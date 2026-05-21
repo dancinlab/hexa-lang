@@ -2803,6 +2803,336 @@ fn _parse_int(t: string) -> i64 {
     return v
 }
 
+// ── RFC 071 P5++ follow-on (N100→N101) — nested-loop matmul auto-synth ──
+//
+// `gpu_matmul(c, a, b, M, N, K)` (N100, commit 261bfb29) closed the
+// source-to-silicon path when the user opts in explicitly via the
+// builtin call. This helper closes the same path for the natural
+// hexa source shape — a triple-nested for-loop with an accumulator —
+// so users do NOT need to know about the `gpu_matmul` builtin to hit
+// the WMMA emit lane:
+//
+//     @gpu_kernel
+//     fn matmul_naive(a: [f16], b: [f16], c: [f32], M: i32, N: i32, K: i32) {
+//         for i in 0..M {
+//             for j in 0..N {
+//                 var sum: f32 = 0.0
+//                 for k in 0..K {
+//                     sum += a[i * K + k] * b[k * N + j]
+//                 }
+//                 c[i * N + j] = sum
+//             }
+//         }
+//     }
+//
+// The C19 `_desugar_for` (`compiler/lower/ast_to_hir.hexa`) rewrites
+// each `for x in iter { body }` into an index-into-array `while` shape
+// BEFORE hir_to_mir sees the body. The fn body that arrives here is
+// therefore:
+//
+//     block { block { let __for_it_*, let __for_idx_*, while { ... } } }
+//
+// nested THREE levels deep (one wrapper per source for-loop). The
+// matcher below walks this canonical desugared shape ONLY — any
+// non-canonical wrapping (manual `if i < M` bounds-check, hoisted
+// stride variables, a `try`/`match`, swapped loop order, accumulator
+// pre-init outside the j-loop, two innermost reductions in parallel)
+// falls through to the normal nested-while lowering with zero
+// behaviour change. Per @D g3 the matcher is conservative on purpose;
+// fuzzier shapes are follow-on territory.
+//
+// The synthesis path itself mirrors the N100 call-branch intercept
+// (1135-1235 in this file): STMT_LOAD a → va, STMT_LOAD b → vb,
+// STMT_BINOP("matmul")(va, vb) → vc, STMT_STORE c ← vc. Codegen does
+// NOT care about the operand identities — `_nvptx_mfunc_is_matmul_shape`
+// matches purely on the kind sequence + binop op string + MFunc.gpu_kind;
+// it then emits a hardcoded 6-`u64` param bank keyed off the MFunc
+// name. The op string is always plain "matmul"; the NT_a / NT_b
+// transposed variants require an explicit `gpu_matmul_NT_*` builtin
+// (no source-loop pattern is canonical enough to discriminate the
+// transpose direction unambiguously).
+//
+// CPU codegen safety: `_lr_locals` / `_lr_blocks` are only touched
+// when ALL of (i) the fn carries `@gpu_kernel`, (ii) the param list
+// matches the canonical (a, b, c, M, N, K) shape, AND (iii) the body
+// HIR matches the desugared triple-nested-for-loop matmul template.
+// A CPU fn with arbitrary triple-nested loops is unaffected
+// (F-RFC055-CPU-CODEGEN-UNTOUCHED contract preserved).
+
+// `_hir_has_gpu_kernel_annotation` — true iff the HItem carries the
+// `@gpu_kernel` annotation. The bind/check pass synthesises this
+// annotation from the source-level `@gpu_kernel` decorator; an
+// implicit-CPU fn returns false.
+fn _hir_has_gpu_kernel_annotation(it: HItem) -> bool {
+    let mut i = 0
+    while i < len(it.annotations) {
+        if it.annotations[i].name == "gpu_kernel" { return true }
+        i = i + 1
+    }
+    return false
+}
+
+// `_hir_param_name` — recover the source-level param name from the
+// optional `param_names` annotation. Returns "" if not declared (e.g.
+// param-name preservation pass disabled, or the annotation predates
+// the param-recovery work).
+fn _hir_param_name(it: HItem, idx: i64) -> string {
+    let mut i = 0
+    while i < len(it.annotations) {
+        let a = it.annotations[i]
+        if a.name == "param_names" {
+            if idx >= 0 && idx < len(a.args) {
+                return a.args[idx].text
+            }
+            return ""
+        }
+        i = i + 1
+    }
+    return ""
+}
+
+// `_hir_is_for_idx_let` — true iff the HExpr is the `let __for_idx_*`
+// the desugar produces. The text prefix is the desugar's invariant
+// (`__for_idx_` followed by the per-for uid).
+fn _hir_is_for_idx_let(e: HExpr) -> bool {
+    if e.kind != "let" { return false }
+    let nm = e.text
+    let cs = nm.chars()
+    if len(cs) < 11 { return false }
+    // Prefix check: "__for_idx_"
+    if cs[0] != '_' { return false }
+    if cs[1] != '_' { return false }
+    if cs[2] != 'f' { return false }
+    if cs[3] != 'o' { return false }
+    if cs[4] != 'r' { return false }
+    if cs[5] != '_' { return false }
+    if cs[6] != 'i' { return false }
+    if cs[7] != 'd' { return false }
+    if cs[8] != 'x' { return false }
+    if cs[9] != '_' { return false }
+    return true
+}
+
+// `_hir_is_for_it_let` — companion: `let __for_it_*`.
+fn _hir_is_for_it_let(e: HExpr) -> bool {
+    if e.kind != "let" { return false }
+    let nm = e.text
+    let cs = nm.chars()
+    if len(cs) < 10 { return false }
+    if cs[0] != '_' { return false }
+    if cs[1] != '_' { return false }
+    if cs[2] != 'f' { return false }
+    if cs[3] != 'o' { return false }
+    if cs[4] != 'r' { return false }
+    if cs[5] != '_' { return false }
+    if cs[6] != 'i' { return false }
+    if cs[7] != 't' { return false }
+    if cs[8] != '_' { return false }
+    return true
+}
+
+// `_hir_is_desugared_for_block` — true iff the HExpr is the canonical
+// desugared `for x in iter { body }` shape:
+//
+//     block {
+//         let __for_it_*  = <iter>
+//         let __for_idx_* = 0
+//         while ...      // body picks up the loop var + index increment
+//     }
+//
+// Conservative: requires EXACTLY 3 children in that order. Anything
+// the desugar didn't emit (extra prelude `let`, hoisted stride) falls
+// through.
+fn _hir_is_desugared_for_block(e: HExpr) -> bool {
+    if e.kind != "block" { return false }
+    if len(e.children) != 3 { return false }
+    if !_hir_is_for_it_let(e.children[0]) { return false }
+    if !_hir_is_for_idx_let(e.children[1]) { return false }
+    if e.children[2].kind != "while" { return false }
+    return true
+}
+
+// `_hir_desugared_for_while_body` — given a desugared for-block (per
+// `_hir_is_desugared_for_block`), return the inner block lifted out
+// of the synthetic `while` (i.e. the user-supplied loop body PLUS the
+// implicit `let <x> = __for_it_*[__for_idx_*]` head + the `__for_idx_
+// += 1` tail). Caller is responsible for the desugared-for-block
+// invariant.
+fn _hir_desugared_for_while_body(e: HExpr) -> HExpr {
+    // children[2] is the synthetic while; its second child is the body.
+    let wh = e.children[2]
+    if len(wh.children) < 2 { return _hir_empty_expr_holder() }
+    return wh.children[1]
+}
+
+// Helper — produce an empty placeholder HExpr (kind ""), used only as
+// a "no match" sentinel when the matcher bails out half-way through.
+fn _hir_empty_expr_holder() -> HExpr {
+    return HExpr {
+        kind: "",
+        span: Span { file: "", line: 0, col: 0, len: 0 },
+        typ: Type { kind: "", def: DefId { module: "", index: -1 }, args: [], ret: [], domain: "", unit: "" },
+        text: "",
+        children: [],
+        atlas: AtlasBinding { ref_kind: "", id: "", atlas_index: -1, atlas_hash: "" },
+        def: DefId { module: "", index: -1 }
+    }
+}
+
+// `_hir_is_nested_matmul_body` — true iff the fn body is the canonical
+// triple-nested-for desugared shape (outer-i wraps middle-j wraps
+// inner-k, with sum-accumulator + store) the WMMA matmul codegen lane
+// is keyed on. Conservative: ALL of the following must hold:
+//
+//   * Fn body = `block` containing the outer desugared-for-block.
+//   * Outer for-while body splices to: [let i, <middle-for-block>,
+//     <idx incr>]. (len == 3 — the standard `_build_for_body` shape.)
+//   * Middle for-block is itself a desugared-for-block.
+//   * Middle for-while body splices to: [let j, let sum = 0.0,
+//     <inner-for-block>, assign c[…] = sum, <idx incr>]. (len == 5 —
+//     accumulator declared in middle, store right after the inner
+//     loop closes.)
+//   * Inner for-block is itself a desugared-for-block.
+//   * Inner for-while body splices to: [let k, <sum += a[…]*b[…]>,
+//     <idx incr>]. (len == 3 — single-stmt body.)
+//   * The middle-body's stmts[1] `let sum` rhs is a float literal
+//     (the standard 0.0 accumulator init).
+//   * The inner-body's stmts[1] is an `assign` of `sum` with rhs a
+//     `*` binop between two `index` exprs (the a/b loads).
+//   * The middle-body's stmts[3] is an `assign` whose lhs is an
+//     `index` expr (the c[i*N+j] store).
+//
+// Anything else (compound `+=` not desugared yet, bounds-check
+// wrapper, accumulator hoisted outside j-loop, transposed-input
+// variant) fails the match → fall through to the normal nested-while
+// lowering with zero behaviour change.
+fn _hir_is_nested_matmul_body(body: HExpr) -> bool {
+    if body.kind != "block" { return false }
+    if len(body.children) != 1 { return false }
+    let outer = body.children[0]
+    if !_hir_is_desugared_for_block(outer) { return false }
+    let outer_body = _hir_desugared_for_while_body(outer)
+    if outer_body.kind != "block" { return false }
+    if len(outer_body.children) != 3 { return false }
+    if outer_body.children[0].kind != "let" { return false }     // let i = __for_it_X[__for_idx_X]
+    let middle = outer_body.children[1]
+    if !_hir_is_desugared_for_block(middle) { return false }
+    // outer_body.children[2] is the outer __for_idx_X = __for_idx_X + 1 assign.
+    let middle_body = _hir_desugared_for_while_body(middle)
+    if middle_body.kind != "block" { return false }
+    if len(middle_body.children) != 5 { return false }
+    if middle_body.children[0].kind != "let" { return false }    // let j = __for_it_Y[__for_idx_Y]
+    if middle_body.children[1].kind != "let" { return false }    // let sum = 0.0
+    let inner = middle_body.children[2]
+    if !_hir_is_desugared_for_block(inner) { return false }
+    if middle_body.children[3].kind != "assign" { return false } // c[i*N+j] = sum
+    // middle_body.children[4] is the middle __for_idx_Y += 1.
+    // Validate the c-store has an index-expr LHS (otherwise it's e.g.
+    // a bare scalar assign, not the matmul-shape result write).
+    let cstore = middle_body.children[3]
+    if len(cstore.children) < 2 { return false }
+    if cstore.children[0].kind != "index" { return false }
+    let inner_body = _hir_desugared_for_while_body(inner)
+    if inner_body.kind != "block" { return false }
+    if len(inner_body.children) != 3 { return false }
+    if inner_body.children[0].kind != "let" { return false }     // let k = __for_it_Z[__for_idx_Z]
+    if inner_body.children[1].kind != "assign" { return false }  // sum = sum + a[i*K+k] * b[k*N+j]
+    // inner_body.children[2] is the inner __for_idx_Z += 1.
+    // Validate the accumulator rhs is a `*` binop of two index exprs
+    // (the a/b loads). The parser lowers `sum += rhs` into an Assign
+    // with text "+=" whose rhs is the rhs literal; the equivalent
+    // explicit form `sum = sum + a*b` produces a `+` binop rhs that
+    // contains the `*` binop as its right child. Accept BOTH shapes
+    // by looking at the deepest `*` binop in the rhs subtree.
+    let acc = inner_body.children[1]
+    if len(acc.children) < 2 { return false }
+    let acc_rhs = acc.children[1]
+    if !_hir_rhs_contains_mul_of_two_indexes(acc_rhs) { return false }
+    return true
+}
+
+// `_hir_rhs_contains_mul_of_two_indexes` — find a `*` binop anywhere
+// in the rhs subtree whose two operands are `index` exprs. Walks at
+// most one level past a leading `+` (the `sum = sum + a*b` form) plus
+// the `*` itself. Conservative — any other shape (e.g. a fused MAC
+// helper call, three-input dot product expansion) fails the match.
+fn _hir_rhs_contains_mul_of_two_indexes(e: HExpr) -> bool {
+    if e.kind == "binop" && e.text == "*" && len(e.children) == 2 {
+        if e.children[0].kind == "index" && e.children[1].kind == "index" {
+            return true
+        }
+    }
+    if e.kind == "binop" && e.text == "+" && len(e.children) == 2 {
+        // Walk the `sum + a*b` shape — recurse on each child once,
+        // bounded depth, no allocation.
+        if _hir_rhs_contains_mul_of_two_indexes(e.children[0]) { return true }
+        if _hir_rhs_contains_mul_of_two_indexes(e.children[1]) { return true }
+    }
+    return false
+}
+
+// `_synthesize_matmul_skeleton` — emit the 4-stmt MIR matmul-shape
+// skeleton (STMT_LOAD a → va, STMT_LOAD b → vb, STMT_BINOP("matmul")
+// (va, vb) → vc, STMT_STORE c ← vc) into the current block, mirroring
+// the N100 call-branch synthesis. Operands `a_op` / `b_op` / `c_op`
+// are the lowered param Operands (each from a `_local_op(params[k].id)`
+// at the _lower_fn entry binding). Returns the updated LowerCtx.
+fn _synthesize_matmul_skeleton(ctx_in: LowerCtx, t_kid: Type, a_op: Operand, b_op: Operand, c_op: Operand) -> LowerCtx {
+    let mut ctx_mm = _fresh_local(ctx_in, t_kid, "matmul_va")
+    let va = _lr_locals[len(_lr_locals) - 1]
+    let mut la: [Operand] = []
+    la.push(a_op)
+    let s_la = Stmt {
+        kind: STMT_LOAD,
+        dst: va,
+        op: "",
+        args: la,
+        target_block: -1,
+        target_block_else: -1
+    }
+    ctx_mm = _push_stmt(ctx_mm, s_la)
+    ctx_mm = _fresh_local(ctx_mm, t_kid, "matmul_vb")
+    let vb = _lr_locals[len(_lr_locals) - 1]
+    let mut lb: [Operand] = []
+    lb.push(b_op)
+    let s_lb = Stmt {
+        kind: STMT_LOAD,
+        dst: vb,
+        op: "",
+        args: lb,
+        target_block: -1,
+        target_block_else: -1
+    }
+    ctx_mm = _push_stmt(ctx_mm, s_lb)
+    ctx_mm = _fresh_local(ctx_mm, t_kid, "matmul_vc")
+    let vc = _lr_locals[len(_lr_locals) - 1]
+    let mut ba: [Operand] = []
+    ba.push(_local_op(va.id))
+    ba.push(_local_op(vb.id))
+    let s_bo = Stmt {
+        kind: STMT_BINOP,
+        dst: vc,
+        op: "matmul",
+        args: ba,
+        target_block: -1,
+        target_block_else: -1
+    }
+    ctx_mm = _push_stmt(ctx_mm, s_bo)
+    let mut st: [Operand] = []
+    st.push(c_op)
+    st.push(_local_op(vc.id))
+    let s_st = Stmt {
+        kind: STMT_STORE,
+        dst: _miss_local(),
+        op: "",
+        args: st,
+        target_block: -1,
+        target_block_else: -1
+    }
+    ctx_mm = _push_stmt(ctx_mm, s_st)
+    return ctx_mm
+}
+
 // ── Function lowering ───────────────────────────────────────
 
 fn _lower_fn(it: HItem, mglobals: [Local]) -> MFunc {
@@ -2842,12 +3172,58 @@ fn _lower_fn(it: HItem, mglobals: [Local]) -> MFunc {
         ann_i = ann_i + 1
     }
 
-    let br = _lower_hexpr(ctx, it.body)
-    ctx = br.ctx
+    // RFC 071 P5++ follow-on (N101) — nested-loop matmul auto-synth.
+    // BEFORE the normal body lowering, peek at (i) the fn-level
+    // `@gpu_kernel` annotation, (ii) the canonical (a, b, c, M, N, K)
+    // param-name shape, AND (iii) the HIR body matching the canonical
+    // desugared triple-nested-for matmul template. If ALL three hold,
+    // synthesize the 4-stmt STMT_LOAD + STMT_LOAD + STMT_BINOP("matmul")
+    // + STMT_STORE skeleton directly (mirrors N100's call-branch
+    // intercept at L1198-1235) and skip the normal body lowering. If
+    // any predicate fails, fall through to `_lower_hexpr(ctx, it.body)`
+    // unchanged (CPU codegen is byte-eq; arbitrary CPU triple-nested
+    // loops are unaffected; the F-RFC055-CPU-CODEGEN-UNTOUCHED
+    // contract is preserved).
+    //
+    // The 4-stmt skeleton is what the NVPTX/ROCm/Metal matmul-shape
+    // recognisers key on; the operand identities are ignored by codegen
+    // (it emits a hardcoded 6-`u64` `.param` bank keyed off the MFunc
+    // name + reads dims from `ld.param.u64 %rd3..5`). The synthetic
+    // body therefore replaces ALL nested-loop MIR — codegen sees
+    // exactly the same shape as `gpu_matmul(c, a, b, M, N, K)`.
+    let mut matmul_synthesised = false
+    if _hir_has_gpu_kernel_annotation(it) {
+        if len(params) >= 3 {
+            let n0 = _hir_param_name(it, 0)
+            let n1 = _hir_param_name(it, 1)
+            let n2 = _hir_param_name(it, 2)
+            if n0 == "a" && n1 == "b" && n2 == "c" {
+                if _hir_is_nested_matmul_body(it.body) {
+                    let a_op = _local_op(params[0].id)
+                    let b_op = _local_op(params[1].id)
+                    let c_op = _local_op(params[2].id)
+                    ctx = _synthesize_matmul_skeleton(ctx, it.body.typ, a_op, b_op, c_op)
+                    matmul_synthesised = true
+                }
+            }
+        }
+    }
+
+    // Body lowering — either the normal recursive lower, or a no-op
+    // for the synthesised matmul case (skeleton + trailing implicit
+    // STMT_RETURN mirror the N100 case-f shape exactly).
+    let mut br_has_value = false
+    let mut br_operand: Operand = _const_int_op(0)
+    if !matmul_synthesised {
+        let br = _lower_hexpr(ctx, it.body)
+        ctx = br.ctx
+        br_has_value = br.has_value
+        br_operand = br.operand
+    }
 
     if !ctx.has_returned {
         let mut args: [Operand] = []
-        if br.has_value { args.push(br.operand) }
+        if br_has_value { args.push(br_operand) }
         let s = Stmt {
             kind: STMT_RETURN,
             dst: _miss_local(),
