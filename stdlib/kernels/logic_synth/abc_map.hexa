@@ -176,6 +176,32 @@ fn abc_emit_blif(d: Design) -> str {
         let m = d.modules[mi]
         buf = buf + ".model " + m.name + "\n"
         // .inputs / .outputs from port wires
+        //
+        // rfc_006 §5 FINAL closure (2026-05-21): multi-bit ports must
+        // expand to per-bit `__b<k>` shadow names in `.inputs`/`.outputs`
+        // so the downstream `.latch <in>__b<k> <q>__b<k>` D-pins (emitted
+        // by the multi-bit latch expander at L364+) see their drivers as
+        // declared primary inputs.  Without this, ABC's `read_blif`
+        // treats `in_data[0]__b0..b63` as undriven internal nets and ties
+        // them to constant-0 — producing the 1290 `_const0_` dangling-D
+        // pin pile-up measured at d4 baseline (Δ 18.63% vs Yosys golden).
+        //
+        // Encoding rule: width == 1 → emit bare `<name>` (legacy, keeps
+        // T6/T7/T7e/T7f/T8f fixtures byte-eq). width > 1 → emit W shadow
+        // names `<name>__b0 <name>__b1 ... <name>__b<W-1>`; the bare
+        // `<name>` is OMITTED because no downstream emitter references
+        // the whole-word net for multi-bit ports (multi-bit cells, the
+        // multi-bit `.latch` expander, and the multi-bit connect-buffer
+        // path all use the `__b<k>` shadow naming convention).
+        //
+        // Same expansion is applied to `.outputs` so the per-bit Q-net
+        // shadows emitted by the multi-bit `.latch` expander above are
+        // declared as primary outputs (otherwise ABC drops them as
+        // unused internal nets during `strash; map`).
+        //
+        // BLIF spec §2: `.inputs`/`.outputs` accept N 1-bit signal
+        // names — multi-bit ports must be declared as parallel 1-bit
+        // nets (the spec has no native vector type).
         let mut ibuf = ".inputs"
         let mut obuf = ".outputs"
         let mut have_i = 0
@@ -183,8 +209,32 @@ fn abc_emit_blif(d: Design) -> str {
         let mut wi = 0
         while wi < len(m.wires) {
             let w = m.wires[wi]
-            if w.dir_kind == 1 { ibuf = ibuf + " " + w.name; have_i = 1 }
-            if w.dir_kind == 2 { obuf = obuf + " " + w.name; have_o = 1 }
+            let mut ww = w.width
+            if ww < 1 { ww = 1 }
+            if w.dir_kind == 1 {
+                if ww == 1 {
+                    ibuf = ibuf + " " + w.name
+                } else {
+                    let mut bk = 0
+                    while bk < ww {
+                        ibuf = ibuf + " " + w.name + "__b" + str(bk)
+                        bk = bk + 1
+                    }
+                }
+                have_i = 1
+            }
+            if w.dir_kind == 2 {
+                if ww == 1 {
+                    obuf = obuf + " " + w.name
+                } else {
+                    let mut bk = 0
+                    while bk < ww {
+                        obuf = obuf + " " + w.name + "__b" + str(bk)
+                        bk = bk + 1
+                    }
+                }
+                have_o = 1
+            }
             wi = wi + 1
         }
         if have_i == 1 { buf = buf + ibuf + "\n" }
@@ -1177,6 +1227,66 @@ fn main() {
     }
     if blif8f.find("d1__b0") >= 0 {
         println("FAIL T8f2 single_bit_unexpected_bit_suffix"); fails = fails + 1
+    }
+
+    // T_BLIF_PER_BIT_INPUTS — rfc_006 §5 FINAL closure falsifier
+    // (2026-05-21): multi-bit `input wire [7:0] x;` must expand to
+    // `.inputs x__b0 x__b1 ... x__b7` (8 entries) — no bare `x`. Same
+    // for `.outputs`. 1-bit ports stay bare (T7/T8 coverage). Without
+    // per-bit expansion the multi-bit `.latch <in>__b<k> ...` D-pins
+    // emitted by the L364+ expander are undriven, and ABC ties them
+    // to constant-0 — the 1290 `_const0_` dangling-D pin pile-up
+    // measured at d4 baseline.
+    total = total + 1
+    let mut m_pbi = rtlil_new_module("pbi")
+    m_pbi = rtlil_module_add_wire(m_pbi, rtlil_wire("clk", 1, 1, 1))
+    m_pbi = rtlil_module_add_wire(m_pbi, rtlil_wire("x", 8, 1, 2))
+    m_pbi = rtlil_module_add_wire(m_pbi, rtlil_wire("y", 4, 2, 3))
+    let mut d_pbi = rtlil_new_design("test")
+    d_pbi = rtlil_design_add(d_pbi, m_pbi)
+    let blif_pbi = abc_emit_blif(d_pbi)
+    // T_BLIF_PER_BIT_INPUTS — width-1 stays bare
+    if blif_pbi.find(".inputs clk x__b0 x__b1 x__b2 x__b3 x__b4 x__b5 x__b6 x__b7") < 0 {
+        println("FAIL T_BLIF_PER_BIT_INPUTS_8bit_inputs_missing"); fails = fails + 1
+    }
+    // bare `x` (no `__b`) MUST NOT appear in `.inputs` for multi-bit port
+    let lines_pbi = blif_pbi.split("\n")
+    let mut found_bad_inputs = 0
+    let mut found_bad_outputs = 0
+    let mut lp = 0
+    while lp < len(lines_pbi) {
+        let lnp = lines_pbi[lp].trim()
+        if len(lnp) >= 7 {
+            if lnp.substring(0, 7) == ".inputs" {
+                // tokens on `.inputs` line must not include bare `x`
+                let toks_i = lnp.split(" ")
+                let mut ti = 1
+                while ti < len(toks_i) {
+                    if toks_i[ti] == "x" { found_bad_inputs = 1 }
+                    ti = ti + 1
+                }
+            }
+        }
+        if len(lnp) >= 8 {
+            if lnp.substring(0, 8) == ".outputs" {
+                let toks_o = lnp.split(" ")
+                let mut to = 1
+                while to < len(toks_o) {
+                    if toks_o[to] == "y" { found_bad_outputs = 1 }
+                    to = to + 1
+                }
+            }
+        }
+        lp = lp + 1
+    }
+    if found_bad_inputs == 1 {
+        println("FAIL T_BLIF_PER_BIT_INPUTS_bare_x_leaked"); fails = fails + 1
+    }
+    if blif_pbi.find(".outputs y__b0 y__b1 y__b2 y__b3") < 0 {
+        println("FAIL T_BLIF_PER_BIT_INPUTS_4bit_outputs_missing"); fails = fails + 1
+    }
+    if found_bad_outputs == 1 {
+        println("FAIL T_BLIF_PER_BIT_INPUTS_bare_y_leaked"); fails = fails + 1
     }
 
     // T9 — STALE-OUTPUT GUARD (rfc_006 §5 audit 2026-05-21):
