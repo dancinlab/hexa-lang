@@ -3216,8 +3216,14 @@ fn _rv_emit_body_v2(
             let lhs = lhs_base
             if is_clocked == 1 {
                 let dw = _rv_v2_dwire(lhs)
+                // rfc_006 §5 closure (2026-05-21): inherit LHS register
+                // width on the __d wire so downstream pass_proc_mux +
+                // _passes_lower_mux_cell fire on multi-bit register
+                // assignments. Previously hardcoded width=1 — masked
+                // bit-blast for flat regs like `rr_ptr` (`reg [2:0]`).
+                let _dw_w = _rv_v2_wire_width(m, lhs)
                 if rtlil_find_wire(m, dw) < 0 {
-                    m = rtlil_module_add_wire(m, rtlil_wire(dw, 1, 0, 0))
+                    m = rtlil_module_add_wire(m, rtlil_wire(dw, _dw_w, 0, 0))
                 }
                 m = rtlil_module_connect_cond(m, dw, rer.wire, cond_wire)
                 tracked = _rv_v2_track(tracked, lhs)
@@ -3233,8 +3239,9 @@ fn _rv_emit_body_v2(
             let lhs = lhs_base + "[" + str(ev.value) + "]"
             if is_clocked == 1 {
                 let dw = _rv_v2_dwire(lhs)
+                let _dw_w2 = _rv_v2_wire_width(m, lhs)
                 if rtlil_find_wire(m, dw) < 0 {
-                    m = rtlil_module_add_wire(m, rtlil_wire(dw, 1, 0, 0))
+                    m = rtlil_module_add_wire(m, rtlil_wire(dw, _dw_w2, 0, 0))
                 }
                 m = rtlil_module_connect_cond(m, dw, rer.wire, cond_wire)
                 tracked = _rv_v2_track(tracked, lhs)
@@ -3279,8 +3286,9 @@ fn _rv_emit_body_v2(
             }
             if is_clocked == 1 {
                 let dw = _rv_v2_dwire(elem)
+                let _dw_w3 = _rv_v2_wire_width(m, elem)
                 if rtlil_find_wire(m, dw) < 0 {
-                    m = rtlil_module_add_wire(m, rtlil_wire(dw, 1, 0, 0))
+                    m = rtlil_module_add_wire(m, rtlil_wire(dw, _dw_w3, 0, 0))
                 }
                 m = rtlil_module_connect_cond(m, dw, rer.wire, sel_w)
                 tracked = _rv_v2_track(tracked, elem)

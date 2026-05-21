@@ -2460,10 +2460,23 @@ fn _passes_proc_mux_emit_chain(m_in: Module,
                                 base_rhs: str) -> Module {
     let mut m = m_in
     let mut inner_w = base_rhs
+    // rfc_006 §5 closure (2026-05-21): look up the LHS register width
+    // so the per-condition mux_y wires inherit the same multi-bit shape.
+    // Previously hardcoded width=1 (the pre-Option-II truncation site)
+    // — this masked all downstream bit-blast in `pass_techmap_sky130`
+    // because `_passes_lower_mux_cell` keys off the Y-wire width.
+    // @cite IEEE 1364-2005 §9.2/§9.4 (proc assignment / control) +
+    // Yosys passes/proc/proc_mux.cc (width = LHS reg width).
+    let mut lhs_w = 1
+    let li = rtlil_find_wire(m, lhs)
+    if li >= 0 {
+        lhs_w = m.wires[li].width
+        if lhs_w < 1 { lhs_w = 1 }
+    }
     let mut k = len(conds) - 1
     while k >= 0 {
         let mux_y = "$procmux_y$" + lhs + "$" + str(k)
-        m = rtlil_module_add_wire(m, rtlil_wire(mux_y, 1, 0, 0))
+        m = rtlil_module_add_wire(m, rtlil_wire(mux_y, lhs_w, 0, 0))
         let mux_n = "$procmux$" + lhs + "$" + str(k)
         let mut mc = rtlil_cell(mux_n, "$mux", 0)
         mc = rtlil_cell_connect(mc, "A", inner_w)

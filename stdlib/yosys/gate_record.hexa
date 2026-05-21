@@ -239,6 +239,21 @@ fn main() {
     _print_stages(g4.stages)
     println("")
 
+    // rfc_006 §5 closure (2026-05-21): emit d4 area INLINE so it's
+    // captured even if the larger d6 run OOMs the mac mini (16 GB
+    // jetsam limit). The end-of-main verdict path still runs when both
+    // designs complete — this is a defensive duplicate.
+    let _ok4_inline = _all_ok(g4.stages)
+    if _ok4_inline == 1 {
+        if found_lib != "" {
+            let _lib_inline = parse_liberty_file(found_lib)
+            if _lib_inline.ok == 1 {
+                _gate_emit_area_verdict("router_d4", g4.mapped, _lib_inline, 61762.99)
+            }
+        }
+    }
+    println("")
+
     // Run d6
     println("[gate] router_d6.v — pipeline trace:")
     let g6 = _gate_run_one("d6", d6_path, "router_d6", found_lib)

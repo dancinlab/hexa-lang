@@ -269,9 +269,49 @@ fn abc_emit_blif(d: Design) -> str {
                 if len(lhs) > 0 {
                     if len(rhs) > 0 {
                         if lhs != rhs {
-                            // .gate sky130_fd_sc_hd__buf_1 A=<rhs> X=<lhs>
-                            buf = buf + ".gate sky130_fd_sc_hd__buf_1 A="
-                                + rhs + " X=" + lhs + "\n"
+                            // rfc_006 §5 closure (2026-05-21): when LHS
+                            // wire width W > 1, emit W per-bit buffers
+                            // (one `__b<k>` each) so the downstream
+                            // `.latch <lhs>__d__b<k>` D-pins (Option I
+                            // df4ff3f7) have drivers. Without this the
+                            // whole-word `<lhs>` buffer leaves the per-
+                            // bit `__b<k>` nets dangling and ABC ties
+                            // them to constant-0 (Source 4 closure).
+                            // Apply the same to multi-bit RHS net names
+                            // by suffixing both sides — caller-side
+                            // cell emitters (pass_proc_mux chain after
+                            // _passes_lower_mux_cell) already emit the
+                            // matching `__b<k>` outputs.
+                            let mut lhs_w = 1
+                            let li = rtlil_find_wire(m, lhs)
+                            if li >= 0 { lhs_w = m.wires[li].width }
+                            if lhs_w < 1 { lhs_w = 1 }
+                            let mut rhs_w = 1
+                            let ri = rtlil_find_wire(m, rhs)
+                            if ri >= 0 { rhs_w = m.wires[ri].width }
+                            if rhs_w < 1 { rhs_w = 1 }
+                            if lhs_w == 1 {
+                                if rhs_w == 1 {
+                                    // .gate sky130_fd_sc_hd__buf_1 A=<rhs> X=<lhs>
+                                    buf = buf + ".gate sky130_fd_sc_hd__buf_1 A="
+                                        + rhs + " X=" + lhs + "\n"
+                                } else {
+                                    // 1-bit LHS, multi-bit RHS — take bit 0.
+                                    buf = buf + ".gate sky130_fd_sc_hd__buf_1 A="
+                                        + rhs + "__b0 X=" + lhs + "\n"
+                                }
+                            } else {
+                                // multi-bit LHS — emit W per-bit buffers.
+                                let mut bi = 0
+                                while bi < lhs_w {
+                                    let bstr = str(bi)
+                                    let mut a_name = rhs
+                                    if rhs_w > 1 { a_name = rhs + "__b" + bstr }
+                                    buf = buf + ".gate sky130_fd_sc_hd__buf_1 A="
+                                        + a_name + " X=" + lhs + "__b" + bstr + "\n"
+                                    bi = bi + 1
+                                }
+                            }
                         }
                     }
                 }
