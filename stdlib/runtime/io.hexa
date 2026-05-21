@@ -1,0 +1,54 @@
+// stdlib/runtime/io.hexa — RUNTIME.md step-3 잔여 #7 (IO println/eprint
+// family) hexa-source port. 2026-05-22.
+//
+// History: RUNTIME.md cycles 89-99 closure table marked #7 as DEFERRED
+// pending a `__fd_write_bytes(fd, s)` codegen builtin (Tier-A.6 syscall
+// layer architectural mismatch). Step 5 #4 (re-landed 2026-05-22 commit
+// 61c7eb8d) wired that builtin in self/codegen_c2.hexa + self/bind.hexa.
+// The shipped self/native/hexa_v2 binary is still stale (regen pipeline
+// has known Phase C.2 merge limitations — see self/main.hexa
+// cmd_regen_cc trailing comment), but the interpreter-style emit
+// `hexa_call2(__fd_write_bytes, fd, s)` routes via runtime_core.c's
+// _Generic dispatcher (hexa_call2 → __hexa_call2_fp2 when the symbol
+// is a function pointer). A thin C shim added in self/runtime.c
+// (near hexa_dict_keys, this same cycle) provides exactly that
+// function-pointer entry, so both activation paths converge on the
+// same observable POSIX write(2).
+//
+// Semantics: print/eprint emit to fd 1/2 with NO trailing newline.
+// println/eprintln append "\n". The argument is coerced through
+// `to_string(v)` so all HexaVal tags (int/float/bool/string/array/
+// map/valstruct/void) reduce to a string before the syscall — mirrors
+// the runtime_core.c C-side hexa_println family which delegates
+// TAG_ARRAY/TAG_MAP via hexa_to_string.
+//
+// Cycle-63 lesson (numeric.hexa:472): hexa source can't write
+// `return hexa_void()` — bare `hexa_void` lowers to `hexa_call0(hexa_void)`
+// which fails clang typecheck. We omit the return type so codegen
+// auto-emits `return hexa_void()` at the C end. C-side dispatch in
+// runtime_core.c does `(void)rt_println(v)` / `return rt_eprint(v)`
+// — the eprint family must still surface HexaVal because the original
+// hexa_eprint signature returns HexaVal. Workaround: separate hexa_void
+// returning wrappers — see io.hexa companion patterns below.
+
+pub fn rt_print(v: HexaVal) {
+    let s = to_string(v)
+    __fd_write_bytes(1, s)
+}
+
+pub fn rt_println(v: HexaVal) {
+    let s = to_string(v)
+    __fd_write_bytes(1, s)
+    __fd_write_bytes(1, "\n")
+}
+
+pub fn rt_eprint(v: HexaVal) {
+    let s = to_string(v)
+    __fd_write_bytes(2, s)
+}
+
+pub fn rt_eprintln(v: HexaVal) {
+    let s = to_string(v)
+    __fd_write_bytes(2, s)
+    __fd_write_bytes(2, "\n")
+}
