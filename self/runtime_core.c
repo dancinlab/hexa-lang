@@ -5930,6 +5930,10 @@ HexaVal hexa_to_int(HexaVal v) {
 // ── String format ────────────────────────────────────
 
 // Multi-arg format: hexa_format_n(fmt, args_array)
+// Step-3 cycle 62 port — single-arg `{}` substitution dispatches to
+// rt_format. The polymorphic `hexa_to_string(arg)` coercion stays
+// C-side; the hexa fn receives both args as string.
+#ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal hexa_format(HexaVal fmt, HexaVal arg) {
     // Single arg: replace first {} with arg
     if (!HX_IS_STR(fmt)) return fmt;
@@ -5945,6 +5949,14 @@ HexaVal hexa_format(HexaVal fmt, HexaVal arg) {
     hxlcl_strcat(result, pos + 2);
     return hexa_str_own(result);
 }
+#else
+extern HexaVal rt_format(HexaVal fmt, HexaVal sarg);
+HexaVal hexa_format(HexaVal fmt, HexaVal arg) {
+    if (!HX_IS_STR(fmt)) return fmt;
+    HexaVal sarg = hexa_to_string(arg);
+    return rt_format(fmt, sarg);
+}
+#endif
 
 HexaVal hexa_format_n(HexaVal fmt, HexaVal args) {
     // Multi-arg: replace {} and {:.N} with successive args

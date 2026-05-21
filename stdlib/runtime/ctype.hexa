@@ -157,6 +157,19 @@ pub fn rt_str_last_index_of(s: string, sub: string) -> int {
     return last
 }
 
+// Step 3 cycle 62 — single-arg format: replace first `{}` with the
+// stringified arg. C wrapper handles the `hexa_to_string(arg)`
+// polymorphic coercion before dispatch; the hexa fn always sees a
+// string. Returns fmt unchanged when no `{}` placeholder is present.
+pub fn rt_format(fmt: string, sarg: string) -> string {
+    let idx = rt_str_index_of(fmt, "{}")
+    if idx < 0 { return fmt }
+    let n = byte_len(fmt)
+    let before = fmt.substring(0, idx)
+    let after = fmt.substring(idx + 2, n)
+    return before + sarg + after
+}
+
 // Step 3 cycle 54 — byte-indexed first occurrence of `sub` in `s`.
 // Returns -1 when absent. Empty needle returns 0 (matches the C body's
 // `hxlcl_strstr(hay, "")` → `hay` semantic). Used by `s.index_of(sub)`.

@@ -1094,6 +1094,22 @@ it operates on HexaVal tags from C.
 - aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
   binary 1,162,792 B
 
+### 2026-05-21 — step 3 cycle 62: hexa_format → rt_format (single-arg `{}` substitution)
+
+- ✅ `hexa_format` (self/runtime_core.c:5933) ported. Replaces the
+  first `{}` placeholder in `fmt` with the stringified `arg`. The
+  polymorphic `hexa_to_string(arg)` coercion stays C-side; the hexa
+  fn receives both args as strings
+- Hexa source reuses `rt_str_index_of` (cycle 54) for the `{}` lookup,
+  then `s.substring + s.substring + "+"` concat to assemble
+- Returns `fmt` unchanged when no `{}` is present (matches C body's
+  early-return on strstr-NULL)
+- aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
+  binary 1,164,904 B
+- Worktree note: edits made in `.claude/worktrees/agent-aeea256c37dd61c79`
+  (main is checked out there; the primary repo dir is on a parallel
+  session's feature branch). [[shared-worktree-branch-hazard]]
+
 ### 2026-05-21 — step 3 cycle 61: hexa_format_float_sci → rt_format_float_sci (snprintf "%.*e" replacement)
 
 - ✅ `hexa_format_float_sci` (self/runtime_core.c:6469) ported.
