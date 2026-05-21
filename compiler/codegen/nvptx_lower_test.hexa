@@ -45,6 +45,15 @@ fn _local(id: i64, name: string) -> Local {
     return Local { id: id, arena_id: 1, type_id: 0, name_hint: name, precision: "" }
 }
 
+// _local_typed — Local builder that explicitly stamps a MIR `type_id`
+// (matches `compiler/lower/hir_to_mir.hexa::_type_id_of` constants:
+// 1=i64, 2=i32, 3=f64, 4=f32, 5=bool). Used by Case 29 to exercise the
+// RFC 071 P3+ param-type-propagation pre-pass — `_local` keeps type_id=0
+// so every other test fixture stays byte-identical.
+fn _local_typed(id: i64, name: string, type_id: i64) -> Local {
+    return Local { id: id, arena_id: 1, type_id: type_id, name_hint: name, precision: "" }
+}
+
 fn _miss_local() -> Local {
     return Local { id: -1, arena_id: 0, type_id: 0, name_hint: "", precision: "" }
 }
@@ -792,11 +801,13 @@ fn main() {
     let ok_fls   = _test_f16_load_store()
     let ok_fp8a  = _test_f8_e4m3_load_store()
     let ok_fp8b  = _test_f8_e5m2_load_store()
+    let ok_i64c  = _test_to_i64_and_int_cmp()
+    let ok_ptp   = _test_param_type_propagation()
 
     println("")
     println("══════════════════════════════════════════════")
-    if ok_br && ok_cls && ok_setp && ok_intr && ok_ls && ok_part && ok_barr && ok_atom && ok_shuf && ok_unr && ok_unrn && ok_wmma && ok_mp && ok_fctN && ok_pp && ok_fw && ok_sd && ok_me && ok_np && ok_os && ok_df && ok_bm && ok_wie && ok_gkw && ok_fls && ok_fp8a && ok_fp8b {
-        println("PASS: RFC 055 + RFC 067 + RFC 068 P1/P2/P3/P4-codegen + RFC 068 §3 fp8 scaffold + RFC 069 — 27/27 cases (incl. fp8 e4m3 + e5m2 ld/st)")
+    if ok_br && ok_cls && ok_setp && ok_intr && ok_ls && ok_part && ok_barr && ok_atom && ok_shuf && ok_unr && ok_unrn && ok_wmma && ok_mp && ok_fctN && ok_pp && ok_fw && ok_sd && ok_me && ok_np && ok_os && ok_df && ok_bm && ok_wie && ok_gkw && ok_fls && ok_fp8a && ok_fp8b && ok_i64c && ok_ptp {
+        println("PASS: RFC 055 + RFC 067 + RFC 068 P1/P2/P3/P4-codegen + RFC 068 §3 fp8 scaffold + RFC 069 + RFC 071 P3+ — 29/29 cases (incl. fp8 e4m3 + e5m2 ld/st + to_i64 + int cmp + param-type-propagation)")
     } else {
         println("FAIL: RFC 055 smoke not satisfied.")
         if !ok_br   { println("      STMT_BR FAILED") }
@@ -826,9 +837,11 @@ fn main() {
         if !ok_fls  { println("      RFC 068 P4 f16 ld/st FAILED") }
         if !ok_fp8a { println("      RFC 068 §3 fp8 e4m3 scaffold FAILED") }
         if !ok_fp8b { println("      RFC 068 §3 fp8 e5m2 scaffold FAILED") }
+        if !ok_i64c { println("      RFC 071 P3+ to_i64 + int cmp + br_cond FAILED") }
+        if !ok_ptp  { println("      RFC 071 P3+ param-type-propagation (N17 closure) FAILED") }
     }
     println("══════════════════════════════════════════════")
-    if !(ok_br && ok_cls && ok_setp && ok_intr && ok_ls && ok_part && ok_barr && ok_atom && ok_shuf && ok_unr && ok_unrn && ok_wmma && ok_mp && ok_fctN && ok_pp && ok_fw && ok_sd && ok_me && ok_np && ok_os && ok_df && ok_bm && ok_wie && ok_gkw && ok_fls && ok_fp8a && ok_fp8b) { exit(1) }
+    if !(ok_br && ok_cls && ok_setp && ok_intr && ok_ls && ok_part && ok_barr && ok_atom && ok_shuf && ok_unr && ok_unrn && ok_wmma && ok_mp && ok_fctN && ok_pp && ok_fw && ok_sd && ok_me && ok_np && ok_os && ok_df && ok_bm && ok_wie && ok_gkw && ok_fls && ok_fp8a && ok_fp8b && ok_i64c && ok_ptp) { exit(1) }
 }
 
 // ── Case 9 — 055-P4 gpu_warp_shuffle(v, lane) intrinsic ───────────────
@@ -2833,6 +2846,249 @@ fn _test_f8_e5m2_load_store() -> bool {
         ok = false
     } else {
         println("  ok: no %fe3 (e4m3 bank) in e5m2-only fixture (banks are disjoint)")
+    }
+    return ok
+}
+
+// ── Case 28 — RFC 071 P3+ to_i64 + integer setp + bounds-check ───────
+//
+// Closes the three NVPTX lowering gaps that surfaced when N13's
+// source-to-silicon driver lowered `my_test_kernel` (a vec-add kernel
+// with `if to_i64(gid) < n { c[to_i64(gid)] = a[...] + b[...] }`):
+//
+//   1. `to_i64` STMT_CALL  → `cvt.s64.s32 %rd<d>, %r<s>;`  (s32 → s64
+//                                                          sign-extend)
+//   2. `<` STMT_BINOP with U64 operands → `setp.lt.s64 %p<d>, %rd<a>,
+//                                                              %rd<b>;`
+//   3. `@<pred> bra $L_<t>; bra $L_<f>;` — already-wired STMT_BR_COND
+//      path verified to consume the integer-predicate output.
+//
+// The fixture mirrors the relevant slice of `my_test_kernel`:
+//   block 0:
+//     gid32 = gpu_thread_id_x()          // STMT_CALL → U32 %r0
+//     gid64 = to_i64(gid32)              // STMT_CALL → U64 %rd1
+//     p     = gid64 < n_param            // STMT_BINOP "lt" → pred %p2
+//     br_cond p -> block 1, else block 2
+//   block 1: return
+//   block 2: return
+//
+// `n_param` is a function param (Local id=3, name "n"). Because the
+// classifier's Pass 1 doesn't see a defining stmt for `n_param`, the
+// lookup_kind for `n_param` returns the F64 default — to keep the
+// cmp_operand_type_suffix returning `.s64` regardless of the param's
+// classification gap, the first operand of the cmp is `gid64` (which
+// IS classified U64 via the new `to_i64` rule). The first-non-default-
+// wins rule then picks `.s64`. (A wider param-type-propagation pass
+// is the follow-on RFC 071 cycle — out of scope here.)
+
+fn _build_case_to_i64_and_int_cmp() -> MModule {
+    let gid32 = _local(0, "gid32")     // STMT_CALL gpu_thread_id_x → U32 %r0
+    let gid64 = _local(1, "gid64")     // STMT_CALL to_i64(gid32)   → U64 %rd1
+    let p     = _local(2, "p")         // STMT_BINOP "lt"           → pred %p2
+    let n_p   = _local(3, "n")         // function param (unclassified default → F64 fallback)
+
+    // block 0
+    let mut to_i64_args = []
+    to_i64_args.push(_op_local(gid32.id))
+
+    let mut s0 = []
+    s0.push(_stmt_call(gid32, "gpu_thread_id_x"))
+    s0.push(_stmt_call_with_args(gid64, "to_i64", to_i64_args))
+    s0.push(_stmt_binop(p, "lt", _op_local(gid64.id), _op_local(n_p.id)))
+    s0.push(_stmt_br_cond(_op_local(p.id), 1, 2))
+
+    // block 1: return
+    let mut s1 = []
+    s1.push(_stmt_return())
+    // block 2: return
+    let mut s2 = []
+    s2.push(_stmt_return())
+
+    let mut blocks = []
+    blocks.push(_block(0, s0))
+    blocks.push(_block(1, s1))
+    blocks.push(_block(2, s2))
+
+    let mut params = []
+    params.push(n_p)
+    let mut locals = []
+    locals.push(gid32); locals.push(gid64); locals.push(p); locals.push(n_p)
+
+    let mf = MFunc {
+        name: "to_i64_cmp_smoke",
+        params: params,
+        return_local: _miss_local(),
+        locals: locals,
+        blocks: blocks,
+        entry_block: 0,
+        arena_root: 1,
+        def_line: 0,
+        gpu_kind: GPU_KIND_DEVICE
+    }
+    let mut fns = []
+    fns.push(mf)
+    return MModule { file: "case_to_i64_and_int_cmp.hexa", funcs: fns, globals: [] }
+}
+
+fn _test_to_i64_and_int_cmp() -> bool {
+    let mut ok = true
+    let mod_in = _build_case_to_i64_and_int_cmp()
+    let ptx = codegen_emit_ptx_sm80(mod_in)
+
+    println("")
+    println("── emitted PTX (RFC 071 P3+ to_i64 + int cmp + br_cond, sm_80) ──")
+    println(ptx)
+
+    // GAP 1 — to_i64 lowering. The dst (gid64) must declare in the
+    // U64 bank (`.reg .u64 %rd1;`) and the body must emit
+    // `cvt.s64.s32 %rd1, %r0;` (s32→s64 sign-extend; `to_i64(gid32)`
+    // where gid32 is U32 from the thread-id intrinsic).
+    ok = _check(ok, ptx, ".reg .u64 %rd1",        "to_i64 dst classified U64 (%rd1)")
+    ok = _check(ok, ptx, "cvt.s64.s32 %rd1, %r0", "cvt.s64.s32 emitted for to_i64(u32)")
+
+    // GAP 2 — integer setp. The dst (p) is .pred; both operands are
+    // i64-bank (%rd1 + the f64-default %fd3 fallback for the unclassified
+    // n_param). The first-non-default-wins rule picks `.s64` because
+    // %rd1 classifies U64.
+    ok = _check(ok, ptx, ".reg .pred %p2",        "cmp dst classified .pred (%p2)")
+    ok = _check(ok, ptx, "setp.lt.s64 %p2",       "setp.lt.s64 emitted for U64-operand cmp")
+
+    // GAP 3 — STMT_BR_COND consumes the integer predicate. The existing
+    // STMT_BR_COND path emits `@<pred> bra $L_<t>; bra $L_<f>;` — we
+    // verify it works with the new integer-predicate dst.
+    ok = _check(ok, ptx, "@%p2 bra $L_1",         "predicated bra -> $L_1 (then)")
+    ok = _check(ok, ptx, "bra $L_2",              "fall-through bra -> $L_2 (else)")
+
+    // Honest-stub negative guard — none of the three gaps should leave
+    // an `unsupported` comment in the emitted PTX. The N13-era source-
+    // derived PTX had `// RFC 055 055-P0 - unsupported call: to_i64` and
+    // `// RFC 055 055-P0 - unsupported binop: <` markers; both must
+    // disappear after this cycle.
+    if _contains(ptx, "unsupported call: to_i64") {
+        println("  FAIL: `unsupported call: to_i64` marker still present")
+        ok = false
+    } else {
+        println("  ok: no `unsupported call: to_i64` marker (gap 1 closed)")
+    }
+    if _contains(ptx, "unsupported binop: lt") || _contains(ptx, "unsupported binop: <") {
+        println("  FAIL: `unsupported binop: lt|<` marker still present")
+        ok = false
+    } else {
+        println("  ok: no `unsupported binop: lt|<` marker (gap 2 closed)")
+    }
+    return ok
+}
+
+// ── Case 29 — RFC 071 P3+ param-type-propagation (N17 closure) ───────
+//
+// Closes the N17 honest-scope gap: `_nvptx_classify_locals` Pass 1 only
+// walked defining statements, so a function param like `n: i64` had no
+// PReg in the roster and `_nvptx_lookup_reg_for_local` fell back to
+// `%fd<id>` — yielding mixed-bank `setp.lt.s64 %p, %rd<gid>, %fd<n>`.
+//
+// New Pass 0 walks `mfn.params` and stamps each typed param into its
+// matching PTX register bank by `Local.type_id`:
+//
+//   type_id == 1 (i64) → NVPTX_RKIND_U64  → `%rd<id>`
+//   type_id == 2 (i32) → NVPTX_RKIND_U32  → `%r<id>`
+//   type_id == 3 (f64) → NVPTX_RKIND_F64  → `%fd<id>`
+//   type_id == 4 (f32) → NVPTX_RKIND_F32  → `%fs<id>`
+//
+// Fixture mirrors `_build_case_to_i64_and_int_cmp` but stamps the param
+// `n` with type_id=1 (i64) via `_local_typed`. Expected delta:
+//
+//   * `.reg .u64 %rd3;`     present (NEW — Pass 0 declares the param)
+//   * `setp.lt.s64 %p2, %rd1, %rd3` (NEW — all-U64 operands)
+//   * `setp.lt.s64 %p2, %rd1, %fd3` ABSENT (OLD mixed-bank gone)
+//
+// Honest scope (@D g3): the lower_test smoke fixtures that build params
+// via `_local` (type_id=0) intentionally STAY byte-identical — Pass 0
+// only fires when type_id maps to a recognized bank. The
+// `_test_to_i64_and_int_cmp` (Case 28) above also stays byte-identical
+// because its `n_p` is built via `_local` (type_id=0); it's the
+// regression-guard for the no-op default.
+
+fn _build_case_param_type_propagation() -> MModule {
+    let gid32 = _local(0, "gid32")              // U32 %r0
+    let gid64 = _local(1, "gid64")              // U64 %rd1 via to_i64
+    let p     = _local(2, "p")                  // pred %p2 via setp lt
+    // NEW: param `n` carries type_id=1 (i64) so Pass 0 stamps it U64.
+    let n_p   = _local_typed(3, "n", 1)         // i64 param → U64 %rd3
+
+    let mut to_i64_args = []
+    to_i64_args.push(_op_local(gid32.id))
+
+    let mut s0 = []
+    s0.push(_stmt_call(gid32, "gpu_thread_id_x"))
+    s0.push(_stmt_call_with_args(gid64, "to_i64", to_i64_args))
+    s0.push(_stmt_binop(p, "lt", _op_local(gid64.id), _op_local(n_p.id)))
+    s0.push(_stmt_br_cond(_op_local(p.id), 1, 2))
+
+    let mut s1 = []
+    s1.push(_stmt_return())
+    let mut s2 = []
+    s2.push(_stmt_return())
+
+    let mut blocks = []
+    blocks.push(_block(0, s0))
+    blocks.push(_block(1, s1))
+    blocks.push(_block(2, s2))
+
+    let mut params = []
+    params.push(n_p)
+    let mut locals = []
+    locals.push(gid32); locals.push(gid64); locals.push(p); locals.push(n_p)
+
+    let mf = MFunc {
+        name: "param_type_propagation_smoke",
+        params: params,
+        return_local: _miss_local(),
+        locals: locals,
+        blocks: blocks,
+        entry_block: 0,
+        arena_root: 1,
+        def_line: 0,
+        gpu_kind: GPU_KIND_DEVICE
+    }
+    let mut fns = []
+    fns.push(mf)
+    return MModule { file: "case_param_type_propagation.hexa", funcs: fns, globals: [] }
+}
+
+fn _test_param_type_propagation() -> bool {
+    let mut ok = true
+    let mod_in = _build_case_param_type_propagation()
+    let ptx = codegen_emit_ptx_sm80(mod_in)
+
+    println("")
+    println("── emitted PTX (RFC 071 P3+ param-type-propagation, sm_80) ──")
+    println(ptx)
+
+    // Pass 0 declared the i64 param in the U64 bank.
+    ok = _check(ok, ptx, ".reg .u64 %rd3", "i64 param `n` declared in U64 bank (.reg .u64 %rd3)")
+
+    // The setp now compares two U64 registers (the to_i64-derived %rd1
+    // AND the param-derived %rd3) — not a mixed %rd1 / %fd3 pair.
+    ok = _check(ok, ptx, "setp.lt.s64 %p2, %rd1, %rd3",
+                "setp.lt.s64 all-U64-bank (%rd1, %rd3) — N17 mixed-bank gap closed")
+
+    // Negative: the pre-fix mixed-bank form MUST NOT appear (this was
+    // the N17 honest-scope output that motivated the fix).
+    if _contains(ptx, "setp.lt.s64 %p2, %rd1, %fd3") {
+        println("  FAIL: pre-fix mixed-bank setp `setp.lt.s64 %p2, %rd1, %fd3` still present (N17 gap NOT closed)")
+        ok = false
+    } else {
+        println("  ok: no mixed-bank setp `setp.lt.s64 ..., %rd1, %fd3` (N17 gap closed)")
+    }
+
+    // Negative: no spurious %fd3 declaration (the F64 default fallback
+    // bank for `n` would manifest as `.reg .f64 %fd3` in the emitted
+    // bank decls; with Pass 0 active, only %rd3 is declared).
+    if _contains(ptx, ".reg .f64 %fd3") {
+        println("  FAIL: param `n` ALSO declared as .reg .f64 %fd3 — double bank decl")
+        ok = false
+    } else {
+        println("  ok: param `n` NOT also declared as .reg .f64 %fd3 (single-bank decl)")
     }
     return ok
 }
