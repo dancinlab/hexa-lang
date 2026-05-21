@@ -1,0 +1,44 @@
+cuModuleLoadDataEx sgemm_m16n8k32_256x256_grid.ptx: a PTX JIT compilation failed
+  ptxas err: ptxas application ptx input, line 221; error   : Illegal matrix shape '.m16n8k32' for instruction 'mma'
+ptxas application ptx input, line 227; error   : Illegal matrix shape '.m16n8k32' for instruction 'mma'
+ptxas fatal   : Ptx assembly aborted due to errors
+cuModuleLoadDataEx sgemm_m16n8k32_384x384_grid.ptx: a PTX JIT compilation failed
+  ptxas err: ptxas application ptx input, line 221; error   : Illegal matrix shape '.m16n8k32' for instruction 'mma'
+ptxas application ptx input, line 227; error   : Illegal matrix shape '.m16n8k32' for instruction 'mma'
+ptxas fatal   : Ptx assembly aborted due to errors
+cuModuleLoadDataEx sgemm_m16n8k32_512x512_grid.ptx: a PTX JIT compilation failed
+  ptxas err: ptxas application ptx input, line 221; error   : Illegal matrix shape '.m16n8k32' for instruction 'mma'
+ptxas application ptx input, line 227; error   : Illegal matrix shape '.m16n8k32' for instruction 'mma'
+ptxas fatal   : Ptx assembly aborted due to errors
+cuModuleLoadDataEx sgemm_m16n8k32_768x768_grid.ptx: a PTX JIT compilation failed
+  ptxas err: ptxas application ptx input, line 221; error   : Illegal matrix shape '.m16n8k32' for instruction 'mma'
+ptxas application ptx input, line 227; error   : Illegal matrix shape '.m16n8k32' for instruction 'mma'
+ptxas fatal   : Ptx assembly aborted due to errors
+cuModuleLoadDataEx sgemm_m16n8k32_1024x1024_grid.ptx: a PTX JIT compilation failed
+  ptxas err: ptxas application ptx input, line 221; error   : Illegal matrix shape '.m16n8k32' for instruction 'mma'
+ptxas application ptx input, line 227; error   : Illegal matrix shape '.m16n8k32' for instruction 'mma'
+ptxas fatal   : Ptx assembly aborted due to errors
+cuModuleLoadDataEx sgemm_m16n8k32_1536x1536_grid.ptx: a PTX JIT compilation failed
+  ptxas err: ptxas application ptx input, line 221; error   : Illegal matrix shape '.m16n8k32' for instruction 'mma'
+ptxas application ptx input, line 227; error   : Illegal matrix shape '.m16n8k32' for instruction 'mma'
+ptxas fatal   : Ptx assembly aborted due to errors
+Device: NVIDIA GeForce RTX 5070 sm_120
+CUDA driver=13000 runtime=12000
+FAILED hexa-m16n8k32 PTX shape 256 -- skipping
+FAILED hexa-m16n8k32 PTX shape 384 -- skipping
+FAILED hexa-m16n8k32 PTX shape 512 -- skipping
+FAILED hexa-m16n8k32 PTX shape 768 -- skipping
+FAILED hexa-m16n8k32 PTX shape 1024 -- skipping
+FAILED hexa-m16n8k32 PTX shape 1536 -- skipping
+[M= 256] cuBLAS HGEMM             median=0.007360 ms  std=0.001432  min=0.005568  max=0.016544  TFLOPS=  4.5590
+[M= 256] hexa-m16n8k32 HGEMM        SKIPPED -- PTX load/lookup failed for sgemm_m16n8k32_256x256_grid.ptx
+[M= 384] cuBLAS HGEMM             median=0.008672 ms  std=0.000713  min=0.007168  max=0.015808  TFLOPS= 13.0588
+[M= 384] hexa-m16n8k32 HGEMM        SKIPPED -- PTX load/lookup failed for sgemm_m16n8k32_384x384_grid.ptx
+[M= 512] cuBLAS HGEMM             median=0.010752 ms  std=0.000555  min=0.010144  max=0.012832  TFLOPS= 24.9661
+[M= 512] hexa-m16n8k32 HGEMM        SKIPPED -- PTX load/lookup failed for sgemm_m16n8k32_512x512_grid.ptx
+[M= 768] cuBLAS HGEMM             median=0.019008 ms  std=0.000344  min=0.018432  max=0.020704  TFLOPS= 47.6625
+[M= 768] hexa-m16n8k32 HGEMM        SKIPPED -- PTX load/lookup failed for sgemm_m16n8k32_768x768_grid.ptx
+[M=1024] cuBLAS HGEMM             median=0.039520 ms  std=0.000519  min=0.038240  max=0.041600  TFLOPS= 54.3392
+[M=1024] hexa-m16n8k32 HGEMM        SKIPPED -- PTX load/lookup failed for sgemm_m16n8k32_1024x1024_grid.ptx
+[M=1536] cuBLAS HGEMM             median=0.107968 ms  std=0.000989  min=0.106816  max=0.110208  TFLOPS= 67.1288
+[M=1536] hexa-m16n8k32 HGEMM        SKIPPED -- PTX load/lookup failed for sgemm_m16n8k32_1536x1536_grid.ptx
