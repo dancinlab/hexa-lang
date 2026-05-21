@@ -1094,6 +1094,35 @@ it operates on HexaVal tags from C.
 - aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
   binary 1,162,792 B
 
+### 2026-05-21 — step 3 cycle 65: hexa_array_any + hexa_array_all + hexa_array_count (predicate batch)
+
+- ✅ All three predicate-callback fns (3200/3211/3222) ported. The
+  map-receiver branch (HX_IS_MAP delegates to hexa_map_any/all/count)
+  stays C-side because hexa source can't observe runtime tags. The
+  array branch dispatches to `rt_array_*_pred` (`_pred` suffix to
+  avoid collision since `hexa_array_count` is also called by
+  `hexa_count_poly`)
+- any: first-truthy short-circuit. all: first-falsy short-circuit
+  (uses `if r { } else { return false }` since `!HexaVal` codegen is
+  uncertain). count: full pass with counter
+- Returns: any/all → bool → HexaVal at C ABI matches `hexa_bool(0/1)`.
+  count → int → HexaVal matches `hexa_int(c)`
+- Parallel-session race: first build attempt failed at step 2 (transient
+  hexa_v2 contention). Retry PASSED
+- aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
+  binary 1,165,064 B
+
+### 2026-05-21 — step 3 cycle 64: hexa_array_filter + hexa_array_fold (callback family expansion)
+
+- ✅ `hexa_array_filter` (3134) and `hexa_array_fold` (3144) ported.
+  Uses cycle-63 callback POC pattern. New idioms confirmed:
+  - `if keep { ... }` on HexaVal lowers to `if (hexa_truthy(keep))`
+  - `fn_v(a, b)` 2-arg lowers to `hexa_call2(fn_v, a, b)`
+- Both verified via ubu-2 transpile inspection (`cb_filter.c`,
+  `cb_fold.c`)
+- aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
+  binary 1,165,032 B
+
 ### 2026-05-21 — step 3 cycle 63: 🛸 hexa_array_map (callback POC, unlocks fn-dispatch family)
 
 - ✅ `hexa_array_map` (self/runtime.c:3114) ported. **First successful
