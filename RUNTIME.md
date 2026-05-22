@@ -381,6 +381,36 @@ For each Tier-A sub-phase:
 
 ## Log
 
+### 2026-05-22 — Step 3+4+5 ported-surface regression sweep (verification cycle)
+
+- ✅ `inbox/tests/rt_regression_sweep.hexa` — single self-contained
+  functional smoke re-exercising representative cases of every ported
+  rt_* family after the 5-wipe + re-land churn. ~80 assertions across
+  10 families; exits with the first failing case code (0 = ALL PASS).
+- Method: the rt_* fns are import-closed into `compiler/main.hexa` and
+  are NOT resolvable from a user hexa program (codegen doesn't wire
+  `import "stdlib/runtime/..."` for user code). So concretely-typed fns
+  (int/float/string/[float] sigs) are exercised via BYTE-FAITHFUL
+  inlined copies of the exact bodies under test (`t_` prefix); HexaVal-
+  union-typed fns (rt_eq_* all-9-tags, rt_len, rt_to_string_*, the
+  array-callback family, the map family, IO) are exercised through the
+  NATIVE builtin surface they back (`==`, `len()`, `to_string()`,
+  `.map/.filter/.fold`, `#{}` dict literals + `keys/values/has_key`,
+  `println/eprintln`) — those operators route through the very rt_*
+  implementations being verified (HEXA_HAS_HEXA_RT_STDLIB dispatch).
+- Coverage: F1 arithmetic/numeric (abs/floor/ceil/u_floor/clamp/imin/
+  imax/sign/round/min/max_float/fma/pow_int/isnan/isinf/isfinite) · F2
+  math/transcendental (sqrt/exp/log/cos/sin/tanh/fmod/pow_float/argmax/
+  matvec/matmul) · F3 string (str_parse_int incl ws/sign/hex,
+  format_float_f, int_to_dec_str) · F4 array-float (interleave/range/
+  slice/contains/index_of/unique/reverse/rotate/sum/product/min/max/
+  mean/one_hot) · F5 array callbacks (map/filter/fold) · F6 map
+  (index/keys/has_key/values/iterate) · F7 hexa_eq all tag combos
+  (int/float/bool/string/array-deep/nested/cross-int-float/empty) · F8
+  to_string (scalars/array/nested/empty) · F9 hexa_len (string/array/
+  map/nested) · F10 IO (println/eprintln).
+- Built + run on pool mini (Mac arm64). Local `hexa parse` gate clean.
+
 ### 2026-05-20 — Phase 0 closure
 
 - 🛸 cycle 41 `2392d901` — S3 fixpoint full closure PROVEN (gen1 ≡
