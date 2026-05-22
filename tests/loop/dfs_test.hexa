@@ -135,6 +135,16 @@ fn main() {
     if dfs_verify_child(greek, view) == "" { println("  ok: verify accepts Greek math (sigma/tau)") }
     else { println("  FAIL: Greek math rejected: " + dfs_verify_child(greek, view)); fail = fail + 1 }
 
+    // Greek glyph in CITE — view has ASCII "sigma" P-node, child cites "σ"
+    // (CF 83 via octal printf). cite-in-atlas must normalize and match.
+    let _ = exec("printf '\\317\\203' > /tmp/dfs_test_sigma.txt")
+    let sigma_glyph = read_text("/tmp/dfs_test_sigma.txt")
+    let cite_glyph = _mkcand("cg", "empty_space",
+        "Greek glyph cite — Claude often writes the atlas node sigma as the Greek letter directly.",
+        [sigma_glyph], false)
+    if dfs_verify_child(cite_glyph, view) == "" { println("  ok: cite Greek glyph normalizes to atlas (sigma->sigma)") }
+    else { println("  FAIL: Greek-glyph cite rejected: " + dfs_verify_child(cite_glyph, view)); fail = fail + 1 }
+
     // ---- 3. dfs_run stub integration ----
     let _ = write_text("/tmp/dfs_test_fixture.md", FIXTURE)
     let _ = exec("rm -rf inbox/atlas_candidates/dfs_seed_root")
