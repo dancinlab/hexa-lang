@@ -801,9 +801,18 @@ fn _test_tma_codegen_scaffold() -> bool {
 
     // (3) Feature-flag defaults OFF — preserves byte-identical existing
     //     emit path (no regression on the 31 existing cases above).
+    //
+    // N206 — predicate now reads `HEXA_NVPTX_TMA` env via env_var
+    // (codegen_c2.hexa:5154). When env is unset the predicate must be
+    // false; if env=1 the test is informational (flag is intentionally on).
     if nvptx_tma_codegen_enabled() {
-        println("  FAIL: nvptx_tma_codegen_enabled() must default to false (scaffold)")
-        ok = false
+        let env_set = env_var("HEXA_NVPTX_TMA")
+        if env_set == "1" {
+            println("  INFO: HEXA_NVPTX_TMA=1 detected; default-OFF clause not applicable")
+        } else {
+            println("  FAIL: nvptx_tma_codegen_enabled() must default to false when env unset (scaffold)")
+            ok = false
+        }
     }
 
     // (4) Opcode table — non-empty, every row pins sm_120a + 8.7.
@@ -838,6 +847,100 @@ fn _test_tma_codegen_scaffold() -> bool {
     if NVPTX_TMA_DESC_BYTES != 128     { ok = false; println("  FAIL: NVPTX_TMA_DESC_BYTES must be 128") }
     if NVPTX_TMA_DESC_ALIGNMENT != 64  { ok = false; println("  FAIL: NVPTX_TMA_DESC_ALIGNMENT must be 64") }
     if NVPTX_TMA_MAX_RANK != 5         { ok = false; println("  FAIL: NVPTX_TMA_MAX_RANK must be 5") }
+
+    return ok
+}
+
+// ── Case 33 — F-RFC067-NVPTX-TMA-MATMUL-EMIT (N206 TMA dispatch) ─────
+//
+// RFC 067 N206 — TMA matmul emit dispatch on sm_120a + flag on. Verifies
+// the codegen wiring:
+//   (a) `_nvptx_emit_matmul_tma_module(name, target, "8.7")` directly
+//       emits PTX containing the N196 TMA opcode chain
+//       (cp.async.bulk.tensor.2d + mbarrier.init/arrive/try_wait +
+//       fence.proxy.async + cvta.param.u64) + sm_120a header.
+//   (b) The kernel entry name flows through (parameterised — same
+//       MFunc-name path as the N128 WMMA emit).
+//   (c) The 2 × .param .align 64 .b8 [128] TMA descriptor param slots
+//       are emitted with `tmap_a_param` / `tmap_b_param` + the C global
+//       pointer `c_ptr_param` (matches the N200 SMOKE artifact +
+//       N202 requirements doc kernel signature).
+//   (d) With `nvptx_tma_codegen_enabled()` default-OFF (env HEXA_NVPTX_TMA
+//       unset), `codegen_emit_ptx_for_sm(module, "sm_120a")` falls through
+//       to the WMMA path (no TMA opcodes emitted) — proves the feature
+//       flag actually gates the path (not just sm_120a target).
+//
+// This is the F-RFC067-NVPTX-TMA-CODEGEN-EMIT falsifier — the codegen
+// half of the source-to-silicon E2E. The silicon-fire half lives in
+// inbox/fires/ + the host-side cuTensorMapEncodeTiled driver.
+
+fn _test_tma_matmul_emit() -> bool {
+    let mut ok = true
+
+    println("")
+    println("── RFC 067 N206 TMA matmul emit (sm_120a + flag on) ──")
+
+    // (a)+(b)+(c) Direct emit via the public TMA module emitter.
+    let ptx_tma = _nvptx_emit_matmul_tma_module("matmul_tma", NVPTX_TARGET_SM120A, NVPTX_PTX_VERSION_SM120A)
+
+    // Header (sm_120a + 8.7 + .address_size 64) — N196 finding gate.
+    ok = _check(ok, ptx_tma, ".version 8.7",                   "TMA PTX .version 8.7 (N196)")
+    ok = _check(ok, ptx_tma, ".target sm_120a",                "TMA PTX .target sm_120a (N196)")
+    ok = _check(ok, ptx_tma, ".address_size 64",               "TMA PTX .address_size 64")
+    // Entry directive + param bank (TMA descriptors + C ptr).
+    ok = _check(ok, ptx_tma, ".visible .entry matmul_tma",     "TMA entry directive name flowed through")
+    ok = _check(ok, ptx_tma, ".param .align 64 .b8 tmap_a_param[128]", "TMA A-descriptor param slot (128 B, align 64)")
+    ok = _check(ok, ptx_tma, ".param .align 64 .b8 tmap_b_param[128]", "TMA B-descriptor param slot (128 B, align 64)")
+    ok = _check(ok, ptx_tma, ".param .u64 c_ptr_param",        "C global pointer param")
+    // Shared memory tiles + mbarrier slot.
+    ok = _check(ok, ptx_tma, ".shared .align 16 .b8 smem_a[2048]", "A smem tile (64 rows x 16 cols fp16)")
+    ok = _check(ok, ptx_tma, ".shared .align 16 .b8 smem_b[2048]", "B smem tile (16 rows x 64 cols fp16)")
+    ok = _check(ok, ptx_tma, ".shared .align 8  .b8 smem_mbar[8]", "mbarrier smem slot (8 B)")
+    // TMA descriptor address conversion (PTX ISA 8.7 §9.7.9.6).
+    ok = _check(ok, ptx_tma, "cvta.param.u64 %tmap_a_addr",    "A-descriptor param->generic addr conversion")
+    ok = _check(ok, ptx_tma, "cvta.param.u64 %tmap_b_addr",    "B-descriptor param->generic addr conversion")
+    // mbarrier init + arrive + wait (PTX ISA 8.7 §9.7.12.15).
+    ok = _check(ok, ptx_tma, "mbarrier.init.shared.b64",       "mbarrier init opcode")
+    ok = _check(ok, ptx_tma, "mbarrier.arrive.expect_tx.release.cta.shared::cta.b64", "mbarrier arrive opcode")
+    ok = _check(ok, ptx_tma, "mbarrier.try_wait.parity.shared::cta.b64", "mbarrier try_wait parity opcode")
+    // Proxy fence (PTX ISA 8.7 §8.5).
+    ok = _check(ok, ptx_tma, "fence.proxy.async.shared::cta",  "proxy fence between TMA async and generic proxy")
+    // TMA bulk tensor load (PTX ISA 8.7 §9.7.8.24).
+    ok = _check(ok, ptx_tma, "cp.async.bulk.tensor.2d.shared::cluster.global.tile.mbarrier::complete_tx::bytes", "cp.async.bulk.tensor.2d TMA load opcode")
+    // K-loop (4 iters of 16 cols, M=N=K=64 SMOKE shape).
+    ok = _check(ok, ptx_tma, "L_kloop:",                       "K-loop label")
+    ok = _check(ok, ptx_tma, "setp.lt.s32 %p0, %k_iter, 4",    "K-loop guard (4 K-tiles)")
+    ok = _check(ok, ptx_tma, "add.s32 %k_iter, %k_iter, 1",    "K-loop step")
+    ok = _check(ok, ptx_tma, "ret;",                           "kernel return")
+    // Negative guards — TMA emit must NOT contain WMMA opcodes (different
+    // load/mma path) or the canonical N128 6-param bank (TMA uses 2-desc
+    // + 1-C-ptr signature instead).
+    if _contains(ptx_tma, "wmma.load.a")               { ok = false; println("  FAIL: TMA path must not emit wmma.load.a (uses cp.async.bulk.tensor)") }
+    if _contains(ptx_tma, "wmma.mma.sync")             { ok = false; println("  FAIL: TMA path SMOKE-level does not emit wmma.mma chain (scope-down: load+write-back only)") }
+    if _contains(ptx_tma, ".param .u64 matmul_tma_param_5") { ok = false; println("  FAIL: TMA path uses 2-descriptor + C-ptr signature, not the 6 .u64 bank") }
+
+    // (d) Default-OFF behavior — sm_120a target with flag OFF must NOT
+    //     take TMA path. Run the public dispatcher and confirm no TMA
+    //     opcodes appear. (HEXA_NVPTX_TMA env var must be unset for this
+    //     test to be meaningful; if set, the test is informational.)
+    let mod_mm = _build_matmul_module_for("matmul_default_off", "matmul")
+    let ptx_off = codegen_emit_ptx_for_sm(mod_mm, "sm_120a")
+    if nvptx_tma_codegen_enabled() {
+        // Env is set — TMA path is taken; verify it.
+        println("  INFO: HEXA_NVPTX_TMA=1 detected; default-OFF clause skipped")
+    } else {
+        // Env is unset — must fall through to WMMA path (no TMA opcodes).
+        if _contains(ptx_off, "cp.async.bulk.tensor") {
+            ok = false; println("  FAIL: flag OFF + sm_120a must NOT emit TMA opcodes (got cp.async.bulk.tensor)")
+        }
+        if _contains(ptx_off, "mbarrier.init.shared.b64") {
+            ok = false; println("  FAIL: flag OFF + sm_120a must NOT emit mbarrier opcodes")
+        }
+        // Should still emit something (WMMA-shaped) for the matmul module.
+        if !_contains(ptx_off, ".visible .entry matmul_default_off") {
+            ok = false; println("  FAIL: flag OFF + sm_120a must still emit a matmul kernel entry (WMMA path)")
+        }
+    }
 
     return ok
 }
@@ -881,11 +984,12 @@ fn main() {
     let ok_mta   = _test_matmul_NT_a_emit()
     let ok_mtb   = _test_matmul_NT_b_emit()
     let ok_tma   = _test_tma_codegen_scaffold()
+    let ok_tmae  = _test_tma_matmul_emit()
 
     println("")
     println("══════════════════════════════════════════════")
-    if ok_br && ok_cls && ok_setp && ok_intr && ok_ls && ok_part && ok_barr && ok_atom && ok_shuf && ok_unr && ok_unrn && ok_wmma && ok_mp && ok_fctN && ok_pp && ok_fw && ok_sd && ok_me && ok_np && ok_os && ok_df && ok_bm && ok_wie && ok_gkw && ok_fls && ok_fp8a && ok_fp8b && ok_i64c && ok_mm && ok_mta && ok_mtb && ok_tma {
-        println("PASS: RFC 055 + RFC 067 + RFC 068 P1/P2/P3/P4-codegen + RFC 068 §3 fp8 scaffold + RFC 069 + RFC 071 P3+/P5+ + RFC 067 N202 TMA scaffold — 32/32 cases (incl. matmul + matmul_NT_a + matmul_NT_b + TMA codegen scaffold)")
+    if ok_br && ok_cls && ok_setp && ok_intr && ok_ls && ok_part && ok_barr && ok_atom && ok_shuf && ok_unr && ok_unrn && ok_wmma && ok_mp && ok_fctN && ok_pp && ok_fw && ok_sd && ok_me && ok_np && ok_os && ok_df && ok_bm && ok_wie && ok_gkw && ok_fls && ok_fp8a && ok_fp8b && ok_i64c && ok_mm && ok_mta && ok_mtb && ok_tma && ok_tmae {
+        println("PASS: RFC 055 + RFC 067 + RFC 068 P1/P2/P3/P4-codegen + RFC 068 §3 fp8 scaffold + RFC 069 + RFC 071 P3+/P5+ + RFC 067 N202 TMA scaffold + RFC 067 N206 TMA matmul emit — 33/33 cases (incl. matmul + matmul_NT_a + matmul_NT_b + TMA codegen scaffold + TMA matmul emit)")
     } else {
         println("FAIL: RFC 055 smoke not satisfied.")
         if !ok_br   { println("      STMT_BR FAILED") }
@@ -920,6 +1024,7 @@ fn main() {
         if !ok_mta  { println("      RFC 071 P5+ matmul_NT_a codegen FAILED") }
         if !ok_mtb  { println("      RFC 071 P5+ matmul_NT_b codegen FAILED") }
         if !ok_tma  { println("      RFC 067 N202 TMA codegen scaffold FAILED") }
+        if !ok_tmae { println("      RFC 067 N206 TMA matmul emit FAILED") }
     }
     println("══════════════════════════════════════════════")
     if !(ok_br && ok_cls && ok_setp && ok_intr && ok_ls && ok_part && ok_barr && ok_atom && ok_shuf && ok_unr && ok_unrn && ok_wmma && ok_mp && ok_fctN && ok_pp && ok_fw && ok_sd && ok_me && ok_np && ok_os && ok_df && ok_bm && ok_wie && ok_gkw && ok_fls && ok_fp8a && ok_fp8b && ok_i64c && ok_mm && ok_mta && ok_mtb && ok_tma) { exit(1) }

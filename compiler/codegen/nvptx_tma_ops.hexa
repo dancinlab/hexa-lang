@@ -217,17 +217,23 @@ pub fn ptx_tma_ops() -> [PtxTmaOpEntry] {
 
 // ── Feature-flag predicate (RFC 067 N202 scaffold gate) ───────
 //
-// `nvptx_tma_codegen_enabled` — informational predicate the future
-// emit pass calls to decide whether to take the TMA path or fall back
-// to the existing `cp.async.cg` cooperative-load path (N149 era).
+// `nvptx_tma_codegen_enabled` — predicate the emit pass calls to decide
+// whether to take the TMA path (cp.async.bulk.tensor + mbarrier) or
+// fall back to the existing `cp.async.cg` cooperative-load path (N149
+// era). Wired in N206 to read `HEXA_NVPTX_TMA` from the process env via
+// the hexa-builtin `env_var` (codegen_c2.hexa:5154 -> hexa_env_var):
+//   * `HEXA_NVPTX_TMA=1` → TMA codegen ON
+//   * unset / empty / "0" → OFF (default — byte-identical existing emit)
 //
-// HONEST: today this predicate returns `false` unconditionally. The
-// real flag wiring (env var `HEXA_NVPTX_TMA=1`, or a `@gpu_tma`
-// per-kernel attribute, or a MIR-level capability marker) is N203+.
-// Until then the existing nvptx_target.hexa emit path stays byte-
-// identical (F-RFC067-NVPTX-TMA-CODEGEN-SCAFFOLD).
+// The env var IS the flag mechanism per the N202 requirements doc
+// (`inbox/notes/2026-05-22-tma-runtime-builtin-requirements.md` §
+// "Per-shape TMA descriptor generation"). Default OFF preserves the
+// F-RFC067-NVPTX-TMA-CODEGEN-SCAFFOLD guarantee (32/32 lower_test PASS
+// without env) and keeps the existing nvptx_target.hexa emit path
+// byte-identical when the flag is not set.
 pub fn nvptx_tma_codegen_enabled() -> bool {
-    return false
+    let v = env_var("HEXA_NVPTX_TMA")
+    return v == "1"
 }
 
 // ── Module header emit for TMA (RFC 067 N202 scaffold) ────────
