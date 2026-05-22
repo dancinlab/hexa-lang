@@ -1,87 +1,39 @@
-N164 — RFC 071 P11 natural-loop matmul source-to-silicon re-validation
-================================================================================
-DATE:   2026-05-22
-HOST:   darwin-arm64 (compile/emit) — ubu-1 silicon-fire NOT REACHED (see verdict)
-DRIVER: /tmp/hexa_n164_driver (built from self/main.hexa, 4-env-var setup)
-        HEXA_LANG=<repo> HEXA_MAC_BUILD_OK=1
-        HEXA_MODULE_LOADER=<repo>/build/hexa_module_loader
-        PATH includes <repo>/build/self/native
+# RFC 071 P11 natural-loop matmul source-to-silicon — FIRE LOG
+# 2026-05-22 · ubu-1 RTX 5070 (driver 580.159.04) · CUDA 12.9
+# Branch worktree-agent-ac5d83401a37b1290 · commits c440d002 + 9e937ad9
 
-VERDICT: BLOCKED — N143 natural-loop auto-synth matcher is WIPED from origin/main.
-         Natural-loop fixture emits SCALAR-LOOP PTX (0 wmma.*), not WMMA.
-         ubu-1 fire intentionally NOT executed (would test wrong code path).
+## 1. Emit (ubu-1 /tmp fresh clone, compiled module-loader flatten, NO interp OOM)
+$ build/hexa_module_loader emit_ptx_harness.hexa build/emit_flat.hexa   # 24 files
+$ self/native/hexa_v2 build/emit_flat.hexa build/emit_flat.c            # OK
+$ clang ... build/emit_flat_ext.c self/runtime.c -o build/emit_ptx_harness  # rc=0
+$ ./build/emit_ptx_harness compiler/codegen/nvptx_p11_matmul_natural_test.hexa sm_80 matmul_naive.sm_80.ptx
+[emit] src=compiler/codegen/nvptx_p11_matmul_natural_test.hexa sm=sm_80 out=matmul_naive.sm_80.ptx
 
---------------------------------------------------------------------------------
-STEP 1 — N143 presence check
---------------------------------------------------------------------------------
-$ grep -c "_hir_is_nested_matmul_body" compiler/lower/hir_to_mir.hexa
-0                                   # ABSENT in HEAD
-$ git show origin/main:compiler/lower/hir_to_mir.hexa | grep -c "_hir_is_nested_matmul_body"
-0                                   # ABSENT in origin/main too
+## 2. WMMA verification
+$ grep -oE 'wmma\.[a-z.0-9]+' matmul_naive.sm_80.ptx | cut -d. -f1-3 | sort | uniq -c
+      1 wmma.load.a
+      1 wmma.load.b
+      1 wmma.mma.sync
+      1 wmma.store.d
+# byte-identical instruction set to matmul_kernel.sm_80.BUILTIN_CONTROL_WMMA.ptx
+# emit deterministic (3x re-emit MD5 ff11068f4b87cfb89ebb34763c7f9479)
 
-WIPE TRACE:
-  4c93b550  feat: nested-loop matmul auto-synth (N143)  <- ADDED matcher (+382 L)
-  e8c2dc1c  wip: dfflibmap sky130 reset-flop variants    <- WIPED matcher (-382 L)
-  e8c2dc1c is an ancestor of origin/main (git merge-base --is-ancestor = YES).
-  e8c2dc1c also dropped 482 L from compiler/lower/mir_test.hexa (case g wiped).
-  => stale-base silent-wipe (the documented runtime_c_deploy_regen_wipe /
-     worktree_merge_silent_filedrop hazard, compiler-source variant).
+## 3. Silicon fire
+$ gcc -O2 -I/usr/local/cuda/include host_matmul.c -L/usr/local/cuda/lib64 -lcuda -o host_matmul
+$ LD_LIBRARY_PATH=/usr/local/cuda/lib64 ./host_matmul matmul_naive.sm_80.ptx
+[JIT info]
+{
+  "M": 64, "N": 64, "K": 64,
+  "max_abs": 2.622604e-06,
+  "max_rel": 5.385030e-04,
+  "byte_mismatch": 3324,
+  "c_nonzero_cells": 4096,
+  "first_nonzero_idx": 0,
+  "ref_first_8": [-1.980, 4.992, -2.512, -2.866, -1.160, -1.588, 0.901, -4.402],
+  "got_first_8": [-1.980, 4.992, -2.512, -2.866, -1.160, -1.588, 0.901, -4.402]
+}
+# fire-rc=0 (max_abs 2.62e-06 < 1e-2 tolerance)
 
---------------------------------------------------------------------------------
-STEP 2 — N128 NVPTX codegen presence check (intact)
---------------------------------------------------------------------------------
-$ grep -c "_nvptx_mfunc_is_matmul_shape\|_nvptx_emit_matmul" compiler/codegen/nvptx_target.hexa
-56                                  # PRESENT — all emit fns intact
-$ grep -c "wmma.load.a\|wmma.mma\|wmma.store.d" compiler/codegen/nvptx_target.hexa
-49
-
---------------------------------------------------------------------------------
-STEP 3 — parse-gate the natural-loop fixture (untyped `var sum = 0.0`)
---------------------------------------------------------------------------------
-$ /tmp/hexadrv_n164 parse compiler/codegen/nvptx_p11_matmul_natural_test.hexa
-OK: ...nvptx_p11_matmul_natural_test.hexa parses cleanly
-rc=0                                # PASS — N153 typed-local reject avoided
-
---------------------------------------------------------------------------------
-STEP 4 — emit PTX from natural-loop source (the decisive test)
---------------------------------------------------------------------------------
-$ /tmp/hexa_n164_driver build /tmp/n164_natural.hexa --target=nvptx64-nvidia-cuda-sm80
-atlas: loaded 15952 nodes from hxc
-[nvptx] target=sm_80 src=/tmp/n164_natural.hexa out=/tmp/n164_natural.hexa.ptx phase=P3-PATH-B
-rc=0
-
-WMMA substring audit on emitted matmul_naive PTX:
-  [0] wmma.load.a          <- ZERO — auto-synth did NOT fire
-  [0] wmma.load.b          <- ZERO
-  [0] wmma.mma             <- ZERO
-  [0] wmma.store.d         <- ZERO
-  [1] .visible .entry matmul_naive   <- entry header present (generic codegen)
-
-Register/instr profile (scalar-loop signature):
-  .reg .f64 = 22   .reg .pred = 3   bra = 12   wmma = 0   fma.rn.f32 = 0
-
---------------------------------------------------------------------------------
-STEP 4b — CONTROL: gpu_matmul() builtin path (N100, intact) emits WMMA
---------------------------------------------------------------------------------
-$ /tmp/hexa_n164_driver build /tmp/n164_builtin.hexa --target=nvptx64-nvidia-cuda-sm80
-WMMA substring audit on matmul_kernel PTX:
-  [1] wmma.load.a          <- PRESENT
-  [1] wmma.mma             <- PRESENT
-  [1] wmma.store.d         <- PRESENT
-  [1] .visible .entry matmul_kernel
-  wmma total = 4, bra = 2
-
-CONCLUSION: N128 codegen fully intact (builtin control proves WMMA emit works).
-            ONLY missing piece = N143 HIR->MIR auto-synth matcher.
-            Natural-loop -> scalar PTX because lower_hir never produces the
-            STMT_LOAD+STMT_LOAD+STMT_BINOP("matmul")+STMT_STORE skeleton that
-            _nvptx_mfunc_is_matmul_shape keys on.
-
---------------------------------------------------------------------------------
-ubu-1 SILICON-FIRE: NOT EXECUTED
---------------------------------------------------------------------------------
-Firing scalar-loop PTX on ubu-1 would (a) likely pass numerically (it is a
-correct, if slow, scalar matmul translation) but (b) NOT test the natural-loop
--> WMMA auto-synth path that this falsifier targets. A PASS would be MISLEADING
-(@D g3). The harness host_matmul.c (kernel name matmul_naive) is staged and
-ready to fire the instant N143 is restored.
+## VERDICT
+F-RFC071-NVPTX-MATMUL-NATURAL-LOOP-SOURCE-TO-SILICON: PASS
+Natural-loop matmul source-to-silicon CLOSED end-to-end (the N153 milestone).
