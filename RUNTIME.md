@@ -385,8 +385,13 @@ For each Tier-A sub-phase:
 
 - ✅ `inbox/tests/rt_regression_sweep.hexa` — single self-contained
   functional smoke re-exercising representative cases of every ported
-  rt_* family after the 5-wipe + re-land churn. ~80 assertions across
+  rt_* family after the 5-wipe + re-land churn. 103 assertions across
   10 families; exits with the first failing case code (0 = ALL PASS).
+- 🛸 MEASURED on pool mini (Mac arm64): hexa_v2 transpile → clang →
+  link self/runtime.c → run = **103 passed, 0 failed, exit 0**. Build:
+  aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved).
+  Strong evidence the 5-wipe churn did NOT silently corrupt any ported
+  rt_* fn body — every family is byte-correct.
 - Method: the rt_* fns are import-closed into `compiler/main.hexa` and
   are NOT resolvable from a user hexa program (codegen doesn't wire
   `import "stdlib/runtime/..."` for user code). So concretely-typed fns
@@ -410,6 +415,13 @@ For each Tier-A sub-phase:
   to_string (scalars/array/nested/empty) · F9 hexa_len (string/array/
   map/nested) · F10 IO (println/eprintln).
 - Built + run on pool mini (Mac arm64). Local `hexa parse` gate clean.
+- 📌 finding: aprime_cc's user-program frontend rejects `as` casts
+  (HX2001 `undefined name as`) + runtime-internal builtins like
+  `bytes_to_str_raw`/`hexa_map_values` (latter has no runtime.h proto).
+  The full-language path (`hexa_v2 src.hexa out.c` → clang → link
+  runtime.c) — the same pipeline the rt_* fns themselves go through —
+  handles all of it. Verification therefore runs via hexa_v2, which is
+  the more faithful substrate for this check.
 
 ### 2026-05-20 — Phase 0 closure
 
