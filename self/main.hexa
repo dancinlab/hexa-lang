@@ -2332,8 +2332,42 @@ fn cmd_build(src, out, c_only, target, shared) {
     let mut _shared_cflags = ""
     if shared == "1" { _shared_cflags = "-fPIC -shared " }
     let mut compile = ""
+    // runtime.c content-hash object cache. runtime.c — with its ~18
+    // #include'd TUs (runtime_core.c, runtime_hi_gen.c, native/*.c …) — is
+    // a large, stable translation unit that was re-`clang -O2`'d on EVERY
+    // `hexa build` / `hexa run`: a CPU storm under sidecar-hook fan-out
+    // (timestamp-keyed cache never hit). Precompile it once to a
+    // content-hash-keyed `runtime.<sha>.o` under ~/.hexa-cache and link the
+    // object. The key hashes the whole runtime C-source set, so any runtime
+    // edit transparently yields a fresh object; stale objects are never
+    // hit. Skipped for --shared (needs -fPIC) and cross-target (zig emits
+    // target-specific objects). Hash failure / no $HOME → source fallback.
+    let mut _rt_obj = ""
+    if shared != "1" && len(target) == 0 && len(env("HOME")) > 0 {
+        let _rt_sha = exec("cat '" + __self_dir + "'/runtime*.c '" + __self_dir + "'/runtime*.h '" + __self_dir + "'/native/*.c '" + __self_dir + "'/native/*.h 2>/dev/null | shasum -a 1 2>/dev/null | cut -d' ' -f1").trim()
+        if len(_rt_sha) > 0 {
+            let _rt_cache = env("HOME") + "/.hexa-cache"
+            let _rt_cand = _rt_cache + "/runtime." + _rt_sha + ".o"
+            if !file_exists(_rt_cand) {
+                exec("mkdir -p '" + _rt_cache + "' 2>/dev/null")
+                let _rt_tmp = _rt_cand + ".tmp." + to_string(mono_ns())
+                let _rt_cc = "clang -O2 " + os_clang_cflags() + strict_fp_cflags(__runtime_c) + "-Wno-trigraphs -fbracket-depth=4096 -I '" + __self_dir + "' -c '" + __runtime_c + "' -o '" + _rt_tmp + "' 2>&1"
+                let _rt_r = exec(_rt_cc)
+                if file_exists(_rt_tmp) {
+                    exec("mv -f '" + _rt_tmp + "' '" + _rt_cand + "' 2>/dev/null")
+                } else if len(_rt_r) > 0 {
+                    println("    [runtime.o cache] compile failed — using source: " + _rt_r)
+                }
+            }
+            if file_exists(_rt_cand) { _rt_obj = _rt_cand }
+        }
+    }
+    // Runtime input to the final link: cached object when available, else
+    // runtime.c source (first build of a given runtime, or no $HOME).
+    let mut _rt_input = "'" + __runtime_c + "'"
+    if len(_rt_obj) > 0 { _rt_input = "'" + _rt_obj + "'" }
     if len(target) == 0 {
-        compile = "clang -O2 " + _shared_cflags + os_clang_cflags() + _strict + "-Wno-trigraphs -fbracket-depth=4096 -I '" + __self_dir + "' " + c_file + " '" + __runtime_c + "' -o '" + tmp + "'" + os_clang_ldflags() + " 2>&1"
+        compile = "clang -O2 " + _shared_cflags + os_clang_cflags() + _strict + "-Wno-trigraphs -fbracket-depth=4096 -I '" + __self_dir + "' " + c_file + " " + _rt_input + " -o '" + tmp + "'" + os_clang_ldflags() + " 2>&1"
     } else {
         let zt = target_zig_triple(target)
         if len(zt) == 0 {
