@@ -126,6 +126,25 @@ fn main() {
     if dfs_verify_child(korean, view) == "non-english" { println("  ok: verify drops non-english") }
     else { println("  FAIL: non-english reason = " + dfs_verify_child(korean, view)); fail = fail + 1 }
 
+    // Greek math (sigma/tau, mid-dot) MUST pass — it is this atlas's core
+    // vocabulary. Regression guard for the over-strict ASCII-only gate that
+    // the monitored real-LLM run caught (Claude writes sigma/tau as Greek).
+    let _ = exec("printf 'The ratio of \\317\\203 over \\317\\204 for n equal to six yields exactly three, a real structural identity worth testing.' > /tmp/dfs_test_gr.txt")
+    let gr_body = read_text("/tmp/dfs_test_gr.txt")
+    let greek = _mkcand("gr", "empty_space", gr_body, ["sigma"], false)
+    if dfs_verify_child(greek, view) == "" { println("  ok: verify accepts Greek math (sigma/tau)") }
+    else { println("  FAIL: Greek math rejected: " + dfs_verify_child(greek, view)); fail = fail + 1 }
+
+    // Greek glyph in CITE — view has ASCII "sigma" P-node, child cites "σ"
+    // (CF 83 via octal printf). cite-in-atlas must normalize and match.
+    let _ = exec("printf '\\317\\203' > /tmp/dfs_test_sigma.txt")
+    let sigma_glyph = read_text("/tmp/dfs_test_sigma.txt")
+    let cite_glyph = _mkcand("cg", "empty_space",
+        "Greek glyph cite — Claude often writes the atlas node sigma as the Greek letter directly.",
+        [sigma_glyph], false)
+    if dfs_verify_child(cite_glyph, view) == "" { println("  ok: cite Greek glyph normalizes to atlas (sigma->sigma)") }
+    else { println("  FAIL: Greek-glyph cite rejected: " + dfs_verify_child(cite_glyph, view)); fail = fail + 1 }
+
     // ---- 3. dfs_run stub integration ----
     let _ = write_text("/tmp/dfs_test_fixture.md", FIXTURE)
     let _ = exec("rm -rf inbox/atlas_candidates/dfs_seed_root")

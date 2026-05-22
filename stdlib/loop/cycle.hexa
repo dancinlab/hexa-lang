@@ -319,7 +319,7 @@ struct DfsConfig {
     allow_llm: bool,
     families: string,
     no_cache: bool,
-    resume: bool
+    do_resume: bool   // `resume` is a reserved word in the transpiler
 }
 
 // RFC 080 DFS+LLM stage — runs between DRAFT and AUDIT when --dfs is set.
@@ -335,7 +335,7 @@ fn cycle_dfs(seeds: array, view: AtlasView, cycle_no: int, cfg: DfsConfig) {
     // Phase F — --resume: continue from a budget-interrupted frontier instead
     // of this cycle's fresh lens seeds.
     let mut active_seeds = seeds
-    if cfg.resume {
+    if cfg.do_resume {
         let loaded = dfs_frontier_load()
         if len(loaded) > 0 {
             active_seeds = loaded
@@ -517,7 +517,7 @@ fn main() {
         allow_llm: allow_llm,
         families: llm_families,
         no_cache: no_cache,
-        resume: resume_mode
+        do_resume: resume_mode
     }
     println("")
     run_one_cycle(no_fire, dry_run, dfs_cfg)

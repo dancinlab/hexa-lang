@@ -72,8 +72,63 @@ fn _dfs_bool_str(b: bool) -> string {
     return "false"
 }
 
+// Greek letter -> ASCII name normalization. This atlas's core vocabulary is
+// Greek (sigma/tau/phi/...); LLM-emitted candidates may use Greek glyphs
+// (sigma) or ASCII names (sigma) interchangeably. Normalizing collapses them
+// so cite-in-atlas matches and filesystem slugs stay ASCII. Covers the 24
+// lowercase + 17 uppercase letters that occur in math notation.
+fn _dfs_normalize_greek(s: string) -> string {
+    let mut r = s
+    // lowercase
+    r = r.replace("α", "alpha")
+    r = r.replace("β", "beta")
+    r = r.replace("γ", "gamma")
+    r = r.replace("δ", "delta")
+    r = r.replace("ε", "epsilon")
+    r = r.replace("ζ", "zeta")
+    r = r.replace("η", "eta")
+    r = r.replace("θ", "theta")
+    r = r.replace("ι", "iota")
+    r = r.replace("κ", "kappa")
+    r = r.replace("λ", "lambda")
+    r = r.replace("μ", "mu")
+    r = r.replace("ν", "nu")
+    r = r.replace("ξ", "xi")
+    r = r.replace("ο", "omicron")
+    r = r.replace("π", "pi")
+    r = r.replace("ρ", "rho")
+    r = r.replace("ς", "sigma")   // final sigma -> sigma
+    r = r.replace("σ", "sigma")
+    r = r.replace("τ", "tau")
+    r = r.replace("υ", "upsilon")
+    r = r.replace("φ", "phi")
+    r = r.replace("χ", "chi")
+    r = r.replace("ψ", "psi")
+    r = r.replace("ω", "omega")
+    // uppercase
+    r = r.replace("Α", "Alpha")
+    r = r.replace("Β", "Beta")
+    r = r.replace("Γ", "Gamma")
+    r = r.replace("Δ", "Delta")
+    r = r.replace("Θ", "Theta")
+    r = r.replace("Λ", "Lambda")
+    r = r.replace("Μ", "Mu")
+    r = r.replace("Ξ", "Xi")
+    r = r.replace("Π", "Pi")
+    r = r.replace("Ρ", "Rho")
+    r = r.replace("Σ", "Sigma")
+    r = r.replace("Τ", "Tau")
+    r = r.replace("Υ", "Upsilon")
+    r = r.replace("Φ", "Phi")
+    r = r.replace("Χ", "Chi")
+    r = r.replace("Ψ", "Psi")
+    r = r.replace("Ω", "Omega")
+    return r
+}
+
 fn _dfs_safe_slug(s: string) -> string {
-    let mut r = s.replace(" ", "_")
+    let mut r = _dfs_normalize_greek(s)
+    r = r.replace(" ", "_")
     r = r.replace("*", "_")
     r = r.replace("\"", "_")
     r = r.replace("'", "_")
@@ -303,21 +358,27 @@ pub fn dfs_parse_children(resp: string, parent_slug: string) -> array {
 // ── Phase D: verify gate ────────────────────────────────────────────
 
 // Does at least one cite id resolve to a real atlas P/L node? (axis 10c)
+// Greek-tolerant: if the LLM cites the atlas node by its Greek glyph
+// ("sigma" -> "σ"), normalize before comparing — the atlas itself stores the
+// ASCII names ("sigma"), but Claude often writes them as Greek.
 fn _dfs_cite_in_atlas(cand: Candidate, view: AtlasView) -> bool {
     let cn = len(cand.cite)
     let mut c = 0
     while c < cn {
-        let id = cand.cite[c]
+        let raw = cand.cite[c]
+        let id = _dfs_normalize_greek(raw)
         let pn = len(view.p_nodes)
         let mut i = 0
         while i < pn {
-            if view.p_nodes[i].id == id { return true }
+            let pid = view.p_nodes[i].id
+            if pid == id || pid == raw { return true }
             i = i + 1
         }
         let ln = len(view.l_nodes)
         let mut j = 0
         while j < ln {
-            if view.l_nodes[j].id == id { return true }
+            let lid = view.l_nodes[j].id
+            if lid == id || lid == raw { return true }
             j = j + 1
         }
         c = c + 1
@@ -325,17 +386,22 @@ fn _dfs_cite_in_atlas(cand: Candidate, view: AtlasView) -> bool {
     return false
 }
 
-// English-only heuristic (axis 10f). Rejects any non-ASCII byte (>= 0x80),
-// which covers CJK/Hangul; the atlas itself is ASCII ("phi * n"), so an
-// ASCII-only proposal is the right contract. Counts non-ASCII bytes
-// portably by deleting every ASCII byte (0x00-0x7f) and measuring the
-// remainder -- robust across BSD/GNU `tr` and `sh`, unlike grep's `\xHH`
-// byte-class which is implementation-defined (it silently matched ASCII
-// letters under sh+BSD grep and rejected all English; caught by Phase J).
+// English-only heuristic (axis 10f). Rejects CJK/Hangul specifically while
+// ALLOWING the math notation this atlas lives on -- Greek sigma/tau/phi
+// (2-byte 0xCE/0xCF), Latin-1 mid-dot (0xC2), em-dash/arrows (0xE2). Counts
+// only bytes in 0xE3-0xED, the 3-byte UTF-8 lead-byte band for CJK
+// ideographs (0xE4-0xE9) + Hangul (0xEA-0xED) + CJK symbols (0xE3); these
+// never occur as UTF-8 continuation bytes (0x80-0xBF), so the count is exact.
+// `tr -cd` keeps only that band; >0 means CJK present.
+//
+// History: first used grep `[\xe4-\xed]` (matched ASCII letters under
+// sh+BSD grep -> rejected all English, caught Phase J); then `tr -d
+// '\0-\177'` (rejected ALL non-ASCII -> rejected sigma/tau/phi math, caught
+// by the monitored real-LLM run). This band-only form is the correct gate.
 fn _dfs_has_cjk(s: string) -> bool {
     let tmp = "/tmp/hexa_loop_dfs_cjk_" + to_string(_dfs_now_epoch()) + ".txt"
     let _ = write_text(tmp, s)
-    let cnt = exec("LC_ALL=C tr -d '\\0-\\177' < " + _dfs_shq(tmp) + " | wc -c | tr -d ' '").trim()
+    let cnt = exec("LC_ALL=C tr -cd '\\343-\\355' < " + _dfs_shq(tmp) + " | wc -c | tr -d ' '").trim()
     let _ = exec("rm -f " + _dfs_shq(tmp))
     return _dfs_atoi(cnt) > 0
 }
