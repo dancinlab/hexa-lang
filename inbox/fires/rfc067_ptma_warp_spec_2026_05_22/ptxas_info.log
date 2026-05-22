@@ -1,0 +1,30 @@
+=== shape 512 (sgemm_tma_warp_spec_512x512_grid) ===
+
+
+shape 512 cuFuncGetAttribute: regs/thd=95, shmem=8224 B, max_thd_per_block=640
+
+=== shape 1024 (sgemm_tma_warp_spec_1024x1024_grid) ===
+
+
+shape 1024 cuFuncGetAttribute: regs/thd=95, shmem=8224 B, max_thd_per_block=640
+
+=== shape 2048 (sgemm_tma_warp_spec_2048x2048_grid) ===
+
+
+shape 2048 cuFuncGetAttribute: regs/thd=95, shmem=8224 B, max_thd_per_block=640
+
+=== shape 4096 (sgemm_tma_warp_spec_4096x4096_grid) ===
+
+
+shape 4096 cuFuncGetAttribute: regs/thd=95, shmem=8224 B, max_thd_per_block=640
+
+=== shape 6144 (sgemm_tma_warp_spec_6144x6144_grid) ===
+
+
+shape 6144 cuFuncGetAttribute: regs/thd=95, shmem=8224 B, max_thd_per_block=640
+
+=== shape 8192 (sgemm_tma_warp_spec_8192x8192_grid) ===
+
+
+shape 8192 cuFuncGetAttribute: regs/thd=95, shmem=8224 B, max_thd_per_block=640
+

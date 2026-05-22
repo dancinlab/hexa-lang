@@ -1,0 +1,39 @@
+Device: NVIDIA GeForce RTX 5070 sm_120
+CUDA driver=13000 runtime=12090
+loaded N203 PTX shape 512 (sgemm_tma_warp_spec_512x512_grid)
+  shape 512: regs/thd=95, shmem=8224 B, max_thd_per_block=640
+loaded N203 PTX shape 1024 (sgemm_tma_warp_spec_1024x1024_grid)
+  shape 1024: regs/thd=95, shmem=8224 B, max_thd_per_block=640
+loaded N203 PTX shape 2048 (sgemm_tma_warp_spec_2048x2048_grid)
+  shape 2048: regs/thd=95, shmem=8224 B, max_thd_per_block=640
+loaded N203 PTX shape 4096 (sgemm_tma_warp_spec_4096x4096_grid)
+  shape 4096: regs/thd=95, shmem=8224 B, max_thd_per_block=640
+loaded N203 PTX shape 6144 (sgemm_tma_warp_spec_6144x6144_grid)
+  shape 6144: regs/thd=95, shmem=8224 B, max_thd_per_block=640
+loaded N203 PTX shape 8192 (sgemm_tma_warp_spec_8192x8192_grid)
+  shape 8192: regs/thd=95, shmem=8224 B, max_thd_per_block=640
+Device VRAM free=11579.06 MB total=11772.44 MB
+[M= 512] allocating 3.00 MB device memory
+[M= 512] cuBLAS HGEMM             median=0.011552 ms  TFLOPS= 23.2371
+[M= 512] sanity max|hexa-cuBLAS|=0.0000  maxrel=0.0000 (cuBLAS max|C|=0.0000)
+[M= 512] N203 TMA+warp-spec       median=0.017696 ms  TFLOPS= 15.1693  ratio=0.6528  maxabs=0.0000  CTAs=64  regs=95  shmem=8224
+[M=1024] allocating 12.00 MB device memory
+[M=1024] cuBLAS HGEMM             median=0.040288 ms  TFLOPS= 53.3033
+[M=1024] sanity max|hexa-cuBLAS|=0.0000  maxrel=0.0000 (cuBLAS max|C|=0.0000)
+[M=1024] N203 TMA+warp-spec       median=0.060528 ms  TFLOPS= 35.4792  ratio=0.6656  maxabs=0.0000  CTAs=256  regs=95  shmem=8224
+[M=2048] allocating 48.00 MB device memory
+[M=2048] cuBLAS HGEMM             median=0.257280 ms  TFLOPS= 66.7750
+[M=2048] sanity max|hexa-cuBLAS|=0.0000  maxrel=0.0000 (cuBLAS max|C|=0.0000)
+[M=2048] N203 TMA+warp-spec       median=0.324864 ms  TFLOPS= 52.8833  ratio=0.7920  maxabs=0.0000  CTAs=1024  regs=95  shmem=8224
+[M=4096] allocating 192.00 MB device memory
+[M=4096] cuBLAS HGEMM             median=1.962704 ms  TFLOPS= 70.0253
+[M=4096] sanity max|hexa-cuBLAS|=0.0000  maxrel=0.0000 (cuBLAS max|C|=0.0000)
+[M=4096] N203 TMA+warp-spec       median=2.407840 ms  TFLOPS= 57.0798  ratio=0.8151  maxabs=0.0000  CTAs=4096  regs=95  shmem=8224
+[M=6144] allocating 432.00 MB device memory
+[M=6144] cuBLAS HGEMM             median=6.553456 ms  TFLOPS= 70.7804
+[M=6144] sanity max|hexa-cuBLAS|=0.0000  maxrel=0.0000 (cuBLAS max|C|=0.0000)
+[M=6144] N203 TMA+warp-spec       median=8.002400 ms  TFLOPS= 57.9647  ratio=0.8189  maxabs=0.0000  CTAs=16384  regs=95  shmem=8224
+[M=8192] allocating 768.00 MB device memory
+[M=8192] cuBLAS HGEMM             median=15.527872 ms  TFLOPS= 70.8089
+[M=8192] sanity max|hexa-cuBLAS|=0.0000  maxrel=0.0000 (cuBLAS max|C|=0.0000)
+[M=8192] N203 TMA+warp-spec       median=18.528337 ms  TFLOPS= 59.3422  ratio=0.8381  maxabs=0.0000  CTAs=16384  regs=95  shmem=8224
