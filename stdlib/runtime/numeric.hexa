@@ -1380,3 +1380,36 @@ pub fn rt_map_get_v(m: HexaVal, key: HexaVal) -> HexaVal {
     return __map_get_cstr_v(m, key)
 }
 
+// ─────────────────────────────────────────────────────────────────────
+// Step 3 cycle 108 — map set/remove ALIASING PORTS (잔여 #5 100% surface
+// closure 6/6)
+// ─────────────────────────────────────────────────────────────────────
+// Honest @D g3 scope: these two ports are PASSTHROUGHS. The Robin Hood
+// insert/delete + key intern (hxlcl_strdup) + hmap_grow / order array
+// realloc + free logic stays in C as hexa_map_set_impl /
+// hexa_map_remove_impl (renamed from the legacy surface names). Gain =
+// (a) surface fn dispatchable from hexa source, (b) ALL 6 잔여 #5 ops
+// now have hexa-source presence (set + remove + has + get + keys +
+// values = 6/6 on the routing axis). NOT gained = C-floor reduction
+// (still ~174 fns) or retirement % bump beyond +0.4% (2 surface fns
+// flip; impl unchanged).
+//
+// Uses the codegen-inline opaque builtins from self/codegen_c2.hexa
+// cycle 108:
+//   __map_set_cstr_v(m, key_v, val) → hexa_map_set_impl(<m>, HX_STR(<k>), <v>)
+//   __map_remove_cstr_v(m, key_v)   → hexa_map_remove_impl(<m>, HX_STR(<k>))
+//
+// As with the cycle-107 ports, we CANNOT use `m.set(k, v)` / `m.remove(k)`
+// here because those method-call sites lower to `hexa_map_set` /
+// `hexa_map_remove`, which (with HEXA_HAS_HEXA_RT_STDLIB) dispatch back
+// into these very fns — infinite recursion. The opaque builtins target
+// the renamed `_impl` symbols directly to side-step the recursion.
+
+pub fn rt_map_set(m: HexaVal, key: HexaVal, val: HexaVal) -> HexaVal {
+    return __map_set_cstr_v(m, key, val)
+}
+
+pub fn rt_map_remove(m: HexaVal, key: HexaVal) -> HexaVal {
+    return __map_remove_cstr_v(m, key)
+}
+

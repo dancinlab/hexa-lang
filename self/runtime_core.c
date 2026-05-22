@@ -2219,6 +2219,39 @@ static inline HexaVal __map_order_val_at(HexaVal m, HexaVal i) {
     return t->order_vals[idx];
 }
 
+/* RUNTIME.md step-3 cycle 108 — map set/remove ALIASING PORTS (잔여 #5
+ * full surface closure 6/6). Honest @D g3 scope: the Robin Hood insert/
+ * delete + key intern (hxlcl_strdup) + hmap_grow / order array realloc
+ * + free logic stays in C as `hexa_map_set_impl` / `hexa_map_remove_impl`
+ * (the renamed legacy bodies — irreducible allocator floor). The hexa-
+ * source `rt_map_set` / `rt_map_remove` are passthroughs through the
+ * opaque builtins below; they add NO new logic. Gain = surface
+ * function dispatchable from hexa source + all 6 잔여 #5 ops now
+ * have hexa-source presence; future surface refactor (e.g. instrumenta-
+ * tion, alternate policy) becomes a hexa edit. NOT gained = C-floor
+ * reduction or retirement % bump beyond +0.4% (2 surface fns flip,
+ * impl unchanged).
+ *
+ * Static-inline lowering: codegen emits
+ *   __map_set_cstr_v(m, k, v) → hexa_map_set_impl(<m>, HX_STR(<k>), <v>)
+ *   __map_remove_cstr_v(m, k) → hexa_map_remove_impl(<m>, HX_STR(<k>))
+ * Stale hexa_v2 binaries that don't yet inline the builtin take the
+ * hexa_call2/3 _Generic fn-ptr lane through these helpers. */
+HexaVal hexa_map_set_impl(HexaVal m, const char* key, HexaVal val);
+HexaVal hexa_map_remove_impl(HexaVal m, const char* key);
+
+static inline HexaVal __map_set_cstr_v(HexaVal m, HexaVal key, HexaVal val) {
+    const char* k = HX_STR(key);
+    if (!k) return m;
+    return hexa_map_set_impl(m, k, val);
+}
+
+static inline HexaVal __map_remove_cstr_v(HexaVal m, HexaVal key) {
+    const char* k = HX_STR(key);
+    if (!k) return m;
+    return hexa_map_remove_impl(m, k);
+}
+
 
 HexaVal hexa_map_new() {
     if (_hx_stats_on()) _hx_stats_map_new++;
@@ -2331,7 +2364,14 @@ HexaVal hexa_struct_pack_map(const char* type_name, int n,
     return v;
 }
 
-HexaVal hexa_map_set(HexaVal m, const char* key, HexaVal val) {
+/* RUNTIME.md step-3 cycle 108 — aliasing port. The body below is the
+ * legacy hexa_map_set Robin Hood insert + intern + grow; renamed to
+ * `_impl` so the hexa-source `rt_map_set` (which lowers to
+ * __map_set_cstr_v → hexa_map_set_impl) can call it without recursing
+ * through its own surface symbol. The `hexa_map_set` symbol now lives
+ * further down as a thin dispatch wrapper that prefers `rt_map_set`
+ * when HEXA_HAS_HEXA_RT_STDLIB is defined. */
+HexaVal hexa_map_set_impl(HexaVal m, const char* key, HexaVal val) {
     // rt 32-G: route Val field mutation to flat struct.
     if (HX_IS_VALSTRUCT(m)) {
         return hexa_valstruct_set_by_key(m, key, val);
@@ -2395,6 +2435,32 @@ HexaVal hexa_map_set(HexaVal m, const char* key, HexaVal val) {
     HX_SET_MAP_LEN(m, t->len);
     return m;
 }
+
+// RUNTIME.md step-3 cycle 108 — map set aliasing port (잔여 #5 100%
+// surface closure 6/6). Honest @D g3 scope: rt_map_set is a passthrough
+// to __map_set_cstr_v which inlines to hexa_map_set_impl above. The
+// allocator/Robin Hood logic remains in C; only the surface dispatch
+// moves through hexa source. VALSTRUCT routing is delegated to the
+// impl (it already short-circuits at its head). Stale-binary lane:
+// new opaque builtin `__map_set_cstr_v` lowers inline; legacy hexa_v2
+// emitted hexa_call3 takes the static-inline shim through the _Generic
+// fn-ptr lane (HexaVal (*)(HexaVal, HexaVal, HexaVal)).
+#ifdef HEXA_HAS_HEXA_RT_STDLIB
+extern HexaVal rt_map_set(HexaVal m, HexaVal key, HexaVal val);
+HexaVal hexa_map_set(HexaVal m, const char* key, HexaVal val) {
+    // Keep VALSTRUCT routing on the C side so the hexa-source rt_map_set
+    // never needs to express flat-struct field mutation (it can't — the
+    // valstruct path edits a non-HexaMap shape).
+    if (HX_IS_VALSTRUCT(m)) {
+        return hexa_valstruct_set_by_key(m, key, val);
+    }
+    return rt_map_set(m, hexa_str(key), val);
+}
+#else
+HexaVal hexa_map_set(HexaVal m, const char* key, HexaVal val) {
+    return hexa_map_set_impl(m, key, val);
+}
+#endif
 
 // Step-3 cycle 107 port (RUNTIME.md remaining #5 partial discharge):
 // dispatch the hash-lookup branch to rt_map_get_v when hexa-source
@@ -2815,7 +2881,11 @@ HexaVal hexa_map_all(HexaVal m, HexaVal pred) {
 }
 #endif
 
-HexaVal hexa_map_remove(HexaVal m, const char* key) {
+/* RUNTIME.md step-3 cycle 108 — aliasing port. Robin Hood deletion +
+ * free + order-array compact stays in C (irreducible allocator floor).
+ * Renamed from hexa_map_remove so the hexa-source rt_map_remove can
+ * call this without recursing through its own surface symbol. */
+HexaVal hexa_map_remove_impl(HexaVal m, const char* key) {
     if (!HX_MAP_TBL(m)) return m;
     HexaMapTable* t = HX_MAP_TBL(m);
     uint32_t h = hexa_fnv1a_str(key);
@@ -2859,6 +2929,21 @@ HexaVal hexa_map_remove(HexaVal m, const char* key) {
     HX_SET_MAP_LEN(m, t->len);
     return m;
 }
+
+// RUNTIME.md step-3 cycle 108 — map remove aliasing port (잔여 #5 100%
+// surface closure 6/6). Honest @D g3 scope: rt_map_remove is a
+// passthrough to __map_remove_cstr_v which inlines to hexa_map_remove_impl
+// above. No new logic added; the surface fn merely flips dispatch site.
+#ifdef HEXA_HAS_HEXA_RT_STDLIB
+extern HexaVal rt_map_remove(HexaVal m, HexaVal key);
+HexaVal hexa_map_remove(HexaVal m, const char* key) {
+    return rt_map_remove(m, hexa_str(key));
+}
+#else
+HexaVal hexa_map_remove(HexaVal m, const char* key) {
+    return hexa_map_remove_impl(m, key);
+}
+#endif
 
 // Polymorphic index get: array[int] or map[string]
 HexaVal hexa_index_get(HexaVal container, HexaVal key) {
