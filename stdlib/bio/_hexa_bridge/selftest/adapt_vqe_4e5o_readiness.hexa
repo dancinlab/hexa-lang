@@ -1,0 +1,103 @@
+#!hexa strict
+// hexa-bio/_hexa_bridge/selftest/adapt_vqe_4e5o_readiness.hexa
+//
+// hexa-native port of `selftest/adapt_vqe_4e5o_readiness.sh`. Reads pre-
+// emitted ADAPT-VQE markers in $QMIRROR_ROOT/state/markers/ for LiH + 5 CMT
+// scaffolds at 4e/5o. Mirrors .sh PASS / SKIP / FAIL byte-for-byte.
+// genuine 0-python3 — bash gate → hexa-native.
+
+fn shq(s: string) -> string {
+    let mut o = "'"
+    let mut i = 0
+    while i < len(s) {
+        let c = s.substr(i, 1)
+        if c == "'" { o = o + "'\\''" } else { o = o + c }
+        i = i + 1
+    }
+    return o + "'"
+}
+
+fn main() {
+    let SENTINEL_PASS = "__ADAPT_VQE_4E5O_READINESS__ PASS"
+    let SENTINEL_SKIP = "__ADAPT_VQE_4E5O_READINESS__ SKIP"
+    let SENTINEL_FAIL = "__ADAPT_VQE_4E5O_READINESS__ FAIL"
+
+    let qmirror_root_env = exec("printf '%s' \"${QMIRROR_ROOT:-}\"").trim()
+    let home = exec("printf '%s' \"$HOME\"").trim()
+    let mut qmirror_root = qmirror_root_env
+    if len(qmirror_root) == 0 { qmirror_root = home + "/core/qmirror" }
+    let marker_dir = qmirror_root + "/state/markers"
+
+    let mut scaffolds: array = []
+    scaffolds.push("lih")
+    scaffolds.push("cmt_clc1")
+    scaffolds.push("cmt_sar1")
+    scaffolds.push("cmt_mfn2")
+    scaffolds.push("cmt_hd6")
+    scaffolds.push("cmt_gjb1")
+
+    let mut marker_stems: array = []
+    marker_stems.push("_adapt_vqe_lih_4e5o")
+    marker_stems.push("_adapt_vqe_cmt_clc1_4e5o")
+    marker_stems.push("_adapt_vqe_cmt_sar1_4e5o")
+    marker_stems.push("_adapt_vqe_cmt_mfn2_4e5o")
+    marker_stems.push("_adapt_vqe_cmt_hd6_4e5o")
+    marker_stems.push("_adapt_vqe_cmt_gjb1_4e5o")
+
+    println("adapt_vqe_4e5o_readiness — LiH + 5 CMT scaffolds @ 4e/5o (8-qubit) ADAPT-VQE")
+    println("  marker dir: " + marker_dir)
+    println("")
+
+    let dir_exists = exec("test -d " + shq(marker_dir) + " && printf yes || printf no").trim()
+    if dir_exists != "yes" {
+        println("  SKIP: marker dir not present")
+        println(SENTINEL_SKIP)
+        return
+    }
+
+    let mut n_pass = 0
+    let mut n_skip = 0
+    let mut n_fail = 0
+    let n_total = len(scaffolds)
+
+    let mut i = 0
+    while i < len(scaffolds) {
+        let name = scaffolds[i]
+        let stem = marker_stems[i]
+        let pass_marker = exec("ls -t " + shq(marker_dir) + "/" + stem + "_*.marker 2>/dev/null | grep -v FAILED | head -1").trim()
+        let fail_marker = exec("ls -t " + shq(marker_dir) + "/" + stem + "_*_FAILED.marker 2>/dev/null | head -1").trim()
+        if len(pass_marker) > 0 {
+            let LINE_raw = exec("head -1 " + shq(pass_marker))
+            let mut LINE = LINE_raw
+            while len(LINE) > 0 && LINE.substr(len(LINE) - 1, 1) == "\n" { LINE = LINE.substr(0, len(LINE) - 1) }
+            println("  PASS[" + name + "]:  " + LINE)
+            n_pass = n_pass + 1
+        } else if len(fail_marker) > 0 {
+            let LINE_raw = exec("head -1 " + shq(fail_marker))
+            let mut LINE = LINE_raw
+            while len(LINE) > 0 && LINE.substr(len(LINE) - 1, 1) == "\n" { LINE = LINE.substr(0, len(LINE) - 1) }
+            println("  FAIL[" + name + "]: " + LINE)
+            n_fail = n_fail + 1
+        } else {
+            println("  SKIP[" + name + "]: no marker")
+            n_skip = n_skip + 1
+        }
+        i = i + 1
+    }
+
+    println("")
+    println("  per-scaffold tally: " + str(n_pass) + " PASS / " + str(n_skip) + " SKIP / " + str(n_fail) + " FAIL  (of " + str(n_total) + ")")
+
+    if n_fail > 0 {
+        println(SENTINEL_FAIL)
+        exit(1)
+    }
+    if n_pass >= 1 {
+        if n_skip > 0 {
+            println("  (" + str(n_skip) + " skips do not block gate-level PASS — markers may be in flight)")
+        }
+        println(SENTINEL_PASS)
+        return
+    }
+    println(SENTINEL_SKIP)
+}

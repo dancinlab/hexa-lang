@@ -1,0 +1,35 @@
+{
+  "_fixture_note": "SAMPLE FIXTURE — not real data, for selftest replay only",
+  "_source": "UniProt REST API entry schema (illustrative; based on P0DTC2 SARS-CoV-2 spike record shape)",
+  "_captured": "2026-05-13 (hexa-bio cycle-30++++++++ absorption-bridge backport)",
+  "entryType": "UniProtKB reviewed (Swiss-Prot)",
+  "primaryAccession": "P0DTC2",
+  "secondaryAccessions": [],
+  "uniProtkbId": "SPIKE_SARS2",
+  "annotationScore": 5.0,
+  "organism": {
+    "scientificName": "Severe acute respiratory syndrome coronavirus 2",
+    "commonName": "2019-nCoV",
+    "taxonId": 2697049
+  },
+  "proteinDescription": {
+    "recommendedName": {
+      "fullName": {"value": "Spike glycoprotein"}
+    },
+    "alternativeNames": [
+      {"fullName": {"value": "S glycoprotein"}}
+    ]
+  },
+  "sequence": {
+    "length": 1273,
+    "molWeight": 141178,
+    "crc64": "FIXTUREDONOTUSE",
+    "md5": "FIXTUREDONOTUSE"
+  },
+  "features": [
+    {"type": "Signal", "location": {"start": {"value": 1}, "end": {"value": 13}}},
+    {"type": "Chain", "location": {"start": {"value": 14}, "end": {"value": 1273}}, "description": "Spike glycoprotein"}
+  ],
+  "citation": "UniProt Consortium 2023 Nucleic Acids Res 51:D523 (DOI 10.1093/nar/gkac1052)",
+  "license": "CC-BY 4.0 (UniProt data; EMBL-EBI / SIB / PIR consortium)"
+}

@@ -1,0 +1,82 @@
+#!hexa strict
+// hexa-matter/_hexa_bridge/module/silicon_purity_compute.hexa
+//
+// Purity-nomenclature converter for silicon feedstock specs (Si-L1 9N
+// anchor). Stage-1 hexa-native port of the Phase E python_bridge module
+// `_python_bridge/module/silicon_purity_compute.py` — stdlib-only.
+//
+//   nN  → purity fraction  p = 1 - 10^(-n)
+//   ppba                     = (1 - p) * 1e9 = 10^(-n) * 1e9
+//
+// 9N (electronic-grade poly-Si) → 1 ppba impurity ceiling (SOFT wall —
+// process/measurement bound, not the bond-energy HARD wall Si-L5). This
+// is a SPEC-CONSISTENCY arithmetic identity, NOT a measurement.
+// License: MIT (Phase E).
+
+// 10^n for non-negative integer n.
+fn ten_pow(n: int) -> float {
+    let mut t = 1.0
+    let mut i = 0
+    while i < n {
+        t = t * 10.0
+        i = i + 1
+    }
+    return t
+}
+
+// nN nomenclature → ppba impurity. 9N → 1 ppba, 11N → 0.01 ppba.
+fn nN_to_ppba(n: int) -> float {
+    let inv = 1.0 / ten_pow(n)
+    return inv * 1000000000.0
+}
+
+fn abs_f(x: float) -> float {
+    if x < 0.0 { return 0.0 - x }
+    return x
+}
+
+fn main() {
+    println("hexa-matter silicon_purity_compute (hexa-native, Stage-1 port)")
+    let mut bad = 0
+
+    // Case set: (nN, expected ppba).
+    let cn = [6, 9, 11]
+    let cexp = [1000.0, 1.0, 0.01]
+    let mut i = 0
+    while i < cn.len() {
+        let got = nN_to_ppba(cn[i])
+        let exp = cexp[i]
+        let rel = abs_f(got - exp) / exp
+        if rel < 0.000001 {
+            println("  [PASS] " + str(cn[i]) + "N -> ppba " + str(got))
+        }
+        if rel >= 0.000001 {
+            println("  [FAIL] " + str(cn[i]) + "N expected " + str(exp) + " got " + str(got))
+            bad = bad + 1
+        }
+        i = i + 1
+    }
+
+    // Sanity: ppba strictly decreases as nN increases.
+    let mono = [3, 6, 9, 11, 13]
+    let mut prev = ten_pow(40)
+    let mut monobad = 0
+    let mut j = 0
+    while j < mono.len() {
+        let p = nN_to_ppba(mono[j])
+        if p >= prev { monobad = monobad + 1 }
+        prev = p
+        j = j + 1
+    }
+    if monobad == 0 { println("  [PASS] monotonic ppba decrease (3N..13N)") }
+    if monobad > 0 {
+        println("  [FAIL] non-monotonic ppba")
+        bad = bad + 1
+    }
+
+    if bad > 0 {
+        println("__HEXA_MATTER_SILICON_PURITY_COMPUTE__ FAIL")
+        exit(1)
+    }
+    println("__HEXA_MATTER_SILICON_PURITY_COMPUTE__ PASS")
+}

@@ -1,0 +1,1064 @@
+#!hexa strict
+// hexa-bio/_hexa_bridge/selftest/landscape_generator.hexa
+//
+// modality landscape CROSS-TAB generator — GENUINE hexa-native port of
+// `case_studies/landscape/landscape_generator.py` (T3; json/os/subprocess/
+// sys). REPORTER, NEVER a ranker. Discovers every case-study portfolio on
+// disk, runs each runner, parses the witness JSON, and projects the union
+// onto a 24-axis CROSS-TAB; overwrites `case_studies/landscape/LANDSCAPE.md`.
+//
+// GENUINE-PORT STRATEGY (NO CPython sub-shell — the absolute rule)
+// ────────────────────────────────────────────────────────────────
+// The .py shells `subprocess.run([sys.executable, runner_path])` — a
+// CPython sub-process per portfolio runner. This port REPLACES that with
+// the ALREADY-PORTED, byte-parity-verified hexa sibling runner
+// `_hexa_bridge/selftest/<name>_portfolio.hexa` (all 10 portfolios:
+// alzheimer · bcl2 · hiv1 · kras_g12c · migraine · mpro_covid · parkinson
+// · sickle_cell · sma · type2_diabetes — every one genuine, ZERO CPython,
+// byte-identical stdout incl. the witness JSON). Each is run via
+// `exec("cd … && hexa run … 2>/dev/null; echo __EXIT__:$?")`.
+//   - discovery   = `exec("ls -1 case_studies …")` + sorted *_portfolio
+//                   dir scan (deterministic, byte-stable).
+//   - witness     = a balanced-brace JSON scanner (byte-identical logic to
+//                   the .py `extract_witness_json`) pulls the first
+//                   top-level object carrying `schema_version` +
+//                   `in_scope_drugs`; `json_parse` + structured access
+//                   rebuild the cross-tab grid (same op order as the .py).
+//   - output      = LANDSCAPE.md written via `exec` heredoc-free file write
+//                   (a base64 round-trip keeps every byte — incl. UTF-8
+//                   glyphs ✓ 🔬 ⚠ · and em-dashes — verbatim).
+//
+// A portfolio dir WITHOUT a hexa-native runner would be an honest g7 SKIP
+// (the .py would have run a CPython runner, forbidden here). All 10 are
+// ported, so in practice every row is PASS — same verdicts as the .py.
+//
+// ZERO CPython sub-shells — no exec-to-CPython anywhere in this port.
+//
+// DISCIPLINES honored (1-8):
+//   1. shq imported from json_schema_validator (no local `fn shq`).
+//   2. counts are int — no float reductions; plain `+` only (fsum unused).
+//   3. fmt / ljust for widths; raw ints throughout — no float→int bugs.
+//   4. raw UTF-8 preserved (cells hold ✓ 🔬 ⚠ ·; notes hold —); the
+//      base64 file-write round-trip ships every byte verbatim.
+//   5. exit(0) PASS/SKIP · exit(1) FAIL — a FAIL only when a discovered
+//      runner exited 0 yet emitted no parseable witness (hard contract
+//      break, same fence as portfolio_fitness_function).
+//   6. SKIP exits 0 (g7 honest) — empty discovery, or every runner SKIP'd.
+//   7. NO `**` operator; percentages use float `/` then a manual 1-dp
+//      round identical to CPython `f"{x:.1f}"`.
+//   8. dispatch order = sorted `ls -1 case_studies` — byte-stable.
+//
+// HONESTY (echoes the .py docstring): this is a CROSS-TAB, not a ranking.
+// The landscape is HONESTLY SPARSE — most cells are `·` (empty), and that
+// is the truth. No compound score, no 'best disease'/'best axis', no
+// fabricated drug or axis mapping. UNPLACED (CBER/CDRH) rows are reported
+// per-disease only, never bound to an axis column. The 24-axis surface
+// comes from AXIS/HIERARCHY.tape curator order — NOT the n=6 lattice
+// (g1 / g3 / g7 / g8 / f1 / f_lattice_fit / f2).
+
+import "_hexa_bridge/module/json_schema_validator.hexa"  // for shq
+
+// ── standard helper set ───────────────────────────────────────────────
+fn fmt(spec: string, v: float) -> string {
+    let mut o = exec("printf '" + spec + "' " + json_stringify(v))
+    while len(o) > 0 {
+        let last = o.substr(len(o) - 1, 1)
+        if last == "\n" || last == "\r" { o = o.substr(0, len(o) - 1) } else { break }
+    }
+    return o
+}
+fn ljust(s: string, n: int) -> string { let mut o = s; while len(o) < n { o = o + " " }; return o }
+fn rjust(s: string, n: int) -> string { let mut o = s; while len(o) < n { o = " " + o }; return o }
+fn js(v: float) -> string { return json_stringify(v) }
+fn jsb(b: bool) -> string { if b { return "true" } return "false" }
+fn pyb(b: bool) -> string { if b { return "True" } return "False" }
+fn fabs(x: float) -> float { if x < 0.0 { return -x } return x }
+fn fsum(xs: array) -> float {
+    let mut s = 0.0; let mut c = 0.0; let mut i = 0
+    while i < len(xs) { let y = xs[i]-c; let t = s+y; c = (t-s)-y; s = t; i = i+1 }
+    return s
+}
+fn cp_substr(s: string, a: int, b: int) -> string {
+    let mut out = ""; let mut cp = 0; let mut i = 0
+    while i < len(s) {
+        let bv = ord(s.substr(i, 1))
+        let is_lead = bv < 128 || bv >= 192
+        if is_lead {
+            if cp >= b { return out }
+            let mut seq = 1
+            if bv >= 240 { seq = 4 }
+            else if bv >= 224 { seq = 3 }
+            else if bv >= 192 { seq = 2 }
+            if cp >= a { out = out + s.substr(i, seq) }
+            cp = cp + 1
+            i = i + seq
+        } else {
+            i = i + 1
+        }
+    }
+    return out
+}
+
+// ── verdict tokens ─────────────────────────────────────────────────────
+let PASS = "PASS"
+let SKIP = "SKIP"
+let FAIL = "FAIL"
+
+// ── cell glyphs (UTF-8 verbatim — match the .py byte-for-byte) ──────────
+let CELL_EMPTY = "·"
+let CELL_FDA_PREFIX = "✓"
+let CELL_RESEARCH = "🔬 research"
+let CELL_UNPLACED = "⚠ UNPLACED"
+
+// ── string trim / predicates ───────────────────────────────────────────
+fn is_ws(c: string) -> bool {
+    return c == " " || c == "\t" || c == "\n" || c == "\r"
+}
+fn strip(s: string) -> string {
+    let mut a = 0
+    let mut b = len(s)
+    while a < b && is_ws(s.substr(a, 1)) { a = a + 1 }
+    while b > a && is_ws(s.substr(b - 1, 1)) { b = b - 1 }
+    return s.substr(a, b - a)
+}
+fn ends_with(s: string, suf: string) -> bool {
+    if len(s) < len(suf) { return false }
+    return s.substr(len(s) - len(suf), len(suf)) == suf
+}
+fn s2i(s: string) -> int {
+    let mut v = 0; let mut k = 0
+    while k < len(s) {
+        let b = ord(s.substr(k, 1))
+        if b < 48 || b > 57 { break }
+        v = v * 10 + (b - 48)
+        k = k + 1
+    }
+    return v
+}
+fn imax(a: int, b: int) -> int { if a > b { return a } return b }
+
+// ── codepoint count — the .py `len(md)` is a Python str length (== count
+// of Unicode codepoints), NOT a byte count. Hexa `len()` is byte length;
+// this reproduces CPython's codepoint semantics for the "wrote … bytes"
+// line so the stdout matches byte-for-byte. ────────────────────────────
+fn cp_len(s: string) -> int {
+    let mut n = 0
+    let mut i = 0
+    while i < len(s) {
+        let b = ord(s.substr(i, 1))
+        if b < 128 || b >= 192 { n = n + 1 }
+        i = i + 1
+    }
+    return n
+}
+
+// ── byte is ASCII alphanumeric (used for token-boundary checks) ─────────
+fn byte_is_alnum(c: string) -> bool {
+    if len(c) == 0 { return false }
+    let b = ord(c)
+    if b >= 48 && b <= 57 { return true }      // 0-9
+    if b >= 65 && b <= 90 { return true }      // A-Z
+    if b >= 97 && b <= 122 { return true }     // a-z
+    return false
+}
+
+// ── single hex digit → value (0-15; -1 on non-hex) ─────────────────────
+fn hexval(c: string) -> int {
+    let b = ord(c)
+    if b >= 48 && b <= 57 { return b - 48 }
+    if b >= 97 && b <= 102 { return b - 97 + 10 }
+    if b >= 65 && b <= 70 { return b - 65 + 10 }
+    return -1
+}
+fn cp_to_utf8(cp: int) -> string {
+    if cp < 128 { return chr(cp) }
+    if cp < 2048 {
+        return chr(192 + (cp / 64)) + chr(128 + (cp % 64))
+    }
+    if cp < 65536 {
+        return chr(224 + (cp / 4096))
+             + chr(128 + ((cp / 64) % 64))
+             + chr(128 + (cp % 64))
+    }
+    return chr(240 + (cp / 262144))
+         + chr(128 + ((cp / 4096) % 64))
+         + chr(128 + ((cp / 64) % 64))
+         + chr(128 + (cp % 64))
+}
+
+// ── JSON string-escape DECODER — `json_parse` leaves `\uXXXX`, `\n`, `\"`
+// literal; CPython's `json.loads` decodes them. Reproduces that decoding
+// so a string pulled from the witness is byte-identical to the
+// CPython-decoded value. Handles `\" \\ \/ \b \f \n \r \t \uXXXX` incl.
+// surrogate pairs. ──────────────────────────────────────────────────────
+fn json_unescape(s: string) -> string {
+    let mut out = ""
+    let n = len(s)
+    let mut i = 0
+    while i < n {
+        let c = s.substr(i, 1)
+        if c != "\\" || i + 1 >= n { out = out + c; i = i + 1; continue }
+        let e = s.substr(i + 1, 1)
+        if e == "\"" { out = out + "\""; i = i + 2 }
+        else if e == "\\" { out = out + "\\"; i = i + 2 }
+        else if e == "/" { out = out + "/"; i = i + 2 }
+        else if e == "b" { out = out + chr(8); i = i + 2 }
+        else if e == "f" { out = out + chr(12); i = i + 2 }
+        else if e == "n" { out = out + "\n"; i = i + 2 }
+        else if e == "r" { out = out + "\r"; i = i + 2 }
+        else if e == "t" { out = out + "\t"; i = i + 2 }
+        else if e == "u" && i + 6 <= n {
+            let h0 = hexval(s.substr(i + 2, 1))
+            let h1 = hexval(s.substr(i + 3, 1))
+            let h2 = hexval(s.substr(i + 4, 1))
+            let h3 = hexval(s.substr(i + 5, 1))
+            if h0 < 0 || h1 < 0 || h2 < 0 || h3 < 0 {
+                out = out + c; i = i + 1
+            } else {
+                let mut cp = h0 * 4096 + h1 * 256 + h2 * 16 + h3
+                if cp >= 55296 && cp <= 56319 && i + 12 <= n
+                        && s.substr(i + 6, 2) == "\\u" {
+                    let l0 = hexval(s.substr(i + 8, 1))
+                    let l1 = hexval(s.substr(i + 9, 1))
+                    let l2 = hexval(s.substr(i + 10, 1))
+                    let l3 = hexval(s.substr(i + 11, 1))
+                    if l0 >= 0 && l1 >= 0 && l2 >= 0 && l3 >= 0 {
+                        let lo = l0 * 4096 + l1 * 256 + l2 * 16 + l3
+                        if lo >= 56320 && lo <= 57343 {
+                            cp = 65536 + (cp - 55296) * 1024 + (lo - 56320)
+                            out = out + cp_to_utf8(cp)
+                            i = i + 12
+                            continue
+                        }
+                    }
+                }
+                out = out + cp_to_utf8(cp)
+                i = i + 6
+            }
+        }
+        else { out = out + c; i = i + 1 }
+    }
+    return out
+}
+
+// ── witness JSON extraction — byte-identical logic to the .py
+// `extract_witness_json`: scan every `{`, walk a balanced-brace slice
+// while respecting quoted strings, return the first slice that json_parse's
+// AND carries both `schema_version` + `in_scope_drugs`. "" if none. ──────
+fn extract_witness_json(out: string) -> string {
+    let n = len(out)
+    let mut i = 0
+    while i < n {
+        if out.substr(i, 1) != "{" { i = i + 1; continue }
+        let mut depth = 0
+        let mut j = i
+        let mut in_str = false
+        let mut esc = false
+        let mut sliced = false
+        let mut candidate = ""
+        while j < n {
+            let ch = out.substr(j, 1)
+            if in_str {
+                if esc { esc = false }
+                else if ch == "\\" { esc = true }
+                else if ch == "\"" { in_str = false }
+            } else {
+                if ch == "\"" { in_str = true }
+                else if ch == "{" { depth = depth + 1 }
+                else if ch == "}" {
+                    depth = depth - 1
+                    if depth == 0 {
+                        candidate = out.substr(i, j - i + 1)
+                        sliced = true
+                        break
+                    }
+                }
+            }
+            j = j + 1
+        }
+        if sliced {
+            let obj = json_parse(candidate)
+            if type_of(obj) == "map" {
+                let ks = keys(obj)
+                let mut has_sv = false
+                let mut has_isd = false
+                let mut ki = 0
+                while ki < len(ks) {
+                    if ks[ki] == "schema_version" { has_sv = true }
+                    if ks[ki] == "in_scope_drugs" { has_isd = true }
+                    ki = ki + 1
+                }
+                if has_sv && has_isd { return candidate }
+            }
+        }
+        i = i + 1
+    }
+    return ""
+}
+
+// ── guarded map access — CPython `dict.get(k)` returns None on a missing
+// key; a bare `m[k]` on a hexa map warns to stderr. Every optional read
+// goes through map_has. ─────────────────────────────────────────────────
+fn map_has(m, k: string) -> bool {
+    if type_of(m) != "map" { return false }
+    let ks = keys(m)
+    let mut i = 0
+    while i < len(ks) { if ks[i] == k { return true }; i = i + 1 }
+    return false
+}
+// guarded string read — returns json_unescaped value if key present AND a
+// string, else "".
+fn mstr(m, k: string) -> string {
+    if !map_has(m, k) { return "" }
+    if type_of(m[k]) != "string" { return "" }
+    return json_unescape(m[k])
+}
+
+// ── insertion sort of a string array (ASCII) ───────────────────────────
+fn sort_strs(xs: array) -> array {
+    let mut a = xs
+    let mut p = 1
+    while p < len(a) {
+        let cur = a[p]
+        let mut q = p - 1
+        while q >= 0 && a[q] > cur { a[q + 1] = a[q]; q = q - 1 }
+        a[q + 1] = cur
+        p = p + 1
+    }
+    return a
+}
+
+// ── 24-axis surface (AXIS/HIERARCHY.tape curator order) — NOT the n=6
+// lattice (f_lattice_fit). ──────────────────────────────────────────────
+fn build_all_axes() -> array {
+    let core: array = ["QUANTUM", "WEAVE", "NANOBOT", "RIBOZYME", "VIROCAPSID"]
+    let expmain: array = ["COVALENT", "BIFUNCTIONAL", "METALLODRUG", "OLIGONUCLEOTIDE"]
+    let sub: array = [
+        "PROTAC", "LYTAC", "AUTAC", "RIBOTAC",
+        "COVALENT-DEGRADER", "MOLECULAR-GLUE",
+        "ALLOSTERIC", "CRYPTIC-POCKET", "PPI",
+        "PEPTIDE", "MACROCYCLE",
+        "REVERSIBLE-COVALENT",
+        "RNA-TARGETING-SMALL-MOLECULE", "APTAMER",
+        "CAPSID-ASSEMBLY-MODULATOR",
+    ]
+    let mut all: array = []
+    let mut i = 0
+    while i < len(core) { all.push(core[i]); i = i + 1 }
+    i = 0
+    while i < len(expmain) { all.push(expmain[i]); i = i + 1 }
+    i = 0
+    while i < len(sub) { all.push(sub[i]); i = i + 1 }
+    return all
+}
+fn axis_layer(axis: string) -> string {
+    let core: array = ["QUANTUM", "WEAVE", "NANOBOT", "RIBOZYME", "VIROCAPSID"]
+    let expmain: array = ["COVALENT", "BIFUNCTIONAL", "METALLODRUG", "OLIGONUCLEOTIDE"]
+    let mut i = 0
+    while i < len(core) { if core[i] == axis { return "core-5" }; i = i + 1 }
+    i = 0
+    while i < len(expmain) { if expmain[i] == axis { return "expansion-main" }; i = i + 1 }
+    return "expansion-sub"
+}
+// index of axis in ALL_AXES; -1 if absent.
+fn axis_index(all: array, axis: string) -> int {
+    let mut i = 0
+    while i < len(all) { if all[i] == axis { return i }; i = i + 1 }
+    return -1
+}
+
+// ── _parse_axis_from_in_repo_label — byte-identical to the .py: longest
+// token first; mask a matched span so substring tokens cannot re-match;
+// token-boundary check (left/right NOT alnum and NOT '-'). ──────────────
+fn parse_axis_from_label(all_axes: array, label: string) -> array {
+    let mut matches: array = []
+    if len(strip(label)) == 0 { return matches }
+    // sort axes by length DESC (then the .py's sorted() is stable on the
+    // original AXIS_INDEX order for equal lengths — replicate by a stable
+    // insertion sort keyed on -len).
+    let mut order: array = []
+    let mut i = 0
+    while i < len(all_axes) { order.push(all_axes[i]); i = i + 1 }
+    let mut p = 1
+    while p < len(order) {
+        let cur = order[p]
+        let mut q = p - 1
+        while q >= 0 && len(order[q]) < len(cur) {
+            order[q + 1] = order[q]; q = q - 1
+        }
+        order[q + 1] = cur
+        p = p + 1
+    }
+    // masked = list(label); we mutate a string copy span-by-span.
+    let mut masked = label
+    let mut oi = 0
+    while oi < len(order) {
+        let axis = order[oi]
+        let mut start = 0
+        let alen = len(axis)
+        while true {
+            let idx = masked.find(axis, start)
+            if idx < 0 { break }
+            // left boundary: masked[idx-1] not alnum and not '-'
+            let mut left_ok = idx == 0
+            if !left_ok {
+                let lc = masked.substr(idx - 1, 1)
+                left_ok = !byte_is_alnum(lc) && lc != "-"
+            }
+            let end = idx + alen
+            let mut right_ok = end >= len(masked)
+            if !right_ok {
+                let rc = masked.substr(end, 1)
+                right_ok = !byte_is_alnum(rc) && rc != "-"
+            }
+            if left_ok && right_ok {
+                let mut seen = false
+                let mut mi = 0
+                while mi < len(matches) {
+                    if matches[mi] == axis { seen = true }
+                    mi = mi + 1
+                }
+                if !seen { matches.push(axis) }
+                // mask the matched span with spaces.
+                let mut spaces = ""
+                let mut si = 0
+                while si < alen { spaces = spaces + " "; si = si + 1 }
+                masked = masked.substr(0, idx) + spaces
+                       + masked.substr(end, len(masked) - end)
+                start = end
+            } else {
+                start = idx + 1
+            }
+        }
+        oi = oi + 1
+    }
+    return matches
+}
+
+// ── _drug_name — drug | drug_name | brand | "?" ─────────────────────────
+fn drug_name(d) -> string {
+    let ks: array = ["drug", "drug_name", "brand"]
+    let mut i = 0
+    while i < len(ks) {
+        if map_has(d, ks[i]) && type_of(d[ks[i]]) == "string" {
+            let v = strip(json_unescape(d[ks[i]]))
+            if len(v) > 0 { return v }
+        }
+        i = i + 1
+    }
+    return "?"
+}
+
+// ── _drug_axes — axis_mapping.axis (+ cryptic_touch_axis) then flat axis.
+// Dedup preserving order; keep only known 24-axis labels. ───────────────
+fn drug_axes(all_axes: array, d) -> array {
+    let mut axes: array = []
+    if map_has(d, "axis_mapping") && type_of(d["axis_mapping"]) == "map" {
+        let am = d["axis_mapping"]
+        let a = mstr(am, "axis")
+        if len(strip(a)) > 0 { axes.push(strip(a)) }
+        let a2 = mstr(am, "cryptic_touch_axis")
+        if len(strip(a2)) > 0 { axes.push(strip(a2)) }
+    }
+    let af = mstr(d, "axis")
+    if len(strip(af)) > 0 { axes.push(strip(af)) }
+    let mut seen: array = []
+    let mut i = 0
+    while i < len(axes) {
+        let a = axes[i]
+        if axis_index(all_axes, a) >= 0 {
+            let mut dup = false
+            let mut si = 0
+            while si < len(seen) { if seen[si] == a { dup = true }; si = si + 1 }
+            if !dup { seen.push(a) }
+        }
+        i = i + 1
+    }
+    return seen
+}
+
+// ── _is_fda_approved — fda_approval_status=='approved' if present, else
+// fda_center=='CDER' AND fda_year is an int. ────────────────────────────
+fn is_fda_approved(d) -> bool {
+    if map_has(d, "fda_approval_status") && type_of(d["fda_approval_status"]) == "string" {
+        return json_unescape(d["fda_approval_status"]) == "approved"
+    }
+    let center_ok = map_has(d, "fda_center") && type_of(d["fda_center"]) == "string"
+                    && json_unescape(d["fda_center"]) == "CDER"
+    let year_ok = map_has(d, "fda_year") && type_of(d["fda_year"]) == "int"
+    return center_ok && year_ok
+}
+
+// ── 1-dp percentage — CPython `f"{x:.1f}"`. The fmt() helper round-trips
+// printf %.1f, which is the same rounding (round-half-to-even on the libc
+// macOS uses agrees with CPython for the values here). ──────────────────
+fn pct1(num: int, den: int) -> string {
+    if den == 0 { return "0.0" }
+    let x = (100.0 * float(num)) / float(den)
+    return fmt("%.1f", x)
+}
+
+fn main() {
+    let repo_root = exec("pwd").trim()
+    let all_axes = build_all_axes()
+    let n_axes = len(all_axes)
+
+    println("landscape_generator — case-study modality cross-tab")
+    println("  CROSS-TAB, not a ranking. The 24-axis surface is fixed from")
+    println("  AXIS/HIERARCHY.tape (core-5 + expansion-main + sub-axes).")
+    println("  governance: g1 · g3 · g7 · g8 · f1 · f_lattice_fit · f2")
+    println("")
+
+    // ── discovery — sorted *_portfolio dirs under case_studies/ ─────────
+    let listing = exec("ls -1 " + shq(repo_root + "/case_studies") + " 2>/dev/null")
+    let mut entries: array = []
+    if len(listing) > 0 {
+        let raw = listing.split("\n")
+        let mut ei = 0
+        while ei < len(raw) {
+            let e = strip(raw[ei])
+            if len(e) > 0 && ends_with(e, "_portfolio") { entries.push(e) }
+            ei = ei + 1
+        }
+    }
+    entries = sort_strs(entries)
+
+    let mut p_name: array = []
+    let mut p_runner: array = []
+    let mut p_has_runner: array = []
+    let mut di = 0
+    while di < len(entries) {
+        let entry = entries[di]
+        let name = entry.substr(0, len(entry) - len("_portfolio"))
+        let py_rel = "case_studies/" + entry + "/" + name + "_portfolio_runner.py"
+        let py_exists = exec("test -f " + shq(repo_root + "/" + py_rel) +
+                             " && echo Y || echo N").trim()
+        if py_exists != "Y" { di = di + 1; continue }
+        let hexa_rel = "_hexa_bridge/selftest/" + name + "_portfolio.hexa"
+        let hexa_exists = exec("test -f " + shq(repo_root + "/" + hexa_rel) +
+                               " && echo Y || echo N").trim()
+        p_name.push(name)
+        if hexa_exists == "Y" {
+            p_runner.push(hexa_rel)
+            p_has_runner.push(true)
+        } else {
+            p_runner.push(py_rel)
+            p_has_runner.push(false)
+        }
+        di = di + 1
+    }
+    let total = len(p_name)
+
+    // ── empty-discovery SKIP path (mirrors the .py main()). ─────────────
+    if total == 0 {
+        println("  [SKIP] no '*_portfolio/*_portfolio_runner.py' found under case_studies/")
+        println("         — g7 skip-is-honest (no portfolios != FAIL)")
+        println("")
+        println("__LANDSCAPE_GENERATOR__ SKIP")
+        return
+    }
+
+    let mut names_joined = ""
+    let mut ji = 0
+    while ji < total {
+        if ji > 0 { names_joined = names_joined + ", " }
+        names_joined = names_joined + p_name[ji]
+        ji = ji + 1
+    }
+    println("  discovered " + str(total) + " portfolio runner(s): " + names_joined)
+    println("")
+
+    // ── run each portfolio + build the per-disease row ──────────────────
+    // parallel arrays in diseases_order.
+    let mut d_label: array = []        // disease display label
+    let mut d_cells: array = []        // array of n_axes cell-strings
+    let mut d_fda: array = []
+    let mut d_research: array = []
+    let mut d_unpl_count: array = []
+    let mut d_unpl_notes: array = []   // array of note strings
+    let mut d_portfolio: array = []
+    let mut d_verdict: array = []
+
+    // axis totals: parallel arrays indexed by axis.
+    let mut ax_fda: array = []
+    let mut ax_research: array = []
+    let mut axi = 0
+    while axi < n_axes { ax_fda.push(0); ax_research.push(0); axi = axi + 1 }
+
+    let mut n_pass = 0
+    let mut n_skip = 0
+    let mut n_fail = 0
+
+    let mut ri = 0
+    while ri < total {
+        let nm = p_name[ri]
+        println("── running " + nm + "_portfolio_runner.py …")
+
+        let mut verdict = SKIP
+        let mut reason = ""
+        let mut witness_ok = false
+        let mut witness = json_parse("{}")
+
+        if p_has_runner[ri] == false {
+            verdict = SKIP
+            reason = "no hexa-native runner — T3 zero-CPython path; awaits a hexa port of " +
+                     nm + "_portfolio_runner.py (g7 skip-is-honest, do not block sentinel)"
+        } else {
+            let raw = exec("cd " + shq(repo_root) + " && hexa run " + shq(p_runner[ri]) +
+                           " 2>/dev/null; echo __EXIT__:$?")
+            let marker = "__EXIT__:"
+            let mut exit_code = 0
+            let mut stdout = raw
+            let mut mpos = -1
+            let mut sp = 0
+            while sp < len(raw) {
+                if sp + len(marker) <= len(raw) && raw.substr(sp, len(marker)) == marker {
+                    mpos = sp
+                }
+                sp = sp + 1
+            }
+            if mpos >= 0 {
+                let codestr = strip(raw.substr(mpos + len(marker),
+                                               len(raw) - mpos - len(marker)))
+                exit_code = s2i(codestr)
+                let mut cut = mpos
+                if cut > 0 && raw.substr(cut - 1, 1) == "\n" { cut = cut - 1 }
+                stdout = raw.substr(0, cut)
+            }
+            if exit_code != 0 {
+                verdict = SKIP
+                reason = "runner exited non-zero (code=" + str(exit_code) +
+                         ") — g7 skip-is-honest"
+            } else {
+                let candidate = extract_witness_json(stdout)
+                if len(candidate) == 0 {
+                    verdict = FAIL
+                    reason = "runner exited 0 but emitted no parseable witness " +
+                             "JSON containing schema_version + in_scope_drugs"
+                } else {
+                    verdict = PASS
+                    witness = json_parse(candidate)
+                    witness_ok = true
+                }
+            }
+        }
+
+        // ── verbose [PASS]/[SKIP]/[FAIL] line ───────────────────────────
+        if verdict == PASS {
+            n_pass = n_pass + 1
+            let mut isd: array = []
+            let mut rsn: array = []
+            let mut nis: array = []
+            if map_has(witness, "in_scope_drugs") && type_of(witness["in_scope_drugs"]) == "array" {
+                isd = witness["in_scope_drugs"]
+            }
+            if map_has(witness, "research_stage_negatives")
+                    && type_of(witness["research_stage_negatives"]) == "array" {
+                rsn = witness["research_stage_negatives"]
+            }
+            if map_has(witness, "not_in_scope_drugs")
+                    && type_of(witness["not_in_scope_drugs"]) == "array" {
+                nis = witness["not_in_scope_drugs"]
+            }
+            println("  [PASS] " + nm + ": in_scope=" + str(len(isd)) +
+                    ", research_stage=" + str(len(rsn)) +
+                    ", not_in_scope=" + str(len(nis)))
+        } else if verdict == SKIP {
+            n_skip = n_skip + 1
+            println("  [SKIP] " + nm + ": " + reason)
+        } else {
+            n_fail = n_fail + 1
+            println("  [FAIL] " + nm + ": " + reason)
+        }
+
+        // ── build_grid row contribution ─────────────────────────────────
+        if verdict != PASS || !witness_ok {
+            // witness-absent row — portfolio basename label, empty cells.
+            let label = nm
+            let mut cells: array = []
+            let mut ci = 0
+            while ci < n_axes { cells.push(CELL_EMPTY); ci = ci + 1 }
+            d_label.push(label)
+            d_cells.push(cells)
+            d_fda.push(0)
+            d_research.push(0)
+            d_unpl_count.push(0)
+            let empty_notes: array = []
+            d_unpl_notes.push(empty_notes)
+            d_portfolio.push(nm)
+            d_verdict.push(verdict)
+            ri = ri + 1
+            continue
+        }
+
+        // disease label — abbreviation | name | portfolio name.
+        let mut label = nm
+        if map_has(witness, "disease") && type_of(witness["disease"]) == "map" {
+            let dis = witness["disease"]
+            let ab = mstr(dis, "abbreviation")
+            let nmv = mstr(dis, "name")
+            if len(ab) > 0 { label = ab }
+            else if len(nmv) > 0 { label = nmv }
+        }
+
+        let mut cells: array = []
+        let mut ci = 0
+        while ci < n_axes { cells.push(CELL_EMPTY); ci = ci + 1 }
+        let mut fda_count = 0
+        let mut research_count = 0
+        let mut unplaced_notes: array = []
+
+        // ── in_scope_drugs → '✓ <drug>' (FDA) OR '🔬 research' ──────────
+        let mut isd: array = []
+        if map_has(witness, "in_scope_drugs") && type_of(witness["in_scope_drugs"]) == "array" {
+            isd = witness["in_scope_drugs"]
+        }
+        let mut k = 0
+        while k < len(isd) {
+            let d = isd[k]
+            if type_of(d) == "map" {
+                let name = drug_name(d)
+                let axes = drug_axes(all_axes, d)
+                let approved = is_fda_approved(d)
+                let mut ax = 0
+                while ax < len(axes) {
+                    let idx = axis_index(all_axes, axes[ax])
+                    if approved {
+                        let incumbent = cells[idx]
+                        if incumbent == CELL_EMPTY {
+                            cells[idx] = CELL_FDA_PREFIX + " " + name
+                        } else if incumbent.substr(0, len(CELL_FDA_PREFIX)) == CELL_FDA_PREFIX {
+                            cells[idx] = incumbent + " + " + name
+                        } else {
+                            cells[idx] = CELL_FDA_PREFIX + " " + name
+                        }
+                        fda_count = fda_count + 1
+                        ax_fda[idx] = ax_fda[idx] + 1
+                    } else {
+                        let inc = cells[idx]
+                        if inc.substr(0, len(CELL_FDA_PREFIX)) != CELL_FDA_PREFIX {
+                            cells[idx] = CELL_RESEARCH
+                            ax_research[idx] = ax_research[idx] + 1
+                        }
+                        research_count = research_count + 1
+                    }
+                    ax = ax + 1
+                }
+            }
+            k = k + 1
+        }
+
+        // ── research_stage_negatives → '🔬 research' on parsed axes;
+        //     CBER/CDRH+null axis → disease-level UNPLACED note. ──────────
+        let mut rsn: array = []
+        if map_has(witness, "research_stage_negatives")
+                && type_of(witness["research_stage_negatives"]) == "array" {
+            rsn = witness["research_stage_negatives"]
+        }
+        let mut ni = 0
+        while ni < len(rsn) {
+            let nd = rsn[ni]
+            if type_of(nd) == "map" {
+                let axis_label = mstr(nd, "axis_in_repo")
+                let center = mstr(nd, "fda_center_if_filed")
+                let mut cls = mstr(nd, "candidate_class")
+                if len(cls) == 0 { cls = "research-stage" }
+                let parsed = parse_axis_from_label(all_axes, axis_label)
+                if len(parsed) > 0 {
+                    let mut pp = 0
+                    while pp < len(parsed) {
+                        let idx = axis_index(all_axes, parsed[pp])
+                        let inc = cells[idx]
+                        if inc.substr(0, len(CELL_FDA_PREFIX)) != CELL_FDA_PREFIX {
+                            if inc != CELL_RESEARCH {
+                                cells[idx] = CELL_RESEARCH
+                                ax_research[idx] = ax_research[idx] + 1
+                            }
+                        }
+                        research_count = research_count + 1
+                        pp = pp + 1
+                    }
+                } else {
+                    if center == "CBER" || center == "CDRH" {
+                        unplaced_notes.push(cls + " (CBER scope-disqualified)")
+                    } else {
+                        research_count = research_count + 1
+                    }
+                }
+            }
+            ni = ni + 1
+        }
+
+        // ── not_in_scope_drugs → UNPLACED note ──────────────────────────
+        let mut nis: array = []
+        if map_has(witness, "not_in_scope_drugs")
+                && type_of(witness["not_in_scope_drugs"]) == "array" {
+            nis = witness["not_in_scope_drugs"]
+        }
+        ni = 0
+        while ni < len(nis) {
+            let nd = nis[ni]
+            if type_of(nd) == "map" {
+                // .py: str(n.get("drug_name") or n.get("brand") or "UNPLACED")
+                let dn = mstr(nd, "drug_name")
+                let bn = mstr(nd, "brand")
+                let mut nmv = "UNPLACED"
+                if len(dn) > 0 { nmv = dn }
+                else if len(bn) > 0 { nmv = bn }
+                let center = mstr(nd, "fda_center")
+                let has_axis = map_has(nd, "axis") && type_of(nd["axis"]) == "string"
+                if !has_axis && (center == "CBER" || center == "CDRH") {
+                    unplaced_notes.push(nmv + " (" + center + ")")
+                } else {
+                    if has_axis {
+                        let av = strip(json_unescape(nd["axis"]))
+                        let idx = axis_index(all_axes, av)
+                        if idx >= 0 && cells[idx] == CELL_EMPTY {
+                            cells[idx] = CELL_UNPLACED
+                        }
+                    }
+                    let mut ctr = center
+                    if len(ctr) == 0 { ctr = "—" }
+                    unplaced_notes.push(nmv + " (" + ctr + ")")
+                }
+            }
+            ni = ni + 1
+        }
+
+        d_label.push(label)
+        d_cells.push(cells)
+        d_fda.push(fda_count)
+        d_research.push(research_count)
+        d_unpl_count.push(len(unplaced_notes))
+        d_unpl_notes.push(unplaced_notes)
+        d_portfolio.push(nm)
+        d_verdict.push(verdict)
+
+        ri = ri + 1
+    }
+    println("")
+
+    let n_dis = len(d_label)
+
+    // ── density stats ───────────────────────────────────────────────────
+    let total_cells = n_dis * n_axes
+    let mut fda_cells = 0
+    let mut research_cells = 0
+    let mut empty_cells = 0
+    let mut si = 0
+    while si < n_dis {
+        let cells = d_cells[si]
+        let mut ci = 0
+        while ci < n_axes {
+            let c = cells[ci]
+            if c == CELL_EMPTY { empty_cells = empty_cells + 1 }
+            else if c.substr(0, len(CELL_FDA_PREFIX)) == CELL_FDA_PREFIX { fda_cells = fda_cells + 1 }
+            else if c == CELL_RESEARCH { research_cells = research_cells + 1 }
+            else { research_cells = research_cells + 1 }
+            ci = ci + 1
+        }
+        si = si + 1
+    }
+
+    // ── render the LANDSCAPE.md document ────────────────────────────────
+    let ts = exec("date -u +'%Y-%m-%dT%H:%M:%SZ'").trim()
+    let mut md = ""
+    md = md + "# Modality landscape — case-study cross-tab\n\n"
+    md = md + "> **Status**: auto-generated by `case_studies/landscape/landscape_generator.py`. "
+            + "Hand-edits will be overwritten on the next run.\n>\n"
+    md = md + "> **Scope** (g8 / f2 in-silico-only): this is a CROSS-TAB of the\n"
+            + "> case-study portfolio cohort currently on disk against the 24-axis\n"
+            + "> surface from `AXIS/HIERARCHY.tape`. It is a project-state REPORT,\n"
+            + "> NOT a portfolio recommendation, ranking, clinical, regulatory,\n"
+            + "> therapeutic, or efficacy claim. Each cell is read from a runner's\n"
+            + "> own witness JSON (g1); modalities are described by their own drug\n"
+            + "> precedent only (g3 / f1). The landscape is HONESTLY SPARSE — most\n"
+            + "> disease × axis cells are empty, and that is the truth. Not the\n"
+            + "> deferred 200-disease re-mapping (a multi-disease pilot only).\n\n"
+    md = md + "_Generated: " + ts + "_\n\n"
+    md = md + "_Diseases discovered: " + str(n_dis) + " · axes (cols): "
+            + str(n_axes) + " (5 core + 4 expansion-main + 15 sub)_\n\n"
+
+    // §0
+    md = md + "## §0 Honest scope fence\n\n"
+    md = md + "This is a multi-disease pilot CROSS-TAB. The 200-disease re-mapping\n"
+            + "the `AXIS/HIERARCHY.tape` Log flags as deferred work remains\n"
+            + "deferred — these cells are read from the small cohort of\n"
+            + "case-study portfolios actually present in `case_studies/`. Every\n"
+            + "cell that holds an FDA drug name was read from the originating\n"
+            + "portfolio runner's own witness JSON (`in_scope_drugs[].drug` or\n"
+            + "`drug_name`). No drug is invented; no axis mapping is invented.\n"
+            + "The cell glyph legend is:\n\n"
+            + "- **`✓ <drug-name>`** — IN-SCOPE FDA-approved drug on this axis.\n"
+            + "- **`🔬 research`** — research-stage candidate listed on this axis\n"
+            + "  in a portfolio's `research_stage_negatives[]` (or a\n"
+            + "  clinical-stage drug in `in_scope_drugs[]` flagged\n"
+            + "  `fda_approval_status='clinical_stage'`).\n"
+            + "- **`⚠ UNPLACED`** — a CBER / CDRH scope-disqualified row from a\n"
+            + "  portfolio's `not_in_scope_drugs[]` (or a research-stage\n"
+            + "  negative with `fda_center_if_filed='CBER'/'CDRH'` and a null\n"
+            + "  `axis_in_repo`). These do NOT bind to a specific axis column\n"
+            + "  by design — listing them at the disease level keeps the\n"
+            + "  honesty discipline of criterion #4 (drug-only / CDER scope).\n"
+            + "- **`·`** — no candidate / not applicable (honest empty cell).\n\n"
+
+    // §1 cross-tab
+    md = md + "## §1 Cross-tab — diseases × axes\n\n"
+    let mut hdr = "| disease"
+    let mut ai = 0
+    while ai < n_axes { hdr = hdr + " | " + all_axes[ai]; ai = ai + 1 }
+    hdr = hdr + " |"
+    md = md + hdr + "\n"
+    let mut algn = "|:---"
+    ai = 0
+    while ai < n_axes { algn = algn + "|:---"; ai = ai + 1 }
+    algn = algn + "|"
+    md = md + algn + "\n"
+    si = 0
+    while si < n_dis {
+        let cells = d_cells[si]
+        let mut row = "| " + d_label[si].replace("|", "\\|")
+        ai = 0
+        while ai < n_axes {
+            row = row + " | " + cells[ai].replace("|", "\\|")
+            ai = ai + 1
+        }
+        row = row + " |"
+        md = md + row + "\n"
+        si = si + 1
+    }
+    md = md + "\n"
+
+    // §2 per-disease totals
+    md = md + "## §2 Per-disease totals\n\n"
+    md = md + "`FDA in-scope` = number of FDA-approved drugs listed in this\n"
+            + "portfolio's `in_scope_drugs[]` (NOT distinct axes — a portfolio\n"
+            + "may map two drugs onto one axis, e.g. KRAS-G12C maps both\n"
+            + "sotorasib and adagrasib to COVALENT). `research-stage` =\n"
+            + "research-stage cells contributed by this portfolio.\n"
+            + "`UNPLACED (CBER/CDRH)` = disease-level honesty rows that do NOT\n"
+            + "bind to any axis column.\n\n\n"
+    md = md + "| disease | FDA in-scope | research-stage | UNPLACED (CBER/CDRH) | portfolio | verdict |\n"
+    md = md + "|:---|:---|:---|:---|:---|:---|\n"
+    si = 0
+    while si < n_dis {
+        md = md + "| " + d_label[si] + " | " + str(d_fda[si]) + " | "
+                + str(d_research[si]) + " | " + str(d_unpl_count[si]) + " | `"
+                + d_portfolio[si] + "_portfolio` | " + d_verdict[si] + " |\n"
+        si = si + 1
+    }
+    md = md + "\n"
+
+    // §3 per-axis totals
+    md = md + "## §3 Per-axis totals\n\n"
+    md = md + "`FDA-cell count` = how many disease × axis cells in the cohort\n"
+            + "carry at least one FDA-approved drug on this axis. The vast\n"
+            + "majority of axes have zero — this is the truth (most\n"
+            + "disease × axis combinations have no FDA precedent in this\n"
+            + "small cohort, and the deferred 200-disease re-mapping is\n"
+            + "exactly what would change that).\n\n\n"
+    md = md + "| axis | layer | FDA-cell count | research-cell count |\n"
+    md = md + "|:---|:---|:---|:---|\n"
+    ai = 0
+    while ai < n_axes {
+        md = md + "| " + all_axes[ai] + " | " + axis_layer(all_axes[ai]) + " | "
+                + str(ax_fda[ai]) + " | " + str(ax_research[ai]) + " |\n"
+        ai = ai + 1
+    }
+    md = md + "\n"
+
+    // §4 honest empty-cell discussion
+    md = md + "## §4 Honest empty-cell discussion\n\n"
+    md = md + "Cohort size: " + str(total_cells) + " cells ("
+            + str(n_dis) + " diseases × " + str(n_axes) + " axes).\n\n"
+    md = md + "- **FDA-occupied cells**: " + str(fda_cells) + " ("
+            + pct1(fda_cells, total_cells) + "% of cohort)\n"
+    md = md + "- **Research-stage cells**: " + str(research_cells) + " ("
+            + pct1(research_cells, total_cells) + "% of cohort)\n"
+    md = md + "- **Honest empty `·` cells**: " + str(empty_cells) + " ("
+            + pct1(empty_cells, total_cells) + "% of cohort)\n\n"
+    md = md + "The empty-cell majority is **not a gap** — it is the honest state\n"
+            + "of the per-disease evidence base. A landscape that puts something\n"
+            + "into every cell would have to fabricate drug-precedent or\n"
+            + "research-precedent that does not actually exist. The empty `·`\n"
+            + "glyph is the truth-telling cell.\n\n"
+            + "Disease-level UNPLACED (CBER / CDRH) notes — these do NOT appear\n"
+            + "in any axis column by design (no fake CBER coverage of axes that\n"
+            + "are by-definition CDER-only):\n\n\n"
+    // UNPLACED notes
+    let mut any_note = false
+    si = 0
+    while si < n_dis {
+        let notes = d_unpl_notes[si]
+        let mut k2 = 0
+        while k2 < len(notes) {
+            md = md + "- **" + d_label[si] + "** — " + notes[k2] + "\n"
+            any_note = true
+            k2 = k2 + 1
+        }
+        si = si + 1
+    }
+    if !any_note {
+        md = md + "_(no UNPLACED rows in the discovered cohort)_\n"
+    }
+    md = md + "\n"
+
+    // §5 cross-links
+    md = md + "## §5 Cross-links\n\n"
+    md = md + "- Per-disease writeups live under each portfolio's own README:\n\n"
+    si = 0
+    while si < n_dis {
+        md = md + "  - **" + d_label[si] + "** — `case_studies/"
+                + d_portfolio[si] + "_portfolio/README.md`\n\n"
+        si = si + 1
+    }
+    md = md + "- Axis truth: `AXIS/HIERARCHY.tape` (core-5 in `AXIS.tape`,\n"
+            + "  expansion-main + sub-axes in `AXIS/HIERARCHY.tape`).\n"
+            + "- Reporter pattern echo: `selftest/portfolio_fitness_function.py`\n"
+            + "  (per-portfolio three-independent-metric reporter — same\n"
+            + "  honesty fence: REPORTER ≠ RANKER).\n"
+            + "- Governance: `AGENTS.tape` g1 / g3 / g7 / g8 / f1 /\n"
+            + "  f_lattice_fit / f2.\n"
+    // .py: "\n".join(parts) + "\n" — every part already ends "\n", so the
+    // join inserts a "\n" between them and the final +"\n" adds the last.
+    md = md + "\n"
+
+    // ── write LANDSCAPE.md — base64 round-trip keeps every UTF-8 byte
+    // verbatim (no heredoc / no escaping pitfalls). ─────────────────────
+    let landscape_md = repo_root + "/case_studies/landscape/LANDSCAPE.md"
+    let b64 = exec("printf '%s' " + shq(md) + " | base64")
+    exec("printf '%s' " + shq(b64) + " | base64 --decode > " + shq(landscape_md))
+    println("  wrote case_studies/landscape/LANDSCAPE.md (" + str(cp_len(md)) + " bytes)")
+    println("")
+
+    // ── summary ─────────────────────────────────────────────────────────
+    let dash60 = "────────────────────────────────────────────────────────────"
+    println("── summary " + dash60)
+    println("  cohort dimensions      : " + str(n_dis) + " diseases × "
+            + str(n_axes) + " axes = " + str(total_cells) + " cells")
+    println("  cells FDA              : " + str(fda_cells) + " ("
+            + pct1(fda_cells, total_cells) + "%)")
+    println("  cells research-stage   : " + str(research_cells) + " ("
+            + pct1(research_cells, total_cells) + "%)")
+    println("  cells honestly empty   : " + str(empty_cells) + " ("
+            + pct1(empty_cells, total_cells) + "%)")
+    println("  portfolio runners      : " + str(n_pass) + " PASS · "
+            + str(n_skip) + " SKIP · " + str(n_fail) + " FAIL")
+    println("")
+    println("  HONESTY: this is a CROSS-TAB, not a ranking. Most cells are")
+    println("  honestly empty — the landscape is sparse, and that is the")
+    println("  truth. UNPLACED rows (CBER/CDRH scope-disqualified) do NOT")
+    println("  bind to any axis column (no fake CBER coverage). The deferred")
+    println("  200-disease re-mapping remains DEFERRED.")
+    println("")
+
+    if n_fail > 0 {
+        println("__LANDSCAPE_GENERATOR__ FAIL")
+        exit(1)
+    }
+    if n_pass == 0 {
+        println("__LANDSCAPE_GENERATOR__ SKIP")
+        return
+    }
+    println("__LANDSCAPE_GENERATOR__ PASS")
+}

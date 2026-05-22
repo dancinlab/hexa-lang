@@ -1,0 +1,60 @@
+#!hexa strict
+// tests/test_saturation.hexa — exercise verify/saturation_check.hexa
+// (recipe §7.3 self-stop signal) as an isolated regression test.
+//
+// Why a separate test (not just test_calculators sentinel grep):
+//   verify/saturation_check.hexa emits `__HEXA_RTSC_RSC_SATURATED__ STOP`
+//   on PASS — the recipe §7.3-mandated form has STOP as suffix, not PASS.
+//   tests/test_calculators.hexa only registers `... PASS` sentinel pairs
+//   so it cannot bind on STOP. Without this isolated test the saturation
+//   predicate had no count-locked regression coverage.
+//
+// Pass criterion: "9/9 saturation predicates passed" + sentinel
+//   `__HEXA_RTSC_RSC_SATURATED__ STOP` from verify/saturation_check.hexa.
+//
+// Composition (must match saturation_check.hexa main() _check count):
+//   - sat-1 ×6  : per-falsifier T1+T2+T3 row complete (F-RTSC-{1..3} +
+//                 F-SC-{1..3})
+//   - sat-2 ×2  : inv_count(numerics_*.hexa) ≥ 9 + lint_numerics PASS
+//   - drift-lock ×1 : falsifier_check.hexa mirrors saturation_check
+//                     tier arrays
+//
+// On v1.1.0+심화 봉쇄: all 6 falsifiers at 100% bookkeeping closure
+// AND inv_count ≥ 10 (after numerics_cross_pillar landing) AND
+// lint_numerics clean → 9/9 predicates pass, STOP sentinel emitted.
+//
+// FAIL surfaces if:
+//   - any falsifier loses a T1/T2/T3 evidence file (sat-1 row breaks)
+//   - numerics inventory drops below 9 (sat-2 inventory floor)
+//   - lint_numerics regresses (sat-2 invariant lint)
+//   - saturation_check tier arrays drift from falsifier_check SSOT
+//
+// Run:
+//     hexa run tests/test_saturation.hexa
+//
+// Authority: recipe §7.2 stop conditions + §7.3 saturation predicate +
+//            §9.1 post-saturation guard. Sister of tests/test_falsifier.hexa.
+
+fn main() {
+    let root = env("HEXA_RTSC_ROOT")
+    let mut p = "verify/saturation_check.hexa"
+    if root.len() > 0 { p = root + "/verify/saturation_check.hexa" }
+
+    let raw = exec("hexa run " + p + " 2>&1")
+    let count_ok    = raw.contains("9/9 saturation predicates passed")
+    let sat1_ok     = raw.contains("sat-1 (all 6 falsifier rows complete)        = TRUE")
+    let sat2_ok     = raw.contains("sat-2 (inventory ≥ 9 + lint clean)           = TRUE")
+    let sentinel_ok = raw.contains("__HEXA_RTSC_RSC_SATURATED__ STOP")
+
+    if count_ok && sat1_ok && sat2_ok && sentinel_ok {
+        println("test_saturation: PASS  (verify/saturation_check.hexa 9/9 + sat-1 + sat-2 + STOP)")
+        return
+    }
+    println("test_saturation: FAIL")
+    if !count_ok    { println("  · missing '9/9 saturation predicates passed'") }
+    if !sat1_ok     { println("  · sat-1 row not TRUE (per-falsifier T1+T2+T3 incomplete)") }
+    if !sat2_ok     { println("  · sat-2 row not TRUE (inv_count < 9 OR lint_numerics dirty)") }
+    if !sentinel_ok { println("  · missing '__HEXA_RTSC_RSC_SATURATED__ STOP' sentinel") }
+    println(raw.trim())
+    exit(1)
+}

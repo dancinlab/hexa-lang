@@ -1,0 +1,30 @@
+{
+  "__fixture_tag__": "VENDORED SOURCE SNAPSHOT — frozen citation, not live data",
+  "gate_id": "fib_b2_paper_tensile",
+  "claim": {
+    "property": "tensile index (bleached softwood kraft, 80 g/m^2 handsheet)",
+    "material": "bleached softwood kraft paper",
+    "min_value": 70,
+    "unit": "N*m/g",
+    "conditioning": "TAPPI T402 (23 C +/- 1 C, 50 % +/- 2 % RH, >= 24 h)"
+  },
+  "source": {
+    "kind": "TAPPI_STANDARD",
+    "standard": "TAPPI T494",
+    "title": "Tensile properties of paper and paperboard (using constant rate of elongation apparatus)",
+    "year": 2021,
+    "citation": "TAPPI T494 / T402 conditioning; bleached softwood kraft tensile index baseline >= 70 N*m/g"
+  },
+  "tolerance": {
+    "kind": "min_threshold",
+    "abs_min": 70,
+    "unit": "N*m/g",
+    "basis": "TAPPI T494 industry baseline for structural-grade bleached softwood kraft (n >= 10 strips)"
+  },
+  "spec_doc": {
+    "path": "paper/paper.md",
+    "line_hint": "F-PA-Q1 falsifier row (kraft tensile index >= 70 N*m/g)"
+  },
+  "accessed": "2026-05-13",
+  "n6_lattice_fit_applied": false
+}

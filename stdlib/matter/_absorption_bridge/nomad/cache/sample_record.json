@@ -1,0 +1,56 @@
+{
+  "__fixture_tag__": "SAMPLE FIXTURE — not real data, for selftest replay only",
+  "__source__": "NOMAD V1 entry schema (illustrative); real fetch via REST API at https://nomad-lab.eu/prod/v1/api/v1/entries/<entry_id>",
+  "__captured__": "2026-05-13 (hexa-matter Phase G+2)",
+  "__honest_note__": "NOMAD is a FAIR-data repository for computational materials science (Draxl & Scheffler 2018 MRS Bull. 43, 676; Draxl & Scheffler 2019 J. Phys. Mater. 2, 036001). Aggregates 19M+ DFT calculations from VASP / Quantum ESPRESSO / FHI-aims / ABINIT / CP2K / GPAW / SIESTA / Exciting / WIEN2k / CASTEP and many other codes. Records are PREDICTIONS — not measurements. NOMAD does NOT curate synthesis status.",
+  "entry_id": "nomad_sample_entry_0xSi2_Fd3m",
+  "upload_id": "nomad_sample_upload_0001",
+  "mainfile": "vasprun.xml",
+  "parser_name": "parsers/vasp",
+  "results": {
+    "material": {
+      "chemical_formula_reduced": "Si",
+      "chemical_formula_hill": "Si2",
+      "elements": ["Si"],
+      "n_elements": 1,
+      "structural_type": "bulk",
+      "symmetry": {
+        "space_group_number": 227,
+        "space_group_symbol": "Fd-3m",
+        "crystal_system": "cubic"
+      }
+    },
+    "method": {
+      "simulation": {
+        "program_name": "VASP",
+        "program_version": "6.3.2",
+        "dft": {
+          "xc_functional_type": "GGA",
+          "xc_functional_names": ["GGA_X_PBE", "GGA_C_PBE"],
+          "basis_set_type": "plane waves",
+          "plane_wave_cutoff_eV": 520.0
+        }
+      }
+    },
+    "properties": {
+      "energies": {
+        "total": -10.84,
+        "formation_per_atom": 0.0
+      },
+      "structure": {
+        "lattice_parameters_A": [5.468, 5.468, 5.468],
+        "lattice_angles_deg": [90.0, 90.0, 90.0]
+      }
+    }
+  },
+  "is_measurement": false,
+  "publication": {
+    "primary": "Draxl & Scheffler 2018 MRS Bull. 43, 676 — NOMAD: The FAIR concept for big data-driven materials science",
+    "doi_primary": "10.1557/mrs.2018.208",
+    "secondary": "Draxl & Scheffler 2019 J. Phys. Mater. 2, 036001 — The NOMAD laboratory: from data sharing to artificial intelligence",
+    "doi_secondary": "10.1088/2515-7639/ab13bb"
+  },
+  "api_endpoint_template": "https://nomad-lab.eu/prod/v1/api/v1/entries/{entry_id}",
+  "license": "CC-BY 4.0 (NOMAD data policy; https://nomad-lab.eu/nomad-lab/services-uploads.html; citation required to Draxl & Scheffler 2018)",
+  "verdict": "PREDICTION (DFT via VASP-PBE, originating code preserved), not measurement"
+}

@@ -1,0 +1,36 @@
+{
+  "_fixture_note": "SAMPLE FIXTURE — not real data, for selftest replay only",
+  "_source": "DeepMind AlphaFold-3 prediction schema (illustrative); real predictions via AlphaFold Server / gated weights release",
+  "_captured": "2026-05-13 (hexa-bio cycle-30++++++++ absorption-bridge backport)",
+  "_license_note": "NON-COMMERCIAL RESEARCH ONLY — AlphaFold-3 weights released 2024-11 under DeepMind non-commercial license; commercial use via Isomorphic Labs license",
+  "_predictions_not_measurements": "AF3 outputs are computational predictions; novel-fold predictions are UNVERIFIED until experimental confirmation (X-ray, cryo-EM, NMR)",
+  "model_name": "AlphaFold-3",
+  "model_version": "af3-202411",
+  "target_id": "hexa-bio-af3-fixture-001",
+  "input_sequence": "MGSSHHHHHHSSGLVPRGSHM",
+  "chains": [
+    {
+      "chain_id": "A",
+      "entity_type": "polypeptide(L)",
+      "n_residues": 21,
+      "residues": [
+        {"residue_idx": 1, "name": "MET", "pLDDT": 72.4, "atom_xyz": [12.345, 6.789, 1.234]},
+        {"residue_idx": 2, "name": "GLY", "pLDDT": 78.1, "atom_xyz": [13.012, 7.456, 1.891]},
+        {"residue_idx": 3, "name": "SER", "pLDDT": 83.7, "atom_xyz": [13.679, 8.123, 2.548]}
+      ]
+    }
+  ],
+  "global_metrics": {
+    "ptm": 0.74,
+    "iptm": 0.68,
+    "mean_pLDDT": 78.07
+  },
+  "pAE_matrix_shape": [21, 21],
+  "pAE_summary": {
+    "mean": 12.4,
+    "max": 31.2,
+    "min": 0.5
+  },
+  "citation": "Abramson J. et al. 2024 Nature 630:493-500 (DOI 10.1038/s41586-024-07487-w)",
+  "license": "Non-commercial research only (DeepMind 2024-11); commercial via Isomorphic Labs"
+}

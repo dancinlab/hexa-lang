@@ -1,0 +1,83 @@
+#!hexa strict
+// hexa-matter/_hexa_bridge/selftest/silicon_purity_audit.hexa
+//
+// silicon Si-L1..Si-L12 + 9N + CZ/FZ + anchor gate. hexa-native port of
+// `selftest/silicon_purity_audit.py` (T2). Lossless — the Python `re`
+// uses were `9N`, `600\s*mm`, `200\s*mm` which are substring-exact for
+// the spec wording. stdlib-only; exec file read.
+
+let ROOT_ENV = env("HEXA_MATTER_ROOT")
+
+fn shq(s: str) -> str { return "'" + s.replace("'", "'\\''") + "'" }
+
+fn root() -> str {
+    if ROOT_ENV.len() > 0 { return ROOT_ENV }
+    return exec("pwd").trim()
+}
+
+let ANCHORS = ["SEMI", "ASTM", "Wacker", "Hemlock", "Topsil", "Siltronic", "Wolfspeed", "Ferrotec", "Heraeus"]
+
+fn main() {
+    println("hexa-matter/selftest/silicon_purity_audit (hexa-native, T2)")
+    let spec = root() + "/silicon/silicon.md"
+    let ex = exec("[ -f " + shq(spec) + " ] && echo y || echo n").trim()
+    if ex != "y" {
+        println("  [FAIL] silicon/silicon.md missing")
+        println("__HEXA_MATTER_SILICON_PURITY__ FAIL")
+        exit(1)
+    }
+    let text = exec("cat " + shq(spec) + " 2>/dev/null")
+    let mut fail = 0
+
+    let mut i = 1
+    while i <= 12 {
+        let tag = "Si-L" + str(i)
+        if text.contains(tag) {
+            println("  [PASS] " + tag + " declared")
+        } else {
+            println("  [FAIL] " + tag + " missing")
+            fail = fail + 1
+        }
+        i = i + 1
+    }
+
+    if text.contains("9N") && text.contains("SOFT_WALL") {
+        println("  [PASS] 9N purity ceiling + SOFT_WALL")
+    } else {
+        println("  [FAIL] 9N/SOFT_WALL missing")
+        fail = fail + 1
+    }
+
+    if text.contains("600 mm") || text.contains("600mm") {
+        println("  [PASS] CZ crucible 600 mm anchor")
+    } else {
+        println("  [FAIL] no 600 mm CZ anchor")
+        fail = fail + 1
+    }
+
+    if text.contains("200 mm") || text.contains("200mm") {
+        println("  [PASS] FZ rod 200 mm anchor")
+    } else {
+        println("  [FAIL] no 200 mm FZ anchor")
+        fail = fail + 1
+    }
+
+    let mut anc = 0
+    let mut j = 0
+    while j < ANCHORS.len() {
+        if text.contains(ANCHORS[j]) { anc = anc + 1 }
+        j = j + 1
+    }
+    if anc >= 3 {
+        println("  [PASS] >= 3 SEMI/ASTM/vendor anchors (" + str(anc) + ")")
+    } else {
+        println("  [FAIL] insufficient anchors (" + str(anc) + ")")
+        fail = fail + 1
+    }
+
+    if fail > 0 {
+        println("__HEXA_MATTER_SILICON_PURITY__ FAIL  (" + str(fail) + " missing)")
+        exit(1)
+    }
+    println("__HEXA_MATTER_SILICON_PURITY__ PASS")
+}

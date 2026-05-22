@@ -1,0 +1,43 @@
+{
+  "__fixture_tag__": "VENDORED UNIVERSAL-FF PREDICTION — frozen NNP output, not measurement",
+  "candidate_id": "hxm-aero-polyimide-001",
+  "novel_section": "§4.D.12 (Tier-2 wave, 2026-05-14)",
+  "target_property": "thermal conductivity k at 25 °C plus continuous service-temperature ceiling for a BPDA-based polyimide aerogel (Meador / NASA Glenn chemistry)",
+  "predicted_value": 0.014,
+  "predicted_unit": "W/(m·K) (thermal conductivity at 25 °C, dry, ambient pressure)",
+  "predicted_t_service_C": 380.0,
+  "operating_conditions": {
+    "polymer_backbone": "BPDA + p-PDA / ODA diamine, imidized polyimide aerogel",
+    "drying_route": "supercritical CO₂ extraction post sol-gel",
+    "density_kg_per_m3": "100-300",
+    "test_temperature_C": 25,
+    "test_pressure": "1 atm, dry-state",
+    "service_T_basis": "continuous-use in air without > 10 % mass-loss / shrinkage over 100 h"
+  },
+  "model": "MACE-MP-0 (notional)",
+  "model_caveat": "Universal FFs predict atomistic energies / forces on the polyimide repeat unit + crosslink chemistry — they do NOT directly compute panel-scale thermal conductivity (a porous-media homogenization property dominated by Knudsen-regime gas conduction at sub-100 nm pores). The 0.014 W/(m·K) + 380 °C values here are a PROXY-from-literature pinned with raw#10 C3 honesty: Meador NASA Glenn polyimide aerogel papers + Aspen / Blueshift commercial datasheets.",
+  "proxy_source": "Meador et al. 2014 ACS Appl. Mater. Interfaces 6:6062 (BPDA-PDA / BPDA-ODA polyimide aerogel k = 0.014 W/(m·K) @ 25 °C, density 100-250 kg/m³, T-service to 400 °C short-term); Meador 2017 Mater. Res. Soc. Bull. 42:744 (polyimide aerogel for aerospace insulation, 380 °C continuous demonstrated); Aspen Aerogels Pyrogel XTE 2024 datasheet (silica-aerogel commercial baseline k 0.020-0.025 W/(m·K) for context); Blueshift Materials AeroZero polyimide commercial datasheet (post-acquisition by Aspen 2021)",
+  "falsifier_relation": "PASS",
+  "falsifier_target_value": 0.018,
+  "falsifier_target_unit": "W/(m·K)",
+  "falsifier_target_t_service": 350.0,
+  "falsifier_target_t_service_unit": "°C (continuous)",
+  "falsifier_id": "F-AERO-2",
+  "falsifier_text": "T service > 350 °C OR thermal conductivity > 0.018 W/(m·K) → FAIL",
+  "delta_to_target_k": -0.004,
+  "delta_to_target_tservice": 30.0,
+  "accessed": "2026-05-14",
+  "n6_lattice_fit_applied": false,
+  "is_measurement": false,
+  "is_external_verification": false,
+  "tier": "Tier-2",
+  "unproven_markers_preserved": [
+    "polyimide aerogel above 400 °C UNVERIFIED long-term — imide ring degrades > 450 °C in air (preserved per `aerogel-foam/aerogel-foam.md` corpus)",
+    "cost of dianhydride + diamine monomer ($300-1000/kg) HARD_WALL for commodity insulation",
+    "aerogel particulate release / inhalation toxicity (sub-100 nm fibrils) UNVERIFIED in occupational setting",
+    "Blueshift / Aspen commercial production volume small vs petrochemical PU + XPS baseline; commodity-scale UNVERIFIED",
+    "freeze-thaw + humidity cycling over 10⁴ h UNVERIFIED for polyimide aerogel matrix"
+  ],
+  "honesty_caveats": "Both falsifier branches PASS at the proxy literature + vendor values. T_service 380 °C clears the 350 °C floor; k 0.014 W/(m·K) clears the 0.018 W/(m·K) ceiling. PASS does NOT close the candidate — commodity-cost UNPROVEN marker (per `aerogel-foam/aerogel-foam.md`) stays in place; monomer cost $300-1000/kg HARD_WALL on commodity insulation. SPEC_FIRST preserved — does NOT promote to EXTERNAL-VERIFIED.",
+  "license_note": "Peer-reviewed paper + NASA technical publication values per ACS / MRS publisher terms; Aspen Aerogels / Blueshift commercial datasheets governed by vendor disclosure (raw#10 C3, NOT n=6 lattice-fit)."
+}

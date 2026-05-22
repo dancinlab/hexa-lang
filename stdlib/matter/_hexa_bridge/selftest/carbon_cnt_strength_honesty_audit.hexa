@@ -1,0 +1,100 @@
+#!hexa strict
+// hexa-matter/_hexa_bridge/selftest/carbon_cnt_strength_honesty_audit.hexa
+//
+// CNT "80 GPa" lab/commercial honesty gate. hexa-native port of
+// `selftest/carbon_cnt_strength_honesty_audit.py` (T2). Every non-
+// References occurrence of "80 GPa" must have an honesty marker within
+// ±5 lines. Lossless — line-window proximity is exact (no regex digit
+// shape; "80 GPa"/"80GPa" substring + markers). stdlib-only; exec read.
+
+let ROOT_ENV = env("HEXA_MATTER_ROOT")
+
+fn shq(s: str) -> str { return "'" + s.replace("'", "'\\''") + "'" }
+
+fn root() -> str {
+    if ROOT_ENV.len() > 0 { return ROOT_ENV }
+    return exec("pwd").trim()
+}
+
+let MARKERS = ["unverified", "unproven", "lab", "mm-scale", "millimeter", "commercial 1-3 gpa", "commercial 1–3 gpa", "r&d", "not at production", "lab record", "lab-scale"]
+
+fn main() {
+    println("hexa-matter/selftest/carbon_cnt_strength_honesty_audit (hexa-native, T2)")
+    let spec = root() + "/carbon/carbon.md"
+    let ex = exec("[ -f " + shq(spec) + " ] && echo y || echo n").trim()
+    if ex != "y" {
+        println("  [FAIL] carbon/carbon.md missing")
+        println("__HEXA_MATTER_CARBON_CNT_HONESTY__ FAIL")
+        exit(1)
+    }
+    let lines = exec("cat " + shq(spec) + " 2>/dev/null").split("\n")
+
+    // locate References section start (## ... References)
+    let mut refs = -1
+    let mut i = 0
+    while i < lines.len() {
+        if refs < 0 {
+            let t = lines[i].trim()
+            if t.len() >= 2 {
+                if t.substr(0, 2) == "##" && lines[i].contains("References") { refs = i }
+            }
+        }
+        i = i + 1
+    }
+
+    // target lines: "80 GPa" outside References
+    let mut targets: [int] = []
+    let mut j = 0
+    while j < lines.len() {
+        let skip = refs >= 0 && j >= refs
+        if skip == false {
+            if lines[j].contains("80 GPa") || lines[j].contains("80GPa") {
+                targets.push(j)
+            }
+        }
+        j = j + 1
+    }
+
+    if targets.len() == 0 {
+        println("  [FAIL] '80 GPa' not found — CNT lab-record citation missing")
+        println("__HEXA_MATTER_CARBON_CNT_HONESTY__ FAIL")
+        exit(1)
+    }
+    println("  found '80 GPa' on " + str(targets.len()) + " line(s)")
+
+    let mut fail = 0
+    let mut k = 0
+    while k < targets.len() {
+        let ln = targets[k]
+        let mut lo = ln - 5
+        if lo < 0 { lo = 0 }
+        let mut hi = ln + 6
+        if hi > lines.len() { hi = lines.len() }
+        let mut win = ""
+        let mut w = lo
+        while w < hi {
+            win = win + "\n" + lines[w]
+            w = w + 1
+        }
+        let wl = win.to_lower()
+        let mut hasmark = false
+        let mut m = 0
+        while m < MARKERS.len() {
+            if wl.contains(MARKERS[m]) { hasmark = true }
+            m = m + 1
+        }
+        if hasmark {
+            println("  [PASS] line " + str(ln + 1) + ": honesty marker within ±5 lines")
+        } else {
+            println("  [FAIL] line " + str(ln + 1) + ": bare '80 GPa' (no caveat ±5 lines)")
+            fail = fail + 1
+        }
+        k = k + 1
+    }
+
+    if fail > 0 {
+        println("__HEXA_MATTER_CARBON_CNT_HONESTY__ FAIL  (" + str(fail) + " bare 80 GPa)")
+        exit(1)
+    }
+    println("__HEXA_MATTER_CARBON_CNT_HONESTY__ PASS")
+}

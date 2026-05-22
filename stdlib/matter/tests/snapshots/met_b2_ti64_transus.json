@@ -1,0 +1,28 @@
+{
+  "__fixture_tag__": "VENDORED SOURCE SNAPSHOT — frozen citation, not live data",
+  "gate_id": "met_b2_ti64_transus",
+  "claim": {
+    "property": "alpha-beta phase transformation temperature (beta-transus)",
+    "material": "Ti-6Al-4V (Grade 5, UNS R56400, ASTM B348)",
+    "T_C": 995,
+    "T_K": 1268,
+    "unit": "deg C (1268 K)",
+    "condition": "alpha+beta to all-beta at heating; alloy-dependent; ATI / Timet / ATI ATI Specialty Alloys datasheets agree"
+  },
+  "source": {
+    "kind": "ASM_HANDBOOK",
+    "primary": "ASM Handbook vol. 2 — Properties and Selection: Nonferrous Alloys and Special-Purpose Materials (1990)",
+    "vendor_secondary": "ATI Specialty Alloys Ti-6Al-4V datasheet; Timet 6Al-4V grade sheet",
+    "citation": "ASM Handbook vol. 2 — Ti-6Al-4V beta-transus 995 +/- 15 C (1268 K)"
+  },
+  "tolerance": {
+    "abs_C": 15,
+    "basis": "ASM vol. 2 published spread ± 15 C reflecting interstitial O/N variation"
+  },
+  "spec_doc": {
+    "path": "METALLURGY-DEEP.md",
+    "line_hint": "§4.3 Ti-6Al-4V property table 'β-transus (°C) | 995 ± 15'"
+  },
+  "accessed": "2026-05-13",
+  "n6_lattice_fit_applied": false
+}

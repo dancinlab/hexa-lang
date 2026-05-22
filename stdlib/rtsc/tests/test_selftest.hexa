@@ -1,0 +1,24 @@
+#!hexa strict
+// tests/test_selftest.hexa — placeholder selftest harness for hexa-rtsc.
+//
+// Pass criterion: __HEXA_RTSC_SELFTEST__ PASS sentinel present.
+// Cost: $0 (orchestrates spec-existence checks only — no compute).
+//
+// Honest C3: this PASS confirms only that the 2 spec files
+// (rtsc/room-temp-sc.md, sc/superconductor.md) exist on disk. It does NOT
+// validate any empirical RT-SC claim. v1.0.0 CLI dispatcher is placeholder.
+
+fn main() {
+    let root = env("HEXA_RTSC_ROOT")
+    let mut p = "cli/hexa-rtsc.hexa"
+    if root.len() > 0 { p = root + "/cli/hexa-rtsc.hexa" }
+
+    let raw = exec("hexa run " + p + " selftest 2>&1")
+    if raw.contains("__HEXA_RTSC_SELFTEST__ PASS") {
+        println("test_selftest: PASS")
+        return
+    }
+    println("test_selftest: FAIL")
+    println(raw.trim())
+    exit(1)
+}
