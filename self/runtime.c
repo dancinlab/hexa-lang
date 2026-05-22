@@ -960,8 +960,12 @@ static int hxlcl_pthread_join(void *thread, void **retval);
 // Cycle 63 — Darwin BSD ABI syscall wrappers via inline `svc 0x80`.
 // Each call: x16 = syscall number, x0..x5 = args, svc 0x80 → x0 = ret.
 // Replaces libc syscall wrappers (_read, _write, _open, etc) with
-// direct kernel trap. Currently arm64 only (aprime_cc is Mach-O arm64).
-#if defined(__arm64__) || defined(__aarch64__)
+// direct kernel trap. Darwin arm64 ONLY — `svc #0x80` + the BSD SYS_*
+// numbers below are the Darwin ABI. `__aarch64__` alone is NOT enough:
+// it is also defined on arm64 Linux (which needs `svc #0` + a different
+// table), so the gate requires `__APPLE__`. Linux of any arch routes
+// through the libc branch below.
+#if (defined(__arm64__) || defined(__aarch64__)) && defined(__APPLE__)
 #define HXLCL_SYS_EXIT      1
 #define HXLCL_SYS_FORK      2
 #define HXLCL_SYS_READ      3
@@ -1133,16 +1137,15 @@ static int __attribute__((noinline)) hxlcl_darwin_check_fd_set_overflow(int fd, 
     (void)fd; (void)p; (void)n;
     return 0;  // never overflowing
 }
-#elif defined(__x86_64__) && defined(__linux__)
-// iter-2d (2026-05-22) — Option L: libc-fallback syscall layer for x86_64
-// Linux. The arm64 branch above traps directly via `svc #0x80` because
-// aprime_cc targets Mach-O arm64 (macOS/iOS), where the raw-trap path was
-// chosen to avoid pulling libSystem wrappers. On x86_64 Linux there is a
-// universal glibc, the Darwin SYS_* numbers do not apply (Linux uses a
-// different syscall table + the `syscall` instruction, not `svc`), and the
-// CI bootstrap toolchain always links libc — so we route the hxlcl_*
-// wrappers through thin glibc calls. This unblocks linux-x86_64 Stage 0
-// without a full x86_64 raw-syscall port. arm64 path is UNCHANGED.
+#elif defined(__linux__)
+// libc-fallback syscall layer for Linux — every architecture (x86_64
+// AND arm64). The branch above raw-traps via `svc #0x80` with Darwin
+// BSD syscall numbers, correct ONLY on Darwin arm64. On Linux the
+// Darwin SYS_* numbers and the `svc #0x80` trap do not apply (Linux
+// arm64 = `svc #0` + a different table; x86_64 = the `syscall` insn),
+// and the toolchain always links libc — so route the hxlcl_* wrappers
+// through thin glibc calls. One architecture-neutral libc layer serves
+// every Linux arch; no per-arch raw-syscall port is needed.
 //
 // Note: cycle-66 already used this exact pattern for read/write/close/dup2/
 // pipe/fork/waitpid on arm64 (carry-flag + EINTR + pair-return bugs in the
@@ -1230,7 +1233,7 @@ static int __attribute__((noinline)) hxlcl_darwin_check_fd_set_overflow(int fd, 
     (void)fd; (void)p; (void)n;
     return 0;  // never overflowing
 }
-#endif  /* arm64 / x86_64-linux */
+#endif  /* darwin-arm64 raw-trap / linux libc */
 // cycle 6: time/term/mach forward decls — bodies after #include
 static int hxlcl_time(int *t);
 static int hxlcl_nanosleep(const void *req, void *rem);
