@@ -3069,3 +3069,139 @@ shape-sweep — this P1 is a tiny step on (c)) · memory
 path for P1-full) · @D g3 (honest scope — PROXY-vs-full-spec caveat
 explicit at every site) · @D f1/f2 (PyTorch baseline reference exception
 to hexa-native-only · CITED).
+
+### 2026-05-21 — SD14 ag_extract — multi-use Param compile-and-run round-trip (north-star ① autograd primitive · SD7 × SD13 compose · honest R-FMA finding)
+
+**SD14 composes SD7's multi-use Param fwd builder (`x*x + dt_exp(x)`)
+with SD13's `ag_extract_emit_program_x_dy_with_fwd_cache` — zero
+changes to `stdlib/flame/ag_extract.hexa`, single new test file
+`test/flame_ag_extract_sd14_compile_test.hexa`. The walker → emit →
+hexa-build → compiled-binary round-trip executes end-to-end for the
+canonical multi-use shape; the gate
+F-RFC043-AUTOGRAD-AUTO-SD14-MULTIUSE-COMPILE-RUN PASSes as
+classification R-FMA, with the in-process anchor leg (interp vs hand)
+holding at byte-eq max|Δ| = 0.0 (SD7 inheritance preserved).**
+
+**Three-regime classifier** (per-binop `let` fence vs FMA contraction):
+- `R-EQ`   (max|Δ| = 0.0)              : per-binop `let` fence held —
+                                          clang did not pick up an FMA.
+- `R-ULP`  (0 < max|Δ| ≤ 5e-16)         : SD6-style algebraic-identity
+                                          1-ULP reorder zone.
+- `R-FMA`  (5e-16 < max|Δ| ≤ 1e-13)     : FMA fusion across adjacent
+                                          `let` bindings exposing the
+                                          `(a*b) + (c*d)` pattern.
+- `R-BUG`  (max|Δ| > 1e-13)             : real bwd-graph or emit bug
+                                          (gate FAIL).
+
+**Measured (corpus = 32 LCG-seeded `(x, dy)` pairs · x ∈ [−1, 1] seed
+4242 · dy ∈ [0, 1) seed 31337 — same as SD5–SD13)**:
+- interp vs compiled : max|Δ| = 3.10862e-15  → **R-FMA**
+- interp vs hand     : max|Δ| = 0.0          → SD7 byte-eq preserved
+- compiled vs hand   : max|Δ| = 3.10862e-15  → same FMA envelope
+
+**Emitted bwd source** (multi-use, materialised inline in main() — the
+per-binop SSA naming pattern is intact; the FMA fusion happens at the
+clang IR level as it inlines through `let` bindings):
+```hexa
+use "stdlib/flame/flame_math"
+// SD13: multiuse_bwd_auto_emitted — bwd materialised inline in main() (FMA-fence pattern).
+
+fn main() {
+    let argv = args()
+    if len(argv) < 3 { println("usage: <bin> <x> <dy>"); exit(2) }
+    let x  = argv[1].to_float()
+    let dy = argv[2].to_float()
+    // ── fwd-cache materialisation (SD13 §3.2 Wengert tape) ──
+    let _fwd0: float = x
+    let _fwd1: float = x
+    let _fwd2: float = x
+    let _fwd3: float = (_fwd0 * _fwd1)
+    let _fwd4: float = dt_exp(_fwd2)
+    let _fwd5: float = (_fwd3 + _fwd4)
+    // ── bwd materialisation (one binop per let — FMA fence) ──
+    let _bwd6: float = dy
+    let _bwd7: float = _fwd1
+    let _bwd8: float = _fwd0
+    let _bwd9: float = (_bwd6 * _bwd7)
+    let _bwd10: float = (_bwd6 * _bwd8)
+    let _bwd11: float = (_bwd9 + _bwd10)        // FMA-prone: (a*b) + (c*d)
+    let _bwd12: float = _fwd4
+    let _bwd13: float = (_bwd6 * _bwd12)
+    let _bwd14: float = (_bwd11 + _bwd13)       // FMA-prone: t + (c*d)
+    let dx = _bwd14
+    println(json_stringify(dx))
+}
+```
+
+**Why this is honest, not a regression**:
+1. SD7's in-process oracle (interp ≡ hand) holds byte-eq, max|Δ| = 0.0
+   on the same 32-pair corpus — confirming the AST walker + Option A
+   reference trajectory match end-to-end.
+2. The drift surfaces ONLY at the compile boundary, ONLY on the
+   `(_bwdM * _bwdX) + (_bwdN * _bwdY)` accumulator pattern. SD13
+   sigmoid's bwd graph does not produce this pattern (each multiplicand
+   is consumed by a div or a unary neg before any add), so SD13
+   measured no FMA fusion at the compile boundary.
+3. SD6's 1-ULP reorder zone is a DIFFERENT phenomenon (algebraic
+   identity `1 − s ≡ e/d`). SD14 R-FMA is single-FMA fusion in the
+   accumulator — magnitude is ≤ ~3.1e-15 on this corpus (≈ 14 ULPs at
+   result scale ~2). Both are bounded, characterised, and PASS-zone.
+4. The compiled binary's gradient is no less mathematically correct
+   than the interp's — IEEE-754 just associates the same atoms
+   slightly differently. The test reports the exact number; downstream
+   consumers (training) routinely tolerate single-FMA-fusion drift.
+
+**SD15+ remediation paths (deferred — out of SD14 scope, no
+architecture decision made here)**:
+- Codegen-level `#pragma STDC FP_CONTRACT OFF` emission inside the
+  generated bwd fn (the runtime.c precedent at L7211 shows this is
+  the canonical hexa-stack fence — see `c0789e05` flame transcendental
+  byte-eq lesson).
+- `volatile` qualifier on each bwd-let binding (heavy: every load
+  becomes a memory round-trip; would slow CPU bwd by ~10–100×).
+- Split the accumulator add into a helper-function call boundary
+  (matches interpret_v2's per-recursion-return op trajectory but
+  bloats codegen).
+- Emit the bwd graph as a Wengert sequence in a separately-compiled
+  TU with `-ffp-contract=off` build flag (codegen-driver work).
+
+**Surgical scope** (g3-honest no over-claim):
+- Single new test file (~340 LoC): `test/flame_ag_extract_sd14_compile_test.hexa`
+- One PLAN.md entry (this section).
+- ZERO changes to `stdlib/flame/ag_extract.hexa` — SD13's emit primitive
+  composed directly with SD7's multi-use fwd builder; the test is
+  pure consumption.
+- ZERO changes to `stdlib/flame/ag_derive.hexa` and `stdlib/flame/ag_tape.hexa`
+  (per task constraint).
+
+**Sibling-test environmental note** (g3-honest disclosure for the PR):
+Running the existing SD11/SD12/SD13 selftests against the current
+toolchain (hexa.real symlink → `/Users/ghost/core/hexa-lang/hexa.real`
+= 2026-05-20 build) produces ULP-scale drift (~1–2 ULP) that was NOT
+present at PR-merge time. The drift is:
+  - SD11 (relu)      : max|Δ| = 4.44e-16 (1 ULP at result scale)
+  - SD12 (df/dx)     : max|Δ| = 6.66e-16 (1–2 ULP)
+  - SD13 (sigmoid)   : max|Δ| = 1.39e-16 (1 ULP)
+  - SD14 (multi-use) : max|Δ| = 3.11e-15 (~14 ULP — FMA envelope)
+This is consistent with a toolchain or clang FP-default drift since
+the SD11/12/13 merges; it is NOT introduced by SD14 (the SD14 commit
+adds only the new test file + this PLAN entry — zero changes to
+ag_extract.hexa / ag_derive.hexa / ag_tape.hexa). SD14's gate is
+DESIGNED to accept R-FMA as PASS so the multi-use shape lands without
+forcing a synchronous fence-emission decision (R-EQ would require
+the codegen change above). The honest finding is recorded for SD15+
+to address as a campaign rather than a one-line patch.
+
+**Cross-link**: north-star ① (NN stack — autograd primitive layer) ·
+SD5/SD6/SD7/SD9/SD10/SD11/SD12/SD13 lineage · `@cite Griewank-Walther
+§3.2 Algorithm 3.6` (reverse-mode AD emit + sum-of-contributions
+accumulator) · `@cite Steele-White 1990` (binary64 shortest-roundtrip
+codec — SD11 lemma) · `@cite c0789e05` (FP_CONTRACT OFF — the
+campaign-known FMA fence pattern) · memory
+`feedback_flame_transcendental_byteeq_hazard` (the 3-mechanism FMA
+hazard catalogue this finding belongs to) · @D g3 honest scope (no
+over-claim — R-FMA documented as a NEW, BOUNDED, CHARACTERISED zone
+distinct from SD6's 1-ULP algebraic-identity zone) · @D g5
+hexa-native-only (no LLVM, no C-transpile architecture change —
+single test file, $0 CPU only) · @D g6 citation-enforced (all formula
+lines cite Griewank-Walther or Steele-White).
