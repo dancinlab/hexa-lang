@@ -125,9 +125,11 @@ L_kloop:
         %tok, [%smem_mbar_lo], %tx_count;
 L_skip_issue:
 
-    // wait on mbarrier (all threads spin until completion)
+    // wait on mbarrier -- parity alternates per K-iter (0 at iter 0, 1 at iter 1, ...)
+    .reg .b32 %parity;
+    and.b32 %parity, %k_iter, 1;
 L_wait:
-    mbarrier.try_wait.parity.shared::cta.b64 %pdone, [%smem_mbar_lo], 0;
+    mbarrier.try_wait.parity.shared::cta.b64 %pdone, [%smem_mbar_lo], %parity;
     @!%pdone bra L_wait;
     bar.sync 0;
 
