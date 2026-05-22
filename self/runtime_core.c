@@ -5673,6 +5673,51 @@ static inline HexaVal __map_ptr_eq(HexaVal a, HexaVal b) {
 }
 #endif
 
+/* Step 3 cycle 105 — paired items-allocator inline builtins for the array
+ * allocator ports (RUNTIME.md 잔여 #6). aprime_cc codegen inlines
+ * `__arr_alloc_items_zero{,_int}(n)` to a statement-expr building a complete
+ * pre-zeroed TAG_ARRAY; the hexa_v2 bootstrap emits
+ * `hexa_call1(__arr_alloc_items_zero, n)` resolved here via the `hexa_call1`
+ * _Generic dispatch on `HexaVal (*)(HexaVal)`. Result is byte-identical to
+ * the legacy hexa_array_zeros_float / hexa_array_alloc fast-paths (single
+ * calloc + items malloc + zero-fill, positive cap). Unlike __arr_set_cap
+ * (cap-only → push SIGSEGVs on NULL items), these return a usable array.
+ * Mirror lives in self/runtime.h for non-aprime build paths. */
+#ifndef __arr_alloc_items_zero_DEFINED
+#define __arr_alloc_items_zero_DEFINED
+static inline HexaVal __arr_alloc_items_zero(HexaVal nv) {
+    HexaVal out = {.tag=TAG_ARRAY};
+    HX_SET_ARR_PTR(out, (HexaArr*)calloc(1, sizeof(HexaArr)));
+    int64_t n = HX_INT(nv);
+    if (n > 0) {
+        HexaVal* items = (HexaVal*)malloc(sizeof(HexaVal) * (size_t)n);
+        HexaVal zero = {.tag=TAG_FLOAT, .f=0.0};
+        for (int64_t i = 0; i < n; i++) items[i] = zero;
+        HX_SET_ARR_ITEMS(out, items);
+        HX_SET_ARR_LEN(out, (int)n);
+        HX_SET_ARR_CAP(out, (int)n);
+    }
+    return out;
+}
+#endif
+#ifndef __arr_alloc_items_zero_int_DEFINED
+#define __arr_alloc_items_zero_int_DEFINED
+static inline HexaVal __arr_alloc_items_zero_int(HexaVal nv) {
+    HexaVal out = {.tag=TAG_ARRAY};
+    HX_SET_ARR_PTR(out, (HexaArr*)calloc(1, sizeof(HexaArr)));
+    int64_t n = HX_INT(nv);
+    if (n > 0) {
+        HexaVal* items = (HexaVal*)malloc(sizeof(HexaVal) * (size_t)n);
+        HexaVal zero = {.tag=TAG_INT, .i=0};
+        for (int64_t i = 0; i < n; i++) items[i] = zero;
+        HX_SET_ARR_ITEMS(out, items);
+        HX_SET_ARR_LEN(out, (int)n);
+        HX_SET_ARR_CAP(out, (int)n);
+    }
+    return out;
+}
+#endif
+
 HexaVal hexa_eq(HexaVal a, HexaVal b) {
     // Cross-type numeric equality (int ↔ float) — matches interp
     // eval_binop float-coerce path (hexa_full.hexa:7867). 이전엔
