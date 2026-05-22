@@ -1,0 +1,88 @@
+RFC 067 PHILB -- Hilbert-curve CTA-swizzle (Pattern B) vs N134 super-block (Pattern A)
+
+Date:  2026-05-22
+Host:  ubu-1 (NVIDIA GeForce RTX 5070, sm_120, driver 13000, runtime 12090)
+Falsifier: F-RFC067-HEXA-SGEMM-HILBERT-SWIZZLE -- PASS (bit-exact all 4 shapes, max_abs=0.0)
+Measurement: 200 timed reps + 20 warmup, cuEvent sync per launch.
+
+== HEADLINE ==
+Hilbert beats super-block decisively at the cliff, and flattens it entirely.
+Where N134 Pattern A super-block still degraded toward larger M (ratio 0.828 -> 0.624),
+Pattern B Hilbert holds the ratio essentially FLAT at 0.82-0.85 across all M.
+
+ M     grid    p    cuBLAS   N134 super-block   Hilbert(PHILB)   %over SB   ratio-delta
+ 4096  64x64   64   69.39    58.03 / 0.828      56.99 / 0.821    -1.79%     -0.0071
+ 5120  80x80   128  69.72    50.45 / 0.717      57.69 / 0.827    +14.35%    +0.1107
+ 6144  96x96   128  70.13    46.37 / 0.655      58.49 / 0.834    +26.12%    +0.1792
+ 8192  128x128 128  70.20    44.17 / 0.624      59.48 / 0.847    +34.65%    +0.2236
+
+(TFLOPS / ratio-vs-cuBLAS. cuBLAS re-measured this run on ubu-1; ratio uses this
+run's cuBLAS so it is self-consistent. N134 super-block values from
+rfc067_pswz_hexa_sgemm_cta_swizzle_2026_05_22/result.json.)
+
+== DID HILBERT BEAT SUPER-BLOCK? YES at M>=5120, marginally slower at M=4096. ==
+- M=6144 (cliff headline): +26.1% TFLOPS (46.37 -> 58.49), ratio 0.655 -> 0.834.
+- M=8192:                  +34.6% TFLOPS (44.17 -> 59.48), ratio 0.624 -> 0.847.
+- M=4096:                  -1.8% (56.99 vs 58.03). At M=4096 the working set (~64 MB)
+  already fit the 32 MB L2 with streaming reuse, so there is no L2-thrash for Hilbert to
+  fix; the slightly longer prologue + global-scheduler interaction make it a hair slower.
+  Expected useful negative for the regime where swizzle is not needed.
+
+== WHY HILBERT WINS PAST THE CLIFF ==
+N134 super-block keeps a ~6 MB working set per 256x256 super-block, but super-blocks are
+visited row-major: super-block i+1 is to the right, and the last super-block in a
+grid-row jumps back to column 0 of the next row. Recently-scheduled CTAs across the device
+still span a horizontal strip of B (and re-touch A rows). The Hilbert curve maps adjacent
+linear CTA IDs to Manhattan-adjacent output tiles (verified: consecutive indices differ by
+exactly 1 in (x,y)). The set of concurrently-resident CTAs is thus a tight 2D blob whose
+A-row span and B-column span are both bounded by ~sqrt(occupancy) tiles, giving a strictly
+smaller and more-reused L2 footprint.
+
+The ratio is now CONSTANT (0.82-0.85) rather than decaying, showing the L2 working set no
+longer grows with M -- the signature of a space-filling-curve locality fix. This
+corroborates N140's ncu finding that the cliff was an L2-hit-rate collapse (56% @ M=6144)
+and shows the super-block only PARTIALLY fixed it; Hilbert closes the remaining gap.
+
+== HILBERT PROLOGUE OVERHEAD (honest @D g3) ==
+- Static PTX prologue ALU ops (swizzle math only, excluding shared body):
+    Super-block (Pattern A): ~14 ops  (1 div.u32 + 1 rem.u32 + shifts/ands)
+    Hilbert (Pattern B):     ~143 ops -- 7 unrolled d2xy rounds (p=128), each ~18 ops
+      (shr/and/xor/setp/and.pred/sub/selp x4/mul/add x2/shr) + 2-op bounds check.
+      d2xy fully unrolled at gen time (no runtime loop): 6 rounds @ p=64, 7 @ p=128.
+- Register pressure: ZERO delta. Both patterns report regs/thd = 64, shmem = 8192 B,
+  max_thd_per_block = 1024. ptxas folds the constant s-multiplies and reuses scratch, so
+  the longer PTX prologue does not spill or raise occupancy pressure.
+- Amortization: prologue runs once per CTA; K-loop runs K/16 = 256..512 MMA iterations of
+  8 mma.m16n8k16 each. Prologue is a single-digit-microsecond-fraction of kernel time.
+  Hilbert is faster despite the longer prologue at M>=5120 -> L2-reuse win dominates.
+
+== NON-POWER-OF-2 GRID HANDLING (honest cost) ==
+Standard Hilbert d2xy requires a power-of-2 side. Grids 80x80 (M=5120) and 96x96 (M=6144)
+are not pow2, so we launch the enclosing p=128 Hilbert square and early-return padding CTAs
+whose (sw_x,sw_y) lands outside [0,gx)x[0,gy). The generator verifies the filtered map is a
+bijection over the real grid (every tile computed exactly once -> bit-exact preserved).
+  M=5120: 16384 launched, 6400 real, 9984 padding-return (61%)
+  M=6144: 16384 launched, 9216 real, 7168 padding-return (44%)
+  M=4096 (64x64) & M=8192 (128x128): exact pow2 -> 0 padding.
+Padding CTAs hit the d2xy prologue + bounds check then ret immediately (no MMA, no A/B
+global loads, no shared traffic). They cost a few scheduler slots, no compute. This launch
+overhead is real and is part of the honest Hilbert cost on non-pow2 shapes -- yet
+M=5120/6144 still beat the super-block by +14% / +26%, so the locality win swamps it.
+A CUTLASS-style "tile remap with compaction" could drop padding launches; not needed here.
+
+== VERIFICATION ==
+- F-RFC067-HEXA-SGEMM-HILBERT-SWIZZLE: PASS. maxabs = 0.0, maxrel = 0.0 vs cuBLAS HGEMM at
+  all four shapes (4096/5120/6144/8192).
+- Both swizzles semantic-preserving: only CTA->tile visitation order changes; per-tile MMA
+  math byte-identical to N107 PY / N134.
+- Bijection asserted in the generator (verify_bijection) for every shape before PTX emission.
+
+== CONCLUSION ==
+Pattern B (Hilbert) is the better CTA-swizzle for the M>=5120 L2-thrash cliff on the RTX
+5070 (32 MB L2). It recovers the cliff more completely than N134 super-block -- flattening
+the cuBLAS ratio to a near-constant 0.82-0.85 across M=4096..8192 -- at the cost of a longer
+(but register-neutral, fully amortized) unrolled-d2xy prologue and, on non-pow2 grids, some
+no-op padding-CTA launches. At M=4096, where no thrash exists, Hilbert is a hair slower
+(-1.8%): super-block (or no swizzle) is fine in that regime.
+Peak hexa ratio this campaign: 0.847 @ M=8192 -- the best large-M ratio in the RFC 067
+SGEMM line.
