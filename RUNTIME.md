@@ -1104,7 +1104,7 @@ the 8 잔여 items have settled to:
 | 1 | hexa_len polymorphic | ✅ ported | cycle 99 (alias dispatch via `byte_len`) |
 | 2 | hexa_to_string | ✅ partial | cycle 96 (scalar branches: int/float/bool/void/str). Array/Map recursive + ValStruct stay C |
 | 3 | hexa_str_concat heap-only | ❌ REVERT | arena nesting hazard (cycle-30 family). Inner-fn `__hexa_fn_arena_enter` frame corrupts outer arena array storage. Step 5+ work |
-| 4 | hexa_eq deep eq | ✅ partial | cycles 91 (TAG_STR strcmp) + 97 (TAG_ARRAY deep). 2/9 branches ported |
+| 4 | hexa_eq deep eq | ✅ 9/9 | cycles 91 (TAG_STR) + 97 (TAG_ARRAY) + 100 (TAG_VALSTRUCT/TAG_MAP ptr-eq) + 103 (TAG_INT/FLOAT/BOOL same-tag scalar). 9/9 candidate branches ported |
 | 5 | Map basic ops (set/get/keys/values/contains_key/remove) | ❌ CORE | foundation primitives — surface builtins LOWER to them. Robin Hood deletion + hash slot insert + key-interning malloc all C-internal |
 | 6 | Array allocators (new/zeros_float/alloc) | ❌ CORE | `[]` literal lowers to `hexa_array_new()` → self-recursion. Fast-path semantics (single-shot calloc + pre-cap) require HX_SET_ARR_CAP exposure |
 | 7 | IO (println/eprint/print/eprintln) | ❌ DEFERRED | needs new `__fd_write_bytes(fd, s)` codegen builtin (3-5 cycles). Tier-A.6 syscall layer architectural mismatch |
@@ -1117,6 +1117,43 @@ the 8 잔여 items have settled to:
 - `__fd_write_bytes` codegen builtin → unblocks #7
 
 **Wipe pattern recurrence** (memory `feedback_runtime_c_deploy_regen_wipe`): commits c39afbbe + 0d59c419 silently overwrote stdlib/runtime/numeric.hexa + ctype.hexa + self/runtime_core.c entries cycles 91-96 between original land and re-land. Cherry-picks `3fc62729 + 459be02c + f0be7ace + 7bdb4aba + 85150013` recovered the work. Sub-agent worktree leak also observed (#4 agent's branch HEAD propagated into main worktree's index via shared git object store — fixed by `cd` back to session worktree).
+
+### 2026-05-22 — step 3 cycle 103: hexa_eq TAG_INT/TAG_FLOAT/TAG_BOOL same-tag scalar branches (잔여 #4 CLOSED → 9/9)
+
+- ✅ The final three same-tag scalar cases of polymorphic `hexa_eq`
+  (self/runtime_core.c TAG_INT/TAG_FLOAT/TAG_BOOL) split via `#ifdef
+  HEXA_HAS_HEXA_RT_STDLIB` and dispatch to `rt_eq_int` / `rt_eq_float` /
+  `rt_eq_bool` in stdlib/runtime/numeric.hexa. With cycles 91 (TAG_STR) +
+  97 (TAG_ARRAY) + 100 (TAG_VALSTRUCT/TAG_MAP), 잔여 #4 reaches 9/9
+- **Recursion-safety — the cycle-100 `as`-cast fix was INSUFFICIENT for
+  fn-locals.** The cycle-100 codegen restore registers a `let X: int =
+  Y as int` as known-int ONLY for module-global lets. A fn-BODY local
+  let is short-circuited to `false` by the 2026-05-19 fn-local-shadowing
+  guard (`_is_known_int_name` codegen_c2.hexa:7117 → `_gen2_name_in_cur_
+  lets(name)` returns true → bail). Transpile-verified: the original
+  `let ai: int = a as int; return ai == bi` body emits `hexa_eq(ai, bi)`
+  — direct recursion trap into rt_eq_int. (The cycle-76 typed-int-param
+  fast path is likewise not active in the current hexa_v2 binary —
+  `pub fn rt_eq_int(a: int, b: int)` also emitted `hexa_eq(a, b)`.)
+- **Fix**: express int/float equality with ORDERED comparisons.
+  `(a <= b) && (a >= b)` lowers (codegen_c2.hexa:4071-4074) to
+  `hexa_bool(hexa_truthy(hexa_cmp_le(a,b)) && hexa_truthy(hexa_cmp_ge(a,
+  b)))`. `hexa_cmp_le`/`hexa_cmp_ge` (runtime_core.c:6695/6702) compare
+  via HX_INT / __hx_to_double and never call hexa_eq, and the C wrapper
+  does NOT redirect them — 0 hexa_eq call sites. Byte-exact for TAG_INT
+  and TAG_FLOAT incl. NaN (NaN<=x, NaN>=x both false → false, matching
+  the C body's IEEE `HX_FLOAT(a)==HX_FLOAT(b)`)
+- TAG_BOOL: `let ab: bool = a as bool` lowers to `hexa_bool(hexa_truthy(
+  a))` (codegen_c2.hexa:4113); `if ab { return bb } return !bb` →
+  `if (hexa_truthy(ab))` + `hexa_bool(!hexa_truthy(bb))` — no comparison
+  on HexaVals, 0 hexa_eq call sites
+- Transpile-verified via local self/native/hexa_v2: all three rt_eq_*
+  bodies emit 0 `hexa_eq` (probes in inbox/notes/probe_*_103.hexa).
+  Verified BEFORE wiring the C dispatch (RUNTIME.md watchpoint #4)
+- Sample equality semantics preserved: `5 == 5` → TAG_INT → rt_eq_int →
+  `(5<=5)&&(5>=5)` = true · `1.5 == 1.5` → TAG_FLOAT → rt_eq_float =
+  true · `true == true` → TAG_BOOL → rt_eq_bool → `if true { return
+  true }` = true
 
 ### 2026-05-22 — step 3 cycle 100: codegen restore — `as`-cast init registers known-int/float (unblocks hexa_eq same-tag scalar port)
 
