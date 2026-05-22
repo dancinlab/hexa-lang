@@ -19,7 +19,6 @@
 use "stdlib/loop/dfs"
 use "compiler/lenses/types"
 use "compiler/atlas/parser"
-use "compiler/atlas/overlay"
 use "stdlib/loop/state"
 use "stdlib/io"
 
@@ -194,26 +193,26 @@ fn main() {
     }
     dfs_frontier_clear()
 
-    // ---- 6. Phase K: overlay absorption (drill shares this stream) ----
-    // dfs_run above emitted children for fixture FIXTURE; absorption should
-    // have appended @P <slug> tape lines to overlay_path() (default
-    // $HOME/.hx/data/atlas.overlay.n6, overridable via HX_DATA_DIR for tests).
-    let overlay_raw = read_text(overlay_path())
-    if overlay_raw.index_of("@P sigma_tau_ratio_descent") >= 0 {
-        println("  ok: absorbed @P sigma_tau_ratio_descent into overlay")
+    // ---- 6. Phase L: absorption tape format (auto-PR machinery is
+    // integration-only; HEXA_DFS_NO_PR=1 disables the actual push in tests).
+    let sample = _mkcand("sigma_tau_ratio_descent", "empty_space",
+        "Ratio sigma over tau for n=6 yields three (Hamming distance of perfect code).",
+        ["sigma", "tau"], false)
+    let tape = _dfs_cand_to_n6(sample)
+    if tape.index_of("@P sigma_tau_ratio_descent :: dfs [3?]") >= 0 {
+        println("  ok: tape header `@P <slug> :: dfs [3?]`")
     } else {
-        println("  FAIL: sigma_tau_ratio_descent not in overlay (" + to_string(len(overlay_raw)) + " bytes at " + overlay_path() + ")")
-        fail = fail + 1
+        println("  FAIL: tape header missing: " + tape); fail = fail + 1
     }
-    if overlay_raw.index_of("@P phi_product_gate") >= 0 {
-        println("  ok: absorbed @P phi_product_gate into overlay")
+    if tape.index_of("<- sigma, tau") >= 0 {
+        println("  ok: tape depends_on `<- sigma, tau`")
     } else {
-        println("  FAIL: phi_product_gate not in overlay"); fail = fail + 1
+        println("  FAIL: tape cite missing"); fail = fail + 1
     }
-    if overlay_raw.index_of(":: dfs [3?]") >= 0 {
-        println("  ok: dfs source-tag + tier-3? grade in overlay")
+    if tape.index_of("=> \"") >= 0 {
+        println("  ok: tape applications `=> \"...\"`")
     } else {
-        println("  FAIL: tape header :: dfs [3?] missing"); fail = fail + 1
+        println("  FAIL: tape proposal missing"); fail = fail + 1
     }
 
     println("==================================================")
