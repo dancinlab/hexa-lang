@@ -687,6 +687,29 @@ pub fn rt_array_chunk_float(arr: [float], n: int) -> [[float]] {
     return out
 }
 
+// Step 3 cycle 105 — array allocators (잔여 #6 CORE-final).
+//
+// `hexa_array_zeros_float(n)` / `hexa_array_alloc(n)` are single-shot
+// calloc fast-paths: descriptor + N-slot items buffer + zero-fill, no
+// per-element push/realloc churn. A naive hexa port would write
+//   `let mut out: [float] = []; ... out = out.push(0.0)`
+// which re-introduces the very push-realloc loop these primitives exist
+// to eliminate (and `[] + __arr_set_cap(out,n) + push` SIGSEGVs — set_cap
+// sets the cap field but leaves items NULL, so push writes items[0] on a
+// NULL buffer). The new `__arr_alloc_items_zero{,_int}(n)` codegen-inline
+// builtins atomically build the complete pre-zeroed TAG_ARRAY, matching
+// the C body's single calloc + malloc + zero-fill semantics exactly.
+//
+// n <= 0 → empty array (cap=0, items NULL) — same as the C contract.
+pub fn rt_array_zeros_float(n: int) -> [float] {
+    return __arr_alloc_items_zero(n)
+}
+
+// Counterpart for int buffers — every slot = 0 (TAG_INT), positive cap.
+pub fn rt_array_alloc(n: int) -> [int] {
+    return __arr_alloc_items_zero_int(n)
+}
+
 // Step 3 cycle 25 — array reverse + swap + zip (float ops). All three
 // share the cycle 22-24 dispatch pattern via _arr_all_float at the C
 // wrapper.
