@@ -933,8 +933,12 @@ static int hxlcl_pthread_join(void *thread, void **retval);
 // Cycle 63 — Darwin BSD ABI syscall wrappers via inline `svc 0x80`.
 // Each call: x16 = syscall number, x0..x5 = args, svc 0x80 → x0 = ret.
 // Replaces libc syscall wrappers (_read, _write, _open, etc) with
-// direct kernel trap. Currently arm64 only (aprime_cc is Mach-O arm64).
-#if defined(__arm64__) || defined(__aarch64__)
+// direct kernel trap. Darwin only (svc #0x80 + x16 + Darwin SYS_* numbers
+// are macOS ABI; Linux arm64 uses svc #0 + x8 + different numbers).
+// iter-2e (2026-05-22 re-apply · bf406f08 wipe reverted PR #300): narrowed
+// from (__arm64__||__aarch64__) to __APPLE__ so Linux arm64 routes to the
+// libc fallback below instead of trapping with Darwin syscall numbers.
+#if defined(__APPLE__)
 #define HXLCL_SYS_EXIT      1
 #define HXLCL_SYS_FORK      2
 #define HXLCL_SYS_READ      3
@@ -1106,7 +1110,7 @@ static int __attribute__((noinline)) hxlcl_darwin_check_fd_set_overflow(int fd, 
     (void)fd; (void)p; (void)n;
     return 0;  // never overflowing
 }
-#elif defined(__x86_64__) && defined(__linux__)
+#elif defined(__linux__)
 // iter-2d (2026-05-22) — Option L: libc-fallback syscall layer for x86_64
 // Linux. The arm64 branch above traps directly via `svc #0x80` because
 // aprime_cc targets Mach-O arm64 (macOS/iOS), where the raw-trap path was
