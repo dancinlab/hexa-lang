@@ -1,0 +1,641 @@
+// stdlib/loop/dfs.hexa — RFC 080 DFS+LLM recursive atlas expansion.
+//
+// TECS-L.md §5. Ports the archive-TECS-L `dfs_engine.py` "타고타고 내려가는"
+// (depth-first descent) discovery strategy into `hexa loop`. A lens-emitted
+// Candidate is treated as a DFS seed; an external LLM (pluggable via
+// --llm-cmd) proposes child hypotheses one level deeper; verified children
+// become the next-depth frontier (beam-capped). Every child lands in
+// inbox/atlas_candidates/dfs_<parent>/ for human PR review — never mutates
+// the binary built-in atlas (@D g_atlas_binary_builtin, PR-only).
+//
+// PHASE MAP (TECS-L.md §5):
+//   B  dfs_llm_invoke       — pluggable LLM shellout (stdin=prompt)
+//   C  dfs_build_prompt /   — prompt scaffold + markdown front-matter parse
+//      dfs_parse_children /   + iterative beam-search frontier walk
+//      dfs_run
+//   D  dfs_verify_child     — cite-required + cite-in-atlas + non-trivial
+//                             + English-only (no-CJK) gate; drop log
+//   E  budget guard         — 3-way AND (calls · wall-time · USD estimate),
+//                             --allow-llm gates real exec
+//   F  frontier persist     — state/loop/dfs_frontier.jsonl + --resume +
+//                             chain.jsonl extension + llm_calls.jsonl
+//   G  content-addr cache   — sha256(prompt+cmd) file cache, --no-cache
+//
+// authority: AGENTS.tape @D g_atlas_binary_builtin (PR-only) · g6 (cite
+//   enforced — dfs_verify_child) · g_interp_deprecated (compiled-path) ·
+//   g_llm_pluggable (RFC 080 — LLM opt-in, budget+verify mandatory).
+
+use "compiler/lenses/types"
+use "compiler/atlas/parser"
+use "stdlib/loop/state"
+use "stdlib/io"
+
+// Blended USD per million tokens (rough estimate — pluggable cmd returns no
+// token usage, so cost is necessarily an over-estimate; see RFC 080 §honest).
+let DFS_USD_PER_MTOK = 5.0
+let DFS_CHARS_PER_TOK = 4
+
+// ── tiny local helpers (state.hexa equivalents are private) ──────────
+
+fn _dfs_shq(s: string) -> string {
+    return "'" + s.replace("'", "'\\''") + "'"
+}
+
+fn _dfs_atoi(s: string) -> int {
+    let t = s.trim()
+    let mut n = 0
+    let mut i = 0
+    while i < len(t) {
+        let c = t.substring(i, i + 1)
+        if c == "0" { n = n * 10 + 0 }
+        else if c == "1" { n = n * 10 + 1 }
+        else if c == "2" { n = n * 10 + 2 }
+        else if c == "3" { n = n * 10 + 3 }
+        else if c == "4" { n = n * 10 + 4 }
+        else if c == "5" { n = n * 10 + 5 }
+        else if c == "6" { n = n * 10 + 6 }
+        else if c == "7" { n = n * 10 + 7 }
+        else if c == "8" { n = n * 10 + 8 }
+        else if c == "9" { n = n * 10 + 9 }
+        else { break }
+        i = i + 1
+    }
+    return n
+}
+
+fn _dfs_now_epoch() -> int {
+    return _dfs_atoi(exec("date +%s").trim())
+}
+
+fn _dfs_bool_str(b: bool) -> string {
+    if b { return "true" }
+    return "false"
+}
+
+fn _dfs_safe_slug(s: string) -> string {
+    let mut r = s.replace(" ", "_")
+    r = r.replace("*", "_")
+    r = r.replace("\"", "_")
+    r = r.replace("'", "_")
+    r = r.replace("/", "_")
+    return r
+}
+
+// Does the family csv contain `fam`? (axis 11c family filter)
+fn _dfs_family_enabled(fam: string, families_csv: string) -> bool {
+    let parts = families_csv.split(",")
+    let n = len(parts)
+    let mut i = 0
+    while i < n {
+        if parts[i].trim() == fam { return true }
+        i = i + 1
+    }
+    return false
+}
+
+// ── Phase B: pluggable LLM invoke ───────────────────────────────────
+
+// Writes `prompt` to a temp file and pipes it as stdin to `cmd` (axis 2c).
+// The prompt never reaches the shell argv (R12 injection guard) and is
+// unbounded in size (R13). Returns captured stdout (markdown response).
+pub fn dfs_llm_invoke(prompt: string, cmd: string) -> string {
+    let tmp = "/tmp/hexa_loop_dfs_prompt_" + to_string(_dfs_now_epoch()) + "_" + to_string(len(prompt)) + ".txt"
+    let _ = write_text(tmp, prompt)
+    let out = exec(cmd + " < " + _dfs_shq(tmp))
+    let _ = exec("rm -f " + _dfs_shq(tmp))
+    return out
+}
+
+// ── Phase G: content-addressed cache ────────────────────────────────
+
+fn _dfs_cache_dir() -> string {
+    return loop_state_dir() + "/llm_cache"
+}
+
+// sha256 of (prompt + space + cmd) hex via shasum (axis 14b).
+fn _dfs_cache_key(prompt: string, cmd: string) -> string {
+    let dir = _dfs_cache_dir()
+    let _ = exec("mkdir -p " + _dfs_shq(dir))
+    let keyfile = dir + "/.keytmp"
+    let _ = write_text(keyfile, prompt + "::" + cmd)
+    let h = exec("shasum -a 256 " + _dfs_shq(keyfile) + " | cut -c1-64").trim()
+    return h
+}
+
+// Returns cached response or "" on miss.
+fn _dfs_cache_get(key: string) -> string {
+    let path = _dfs_cache_dir() + "/" + key + ".resp"
+    let exists = exec("test -e " + _dfs_shq(path) + " && echo Y || echo N").trim()
+    if exists == "Y" { return read_text(path) }
+    return ""
+}
+
+fn _dfs_cache_put(key: string, resp: string) {
+    let path = _dfs_cache_dir() + "/" + key + ".resp"
+    let _ = write_text(path, resp)
+}
+
+// ── Phase C: prompt scaffold ────────────────────────────────────────
+
+// Find an atlas node's raw body by id across P + L node lists (axis 9b).
+fn _dfs_lookup_raw(node_id: string, view: AtlasView) -> string {
+    let pn = len(view.p_nodes)
+    let mut i = 0
+    while i < pn {
+        if view.p_nodes[i].id == node_id { return view.p_nodes[i].raw }
+        i = i + 1
+    }
+    let ln = len(view.l_nodes)
+    let mut j = 0
+    while j < ln {
+        if view.l_nodes[j].id == node_id { return view.l_nodes[j].raw }
+        j = j + 1
+    }
+    return ""
+}
+
+// Build the DFS expansion prompt for one parent Candidate (axis 9a/b/d/e).
+// Output contract mirrors inbox/atlas_candidates/<slug>.md (axis 3b) so the
+// LLM emits the same markdown front-matter the lens system already speaks.
+pub fn dfs_build_prompt(parent: Candidate, view: AtlasView, beam: int) -> string {
+    let mut cites_raw = ""
+    let cn = len(parent.cite)
+    let mut c = 0
+    while c < cn {
+        let raw = _dfs_lookup_raw(parent.cite[c], view)
+        if len(raw) > 0 {
+            let mut snippet = raw
+            // R13 — cap each cite body to keep total prompt bounded.
+            if len(snippet) > 800 { snippet = snippet.substring(0, 800) + " ..." }
+            cites_raw = cites_raw + "### " + parent.cite[c] + "\n" + snippet + "\n\n"
+        } else {
+            cites_raw = cites_raw + "### " + parent.cite[c] + "\n(id only; body not in view)\n\n"
+        }
+        c = c + 1
+    }
+    if len(cites_raw) == 0 { cites_raw = "(no cited node bodies available)\n\n" }
+
+    let p = "You are extending a theorem atlas for hexa-lang. Output ONLY markdown.\n\n"
+          + "PARENT HYPOTHESIS (family: " + parent.family + ", slug: " + parent.slug + ")\n"
+          + parent.proposed + "\n\n"
+          + "CITED ATLAS NODES\n"
+          + cites_raw
+          + "TASK\n"
+          + "Propose up to " + to_string(beam) + " CHILD hypotheses that descend from the\n"
+          + "parent: deeper, more specific, or testing a sub-claim. For EACH child\n"
+          + "output exactly this block, children separated by a line containing only ---\n\n"
+          + "## <child-slug>\n"
+          + "- family: <empty_space|paradigm_shift|cross_pollinate|counterexample_mine|invariant_stress|scale_extrapolate|constraint_flip|falsify_self|unfold>\n"
+          + "- fire_needed: <true|false>\n"
+          + "- cite: [<atlas-node-id>, ...]\n\n"
+          + "<one-paragraph English proposal, under 120 words>\n\n"
+          + "RULES\n"
+          + "- English only. No Korean or CJK text.\n"
+          + "- cite MUST include at least one real atlas node id from the cited set above.\n"
+          + "- Output nothing except the child blocks.\n"
+    return p
+}
+
+// ── Phase C: markdown front-matter parse ────────────────────────────
+
+fn _dfs_after_prefix(line: string, prefix: string) -> string {
+    if line.starts_with(prefix) {
+        return line.substring(len(prefix), len(line)).trim()
+    }
+    return ""
+}
+
+// Parse a `- cite: [a, b, c]` line into a string array. Robust to missing
+// brackets; splits on comma and trims.
+fn _dfs_parse_cite(line: string) -> array {
+    let mut out: array = []
+    let lb = line.index_of("[")
+    let rb = line.index_of("]")
+    let mut inner = ""
+    if lb >= 0 && rb > lb {
+        inner = line.substring(lb + 1, rb)
+    } else {
+        // fall back to text after "cite:"
+        let ci = line.index_of("cite:")
+        if ci >= 0 { inner = line.substring(ci + 5, len(line)) }
+    }
+    let parts = inner.split(",")
+    let n = len(parts)
+    let mut i = 0
+    while i < n {
+        let t = parts[i].trim()
+        if len(t) > 0 { out.push(t) }
+        i = i + 1
+    }
+    return out
+}
+
+// Parse an LLM markdown response into an array of child Candidate. The
+// derivation parent slug is recorded by prefixing the child slug; verify is
+// applied separately (Phase D) so callers can log drops.
+pub fn dfs_parse_children(resp: string, parent_slug: string) -> array {
+    let lines = resp.split("\n")
+    let n = len(lines)
+    let mut out: array = []
+
+    let mut have = false
+    let mut cur_slug = ""
+    let mut cur_family = ""
+    let mut cur_fire = false
+    let mut cur_cite: array = []
+    let mut cur_body = ""
+
+    let mut i = 0
+    while i < n {
+        let line = lines[i]
+        let trimmed = line.trim()
+        if line.starts_with("## ") {
+            // flush previous
+            if have {
+                out.push(Candidate {
+                    slug: cur_slug, family: cur_family, proposed: cur_body.trim(),
+                    cite: cur_cite, fire_needed: cur_fire, fire_estimate_usd: 0.0
+                })
+            }
+            have = true
+            cur_slug = line.substring(3, len(line)).trim()
+            cur_family = ""
+            cur_fire = false
+            cur_cite = []
+            cur_body = ""
+            i = i + 1
+            continue
+        }
+        if trimmed == "---" {
+            if have {
+                out.push(Candidate {
+                    slug: cur_slug, family: cur_family, proposed: cur_body.trim(),
+                    cite: cur_cite, fire_needed: cur_fire, fire_estimate_usd: 0.0
+                })
+            }
+            have = false
+            cur_slug = ""; cur_family = ""; cur_fire = false; cur_cite = []; cur_body = ""
+            i = i + 1
+            continue
+        }
+        if have {
+            if line.starts_with("- family:") {
+                cur_family = _dfs_after_prefix(line, "- family:")
+            } else if line.starts_with("- fire_needed:") {
+                cur_fire = _dfs_after_prefix(line, "- fire_needed:") == "true"
+            } else if line.starts_with("- cite:") {
+                cur_cite = _dfs_parse_cite(line)
+            } else {
+                cur_body = cur_body + line + "\n"
+            }
+        }
+        i = i + 1
+    }
+    if have {
+        out.push(Candidate {
+            slug: cur_slug, family: cur_family, proposed: cur_body.trim(),
+            cite: cur_cite, fire_needed: cur_fire, fire_estimate_usd: 0.0
+        })
+    }
+    return out
+}
+
+// ── Phase D: verify gate ────────────────────────────────────────────
+
+// Does at least one cite id resolve to a real atlas P/L node? (axis 10c)
+fn _dfs_cite_in_atlas(cand: Candidate, view: AtlasView) -> bool {
+    let cn = len(cand.cite)
+    let mut c = 0
+    while c < cn {
+        let id = cand.cite[c]
+        let pn = len(view.p_nodes)
+        let mut i = 0
+        while i < pn {
+            if view.p_nodes[i].id == id { return true }
+            i = i + 1
+        }
+        let ln = len(view.l_nodes)
+        let mut j = 0
+        while j < ln {
+            if view.l_nodes[j].id == id { return true }
+            j = j + 1
+        }
+        c = c + 1
+    }
+    return false
+}
+
+// English-only heuristic (axis 10f). Rejects any non-ASCII byte (>= 0x80),
+// which covers CJK/Hangul; the atlas itself is ASCII ("phi * n"), so an
+// ASCII-only proposal is the right contract. Counts non-ASCII bytes
+// portably by deleting every ASCII byte (0x00-0x7f) and measuring the
+// remainder -- robust across BSD/GNU `tr` and `sh`, unlike grep's `\xHH`
+// byte-class which is implementation-defined (it silently matched ASCII
+// letters under sh+BSD grep and rejected all English; caught by Phase J).
+fn _dfs_has_cjk(s: string) -> bool {
+    let tmp = "/tmp/hexa_loop_dfs_cjk_" + to_string(_dfs_now_epoch()) + ".txt"
+    let _ = write_text(tmp, s)
+    let cnt = exec("LC_ALL=C tr -d '\\0-\\177' < " + _dfs_shq(tmp) + " | wc -c | tr -d ' '").trim()
+    let _ = exec("rm -f " + _dfs_shq(tmp))
+    return _dfs_atoi(cnt) > 0
+}
+
+// Returns "" if the child passes all gates, else a short drop reason.
+pub fn dfs_verify_child(cand: Candidate, view: AtlasView) -> string {
+    if len(cand.slug) == 0 { return "empty-slug" }
+    if len(cand.cite) == 0 { return "no-cite" }                 // 10b
+    if _dfs_cite_in_atlas(cand, view) == false { return "cite-not-in-atlas" } // 10c
+    if len(cand.proposed) < 50 { return "trivial-body" }        // 10e
+    if _dfs_has_cjk(cand.proposed) { return "non-english" }     // 10f
+    return ""
+}
+
+fn _dfs_drop_log(parent_slug: string, child_slug: string, reason: string) {
+    let path = loop_state_dir() + "/llm_drops.jsonl"
+    let row = "{\"parent\":\"" + parent_slug + "\""
+            + ",\"child\":\"" + child_slug + "\""
+            + ",\"reason\":\"" + reason + "\"}\n"
+    let _ = exec("printf '%s' " + _dfs_shq(row) + " >> " + _dfs_shq(path))
+}
+
+// ── Phase F: telemetry + chain extension ────────────────────────────
+
+fn _dfs_call_log(parent_slug: string, depth: int, prompt_len: int, resp_len: int, cost: float, cached: bool) {
+    let path = loop_state_dir() + "/llm_calls.jsonl"
+    let row = "{\"parent\":\"" + parent_slug + "\""
+            + ",\"depth\":" + to_string(depth)
+            + ",\"prompt_chars\":" + to_string(prompt_len)
+            + ",\"resp_chars\":" + to_string(resp_len)
+            + ",\"cost_usd_est\":" + to_string(cost)
+            + ",\"cached\":" + _dfs_bool_str(cached) + "}\n"
+    let _ = exec("printf '%s' " + _dfs_shq(row) + " >> " + _dfs_shq(path))
+}
+
+fn _dfs_chain_append(cycle: int, parent_slug: string, child_slug: string, family: string, depth: int, cost: float) {
+    let path = loop_state_dir() + "/chain"
+    let row = "{\"cycle\":" + to_string(cycle)
+            + ",\"slug\":\"" + child_slug + "\""
+            + ",\"family\":\"" + family + "\""
+            + ",\"parent_slug\":\"" + parent_slug + "\""
+            + ",\"depth\":" + to_string(depth)
+            + ",\"cost_usd\":" + to_string(cost)
+            + ",\"source\":\"dfs\"}\n"
+    let _ = exec("printf '%s' " + _dfs_shq(row) + " >> " + _dfs_shq(path))
+}
+
+// ── Phase F: frontier persistence for --resume ──────────────────────
+//
+// When a cycle exhausts its budget mid-walk, the unprocessed frontier is
+// serialized to state/loop/<hash>/dfs_frontier.jsonl so a later
+// `hexa loop --dfs --resume` picks up exactly where it stopped. On clean
+// completion the file is cleared. Serialization is a fixed-field one-line
+// JSON record (slug/family/fire/cite/proposed); proposals carry newlines
+// and quotes, so they are escaped. MVP: assumes proposals contain no
+// literal backslash (LLM prose) — see RFC 080 non-scope.
+
+fn _dfs_esc(s: string) -> string {
+    let mut r = s.replace("\\", "\\\\")
+    r = r.replace("\"", "\\\"")
+    r = r.replace("\n", "\\n")
+    return r
+}
+
+fn _dfs_unesc(s: string) -> string {
+    let mut r = s.replace("\\n", "\n")
+    r = r.replace("\\\"", "\"")
+    return r
+}
+
+// Substring of `s` between the first `a` and the next `b` after it.
+fn _dfs_between(s: string, a: string, b: string) -> string {
+    let i = s.index_of(a)
+    if i < 0 { return "" }
+    let from = i + len(a)
+    let rest = s.substring(from, len(s))
+    let j = rest.index_of(b)
+    if j < 0 { return rest }
+    return rest.substring(0, j)
+}
+
+fn dfs_serialize_candidate(c: Candidate) -> string {
+    let mut cite_join = ""
+    let n = len(c.cite)
+    let mut i = 0
+    while i < n {
+        if i > 0 { cite_join = cite_join + "|" }
+        cite_join = cite_join + c.cite[i]
+        i = i + 1
+    }
+    return "{\"slug\":\"" + _dfs_esc(c.slug) + "\""
+         + ",\"family\":\"" + _dfs_esc(c.family) + "\""
+         + ",\"fire\":" + _dfs_bool_str(c.fire_needed)
+         + ",\"cite\":\"" + _dfs_esc(cite_join) + "\""
+         + ",\"proposed\":\"" + _dfs_esc(c.proposed) + "\"}"
+}
+
+fn dfs_parse_candidate_line(line: string) -> Candidate {
+    let slug = _dfs_unesc(_dfs_between(line, "\"slug\":\"", "\",\"family\":\""))
+    let family = _dfs_unesc(_dfs_between(line, "\",\"family\":\"", "\",\"fire\":"))
+    let fire_s = _dfs_between(line, "\",\"fire\":", ",\"cite\":\"")
+    let cite_raw = _dfs_unesc(_dfs_between(line, ",\"cite\":\"", "\",\"proposed\":\""))
+    let prop = _dfs_unesc(_dfs_between(line, "\",\"proposed\":\"", "\"}"))
+    let mut cite: array = []
+    if len(cite_raw) > 0 {
+        let parts = cite_raw.split("|")
+        let n = len(parts)
+        let mut i = 0
+        while i < n {
+            if len(parts[i]) > 0 { cite.push(parts[i]) }
+            i = i + 1
+        }
+    }
+    return Candidate {
+        slug: slug, family: family, proposed: prop,
+        cite: cite, fire_needed: (fire_s == "true"), fire_estimate_usd: 0.0
+    }
+}
+
+fn dfs_frontier_path() -> string {
+    return loop_state_dir() + "/dfs_frontier.jsonl"
+}
+
+fn dfs_frontier_save(frontier: array) {
+    let mut out = ""
+    let n = len(frontier)
+    let mut i = 0
+    while i < n {
+        out = out + dfs_serialize_candidate(frontier[i]) + "\n"
+        i = i + 1
+    }
+    let _ = write_text(dfs_frontier_path(), out)
+}
+
+// Read persisted frontier (empty if none). Public — cycle.hexa --resume.
+pub fn dfs_frontier_load() -> array {
+    let path = dfs_frontier_path()
+    let exists = exec("test -e " + _dfs_shq(path) + " && echo Y || echo N").trim()
+    let mut out: array = []
+    if exists != "Y" { return out }
+    let raw = read_text(path)
+    let lines = raw.split("\n")
+    let n = len(lines)
+    let mut i = 0
+    while i < n {
+        if len(lines[i].trim()) > 0 { out.push(dfs_parse_candidate_line(lines[i])) }
+        i = i + 1
+    }
+    return out
+}
+
+pub fn dfs_frontier_clear() {
+    let _ = exec("rm -f " + _dfs_shq(dfs_frontier_path()))
+}
+
+// ── Phase C: emit child to nested inbox path (axis 8b) ──────────────
+
+fn _dfs_emit_child(parent_slug: string, child: Candidate, depth: int) {
+    let dir = "inbox/atlas_candidates/dfs_" + _dfs_safe_slug(parent_slug)
+    let _ = exec("mkdir -p " + _dfs_shq(dir))
+    let mut cite_str = ""
+    let cn = len(child.cite)
+    let mut k = 0
+    while k < cn {
+        if k > 0 { cite_str = cite_str + ", " }
+        cite_str = cite_str + child.cite[k]
+        k = k + 1
+    }
+    let path = dir + "/" + _dfs_safe_slug(child.slug) + ".md"
+    let md = "# " + child.slug + "\n\n"
+           + "- family: " + child.family + "\n"
+           + "- fire_needed: " + _dfs_bool_str(child.fire_needed) + "\n"
+           + "- cite: [" + cite_str + "]\n"
+           + "- parent: " + parent_slug + "\n"
+           + "- depth: " + to_string(depth) + "\n"
+           + "- source: hexa loop --dfs (RFC 080)\n\n"
+           + "## proposal\n\n"
+           + child.proposed + "\n"
+    let _ = write_text(path, md)
+}
+
+// ── Phase C+E+F+G: iterative beam-search DFS driver ─────────────────
+
+// dfs_run walks `seeds` to `max_depth`, asking the LLM for up to `beam`
+// children per parent (within enabled families), verifying each, emitting
+// survivors to inbox, and carrying a beam-capped frontier to the next depth.
+//
+// allow_llm gates real exec (axis 18 / R1): when false, prompts are built
+// and counted but the cmd is NOT executed and nothing is emitted — a safe
+// dry plan. When true, exec runs under the 3-way AND budget.
+//
+// Returns total verified children emitted.
+pub fn dfs_run(seeds: array, view: AtlasView, cycle_no: int,
+               cmd: string, max_depth: int, beam: int,
+               max_calls: int, max_usd: float, max_secs: int,
+               allow_llm: bool, families_csv: string, no_cache: bool) -> int {
+    let start_epoch = _dfs_now_epoch()
+    let mut frontier = seeds
+    let mut calls = 0
+    let mut cost = 0.0
+    let mut emitted = 0
+    let mut budget_hit = false
+    let mut bstart = -1   // index of first unprocessed parent when budget hit (Phase F resume)
+
+    let frontier_max = beam * 4   // MVP breadth cap (true best-first = follow-up)
+
+    let mut depth = 0
+    while depth < max_depth {
+        if budget_hit { break }
+        let mut next: array = []
+        let mut fi = 0
+        let fn_count = len(frontier)
+        while fi < fn_count {
+            let parent = frontier[fi]
+            fi = fi + 1
+            if _dfs_family_enabled(parent.family, families_csv) == false { continue }
+
+            // 3-way AND budget (axis 6) — short-circuit on any hit. Record the
+            // unprocessed parent index so the remainder can be persisted for
+            // --resume (Phase F).
+            if (max_calls > 0 && calls >= max_calls)
+               || (max_secs > 0 && (_dfs_now_epoch() - start_epoch) >= max_secs)
+               || (max_usd > 0.0 && cost >= max_usd) {
+                budget_hit = true
+                bstart = fi - 1
+                break
+            }
+
+            let prompt = dfs_build_prompt(parent, view, beam)
+
+            if allow_llm == false {
+                // Safe dry plan — count the would-be call, no exec, no emit.
+                println("  [dfs] depth=" + to_string(depth) + " parent=" + parent.slug + " -> WOULD call LLM (no --allow-llm)")
+                calls = calls + 1
+                continue
+            }
+
+            // Phase G cache lookup.
+            let mut resp = ""
+            let mut cached = false
+            let mut key = ""
+            if no_cache == false {
+                key = _dfs_cache_key(prompt, cmd)
+                let hit = _dfs_cache_get(key)
+                if len(hit) > 0 { resp = hit; cached = true }
+            }
+            if cached == false {
+                resp = dfs_llm_invoke(prompt, cmd)
+                if no_cache == false && len(resp) > 0 { _dfs_cache_put(key, resp) }
+            }
+
+            calls = calls + 1
+            let call_cost = (to_float(len(prompt) + len(resp)) / to_float(DFS_CHARS_PER_TOK)) / 1000000.0 * DFS_USD_PER_MTOK
+            if cached == false { cost = cost + call_cost }
+            _dfs_call_log(parent.slug, depth, len(prompt), len(resp), call_cost, cached)
+
+            let children = dfs_parse_children(resp, parent.slug)
+            let cc = len(children)
+            let mut ci = 0
+            while ci < cc {
+                let child = children[ci]
+                ci = ci + 1
+                let reason = dfs_verify_child(child, view)
+                if len(reason) > 0 {
+                    _dfs_drop_log(parent.slug, child.slug, reason)
+                    continue
+                }
+                _dfs_emit_child(parent.slug, child, depth + 1)
+                _dfs_chain_append(cycle_no, parent.slug, child.slug, child.family, depth + 1, call_cost)
+                emitted = emitted + 1
+                // fire_needed at depth>0 defers (axis 5.iv) — not carried.
+                if child.fire_needed == false && len(next) < frontier_max {
+                    next.push(child)
+                }
+            }
+        }
+        // Phase F — persist the unprocessed remainder of this depth's frontier
+        // so `hexa loop --dfs --resume` continues exactly here.
+        if budget_hit && bstart >= 0 {
+            let mut rem: array = []
+            let mut ri = bstart
+            while ri < fn_count {
+                rem.push(frontier[ri])
+                ri = ri + 1
+            }
+            dfs_frontier_save(rem)
+            println("  [dfs] budget hit — saved " + to_string(len(rem)) + " frontier seed(s) for --resume")
+        }
+        frontier = next
+        depth = depth + 1
+        if len(frontier) == 0 { break }
+    }
+
+    // Clean completion (no budget cut) — drop any stale resume frontier.
+    if budget_hit == false { dfs_frontier_clear() }
+
+    println("  [dfs] done: depth_reached=" + to_string(depth)
+          + " calls=" + to_string(calls)
+          + " cost_usd_est=" + to_string(cost)
+          + " emitted=" + to_string(emitted)
+          + " budget_hit=" + _dfs_bool_str(budget_hit))
+    return emitted
+}

@@ -1,0 +1,184 @@
+// tests/loop/dfs_test.hexa — RFC 080 Phase H self-contained test.
+//
+// Exercises the DFS+LLM engine (stdlib/loop/dfs.hexa) without the full
+// atlas / lens corpus: a tiny hand-built AtlasView (sigma/tau/phi/n) plus a
+// stub LLM command (`cat <fixture>`) so the whole pipeline runs at $0 with
+// no real model call. Covers:
+//   1. dfs_parse_children — markdown front-matter parse (2 children)
+//   2. dfs_verify_child    — pass + each drop reason (no-cite, cite-not-in-
+//                            atlas, trivial-body, non-english)
+//   3. dfs_run             — stub-cmd integration: emit count + inbox files
+//   4. budget guard        — --llm-calls cap short-circuits
+//
+// Korean test bytes are produced at runtime via octal printf so this source
+// stays pure ASCII (hexa string literals must avoid NUL/stray bytes — see
+// RFC 080 lexer note).
+//
+// Exit: 0 = all PASS, 1 = any FAIL.
+
+use "stdlib/loop/dfs"
+use "compiler/lenses/types"
+use "compiler/atlas/parser"
+use "stdlib/loop/state"
+use "stdlib/io"
+
+fn _empty_edges() -> EdgeInfo {
+    return EdgeInfo {
+        depends_on: [], derives: [], applications: [],
+        equivalents: [], converges: [], verified_by: [], breakthroughs: []
+    }
+}
+
+fn _mknode(id: string) -> AtlasNode {
+    return AtlasNode {
+        kind: "P", id: id, raw: "@P " + id + " :: spec\n  => \"" + id + " body\"",
+        source_file: "test", source_line: 1,
+        grade: GradeInfo { value: -1, verified: false, breakthrough: false, hypothesis: false },
+        edges: _empty_edges()
+    }
+}
+
+fn _mkview() -> AtlasView {
+    let mut p: array = []
+    p.push(_mknode("sigma"))
+    p.push(_mknode("tau"))
+    p.push(_mknode("phi"))
+    p.push(_mknode("n"))
+    return AtlasView {
+        p_nodes: p, c_nodes: [], l_nodes: [],
+        f_nodes: [], r_nodes: [], s_nodes: [], x_nodes: [], q_nodes: [],
+        atlas_hash: "", atlas_generated_at: ""
+    }
+}
+
+fn _mkcand(slug: string, family: string, proposed: string, cite: array, fire: bool) -> Candidate {
+    return Candidate {
+        slug: slug, family: family, proposed: proposed,
+        cite: cite, fire_needed: fire, fire_estimate_usd: 0.0
+    }
+}
+
+let FIXTURE = "## sigma_tau_ratio_descent\n"
+            + "- family: empty_space\n"
+            + "- fire_needed: false\n"
+            + "- cite: [sigma, tau]\n\n"
+            + "The ratio sigma over tau for n equal to six yields exactly three,\n"
+            + "coinciding with the minimal Hamming distance of the perfect code.\n"
+            + "---\n"
+            + "## phi_product_gate\n"
+            + "- family: cross_pollinate\n"
+            + "- fire_needed: false\n"
+            + "- cite: [phi, n]\n\n"
+            + "Euler totient of six equals two, matching the count of distinct\n"
+            + "prime factors, bridging number theory and the divisor lattice.\n"
+
+fn main() {
+    println("================ RFC 080 DFS test ================")
+    loop_state_init()   // ensure state/loop/<hash>/ exists for telemetry+chain writes
+    let view = _mkview()
+    let mut fail = 0
+
+    // ---- 1. dfs_parse_children ----
+    let kids = dfs_parse_children(FIXTURE, "root")
+    if len(kids) == 2 {
+        println("  ok: parsed 2 children")
+    } else {
+        println("  FAIL: expected 2 children, got " + to_string(len(kids)))
+        fail = fail + 1
+    }
+    if len(kids) >= 1 {
+        let k0 = kids[0]
+        if k0.slug == "sigma_tau_ratio_descent" { println("  ok: child0 slug") }
+        else { println("  FAIL: child0 slug = " + k0.slug); fail = fail + 1 }
+        if k0.family == "empty_space" { println("  ok: child0 family") }
+        else { println("  FAIL: child0 family = " + k0.family); fail = fail + 1 }
+        if len(k0.cite) == 2 { println("  ok: child0 cite count") }
+        else { println("  FAIL: child0 cite count = " + to_string(len(k0.cite))); fail = fail + 1 }
+    }
+
+    // ---- 2. dfs_verify_child ----
+    let good = _mkcand("good", "empty_space",
+        "This is a sufficiently long English proposal body that cites a real atlas node.",
+        ["sigma"], false)
+    if dfs_verify_child(good, view) == "" { println("  ok: verify passes good child") }
+    else { println("  FAIL: good child rejected: " + dfs_verify_child(good, view)); fail = fail + 1 }
+
+    let no_cite = _mkcand("nc", "empty_space",
+        "This is a sufficiently long English proposal body without any citation.",
+        [], false)
+    if dfs_verify_child(no_cite, view) == "no-cite" { println("  ok: verify drops no-cite") }
+    else { println("  FAIL: no-cite reason = " + dfs_verify_child(no_cite, view)); fail = fail + 1 }
+
+    let bad_cite = _mkcand("bc", "empty_space",
+        "This is a sufficiently long English proposal body citing a non-existent node.",
+        ["does_not_exist"], false)
+    if dfs_verify_child(bad_cite, view) == "cite-not-in-atlas" { println("  ok: verify drops cite-not-in-atlas") }
+    else { println("  FAIL: bad-cite reason = " + dfs_verify_child(bad_cite, view)); fail = fail + 1 }
+
+    let trivial = _mkcand("tv", "empty_space", "too short", ["sigma"], false)
+    if dfs_verify_child(trivial, view) == "trivial-body" { println("  ok: verify drops trivial-body") }
+    else { println("  FAIL: trivial reason = " + dfs_verify_child(trivial, view)); fail = fail + 1 }
+
+    // non-english: build Korean bytes at runtime (octal printf, ASCII source)
+    let _ = exec("printf 'This English padding is long enough to pass the length gate \\355\\225\\234\\352\\270\\200' > /tmp/dfs_test_kr.txt")
+    let kr_body = read_text("/tmp/dfs_test_kr.txt")
+    let korean = _mkcand("kr", "empty_space", kr_body, ["sigma"], false)
+    if dfs_verify_child(korean, view) == "non-english" { println("  ok: verify drops non-english") }
+    else { println("  FAIL: non-english reason = " + dfs_verify_child(korean, view)); fail = fail + 1 }
+
+    // ---- 3. dfs_run stub integration ----
+    let _ = write_text("/tmp/dfs_test_fixture.md", FIXTURE)
+    let _ = exec("rm -rf inbox/atlas_candidates/dfs_seed_root")
+    let mut seeds: array = []
+    seeds.push(_mkcand("seed_root", "empty_space",
+        "Seed hypothesis exploring the sigma tau relationship at n equals six.",
+        ["sigma"], false))
+    let emitted = dfs_run(seeds, view, 1,
+                          "cat /tmp/dfs_test_fixture.md", 1, 2,
+                          0, 0.0, 0, true, "empty_space,cross_pollinate", true)
+    if emitted == 2 { println("  ok: dfs_run emitted 2 children") }
+    else { println("  FAIL: dfs_run emitted " + to_string(emitted)); fail = fail + 1 }
+
+    let f1 = exec("test -e inbox/atlas_candidates/dfs_seed_root/sigma_tau_ratio_descent.md && echo Y || echo N").trim()
+    if f1 == "Y" { println("  ok: child inbox file written") }
+    else { println("  FAIL: child inbox file missing"); fail = fail + 1 }
+
+    // ---- 4. budget guard: --llm-calls 1 caps at one parent ----
+    let _ = exec("rm -rf inbox/atlas_candidates/dfs_b1 inbox/atlas_candidates/dfs_b2")
+    let mut two: array = []
+    two.push(_mkcand("b1", "empty_space",
+        "First budget seed exploring divisor structure at n equals six in depth.",
+        ["sigma"], false))
+    two.push(_mkcand("b2", "empty_space",
+        "Second budget seed exploring totient structure at n equals six in depth.",
+        ["phi"], false))
+    // depth 1, max_calls 1 → only first seed expands (1 call), 2 children.
+    let e2 = dfs_run(two, view, 1,
+                     "cat /tmp/dfs_test_fixture.md", 1, 2,
+                     1, 0.0, 0, true, "empty_space,cross_pollinate", true)
+    if e2 == 2 { println("  ok: budget cap stopped after 1 call (2 children)") }
+    else { println("  FAIL: budget cap emitted " + to_string(e2) + " (expected 2)"); fail = fail + 1 }
+
+    // ---- 5. Phase F: budget hit persisted the unprocessed frontier ----
+    // The budget run above (--llm-calls 1) processed seed b1 and left b2
+    // unprocessed -> dfs_run should have saved it for --resume.
+    let saved = dfs_frontier_load()
+    if len(saved) >= 1 { println("  ok: frontier persisted for --resume (" + to_string(len(saved)) + " seed)") }
+    else { println("  FAIL: frontier not persisted (expected >= 1)"); fail = fail + 1 }
+    if len(saved) >= 1 {
+        if saved[0].slug == "b2" && len(saved[0].cite) == 1 && saved[0].cite[0] == "phi" {
+            println("  ok: persisted seed round-trips (slug+cite)")
+        } else {
+            println("  FAIL: persisted seed mismatch: slug=" + saved[0].slug); fail = fail + 1
+        }
+    }
+    dfs_frontier_clear()
+
+    println("==================================================")
+    if fail == 0 {
+        println("PASS: all RFC 080 DFS checks green.")
+        exit(0)
+    }
+    println("FAIL: " + to_string(fail) + " RFC 080 DFS check(s) failed.")
+    exit(1)
+}
