@@ -3472,13 +3472,211 @@ fn _passes_cell_input_nets(c: Cell) -> [str] {
     return nets
 }
 
+// ─── PERF: precomputed net→producer / net→fanout index (RFC 006 §5) ──────
+//
+// The pre-fix cut-and-remap was O(n³): the per-cell cut loop calls
+// `_passes_enumerate_cuts`, whose BFS frontier calls `_passes_find_producer`
+// (O(n) scan) and `_passes_net_fanout` (O(n×conns) scan) for every net.
+// On router_d6 (n ≈ 1.5× d4 ≈ 4400 cells) the cube term * string compares
+// * hexa array.push() realloc blew past mini's RAM/time wall (19+ GB hang,
+// never reached ABC).
+//
+// FIX: build a string-keyed open-addressing (linear-probe) hash table ONCE
+// per module mapping every net to (producer cell index, total fanout count).
+// Lookups then become O(1) amortised. The producer rule and fanout-with-
+// exclusion arithmetic below reproduce `_passes_find_producer` /
+// `_passes_net_fanout` exactly so the rewrite is behaviour-neutral.
+struct CutNetIndex {
+    keys:      [str],      // bucket → net name ("" = empty slot)
+    producer:  [int],      // bucket → first producer cell idx (-1 if none yet)
+    fanout:    [int],      // bucket → total #conns referencing this net
+    cap:       int,        // bucket count (power-of-two-ish; > 0)
+}
+
+// CLEAN-ROOM: FNV-1a-style byte hash over the net name (uses the same
+// `ord`/`substring` byte-read primitives the policy router uses). Returns a
+// non-negative bucket in [0, cap).
+fn _passes_net_hash(s: str, cap: int) -> int {
+    let mut h = 2166136261
+    let mut i = 0
+    let sl = len(s)
+    while i < sl {
+        let b = ord(s.substring(i, i + 1))
+        h = (h ^ b) * 16777619
+        // keep h non-negative & bounded — mask to 31 bits each step
+        h = h - (h / 2147483648) * 2147483648
+        if h < 0 { h = 0 - h }
+        i = i + 1
+    }
+    return h - (h / cap) * cap
+}
+
+// CLEAN-ROOM: locate the bucket for `net` via linear probing. Returns the
+// bucket index if present, else -1.
+fn _passes_idx_find_bucket(idx: CutNetIndex, net: str) -> int {
+    let cap = idx.cap
+    let mut b = _passes_net_hash(net, cap)
+    let mut probes = 0
+    while probes < cap {
+        let k = idx.keys[b]
+        if k == "" { return 0 - 1 }
+        if k == net { return b }
+        b = b + 1
+        if b >= cap { b = 0 }
+        probes = probes + 1
+    }
+    return 0 - 1
+}
+
+// CLEAN-ROOM: build the net→(producer,fanout) index once for a cell list.
+//   producer  — FIRST cell index whose output pin (X then Y) drives the net,
+//               matching `_passes_find_producer`'s first-match-X-then-Y rule.
+//   fanout    — total #conns across ALL cells referencing the net on any pin,
+//               matching `_passes_net_fanout` summed with exclude_idx=-1.
+// Capacity is sized to ~2× the distinct-net upper bound (cells×conns) so the
+// load factor stays < 0.5 and probe chains stay short.
+fn _passes_build_net_index(cells: [Cell]) -> CutNetIndex {
+    let n = len(cells)
+    // upper bound on distinct nets = total conns; size table to ~2×.
+    let mut conn_total = 0
+    let mut ci = 0
+    while ci < n {
+        conn_total = conn_total + len(cells[ci].conns)
+        ci = ci + 1
+    }
+    let mut cap = 16
+    while cap < conn_total * 2 + 8 { cap = cap * 2 }
+    let mut keys: [str] = []
+    let mut prod: [int] = []
+    let mut fan: [int] = []
+    let mut bi = 0
+    while bi < cap {
+        keys = keys.push("")
+        prod = prod.push(0 - 1)
+        fan = fan.push(0)
+        bi = bi + 1
+    }
+    // Single pass over all cells/conns: record producers + tally fanout.
+    // All bucket mutations happen inline against the local parallel arrays
+    // (keys/prod/fan) to avoid any struct-by-value clone semantics; the
+    // CutNetIndex is constructed once at the end from the finished arrays.
+    let mut k = 0
+    while k < n {
+        let c = cells[k]
+        let xn = _passes_pin_net(c, "X")
+        let yn = _passes_pin_net(c, "Y")
+        // tally fanout for EVERY conn (incl. output pins — matches the
+        // original which scans c.conns unconditionally).
+        let mut j = 0
+        while j < len(c.conns) {
+            let net = c.conns[j].net
+            if net != "" {
+                // insert-or-find bucket via linear probe (open addressing).
+                let mut b = _passes_net_hash(net, cap)
+                let mut probes = 0
+                while probes < cap {
+                    let kk = keys[b]
+                    if kk == net {
+                        fan[b] = fan[b] + 1
+                        probes = cap
+                    } else {
+                        if kk == "" {
+                            keys[b] = net
+                            fan[b] = fan[b] + 1
+                            probes = cap
+                        } else {
+                            b = b + 1
+                            if b >= cap { b = 0 }
+                            probes = probes + 1
+                        }
+                    }
+                }
+            }
+            j = j + 1
+        }
+        // record producer (first cell that drives the net via X, then Y).
+        if xn != "" {
+            let mut b = _passes_net_hash(xn, cap)
+            let mut probes = 0
+            while probes < cap {
+                let kk = keys[b]
+                if kk == xn {
+                    if prod[b] < 0 { prod[b] = k }
+                    probes = cap
+                } else {
+                    if kk == "" {
+                        keys[b] = xn
+                        prod[b] = k
+                        probes = cap
+                    } else {
+                        b = b + 1
+                        if b >= cap { b = 0 }
+                        probes = probes + 1
+                    }
+                }
+            }
+        }
+        if yn != "" {
+            let mut b = _passes_net_hash(yn, cap)
+            let mut probes = 0
+            while probes < cap {
+                let kk = keys[b]
+                if kk == yn {
+                    if prod[b] < 0 { prod[b] = k }
+                    probes = cap
+                } else {
+                    if kk == "" {
+                        keys[b] = yn
+                        prod[b] = k
+                        probes = cap
+                    } else {
+                        b = b + 1
+                        if b >= cap { b = 0 }
+                        probes = probes + 1
+                    }
+                }
+            }
+        }
+        k = k + 1
+    }
+    return CutNetIndex { keys: keys, producer: prod, fanout: fan, cap: cap }
+}
+
+// CLEAN-ROOM: O(1) replacement for `_passes_find_producer`.
+fn _passes_idx_producer(idx: CutNetIndex, net: str) -> int {
+    let b = _passes_idx_find_bucket(idx, net)
+    if b < 0 { return 0 - 1 }
+    return idx.producer[b]
+}
+
+// CLEAN-ROOM: O(1)+O(conns) replacement for `_passes_net_fanout`. The index
+// holds the TOTAL fanout (no exclusion); subtract the excluded cell's own
+// references to `net` to reproduce the original exclude-semantics exactly.
+fn _passes_idx_fanout(idx: CutNetIndex, cells: [Cell], net: str, exclude_idx: int) -> int {
+    let b = _passes_idx_find_bucket(idx, net)
+    if b < 0 { return 0 }
+    let mut total = idx.fanout[b]
+    if exclude_idx >= 0 && exclude_idx < len(cells) {
+        let c = cells[exclude_idx]
+        let mut j = 0
+        while j < len(c.conns) {
+            if c.conns[j].net == net { total = total - 1 }
+            j = j + 1
+        }
+    }
+    return total
+}
+
 // CLEAN-ROOM: starting from `root_cell_idx`, walk backward through
 // producer cells (recorded by `_passes_find_producer`). A cell is
 // pulled INTO the cut only if (a) its output net is single-fanout to
 // another cell already in the cut, and (b) the cut's primary-input
 // count stays ≤ max_inputs. Returns the cut; on failure (would exceed
 // max_inputs at root, or the cells list is empty) returns an empty cut.
-fn _passes_enumerate_cuts(cells: [Cell], root_cell_idx: int, max_inputs: int) -> Cut {
+//
+// PERF: takes a precomputed `CutNetIndex` so producer/fanout lookups are
+// O(1) amortised instead of O(n) / O(n×conns) per net (RFC 006 §5).
+fn _passes_enumerate_cuts(cells: [Cell], idx: CutNetIndex, root_cell_idx: int, max_inputs: int) -> Cut {
     let root_c = cells[root_cell_idx]
     // pick the root cell's output net
     let mut root_net = _passes_pin_net(root_c, "Y")
@@ -3501,14 +3699,14 @@ fn _passes_enumerate_cuts(cells: [Cell], root_cell_idx: int, max_inputs: int) ->
             pi = pi + 1
         }
         if seen_p == 0 {
-            let pidx = _passes_find_producer(cells, net)
+            let pidx = _passes_idx_producer(idx, net)
             if pidx < 0 {
                 // primary input (driven by a module port or const tie)
                 prim = prim.push(net)
             } else {
                 // candidate to pull into cut: must be single-fanout to
                 // some cell already in the cut.
-                let fan = _passes_net_fanout(cells, net, pidx)
+                let fan = _passes_idx_fanout(idx, cells, net, pidx)
                 if fan == 1 {
                     // pull it in: append its input nets to frontier,
                     // continue BFS.
@@ -3711,10 +3909,21 @@ fn pass_cut_and_remap(d: Design) -> PassResult {
     let mut out_modules: [Module] = []
     let mut total_matches = 0
     let mut mi = 0
+    // PERF size guard (RFC 006 §5): cut-enumeration (mux4/aoi22) is the
+    // O(n²)-per-module hot path even with the net-index. Above this cell
+    // count the cut enumeration is skipped so the pass degrades gracefully
+    // to the un-fused netlist instead of hanging (d6 was 19+ GB / never
+    // reached ABC). The cheap single-cell const-fold still runs everywhere.
+    // d4 (~2942 cells) is below the threshold and is fully UNCHANGED.
+    let cut_cell_threshold = 5000
     while mi < len(d.modules) {
         let m = d.modules[mi]
         let cells_in = m.cells
         let n = len(cells_in)
+        // PERF: build the net→(producer,fanout) index once per module so the
+        // cut-enumeration BFS does O(1) lookups instead of O(n) scans.
+        let net_idx = _passes_build_net_index(cells_in)
+        let enum_cuts = n <= cut_cell_threshold
         let mut consumed: [int] = []
         let mut emit_at: [int] = []     // outermost cell idx per fusion
         let mut emit_cell: [Cell] = []
@@ -3746,8 +3955,8 @@ fn pass_cut_and_remap(d: Design) -> PassResult {
                     total_matches = total_matches + 1
                 } else {
                     // 2. mux4 — root must be mux2_1
-                    if cells_in[k].cell_type == "sky130_fd_sc_hd__mux2_1" {
-                        let cut4 = _passes_enumerate_cuts(cells_in, k, 6)
+                    if enum_cuts && cells_in[k].cell_type == "sky130_fd_sc_hd__mux2_1" {
+                        let cut4 = _passes_enumerate_cuts(cells_in, net_idx, k, 6)
                         if len(cut4.cells) >= 3 {
                             let m4 = _passes_match_mux4(cells_in, cut4, k)
                             if m4.ok == 1 {
@@ -3772,9 +3981,9 @@ fn pass_cut_and_remap(d: Design) -> PassResult {
                         }
                     }
                     // 3. aoi22 — root must be inv_1
-                    if cells_in[k].cell_type == "sky130_fd_sc_hd__inv_1"
+                    if enum_cuts && cells_in[k].cell_type == "sky130_fd_sc_hd__inv_1"
                        && consumed[k] == 0 {
-                        let cuta = _passes_enumerate_cuts(cells_in, k, 4)
+                        let cuta = _passes_enumerate_cuts(cells_in, net_idx, k, 4)
                         if len(cuta.cells) >= 4 {
                             let ma = _passes_match_aoi22(cells_in, cuta, k)
                             if ma.ok == 1 {
@@ -5789,6 +5998,75 @@ fn main() {
     if rtlil_count_cells_of_type(r_mc.design.modules[0], "sky130_fd_sc_hd__mux2_1") != 0 {
         println("FAIL T_CUT_REMAP_MUX_CONST mux2_remains got "
             + str(rtlil_count_cells_of_type(r_mc.design.modules[0], "sky130_fd_sc_hd__mux2_1")))
+        fails = fails + 1
+    }
+
+    // T_CUT_REMAP_PERF_GUARD — RFC 006 §5 d6 unblock. When a module exceeds
+    // the cut-enumeration size threshold (5000 cells) the O(n²)-per-module
+    // cut walk is SKIPPED so the pass degrades to the un-fused netlist
+    // instead of hanging (d6 was 19+ GB / never reached ABC). Build an
+    // exact aoi22 fan-in (inv(or(and,and))) — which the cut-remap WOULD fuse
+    // to a22oi_1 below threshold — then pad past 5000 cells with inert filler
+    // and assert the fusion is suppressed and the pass still completes.
+    total = total + 1
+    let mut m_pg = rtlil_new_module("cutr_perf_guard")
+    m_pg = rtlil_module_add_wire(m_pg, rtlil_wire("a", 1, 1, 1))
+    m_pg = rtlil_module_add_wire(m_pg, rtlil_wire("b", 1, 1, 2))
+    m_pg = rtlil_module_add_wire(m_pg, rtlil_wire("c", 1, 1, 3))
+    m_pg = rtlil_module_add_wire(m_pg, rtlil_wire("dnet", 1, 1, 4))
+    m_pg = rtlil_module_add_wire(m_pg, rtlil_wire("ab", 1, 2, 5))
+    m_pg = rtlil_module_add_wire(m_pg, rtlil_wire("cd", 1, 2, 6))
+    m_pg = rtlil_module_add_wire(m_pg, rtlil_wire("orq", 1, 2, 7))
+    m_pg = rtlil_module_add_wire(m_pg, rtlil_wire("yq", 1, 2, 8))
+    let mut c_a1 = rtlil_cell("u_and0", "sky130_fd_sc_hd__and2_1", 1)
+    c_a1 = rtlil_cell_connect(c_a1, "A", "a")
+    c_a1 = rtlil_cell_connect(c_a1, "B", "b")
+    c_a1 = rtlil_cell_connect(c_a1, "X", "ab")
+    m_pg = rtlil_module_add_cell(m_pg, c_a1)
+    let mut c_a2 = rtlil_cell("u_and1", "sky130_fd_sc_hd__and2_1", 1)
+    c_a2 = rtlil_cell_connect(c_a2, "A", "c")
+    c_a2 = rtlil_cell_connect(c_a2, "B", "dnet")
+    c_a2 = rtlil_cell_connect(c_a2, "X", "cd")
+    m_pg = rtlil_module_add_cell(m_pg, c_a2)
+    let mut c_or = rtlil_cell("u_or", "sky130_fd_sc_hd__or2_1", 1)
+    c_or = rtlil_cell_connect(c_or, "A", "ab")
+    c_or = rtlil_cell_connect(c_or, "B", "cd")
+    c_or = rtlil_cell_connect(c_or, "X", "orq")
+    m_pg = rtlil_module_add_cell(m_pg, c_or)
+    let mut c_iv = rtlil_cell("u_inv", "sky130_fd_sc_hd__inv_1", 1)
+    c_iv = rtlil_cell_connect(c_iv, "A", "orq")
+    c_iv = rtlil_cell_connect(c_iv, "Y", "yq")
+    m_pg = rtlil_module_add_cell(m_pg, c_iv)
+    // pad with > 5000 inert buf_1 filler cells (own private nets, no fan-in
+    // to the aoi22 cone) to push len(cells) past the guard threshold.
+    let mut pad = 0
+    while pad < 5200 {
+        let mut cf = rtlil_cell("u_pad" + str(pad), "sky130_fd_sc_hd__buf_1", 1)
+        cf = rtlil_cell_connect(cf, "A", "pi" + str(pad))
+        cf = rtlil_cell_connect(cf, "X", "po" + str(pad))
+        m_pg = rtlil_module_add_cell(m_pg, cf)
+        pad = pad + 1
+    }
+    let mut d_pg = rtlil_new_design("test")
+    d_pg = rtlil_design_add(d_pg, m_pg)
+    let r_pg = pass_cut_and_remap(d_pg)
+    // guard path: aoi22 fusion suppressed → no a22oi_1 emitted, original
+    // and2/or2/inv all survive, and the pass returns ok=1 (completed).
+    if r_pg.ok != 1 {
+        println("FAIL T_CUT_REMAP_PERF_GUARD pass did not complete (ok="
+            + str(r_pg.ok) + ")")
+        fails = fails + 1
+    }
+    if rtlil_count_cells_of_type(r_pg.design.modules[0], "sky130_fd_sc_hd__a22oi_1") != 0 {
+        println("FAIL T_CUT_REMAP_PERF_GUARD a22oi_1 got "
+            + str(rtlil_count_cells_of_type(r_pg.design.modules[0], "sky130_fd_sc_hd__a22oi_1"))
+            + " (want 0 — cut enumeration must be skipped above threshold)")
+        fails = fails + 1
+    }
+    if rtlil_count_cells_of_type(r_pg.design.modules[0], "sky130_fd_sc_hd__inv_1") != 1 {
+        println("FAIL T_CUT_REMAP_PERF_GUARD inv_1 got "
+            + str(rtlil_count_cells_of_type(r_pg.design.modules[0], "sky130_fd_sc_hd__inv_1"))
+            + " (want 1 — un-fused netlist preserved)")
         fails = fails + 1
     }
 
