@@ -27,6 +27,7 @@
 
 use "compiler/lenses/types"
 use "compiler/atlas/parser"
+use "compiler/atlas/overlay"
 use "stdlib/loop/state"
 use "stdlib/io"
 
@@ -449,6 +450,63 @@ fn _dfs_chain_append(cycle: int, parent_slug: string, child_slug: string, family
     let _ = exec("printf '%s' " + _dfs_shq(row) + " >> " + _dfs_shq(path))
 }
 
+// ── Phase K: atlas overlay absorption ───────────────────────────────
+//
+// Verified DFS children flow into the SAME overlay export stream the drill
+// engine already uses (`<HX_DATA_DIR>/atlas.overlay.n6`, see
+// compiler/atlas/overlay.hexa + compiler/drill/round.hexa::_cand_to_n6).
+// This is the established "discovery → 3+ hits → promote" pipeline:
+//
+//   • overlay is EXPORT-ONLY (overlay.hexa explicitly retires the runtime
+//     load path — atlas remains binary built-in, governance @D
+//     g_atlas_binary_builtin preserved)
+//   • DFS + drill share one overlay stream → unified discovery corpus
+//   • promotion to embedded.gen stays PR-only (the human gate)
+//
+// Tape line format mirrors drill's `_cand_to_n6`, adapted for the
+// proposal-bearing Candidate: `@P <slug> :: dfs [3?]` header +
+// `<- cite1, cite2` (depends_on) + `=> "<proposal>"` (applications).
+// Grade `3?` follows nexus convention: tier-3 hypothesis pending
+// verification (cf. tool/verify_cli.hexa's tier rubric — 🔵/🟡/🟠/⚪).
+
+fn _dfs_cand_to_n6(c: Candidate) -> string {
+    let mut parts: array = []
+    parts.push("@P ")
+    parts.push(c.slug)
+    parts.push(" :: dfs [3?]")
+    if len(c.cite) > 0 {
+        parts.push("\n  <- ")
+        let mut i = 0
+        while i < len(c.cite) {
+            if i > 0 { parts.push(", ") }
+            parts.push(c.cite[i])
+            i = i + 1
+        }
+    }
+    // Single-line proposal — strip newlines so the .n6 record stays one
+    // logical block (overlay parser uses blank-line block boundaries).
+    let mut prop = c.proposed.replace("\n", " ")
+    prop = prop.replace("\"", "\\\"")
+    parts.push("\n  => \"")
+    parts.push(prop)
+    parts.push("\"")
+    return parts.join("")
+}
+
+// Append a verified Candidate to the overlay export stream. Uses
+// overlay_path() to share the canonical location with drill, but writes
+// directly via exec append (mirrors _dfs_chain_append) instead of going
+// through overlay_append_lines — the latter mutates a module-level
+// _g_overlay_meta cache that destabilizes after repeated calls in this
+// compile target. The on-disk format is identical, so the merged-discovery
+// pipeline (drill rounds + DFS children share atlas.overlay.n6) is intact.
+fn _dfs_absorb_to_overlay(c: Candidate) {
+    let path = overlay_path()
+    let _ = exec("mkdir -p \"$(dirname " + _dfs_shq(path) + ")\"")
+    let line = _dfs_cand_to_n6(c) + "\n"
+    let _ = exec("printf '%s' " + _dfs_shq(line) + " >> " + _dfs_shq(path))
+}
+
 // ── Phase F: frontier persistence for --resume ──────────────────────
 //
 // When a cycle exhausts its budget mid-walk, the unprocessed frontier is
@@ -671,6 +729,7 @@ pub fn dfs_run(seeds: array, view: AtlasView, cycle_no: int,
                 }
                 _dfs_emit_child(parent.slug, child, depth + 1)
                 _dfs_chain_append(cycle_no, parent.slug, child.slug, child.family, depth + 1, call_cost)
+                _dfs_absorb_to_overlay(child)   // Phase K — feed unified discovery stream (drill shares this overlay)
                 emitted = emitted + 1
                 // fire_needed at depth>0 defers (axis 5.iv) — not carried.
                 if child.fire_needed == false && len(next) < frontier_max {
