@@ -1,0 +1,64 @@
+// stdlib/kernels/wind/power_curve_kernel_test.hexa — G41 substrate parity
+//
+// Cross-implementation parity: hexa-native power_curve_kernel vs a Python
+// reference of the SAME IEC 61400-12-1 cubic-interpolation curve
+// (generated 2026-05-22 on pool:ubu-2 · python3). Reference turbine:
+// cut-in 3, rated 12, cut-out 25 m/s, P_rated 2000 kW.
+//
+// kappa-71 R10 G41 substrate floor (design.md D120 Energy/wind). Establishes
+// the wind kernel parity BEFORE it serves as a measured-oracle hexa-native
+// side (mirror of G31 substrate-establishment pattern).
+
+use "stdlib/kernels/wind/power_curve_kernel"
+
+let mut pass_count = 0
+let mut total_count = 0
+let mut failed = ""
+
+fn fabs(x: float) -> float { if x < 0.0 { return -x } return x }
+
+fn rel_err(got: float, want: float) -> float {
+    if fabs(want) < 1.0e-12 { return fabs(got - want) }
+    return fabs(got - want) / fabs(want)
+}
+
+fn check(name: str, got: float, want: float, tol: float) {
+    total_count = total_count + 1
+    let e = rel_err(got, want)
+    if e <= tol {
+        pass_count = pass_count + 1
+        println("  PASS " + name + " got=" + to_string(got) + " want=" + to_string(want) + " rel=" + to_string(e))
+    } else {
+        if failed == "" { failed = name }
+        println("  FAIL " + name + " got=" + to_string(got) + " want=" + to_string(want) + " rel=" + to_string(e))
+    }
+}
+
+fn main() {
+    println("[parity] power_curve_kernel.hexa — IEC 61400-12 cubic-interp (G41 substrate)")
+    let ci = 3.0
+    let vr = 12.0
+    let co = 25.0
+    let pr = 2000.0
+    let tol = 1.0e-9
+
+    // ─── power_curve (10 points · cut-in / cubic / rated / cut-out) ───────
+    check("v=0_below_cutin",  power_curve(0.0,  ci, vr, co, pr), 0.0,            tol)
+    check("v=2_below_cutin",  power_curve(2.0,  ci, vr, co, pr), 0.0,            tol)
+    check("v=4_cubic",        power_curve(4.0,  ci, vr, co, pr), 43.5038212816,  tol)
+    check("v=6_cubic",        power_curve(6.0,  ci, vr, co, pr), 222.2222222222, tol)
+    check("v=8_cubic",        power_curve(8.0,  ci, vr, co, pr), 570.2527924750, tol)
+    check("v=10_cubic",       power_curve(10.0, ci, vr, co, pr), 1144.0329218107, tol)
+    check("v=12_rated",       power_curve(12.0, ci, vr, co, pr), 2000.0,         tol)
+    check("v=14_rated",       power_curve(14.0, ci, vr, co, pr), 2000.0,         tol)
+    check("v=24_rated",       power_curve(24.0, ci, vr, co, pr), 2000.0,         tol)
+    check("v=26_above_cutout", power_curve(26.0, ci, vr, co, pr), 0.0,           tol)
+
+    // ─── air-density correction (thin air rho=1.0 → curve shifts right) ───
+    check("density_v10_rho1.0", power_curve_density_corrected(10.0, 1.0, ci, vr, co, pr), 928.0735221778, 1.0e-6)
+    let vcorr = air_density_corrected_speed(10.0, 1.0)
+    check("vcorr_v10_rho1.0",   vcorr, 9.3459037434, 1.0e-6)
+
+    println("[parity] " + to_string(pass_count) + "/" + to_string(total_count) + " PASS")
+    if failed != "" { println("[parity] FIRST FAIL: " + failed) }
+}
