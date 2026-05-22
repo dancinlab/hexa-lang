@@ -1,0 +1,23 @@
+#!hexa strict
+// tests/test_lattice.hexa — exercise verify/lattice_check.hexa.
+//
+// Pass criterion: 10/10 PASS sentinel from verify/lattice_check.hexa.
+// Run:
+//     hexa run tests/test_lattice.hexa
+//
+// Authority: own 1 (n=6 master identity).
+
+fn main() {
+    let root = env("HEXA_RTSC_ROOT")
+    let mut p = "verify/lattice_check.hexa"
+    if root.len() > 0 { p = root + "/verify/lattice_check.hexa" }
+
+    let raw = exec("hexa run " + p + " 2>&1")
+    if raw.contains("10/10 PASS") {
+        println("test_lattice: PASS  (verify/lattice_check.hexa 10/10)")
+        return
+    }
+    println("test_lattice: FAIL")
+    println(raw.trim())
+    exit(1)
+}
