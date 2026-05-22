@@ -1,0 +1,81 @@
+// HEXA Standard Library — kernels/wind/power_curve
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// IEC 61400-12-1 reference wind-turbine power curve (cubic-interpolation
+// model) + air-density correction. Closed-form; libm pow only.
+// kappa-71 R10 G41 substrate floor (design.md D120 Energy/wind cell).
+//
+// Model (standard wind-resource-assessment reference curve · cited in
+// IEC 61400-12-1 power-performance methodology + windpowerlib simple
+// power-curve form):
+//   v <  v_cut_in              : P = 0          (below cut-in)
+//   v_cut_in <= v <  v_rated   : P = P_rated * (v^3 - v_cut_in^3)
+//                                            / (v_rated^3 - v_cut_in^3)
+//   v_rated  <= v <= v_cut_out : P = P_rated    (rated plateau)
+//   v >  v_cut_out             : P = 0          (cut-out shutdown)
+//
+// Air-density correction (IEC 61400-12-1 stall/pitch normalisation):
+//   v_corrected = v * (rho / rho0)^(1/3),  rho0 = 1.225 kg/m^3 (15C SL).
+//   Applied to wind speed before the curve evaluation.
+//
+// g3 (honest scope): this kernel is a *reference power curve* — a
+// PREDICTION of turbine output from wind speed. Measured-oracle parity
+// (vs a metered turbine timeseries) is a separate gate (D120 G41).
+// absorbed = false for any record-kind built on this until a measured
+// gate flips it (kappa-71 G41 producer).
+
+fn _cube(x: float) -> float {
+    return x * x * x
+}
+
+// Reference IEC cubic-interpolation power curve.
+// Inputs: wind speed v (m/s), cut-in / rated / cut-out (m/s), rated power
+// (any power unit; output matches p_rated's unit).
+pub fn power_curve(v: float, v_cut_in: float, v_rated: float,
+                   v_cut_out: float, p_rated: float) -> float {
+    if v < v_cut_in  { return 0.0 }
+    if v > v_cut_out { return 0.0 }
+    if v >= v_rated  { return p_rated }
+    let num = _cube(v) - _cube(v_cut_in)
+    let den = _cube(v_rated) - _cube(v_cut_in)
+    if den <= 0.0 { return 0.0 }
+    return p_rated * num / den
+}
+
+// Air-density-corrected wind speed (IEC 61400-12-1). rho in kg/m^3.
+pub fn air_density_corrected_speed(v: float, rho: float) -> float {
+    let rho0 = 1.225
+    if rho <= 0.0 { return v }
+    return v * pow(rho / rho0, 1.0 / 3.0)
+}
+
+// Power curve with air-density correction applied to the input speed.
+pub fn power_curve_density_corrected(v: float, rho: float,
+                                     v_cut_in: float, v_rated: float,
+                                     v_cut_out: float, p_rated: float) -> float {
+    let v_corr = air_density_corrected_speed(v, rho)
+    return power_curve(v_corr, v_cut_in, v_rated, v_cut_out, p_rated)
+}
+
+fn main() {
+    println("[wind+power_curve] IEC 61400-12 reference curve — kappa-71 R10 G41")
+    // Reference turbine: cut-in 3, rated 12, cut-out 25 m/s, P_rated 2000 kW
+    let ci = 3.0
+    let vr = 12.0
+    let co = 25.0
+    let pr = 2000.0
+    let mut v = 0.0
+    while v <= 26.0 {
+        let p = power_curve(v, ci, vr, co, pr)
+        println("  v=" + to_string(v) + " m/s  P=" + to_string(p) + " kW")
+        v = v + 2.0
+    }
+    // air-density correction smoke: thin air (rho=1.0) shifts curve right
+    let p10_sl = power_curve(10.0, ci, vr, co, pr)
+    let p10_thin = power_curve_density_corrected(10.0, 1.0, ci, vr, co, pr)
+    println("[density] v=10 SL P=" + to_string(p10_sl) + " kW  thin(rho=1.0) P=" + to_string(p10_thin) + " kW")
+    println("[cite] IEC 61400-12-1 power performance measurement methodology")
+    println("[anchor] kappa-71 R10 G41 D120 Energy/wind substrate floor")
+}
