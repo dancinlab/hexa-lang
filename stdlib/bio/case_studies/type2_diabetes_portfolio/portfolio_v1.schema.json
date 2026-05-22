@@ -1,0 +1,269 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/dancinlab/hexa-bio/case_studies/type2_diabetes_portfolio/portfolio_v1.schema.json",
+  "title": "Type 2 Diabetes portfolio case-study witness (v1)",
+  "description": "In-silico simulator-consistency witness for the Type 2 Diabetes Mellitus (T2DM) portfolio case study. Three separated arrays cover three distinct honest categories. (1) `in_scope_drugs` — FDA-approved CDER drugs whose modality maps cleanly onto an in-repo axis: semaglutide (Ozempic/Wegovy/Rybelsus, Novo Nordisk, FDA 2017 inj. / 2019 oral) and tirzepatide (Mounjaro/Zepbound, Lilly, FDA 2022) — both PEPTIDE sub-axis (:> WEAVE core), parent sim peptide_sim.py with the Zimm-Bragg 1959 real-limit anchor. (2) `cder_in_scope_no_axis_mapping` — the NEW honest category this portfolio introduces: FDA-approved CDER small molecules whose mechanism the new-modality axes were never designed to cover. SGLT2 inhibitors (dapagliflozin/Farxiga 2014, empagliflozin/Jardiance 2014, canagliflozin/Invokana 2013) block renal sodium-glucose cotransporter 2 — a classical transporter-inhibition mechanism that is not PROTAC, not CAM, not COVALENT, not METALLODRUG, not MACROCYCLE, not MWC-allosteric, not RNA-targeting. Schema-const `cder_in_scope_but_no_axis_mapping: true` distinguishes this category from the CBER UNPLACED bucket. (3) `not_in_scope_drugs` — CBER UNPLACED, the SMA-portfolio pattern: insulin analogs (Humalog/Lantus/Tresiba etc.) are CBER protein biologics outside the criterion #4 drug-only/CDER scope. NEVER a therapeutic, clinical, glycemic, weight-loss, cardiovascular, immunogenic, regulatory, or portfolio-recommendation claim (g8 / f2). NOT the deferred 200-disease re-mapping.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "case_study_id",
+    "disease",
+    "in_scope_drugs",
+    "cder_in_scope_no_axis_mapping",
+    "not_in_scope_drugs",
+    "cross_axis_touch_point",
+    "honesty",
+    "sentinel"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "type2_diabetes_portfolio_v1"
+    },
+    "case_study_id": {
+      "type": "string",
+      "const": "type2_diabetes_portfolio.v1"
+    },
+    "disease": {
+      "type": "object",
+      "required": ["name", "abbreviation", "summary"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {"type": "string"},
+        "abbreviation": {"type": "string", "const": "T2DM"},
+        "summary": {"type": "string"}
+      }
+    },
+    "in_scope_drugs": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 2,
+      "description": "FDA-approved CDER drugs whose modality maps onto an in-repo axis. Both entries map onto PEPTIDE (:> WEAVE core) and exercise peptide_sim.py via importlib (no fork — governance f3). Each entry carries the parent sim's Zimm-Bragg 1959 real-limit anchor.",
+      "items": {
+        "type": "object",
+        "required": [
+          "drug_name",
+          "brand",
+          "sponsor",
+          "fda_year",
+          "fda_center",
+          "modality",
+          "axis",
+          "axis_layer",
+          "axis_module",
+          "in_scope",
+          "real_limit_anchor",
+          "real_limit_citations",
+          "drug_precedent_citations",
+          "model_signal_name",
+          "model_signal_value",
+          "model_signal_units",
+          "in_silico_only"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "drug_name": {"type": "string"},
+          "brand": {"type": "string"},
+          "sponsor": {"type": "string"},
+          "fda_year": {"type": "integer", "minimum": 1900, "maximum": 2100},
+          "fda_center": {"type": "string", "const": "CDER"},
+          "modality": {"type": "string"},
+          "axis": {"type": "string", "const": "PEPTIDE"},
+          "axis_layer": {
+            "type": "string",
+            "enum": ["expansion-main", "expansion-sub"]
+          },
+          "axis_module": {"type": "string"},
+          "in_scope": {"type": "boolean", "const": true},
+          "real_limit_anchor": {"type": "string"},
+          "real_limit_citations": {
+            "type": "array",
+            "minItems": 1,
+            "items": {"type": "string"}
+          },
+          "drug_precedent_citations": {
+            "type": "array",
+            "minItems": 1,
+            "items": {"type": "string"}
+          },
+          "model_signal_name": {"type": "string"},
+          "model_signal_value": {"type": "number"},
+          "model_signal_units": {"type": "string"},
+          "model_signal_detail": {"type": "object"},
+          "in_silico_only": {"type": "boolean", "const": true}
+        }
+      }
+    },
+    "cder_in_scope_no_axis_mapping": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 3,
+      "description": "NEW honest category — FDA-approved CDER small molecules whose mechanism the new-modality axes were never designed to cover. Distinct from `not_in_scope_drugs` (CBER UNPLACED): these drugs PASS criterion #4 drug-only/CDER but no expansion-layer axis fits. SGLT2 inhibitors: dapagliflozin, empagliflozin, canagliflozin — renal SGLT2 transporter inhibition is a classical pharmacology mechanism, not a new-modality chemistry (not PROTAC, not CAM, not COVALENT, not METALLODRUG, not MACROCYCLE, not MWC-allosteric, not RNA-targeting). HONEST GAP RECOGNITION — the axis tree was built for new modalities; the honest call is to acknowledge the gap rather than invent a forced placement.",
+      "items": {
+        "type": "object",
+        "required": [
+          "drug_name",
+          "brand",
+          "sponsor",
+          "fda_year",
+          "fda_center",
+          "modality",
+          "axis",
+          "in_scope_by_cder_discipline",
+          "no_axis_mapping",
+          "cder_in_scope_but_no_axis_mapping",
+          "reason",
+          "drug_precedent_citations",
+          "reported_not_run"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "drug_name": {"type": "string"},
+          "brand": {"type": "string"},
+          "sponsor": {"type": "string"},
+          "fda_year": {"type": "integer", "minimum": 1900, "maximum": 2100},
+          "fda_center": {
+            "type": "string",
+            "const": "CDER",
+            "description": "CDER — this category PASSES the drug-only/CDER criterion #4 (unlike the CBER UNPLACED bucket which FAILS it)."
+          },
+          "modality": {"type": "string"},
+          "axis": {
+            "description": "Null — no expansion-layer axis maps onto the mechanism. The criterion #4 gate is PASSED (CDER); the axis-mapping gap is INSIDE the criterion #4 boundary, not outside.",
+            "type": "null"
+          },
+          "in_scope_by_cder_discipline": {
+            "type": "boolean",
+            "const": true,
+            "description": "True — the drug satisfies the CDER scope discipline (criterion #4)."
+          },
+          "no_axis_mapping": {
+            "type": "boolean",
+            "const": true,
+            "description": "True — no in-repo expansion-layer axis maps onto the drug's mechanism."
+          },
+          "cder_in_scope_but_no_axis_mapping": {
+            "type": "boolean",
+            "const": true,
+            "description": "Schema-const distinguishing this NEW honest category from CBER UNPLACED. CDER-pass + axis-tree-gap — distinct from CBER-fail."
+          },
+          "reason": {"type": "string"},
+          "drug_precedent_citations": {
+            "type": "array",
+            "minItems": 1,
+            "items": {"type": "string"}
+          },
+          "reported_not_run": {
+            "type": "boolean",
+            "const": true,
+            "description": "Reported in the witness for honest portfolio coverage; NOT modeled (no axis sim run — no axis fits)."
+          }
+        }
+      }
+    },
+    "not_in_scope_drugs": {
+      "type": "array",
+      "minItems": 1,
+      "description": "FDA-approved T2DM drugs that are HONESTLY UNPLACED — fall outside the criterion #4 drug-only/CDER scope boundary; CBER biologics. Insulin analogs (Humalog/Lantus/Tresiba/NovoLog/Levemir/Fiasp etc.) are recombinant protein biologics regulated by CBER. Same UNPLACED pattern as the SMA portfolio's Zolgensma row and the AXIS/HIERARCHY.tape @N genetic_medicine_status / @N adc_status / @N theranostic_status notes.",
+      "items": {
+        "type": "object",
+        "required": [
+          "drug_name",
+          "brand",
+          "sponsor",
+          "fda_year",
+          "fda_center",
+          "modality",
+          "axis",
+          "in_scope",
+          "reason",
+          "unplaced_precedent_in_repo",
+          "drug_precedent_citations",
+          "reported_not_run"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "drug_name": {"type": "string"},
+          "brand": {"type": "string"},
+          "sponsor": {"type": "string"},
+          "fda_year": {"type": "integer", "minimum": 1900, "maximum": 2100},
+          "fda_center": {
+            "type": "string",
+            "enum": ["CBER", "CDRH"],
+            "description": "CBER (biologics) or CDRH (devices) — these centers fall outside the criterion #4 drug-only/CDER scope."
+          },
+          "modality": {"type": "string"},
+          "axis": {
+            "description": "Null — UNPLACED by design (no code axis for this modality).",
+            "type": "null"
+          },
+          "in_scope": {"type": "boolean", "const": false},
+          "reason": {"type": "string"},
+          "unplaced_precedent_in_repo": {
+            "type": "string",
+            "description": "Pointer to the in-repo precedent for honest UNPLACED handling (e.g. AXIS/HIERARCHY.tape @N genetic_medicine_status, case_studies/sma_portfolio/ Zolgensma row)."
+          },
+          "drug_precedent_citations": {
+            "type": "array",
+            "minItems": 1,
+            "items": {"type": "string"}
+          },
+          "reported_not_run": {
+            "type": "boolean",
+            "const": true,
+            "description": "Reported in the witness for honest portfolio coverage; NOT modeled (no axis sim run)."
+          }
+        }
+      }
+    },
+    "cross_axis_touch_point": {
+      "type": "object",
+      "description": "Pointer to the G4 PEPTIDE × MACROCYCLE cross — peptide-chemistry side of the GLP-1 class touches stapled/macrocyclic peptide engineering. This case study NOTES the touch-point without re-running G4; G4 stays the canonical PEPTIDE × MACROCYCLE bridge.",
+      "required": ["bridge_id", "source_axis", "sister_axis", "honesty_note"],
+      "additionalProperties": false,
+      "properties": {
+        "bridge_id": {"type": "string", "const": "G4"},
+        "source_axis": {"type": "string", "const": "PEPTIDE"},
+        "sister_axis": {"type": "string", "const": "MACROCYCLE"},
+        "honesty_note": {"type": "string"}
+      }
+    },
+    "honesty": {
+      "type": "object",
+      "required": [
+        "in_silico_only",
+        "not_a_portfolio_recommendation",
+        "not_an_efficacy_ranking",
+        "not_a_superiority_claim",
+        "not_a_clinical_claim",
+        "all_in_scope_drugs_fda_approved",
+        "unplaced_handling_is_honest",
+        "cder_in_scope_no_axis_mapping_is_honest_gap",
+        "new_honesty_category_distinct_from_cber_unplaced",
+        "no_lattice_derivation",
+        "scope_is_one_disease_pilot",
+        "statement"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "in_silico_only": {"type": "boolean", "const": true},
+        "not_a_portfolio_recommendation": {"type": "boolean", "const": true},
+        "not_an_efficacy_ranking": {"type": "boolean", "const": true},
+        "not_a_superiority_claim": {"type": "boolean", "const": true},
+        "not_a_clinical_claim": {"type": "boolean", "const": true},
+        "all_in_scope_drugs_fda_approved": {"type": "boolean", "const": true},
+        "unplaced_handling_is_honest": {"type": "boolean", "const": true},
+        "cder_in_scope_no_axis_mapping_is_honest_gap": {"type": "boolean", "const": true},
+        "new_honesty_category_distinct_from_cber_unplaced": {"type": "boolean", "const": true},
+        "no_lattice_derivation": {"type": "boolean", "const": true},
+        "scope_is_one_disease_pilot": {"type": "boolean", "const": true},
+        "statement": {"type": "string"}
+      }
+    },
+    "sentinel": {
+      "type": "string",
+      "const": "__TYPE2_DIABETES_PORTFOLIO__ PASS"
+    }
+  }
+}

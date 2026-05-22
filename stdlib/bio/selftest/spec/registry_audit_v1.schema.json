@@ -1,0 +1,13 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "hexa-bio/selftest/spec/registry_audit_v1.schema.json",
+  "title": "raw_77_registry_audit_v1 — registry self-audit",
+  "description": "Session-internal registry self-audit witness (predecessor of registry_consistency_audit_v1). Permissive registry-coverage spec.",
+  "type": "object",
+  "required": ["schema", "ts"],
+  "properties": {
+    "schema": {"type": "string", "const": "raw_77_registry_audit_v1"},
+    "ts": {"type": "string"}
+  },
+  "additionalProperties": true
+}

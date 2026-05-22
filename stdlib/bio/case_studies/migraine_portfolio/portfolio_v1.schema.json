@@ -1,0 +1,169 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/dancinlab/hexa-bio/case_studies/migraine_portfolio/portfolio_v1.schema.json",
+  "title": "Migraine portfolio case-study witness (v1)",
+  "description": "In-silico simulator-consistency witness for the migraine portfolio case study — a one-disease pilot composing one existing sub-axis sim (PPI :> QUANTUM) for the four FDA-approved CDER small-molecule CGRP-receptor antagonists (gepants): rimegepant (Nurtec ODT, Pfizer/Biohaven, FDA 2020), ubrogepant (Ubrelvy, AbbVie/Allergan, FDA 2019), atogepant (Qulipta, AbbVie, FDA 2021) and zavegepant (Zavzpret, Pfizer, FDA 2023, intranasal). All four disrupt the CGRP / CGRP-receptor protein-protein interaction (a calcitonin-gene-related-peptide :: receptor PPI) → PPI sub-axis :> QUANTUM core. The schema deliberately separates `in_scope_drugs` (axis-mapped CDER small-molecule gepants) from `not_in_scope_drugs` (the four CBER-regulated anti-CGRP / anti-CGRP-receptor monoclonal antibodies: erenumab / Aimovig, fremanezumab / Ajovy, galcanezumab / Emgality, eptinezumab / Vyepti — all FDA-approved but CBER biologics, outside the hexa-bio criterion #4 drug-only/CDER scope boundary): an honest portfolio acknowledges what it does NOT model. NEVER a therapeutic, clinical, neurologic, efficacy, regulatory, or portfolio-recommendation claim (g8 / f2). NOT the deferred 200-disease re-mapping.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "case_study_id",
+    "ts",
+    "disease",
+    "in_scope_drugs",
+    "not_in_scope_drugs",
+    "cross_axis_touch_points",
+    "honesty",
+    "acceptance",
+    "sentinel"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {"type": "string", "const": "migraine_portfolio_v1"},
+    "case_study_id":  {"type": "string", "const": "migraine_portfolio.v1"},
+    "ts":             {"type": "string", "minLength": 1},
+    "disease": {
+      "type": "object",
+      "required": ["name", "abbreviation"],
+      "additionalProperties": true,
+      "properties": {
+        "name": {"type": "string"},
+        "abbreviation": {"type": "string", "const": "MIGRAINE"},
+        "target_pathway": {"type": "string"}
+      }
+    },
+    "in_scope_drugs": {
+      "type": "array",
+      "minItems": 4,
+      "maxItems": 4,
+      "description": "FDA-approved CDER small-molecule CGRP-receptor antagonists (gepants). All four disrupt the CGRP / CGRP-receptor PPI → PPI sub-axis :> QUANTUM core. Each row inherits the parent ppi_sim's real-limit citation (Bogan & Thorn 1998 binding-hotspot theory).",
+      "items": {"$ref": "#/definitions/in_scope_drug"}
+    },
+    "not_in_scope_drugs": {
+      "type": "array",
+      "minItems": 4,
+      "maxItems": 4,
+      "description": "FDA-approved anti-CGRP or anti-CGRP-receptor monoclonal antibodies — CBER-regulated biologics that are UNPLACED by design (no code axis for CBER mAbs; criterion #4 drug-only/CDER scope boundary). REPORTED-NOT-RUN with axis=null. An honest portfolio acknowledges what it does NOT model.",
+      "items": {"$ref": "#/definitions/not_in_scope_drug"}
+    },
+    "cross_axis_touch_points": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["id", "module", "note"],
+        "additionalProperties": true,
+        "properties": {
+          "id": {"type": "string"},
+          "module": {"type": "string"},
+          "note": {"type": "string"}
+        }
+      }
+    },
+    "honesty": {
+      "type": "object",
+      "required": [
+        "in_silico_only",
+        "core_5_unchanged",
+        "no_fork_of_sister_sims",
+        "one_disease_pilot_not_200_disease_remap",
+        "cber_mabs_unplaced_handled_honestly",
+        "not_a_molecular_glue_claim",
+        "no_lattice_derivation",
+        "statement"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "in_silico_only": {"const": true},
+        "core_5_unchanged": {"const": true},
+        "no_fork_of_sister_sims": {"const": true},
+        "one_disease_pilot_not_200_disease_remap": {"const": true},
+        "cber_mabs_unplaced_handled_honestly": {"const": true},
+        "not_a_molecular_glue_claim": {"const": true},
+        "no_lattice_derivation": {"const": true},
+        "statement": {"type": "string", "minLength": 1}
+      }
+    },
+    "acceptance": {
+      "type": "object",
+      "required": ["criteria", "pass_count", "total", "verdict"],
+      "additionalProperties": true,
+      "properties": {
+        "verdict": {"type": "string", "enum": ["PASS", "FAIL"]}
+      }
+    },
+    "sentinel": {
+      "type": "string",
+      "enum": ["__MIGRAINE_PORTFOLIO__ PASS", "__MIGRAINE_PORTFOLIO__ FAIL"]
+    }
+  },
+  "definitions": {
+    "in_scope_drug": {
+      "type": "object",
+      "required": [
+        "drug", "brand", "sponsor", "fda_year", "fda_center",
+        "fda_application", "modality", "axis_mapping",
+        "real_limit_anchor", "drug_precedent_refs", "sim_run",
+        "in_silico_only"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "drug": {"type": "string", "minLength": 1},
+        "brand": {"type": "string", "minLength": 1},
+        "sponsor": {"type": "string", "minLength": 1},
+        "fda_year": {"type": "integer", "minimum": 1970, "maximum": 2100},
+        "fda_center": {"type": "string", "const": "CDER"},
+        "fda_application": {"type": "string"},
+        "modality": {"type": "string"},
+        "axis_mapping": {
+          "type": "object",
+          "required": ["axis", "parent_axis", "axis_layer"],
+          "additionalProperties": true,
+          "properties": {
+            "axis": {"type": "string", "const": "PPI"},
+            "parent_axis": {"type": "string"},
+            "axis_layer": {"type": "string"}
+          }
+        },
+        "real_limit_anchor": {"type": "string", "minLength": 1},
+        "drug_precedent_refs": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"type": "string"}
+        },
+        "sim_run": {"type": "object"},
+        "in_silico_only": {"const": true}
+      }
+    },
+    "not_in_scope_drug": {
+      "type": "object",
+      "required": [
+        "drug", "brand", "sponsor", "fda_year", "fda_center",
+        "modality", "axis", "in_scope", "reason",
+        "unplaced_precedent_in_repo", "drug_precedent_refs",
+        "reported_not_run"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "drug": {"type": "string", "minLength": 1},
+        "brand": {"type": "string", "minLength": 1},
+        "sponsor": {"type": "string", "minLength": 1},
+        "fda_year": {"type": "integer", "minimum": 1970, "maximum": 2100},
+        "fda_center": {"type": "string", "const": "CBER"},
+        "modality": {"type": "string"},
+        "axis": {
+          "description": "Null — UNPLACED by design (no code axis for CBER mAbs).",
+          "type": "null"
+        },
+        "in_scope": {"const": false},
+        "reason": {"type": "string"},
+        "unplaced_precedent_in_repo": {"type": "string"},
+        "drug_precedent_refs": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"type": "string"}
+        },
+        "reported_not_run": {"const": true}
+      }
+    }
+  }
+}

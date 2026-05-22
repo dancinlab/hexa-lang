@@ -1,0 +1,246 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/dancinlab/hexa-bio/case_studies/alzheimer_portfolio/portfolio_v1.schema.json",
+  "title": "Alzheimer disease portfolio case-study witness (v1)",
+  "description": "In-silico simulator-consistency witness for the Alzheimer disease portfolio case study. HONESTY SHOWCASE: Alzheimer's only FDA-approved DISEASE-MODIFYING drugs are anti-amyloid monoclonal antibodies (CBER biologics: lecanemab/Leqembi 2023, donanemab/Kisunla 2024, aducanumab/Aduhelm 2021 — voluntarily withdrawn 2024). The long-approved cholinergic palliatives (donepezil 1996, rivastigmine 2000, galantamine 2001) are CDER small molecules but their acetylcholinesterase-inhibition mechanism does NOT map cleanly onto any of the expansion-layer axes (METALLODRUG / OLIGONUCLEOTIDE / COVALENT / BIFUNCTIONAL / sub-axes). RESULT: the portfolio has ZERO in-scope drugs + 3 CBER-UNPLACED + 3 CDER-but-no-axis-map — the most honest extremity of the UNPLACED pattern. The schema deliberately PERMITS in_scope_drugs to be an empty array (no minItems: 1) and ENFORCES the honesty acknowledgement of the zero-in-scope outcome via `zero_in_scope_acknowledged: const true`. This is NEVER a therapeutic, clinical, efficacy, immunogenic, regulatory, or portfolio-recommendation claim (g8 / f2).",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "case_study_id",
+    "disease",
+    "in_scope_drugs",
+    "not_in_scope_drugs",
+    "legacy_palliatives_no_axis",
+    "cross_axis_touch_point",
+    "honesty",
+    "sentinel"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "alzheimer_portfolio_v1"
+    },
+    "case_study_id": {
+      "type": "string",
+      "const": "alzheimer_portfolio.v1"
+    },
+    "disease": {
+      "type": "object",
+      "required": ["name", "abbreviation", "primary_pathology", "honest_modality_landscape"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {"type": "string"},
+        "abbreviation": {"type": "string", "const": "AD"},
+        "primary_pathology": {"type": "string"},
+        "honest_modality_landscape": {"type": "string"}
+      }
+    },
+    "in_scope_drugs": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 0,
+      "description": "FDA-approved Alzheimer drugs whose modality maps cleanly onto an in-repo expansion-layer axis. For Alzheimer this is the EMPTY ARRAY — the honest result. The disease's three FDA-approved disease-modifying drugs are all CBER monoclonal antibodies (UNPLACED by criterion #4 drug-only/CDER) and the legacy CDER cholinergic palliatives have no clean axis mapping (see `legacy_palliatives_no_axis`). An empty in_scope_drugs array is a VALID outcome of the case study and is explicitly acknowledged in `honesty.zero_in_scope_acknowledged`.",
+      "items": false
+    },
+    "not_in_scope_drugs": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 3,
+      "description": "FDA-approved Alzheimer disease-modifying drugs that are HONESTLY UNPLACED — CBER-regulated monoclonal antibodies falling outside the hexa-bio drug-only/CDER criterion #4 scope boundary; no code axis. Same UNPLACED pattern as AXIS/HIERARCHY.tape @N genetic_medicine_status / @N adc_status. Three entries: lecanemab (Leqembi), donanemab (Kisunla), aducanumab (Aduhelm — voluntarily withdrawn 2024).",
+      "items": {
+        "type": "object",
+        "required": [
+          "drug_name",
+          "brand",
+          "sponsor",
+          "fda_year",
+          "fda_center",
+          "modality",
+          "axis",
+          "in_scope",
+          "cber_reason",
+          "reason",
+          "unplaced_precedent_in_repo",
+          "drug_precedent_citations",
+          "reported_not_run",
+          "status_note"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "drug_name": {"type": "string"},
+          "brand": {"type": "string"},
+          "sponsor": {"type": "string"},
+          "fda_year": {"type": "integer", "minimum": 1900, "maximum": 2100},
+          "fda_center": {
+            "type": "string",
+            "description": "FDA center of regulatory jurisdiction; CBER for biologics including monoclonal antibodies.",
+            "const": "CBER"
+          },
+          "modality": {"type": "string"},
+          "axis": {
+            "description": "Null — UNPLACED by design (CBER biologic, no code axis).",
+            "type": "null"
+          },
+          "in_scope": {"type": "boolean", "const": false},
+          "cber_reason": {
+            "type": "string",
+            "description": "Per-row documentation (g1) of WHY this drug is CBER-regulated (monoclonal antibody = biologic)."
+          },
+          "reason": {"type": "string"},
+          "unplaced_precedent_in_repo": {
+            "type": "string",
+            "description": "Pointer to the in-repo precedent for honest UNPLACED handling."
+          },
+          "drug_precedent_citations": {
+            "type": "array",
+            "minItems": 1,
+            "items": {"type": "string"}
+          },
+          "reported_not_run": {
+            "type": "boolean",
+            "const": true,
+            "description": "Reported in the witness for honest portfolio coverage; NOT modeled (no axis sim run)."
+          },
+          "status_note": {
+            "type": "string",
+            "description": "Current regulatory status note (e.g. approved · voluntarily withdrawn · accelerated → traditional)."
+          }
+        }
+      }
+    },
+    "legacy_palliatives_no_axis": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 3,
+      "description": "FDA-approved CDER small-molecule cholinergic palliatives for Alzheimer — donepezil (1996), rivastigmine (2000), galantamine (2001). These drugs ARE small molecules under CDER discipline, but their acetylcholinesterase-inhibition mechanism does NOT map cleanly onto any of the expansion-layer axes (METALLODRUG / OLIGONUCLEOTIDE / COVALENT / BIFUNCTIONAL / sub-axes). They are SYMPTOMATIC palliatives, not disease-modifying. This is the case study's complexity: in-scope-by-CDER-discipline but with no clean axis mapping — flagged honestly rather than force-fit. A distinct honesty const (`legacy_palliative_no_axis: true`) separates this category from the CBER UNPLACED const.",
+      "items": {
+        "type": "object",
+        "required": [
+          "drug_name",
+          "brand",
+          "sponsor",
+          "fda_year",
+          "fda_center",
+          "modality",
+          "axis",
+          "in_scope",
+          "legacy_palliative_no_axis",
+          "no_axis_map_reason",
+          "drug_precedent_citations",
+          "reported_not_run",
+          "symptomatic_not_disease_modifying"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "drug_name": {"type": "string"},
+          "brand": {"type": "string"},
+          "sponsor": {"type": "string"},
+          "fda_year": {"type": "integer", "minimum": 1900, "maximum": 2100},
+          "fda_center": {
+            "type": "string",
+            "description": "CDER — small molecule under CDER discipline.",
+            "const": "CDER"
+          },
+          "modality": {"type": "string"},
+          "axis": {
+            "description": "Null — CDER-class but no clean axis mapping (axes are designed for new modalities: PROTAC / CAM / OLIGO / METALLODRUG / COVALENT; AChE inhibition is a legacy cholinergic palliative mechanism with no matching axis).",
+            "type": "null"
+          },
+          "in_scope": {"type": "boolean", "const": false},
+          "legacy_palliative_no_axis": {
+            "type": "boolean",
+            "const": true,
+            "description": "Honesty const — distinct from the CBER UNPLACED const. Marks this row as CDER-class but no clean axis mapping (not modeled here)."
+          },
+          "no_axis_map_reason": {
+            "type": "string",
+            "description": "Per-row explanation of why this CDER small molecule does not map onto any of the expansion-layer axes."
+          },
+          "drug_precedent_citations": {
+            "type": "array",
+            "minItems": 1,
+            "items": {"type": "string"}
+          },
+          "reported_not_run": {
+            "type": "boolean",
+            "const": true,
+            "description": "Reported in the witness for honest portfolio coverage; NOT modeled (no axis mapping)."
+          },
+          "symptomatic_not_disease_modifying": {
+            "type": "boolean",
+            "const": true,
+            "description": "These are SYMPTOMATIC palliatives — they do not slow disease progression. Not a disease-modifying claim."
+          }
+        }
+      }
+    },
+    "cross_axis_touch_point": {
+      "type": "object",
+      "description": "Honest acknowledgement that this case study has NO cross-axis touch point — with zero in-scope drugs there is no in-axis sim to bridge to anything.",
+      "required": ["bridge_id", "module", "honesty_note"],
+      "additionalProperties": false,
+      "properties": {
+        "bridge_id": {
+          "type": "null",
+          "description": "Null — no cross-axis bridge applies."
+        },
+        "module": {
+          "type": "null",
+          "description": "Null — no upstream module imported."
+        },
+        "honesty_note": {"type": "string"}
+      }
+    },
+    "honesty": {
+      "type": "object",
+      "required": [
+        "in_silico_only",
+        "not_a_portfolio_recommendation",
+        "not_an_efficacy_ranking",
+        "not_a_superiority_claim",
+        "not_a_clinical_claim",
+        "zero_in_scope_acknowledged",
+        "zero_in_scope_is_a_valid_outcome",
+        "all_three_cber_disease_modifying_fda_approved",
+        "all_three_legacy_palliatives_fda_approved",
+        "unplaced_handling_is_honest",
+        "legacy_palliatives_have_no_clean_axis_map",
+        "axes_designed_for_new_modalities_not_legacy_palliatives",
+        "no_lattice_derivation",
+        "scope_is_one_disease_pilot",
+        "statement"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "in_silico_only": {"type": "boolean", "const": true},
+        "not_a_portfolio_recommendation": {"type": "boolean", "const": true},
+        "not_an_efficacy_ranking": {"type": "boolean", "const": true},
+        "not_a_superiority_claim": {"type": "boolean", "const": true},
+        "not_a_clinical_claim": {"type": "boolean", "const": true},
+        "zero_in_scope_acknowledged": {
+          "type": "boolean",
+          "const": true,
+          "description": "Schema-enforced acknowledgement that this case study has ZERO in-scope drugs — and that this is a valid, honest outcome rather than a gap to be papered over."
+        },
+        "zero_in_scope_is_a_valid_outcome": {
+          "type": "boolean",
+          "const": true,
+          "description": "Honest framing: zero-in-scope is the truthful result for Alzheimer given its modality landscape (CBER mAbs + legacy AChE palliatives)."
+        },
+        "all_three_cber_disease_modifying_fda_approved": {"type": "boolean", "const": true},
+        "all_three_legacy_palliatives_fda_approved": {"type": "boolean", "const": true},
+        "unplaced_handling_is_honest": {"type": "boolean", "const": true},
+        "legacy_palliatives_have_no_clean_axis_map": {"type": "boolean", "const": true},
+        "axes_designed_for_new_modalities_not_legacy_palliatives": {"type": "boolean", "const": true},
+        "no_lattice_derivation": {"type": "boolean", "const": true},
+        "scope_is_one_disease_pilot": {"type": "boolean", "const": true},
+        "statement": {"type": "string"}
+      }
+    },
+    "sentinel": {
+      "type": "string",
+      "const": "__ALZHEIMER_PORTFOLIO__ PASS"
+    }
+  }
+}
