@@ -36,6 +36,7 @@ import "../ir/lir.hexa"
 import "../lower/hir_to_mir.hexa"
 import "./nvptx_target.hexa"
 import "./nvptx_ptx_ops.hexa"
+import "./nvptx_tma_ops.hexa"
 
 // ── MIR construction helpers (mirror of codegen_test.hexa /
 //    nvptx_emit_test.hexa — same shape, kept local to keep this file
@@ -758,6 +759,89 @@ fn _test_atomic_add() -> bool {
     return ok
 }
 
+// ── Case 32 — F-RFC067-NVPTX-TMA-CODEGEN-SCAFFOLD ─────────────────────
+//
+// RFC 067 N202 — TMA opcode scaffold + sm_120a header emit. Verifies:
+//   1. `nvptx_emit_module_header_for_tma("sm_120a")` returns the
+//      canonical N196 header (`.target sm_120a` + `.version 8.7` +
+//      `.address_size 64`) matching the N200 SMOKE artifact.
+//   2. Non-sm_120a sm-tags ("sm_80" / "sm_90" / "sm_120") return ""
+//      (fall-through — caller must use the regular header emitter).
+//   3. `nvptx_tma_codegen_enabled()` returns false by default — the
+//      feature-flag mechanism is in place but defaults OFF, so the
+//      existing nvptx_target.hexa emit path stays byte-identical.
+//   4. `ptx_tma_ops()` returns a non-empty opcode table; every row
+//      pins `requires_arch = "sm_120a"` and `requires_version = "8.7"`.
+//
+// SCAFFOLD ONLY — no MIR is lowered through this path, no LModule is
+// emitted with TMA opcodes. The integration point with N128 WMMA
+// matmul is documented in
+// `inbox/notes/2026-05-22-tma-runtime-builtin-requirements.md`.
+
+fn _test_tma_codegen_scaffold() -> bool {
+    let mut ok = true
+
+    println("")
+    println("── RFC 067 N202 TMA codegen scaffold ──")
+
+    // (1) sm_120a header — matches N200 SMOKE artifact lines 13-15.
+    let header_120a = nvptx_emit_module_header_for_tma("sm_120a")
+    println(header_120a)
+    ok = _check(ok, header_120a, ".version 8.7",        "TMA header .version 8.7")
+    ok = _check(ok, header_120a, ".target sm_120a",     "TMA header .target sm_120a")
+    ok = _check(ok, header_120a, ".address_size 64",    "TMA header .address_size 64")
+
+    // (2) Fall-through — non-sm_120a returns "".
+    let header_sm80  = nvptx_emit_module_header_for_tma("sm_80")
+    let header_sm90  = nvptx_emit_module_header_for_tma("sm_90")
+    let header_sm120 = nvptx_emit_module_header_for_tma("sm_120")
+    if len(header_sm80)  != 0 { println("  FAIL: sm_80 expected empty fall-through");  ok = false }
+    if len(header_sm90)  != 0 { println("  FAIL: sm_90 expected empty fall-through");  ok = false }
+    if len(header_sm120) != 0 { println("  FAIL: sm_120 expected empty fall-through (no _a suffix)"); ok = false }
+
+    // (3) Feature-flag defaults OFF — preserves byte-identical existing
+    //     emit path (no regression on the 31 existing cases above).
+    if nvptx_tma_codegen_enabled() {
+        println("  FAIL: nvptx_tma_codegen_enabled() must default to false (scaffold)")
+        ok = false
+    }
+
+    // (4) Opcode table — non-empty, every row pins sm_120a + 8.7.
+    let ops = ptx_tma_ops()
+    if len(ops) == 0 {
+        println("  FAIL: ptx_tma_ops() must enumerate at least one TMA opcode")
+        ok = false
+    }
+    let mut i = 0
+    while i < len(ops) {
+        let row = ops[i]
+        if row.requires_arch != NVPTX_ARCH_SM120A {
+            println("  FAIL: opcode `" + row.mnemonic + "` requires_arch != sm_120a")
+            ok = false
+        }
+        if row.requires_version != NVPTX_PTX_VERSION_SM120A {
+            println("  FAIL: opcode `" + row.mnemonic + "` requires_version != 8.7")
+            ok = false
+        }
+        i = i + 1
+    }
+
+    // (5) Required N200-SMOKE opcode constants exist + are non-empty.
+    if len(PTX_OP_CP_ASYNC_BULK_TENSOR_2D) == 0    { ok = false; println("  FAIL: PTX_OP_CP_ASYNC_BULK_TENSOR_2D empty") }
+    if len(PTX_OP_MBARRIER_INIT) == 0              { ok = false; println("  FAIL: PTX_OP_MBARRIER_INIT empty") }
+    if len(PTX_OP_MBARRIER_ARRIVE_EXPECT_TX) == 0  { ok = false; println("  FAIL: PTX_OP_MBARRIER_ARRIVE_EXPECT_TX empty") }
+    if len(PTX_OP_MBARRIER_TRY_WAIT_PARITY) == 0   { ok = false; println("  FAIL: PTX_OP_MBARRIER_TRY_WAIT_PARITY empty") }
+    if len(PTX_OP_FENCE_PROXY_ASYNC_SHARED_CTA) == 0 { ok = false; println("  FAIL: PTX_OP_FENCE_PROXY_ASYNC_SHARED_CTA empty") }
+    if len(PTX_OP_CVTA_PARAM_U64) == 0             { ok = false; println("  FAIL: PTX_OP_CVTA_PARAM_U64 empty") }
+
+    // (6) ABI constants — CUtensorMap is 128 B, alignment 64, max rank 5.
+    if NVPTX_TMA_DESC_BYTES != 128     { ok = false; println("  FAIL: NVPTX_TMA_DESC_BYTES must be 128") }
+    if NVPTX_TMA_DESC_ALIGNMENT != 64  { ok = false; println("  FAIL: NVPTX_TMA_DESC_ALIGNMENT must be 64") }
+    if NVPTX_TMA_MAX_RANK != 5         { ok = false; println("  FAIL: NVPTX_TMA_MAX_RANK must be 5") }
+
+    return ok
+}
+
 // ── Driver ───────────────────────────────────────────────────────────
 
 fn main() {
@@ -796,11 +880,12 @@ fn main() {
     let ok_mm    = _test_matmul_emit()
     let ok_mta   = _test_matmul_NT_a_emit()
     let ok_mtb   = _test_matmul_NT_b_emit()
+    let ok_tma   = _test_tma_codegen_scaffold()
 
     println("")
     println("══════════════════════════════════════════════")
-    if ok_br && ok_cls && ok_setp && ok_intr && ok_ls && ok_part && ok_barr && ok_atom && ok_shuf && ok_unr && ok_unrn && ok_wmma && ok_mp && ok_fctN && ok_pp && ok_fw && ok_sd && ok_me && ok_np && ok_os && ok_df && ok_bm && ok_wie && ok_gkw && ok_fls && ok_fp8a && ok_fp8b && ok_i64c && ok_mm && ok_mta && ok_mtb {
-        println("PASS: RFC 055 + RFC 067 + RFC 068 P1/P2/P3/P4-codegen + RFC 068 §3 fp8 scaffold + RFC 069 + RFC 071 P3+/P5+ — 31/31 cases (incl. matmul + matmul_NT_a + matmul_NT_b)")
+    if ok_br && ok_cls && ok_setp && ok_intr && ok_ls && ok_part && ok_barr && ok_atom && ok_shuf && ok_unr && ok_unrn && ok_wmma && ok_mp && ok_fctN && ok_pp && ok_fw && ok_sd && ok_me && ok_np && ok_os && ok_df && ok_bm && ok_wie && ok_gkw && ok_fls && ok_fp8a && ok_fp8b && ok_i64c && ok_mm && ok_mta && ok_mtb && ok_tma {
+        println("PASS: RFC 055 + RFC 067 + RFC 068 P1/P2/P3/P4-codegen + RFC 068 §3 fp8 scaffold + RFC 069 + RFC 071 P3+/P5+ + RFC 067 N202 TMA scaffold — 32/32 cases (incl. matmul + matmul_NT_a + matmul_NT_b + TMA codegen scaffold)")
     } else {
         println("FAIL: RFC 055 smoke not satisfied.")
         if !ok_br   { println("      STMT_BR FAILED") }
@@ -834,9 +919,10 @@ fn main() {
         if !ok_mm   { println("      RFC 071 P5+ matmul codegen FAILED") }
         if !ok_mta  { println("      RFC 071 P5+ matmul_NT_a codegen FAILED") }
         if !ok_mtb  { println("      RFC 071 P5+ matmul_NT_b codegen FAILED") }
+        if !ok_tma  { println("      RFC 067 N202 TMA codegen scaffold FAILED") }
     }
     println("══════════════════════════════════════════════")
-    if !(ok_br && ok_cls && ok_setp && ok_intr && ok_ls && ok_part && ok_barr && ok_atom && ok_shuf && ok_unr && ok_unrn && ok_wmma && ok_mp && ok_fctN && ok_pp && ok_fw && ok_sd && ok_me && ok_np && ok_os && ok_df && ok_bm && ok_wie && ok_gkw && ok_fls && ok_fp8a && ok_fp8b && ok_i64c && ok_mm && ok_mta && ok_mtb) { exit(1) }
+    if !(ok_br && ok_cls && ok_setp && ok_intr && ok_ls && ok_part && ok_barr && ok_atom && ok_shuf && ok_unr && ok_unrn && ok_wmma && ok_mp && ok_fctN && ok_pp && ok_fw && ok_sd && ok_me && ok_np && ok_os && ok_df && ok_bm && ok_wie && ok_gkw && ok_fls && ok_fp8a && ok_fp8b && ok_i64c && ok_mm && ok_mta && ok_mtb && ok_tma) { exit(1) }
 }
 
 // ── Case 9 — 055-P4 gpu_warp_shuffle(v, lane) intrinsic ───────────────
