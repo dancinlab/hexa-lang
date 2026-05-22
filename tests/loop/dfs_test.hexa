@@ -19,6 +19,7 @@
 use "stdlib/loop/dfs"
 use "compiler/lenses/types"
 use "compiler/atlas/parser"
+use "stdlib/loop/state"
 use "stdlib/io"
 
 fn _empty_edges() -> EdgeInfo {
@@ -73,6 +74,7 @@ let FIXTURE = "## sigma_tau_ratio_descent\n"
 
 fn main() {
     println("================ RFC 080 DFS test ================")
+    loop_state_init()   // ensure state/loop/<hash>/ exists for telemetry+chain writes
     let view = _mkview()
     let mut fail = 0
 

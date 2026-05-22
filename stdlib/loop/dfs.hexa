@@ -325,13 +325,17 @@ fn _dfs_cite_in_atlas(cand: Candidate, view: AtlasView) -> bool {
     return false
 }
 
-// English-only heuristic (axis 10f). Rejects CJK/Hangul (3-byte UTF-8 lead
-// 0xE4–0xED) while allowing Greek/Latin math (2-byte 0xCE/0xCF). Uses a
-// LC_ALL=C grep byte-class oracle on a temp file.
+// English-only heuristic (axis 10f). Rejects any non-ASCII byte (>= 0x80),
+// which covers CJK/Hangul; the atlas itself is ASCII ("phi * n"), so an
+// ASCII-only proposal is the right contract. Counts non-ASCII bytes
+// portably by deleting every ASCII byte (0x00-0x7f) and measuring the
+// remainder -- robust across BSD/GNU `tr` and `sh`, unlike grep's `\xHH`
+// byte-class which is implementation-defined (it silently matched ASCII
+// letters under sh+BSD grep and rejected all English; caught by Phase J).
 fn _dfs_has_cjk(s: string) -> bool {
     let tmp = "/tmp/hexa_loop_dfs_cjk_" + to_string(_dfs_now_epoch()) + ".txt"
     let _ = write_text(tmp, s)
-    let cnt = exec("LC_ALL=C grep -c '[\\xe4-\\xed]' " + _dfs_shq(tmp) + " 2>/dev/null || echo 0").trim()
+    let cnt = exec("LC_ALL=C tr -d '\\0-\\177' < " + _dfs_shq(tmp) + " | wc -c | tr -d ' '").trim()
     let _ = exec("rm -f " + _dfs_shq(tmp))
     return _dfs_atoi(cnt) > 0
 }
