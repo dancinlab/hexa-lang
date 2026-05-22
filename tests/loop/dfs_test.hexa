@@ -159,6 +159,21 @@ fn main() {
     if e2 == 2 { println("  ok: budget cap stopped after 1 call (2 children)") }
     else { println("  FAIL: budget cap emitted " + to_string(e2) + " (expected 2)"); fail = fail + 1 }
 
+    // ---- 5. Phase F: budget hit persisted the unprocessed frontier ----
+    // The budget run above (--llm-calls 1) processed seed b1 and left b2
+    // unprocessed -> dfs_run should have saved it for --resume.
+    let saved = dfs_frontier_load()
+    if len(saved) >= 1 { println("  ok: frontier persisted for --resume (" + to_string(len(saved)) + " seed)") }
+    else { println("  FAIL: frontier not persisted (expected >= 1)"); fail = fail + 1 }
+    if len(saved) >= 1 {
+        if saved[0].slug == "b2" && len(saved[0].cite) == 1 && saved[0].cite[0] == "phi" {
+            println("  ok: persisted seed round-trips (slug+cite)")
+        } else {
+            println("  FAIL: persisted seed mismatch: slug=" + saved[0].slug); fail = fail + 1
+        }
+    }
+    dfs_frontier_clear()
+
     println("==================================================")
     if fail == 0 {
         println("PASS: all RFC 080 DFS checks green.")

@@ -318,7 +318,8 @@ struct DfsConfig {
     max_secs: int,
     allow_llm: bool,
     families: string,
-    no_cache: bool
+    no_cache: bool,
+    resume: bool
 }
 
 // RFC 080 DFS+LLM stage — runs between DRAFT and AUDIT when --dfs is set.
@@ -331,11 +332,23 @@ fn cycle_dfs(seeds: array, view: AtlasView, cycle_no: int, cfg: DfsConfig) {
         println("  [dfs]  --dfs set but no --llm-cmd / $HEXA_LLM_CMD — skipping (set a command to expand)")
         return
     }
-    println("  [dfs]  seeds=" + to_string(len(seeds))
+    // Phase F — --resume: continue from a budget-interrupted frontier instead
+    // of this cycle's fresh lens seeds.
+    let mut active_seeds = seeds
+    if cfg.resume {
+        let loaded = dfs_frontier_load()
+        if len(loaded) > 0 {
+            active_seeds = loaded
+            println("  [dfs]  --resume: loaded " + to_string(len(loaded)) + " persisted frontier seed(s)")
+        } else {
+            println("  [dfs]  --resume: no saved frontier — starting fresh from lens seeds")
+        }
+    }
+    println("  [dfs]  seeds=" + to_string(len(active_seeds))
           + " depth=" + to_string(cfg.depth)
           + " beam=" + to_string(cfg.beam)
           + " allow_llm=" + _bool_str(cfg.allow_llm))
-    let emitted = dfs_run(seeds, view, cycle_no,
+    let emitted = dfs_run(active_seeds, view, cycle_no,
                           cfg.cmd, cfg.depth, cfg.beam,
                           cfg.max_calls, cfg.max_usd, cfg.max_secs,
                           cfg.allow_llm, cfg.families, cfg.no_cache)
@@ -503,7 +516,8 @@ fn main() {
         max_secs: to_int(llm_time),
         allow_llm: allow_llm,
         families: llm_families,
-        no_cache: no_cache
+        no_cache: no_cache,
+        resume: resume_mode
     }
     println("")
     run_one_cycle(no_fire, dry_run, dfs_cfg)

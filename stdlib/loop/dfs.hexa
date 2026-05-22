@@ -383,6 +383,114 @@ fn _dfs_chain_append(cycle: int, parent_slug: string, child_slug: string, family
     let _ = exec("printf '%s' " + _dfs_shq(row) + " >> " + _dfs_shq(path))
 }
 
+// ── Phase F: frontier persistence for --resume ──────────────────────
+//
+// When a cycle exhausts its budget mid-walk, the unprocessed frontier is
+// serialized to state/loop/<hash>/dfs_frontier.jsonl so a later
+// `hexa loop --dfs --resume` picks up exactly where it stopped. On clean
+// completion the file is cleared. Serialization is a fixed-field one-line
+// JSON record (slug/family/fire/cite/proposed); proposals carry newlines
+// and quotes, so they are escaped. MVP: assumes proposals contain no
+// literal backslash (LLM prose) — see RFC 080 non-scope.
+
+fn _dfs_esc(s: string) -> string {
+    let mut r = s.replace("\\", "\\\\")
+    r = r.replace("\"", "\\\"")
+    r = r.replace("\n", "\\n")
+    return r
+}
+
+fn _dfs_unesc(s: string) -> string {
+    let mut r = s.replace("\\n", "\n")
+    r = r.replace("\\\"", "\"")
+    return r
+}
+
+// Substring of `s` between the first `a` and the next `b` after it.
+fn _dfs_between(s: string, a: string, b: string) -> string {
+    let i = s.index_of(a)
+    if i < 0 { return "" }
+    let from = i + len(a)
+    let rest = s.substring(from, len(s))
+    let j = rest.index_of(b)
+    if j < 0 { return rest }
+    return rest.substring(0, j)
+}
+
+fn dfs_serialize_candidate(c: Candidate) -> string {
+    let mut cite_join = ""
+    let n = len(c.cite)
+    let mut i = 0
+    while i < n {
+        if i > 0 { cite_join = cite_join + "|" }
+        cite_join = cite_join + c.cite[i]
+        i = i + 1
+    }
+    return "{\"slug\":\"" + _dfs_esc(c.slug) + "\""
+         + ",\"family\":\"" + _dfs_esc(c.family) + "\""
+         + ",\"fire\":" + _dfs_bool_str(c.fire_needed)
+         + ",\"cite\":\"" + _dfs_esc(cite_join) + "\""
+         + ",\"proposed\":\"" + _dfs_esc(c.proposed) + "\"}"
+}
+
+fn dfs_parse_candidate_line(line: string) -> Candidate {
+    let slug = _dfs_unesc(_dfs_between(line, "\"slug\":\"", "\",\"family\":\""))
+    let family = _dfs_unesc(_dfs_between(line, "\",\"family\":\"", "\",\"fire\":"))
+    let fire_s = _dfs_between(line, "\",\"fire\":", ",\"cite\":\"")
+    let cite_raw = _dfs_unesc(_dfs_between(line, ",\"cite\":\"", "\",\"proposed\":\""))
+    let prop = _dfs_unesc(_dfs_between(line, "\",\"proposed\":\"", "\"}"))
+    let mut cite: array = []
+    if len(cite_raw) > 0 {
+        let parts = cite_raw.split("|")
+        let n = len(parts)
+        let mut i = 0
+        while i < n {
+            if len(parts[i]) > 0 { cite.push(parts[i]) }
+            i = i + 1
+        }
+    }
+    return Candidate {
+        slug: slug, family: family, proposed: prop,
+        cite: cite, fire_needed: (fire_s == "true"), fire_estimate_usd: 0.0
+    }
+}
+
+fn dfs_frontier_path() -> string {
+    return loop_state_dir() + "/dfs_frontier.jsonl"
+}
+
+fn dfs_frontier_save(frontier: array) {
+    let mut out = ""
+    let n = len(frontier)
+    let mut i = 0
+    while i < n {
+        out = out + dfs_serialize_candidate(frontier[i]) + "\n"
+        i = i + 1
+    }
+    let _ = write_text(dfs_frontier_path(), out)
+}
+
+// Read persisted frontier (empty if none). Public — cycle.hexa --resume.
+pub fn dfs_frontier_load() -> array {
+    let path = dfs_frontier_path()
+    let exists = exec("test -e " + _dfs_shq(path) + " && echo Y || echo N").trim()
+    let mut out: array = []
+    if exists != "Y" { return out }
+    let raw = read_text(path)
+    let lines = raw.split("\n")
+    let n = len(lines)
+    let mut i = 0
+    while i < n {
+        if len(lines[i].trim()) > 0 { out.push(dfs_parse_candidate_line(lines[i])) }
+        i = i + 1
+    }
+    return out
+}
+
+pub fn dfs_frontier_clear() {
+    let _ = exec("rm -f " + _dfs_shq(dfs_frontier_path()))
+}
+
 // ── Phase C: emit child to nested inbox path (axis 8b) ──────────────
 
 fn _dfs_emit_child(parent_slug: string, child: Candidate, depth: int) {
@@ -430,6 +538,7 @@ pub fn dfs_run(seeds: array, view: AtlasView, cycle_no: int,
     let mut cost = 0.0
     let mut emitted = 0
     let mut budget_hit = false
+    let mut bstart = -1   // index of first unprocessed parent when budget hit (Phase F resume)
 
     let frontier_max = beam * 4   // MVP breadth cap (true best-first = follow-up)
 
@@ -444,10 +553,16 @@ pub fn dfs_run(seeds: array, view: AtlasView, cycle_no: int,
             fi = fi + 1
             if _dfs_family_enabled(parent.family, families_csv) == false { continue }
 
-            // 3-way AND budget (axis 6) — short-circuit on any hit.
-            if max_calls > 0 && calls >= max_calls { budget_hit = true; break }
-            if max_secs > 0 && (_dfs_now_epoch() - start_epoch) >= max_secs { budget_hit = true; break }
-            if max_usd > 0.0 && cost >= max_usd { budget_hit = true; break }
+            // 3-way AND budget (axis 6) — short-circuit on any hit. Record the
+            // unprocessed parent index so the remainder can be persisted for
+            // --resume (Phase F).
+            if (max_calls > 0 && calls >= max_calls)
+               || (max_secs > 0 && (_dfs_now_epoch() - start_epoch) >= max_secs)
+               || (max_usd > 0.0 && cost >= max_usd) {
+                budget_hit = true
+                bstart = fi - 1
+                break
+            }
 
             let prompt = dfs_build_prompt(parent, view, beam)
 
@@ -497,10 +612,25 @@ pub fn dfs_run(seeds: array, view: AtlasView, cycle_no: int,
                 }
             }
         }
+        // Phase F — persist the unprocessed remainder of this depth's frontier
+        // so `hexa loop --dfs --resume` continues exactly here.
+        if budget_hit && bstart >= 0 {
+            let mut rem: array = []
+            let mut ri = bstart
+            while ri < fn_count {
+                rem.push(frontier[ri])
+                ri = ri + 1
+            }
+            dfs_frontier_save(rem)
+            println("  [dfs] budget hit — saved " + to_string(len(rem)) + " frontier seed(s) for --resume")
+        }
         frontier = next
         depth = depth + 1
         if len(frontier) == 0 { break }
     }
+
+    // Clean completion (no budget cut) — drop any stale resume frontier.
+    if budget_hit == false { dfs_frontier_clear() }
 
     println("  [dfs] done: depth_reached=" + to_string(depth)
           + " calls=" + to_string(calls)
