@@ -551,16 +551,36 @@ fn read_verilog(src: str) -> ReadVerilogResult {
                 // once at least one function is collected and we're past
                 // the function decl region, rewrite the remaining tokens
                 // by inlining single-stmt return-expr function calls.
-                if inlined == 0 && len(funcs) > 0 && bt != "function" {
+                // rfc_006 §5 d4 closure (2026-05-22): inline to a FIXPOINT
+                // so nested function calls (route_xy → dst_x_of/dst_y_of)
+                // expand too — a single pass left the nested calls as
+                // undriven identifiers (see _rv_inline_func_calls_fixpoint).
+                //
+                // rfc_006 §5 d4 ±5% DECISIVE closure (2026-05-22): re-run
+                // the inline pass whenever NEW functions have been collected
+                // since the last inline — NOT just once. router_d4 declares
+                // `dst_x_of`/`dst_y_of` (lines 33-38) BEFORE the fifo `reg`
+                // arrays and the generate block, but `route_xy` (line 58)
+                // AFTER them. The previous single-shot latch (`inlined==0`)
+                // fired the inline at the first `reg` token (line 41), when
+                // `route_xy` was NOT yet in `funcs` — so the call site
+                // `grant_out = route_xy(fifo_peek[idx])` was left un-inlined
+                // → `route_xy` const-0 → out_valid[0..4] D-pins all tied to
+                // `_const0_`. Re-inlining on `len(funcs) > inlined_funcs`
+                // catches `route_xy` once it is finally parsed. The token
+                // stream before `st.pos` (already-parsed funcs/decls) is
+                // untouched; re-tokenisation resets pos=0 of the rewritten
+                // remainder, so no statement is parsed twice.
+                if len(funcs) > inlined && bt != "function" {
                     let mut rest: [str] = []
                     let mut ri = st.pos
                     while ri < len(st.toks) {
                         rest = rest.push(st.toks[ri])
                         ri = ri + 1
                     }
-                    let pp = _rv_inline_func_calls(rest, funcs)
+                    let pp = _rv_inline_func_calls_fixpoint(rest, funcs)
                     st = PState { toks: pp, pos: 0, err: st.err }
-                    inlined = 1
+                    inlined = len(funcs)
                     continue
                 }
                 // wire / input / output / inout declarations
@@ -1919,6 +1939,76 @@ fn _rv_collapse_cascaded_if_body(body: [str], fname: str) -> [str] {
     return out
 }
 
+// CLEAN-ROOM (rfc_006 §5 d4 closure, 2026-05-22): count residual
+// inlinable call sites in a token stream — a registered function name
+// immediately followed by `(`. Used to drive the fixpoint inline loop
+// (`_rv_inline_func_calls_fixpoint`) so that NESTED function calls in a
+// function body get expanded too. router_d4's `route_xy` body itself
+// calls `dst_x_of(pkt)` / `dst_y_of(pkt)`; a single inline pass leaves
+// those nested calls in the emitted expression (each pass only re-scans
+// `out`, never the freshly-substituted body), so `route_xy` elaborated
+// to a tree referencing the undriven wire `dst_x_of`, which ABC then
+// ties to const-0 → `grant_out` collapses to const-0 → out_valid[1..4]
+// cones vanish → d4 area undershoots (Δ 10.07%). One inline pass per
+// nesting level converges because router functions are non-recursive.
+fn _rv_count_func_call_sites(toks: [str], funcs: [VFunc]) -> int {
+    let mut count = 0
+    let mut i = 0
+    while i < len(toks) {
+        let nm = toks[i]
+        if i + 1 < len(toks) && toks[i + 1] == "(" {
+            let mut k = 0
+            while k < len(funcs) {
+                if funcs[k].name == nm { count = count + 1; k = len(funcs) }
+                k = k + 1
+            }
+        }
+        i = i + 1
+    }
+    return count
+}
+
+// CLEAN-ROOM (rfc_006 §5 d4 closure, 2026-05-22): run `_rv_inline_func_calls`
+// to a fixpoint. Each pass expands one nesting level of function calls;
+// repeating until no inlinable call site remains (or a depth cap is hit)
+// expands NESTED calls such as `route_xy`'s `dst_x_of(pkt)` / `dst_y_of(pkt)`.
+// The cap (16) guards against pathological / recursive inputs that never
+// converge — well above the 2-level nesting router_d{4,6} need. On no-
+// progress (a residual call site whose body shape is unsupported, so the
+// pass leaves it untouched) the partially-inlined stream is returned —
+// the parser then surfaces any residual unknown identifier loudly, so
+// this never loops forever.
+fn _rv_inline_func_calls_fixpoint(toks_in: [str], funcs: [VFunc]) -> [str] {
+    let mut cur = toks_in
+    let mut iter = 0
+    while iter < 16 {
+        if _rv_count_func_call_sites(cur, funcs) == 0 { break }
+        let nxt = _rv_inline_func_calls(cur, funcs)
+        // Progress is measured by an actual change in the token stream,
+        // NOT by call-site count: inlining `outer` (whose body calls
+        // `inner`) replaces one call site with another, so the count can
+        // stay constant across a productive pass. Compare token-for-token
+        // instead — equal streams mean the residual call site's body
+        // shape is unsupported, so further passes cannot help. Bail
+        // rather than spin to the cap (which would leave the call un-
+        // inlined anyway, surfaced loudly by the parser downstream).
+        let mut changed = 0
+        if len(nxt) != len(cur) {
+            changed = 1
+        } else {
+            let mut ci = 0
+            while ci < len(cur) {
+                if cur[ci] != nxt[ci] { changed = 1; ci = len(cur) }
+                ci = ci + 1
+            }
+        }
+        cur = nxt
+        if changed == 0 { break }
+        iter = iter + 1
+    }
+    return cur
+}
+
 // CLEAN-ROOM: token-level inlining of function calls inside the
 // remaining module body. Handles the minimal shape:
 //   call site:  `func_name ( arg1_toks , arg2_toks , … )`
@@ -1927,6 +2017,9 @@ fn _rv_collapse_cascaded_if_body(body: [str], fname: str) -> [str] {
 // args using `(`/`)` deeper than the call's own parens, mismatched
 // arity) is left untouched so the parser still sees the original
 // token stream and either parses correctly or fails loudly.
+// Nested calls (a function body that itself calls another function) are
+// resolved by the fixpoint driver `_rv_inline_func_calls_fixpoint`,
+// which re-runs this pass until no call site remains.
 fn _rv_inline_func_calls(toks_in: [str], funcs: [VFunc]) -> [str] {
     let mut out: [str] = []
     let mut i = 0
@@ -7069,6 +7162,74 @@ fn main() {
         }
         if _mux != 1 {
             println("FAIL T50b mux_count got " + str(_mux) + " (expected 1)"); fails = fails + 1
+        }
+    }
+
+    // T_FUNCTION_INLINE — rfc_006 §5 d4 ±5% decisive closure (2026-05-22).
+    //   Minimum-shape function-inline in a combinational `always @*`:
+    //     function automatic [2:0] f ( input [3:0] x ) ;
+    //       begin if (x > 0) f = 3'd2; else f = 3'd1; end
+    //     endfunction
+    //     always @* q = f(d);
+    //   After read_verilog the call `f(d)` is inlined to a ternary
+    //   `(d>0) ? 3'd2 : 3'd1` and elaborated → 1 $gt + 1 $mux feeding
+    //   `q` (combinational connect). Mirrors T50 but with an always-block
+    //   call site (the d4 router calls route_xy inside `always @*`).
+    total = total + 1
+    let _vfi = "module mfi ( input [ 3 : 0 ] d , output reg [ 2 : 0 ] q ) ; function automatic [ 2 : 0 ] f ( input [ 3 : 0 ] x ) ; begin if ( x > 0 ) f = 3'd2 ; else f = 3'd1 ; end endfunction always @ ( * ) q = f ( d ) ; endmodule"
+    let _rfi = read_verilog(_vfi)
+    if _rfi.ok != 1 {
+        println("FAIL T_FUNCTION_INLINE: " + _rfi.message); fails = fails + 1
+    } else {
+        let _mfi = _rfi.design.modules[0]
+        let _gtfi = rtlil_count_cells_of_type(_mfi, "$gt")
+        let _muxfi = rtlil_count_cells_of_type(_mfi, "$mux")
+        if _gtfi != 1 {
+            println("FAIL T_FUNCTION_INLINE_a gt_count got " + str(_gtfi) + " (expected 1)"); fails = fails + 1
+        }
+        if _muxfi != 1 {
+            println("FAIL T_FUNCTION_INLINE_b mux_count got " + str(_muxfi) + " (expected 1)"); fails = fails + 1
+        }
+    }
+
+    // T_FUNCTION_INLINE_NESTED — rfc_006 §5 d4 ±5% decisive closure
+    //   (2026-05-22). The exact router_d4 idiom: a function `outer` whose
+    //   body CALLS another function `inner`. A single inline pass left the
+    //   nested `inner(...)` call as an undriven identifier in the emitted
+    //   expression → ABC tied it to const-0 → grant_out const-0 →
+    //   out_valid cones collapse → d4 area undershoots. The fixpoint
+    //   driver (`_rv_inline_func_calls_fixpoint`) expands both levels.
+    //     function automatic [3:0] inner ( input [3:0] x ) ; inner = x + 4'd1 ; endfunction
+    //     function automatic [3:0] outer ( input [3:0] y ) ;
+    //       begin if ( inner(y) > 0 ) outer = 4'd2 ; else outer = 4'd1 ; end
+    //     endfunction
+    //     always @* r = outer(d);
+    //   After 2 inline passes the body becomes
+    //   `((d)+4'd1) > 0 ? 4'd2 : 4'd1` → 1 $add + 1 $gt + 1 $mux. The
+    //   crucial check: the $add (from the inlined `inner` body) is
+    //   present — a pre-fix single-pass inline left `inner(...)` undriven
+    //   and the $add never materialised.
+    total = total + 1
+    let _vfn = "module mfn ( input [ 3 : 0 ] d , output reg [ 3 : 0 ] r ) ; function automatic [ 3 : 0 ] inner ( input [ 3 : 0 ] x ) ; inner = x + 4'd1 ; endfunction function automatic [ 3 : 0 ] outer ( input [ 3 : 0 ] y ) ; begin if ( inner ( y ) > 0 ) outer = 4'd2 ; else outer = 4'd1 ; end endfunction always @ ( * ) r = outer ( d ) ; endmodule"
+    let _rfn = read_verilog(_vfn)
+    if _rfn.ok != 1 {
+        println("FAIL T_FUNCTION_INLINE_NESTED: " + _rfn.message); fails = fails + 1
+    } else {
+        let _mfn = _rfn.design.modules[0]
+        let _addfn = rtlil_count_cells_of_type(_mfn, "$add")
+        let _gtfn = rtlil_count_cells_of_type(_mfn, "$gt")
+        let _muxfn = rtlil_count_cells_of_type(_mfn, "$mux")
+        // The nested `inner(d)` must have been inlined to `(d) + 4'd1`,
+        // producing the $add. If the nested call were left undriven the
+        // $add would be absent.
+        if _addfn != 1 {
+            println("FAIL T_FUNCTION_INLINE_NESTED_a add_count got " + str(_addfn) + " (expected 1 — nested call not inlined)"); fails = fails + 1
+        }
+        if _gtfn != 1 {
+            println("FAIL T_FUNCTION_INLINE_NESTED_b gt_count got " + str(_gtfn) + " (expected 1)"); fails = fails + 1
+        }
+        if _muxfn != 1 {
+            println("FAIL T_FUNCTION_INLINE_NESTED_c mux_count got " + str(_muxfn) + " (expected 1)"); fails = fails + 1
         }
     }
 
