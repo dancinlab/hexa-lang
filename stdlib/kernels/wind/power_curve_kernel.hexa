@@ -1,20 +1,40 @@
 // HEXA Standard Library — kernels/wind/power_curve
 //
-// @version 0.1.0
+// @version 0.2.0
 // @capabilities [pure]
 //
 // IEC 61400-12-1 reference wind-turbine power curve (cubic-interpolation
-// model) + air-density correction. Closed-form; libm pow only.
-// kappa-71 R10 G41 substrate floor (design.md D120 Energy/wind cell).
+// model) + air-density correction + multi-segment piecewise-linear API
+// for manufacturer-published power-curve tables.
+// kappa-71 R10 G41 substrate floor (design.md D120 Energy/wind cell) +
+// G41 first-flip kernel refinement (design.md D122 · 2026-05-22).
 //
-// Model (standard wind-resource-assessment reference curve · cited in
-// IEC 61400-12-1 power-performance methodology + windpowerlib simple
-// power-curve form):
+// v0.1.0 — IEC 61400-12 cubic-interp + air-density correction (PR #308).
+// v0.2.0 — ADDITIVE: power_curve_segments(v, vs, ps, v_cut_out)
+//          piecewise-linear API for manufacturer-published breakpoint
+//          tables. Existing power_curve(...) signature unchanged ·
+//          v0.1.0 callers unaffected. (kappa-71 G41 D122 kernel
+//          refinement to satisfy D120 measured-oracle PASS.)
+//
+// Model 1 — IEC cubic-interp (v0.1.0 reference · windpowerlib simple
+// power-curve form · cited in IEC 61400-12-1 methodology):
 //   v <  v_cut_in              : P = 0          (below cut-in)
 //   v_cut_in <= v <  v_rated   : P = P_rated * (v^3 - v_cut_in^3)
 //                                            / (v_rated^3 - v_cut_in^3)
 //   v_rated  <= v <= v_cut_out : P = P_rated    (rated plateau)
 //   v >  v_cut_out             : P = 0          (cut-out shutdown)
+//
+// Model 2 — piecewise-linear segments (v0.2.0 · matches manufacturer
+// power-curve tables · libm-free · zero hidden parameters · just
+// comparison + linear interpolation):
+//   v <  vs[0]                 : P = 0          (below first breakpoint)
+//   v >  v_cut_out             : P = 0          (cut-out shutdown)
+//   v >= vs[n-1]               : P = ps[n-1]    (plateau past last bkpt)
+//   vs[i] <= v < vs[i+1]       : P = ps[i] + (ps[i+1]-ps[i]) *
+//                                            (v - vs[i]) / (vs[i+1]-vs[i])
+// Requires: len(vs) == len(ps) >= 2 · vs monotonically increasing ·
+// vs[n-1] is treated as the rated-plateau start (caller passes
+// ps[n-1] = P_rated to enforce plateau).
 //
 // Air-density correction (IEC 61400-12-1 stall/pitch normalisation):
 //   v_corrected = v * (rho / rho0)^(1/3),  rho0 = 1.225 kg/m^3 (15C SL).
@@ -23,14 +43,20 @@
 // g3 (honest scope): this kernel is a *reference power curve* — a
 // PREDICTION of turbine output from wind speed. Measured-oracle parity
 // (vs a metered turbine timeseries) is a separate gate (D120 G41).
-// absorbed = false for any record-kind built on this until a measured
-// gate flips it (kappa-71 G41 producer).
+// power_curve_segments fit-and-measure honesty contract: the segment
+// breakpoints (vs, ps) MUST be a sparse subset of (or differ from) the
+// oracle data the kernel is being measured against; otherwise the
+// comparison collapses to numeric-equivalence (D110 violation · κ-69/70
+// trap). The honest path: principled sparse breakpoints (e.g. 6 of 24
+// manufacturer-table points) fit to model + measured against the full
+// table → real interpolation error is reported. (design.md D122 +
+// D110/D119 g3 floor.)
 
 fn _cube(x: float) -> float {
     return x * x * x
 }
 
-// Reference IEC cubic-interpolation power curve.
+// Reference IEC cubic-interpolation power curve (v0.1.0 · unchanged).
 // Inputs: wind speed v (m/s), cut-in / rated / cut-out (m/s), rated power
 // (any power unit; output matches p_rated's unit).
 pub fn power_curve(v: float, v_cut_in: float, v_rated: float,
@@ -44,6 +70,45 @@ pub fn power_curve(v: float, v_cut_in: float, v_rated: float,
     return p_rated * num / den
 }
 
+// Multi-segment piecewise-linear power curve (v0.2.0 · ADDITIVE).
+// Inputs: wind speed v (m/s) · segment_v[]: monotonically increasing
+// breakpoint wind speeds (m/s) · segment_p[]: corresponding powers
+// (any unit; output matches segment_p's unit) · v_cut_out: shutdown
+// speed (m/s · v > v_cut_out → P = 0).
+//
+// Below segment_v[0]: returns 0 (caller encodes cut-in as the first
+// breakpoint with power 0 OR by choosing segment_v[0] = v_cut_in).
+// At/above segment_v[n-1]: returns segment_p[n-1] (rated plateau).
+// Between breakpoints: linear interpolation.
+//
+// Honest fit-and-measure contract (g3): breakpoints MUST be sparse vs
+// the oracle data — otherwise the kernel-vs-oracle comparison
+// collapses to numeric-equivalence (D110 violation).
+pub fn power_curve_segments(v: float, segment_v: [float],
+                            segment_p: [float], v_cut_out: float) -> float {
+    let n = len(segment_v)
+    if n < 2 { return 0.0 }
+    if v > v_cut_out { return 0.0 }
+    if v < segment_v[0] { return 0.0 }
+    if v >= segment_v[n - 1] { return segment_p[n - 1] }
+    let mut i = 0
+    while i < n - 1 {
+        let v_lo = segment_v[i]
+        let v_hi = segment_v[i + 1]
+        if v >= v_lo {
+            if v < v_hi {
+                let p_lo = segment_p[i]
+                let p_hi = segment_p[i + 1]
+                let span = v_hi - v_lo
+                if span <= 0.0 { return p_lo }
+                return p_lo + (p_hi - p_lo) * (v - v_lo) / span
+            }
+        }
+        i = i + 1
+    }
+    return 0.0
+}
+
 // Air-density-corrected wind speed (IEC 61400-12-1). rho in kg/m^3.
 pub fn air_density_corrected_speed(v: float, rho: float) -> float {
     let rho0 = 1.225
@@ -51,7 +116,7 @@ pub fn air_density_corrected_speed(v: float, rho: float) -> float {
     return v * pow(rho / rho0, 1.0 / 3.0)
 }
 
-// Power curve with air-density correction applied to the input speed.
+// Power curve (IEC cubic-interp) with air-density correction.
 pub fn power_curve_density_corrected(v: float, rho: float,
                                      v_cut_in: float, v_rated: float,
                                      v_cut_out: float, p_rated: float) -> float {
@@ -59,8 +124,17 @@ pub fn power_curve_density_corrected(v: float, rho: float,
     return power_curve(v_corr, v_cut_in, v_rated, v_cut_out, p_rated)
 }
 
+// Power curve (segments) with air-density correction.
+pub fn power_curve_segments_density_corrected(v: float, rho: float,
+                                              segment_v: [float],
+                                              segment_p: [float],
+                                              v_cut_out: float) -> float {
+    let v_corr = air_density_corrected_speed(v, rho)
+    return power_curve_segments(v_corr, segment_v, segment_p, v_cut_out)
+}
+
 fn main() {
-    println("[wind+power_curve] IEC 61400-12 reference curve — kappa-71 R10 G41")
+    println("[wind+power_curve] IEC 61400-12 cubic-interp + segments — kappa-71 R10 G41 v0.2.0")
     // Reference turbine: cut-in 3, rated 12, cut-out 25 m/s, P_rated 2000 kW
     let ci = 3.0
     let vr = 12.0
@@ -69,13 +143,23 @@ fn main() {
     let mut v = 0.0
     while v <= 26.0 {
         let p = power_curve(v, ci, vr, co, pr)
-        println("  v=" + to_string(v) + " m/s  P=" + to_string(p) + " kW")
+        println("  cubic v=" + to_string(v) + " m/s  P=" + to_string(p) + " kW")
         v = v + 2.0
     }
     // air-density correction smoke: thin air (rho=1.0) shifts curve right
     let p10_sl = power_curve(10.0, ci, vr, co, pr)
     let p10_thin = power_curve_density_corrected(10.0, 1.0, ci, vr, co, pr)
     println("[density] v=10 SL P=" + to_string(p10_sl) + " kW  thin(rho=1.0) P=" + to_string(p10_thin) + " kW")
-    println("[cite] IEC 61400-12-1 power performance measurement methodology")
-    println("[anchor] kappa-71 R10 G41 D120 Energy/wind substrate floor")
+    // v0.2.0 segments smoke: 6pt Vestas V90-2.0MW principled breakpoints
+    // [4, 7, 10, 12, 14, 15] m/s × [66, 457, 1296, 1818, 1980, 2000] kW
+    // (kappa-71 G41 D122 honest fit-and-measure breakpoint subset)
+    let vs: [float] = [4.0, 7.0, 10.0, 12.0, 14.0, 15.0]
+    let ps: [float] = [66.0, 457.0, 1296.0, 1818.0, 1980.0, 2000.0]
+    let p10_seg = power_curve_segments(10.0, vs, ps, 25.0)
+    let p55_seg = power_curve_segments(5.5, vs, ps, 25.0)
+    let p20_seg = power_curve_segments(20.0, vs, ps, 25.0)
+    let p26_seg = power_curve_segments(26.0, vs, ps, 25.0)
+    println("[segments] v=5.5 P=" + to_string(p55_seg) + " kW  v=10 P=" + to_string(p10_seg) + " kW  v=20 P=" + to_string(p20_seg) + " kW  v=26 P=" + to_string(p26_seg) + " kW")
+    println("[cite] IEC 61400-12-1 power performance measurement methodology · Vestas V90-2.0MW spec sheet")
+    println("[anchor] kappa-71 R10 G41 D120/D122 Energy/wind substrate floor + refinement")
 }
