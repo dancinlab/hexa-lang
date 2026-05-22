@@ -2092,6 +2092,16 @@ fn _passes_fuse_complex_cells(cells_in: [Cell]) -> [Cell] {
         consumed = consumed.push(0)
         i = i + 1
     }
+    // PERF (RFC 006 §5): pass 1 reads producer/fanout strictly from the
+    // unchanged `cells_in` (fusions are recorded separately and applied in
+    // pass 2), so the net topology is static across the whole loop. Build
+    // the net→(producer,fanout) index ONCE here and use O(1) lookups instead
+    // of the per-call O(n) `_passes_find_producer` / O(n×conns)
+    // `_passes_net_fanout` scans. This is the actual d6 hot path (techmap →
+    // _passes_fuse_complex_cells), profiled as the dominant cost after the
+    // cut_and_remap index landed. Behaviour-neutral: the index reproduces the
+    // first-match-X-then-Y producer rule and exclude-semantics exactly.
+    let fc_idx = _passes_build_net_index(cells_in)
     // pass 1 — pattern detection
     let mut k = 0
     while k < n {
@@ -2100,9 +2110,9 @@ fn _passes_fuse_complex_cells(cells_in: [Cell]) -> [Cell] {
         if c.cell_type == "sky130_fd_sc_hd__inv_1" && consumed[k] == 0 {
             let inv_a = _passes_pin_net(c, "A")
             let inv_y = _passes_pin_net(c, "Y")
-            let pi = _passes_find_producer(cells_in, inv_a)
+            let pi = _passes_idx_producer(fc_idx, inv_a)
             if pi >= 0 && consumed[pi] == 0
-                && _passes_net_fanout(cells_in, inv_a, pi) == 1 {
+                && _passes_idx_fanout(fc_idx, cells_in, inv_a, pi) == 1 {
                 let pc = cells_in[pi]
                 if pc.cell_type == "sky130_fd_sc_hd__mux2_1" {
                     let a0 = _passes_pin_net(pc, "A0")
@@ -2125,12 +2135,12 @@ fn _passes_fuse_complex_cells(cells_in: [Cell]) -> [Cell] {
                 if pc.cell_type == "sky130_fd_sc_hd__and2_1" && consumed[k] == 0 {
                     let m_a = _passes_pin_net(pc, "A")
                     let m_b = _passes_pin_net(pc, "B")
-                    let la_i = _passes_find_producer(cells_in, m_a)
-                    let lb_i = _passes_find_producer(cells_in, m_b)
+                    let la_i = _passes_idx_producer(fc_idx,m_a)
+                    let lb_i = _passes_idx_producer(fc_idx,m_b)
                     if la_i >= 0 && lb_i >= 0 && la_i != lb_i
                         && consumed[la_i] == 0 && consumed[lb_i] == 0
-                        && _passes_net_fanout(cells_in, m_a, la_i) == 1
-                        && _passes_net_fanout(cells_in, m_b, lb_i) == 1 {
+                        && _passes_idx_fanout(fc_idx, cells_in,m_a, la_i) == 1
+                        && _passes_idx_fanout(fc_idx, cells_in,m_b, lb_i) == 1 {
                         let la = cells_in[la_i]
                         let lb = cells_in[lb_i]
                         if la.cell_type == "sky130_fd_sc_hd__and2_1"
@@ -2164,31 +2174,31 @@ fn _passes_fuse_complex_cells(cells_in: [Cell]) -> [Cell] {
                     let or_a = _passes_pin_net(pc, "A")
                     let or_b = _passes_pin_net(pc, "B")
                     // try (and-chain on A, direct on B), then swap.
-                    let mut chain_i = _passes_find_producer(cells_in, or_a)
+                    let mut chain_i = _passes_idx_producer(fc_idx,or_a)
                     let mut b1_net  = or_b
                     let mut chain_net = or_a
                     if chain_i < 0 || cells_in[chain_i].cell_type != "sky130_fd_sc_hd__and2_1" {
-                        chain_i = _passes_find_producer(cells_in, or_b)
+                        chain_i = _passes_idx_producer(fc_idx,or_b)
                         b1_net  = or_a
                         chain_net = or_b
                     }
                     if chain_i >= 0 && consumed[chain_i] == 0
-                        && _passes_net_fanout(cells_in, chain_net, chain_i) == 1
+                        && _passes_idx_fanout(fc_idx, cells_in,chain_net, chain_i) == 1
                         && cells_in[chain_i].cell_type == "sky130_fd_sc_hd__and2_1" {
                         let and1 = cells_in[chain_i]
                         let and1_a = _passes_pin_net(and1, "A")
                         let and1_b = _passes_pin_net(and1, "B")
                         // one of and1's inputs must come from another and2_1.
-                        let mut inner_i = _passes_find_producer(cells_in, and1_a)
+                        let mut inner_i = _passes_idx_producer(fc_idx,and1_a)
                         let mut a3_net  = and1_b
                         let mut inner_out = and1_a
                         if inner_i < 0 || cells_in[inner_i].cell_type != "sky130_fd_sc_hd__and2_1" {
-                            inner_i = _passes_find_producer(cells_in, and1_b)
+                            inner_i = _passes_idx_producer(fc_idx,and1_b)
                             a3_net  = and1_a
                             inner_out = and1_b
                         }
                         if inner_i >= 0 && consumed[inner_i] == 0
-                            && _passes_net_fanout(cells_in, inner_out, inner_i) == 1
+                            && _passes_idx_fanout(fc_idx, cells_in,inner_out, inner_i) == 1
                             && cells_in[inner_i].cell_type == "sky130_fd_sc_hd__and2_1" {
                             let and0 = cells_in[inner_i]
                             let a1n = _passes_pin_net(and0, "A")
@@ -2220,12 +2230,12 @@ fn _passes_fuse_complex_cells(cells_in: [Cell]) -> [Cell] {
                     && consumed[k] == 0 {
                     let mid_a = _passes_pin_net(pc, "A")
                     let mid_b = _passes_pin_net(pc, "B")
-                    let la_i = _passes_find_producer(cells_in, mid_a)
-                    let lb_i = _passes_find_producer(cells_in, mid_b)
+                    let la_i = _passes_idx_producer(fc_idx,mid_a)
+                    let lb_i = _passes_idx_producer(fc_idx,mid_b)
                     if la_i >= 0 && lb_i >= 0 && la_i != lb_i
                         && consumed[la_i] == 0 && consumed[lb_i] == 0
-                        && _passes_net_fanout(cells_in, mid_a, la_i) == 1
-                        && _passes_net_fanout(cells_in, mid_b, lb_i) == 1 {
+                        && _passes_idx_fanout(fc_idx, cells_in,mid_a, la_i) == 1
+                        && _passes_idx_fanout(fc_idx, cells_in,mid_b, lb_i) == 1 {
                         let la = cells_in[la_i]
                         let lb = cells_in[lb_i]
                         // leaf type must be opposite of mid
@@ -2269,12 +2279,12 @@ fn _passes_fuse_complex_cells(cells_in: [Cell]) -> [Cell] {
             let top_a1 = _passes_pin_net(c, "A1")
             let top_s  = _passes_pin_net(c, "S")
             let top_x  = _passes_pin_net(c, "X")
-            let la_i = _passes_find_producer(cells_in, top_a0)
-            let lb_i = _passes_find_producer(cells_in, top_a1)
+            let la_i = _passes_idx_producer(fc_idx,top_a0)
+            let lb_i = _passes_idx_producer(fc_idx,top_a1)
             if la_i >= 0 && lb_i >= 0 && la_i != lb_i
                 && consumed[la_i] == 0 && consumed[lb_i] == 0
-                && _passes_net_fanout(cells_in, top_a0, la_i) == 1
-                && _passes_net_fanout(cells_in, top_a1, lb_i) == 1 {
+                && _passes_idx_fanout(fc_idx, cells_in,top_a0, la_i) == 1
+                && _passes_idx_fanout(fc_idx, cells_in,top_a1, lb_i) == 1 {
                 let la = cells_in[la_i]
                 let lb = cells_in[lb_i]
                 if la.cell_type == "sky130_fd_sc_hd__mux2_1"
