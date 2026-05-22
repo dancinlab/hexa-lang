@@ -285,7 +285,7 @@ target. ~6 engineer-months total.
 
 - `LATTICE_POLICY.md` §1.2 — taxonomy
 - `SPEC.md`, `SPEC.yaml` — language spec
-- `PLAN.md` — phase / goal definitions (G1-G6)
+- `ROADMAP.md` + `ROADMAP.log.md` — phase plan / goal definitions (G1-G6)
 - `compiler/` — frontend + middle + backend stages
 - `tests/m0/`, `verify/wilson-build/` — current test infrastructure
 - `self/forge/PARADIGM_C_RESEARCH.md`, `inbox/rfc_drafts_2026_05_12/`

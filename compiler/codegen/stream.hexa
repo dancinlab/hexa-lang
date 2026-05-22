@@ -1,6 +1,6 @@
 // compiler/codegen/stream.hexa — F2: streaming per-function codegen+emit
 //
-// Authoritative design: PLAN-stage3-footprint.md F2.
+// Authoritative design: COMPILER.md "Stage-3 footprint" F2.
 //
 // The legacy back-half runs three sequential whole-module passes —
 // lower_hir (→ MModule), codegen (→ LModule), emit_asm (→ asm text) —
@@ -42,7 +42,7 @@ pub fn codegen_emit_streaming(hmodule: HModule, target: string) -> string {
     // F4 — fragments accumulate in an array, joined once at the end.
     // `out = out + frag` re-copies the whole accumulator every function,
     // i.e. O(N·T) transient bytes on an N-function compile (the legacy
-    // emit_asm has the same shape — PLAN-stage3-footprint.md Finding §2).
+    // emit_asm has the same shape — COMPILER.log.md "F1–F4 step log").
     // `parts.push` is O(1) amortised; `parts.join("")` is a single
     // length-summed malloc + memcpy (hexa_str_join) — O(T) total, and
     // byte-identical to the left-fold of `+`.
@@ -58,7 +58,7 @@ pub fn codegen_emit_streaming(hmodule: HModule, target: string) -> string {
     }
     parts.push(_text_section_directive(target) + "\n")
 
-    // F6 option A — A5 wiring (PLAN-stage3-footprint-F6-optA.md).
+    // F6 option A — A5 wiring (COMPILER.log.md "F6 — per-function IR reclaim").
     // Per-iteration PUSH/POP reclaims mfunc/lfunc; per-call region
     // toggles route st/frag escapes to malloc.
     //

@@ -539,7 +539,7 @@ fn _emit_func(target: string, f: LFunc) -> string {
 pub fn emit_asm(module: LModule) -> string {
     let target = module.target
 
-    // F4 (PLAN-stage3-footprint.md) — fragments accumulate in an array,
+    // F4 (COMPILER.md "Stage-3 footprint") — fragments accumulate in an array,
     // joined once. `out = out + frag` re-copied the whole accumulator per
     // function: O(N·T) transient bytes on an N-function compile. `parts`
     // + `join("")` is O(T) and byte-identical to the left-fold of `+`.

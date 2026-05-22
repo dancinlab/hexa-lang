@@ -359,188 +359,193 @@ optimizer tax.
 These are interim — they speed the C path that the 정공법 (lever `I`)
 ultimately removes.
 
+## Interpreter retirement (R-series)
+
+GOAL ② SSOT: `compiler/PLAN.md` (cycle log) + `GOAL.md` ②. The native
+`compiler/` toolchain must become good enough to **retire the
+interpreter** (`hexa_real` / `self/hexa_full.hexa`); the interpreter
+stays as fallback until native corpus coverage equals it.
+
+The hard parts already work — the native front-end and the arm64
+codegen (S1–S4 + builtin-symbol map + int/bool ret-box) emit correct
+`.s`. "Retire interp" = replace `hexa run X.hexa` (interpret) with
+native compile + run; compilation works, the open question is whether
+a compiled binary runs *correctly*. Each failure is a missing/incorrect
+**builtin lowering** in arm64 codegen — bounded one-line-class fixes,
+not architectural blockers. The footprint, F6-A and x86_64-codegen ABI
+work (below) are **independent of interp retirement** — small-program
+native compile is cheap and is all interp-retirement needs.
+
+Phased roadmap (R0–R6 closed; dated detail in `COMPILER.log.md`):
+
+| phase | deliverable | status |
+|-------|-------------|--------|
+| R0 | native compile→link→run end-to-end, no crash | ✅ arm64/Mac |
+| R1 | a verifiable program runs correctly (`exit(42)`⇒`$?`=42) | ✅ aprime_cc arm64 |
+| R2 | codegen-correctness audit driven by real programs | ✅ root-cause fixes landed |
+| R3 | compile+run a representative corpus natively; diff vs interp | ✅ nine codegen-correctness classes; `t_batch22` 31/31 byte-identical |
+| R4 | `hexa run` → native compile+run, interp kept as fallback | ✅ `bin/hexa-run-native` wrapper |
+| R5 | broader corpus coverage; close DIFFs cluster-by-cluster | 🔄 aprime_cc-direct ~45%, hexa-build ~63% full-corpus sweep |
+| R6 | three-tier wrapper exposing R3 aprime_cc-direct as opt-in | ✅ `HEXA_APRIME_CC=<path>` opt-in |
+| R7 | delete the interp once aprime_cc-direct coverage ≥ interp | ⬜ gated on R5 cluster closure |
+
+Each phase is incremental and default-safe (interp fallback stays until
+R5; codegen fixes are additive symbol/ABI corrections that do not
+regress working paths). The largest open blocker is the atlas-runtime
+aliasing cluster (struct-array-grow shallow-clone — see `COMPILER.log.md`
+"atlas_* DIFF diagnostic"). Build recipe for the native arm64 compiler
+is recorded in `COMPILER.log.md` ("Build recipe").
+
+## Stage-3 codegen — HexaVal-ABI + footprint
+
+The stage-3 verdict (self-host fixed point) had two halves: codegen
+**correctness** (Path A) and self-compile **footprint** (the streaming
+work). Decision authority: `COMPILE-ONLY.log.tape` `@D d_stage3_abi_path`.
+
+### Path A′ — memory-resident HexaVal codegen (arm64-first)
+
+`sizeof(HexaVal)=16` (`{HexaTag tag(4); union{i64/f64/ptr…}(8)}`,
+8-aligned, non-HFA). AAPCS64 ⇒ HexaVal is passed/returned in a
+**register pair** (arg0→x0:x1 … arg3→x6:x7, then 16B stack; returned in
+x0:x1). The chosen tactic **A′** models every SSA value as a **16B frame
+slot** and threads slot addresses, not register-resident values — this
+avoids a pair-aware register allocator and mirrors the proven
+`self/codegen_c2.hexa` value model. Slower (memory-resident) but
+correct; optimise post-bootstrap.
+
+- low 8B (slot+0, xLo): `tag` (4B) + 4B pad
+- high 8B (slot+8, xHi): the union payload (i64 / f64 bits / pointer)
+- TAG values (runtime.h): INT=0 FLOAT=1 BOOL=2 STR=3 VOID=4 ARRAY=5
+  MAP=6 FN=7 CHAR=8 CLOSURE=9 VALSTRUCT=10.
+
+Sub-units S1–S5 (S1 value/slot model · S2 call ABI + literals · S3
+value-op routing · S4 residual builtins + `_main` synthesis = THE
+verification gate · S5 mirror to x86_64_linux + thumbv7em). S1–S3 have
+no honest per-commit verification (assemble ≠ correct for a value-model
+change) — they are explicitly-labelled **structural checkpoints** of one
+entangled unit whose sole correctness gate is S4's byte-diff. Tree-safety
+invariant: every commit must still `clang -c` cleanly so S4 is always
+reachable. S4 status + the `_main`-entry synthesis detail are in
+`COMPILER.log.md`.
+
+### Footprint — streaming per-function compilation (F1–F6)
+
+`compiler/main.hexa` self-compiles a ~25,932-line flat-spliced
+super-module; the back-half materialises **four whole-program carriers**
+(`AST → HModule → MModule → LModule → asm_text`) all resident at peak,
+leaking to 10–16 GB RSS. Each carrier is dead once the next phase
+consumes it, but nothing frees it (the Val arena reclaims only scoped
+transients). **Streaming** fuses the four per-function loops (`_lower_item`
+→ `_lower_fn` → `_arm64_lower_func` → `_emit_func`) into one, so only one
+function's HIR/MIR/LIR is live at a time:
+
+```
+for each item in module.items:
+    arena_scope_push()
+    hitem = _lower_item(it, def, atlas, module_sc)
+    if hitem is fn:
+        mfunc = _lower_fn(hitem)
+        st    = _collect_strs_from_fn(st, mfunc)   # strtab grows incrementally
+        lfunc = _arm64_lower_func(mfunc, st, modhash)
+        asm_text += _emit_func(target, lfunc)      # the ONLY escaping value
+    arena_scope_heapify(asm_text); arena_scope_pop()
+```
+
+Caveats handled in the refactor: strtab made incremental
+(`_arm_strtab_collect_fn`), globals kept in a light pre-pass, rodata/bss
+emitted after the `.text` loop, the front half (`lex/parse/resolve/bind/
+types` + `lower`'s DefId pre-pass) stays whole-program so the AST is
+resident for the whole loop.
+
+| step | deliverable | status |
+|------|-------------|--------|
+| prereq | heapify TAG_STR O(blocks)→O(1) envelope (`f4b597a7`) | ✅ |
+| F1 | `_arm_strtab_collect_fn` per-MFunc interning (`f39a3bd9`) | ✅ |
+| F2 | `codegen_emit_streaming` fused per-fn loop (`2002c023`) | ✅ |
+| F3 | `--stream` / `HEXA_STREAM=1` gate in `compiler/main.hexa` (`8a40b521`) | ✅ |
+| F4 | array-of-fragments + `parts.join("")` — kills O(N·T) accumulator (`d39853ef`) | ✅ |
+| F5 | streaming default once byte-diff verified | ⬜ needs the stage-1 build |
+| F6 | per-function IR reclaim (architectural) | ⛔ structurally blocked — see below |
+
+**F4 was re-scoped** (Finding 2026-05-16): a loop-body arena scope
+reclaims only per-iteration string scratch — it cannot free the
+per-function MFunc/LFunc, which are fn return values heapified to the
+malloc heap by `__hexa_fn_arena_return`. Streaming bounds the *logical*
+live set but not native RSS without a reclaim mechanism. The O(N·T)
+`out = out + frag` accumulator is a separate, cheaply-fixable sink in
+both the streaming and legacy `emit_asm` paths — F4 became its removal.
+
+Verification rule: streaming is a **pure refactor** — `emit asm` with
+and without `--stream` must be **byte-identical** `.s`; peak-RSS delta
+target is < 4 GB for the stage-1 self-compile (down from 10–16 GB). The
+dated F-step log + the legacy 30 GB / 3 min / exit-0 verdict-ready
+fallback are in `COMPILER.log.md`.
+
+### F6 — per-function IR reclaim (decided, then structurally blocked)
+
+F6 is the only remaining lever that actually moves native RSS. The
+gated question: *how should the streaming compiler reclaim a function's
+MFunc/LFunc once emitted, given hexa-native has no GC?*
+
+Cross-cutting hazard — **aliasing**: per-function IR shares string
+storage with longer-lived structures (`st.keys ← MFunc operand strings`,
+`LFunc ← st.labels`, `MFunc ← HItem/hmodule strings`, `MFunc.name ←
+HItem.name`). **P0 — escape-edge discipline** is the prerequisite for
+any reclaim: every reference *from* a longer-lived structure *into*
+per-function IR must become an owned forced copy (`s.substring(0,len(s))`
+always allocates — residency-independent). The audit closed five
+string-leaf edges (P0a–P0d, P0c-2) with no arbitrary substructure
+sharing (P0e clean).
+
+Three options were weighed: **A** region-promote on return
+(escape-aware heapify — principled value-model change, high blast
+radius), **B** re-enable the array/struct freelist (disabled because of
+the shallow-clone aliasing defect — same hazard, repo-wide), **C** a
+targeted explicit-drop intrinsic (`hexa_val_free_tree`) for the
+streaming loop. Decision history:
+
+- **Decided P0-then-C** (2026-05-16, user "완성도 기준으로 선택해
+  진행") — C is a bounded, fully-enumerated, per-step byte-diff-verifiable
+  sequence; A is an open-ended value-model rewrite. P0a–P0d/c-2 forced
+  copies all landed.
+- **Pivoted to option A** (2026-05-16, user "F6 옵션 A — substantial
+  별도 effort") — C *empirically failed*: runtime-level sharing
+  (`hexa_str_concat` empty-elision, `struct_pack_map` inner-aliasing) is
+  wider than the static string-leaf audit caught, and the resolve pass
+  rejects new builtins (HX2001). A trades blast radius for safety.
+- **A then structurally blocked** (2026-05-16, gdb-confirmed) — in this
+  value model a hexa `struct` lowers to a **TAG_MAP**, and
+  `hexa_map_set` always builds its table via `hmap_alloc(cap)` =
+  `from_arena=0` = **malloc**, never arena. The dominant IR
+  (LowerCtx/MFunc/LFunc) is map-backed, so a per-iteration arena POP has
+  nothing to reclaim. Making F6-A work needs an arena-resident map
+  subsystem (hand-rolled `hexa_map_set` against an arena table) — a
+  multi-week value-model rewrite. **F6-A is the wrong lever for this
+  value model.**
+
+Net stage-3 footprint conclusion — three characterized paths:
+
+| path | status | remaining work |
+|------|--------|----------------|
+| F6-A region reclaim | structurally blocked | hand-rolled arena-map subsystem (multi-week value-model) |
+| ARENA=1 heapify perf | hotspot pinpointed (`hexa_val_heapify` = 92.86% of ARENA=1 compile time) | per-node arena-free seal (multi-day, ABI-sensitive) |
+| x86_64 verdict ABI | diagnosed | codegen bare-name→runtime-symbol alignment (multi-day) |
+
+The *productive* lever is **ARENA=1 perf**: the existing per-fn arena
+scope already bounds the self-compile RSS 30 GB → ~12 GB (2.5×) — it
+just costs ≫14× wall-time because `hexa_val_heapify` deep-copies returned
+trees on every fn return. `f4b597a7` (O(1) str-envelope) was step 1; the
+remaining heapify-cost reductions are bounded engineering, not a
+value-model rewrite. All three remaining paths are deliberate
+non-loop-tick engineering. A1–A5 region infra stays landed as dormant,
+double-gated (`HEXA_STREAM_RECLAIM=1`). Dated F6 implementation status,
+the gdb bug history, and the `hexa_val_heapify` gprof profile are in
+`COMPILER.log.md`.
+
 ## Log
 
-- 2026-05-20 — initial brainstorm captured (10 levers, 3 waves).
-- 2026-05-20 — lever `0` (profiling) DONE — see "Lever 0 — measured
-  profile" above. clang is 80% of build wall; `runtime.c` recompile
-  alone is 53%. Re-ranked: W1 (`runtime.o` cache, ~2x) + W2 (`-O0` dev
-  flag, stacked ~3.8x) are the measured top quick wins; lever `A`
-  (`-O2`) was found already shipped.
-- 2026-05-20 — 정공법 recorded. The orthodox path is not optimizing the
-  C path — it is removing it: clang is an external dependency and the
-  measured 80% of build wall. Lever `I` promoted to keystone; W1/W2/F
-  demoted to interim C-path relief.
-- 2026-05-20 — exhaustive survey: the 정공법 is ~70% built. The native
-  codegen already exists as `compiler/` (85K LoC, binary `aprime_cc`)
-  with a full HIR/MIR/LIR pipeline that self-compiles its hardest
-  modules. No new RFC needed — the staged sequence is `compiler/PLAN.md`
-  #18 (S1->S4). The earlier "RFC-scale, build from scratch" estimate was
-  falsified.
-- 2026-05-20 — renamed `ROI.md` -> `COMPILER.md`; the doc is now a
-  compiler build-speed + native-codegen analysis, not a generic ROI
-  brainstorm.
-- 2026-05-20 — naming policy recorded (user directive "v2 이런것도 안됨,
-  전부 깔끔하게"). Bootstrap vestiges (`_v2` / `_c2` / `aprime` / `s4`
-  stage-numbers) are abandoned: new files use clean names immediately;
-  existing vestige files are renamed in a separate atomic worktree cycle
-  (see "Naming — drop the bootstrap vestiges"). Not folded into S1.
-- 2026-05-20 — S1-step-1 DONE (commit `60946b8d`). Per-phase codegen
-  instrumentation landed (`HEXA_CG_PROFILE=1`, zero behavior change when
-  off). Baseline on the `fn big()` N-stmt probe: `lower_hir` (HIR->MIR)
-  is THE super-linear phase — 15/63/372 ms at N=100/200/400 (~5.9x per
-  N-doubling = O(N^2)+); `codegen` (6/10/29) and `emit` (1/1/4) are
-  near-linear. Root cause = `_lower_hexpr` returning `LowerExprResult{
-  ctx: LowerCtx}` -> deep-heapify of the growing `LowerCtx.blocks`.
-  S1-step-2 = hoist those accumulators to module scope.
-- 2026-05-20 — work moved to a dedicated worktree branch
-  `compiler-native-codegen`. The shared main checkout branch-flipped 4x
-  in one session, scattering commits; this doc + its follow-on now live
-  on one stable branch.
-- 2026-05-20 — S2..S7 prep survey done (read-only, in parallel with the
-  S1-step-2 sub-agent). Each step now has a dispatch-ready sub-plan with
-  file references — see "Step detail — S2..S7". Key finding: S7 (own
-  assembler) is already scaffolded — `compiler/main.hexa` marks `as`/`ld`
-  as "L1 keepers, replaced when self-as lands"; S5 is small (the native
-  compiler already does `--emit=exec`, only `cmd_build` wiring is missing).
-- 2026-05-20 — **S1 DONE.** step-2 (campaign-branch commit `ce4c9706`)
-  hoisted `_lower_hexpr`'s `LowerCtx` accumulators to module scope,
-  killing the O(N²) deep-copy. Measured: `lower_hir` at N=400 went
-  1527 ms -> 9 ms (~170x); the super-linear curve is gone. byte-eq 7/7
-  fixtures PASS — verified correctness-preserving. The dominant self-host
-  blocker is closed. Next: S2 (full-closure codegen 완주).
-- 2026-05-20 — **S2 PASS** (campaign-branch commit `a94ed6e3`). The full
-  `compiler/main.hexa` closure (24k lines) codegens to completion through
-  `aprime_cc` in ~94s — pre-S1 it timed out at the 9-min cap. `.s` =
-  10 MB / 252k lines, 14,067 fn labels, well-formed; codegen diagnostics
-  clean (0 errors). S1's fix confirmed effective at full scale
-  (lower_hir 971ms). New long pole = codegen MIR->LIR (7.4s, ~79%) but
-  not a blocker. Next: S3 (assemble + link self-host fixpoint).
-- 2026-05-20 — **S5 wiring DONE** (campaign-branch commit `30dc7a77`,
-  done in parallel with S3). `cmd_build` gained a `HEXA_BACKEND=native`
-  selector + `resolve_native_cc()` — purely additive, env-gated off, C
-  path byte-identical when unset; smoke-verified native build of a
-  trivial program. Finding that feeds S7: `aprime_cc --emit=exec` does
-  not self-link, so the native path still delegates assemble+link to
-  clang — confirming the native-linker work S7 must do.
-- 2026-05-20 — **S3 dispatch hit a rate-limit** (Anthropic account quota,
-  reset ~07:50 KST). The sub-agent's worktree cherry-picked S1 prereq
-  successfully but never reached the fixpoint measurement; no S3 commit
-  landed. Will re-dispatch after the reset.
-- 2026-05-20 — deeper S6/S7 prep done read-only (rate-limit-safe).
-  Corrections: S6's basic passes (const_fold/dce/inline) are ALREADY
-  wired into `--opt=0..3`, not stubs — S6's real gap is the HEXA-NATIVE-
-  ONLY G-ladder. S7's `tool/hexa_link.hexa` is a clang wrapper per its
-  own header, NOT a from-scratch linker — S7 needs a new native object-
-  file linker.
-- 2026-05-20 — **🛸 S3 PROVEN — SELF-HOST FIXPOINT.** The rate-limited
-  S3 sub-agent's `/tmp` artifacts survived; running the byte-diff that
-  the agent could not complete shows gen1's and gen2's emitted `.s` of
-  the full `compiler/main.hexa` closure are **byte-identical** —
-  10,094,662 B, md5 `29426b801cb072b2861bd608e884b20b`. gen1 = built via
-  `hexa_v2` -> C -> clang; gen2 = assembled from gen1's `.s` + a 3-fn
-  shim (`gen2_shim.c`, asm-path naming bridge for `sha256_hex` /
-  `list_dir` / `mono_ns`). The compiler reproduces its own emitted code.
-  hexa-lang's stated north-star "②인터프리터 폐기·self-host" reaches its
-  first measured proof point. Campaign branch state: S1 ✅ + S2 ✅ + S5
-  ✅ (wiring) + S3 ✅. Next: S4 (drop hexa_v2 from build_aprime.sh
-  stage 2 — now concretely doable).
-- 2026-05-20 — **S4 wiring DONE.** New `tool/build_hexac.hexa` (hexa-
-  native build orchestrator — NOT a `.sh`, honoring hexa-first per a
-  PreToolUse warn). Encodes the gen2 recipe verified by S3: flatten ->
-  `aprime_cc --emit=asm` -> 3-fn naming shim -> clang assemble+link ->
-  Mach-O verify. The compiler's own build no longer goes through
-  hexa_v2. parse-gate PASS. Verification build (actual run +
-  byte-diff vs `tool/build_aprime.sh` output) deferred to post-rate-
-  limit-reset. clang remains as assembler+linker at stage 4 — that is
-  the LAST external toolchain dependency for the compiler's own build,
-  scheduled for elimination by S7 (own assembler + `hexa_ld`).
-- 2026-05-20 — **S7 RFC 063 DRAFTED.** `inbox/rfc_drafts_2026_05_12/
-  rfc_063_s7_native_assembler_linker.md` — 4-phase design (P0 Mach-O
-  arm64 object emitter `compiler/emit/macho_arm64.hexa` / P1 native
-  Mach-O linker `tool/hexa_ld.hexa` / P2 ELF x86_64 / P3 flip
-  default), each with a falsifier. Total estimate ~12-18 cycles —
-  the campaign goal "완전한 hexa-native" is multi-week, this session
-  lands the design contract + S1-S5 wiring. Honest scope: RFC drafted
-  + scaffold plan, not implementation. Implementation across future
-  S7-{P0,P1,P2,P3} sub-agent cycles.
-- 2026-05-20 — **S7 P0 + P1 scaffolds LANDED.** Two new hexa-native
-  files, parse-gate PASS, NOT yet imported into `compiler/main.hexa`
-  (free-standing scaffolds awaiting their implementation sub-agents):
-  - `compiler/emit/macho_arm64.hexa` — P0 LIR -> Mach-O arm64 `.o`
-    emitter. Mach-O constants + relocation types + `MachoArm64Obj`
-    / `Arm64Reloc` / `MachoSymbol` structs + entry stubs +
-    encoding-table checklist + cross-references to
-    `compiler/codegen/arm64_darwin.hexa` and `compiler/emit/asm
-    .hexa` (the .s emitter to mirror).
-  - `tool/hexa_ld.hexa` — P1 native Mach-O linker. CLI arg parser
-    + `ParsedObj` / `LinkSym` / `ParsedReloc` structs + link entry
-    stub + symbol-resolution + relocation-fix-up checklists.
-    Explicitly NOT a rename of `tool/hexa_link.hexa` (which stays
-    as the C-path clang wrapper until S7 P3 retires it).
-  Future P0/P1 sub-agents fill the encoding tables + Mach-O
-  serialization in these scaffolds, then run the F-P0-OBJEQ /
-  F-P1-RUNEQ corpora.
-
-- 2026-05-20 — **🛸 S7 P0 CLOSED · corpus 4/4 byte-eq vs clang.**
-  `compiler/emit/macho_arm64.hexa` 의 7 cycles (header serialize → LIR
-  walker + code byte emit → nlist_64 + strtab → relocation_info → mem
-  ops + N_UNDF → STP/LDP pre/post-index + MOV-with-SP alias fix →
-  `compiler/main.hexa --backend=native` 와이어링 + F-P0-OBJEQ FULL
-  CORPUS PASS). 실제 `aprime_cc --emit=obj --backend=native` 가
-  trivial/if/while/fib.hexa 의 `__text` 를 `clang -c -arch arm64` 의
-  `__text` 와 byte-for-byte 동일하게 emit. otool · nm · otool -rV
-  모두 oracle 통과. F-P0-OBJEQ closure gate 의 정의 충족.
-
-- 2026-05-20 — **🛸 S7 P1 CLOSED · F-P1-RUNEQ static-link PASS.**
-  `tool/hexa_ld.hexa` 의 8 cycles (parser .o → ParsedObj round-trip →
-  MH_EXECUTE skeleton → __text payload + LC_MAIN entryoff → LC_SYMTAB
-  + __LINKEDIT → codesign post-link → MH_NOUNDEFS + LC_BUILD_VERSION +
-  cycle 5 false-positive fix → LC_DYLD_CHAINED_FIXUPS + EXPORTS_TRIE
-  + UUID + SOURCE_VERSION + MH_DYLDLINK → first runnable exec → F-P1-
-  RUNEQ static-link with synthetic runtime stub). real corpus
-  `trivial.hexa` (=`fn main(){exit(42)}`) 가 OUR hexa-native pipeline
-  (aprime_cc + hexa_ld) 끝까지 가서 만든 Mach-O exec 가 macOS Sonoma
-  에서 launch + exit(42).
-
-- 2026-05-20 — **🛸 S7 P2 cycles 1-3 (Linux ELF x86_64).** `compiler/
-  emit/elf_x86_64.hexa` 신규. 3 cycles: ELF64 header + 5 section
-  headers scaffold → x86_64 instruction encoding minimum subset (MOV
-  r32 imm32 / SYSCALL / RET, 4 rules) → ELF executable (PT_LOAD) +
-  ubu-2 원격 launch test (REMOTE_RC=42). cross-platform cross-arch
-  proof: 단일 hexa-lang 코드베이스가 macOS arm64 (P0+P1) + Linux
-  x86_64 (P2) 둘 다의 실행 가능 binary 를 외부 toolchain 0건
-  (codesign macOS-only) 으로 생산.
-
-  RFC 063 phasing matrix (2026-05-20 measured):
-
-  | Phase | 상태 | Falsifier |
-  |-------|------|-----------|
-  | P0 Mach-O arm64 obj emitter   | 🛸 CLOSED | F-P0-OBJEQ corpus 4/4 byte-eq |
-  | P1 hexa_ld Mach-O static-link | 🛸 CLOSED | F-P1-RUNEQ trivial.hexa exit 42 |
-  | P2 ELF x86_64 cycles 1-3      | ✅ 진행 중 | F-P2-LINUX-EXIT exit 42 on ubu-2 |
-  | P2 cycle 4+ (walker + corpus) | pending   | F-P2-RUNEQ corpus |
-  | P3 flip default               | pending   | F-P3-ZERO-EXTERN dtruss |
-
-  잔여 작업 (cycles 19-N): P2 cycle 4 (x86_64 LIR walker + multi-obj
-  static-link + corpus RUNEQ on ubu-2) + P3 (HEXA_BACKEND=native
-  default flip + dtruss verification).
-
-- 2026-05-20 — **🛸🛸🛸 RFC 063 CAMPAIGN COMPLETE · P0+P1+P2+P3 ALL
-  CLOSED.** 21 cycles 측정 증명 campaign 종료. **외부 toolchain
-  (clang, as, ld) fork 0건** path 가 작동함을 측정:
-
-  - F-P0-OBJEQ corpus 4/4 byte-eq vs clang (trivial/if/while/fib)
-  - F-P1-RUNEQ static-link trivial.hexa → exit 42 on macOS Sonoma
-  - F-P2-LINUX-EXIT + F-P2-MULTIOBJ-RUNEQ on ubu-2 (Linux x86_64) → exit 42
-  - F-P3-ZERO-EXTERN-OBJ: stripped PATH (/usr/bin:/bin only) 에서
-    aprime_cc --emit=obj --backend=native 가 정상 작동
-  - F-P3-FULL-RUNEQ: 전체 path `.hexa → aprime_cc → .o → hexa_ld →
-    exec → exit 42` 가 외부 clang/as/ld fork 0건 (codesign 만 OS
-    Gatekeeper exception 명시)
-
-  하지만 정직히: production-grade compiler self-build via native
-  path + HEXA_BACKEND=native default flip 은 follow-up cycles 의
-  baton (더 많은 LIR ops, self/runtime.c hexa port, cmd_build 변경
-  + cc --regen). 본 closure 는 RFC 063 의 falsifier contract 충족
-  측정 — path working proof.
+Dated cycle history moved to [`COMPILER.log.md`](./COMPILER.log.md)
+(chronological spec/log split — `COMPILER.md` carries the current
+compiler analysis + staged sequence, `COMPILER.log.md` carries the
+append-only cycle log + the absorbed stage-3 / interp-retirement
+decision history).

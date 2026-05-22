@@ -300,3 +300,68 @@ Cross-repo deps (Tier 5 #41 미리 사용):
 - **engine impl**: `tool/roadmap_engine.hexa` + 15 modules
 - **bounds impl**: `tool/roadmap_t_star.hexa` (Thermal) · `tool/roadmap_span_dag.hexa` (Span) · `tool/roadmap_info_account.hexa` (Info) · `tool/roadmap_critical_path.hexa` · `tool/roadmap_phase_gate.hexa`
 - **viz**: `tool/viz_dashboard.hexa` → GitHub Pages ([`docs/_site/index.html`](./docs/_site/index.html))
+
+---
+
+## Phase 1–16 development plan (legacy — language v0.1 → v4.0)
+
+> 의식 프로그래밍 언어 완성 트랙. GOAL 한 문장의 SSOT 는 `GOAL.md`
+> (3 north-star: flame+forge NN 스택 · 인터프리터 폐기·self-host ·
+> comb n=6 fabric). Phase 1–16 의 95/95 항목별 완료 현황·성장 그래프·
+> Goal G1–G6 달성 기록은 `ROADMAP.log.md` 가 SSOT.
+
+Phase 1–16 (v0.2 → v4.0) — bytecode VM · Cranelift JIT · self-hosting
+compiler · ESP32/FPGA/WGSL codegen · std 12 모듈 · SAT solver +
+consciousness DSL · hexa-lang.org + The HEXA Book — 의 development plan.
+달성 현황·dated 진척 detail 은 `ROADMAP.log.md` 참조.
+
+### Phase 17 — Atlas Layer 4: full-corpus AOT audit (active)
+
+Phase 1–16 외 follow-up. atlas self-verification 세션(2026-05-15)에서
+차단 확인: interpreter 는 7,398-노드 rodata
+(`compiler/atlas/embedded.gen.hexa`, 4.9 MB 단일 struct-literal)에 대해
+hang(>10 min) — `compiler/atlas/audit_main.hexa:17-28` 문서화. AOT
+경로로 우회하려면 3개 compiler-internal 차단을 해결해야 함.
+
+| # | 작업 | 차단 원인 | 후보 해결책 |
+|---|------|----------|-------------|
+| 17-1 | flat module_loader streaming | `[flat] module_loader` 가 7,398-원소 단일 struct-literal 입력 시 4 GB RSS cap 초과; cap 해제하면 3 분+ hang | (a) loader 를 array-element 단위로 stream, 또는 (b) `embedded.gen.hexa` 를 ≤100-노드 단위로 shard 분할 |
+| 17-2 | cross-module `pub let` rodata emit | single-file codegen 이 `use`d 모듈의 `pub let X = [...]` 본체를 emit 안 함 — `extern HexaVal X(...)` 전방선언만 발산하여 clang link 실패 | (a) 정적으로 도달 가능한 `pub let` 본체를 consumer C 로 emit, 또는 (b) per-module `.o` → link 경로 추가 |
+| 17-3 | `fn main(args)` ↔ `u_main()` arity | `fn main(args: array)` 선언 시 `hexa_v2` 가 `u_main()` 0-arg call-site emit (`self/codegen_c2.hexa`) | call-site 발산을 `u_main(args)` 로 수정 |
+
+**관련 산출물**: `tool/atlas_audit_full.hexa` (차단된 채로 commit, 17-1
++17-2 해결 후 그대로 작동해야 함 — seed) · `compiler/atlas/aliases
+.gen.hexa` + `test/atlas_aliases_smoke.hexa` (Layer 3 alias 메커니즘,
+Layer 4 와 무관, 작동). **우회**: 17 phase 완료 전에는 interpreter 가
+overlay corpus(현재 3 노드)에만 audit 가능.
+
+세 후보 경로 (Path X / Z 가 active 후보, Y 는 retired):
+
+- **Path X — `@embed` 디렉티브 신규 추가.** source 의 const array 를
+  컴파일러 binary 내부 rodata 로 정적 동봉. (17.X-1) parser 가
+  `@embed("path/to/file.hxc")` 어트리뷰트 인식 (`self/parser.hexa`,
+  기존 `@phase("parse_only")` 패턴 참고) → (17.X-2) codegen 이 C `static
+  const unsigned char[]` 로 발산 (`self/codegen_c2.hexa`, `xxd -i`
+  등가) → (17.X-3) runtime 에 `embed_get(name)->bytes` 룩업 API
+  (`self/runtime.c`) → (17.X-4) atlas 소비 측 `static_index.hexa` 가
+  `@embed` 사용해 `embedded.gen.hexa` 대체. 장점: 단일 binary 배포.
+  단점: 컴파일러 binary 5MB+ 비대, atlas 변경시 hexa 재빌드.
+- **Path Z — flat module_loader streaming 정공법.** (17.Z-1)
+  module_loader 가 array literal 을 element-by-element 로 yield (RSS
+  cap 우회 핵심) → (17.Z-2) typecheck 도 streaming-friendly, 7,398
+  노드를 동일 타입 fast-path → (17.Z-3) `pub let` cross-module rodata
+  emit (17-2 와 통합). 장점: 신규 언어 기능 불필요, 모든 const-array
+  자동 혜택. 단점: 작업량 최대 (flatten + typecheck + codegen 3단계).
+- **Path Y — HXC sidecar — RETIRED 2026-05-22 (PRs #312 + #314).** hxc
+  sidecar 폐기. 단일 SSOT 는 `n6/atlas.n6` (3.43 MB, 15,952 nodes) +
+  `n6/atlas.append.*.n6` 샤드들. `static_index.hexa::static_atlas()` 는
+  이제 `compiler/atlas/merger::load_atlas` 로 atlas.n6 를 직접 파싱한다
+  (`HEXA_ATLAS_N6` env 또는 `~/core/hexa-lang/n6/` fallback). 거버넌스:
+  `project.tape :: @D h_atlas_single_export`. 폐기 history detail 은
+  `ROADMAP.log.md` 참조.
+
+## 관련 문서 — language plan
+
+- **dated 진척 SSOT**: [`ROADMAP.log.md`](./ROADMAP.log.md) — Phase
+  1–16 완료 현황, 성장 그래프, Goal G1–G6 달성 기록, Path Y 폐기 history
+- **GOAL 한 문장**: [`GOAL.md`](./GOAL.md) — 3 north-star

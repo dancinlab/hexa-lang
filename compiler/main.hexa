@@ -355,7 +355,7 @@ let mut source_path = ""
 let mut keep_temp = false
 let mut verbose = false
 
-// --stream: F3 streaming codegen (PLAN-stage3-footprint.md). Fuses the
+// --stream: F3 streaming codegen (COMPILER.md "Stage-3 footprint"). Fuses the
 // per-function lower_hir / codegen / emit passes so only one function's
 // IR is resident — cuts the self-compile RSS. arm64-apple-darwin only.
 let mut stream_mode = false
@@ -729,7 +729,7 @@ fn _mmod_stmt_count(m: MModule) -> i64 {
     return total
 }
 
-// ── F3 streaming gate (PLAN-stage3-footprint.md) ─────────────
+// ── F3 streaming gate (COMPILER.md "Stage-3 footprint") ─────────────
 // --stream (or HEXA_STREAM=1), arm64-apple-darwin only: fuse the
 // per-function lower_hir / codegen / emit passes so only one function's
 // MFunc/LFunc is resident at a time — no MModule/LModule whole-program

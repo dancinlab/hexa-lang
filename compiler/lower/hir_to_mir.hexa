@@ -148,7 +148,7 @@ fn _const_str_op(s: string) -> Operand {
         // F6 P0c — forced copy: caller passes the HIR node's `.text`
         // handle (hmodule outlives the streaming loop). substring(0,len)
         // allocates a fresh buffer so the MFunc owns this string and can
-        // be freed without dangling hmodule. PLAN-stage3-footprint-F6.md.
+        // be freed without dangling hmodule. COMPILER.md "F6 — per-function IR reclaim".
         str_val: s.substring(0, len(s)),
         global_id: -1
     }
@@ -2875,7 +2875,7 @@ fn _lower_fn(it: HItem, mglobals: [Local]) -> MFunc {
     }
     return MFunc {
         // F6 P0c-2 — forced copy: it.name is the HItem's name handle
-        // (hmodule outlives the streaming loop). PLAN-stage3-footprint-F6.md.
+        // (hmodule outlives the streaming loop). COMPILER.md "F6 — per-function IR reclaim".
         name: it.name.substring(0, len(it.name)),
         params: params,
         return_local: ret_local,

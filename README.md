@@ -465,7 +465,7 @@ hexa-lang/
 ├── SPEC.yaml                     authoritative decision record (14+ pinned decisions)
 ├── SPEC.md                       auto-rendered from SPEC.yaml
 ├── IDENTITY.tape · PROMOTION.tape · TAPE-AUDIT.md   tape sibling files
-├── FLOW.md · LATTICE_POLICY.md · LIMIT_BREAKTHROUGH.md · PLAN.md · ROADMAP.md   domain SSOTs
+├── FLOW.md · LATTICE_POLICY.md · LIMIT_BREAKTHROUGH.md · ROADMAP.md   domain SSOTs
 ├── compiler/                     lex · parse · resolve · bind · types · domain · units · citation · lower · mono · MIR · LIR · emit
 ├── self/                         self-hosted compiler entry points
 │   ├── main.hexa                 the `hexa` binary entry

@@ -694,7 +694,7 @@ fn _arm64_strtab_lookup(st: ArmStrTab, s: string) -> string {
             // F6 P0b — forced copy: the LFunc operand built from this
             // label must not share st.labels' handle, or freeing the
             // LFunc would dangle st (st outlives every streaming
-            // iteration). PLAN-stage3-footprint-F6.md.
+            // iteration). COMPILER.md "F6 — per-function IR reclaim".
             let lab = st.labels[i]
             return lab.substring(0, len(lab))
         }
@@ -722,7 +722,7 @@ fn _arm64_op_for_operand_st(o: Operand, st: ArmStrTab) -> LOperand {
         if len(lbl) > 0 { return _arm64_op_label(lbl) }
         // F6 P0d — strtab-miss fallback (should be unreachable, every
         // const_str is interned first): copy so the LFunc does not share
-        // the MFunc operand's string. PLAN-stage3-footprint-F6.md.
+        // the MFunc operand's string. COMPILER.md "F6 — per-function IR reclaim".
         return _arm64_op_label(o.str_val.substring(0, len(o.str_val)))
     }
     // fallback: treat as imm 0
@@ -2309,7 +2309,7 @@ fn _collect_strs_from_stmt(st: ArmStrTab, s: Stmt) -> ArmStrTab {
                 // F6 P0a — forced copy: o.str_val is the MFunc operand's
                 // string handle; st outlives every streaming iteration, so
                 // it must own its keys independently of any MFunc.
-                // PLAN-stage3-footprint-F6.md.
+                // COMPILER.md "F6 — per-function IR reclaim".
                 keys.push(o.str_val.substring(0, len(o.str_val)))
                 labs.push(".LCstr" + to_string(n))
                 out = ArmStrTab {
@@ -2328,8 +2328,8 @@ fn _collect_strs_from_stmt(st: ArmStrTab, s: Stmt) -> ArmStrTab {
 }
 
 // F1 (streaming footprint) — per-MFunc string-literal interning. The
-// streaming codegen path (compiler/codegen/stream.hexa, PLAN-stage3-
-// footprint.md F2) calls this once per function as it is lowered, so
+// streaming codegen path (compiler/codegen/stream.hexa, COMPILER.md
+// "Stage-3 footprint" F2) calls this once per function as it is lowered, so
 // the ArmStrTab grows incrementally and the whole MModule never has to
 // be materialised. Label assignment is insertion-ordered, so the table
 // is byte-deterministic regardless of call cadence — incremental and
