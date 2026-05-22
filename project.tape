@@ -24,3 +24,7 @@
 @D h_inbox_patches := "external patches via inbox pipeline" :: governance [required active]
   do   = "downstream patch requests land in `inbox/patches/<descriptive>.md` (one concept per file) → upstream review → integration"
   dont = "downstream consumer edits hexa-lang directly (bypassing inbox) · mix multiple concepts in one patch file"
+
+@D h_atlas_single_export := "atlas SSOT = n6/atlas.n6 — single export, no hxc" :: governance [required active]
+  do   = "atlas reads/writes flow through `n6/atlas.n6` (full corpus, vendored) + `atlas.append.*.n6` staging shards. `static_atlas()` parses via `compiler/atlas/merger::load_atlas` at load time (HEXA_ATLAS_N6 env override; empty → `~/core/hexa-lang/n6` stable fallback, NOT CWD-relative). `hexa atlas append-witness` MUST auto-wrap `--raw` into a `@<KIND> <id>` node sigil so shards never orphan in the merger (parser.hexa::_is_header_sigil). Append-witness supports all 9 kinds (P|C|L|E|F|R|S|X|Q)."
+  dont = "ship `dist/atlas.hxc` as the runtime artifact · regenerate the sidecar via `tool/atlas_build_hxc.hexa` against the lean `compiler/atlas/embedded.gen.hexa` (it silently shrinks the SSOT — 2026-05-22 incident lost 8,504 nodes) · write witness shards without a `@<KIND>` body sigil (the merger drops them — 6 such orphans observed 2026-05-22) · resolve `atlas.n6` via CWD-relative paths · let downstream vendor `dist/atlas.hxc`. Background: inbox/notes/2026-05-22-atlas-n6-ssot-recovery.md."
