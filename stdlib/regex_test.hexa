@@ -1,0 +1,85 @@
+// stdlib/regex_test.hexa — regex engine tests.
+//
+//   hexa run stdlib/regex_test.hexa
+
+import "stdlib/regex.hexa"
+
+let mut pass_count = 0
+let mut total_count = 0
+let mut first_fail = ""
+
+fn check(name: string, got: bool, want: bool) {
+    total_count = total_count + 1
+    if got == want {
+        pass_count = pass_count + 1
+    } else {
+        if first_fail == "" { first_fail = name }
+        println("FAIL " + name + " got=" + to_string(got) + " want=" + to_string(want))
+    }
+}
+
+fn check_find(name: string, got: array, w0: int, w1: int) {
+    total_count = total_count + 1
+    let ok = len(got) == 2 && got[0] == w0 && got[1] == w1
+    if ok {
+        pass_count = pass_count + 1
+    } else {
+        if first_fail == "" { first_fail = name }
+        println("FAIL " + name + " got=" + to_string(got))
+    }
+}
+
+fn main() {
+    // literal
+    check("lit-hit", regex_test("abc", "xabcx"), true)
+    check("lit-miss", regex_test("abc", "xabx"), false)
+    // any
+    check("any-hit", regex_test("a.c", "axc"), true)
+    check("any-miss", regex_test("a.c", "ac"), false)
+    // star
+    check("star-zero", regex_test("ab*c", "ac"), true)
+    check("star-many", regex_test("ab*c", "abbbc"), true)
+    // plus
+    check("plus-zero", regex_test("ab+c", "ac"), false)
+    check("plus-one", regex_test("ab+c", "abc"), true)
+    // quest
+    check("quest-zero", regex_test("ab?c", "ac"), true)
+    check("quest-one", regex_test("ab?c", "abc"), true)
+    check("quest-two", regex_test("ab?c", "abbc"), false)
+    // alternation
+    check("alt-simple", regex_test("a|b", "b"), true)
+    check("alt-sub", regex_test("cat|dog", "hotdog"), true)
+    // char class
+    check("class-digit-hit", regex_test("[0-9]+", "abc123"), true)
+    check("class-digit-miss", regex_test("[0-9]+", "abc"), false)
+    check("class-neg-hit", regex_test("[^0-9]", "5"), false)
+    check("class-neg-miss", regex_test("[^0-9]", "x"), true)
+    // escapes
+    check("esc-d", regex_test("\\d\\d", "x42x"), true)
+    check("esc-w", regex_test("\\w+", "  hi_5 "), true)
+    check("esc-s", regex_test("a\\sb", "a b"), true)
+    // anchors
+    check("bol-hit", regex_test("^abc", "abcx"), true)
+    check("bol-miss", regex_test("^abc", "xabc"), false)
+    check("eol-hit", regex_test("abc$", "xabc"), true)
+    check("eol-miss", regex_test("abc$", "abcx"), false)
+    // word boundary
+    check("wb-hit", regex_test("\\bcat\\b", "the cat sat"), true)
+    check("wb-miss", regex_test("\\bcat\\b", "concatenate"), false)
+    // groups
+    check("group-plus", regex_test("(ab)+", "ababab"), true)
+    check("group-alt", regex_test("(cat|dog)s", "dogs"), true)
+    // whole-text match
+    check("match-full-hit", regex_match("a+", "aaa"), true)
+    check("match-full-miss", regex_match("a+", "aaab"), false)
+    // find bounds
+    check_find("find-digits", regex_find("[0-9]+", "ab123cd"), 2, 5)
+    check_find("find-word", regex_find("\\bcat\\b", "a cat b"), 2, 5)
+
+    println("regex_test: " + to_string(pass_count) + "/" + to_string(total_count) + " passed")
+    if pass_count != total_count {
+        println("FIRST FAIL: " + first_fail)
+        exit(1)
+    }
+    println("OK — all regex tests passed")
+}
