@@ -1,0 +1,147 @@
+// RFC 055 055-P0 - hexa-native NVPTX emit | target=nvptx64-nvidia-cuda-sm80
+.version 7.0
+.target sm_80
+.address_size 64
+
+.visible .entry matmul_naive (
+    .param .u64 matmul_naive_param_0,
+    .param .u64 matmul_naive_param_1,
+    .param .u64 matmul_naive_param_2,
+    .param .u64 matmul_naive_param_3,
+    .param .u64 matmul_naive_param_4,
+    .param .u64 matmul_naive_param_5
+)
+{
+    .reg .u32 %r3;
+    .reg .u32 %r4;
+    .reg .u32 %r5;
+    .reg .f64 %fd6;
+    .reg .f64 %fd7;
+    .reg .f64 %fd8;
+    .reg .u64 %rd9;
+    .reg .f64 %fd10;
+    .reg .pred %p11;
+    .reg .f64 %fd12;
+    .reg .f64 %fd13;
+    .reg .f64 %fd14;
+    .reg .f64 %fd15;
+    .reg .f64 %fd16;
+    .reg .u64 %rd17;
+    .reg .f64 %fd18;
+    .reg .pred %p19;
+    .reg .f64 %fd20;
+    .reg .f64 %fd21;
+    .reg .f64 %fd22;
+    .reg .f64 %fd23;
+    .reg .f64 %fd24;
+    .reg .f64 %fd25;
+    .reg .u64 %rd26;
+    .reg .u64 %rd42;
+    .reg .f64 %fd27;
+    .reg .pred %p28;
+    .reg .f64 %fd29;
+    .reg .f64 %fd30;
+    .reg .u32 %r31;
+    .reg .u32 %r32;
+    .reg .f64 %fd33;
+    .reg .u32 %r34;
+    .reg .u32 %r35;
+    .reg .f64 %fd36;
+    .reg .f64 %fd37;
+    .reg .u64 %rd38;
+    .reg .u32 %r39;
+    .reg .u32 %r40;
+    .reg .u64 %rd41;
+    .reg .u64 %rd0;
+    .reg .u64 %rd1;
+    .reg .u64 %rd2;
+    .reg .u64 %rd_idxa_12;
+    .reg .u64 %rd_idxa_20;
+    .reg .u64 %rd_idxa_29;
+    .reg .u64 %rd_idxa_33;
+    .reg .u64 %rd_idxa_36;
+    .reg .u64 %rd_idxs_addr;
+$L_0:
+    ld.param.u64 %rd0, [matmul_naive_param_0];  // load kernel param 0 into reg
+    ld.param.u64 %rd1, [matmul_naive_param_1];  // load kernel param 1 into reg
+    ld.param.u64 %rd2, [matmul_naive_param_2];  // load kernel param 2 into reg
+    ld.param.u32 %r3, [matmul_naive_param_3];  // load kernel param 3 into reg
+    ld.param.u32 %r4, [matmul_naive_param_4];  // load kernel param 4 into reg
+    ld.param.u32 %r5, [matmul_naive_param_5];  // load kernel param 5 into reg
+    mov.f64 %fd6, 0;  // assign
+    mov.f64 %fd7, %fd6;  // assign
+    mov.f64 %fd8, %fd7;  // assign
+    mov.u64 %rd9, 0;  // assign
+    bra $L_1;  // br -> $L_1
+$L_1:
+    // RFC 055 055-P0 - unsupported call: len
+    setp.lt.s64 %p11, %rd9, %fd10;  // cmp <
+    @%p11 bra $L_2;  // br_cond true -> $L_2
+    bra $L_3;  // br_cond false -> $L_3
+$L_2:
+    mul.lo.s64 %rd_idxa_12, %rd9, 8;  // index byte off = idx * 8
+    add.s64 %rd_idxa_12, %rd_idxa_12, %fd8;  // index addr = base + off
+    ld.global.f64 %fd12, [%rd_idxa_12];  // ld base[idx] (f64)
+    mov.f64 %fd13, %fd12;  // assign
+    mov.f64 %fd14, 0;  // assign
+    mov.f64 %fd15, %fd14;  // assign
+    mov.f64 %fd16, %fd15;  // assign
+    mov.u64 %rd17, 0;  // assign
+    bra $L_4;  // br -> $L_4
+$L_3:
+    ret;  // return
+$L_4:
+    // RFC 055 055-P0 - unsupported call: len
+    setp.lt.s64 %p19, %rd17, %fd18;  // cmp <
+    @%p19 bra $L_5;  // br_cond true -> $L_5
+    bra $L_6;  // br_cond false -> $L_6
+$L_5:
+    mul.lo.s64 %rd_idxa_20, %rd17, 8;  // index byte off = idx * 8
+    add.s64 %rd_idxa_20, %rd_idxa_20, %fd16;  // index addr = base + off
+    ld.global.f64 %fd20, [%rd_idxa_20];  // ld base[idx] (f64)
+    mov.f64 %fd21, %fd20;  // assign
+    mov.f64 %fd22, 0.0;  // assign
+    mov.f64 %fd23, 0;  // assign
+    mov.f64 %fd24, %fd23;  // assign
+    mov.f64 %fd25, %fd24;  // assign
+    mov.u64 %rd26, 0;  // assign
+    bra $L_7;  // br -> $L_7
+$L_6:
+    add.s64 %rd42, %rd9, 1;  // binop +
+    mov.u64 %rd9, %rd42;  // assign
+    bra $L_1;  // br -> $L_1
+$L_7:
+    // RFC 055 055-P0 - unsupported call: len
+    setp.lt.s64 %p28, %rd26, %fd27;  // cmp <
+    @%p28 bra $L_8;  // br_cond true -> $L_8
+    bra $L_9;  // br_cond false -> $L_9
+$L_8:
+    mul.lo.s64 %rd_idxa_29, %rd26, 8;  // index byte off = idx * 8
+    add.s64 %rd_idxa_29, %rd_idxa_29, %fd25;  // index addr = base + off
+    ld.global.f64 %fd29, [%rd_idxa_29];  // ld base[idx] (f64)
+    mov.f64 %fd30, %fd29;  // assign
+    mul.lo.s32 %r31, %fd13, %r5;  // binop *
+    add.s32 %r32, %r31, %fd30;  // binop +
+    mul.lo.s64 %rd_idxa_33, %r32, 8;  // index byte off = idx * 8
+    add.s64 %rd_idxa_33, %rd_idxa_33, %rd0;  // index addr = base + off
+    ld.global.f64 %fd33, [%rd_idxa_33];  // ld base[idx] (f64)
+    mul.lo.s32 %r34, %fd30, %r4;  // binop *
+    add.s32 %r35, %r34, %fd21;  // binop +
+    mul.lo.s64 %rd_idxa_36, %r35, 8;  // index byte off = idx * 8
+    add.s64 %rd_idxa_36, %rd_idxa_36, %rd1;  // index addr = base + off
+    ld.global.f64 %fd36, [%rd_idxa_36];  // ld base[idx] (f64)
+    mul.f64 %fd37, %fd33, %fd36;  // binop *
+    mov.f64 %fd22, %fd37;  // assign
+    add.s64 %rd38, %rd26, 1;  // binop +
+    mov.u64 %rd26, %rd38;  // assign
+    bra $L_7;  // br -> $L_7
+$L_9:
+    mul.lo.s32 %r39, %fd13, %r4;  // binop *
+    add.s32 %r40, %r39, %fd21;  // binop +
+    mul.lo.s64 %rd_idxs_addr, %r40, 8;  // index_set byte off = idx * 8
+    add.s64 %rd_idxs_addr, %rd_idxs_addr, %rd2;  // index_set addr = base + off
+    st.global.f64 [%rd_idxs_addr], %fd22;  // st base[idx] = val (f64)
+    add.s64 %rd41, %rd17, 1;  // binop +
+    mov.u64 %rd17, %rd41;  // assign
+    bra $L_4;  // br -> $L_4
+}

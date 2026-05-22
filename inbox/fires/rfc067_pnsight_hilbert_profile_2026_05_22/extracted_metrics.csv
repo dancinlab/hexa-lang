@@ -1,0 +1,49 @@
+metric,unit,M_6144,M_8192,source,notes
+n149_hilbert_ratio_vs_cublas,ratio,0.834,0.847,N149 result.json,real end-to-end (200 measured launches)
+n149_hilbert_hexa_tflops,TFLOPS,58.486,59.478,N149 result.json,real perf
+nsys_sanity_tflops,TFLOPS,59.355,60.545,this nsys 20-rep,confirms N149 real perf (NOT ncu-replay)
+n134_superblock_ratio_vs_cublas,ratio,0.655,0.624,N134/N157,super-block (Pattern A) baseline
+n140_noswz_ratio_vs_cublas,ratio,0.234,0.304,N140,no-swizzle baseline
+l2_hit_rate_pct,%,96.81,96.48,this ncu lts__t_sector_hit_rate.pct,HILBERT (Pattern B)
+l2_hit_rate_pct_n157_superblock,%,86.94,87.07,N157 extracted_metrics.csv,SUPER-BLOCK (Pattern A)
+l2_hit_rate_pct_n140_noswz,%,56.72,50.44,N140 extracted_metrics.csv,NO-SWIZZLE baseline
+l2_hit_delta_pts_vs_superblock,pts,+9.87,+9.41,hilbert - superblock,HILBERT EXCEEDS 87% PLATEAU
+l2_hit_delta_pts_vs_noswz,pts,+40.09,+46.04,hilbert - noswz,full locality ladder
+l1tex_hit_rate_pct,%,1.76,1.33,this ncu l1tex__t_sector_hit_rate.pct,unchanged vs N157/N140 (L1 bypass)
+dram_bytes_per_launch_MiB,MiB,548,1355,this ncu dram__bytes.sum,HILBERT
+dram_bytes_per_launch_MiB_n157_superblock,MiB,1942,4483,N157 (dram__bytes.sum/1024^2),SUPER-BLOCK
+dram_bytes_per_launch_MiB_n140_noswz,MiB,6470,17464,N140 extracted_metrics.csv,NO-SWIZZLE
+dram_bytes_reduction_x_vs_superblock,ratio,3.55,3.31,superblock / hilbert,HILBERT moves LESS DRAM than super-block
+dram_bytes_reduction_x_vs_noswz,ratio,11.81,12.89,noswz / hilbert,full DRAM-traffic ladder
+dram_throughput_pct_peak,%,9.06,9.52,this ncu dram__throughput.avg.pct,HILBERT (far from saturated)
+dram_throughput_pct_peak_n157_superblock,%,30.04,27.59,N157,SUPER-BLOCK
+dram_throughput_pct_peak_n140_noswz,%,33.83,33.34,N140,NO-SWIZZLE (saturated at cliff)
+dram_bandwidth_GBps,GB/s,59.3,63.0,this ncu MemoryWorkloadAnalysis,HILBERT (DRAM nearly idle)
+dram_bandwidth_GBps_n157_superblock,GB/s,198.9,182.7,N157,SUPER-BLOCK
+dram_bandwidth_GBps_n140_noswz,GB/s,223.9,220.7,N140,NO-SWIZZLE (saturated at cliff)
+compute_sm_throughput_pct,%,42.30,43.12,this ncu SpeedOfLight,HILBERT
+compute_sm_throughput_pct_n157_superblock,%,39.78,37.54,N157,SUPER-BLOCK
+compute_sm_throughput_pct_n140_noswz,%,14.00,12.16,N140,NO-SWIZZLE (compute starved)
+l2_cache_throughput_pct,%,96.07,97.47,this ncu SpeedOfLight,HILBERT (L2 ports near-saturated = heavy reuse)
+l2_cache_throughput_pct_n157_superblock,%,91.06,85.38,N157,SUPER-BLOCK
+l2_cache_throughput_pct_n140_noswz,%,32.83,28.52,N140,NO-SWIZZLE
+l1tex_cache_throughput_pct,%,86.20,87.36,this ncu SpeedOfLight,HILBERT
+eligible_warps_per_sched,warp,0.35,0.36,this ncu SchedulerStats,HILBERT (recovered above super-block 0.33)
+eligible_warps_per_sched_n157_superblock,warp,0.33,0.33,N157,SUPER-BLOCK
+eligible_warps_per_sched_n140_noswz,warp,0.10,0.10,N140,NO-SWIZZLE (scheduler starved at cliff)
+eligible_warps_recovery_x_vs_noswz,ratio,3.50,3.60,hilbert / noswz,ELIGIBLE WARP RECOVERY
+issue_slot_eligible_pct,%,19.61,19.88,this ncu One-or-More-Eligible,HILBERT (above super-block ~18%)
+issue_slot_eligible_pct_n157_superblock,%,18.47,17.38,N157,SUPER-BLOCK
+issue_slot_eligible_pct_n140_noswz,%,6.52,5.63,N140,NO-SWIZZLE
+warp_cycles_per_issued_inst,cycle,40.33,39.95,this ncu WarpStateStats,HILBERT (lower than super-block = less stall)
+warp_cycles_per_issued_inst_n157_superblock,cycle,42.83,45.67,N157,SUPER-BLOCK
+warp_cycles_per_issued_inst_n140_noswz,cycle,121.94,141.53,N140,NO-SWIZZLE (3x latency at cliff)
+achieved_occupancy_pct,%,65.94,66.19,this ncu Occupancy,HILBERT (unchanged -- occupancy NOT the lever)
+achieved_occupancy_pct_n157_superblock,%,65.98,66.25,N157,SUPER-BLOCK
+achieved_occupancy_pct_n140_noswz,%,66.28,66.36,N140,NO-SWIZZLE (also unchanged)
+smsp_cycles_active_pct,%,99.54,99.80,this ncu,HILBERT (SMs always resident)
+inst_executed_total_M,Minst,844,1992,this ncu smsp__inst_executed.sum,HILBERT (~identical to super-block 840/1988; padding CTAs early-return cheaply)
+inst_executed_total_M_n157_superblock,Minst,840,1988,N157,SUPER-BLOCK
+inst_executed_total_M_n140_noswz,Minst,839,1987,N140,NO-SWIZZLE (kernel body byte-identical)
+gpc_cycles_elapsed_M,Mcycle,22.35,52.37,this ncu gpc__cycles_elapsed.max,HILBERT (replay-isolated)
+working_set_over_l2,ratio,4.5,8.0,A+B FP16 / 32MB,full-matrix working set still exceeds L2
