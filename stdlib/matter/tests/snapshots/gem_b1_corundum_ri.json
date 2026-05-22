@@ -1,0 +1,29 @@
+{
+  "__fixture_tag__": "VENDORED SOURCE SNAPSHOT — frozen citation, not live data",
+  "gate_id": "gem_b1_corundum_ri",
+  "claim": {
+    "property": "refractive index n_d (Na-D line, 589.3 nm, 25 C)",
+    "material": "corundum (Al2O3, ruby + sapphire)",
+    "range_min": 1.762,
+    "range_max": 1.770,
+    "unit": "dimensionless"
+  },
+  "source": {
+    "kind": "GIA_GEM_REFERENCE",
+    "organization": "Gemological Institute of America",
+    "secondary": "NIST gem-RI standard / Sugano-Tanabe-Kamimura ligand-field text",
+    "year": 2024,
+    "citation": "GIA corundum identification chart + NIST gem-RI tables — n_d 1.762-1.770 (ordinary/extraordinary spread)"
+  },
+  "tolerance": {
+    "kind": "range_containment",
+    "extension_abs": 0.002,
+    "basis": "GIA accepted refractometer tolerance +/- 0.002 around the 1.762-1.770 band"
+  },
+  "spec_doc": {
+    "path": "gemology/gemology.md",
+    "line_hint": "F-GEM-Q1 falsifier row 'Corundum n_d in 1.762-1.770'"
+  },
+  "accessed": "2026-05-13",
+  "n6_lattice_fit_applied": false
+}

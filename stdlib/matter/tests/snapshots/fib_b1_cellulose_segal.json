@@ -1,0 +1,28 @@
+{
+  "__fixture_tag__": "VENDORED SOURCE SNAPSHOT — frozen citation, not live data",
+  "gate_id": "fib_b1_cellulose_segal",
+  "claim": {
+    "property": "cellulose crystallinity index (CrI) — Segal XRD method",
+    "material": "kraft cellulose (wood-pulp + cotton range)",
+    "CrI_pct_min": 60,
+    "CrI_pct_max": 80,
+    "unit": "percent",
+    "condition": "XRD CuKα; Segal CrI = (I_002 − I_am) / I_002 × 100; native cellulose I; 25 C"
+  },
+  "source": {
+    "kind": "STANDARD_PLUS_PRIMARY",
+    "primary": "Segal L., Creely J.J., Martin A.E., Conrad C.M. (1959) — 'An Empirical Method for Estimating the Degree of Crystallinity of Native Cellulose Using the X-Ray Diffractometer', Textile Res. J. 29 (10), 786-794",
+    "standard": "TAPPI T 271 — Crystallinity index by XRD",
+    "citation": "TAPPI T 271 + Segal 1959 — kraft cellulose CrI 60-80 % (wood pulp 60-70 %, cotton ~ 80 %)"
+  },
+  "tolerance": {
+    "CrI_band_abs_pct": 10,
+    "basis": "Segal method spread (intra-sample 5 %, inter-lab 10 %); spec range must overlap published 60-80 % kraft band within ± 10 % on each endpoint"
+  },
+  "spec_doc": {
+    "path": "wood-cellulose/wood-cellulose.md",
+    "line_hint": "WC-L12 row: 'cotton ~ 80 %; wood pulp 60–70 %; tunicate ~ 90 %'"
+  },
+  "accessed": "2026-05-13",
+  "n6_lattice_fit_applied": false
+}

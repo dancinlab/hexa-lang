@@ -1,0 +1,30 @@
+{
+  "__fixture_tag__": "VENDORED SOURCE SNAPSHOT — vendor datasheet, frozen citation",
+  "gate_id": "cer_b6_uhpc_compressive",
+  "claim": {
+    "property": "compressive strength sigma_c (28-day, water-cured)",
+    "material": "Ultra-High Performance Concrete (UHPC)",
+    "value_range": [150.0, 800.0],
+    "value_typical": [150.0, 200.0],
+    "unit": "MPa",
+    "condition": "ASTM C39 cylinder, 28 d cure, 25 C; high end requires fiber + autoclave"
+  },
+  "source": {
+    "kind": "VENDOR_DATASHEET",
+    "primary": "Ductal datasheet (Lafarge-Holcim) — sigma_c 150-200 MPa typical",
+    "secondary": "Cor-Tuf datasheet (US Army Corps of Engineers spec) — up to ~800 MPa with steel fiber + heat treatment",
+    "citation": "Ductal Premium Plus datasheet 2022 (Lafarge-Holcim) + Cor-Tuf data sheet 2018 (USACE ERDC) — UHPC sigma_c 150-200 MPa typical, 800 MPa upper headroom"
+  },
+  "tolerance": {
+    "rel": 0.20,
+    "unit": "fractional",
+    "basis": "vendor datasheet inter-batch variance ~ 15-20%; spec value accepted within ± 20%"
+  },
+  "spec_doc": {
+    "path": "concrete_tech/concrete_tech.md",
+    "line_hint": "UHPC section + LIMIT_BREAKTHROUGH.md L8 anchor"
+  },
+  "unproven": false,
+  "accessed": "2026-05-13",
+  "n6_lattice_fit_applied": false
+}

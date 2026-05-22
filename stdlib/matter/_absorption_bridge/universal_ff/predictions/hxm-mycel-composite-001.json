@@ -1,0 +1,42 @@
+{
+  "__fixture_tag__": "VENDORED UNIVERSAL-FF PREDICTION — frozen NNP output, not measurement",
+  "candidate_id": "hxm-mycel-composite-001",
+  "novel_section": "§4.F.13 (Tier-2 wave, 2026-05-14)",
+  "target_property": "thermal conductivity k at 25 °C plus moisture absorption percentage for mycelium-substrate hemp/wood-flour insulation panel",
+  "predicted_value": 0.05,
+  "predicted_unit": "W/(m·K) (thermal conductivity at 25 °C, dry-state)",
+  "predicted_moisture_absorption_percent": 25.0,
+  "operating_conditions": {
+    "panel_density_kg_per_m3": 200,
+    "temperature_C": 25,
+    "test_humidity_RH_percent": 50,
+    "substrate": "hemp hurd + wood flour bound by Ganoderma / Pleurotus mycelial network",
+    "moisture_test": "24 h water-immersion, ASTM C209-class protocol"
+  },
+  "model": "SchNet (notional)",
+  "model_caveat": "Universal FFs are atomistic — they predict cell-wall energetics + chitin-glucan bonding in the mycelial network, NOT panel-scale effective thermal conductivity (a porous-media homogenization property). Thermal conductivity is dominated by the porosity (typically 80-90 %) + connectivity of the air-filled lumens. The 0.05 W/(m·K) value here is a PROXY-from-literature pinned with raw#10 C3 honesty: Ecovative MycoComposite + Mogu panel datasheets at typical 200-250 kg/m³ density.",
+  "proxy_source": "Ecovative MycoComposite product datasheet (2024) — declared k ≈ 0.05 W/(m·K) at 200 kg/m³; Yang et al. 2017 Mater. Lett. 187:78 (mycelium-bound agricultural-waste composite k = 0.04-0.07 W/(m·K) over 100-300 kg/m³ density); Jones et al. 2020 Mater. Des. 187:108397 (mycelium-composite mechanical + thermal review); Mogu acoustic-panel datasheet 2023 (Italian commercial mycelium vendor)",
+  "falsifier_relation": "PASS",
+  "falsifier_target_value": 0.06,
+  "falsifier_target_unit": "W/(m·K)",
+  "falsifier_target_moisture": 30.0,
+  "falsifier_target_moisture_unit": "% absorption (24 h immersion)",
+  "falsifier_id": "F-MYCEL-1",
+  "falsifier_text": "thermal conductivity > 0.06 W/(m·K) OR moisture absorption > 30% → FAIL",
+  "delta_to_target_k": -0.01,
+  "delta_to_target_moisture": -5.0,
+  "accessed": "2026-05-14",
+  "n6_lattice_fit_applied": false,
+  "is_measurement": false,
+  "is_external_verification": false,
+  "tier": "Tier-2",
+  "unproven_markers_preserved": [
+    "mycelium scaffold biodegradability UNVERIFIED at industrial-compost scale (ASTM D5511 + EN 13432 lab certification only)",
+    "mycelium fire-classification (Euroclass B/C) UNVERIFIED at production density grade",
+    "moisture-cycling stability across humidity swings HARD_WALL — mycelium is a living-grown then heat-killed substrate; freeze-thaw + 95% RH long-term UNVERIFIED",
+    "panel-to-panel k variability ± 30 % across batches UNVERIFIED at scaled production (Ecovative single-line baseline only)",
+    "competing PU + XPS foam baseline k ≈ 0.025-0.035 W/(m·K) — mycelium is a comparable but not superior insulator"
+  ],
+  "honesty_caveats": "Both falsifier branches PASS at the proxy vendor + paper values. PASS does NOT close the candidate — biodegradability UNVERIFIED + fire-classification UNVERIFIED are binding non-thermal risks per `wood-cellulose/wood-cellulose.md` corpus. SPEC_FIRST preserved — does NOT promote to EXTERNAL-VERIFIED. Building-system installation + code-compliance → out-of-software / Category (c).",
+  "license_note": "Vendor datasheet values per Ecovative / Mogu public product literature; peer-reviewed paper values per CC-BY publisher terms (raw#10 C3, NOT n=6 lattice-fit)."
+}

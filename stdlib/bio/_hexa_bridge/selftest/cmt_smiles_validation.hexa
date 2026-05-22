@@ -1,0 +1,858 @@
+#!hexa strict
+import "_hexa_bridge/module/py_json2.hexa"
+// hexa-bio/_hexa_bridge/selftest/cmt_smiles_validation.hexa
+//
+// CMT Tier-2 placeholder-SMILES validation gate. hexa-native port of
+// `selftest/cmt_smiles_validation.py` (T3-text; file-read + SMILES parse
+// + roadmap regex extraction; no live API). Byte-parity stdout vs the .py.
+
+fn fmt(spec: string, v: float) -> string {
+    let mut o = exec("printf '" + spec + "' " + json_stringify(v))
+    while len(o) > 0 {
+        let last = o.substr(len(o) - 1, 1)
+        if last == "\n" || last == "\r" { o = o.substr(0, len(o) - 1) } else { break }
+    }
+    return o
+}
+fn ljust(s: string, n: int) -> string { let mut o = s; while len(o) < n { o = o + " " }; return o }
+fn rjust(s: string, n: int) -> string { let mut o = s; while len(o) < n { o = " " + o }; return o }
+fn js(v: float) -> string { return json_stringify(v) }
+fn jsb(b: bool) -> string { if b { return "true" } return "false" }
+fn pyb(b: bool) -> string { if b { return "True" } return "False" }
+fn fabs(x: float) -> float { if x < 0.0 { return -x } return x }
+fn fsum(xs: array) -> float {
+    let mut s = 0.0; let mut c = 0.0; let mut i = 0
+    while i < len(xs) { let y = xs[i] - c; let t = s + y; c = (t - s) - y; s = t; i = i + 1 }
+    return s
+}
+
+// ───────────────────────── constants ─────────────────────────
+
+let MONO_K = ["H", "C", "N", "O", "S", "F", "Cl", "Br", "I", "P", "B"]
+let MONO_V = [1.0078250319, 12.0, 14.0030740052, 15.9949146221,
+              31.97207069, 18.9984031627, 34.96885271,
+              78.9183376, 126.904473, 30.97376151, 11.0093055]
+
+let NV_K = ["B", "C", "N", "O", "P", "S", "F", "Cl", "Br", "I"]
+let NV_V = [3, 4, 3, 2, 3, 2, 1, 1, 1, 1]
+
+let ORGANIC_SUBSET = ["B", "C", "N", "O", "P", "S", "F", "Cl", "Br", "I"]
+let AROMATIC_LOWER = ["b", "c", "n", "o", "p", "s"]
+let BOND_CHARS = ["-", "=", "#", ":", "$", "/", "\\", "~"]
+let BOND_ORDERS = [1.0, 2.0, 3.0, 1.5, 4.0, 1.0, 1.0, 1.0]
+let FORMULA_ORDER = ["C", "H", "N", "O", "S", "P", "F", "Cl", "Br", "I", "B"]
+
+let CANDIDATE_IDS = [
+    "hxq-cmt-hd6-001",
+    "hxq-cmt-clc1-001",
+    "hxq-cmt-sar1-001",
+    "hxq-cmt-mfn2-001",
+]
+let HEAVY_MIN = 10
+let HEAVY_MAX = 60
+let MW_MAX = 700.0
+let MW_TOL = 0.06
+
+// ───────────────────────── helpers ─────────────────────────
+
+fn mono_get(sym: string) -> float {
+    let mut i = 0
+    while i < len(MONO_K) { if MONO_K[i] == sym { return MONO_V[i] }; i = i + 1 }
+    return -1.0
+}
+fn nv_get(sym: string) -> int {
+    let mut i = 0
+    while i < len(NV_K) { if NV_K[i] == sym { return NV_V[i] }; i = i + 1 }
+    return 0
+}
+fn bond_order_of(c: string) -> float {
+    let mut i = 0
+    while i < len(BOND_CHARS) { if BOND_CHARS[i] == c { return BOND_ORDERS[i] }; i = i + 1 }
+    return 0.0
+}
+fn is_bond_char(c: string) -> bool {
+    let mut i = 0
+    while i < len(BOND_CHARS) { if BOND_CHARS[i] == c { return true }; i = i + 1 }
+    return false
+}
+fn in_set(xs: array, s: string) -> bool {
+    let mut i = 0
+    while i < len(xs) { if xs[i] == s { return true }; i = i + 1 }
+    return false
+}
+fn is_digit_ch(c: string) -> bool {
+    if len(c) != 1 { return false }
+    let b = ord(c)
+    return b >= 48 && b <= 57
+}
+fn is_upper_ch(c: string) -> bool {
+    if len(c) != 1 { return false }
+    let b = ord(c)
+    return b >= 65 && b <= 90
+}
+fn is_lower_ch(c: string) -> bool {
+    if len(c) != 1 { return false }
+    let b = ord(c)
+    return b >= 97 && b <= 122
+}
+fn upper_ch(c: string) -> string {
+    if !is_lower_ch(c) { return c }
+    return chr(ord(c) - 32)
+}
+fn lower_ch(c: string) -> string {
+    if !is_upper_ch(c) { return c }
+    return chr(ord(c) + 32)
+}
+fn capitalize_sym(s: string) -> string {
+    if len(s) == 0 { return s }
+    let head = upper_ch(s.substr(0, 1))
+    let mut out = head
+    let mut i = 1
+    while i < len(s) { out = out + lower_ch(s.substr(i, 1)); i = i + 1 }
+    return out
+}
+
+// round-half-to-even (Python's round(), banker's rounding), 2-dp.
+fn round2(x: float) -> float {
+    let neg = x < 0.0
+    let ax = if neg { -x } else { x }
+    let scaled = ax * 100.0
+    let floor_v = int(scaled)
+    let frac = scaled - float(floor_v)
+    let mut q = floor_v
+    if frac > 0.5 { q = floor_v + 1 }
+    else if frac < 0.5 { q = floor_v }
+    else {
+        if floor_v % 2 == 0 { q = floor_v } else { q = floor_v + 1 }
+    }
+    let r = float(q) / 100.0
+    if neg { return -r }
+    return r
+}
+
+fn round_pyint(x: float) -> int {
+    let neg = x < 0.0
+    let ax = if neg { -x } else { x }
+    let floor_v = int(ax)
+    let frac = ax - float(floor_v)
+    let mut q = floor_v
+    if frac > 0.5 { q = floor_v + 1 }
+    else if frac < 0.5 { q = floor_v }
+    else {
+        if floor_v % 2 == 0 { q = floor_v } else { q = floor_v + 1 }
+    }
+    if neg { return -q }
+    return q
+}
+
+// ───────────────────────── SMILES parser ─────────────────────────
+
+let mut at_sym: array = []
+let mut at_arom: array = []
+let mut at_charge: array = []
+let mut at_explH: array = []
+let mut bd_a: array = []
+let mut bd_b: array = []
+let mut bd_o: array = []
+let mut parse_err: string = ""
+
+fn reset_parse() {
+    at_sym = []; at_arom = []; at_charge = []; at_explH = []
+    bd_a = []; bd_b = []; bd_o = []
+    parse_err = ""
+}
+
+fn new_atom(sym: string, arom: bool, charge: int, explH: int) -> int {
+    at_sym.push(sym); at_arom.push(arom); at_charge.push(charge); at_explH.push(explH)
+    return len(at_sym) - 1
+}
+
+fn link_bond(a: int, b: int, pending_bond: float) {
+    let mut o = 1.0
+    if pending_bond >= 0.0 { o = pending_bond }
+    else if at_arom[a] && at_arom[b] { o = 1.5 }
+    else { o = 1.0 }
+    bd_a.push(a); bd_b.push(b); bd_o.push(o)
+}
+
+let mut ring_keys: array = []
+let mut ring_atoms: array = []
+let mut ring_bonds: array = []
+
+fn ring_find(k: string) -> int {
+    let mut i = 0
+    while i < len(ring_keys) { if ring_keys[i] == k { return i }; i = i + 1 }
+    return -1
+}
+fn ring_pop(idx: int) {
+    let mut nk: array = []
+    let mut na: array = []
+    let mut nb: array = []
+    let mut i = 0
+    while i < len(ring_keys) {
+        if i != idx { nk.push(ring_keys[i]); na.push(ring_atoms[i]); nb.push(ring_bonds[i]) }
+        i = i + 1
+    }
+    ring_keys = nk; ring_atoms = na; ring_bonds = nb
+}
+fn ring_push(k: string, a: int, b: float) {
+    ring_keys.push(k); ring_atoms.push(a); ring_bonds.push(b)
+}
+fn ring_sorted_keys() -> array {
+    let mut ks: array = []
+    let mut i = 0
+    while i < len(ring_keys) { ks.push(ring_keys[i]); i = i + 1 }
+    let mut p = 1
+    while p < len(ks) {
+        let cur = ks[p]
+        let mut q = p - 1
+        while q >= 0 && ks[q] > cur { ks[q + 1] = ks[q]; q = q - 1 }
+        ks[q + 1] = cur
+        p = p + 1
+    }
+    return ks
+}
+
+fn ring_closure(key: string, prev: int, pending_bond: float) -> bool {
+    if prev < 0 { parse_err = "ring-closure label " + key + " with no preceding atom"; return false }
+    let idx = ring_find(key)
+    if idx >= 0 {
+        let a0 = ring_atoms[idx]
+        let bo = ring_bonds[idx]
+        ring_pop(idx)
+        if a0 == prev { parse_err = "ring-closure label " + key + " bonds an atom to itself"; return false }
+        let mut o = 1.0
+        if pending_bond >= 0.0 { o = pending_bond }
+        else if bo >= 0.0 { o = bo }
+        else if at_arom[a0] && at_arom[prev] { o = 1.5 }
+        else { o = 1.0 }
+        bd_a.push(a0); bd_b.push(prev); bd_o.push(o)
+    } else {
+        ring_push(key, prev, pending_bond)
+    }
+    return true
+}
+
+let mut bk_sym_norm: string = ""
+let mut bk_arom: bool = false
+let mut bk_charge: int = 0
+let mut bk_explH: int = 0
+
+fn parse_bracket_atom(inner: string) -> bool {
+    let n = len(inner)
+    let mut i = 0
+    while i < n && is_digit_ch(inner.substr(i, 1)) { i = i + 1 }
+    if i >= n { parse_err = "unparseable bracket atom '[" + inner + "]'"; return false }
+    let c0 = inner.substr(i, 1)
+    let mut sym = ""
+    if c0 == "s" && i + 1 < n && inner.substr(i + 1, 1) == "e" { sym = "se"; i = i + 2 }
+    else if c0 == "a" && i + 1 < n && inner.substr(i + 1, 1) == "s" { sym = "as"; i = i + 2 }
+    else if is_upper_ch(c0) {
+        sym = c0; i = i + 1
+        if i < n && is_lower_ch(inner.substr(i, 1)) { sym = sym + inner.substr(i, 1); i = i + 1 }
+    } else if c0 == "b" || c0 == "c" || c0 == "n" || c0 == "o" || c0 == "p" || c0 == "s" {
+        sym = c0; i = i + 1
+    } else {
+        parse_err = "unparseable bracket atom '[" + inner + "]'"; return false
+    }
+    if i < n && inner.substr(i, 1) == "@" {
+        if i + 1 < n && inner.substr(i + 1, 1) == "@" { i = i + 2 }
+        else if i + 2 < n {
+            let two = inner.substr(i + 1, 2)
+            if two == "TH" || two == "AL" {
+                if i + 3 < n {
+                    let d = inner.substr(i + 3, 1)
+                    if d == "1" || d == "2" { i = i + 4 } else { i = i + 1 }
+                } else { i = i + 1 }
+            } else if two == "SP" {
+                if i + 3 < n {
+                    let d = inner.substr(i + 3, 1)
+                    if d == "1" || d == "2" || d == "3" { i = i + 4 } else { i = i + 1 }
+                } else { i = i + 1 }
+            } else if two == "TB" || two == "OH" {
+                let mut j = i + 3
+                if j < n && is_digit_ch(inner.substr(j, 1)) {
+                    while j < n && is_digit_ch(inner.substr(j, 1)) { j = j + 1 }
+                    i = j
+                } else { i = i + 1 }
+            } else { i = i + 1 }
+        } else { i = i + 1 }
+    }
+    let mut explH = 0
+    if i < n && inner.substr(i, 1) == "H" {
+        i = i + 1
+        let mut j = i
+        while j < n && is_digit_ch(inner.substr(j, 1)) { j = j + 1 }
+        if j == i { explH = 1 }
+        else {
+            let dstr = inner.substr(i, j - i)
+            let mut v = 0; let mut k = 0
+            while k < len(dstr) { v = v * 10 + (ord(dstr.substr(k, 1)) - 48); k = k + 1 }
+            explH = v
+            i = j
+        }
+    }
+    let mut charge = 0
+    if i < n {
+        let cc = inner.substr(i, 1)
+        if cc == "+" || cc == "-" {
+            let next_ch = if i + 1 < n { inner.substr(i + 1, 1) } else { "" }
+            if is_digit_ch(next_ch) {
+                let sign = if cc == "+" { 1 } else { -1 }
+                i = i + 1
+                let mut j = i
+                while j < n && is_digit_ch(inner.substr(j, 1)) { j = j + 1 }
+                let dstr = inner.substr(i, j - i)
+                let mut v = 0; let mut k = 0
+                while k < len(dstr) { v = v * 10 + (ord(dstr.substr(k, 1)) - 48); k = k + 1 }
+                charge = sign * v
+                i = j
+            } else if cc == "+" {
+                let mut cnt = 0
+                while i < n && inner.substr(i, 1) == "+" { cnt = cnt + 1; i = i + 1 }
+                charge = cnt
+            } else {
+                let mut cnt = 0
+                while i < n && inner.substr(i, 1) == "-" { cnt = cnt + 1; i = i + 1 }
+                charge = -cnt
+            }
+        }
+    }
+    if i < n && inner.substr(i, 1) == ":" {
+        let mut j = i + 1
+        if j >= n || !is_digit_ch(inner.substr(j, 1)) {
+            parse_err = "unparseable bracket atom '[" + inner + "]'"; return false
+        }
+        while j < n && is_digit_ch(inner.substr(j, 1)) { j = j + 1 }
+        i = j
+    }
+    if i != n { parse_err = "unparseable bracket atom '[" + inner + "]'"; return false }
+    let sym_norm = capitalize_sym(sym)
+    let arom = is_lower_ch(sym.substr(0, 1))
+    bk_sym_norm = sym_norm
+    bk_arom = arom
+    bk_charge = charge
+    bk_explH = explH
+    return true
+}
+
+fn parse_smiles(smiles: string) -> bool {
+    reset_parse()
+    ring_keys = []; ring_atoms = []; ring_bonds = []
+    let mut branch_stack: array = []
+    let mut prev = -1
+    let mut pending_bond = -1.0  // -1.0 sentinel == None
+    let n = len(smiles)
+    let mut i = 0
+    while i < n {
+        let c = smiles.substr(i, 1)
+        if c == "(" {
+            if prev < 0 { parse_err = "'(' with no preceding atom"; return false }
+            branch_stack.push(prev)
+            i = i + 1
+            continue
+        }
+        if c == ")" {
+            if len(branch_stack) == 0 { parse_err = "unbalanced ')'"; return false }
+            prev = branch_stack[len(branch_stack) - 1]
+            branch_stack.pop()
+            i = i + 1
+            continue
+        }
+        if is_bond_char(c) {
+            if pending_bond >= 0.0 { parse_err = "two bond operators in a row"; return false }
+            pending_bond = bond_order_of(c)
+            i = i + 1
+            continue
+        }
+        if c == "." {
+            prev = -1
+            pending_bond = -1.0
+            i = i + 1
+            continue
+        }
+        if c == "[" {
+            let mut j = i + 1
+            while j < n && smiles.substr(j, 1) != "]" { j = j + 1 }
+            if j >= n { parse_err = "unclosed '['"; return false }
+            let inner = smiles.substr(i + 1, j - i - 1)
+            if !parse_bracket_atom(inner) { return false }
+            let idx = new_atom(bk_sym_norm, bk_arom, bk_charge, bk_explH)
+            if prev >= 0 { link_bond(prev, idx, pending_bond) }
+            else if pending_bond >= 0.0 { parse_err = "bond operator at start of chain"; return false }
+            prev = idx
+            pending_bond = -1.0
+            i = j + 1
+            continue
+        }
+        if c == "%" {
+            let key = smiles.substr(i + 1, 2)
+            if len(key) != 2 || !is_digit_ch(key.substr(0, 1)) || !is_digit_ch(key.substr(1, 1)) {
+                parse_err = "malformed %NN ring closure"; return false
+            }
+            i = i + 3
+            if !ring_closure(key, prev, pending_bond) { return false }
+            pending_bond = -1.0
+            continue
+        }
+        if is_digit_ch(c) {
+            i = i + 1
+            if !ring_closure(c, prev, pending_bond) { return false }
+            pending_bond = -1.0
+            continue
+        }
+        let two = smiles.substr(i, 2)
+        let mut sym = ""
+        if two == "Cl" || two == "Br" { sym = two; i = i + 2 }
+        else if in_set(ORGANIC_SUBSET, c) || in_set(AROMATIC_LOWER, c) { sym = c; i = i + 1 }
+        else if c == "/" || c == "\\" || c == "@" || c == "%" || c == "H" || c == "+" || c == "-" {
+            parse_err = "stray '" + c + "' outside a bracket atom"; return false
+        } else {
+            parse_err = "unexpected character '" + c + "' at position " + str(i); return false
+        }
+        let arom = is_lower_ch(sym.substr(0, 1))
+        let sym_norm = capitalize_sym(sym)
+        let idx = new_atom(sym_norm, arom, 0, 0)
+        if prev >= 0 { link_bond(prev, idx, pending_bond) }
+        else if pending_bond >= 0.0 { parse_err = "bond operator at start of chain"; return false }
+        prev = idx
+        pending_bond = -1.0
+    }
+    if len(branch_stack) > 0 { parse_err = "unbalanced '(' — branch never closed"; return false }
+    if len(ring_keys) > 0 {
+        let ks = ring_sorted_keys()
+        let mut s = "["
+        let mut i2 = 0
+        while i2 < len(ks) {
+            if i2 > 0 { s = s + ", " }
+            s = s + "'" + ks[i2] + "'"
+            i2 = i2 + 1
+        }
+        s = s + "]"
+        parse_err = "ring-closure label(s) opened but never closed: " + s
+        return false
+    }
+    if pending_bond >= 0.0 { parse_err = "trailing bond operator"; return false }
+    if len(at_sym) == 0 { parse_err = "empty molecule"; return false }
+    return true
+}
+
+let mut out_heavy: int = 0
+let mut out_formula_keys: array = []
+let mut out_formula_vals: array = []
+let mut out_mono: float = 0.0
+let mut out_nbonds: int = 0
+
+fn formula_inc(sym: string, n: int) {
+    let mut i = 0
+    while i < len(out_formula_keys) {
+        if out_formula_keys[i] == sym { out_formula_vals[i] = out_formula_vals[i] + n; return }
+        i = i + 1
+    }
+    out_formula_keys.push(sym); out_formula_vals.push(n)
+}
+
+fn formula_get(sym: string) -> int {
+    let mut i = 0
+    while i < len(out_formula_keys) { if out_formula_keys[i] == sym { return out_formula_vals[i] }; i = i + 1 }
+    return 0
+}
+
+fn finalize_parse() -> bool {
+    out_heavy = 0
+    out_formula_keys = []; out_formula_vals = []
+    out_mono = 0.0
+    out_nbonds = len(bd_a)
+
+    let na = len(at_sym)
+    let mut bsum: array = []
+    let mut i = 0
+    while i < na { bsum.push(0.0); i = i + 1 }
+    let mut bi = 0
+    while bi < len(bd_a) {
+        bsum[bd_a[bi]] = bsum[bd_a[bi]] + bd_o[bi]
+        bsum[bd_b[bi]] = bsum[bd_b[bi]] + bd_o[bi]
+        bi = bi + 1
+    }
+
+    let mut k = 0
+    while k < na {
+        let sym = at_sym[k]
+        formula_inc(sym, 1)
+        let mut hh = 0
+        if at_explH[k] > 0 { hh = at_explH[k] }
+        else {
+            let base = nv_get(sym)
+            let mut need = float(base) - bsum[k]
+            if (sym == "N" || sym == "O" || sym == "S" || sym == "P") && at_charge[k] > 0 {
+                need = need + float(at_charge[k])
+            }
+            let rounded = round_pyint(need)
+            hh = if rounded > 0 { rounded } else { 0 }
+        }
+        formula_inc("H", hh)
+        k = k + 1
+    }
+
+    let mut bad: array = []
+    let mut q = 0
+    while q < len(out_formula_keys) {
+        let sym = out_formula_keys[q]
+        let mut found = false
+        let mut m = 0
+        while m < len(MONO_K) { if MONO_K[m] == sym { found = true; break }; m = m + 1 }
+        if !found { bad.push(sym) }
+        q = q + 1
+    }
+    if len(bad) > 0 {
+        let mut s = "["
+        let mut i2 = 0
+        while i2 < len(bad) {
+            if i2 > 0 { s = s + ", " }
+            s = s + "'" + bad[i2] + "'"
+            i2 = i2 + 1
+        }
+        s = s + "]"
+        parse_err = "no monoisotopic mass for element(s): " + s
+        return false
+    }
+
+    let mut h2 = 0
+    let mut qi = 0
+    while qi < len(out_formula_keys) {
+        if out_formula_keys[qi] != "H" { h2 = h2 + out_formula_vals[qi] }
+        qi = qi + 1
+    }
+    out_heavy = h2
+
+    let mut terms: array = []
+    let mut ri = 0
+    while ri < len(out_formula_keys) {
+        terms.push(mono_get(out_formula_keys[ri]) * float(out_formula_vals[ri]))
+        ri = ri + 1
+    }
+    out_mono = fsum(terms)
+    return true
+}
+
+fn formula_str() -> string {
+    let mut parts: array = []
+    let mut i = 0
+    while i < len(FORMULA_ORDER) {
+        let s = FORMULA_ORDER[i]
+        let v = formula_get(s)
+        if v > 0 {
+            if v > 1 { parts.push(s + str(v)) } else { parts.push(s) }
+        }
+        i = i + 1
+    }
+    let mut extras: array = []
+    let mut k = 0
+    while k < len(out_formula_keys) {
+        let s = out_formula_keys[k]
+        if !in_set(FORMULA_ORDER, s) && out_formula_vals[k] > 0 { extras.push(s) }
+        k = k + 1
+    }
+    let mut p = 1
+    while p < len(extras) {
+        let cur = extras[p]
+        let mut q = p - 1
+        while q >= 0 && extras[q] > cur { extras[q + 1] = extras[q]; q = q - 1 }
+        extras[q + 1] = cur
+        p = p + 1
+    }
+    let mut e = 0
+    while e < len(extras) {
+        let s = extras[e]; let v = formula_get(s)
+        if v > 1 { parts.push(s + str(v)) } else { parts.push(s) }
+        e = e + 1
+    }
+    let mut out = ""
+    let mut z = 0
+    while z < len(parts) { out = out + parts[z]; z = z + 1 }
+    return out
+}
+
+// ───────────────────────── roadmap extraction ─────────────────────────
+
+fn find_at(hay: string, needle: string, start: int) -> int {
+    let nl = len(needle)
+    if nl == 0 { return start }
+    let lim = len(hay) - nl
+    let mut k = start
+    while k <= lim {
+        if hay.substr(k, nl) == needle { return k }
+        k = k + 1
+    }
+    return -1
+}
+
+fn is_ws(c: string) -> bool { return c == " " || c == "\t" || c == "\n" || c == "\r" }
+
+let mut row_found: bool = false
+let mut row_smiles: string = ""
+let mut row_heavy_str: string = ""
+let mut row_formula_str: string = ""
+let mut row_mono_str: string = ""
+
+fn strip_ws(s: string) -> string {
+    let mut a = 0
+    while a < len(s) && is_ws(s.substr(a, 1)) { a = a + 1 }
+    let mut b = len(s)
+    while b > a && is_ws(s.substr(b - 1, 1)) { b = b - 1 }
+    return s.substr(a, b - a)
+}
+
+fn is_word_ch(c: string) -> bool {
+    if len(c) != 1 { return false }
+    let b = ord(c)
+    if b >= 48 && b <= 57 { return true }
+    if b >= 65 && b <= 90 { return true }
+    if b >= 97 && b <= 122 { return true }
+    if b == 95 { return true }
+    return false
+}
+
+fn search_heavy(ann: string) -> string {
+    let n = len(ann)
+    let needle = "heavy"
+    let nl = len(needle)
+    let mut i = 0
+    while i + nl <= n {
+        if ann.substr(i, nl) == needle {
+            let mut j = i + nl
+            let mut wcount = 0
+            while j < n && is_ws(ann.substr(j, 1)) { j = j + 1; wcount = wcount + 1 }
+            if wcount > 0 && j < n && is_digit_ch(ann.substr(j, 1)) {
+                let s0 = j
+                while j < n && is_digit_ch(ann.substr(j, 1)) { j = j + 1 }
+                return ann.substr(s0, j - s0)
+            }
+        }
+        i = i + 1
+    }
+    return ""
+}
+
+fn search_mono(ann: string) -> string {
+    let n = len(ann)
+    let needle = "monoisotopic"
+    let nl = len(needle)
+    let mut i = 0
+    while i + nl <= n {
+        if ann.substr(i, nl) == needle {
+            let mut j = i + nl
+            let mut wcount = 0
+            while j < n && is_ws(ann.substr(j, 1)) { j = j + 1; wcount = wcount + 1 }
+            if wcount > 0 && j < n {
+                let cc = ann.substr(j, 1)
+                if is_digit_ch(cc) || cc == "." {
+                    let s0 = j
+                    while j < n {
+                        let c2 = ann.substr(j, 1)
+                        if is_digit_ch(c2) || c2 == "." { j = j + 1 } else { break }
+                    }
+                    return ann.substr(s0, j - s0)
+                }
+            }
+        }
+        i = i + 1
+    }
+    return ""
+}
+
+fn search_formula(ann: string) -> string {
+    let n = len(ann)
+    let heads = "CHNOSPF"
+    let mut i = 0
+    while i < n {
+        let c = ann.substr(i, 1)
+        let lb_ok = (i == 0) || !is_word_ch(ann.substr(i - 1, 1))
+        if lb_ok && find_at(heads, c, 0) >= 0 {
+            let s0 = i
+            let mut j = i + 1
+            while j < n {
+                let cc = ann.substr(j, 1)
+                let b = ord(cc)
+                let alnum = (b >= 48 && b <= 57) || (b >= 65 && b <= 90) || (b >= 97 && b <= 122)
+                if alnum { j = j + 1 } else { break }
+            }
+            let rb_ok = (j >= n) || !is_word_ch(ann.substr(j, 1))
+            if rb_ok {
+                let cand = ann.substr(s0, j - s0)
+                let mut hasd = false
+                let mut t = 0
+                while t < len(cand) { if is_digit_ch(cand.substr(t, 1)) { hasd = true; break }; t = t + 1 }
+                if hasd { return cand }
+            }
+            i = j
+            continue
+        }
+        i = i + 1
+    }
+    return ""
+}
+
+fn extract_row(text: string, cid: string) {
+    row_found = false; row_smiles = ""; row_heavy_str = ""; row_formula_str = ""; row_mono_str = ""
+    let mut start = 0
+    while true {
+        let p = find_at(text, cid, start)
+        if p < 0 { return }
+        let b1 = find_at(text, "`", p + len(cid))
+        if b1 < 0 { start = p + len(cid); continue }
+        let b2 = find_at(text, "`", b1 + 1)
+        if b2 < 0 { start = p + len(cid); continue }
+        let b3 = find_at(text, "`", b2 + 1)
+        if b3 < 0 { start = p + len(cid); continue }
+        if b3 == b2 + 1 { start = p + len(cid); continue }
+        let smiles = text.substr(b2 + 1, b3 - b2 - 1)
+        let mut k = b3 + 1
+        while k < len(text) && is_ws(text.substr(k, 1)) { k = k + 1 }
+        if k >= len(text) || text.substr(k, 1) != "(" { start = p + len(cid); continue }
+        let p_close = find_at(text, ")", k + 1)
+        if p_close < 0 { start = p + len(cid); continue }
+        let ann = text.substr(k + 1, p_close - k - 1)
+        row_found = true
+        row_smiles = strip_ws(smiles)
+        row_heavy_str = search_heavy(ann)
+        row_formula_str = search_formula(ann)
+        row_mono_str = search_mono(ann)
+        return
+    }
+}
+
+// Python f"{v}" for a float — use json_stringify (matches Python repr).
+fn fstr(v: float) -> string { return json_stringify(v) }
+fn f3(v: float) -> string { return fmt("%.3f", v) }
+
+// ───────────────────────── main ─────────────────────────
+
+fn main() {
+    let root = exec("pwd").trim()
+    let roadmap = root + "/.roadmap.disease_cmt_specific"
+    let probe = exec("test -f " + json_stringify(roadmap) + " && echo Y || echo N").trim()
+    if probe != "Y" {
+        println("FAIL: roadmap not found: " + roadmap)
+        println("__CMT_SMILES_VALIDATION__ FAIL")
+        return
+    }
+    let text = read_file(roadmap)
+
+    println("CMT Tier-2 placeholder-SMILES validation")
+    let mut bar64 = ""
+    let mut i = 0
+    while i < 64 { bar64 = bar64 + "="; i = i + 1 }
+    println(bar64)
+
+    let mut n_pass = 0
+    let mut n_fail = 0
+
+    let mut ci = 0
+    while ci < len(CANDIDATE_IDS) {
+        let cid = CANDIDATE_IDS[ci]
+        extract_row(text, cid)
+        if !row_found {
+            println("  ✗ " + cid + ": no backticked SMILES + annotation found in roadmap")
+            n_fail = n_fail + 1
+            ci = ci + 1
+            continue
+        }
+        let smiles = row_smiles
+        let ok = parse_smiles(smiles)
+        if !ok {
+            println("  ✗ " + cid + ": SMILES `" + smiles + "` malformed — " + parse_err)
+            n_fail = n_fail + 1
+            ci = ci + 1
+            continue
+        }
+        if !finalize_parse() {
+            println("  ✗ " + cid + ": SMILES `" + smiles + "` malformed — " + parse_err)
+            n_fail = n_fail + 1
+            ci = ci + 1
+            continue
+        }
+        let fstr_s = formula_str()
+        let mono_r = round2(out_mono)
+        let mut problems: array = []
+        if !(out_heavy >= HEAVY_MIN && out_heavy <= HEAVY_MAX) {
+            problems.push("heavy " + str(out_heavy) + " outside small-molecule envelope [" + str(HEAVY_MIN) + "," + str(HEAVY_MAX) + "]")
+        }
+        if mono_r > MW_MAX {
+            problems.push("monoisotopic " + fstr(mono_r) + " > " + fstr(MW_MAX) + " (too large for the stated oral-small-molecule modality)")
+        }
+        if len(row_heavy_str) > 0 {
+            let mut hv = 0; let mut hk = 0
+            while hk < len(row_heavy_str) { hv = hv * 10 + (ord(row_heavy_str.substr(hk, 1)) - 48); hk = hk + 1 }
+            if hv != out_heavy {
+                problems.push("roadmap annotation says 'heavy " + str(hv) + "' but the SMILES has " + str(out_heavy) + " heavy atoms")
+            }
+        }
+        if len(row_formula_str) > 0 {
+            let mut rf = ""
+            let mut zk = 0
+            while zk < len(row_formula_str) {
+                let cc = row_formula_str.substr(zk, 1)
+                if cc != " " { rf = rf + cc }
+                zk = zk + 1
+            }
+            if rf != fstr_s {
+                problems.push("roadmap annotation formula '" + row_formula_str + "' ≠ computed " + fstr_s)
+            }
+        }
+        if len(row_mono_str) > 0 {
+            let mv = float(row_mono_str)
+            let delta = fabs(mv - mono_r)
+            if delta > MW_TOL {
+                problems.push("roadmap annotation 'monoisotopic " + fstr(mv) + "' ≠ computed " + fstr(mono_r) + " (Δ=" + f3(delta) + " > " + fstr(MW_TOL) + ")")
+            }
+        }
+        if len(problems) > 0 {
+            println("  ✗ " + cid + ": `" + smiles + "`")
+            let mut pp = 0
+            while pp < len(problems) {
+                println("      - " + problems[pp])
+                pp = pp + 1
+            }
+            n_fail = n_fail + 1
+        } else {
+            let mut extras: array = []
+            if len(row_formula_str) == 0 { extras.push("formula not yet annotated in roadmap") }
+            if len(row_mono_str) == 0 { extras.push("monoisotopic mass not yet annotated in roadmap") }
+            let mut tag = ""
+            if len(extras) > 0 {
+                let mut joined = ""
+                let mut ek = 0
+                while ek < len(extras) {
+                    if ek > 0 { joined = joined + "; " }
+                    joined = joined + extras[ek]
+                    ek = ek + 1
+                }
+                tag = "  [" + joined + "]"
+            }
+            println("  ✓ " + cid + ": `" + smiles + "`")
+            println("      → " + fstr_s + "  heavy=" + str(out_heavy) + "  bonds=" + str(out_nbonds) + "  monoisotopic=" + fstr(mono_r) + tag)
+            n_pass = n_pass + 1
+        }
+        ci = ci + 1
+    }
+
+    let mut bar64b = ""
+    let mut bk = 0
+    while bk < 64 { bar64b = bar64b + "-"; bk = bk + 1 }
+    println(bar64b)
+    println("  " + str(n_pass) + "/" + str(len(CANDIDATE_IDS)) + " placeholder SMILES validated " +
+            "(syntactically well-formed + roadmap-self-consistent + in small-molecule envelope)")
+    println("  Tier-2 (placeholder structure) closure leg for axis-Q CMT candidates " +
+            "hd6/clc1/sar1/mfn2. Downstream: F-Q-1..6 pocket VQE binding is LIVE at " +
+            "the 2e/2o tier (qmirror chemistry_vqe_cmt_hamiltonians.hexa, vendored " +
+            "Hamiltonians vs CASCI(2,2)) — gated by cmt_vqe_ladder_readiness.sh; " +
+            "4e/4o+ / final-molecule / pocket-embedded VQE = next ramp " +
+            "(see ~/core/qmirror/CHEMISTRY_VQE_PYSCF_BACKEND_PLAN_2026_05_12.md §4-5)")
+
+    if n_fail == 0 {
+        println("__CMT_SMILES_VALIDATION__ PASS")
+        return
+    }
+    println("__CMT_SMILES_VALIDATION__ FAIL")
+}

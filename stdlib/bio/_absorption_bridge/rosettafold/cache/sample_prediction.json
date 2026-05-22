@@ -1,0 +1,29 @@
+{
+  "_fixture_note": "SAMPLE FIXTURE — not real data, for selftest replay only",
+  "_source": "Baker Lab RoseTTAFold + RoseTTAFold All-Atom prediction schema (illustrative)",
+  "_captured": "2026-05-13 (hexa-bio cycle-30++++++++ absorption-bridge backport)",
+  "_predictions_not_measurements": "RoseTTAFold outputs are computational predictions; experimental verification still required",
+  "model_name": "RoseTTAFold-All-Atom",
+  "model_version": "RFAA-2024",
+  "target_id": "hexa-bio-rosettafold-fixture-001",
+  "input_sequence": "MGSSHHHHHHSSGLVPRGSHM",
+  "chains": [
+    {
+      "chain_id": "A",
+      "entity_type": "polypeptide(L)",
+      "n_residues": 21,
+      "residues": [
+        {"residue_idx": 1, "name": "MET", "plddt": 71.2, "atom_xyz": [10.123, 4.567, 0.891]},
+        {"residue_idx": 2, "name": "GLY", "plddt": 76.8, "atom_xyz": [10.790, 5.234, 1.558]}
+      ]
+    }
+  ],
+  "global_metrics": {
+    "mean_plddt": 74.0,
+    "pae_mean": 13.7,
+    "lddt_estimate": 0.78
+  },
+  "citation_original": "Baek M. et al. 2021 Science 373:871-876 (DOI 10.1126/science.abj8754)",
+  "citation_rfaa": "Krishna R. et al. 2024 Science 384:eadl2528 (RoseTTAFold All-Atom)",
+  "license": "BSD-3-Clause (original RoseTTAFold); Apache-2.0 (RoseTTAFold All-Atom); commercial use OK"
+}

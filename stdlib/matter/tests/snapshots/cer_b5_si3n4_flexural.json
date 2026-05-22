@@ -1,0 +1,30 @@
+{
+  "__fixture_tag__": "VENDORED SOURCE SNAPSHOT — frozen citation, not live data",
+  "gate_id": "cer_b5_si3n4_flexural",
+  "claim": {
+    "property": "flexural strength (HIP-densified)",
+    "material": "Si3N4 (silicon nitride, hot-isostatic-pressed)",
+    "range_min": 600,
+    "range_max": 1200,
+    "unit": "MPa",
+    "note": "Source range; ASM lists ~800-1000 MPa typical, 600-1200 with grade spread"
+  },
+  "source": {
+    "kind": "ASM_HANDBOOK",
+    "volume": 21,
+    "year": 2001,
+    "title": "ASM Handbook Vol. 21: Composites / Ceramics and Glasses",
+    "page": "Si3N4 mechanical property tables",
+    "citation": "ASM Handbook vol. 21 (2001) — HIP-densified Si3N4 flexural strength"
+  },
+  "tolerance": {
+    "kind": "range_containment",
+    "basis": "spec value must lie inside published ASM range 600-1200 MPa"
+  },
+  "spec_doc": {
+    "path": "silicon/silicon.md",
+    "line_hint": "Si-L12 row in §3 ceiling table"
+  },
+  "accessed": "2026-05-13",
+  "n6_lattice_fit_applied": false
+}

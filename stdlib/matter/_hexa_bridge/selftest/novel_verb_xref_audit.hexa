@@ -1,0 +1,247 @@
+#!hexa strict
+// hexa-matter/_hexa_bridge/selftest/novel_verb_xref_audit.hexa
+//
+// NOVEL ↔ verb-spec xref gate. hexa-native port of
+// `selftest/novel_verb_xref_audit.py` (T2).
+//
+// Lossless: SECTION_RE / candidate-row are run via grep -nE whose ERE is
+// the literal equivalent of the Python `re` (\d→[0-9], \s→[[:space:]]);
+// section span [last header ≤ cid_line , first header > cid_line) is the
+// exact Python find_candidate_section result; forward/back checks are
+// exact substring tests; Tier-1 hard (0 broken) / Tier-2 soft (K≤2).
+// stdlib-only; exec.
+
+let ROOT_ENV = env("HEXA_MATTER_ROOT")
+let TIER2_SOFT_FLOOR_K = 2
+
+fn shq(s: str) -> str { return "'" + s.replace("'", "'\\''") + "'" }
+
+fn root() -> str {
+    if ROOT_ENV.len() > 0 { return ROOT_ENV }
+    return exec("pwd").trim()
+}
+
+fn is_dig(c: str) -> bool { return "0123456789".contains(c) && c.len() == 1 }
+
+fn to_int(s: str) -> int {
+    let mut v = 0
+    let mut seen = false
+    let mut i = 0
+    while i < s.len() {
+        let c = s.substr(i, 1)
+        if is_dig(c) {
+            let mut d = 0
+            while d < 10 { if str(d) == c { break }; d = d + 1 }
+            v = v * 10 + d
+            seen = true
+        }
+        i = i + 1
+    }
+    if seen == false { return -1 }
+    return v
+}
+
+// Tier-1 (hard, 0 broken). paths ';'-joined.
+let T1_ID = ["hxm-pv-tandem-002", "hxm-bat-cath-drx-001",
+    "hxm-bat-anode-li-metal-001", "hxm-co2-cap-mof-mfm-002",
+    "hxm-te-half-zrnisn-001", "hxm-cement-mgo-co2neg-001",
+    "hxm-h2-elec-iro2-doped-001"]
+let T1_PATHS = ["perovskite/perovskite.md;silicon/silicon.md",
+    "electrode-material/electrode-material.md",
+    "electrode-material/electrode-material.md", "mof/mof.md",
+    "metallurgy/swordsmithing.md",
+    "concrete_tech/concrete-technology.md",
+    "electrode-material/electrode-material.md"]
+
+// Tier-2 (soft floor, K≤2).
+let T2_ID = ["hxm-quantum-si-donor-001", "hxm-quantum-hbn-vb-001",
+    "hxm-ni-4gen-re-free-001", "hxm-mycel-composite-001",
+    "hxm-algae-plastic-001", "hxm-weyl-tas-001", "hxm-flatband-tbg-001",
+    "hxm-aero-polyimide-001", "hxm-mof-h2o-stable-uio66-001",
+    "hxm-bat-cath-naion-001", "hxm-mag-refree-001", "hxm-mag-mnbi-001",
+    "hxm-mag-tetra-001", "hxm-mag-boride-001", "hxm-mag-mn2sb-001",
+    "hxm-mag-mnalc-001", "hxm-mag-ferrhd-001", "hxm-mag-lowdy-001",
+    "hxm-mag-aifound-001", "hxm-mag-gfcs-001", "hxm-mag-znfe-001"]
+let T2_PATHS = ["silicon/silicon.md", "2d-materials/2d-materials.md",
+    "superalloy/superalloy.md", "wood-cellulose/wood-cellulose.md",
+    "biodegradable-plastics/biodegradable-plastics.md",
+    "compound-semi/compound-semi.md", "2d-materials/2d-materials.md",
+    "aerogel-foam/aerogel-foam.md", "mof/mof.md",
+    "electrode-material/electrode-material.md",
+    "magnetic-materials/magnetic-materials.md",
+    "magnetic-materials/magnetic-materials.md",
+    "magnetic-materials/magnetic-materials.md",
+    "magnetic-materials/magnetic-materials.md",
+    "magnetic-materials/magnetic-materials.md",
+    "magnetic-materials/magnetic-materials.md",
+    "magnetic-materials/magnetic-materials.md",
+    "magnetic-materials/magnetic-materials.md",
+    "magnetic-materials/magnetic-materials.md",
+    "magnetic-materials/magnetic-materials.md",
+    "magnetic-materials/magnetic-materials.md"]
+
+let G_ROOT = root()
+let NOVEL = G_ROOT + "/NOVEL.md"
+
+// header line numbers (1-based), ascending — SECTION_RE equivalent ERE
+fn header_lines() -> [int] {
+    let raw = exec("grep -nE '^#{2,4}[[:space:]]+[0-9]+\\.[A-Z]?(\\.[0-9]+)?[[:space:]]' " + shq(NOVEL) + " 2>/dev/null | cut -d: -f1").trim()
+    let mut out: [int] = []
+    if raw.len() == 0 { return out }
+    let rows = raw.split("\n")
+    let mut i = 0
+    while i < rows.len() {
+        let n = to_int(rows[i])
+        if n > 0 { out.push(n) }
+        i = i + 1
+    }
+    return out
+}
+
+// first 1-based line for the candidate's table row, or -1
+fn cid_line(cid: str) -> int {
+    let pat = "^[[:space:]]*\\|.*`" + cid + "`"
+    let raw = exec("grep -nE " + shq(pat) + " " + shq(NOVEL) + " 2>/dev/null | head -1 | cut -d: -f1").trim()
+    return to_int(raw)
+}
+
+let G_LINES = exec("cat " + shq(NOVEL) + " 2>/dev/null").split("\n")
+let G_HDR = header_lines()
+
+// verb-spec back-text cache
+let mut VP_KEY: [str] = []
+let mut VP_VAL: [str] = []
+
+fn vp_text(vp: str) -> str {
+    let mut i = 0
+    while i < VP_KEY.len() {
+        if VP_KEY[i] == vp { return VP_VAL[i] }
+        i = i + 1
+    }
+    let p = G_ROOT + "/" + vp
+    let ex = exec("[ -f " + shq(p) + " ] && echo y || echo n").trim()
+    let mut t = "@@MISSING@@"
+    if ex == "y" { t = exec("cat " + shq(p) + " 2>/dev/null") }
+    VP_KEY.push(vp)
+    VP_VAL.push(t)
+    return t
+}
+
+// audit one group; returns "ok broken" via out-params emulated by array
+fn audit_group(ids: [str], paths: [str], label: str) -> [int] {
+    let mut linked = 0
+    let mut broken = 0
+    let mut gi = 0
+    while gi < ids.len() {
+        let cid = ids[gi]
+        let vps = paths[gi].split(";")
+        let cl = cid_line(cid)
+        if cl < 1 {
+            println("  [FAIL] " + cid + " (" + label + "): NOT FOUND in NOVEL.md")
+            broken = broken + 1
+            gi = gi + 1
+            continue
+        }
+        // s = last header <= cl ; e = first header > cl (else EOF)
+        let mut s1 = -1
+        let mut e1 = G_LINES.len() + 1
+        let mut hi = 0
+        while hi < G_HDR.len() {
+            let h = G_HDR[hi]
+            if h <= cl { s1 = h }
+            if h > cl && e1 == G_LINES.len() + 1 { e1 = h }
+            hi = hi + 1
+        }
+        if s1 < 1 {
+            println("  [FAIL] " + cid + " (" + label + "): NOT FOUND in NOVEL.md")
+            broken = broken + 1
+            gi = gi + 1
+            continue
+        }
+        // sub = lines[s1-1 .. e1-1)
+        let mut sub = ""
+        let mut li = s1 - 1
+        let hiend = e1 - 1
+        while li < hiend && li < G_LINES.len() {
+            sub = sub + G_LINES[li] + "\n"
+            li = li + 1
+        }
+        if sub.contains("Verb spec link") == false {
+            println("  [FAIL] " + cid + " (" + label + "): missing `Verb spec link:` line")
+            broken = broken + 1
+            gi = gi + 1
+            continue
+        }
+        let mut fwd_ok = true
+        let mut vi = 0
+        while vi < vps.len() {
+            if sub.contains(vps[vi]) == false {
+                println("  [FAIL] " + cid + " (" + label + "): forward link to `" + vps[vi] + "` missing")
+                broken = broken + 1
+                fwd_ok = false
+            }
+            vi = vi + 1
+        }
+        if fwd_ok == false { gi = gi + 1; continue }
+
+        let mut back_ok = true
+        let mut bi = 0
+        while bi < vps.len() {
+            let vt = vp_text(vps[bi])
+            if vt == "@@MISSING@@" {
+                println("  [FAIL] " + cid + " (" + label + "): verb spec `" + vps[bi] + "` does not exist on disk")
+                broken = broken + 1
+                back_ok = false
+            } else if vt.contains("Related NOVEL candidate") == false {
+                println("  [FAIL] " + cid + " (" + label + "): `" + vps[bi] + "` missing `Related NOVEL candidate` line")
+                broken = broken + 1
+                back_ok = false
+            } else if vt.contains(cid) == false {
+                println("  [FAIL] " + cid + " (" + label + "): `" + vps[bi] + "` does NOT mention this candidate ID")
+                broken = broken + 1
+                back_ok = false
+            }
+            bi = bi + 1
+        }
+        if back_ok {
+            println("  [PASS] " + cid + " (" + label + ") ↔ " + paths[gi])
+            linked = linked + 1
+        }
+        gi = gi + 1
+    }
+    return [linked, broken]
+}
+
+fn main() {
+    println("hexa-matter/selftest/novel_verb_xref_audit (hexa-native, T2)")
+    println("  root: " + G_ROOT)
+    println("")
+    if exec("[ -f " + shq(NOVEL) + " ] && echo y || echo n").trim() != "y" {
+        println("  [FAIL] NOVEL.md missing")
+        println("__HEXA_MATTER_NOVEL_VERB_XREF__ FAIL  (NOVEL.md missing)")
+        exit(1)
+    }
+
+    let r1 = audit_group(T1_ID, T1_PATHS, "Tier-1")
+    println("")
+    let r2 = audit_group(T2_ID, T2_PATHS, "Tier-2")
+    println("")
+
+    let t1_ok = r1[0]
+    let t1_broken = r1[1]
+    let t2_ok = r2[0]
+    let t2_broken = r2[1]
+    let n1 = T1_ID.len()
+    let n2 = T2_ID.len()
+    let total_broken = t1_broken + t2_broken
+
+    let mut fatal = false
+    if t1_broken > 0 { fatal = true }
+    if t2_broken > TIER2_SOFT_FLOOR_K { fatal = true }
+
+    if fatal {
+        println("__HEXA_MATTER_NOVEL_VERB_XREF__ FAIL  (" + str(t1_ok) + "/" + str(n1) + " Tier-1 linked, " + str(t2_ok) + "/" + str(n2) + " Tier-2 linked, " + str(total_broken) + " broken; Tier-1 hard gate=0, Tier-2 soft floor K=" + str(TIER2_SOFT_FLOOR_K) + ")")
+        exit(1)
+    }
+    println("__HEXA_MATTER_NOVEL_VERB_XREF__ PASS  (" + str(t1_ok) + "/" + str(n1) + " Tier-1 linked, " + str(t2_ok) + "/" + str(n2) + " Tier-2 linked, " + str(total_broken) + " broken)")
+}

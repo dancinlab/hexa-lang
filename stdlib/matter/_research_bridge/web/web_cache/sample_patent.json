@@ -1,0 +1,34 @@
+{
+  "_comment": "SAMPLE FIXTURE — not real data, for selftest replay only. Mimics a USPTO-style patent record listing.",
+  "query":   "perovskite solar OR mof carbon capture",
+  "endpoint":"http://fixture.invalid/uspto-patft-mock",
+  "results": [
+    {
+      "patent_no":   "US11000001",
+      "title":       "FIXTURE: Method for halide perovskite solar cell encapsulation",
+      "assignee":    "SAMPLE-VENDOR-CORP",
+      "filing_date": "2023-04-15",
+      "grant_date":  "2024-07-02",
+      "abstract":    "Synthetic patent abstract for hexa-matter Phase F selftest. Describes an encapsulation process for halide perovskite solar cells claiming 25-year lifetime (UNVERIFIED).",
+      "verb_hint":   "perovskite"
+    },
+    {
+      "patent_no":   "US11000002",
+      "title":       "FIXTURE: Metal-organic framework composition for direct air capture",
+      "assignee":    "SAMPLE-VENDOR-CORP",
+      "filing_date": "2022-11-20",
+      "grant_date":  "2024-02-13",
+      "abstract":    "Synthetic patent abstract. Describes a MOF composition for direct air capture at $100/t CO2 (UNPROVEN; Climeworks amine baseline $600-1000/t).",
+      "verb_hint":   "mof"
+    },
+    {
+      "patent_no":   "US11000003",
+      "title":       "FIXTURE: Single-crystal turbine blade casting process for Ni-based superalloy",
+      "assignee":    "SAMPLE-VENDOR-CORP",
+      "filing_date": "2023-08-10",
+      "grant_date":  "2024-09-17",
+      "abstract":    "Synthetic patent abstract. Describes a Bridgman-process variant for Ni-based superalloy single-crystal turbine blade casting.",
+      "verb_hint":   "superalloy"
+    }
+  ]
+}

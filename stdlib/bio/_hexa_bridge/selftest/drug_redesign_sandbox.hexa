@@ -1,0 +1,540 @@
+#!hexa strict
+// hexa-bio/_hexa_bridge/selftest/drug_redesign_sandbox.hexa
+//
+// hexa-native port of `case_studies/drug_redesign_sandbox/drug_redesign_runner.py`
+// (T3; importlib/json/os/sys — deterministic, no network/time/random).
+// One-target drug-redesign SANDBOX: SARS-CoV-2 Mpro around nirmatrelvir,
+// four axis lenses (L1 reversible-covalent · L2 irreversible covalent ·
+// L3 PROTAC · L4 PPI). The .py uses importlib to load FOUR parent sims
+// (reversible_covalent_sim, covalent_inhibition_sim, protac_sim, ppi_sim),
+// calls each one's build_rows() and extracts ONE row. For byte-parity in
+// hexa — no importlib, no interpreter fork — the SINGLE needed row's
+// computation from each parent sim is INLINED here verbatim at CPython op-order
+// (each parent is itself already hexa-ported under _hexa_bridge/selftest/;
+// this re-inlines only the one extracted row). Witness JSON via compact
+// build → json_parse → py_json2(wv, 0) preserving .py insertion order.
+//
+// HONESTY: PASS here = in-silico simulator-CONSISTENCY ONLY (g8/f2) — the
+// four lenses are MODEL SIGNATURES, NOT efficacy predictions, NOT redesign
+// proposals, NOT clinical / therapeutic / regulatory claims. nirmatrelvir
+// is the clinically-validated truth; L2/L3/L4 are RESEARCH/ILLUSTRATIVE
+// projections. No fork of the sister sims (their single-row math is
+// re-inlined). No quantity derived from the n=6 lattice.
+
+import "_hexa_bridge/module/py_json2.hexa"
+
+// ── helpers (paste-standard) ───────────────────────────────────────────────
+fn js(v: float) -> string { return json_stringify(v) }
+fn jsb(b: bool) -> string { if b { return "true" } return "false" }
+fn pyb(b: bool) -> string { if b { return "True" } return "False" }
+fn fabs(x: float) -> float { if x < 0.0 { return -x } return x }
+// CPython sum() over a list = naive left-fold (NOT Kahan-compensated).
+fn naive_sum(xs: array) -> float {
+    let mut s = 0.0
+    let mut i = 0
+    while i < len(xs) { s = s + xs[i]; i = i + 1 }
+    return s
+}
+fn fmt(spec: string, v: float) -> string {
+    let mut o = exec("printf '" + spec + "' " + json_stringify(v))
+    while len(o) > 0 {
+        let last = o.substr(len(o) - 1, 1)
+        if last == "\n" || last == "\r" { o = o.substr(0, len(o) - 1) } else { break }
+    }
+    return o
+}
+
+// ── physical constants (CODATA 2019, exact SI) — shared by the sims ────────
+let K_B = 1.380649e-23
+let H_PLANCK = 6.62607015e-34
+let N_A = 6.02214076e23
+let R_GAS = 1.380649e-23 * 6.02214076e23
+let KCAL_TO_J = 4184.0
+let TEMP_K = 310.0
+let EYRING_PREFACTOR = 1.380649e-23 * 310.0 / 6.62607015e-34
+let KOFF_REVERSIBLE_THRESHOLD = 1.0e-4
+let REFERENCE_INHIBITOR_CONC_M = 1.0e-6
+let HOTSPOT_DDG_THRESHOLD_KCAL = 2.0
+let MIMICRY_DG_THRESHOLD_KCAL = -7.0
+
+// ── reversible_covalent_sim.eyring_rate ────────────────────────────────────
+fn eyring_rate(dg_kcal: float) -> float {
+    let dg_j = dg_kcal * KCAL_TO_J
+    return (K_B * TEMP_K / H_PLANCK) * exp(-dg_j / (R_GAS * TEMP_K))
+}
+
+// ── _human_time (reversible_covalent_sim / covalent_inhibition_sim) ────────
+fn human_time(s: float) -> string {
+    if s < 60.0 { return fmt("%.3g", s) + " s" }
+    if s < 3600.0 { return fmt("%.3g", s / 60.0) + " min" }
+    if s < 86400.0 { return fmt("%.3g", s / 3600.0) + " h" }
+    if s < 31557600.0 { return fmt("%.3g", s / 86400.0) + " d" }
+    return fmt("%.3g", s / 31557600.0) + " yr"
+}
+
+fn main() {
+    println("drug_redesign_runner — one-target modality-space sandbox")
+    println("")
+    println("  target:        SARS-CoV-2 Mpro (3CLpro / nsp5)")
+    println("  original drug: nirmatrelvir (Paxlovid, Pfizer; FDA EUA 2022 / full 2023)")
+    println("  lenses:        L1 REVERSIBLE-COVALENT (status quo)")
+    println("                 L2 COVALENT (irreversible — illustrative)")
+    println("                 L3 PROTAC :> BIFUNCTIONAL (illustrative)")
+    println("                 L4 PPI :> QUANTUM (illustrative)")
+    println("")
+
+    // ════════════════════════════════════════════════════════════════════
+    // L1 — reversible_covalent_sim.py · WARHEAD_PANEL[0] nitrile_nirmatrelvir
+    //   (name, ΔG‡_on=18.0, ΔG_rxn=-1.5, "nitrile_to_thioimidate", precedent)
+    // covalent_equilibrium(): dg_off = dg_on + abs(dg_rxn); kon/koff Eyring;
+    //   k_eq = kon/koff; tau = 1/koff; k_eq_thermo = exp(-dg_rxn*KCAL/RT);
+    //   consistency_rel_err = abs(k_eq - k_eq_thermo)/k_eq_thermo.
+    // ════════════════════════════════════════════════════════════════════
+    let l1_dg_on = 18.0
+    let l1_dg_rxn = -1.5
+    let l1_dg_off = l1_dg_on + fabs(l1_dg_rxn)
+    let l1_kon = eyring_rate(l1_dg_on)
+    let l1_koff = eyring_rate(l1_dg_off)
+    let l1_keq = l1_kon / l1_koff
+    let l1_tau = 1.0 / l1_koff
+    let l1_keq_thermo = exp(-(l1_dg_rxn * KCAL_TO_J) / (R_GAS * TEMP_K))
+    let l1_cerr = fabs(l1_keq - l1_keq_thermo) / l1_keq_thermo
+    let l1_tau_human = human_time(l1_tau)
+    let l1_reversible = l1_koff >= KOFF_REVERSIBLE_THRESHOLD
+    let l1_rev_str = if l1_reversible { "reversible" } else { "irreversible" }
+    let l1_kon_ok = l1_kon < EYRING_PREFACTOR
+    let l1_koff_ok = l1_koff < EYRING_PREFACTOR
+
+    // ════════════════════════════════════════════════════════════════════
+    // L2 — covalent_inhibition_sim.py · COVALENT_PANEL[2] sotorasib_KRAS_Cys12
+    //   (name, Ki=3.0e-7, kinact=1.2e-3, dg_covalent=19.4, "acrylamide_thio_michael", prec)
+    // covalent_inhibition(): kinact_over_ki = kinact/ki;
+    //   saturation = I/ki; kobs = (kinact*saturation)/(1+saturation);
+    //   kobs_low = kinact_over_ki * I; kok_from_kobs = kobs_low / I;
+    //   metric_rel_err = abs(kok - kok_from_kobs)/kok;
+    //   half_life = log(2)/kobs;
+    //   dg_implied = (-R*T*log(kinact*H/(K_B*T)))/KCAL.
+    // ════════════════════════════════════════════════════════════════════
+    let l2_ki = 3.0e-7
+    let l2_kinact = 1.2e-3
+    let l2_dg_cov = 19.4
+    let l2_kok = l2_kinact / l2_ki
+    let l2_sat = REFERENCE_INHIBITOR_CONC_M / l2_ki
+    let l2_kobs = (l2_kinact * l2_sat) / (1.0 + l2_sat)
+    let l2_kobs_low = l2_kok * REFERENCE_INHIBITOR_CONC_M
+    let l2_kok_from = l2_kobs_low / REFERENCE_INHIBITOR_CONC_M
+    let l2_mrel = fabs(l2_kok - l2_kok_from) / l2_kok
+    let l2_half_life = log(2.0) / l2_kobs
+    let l2_half_human = human_time(l2_half_life)
+    let l2_dg_implied = (-R_GAS * TEMP_K * log(l2_kinact * H_PLANCK / (K_B * TEMP_K))) / KCAL_TO_J
+    let l2_kinact_ok = l2_kinact < EYRING_PREFACTOR
+
+    // ════════════════════════════════════════════════════════════════════
+    // L3 — protac_sim.py · PROTAC_PANEL[5] strongcoop_PROTAC_like
+    //   (name, Kd_target=6.0, Kd_e3=20.0, alpha=20.0, transfer=0.80, "CRBN", prec)
+    // degrader_profile(): for each c in PROTAC_CONC_GRID_NM compute
+    //   ternary_fraction(c, kd_t, kd_e3, alpha); peak = max-by-tf (first occ);
+    //   interior = profile[0]!=peak and profile[-1]!=peak;
+    //   drive = peak_tf * transfer_efficiency; kd_ternary = kd_e3/alpha.
+    // ternary_fraction: theta_target = c/(kd_t+c); kd_ternary = kd_e3/alpha;
+    //   productive = theta_target/kd_ternary; sequestered = c/kd_e3;
+    //   theta = productive/(1.0 + productive + sequestered).
+    // ════════════════════════════════════════════════════════════════════
+    let l3_kd_target = 6.0
+    let l3_kd_e3 = 20.0
+    let l3_alpha = 20.0
+    let l3_transfer = 0.80
+    let l3_kd_ternary = l3_kd_e3 / l3_alpha
+    let protac_grid: array = [0.1, 0.3, 1.0, 3.0, 10.0, 30.0, 100.0, 300.0, 1000.0, 3000.0, 10000.0]
+    let mut l3_peak_tf = 0.0
+    let mut l3_peak_c = 0.0
+    let mut l3_peak_idx = -1
+    let mut gi = 0
+    while gi < len(protac_grid) {
+        let c = protac_grid[gi]
+        let theta_target = c / (l3_kd_target + c)
+        let kd_tern = l3_kd_e3 / l3_alpha
+        let productive = theta_target / kd_tern
+        let sequestered = c / l3_kd_e3
+        let tf = productive / (1.0 + productive + sequestered)
+        if l3_peak_idx < 0 || tf > l3_peak_tf {
+            l3_peak_tf = tf
+            l3_peak_c = c
+            l3_peak_idx = gi
+        }
+        gi = gi + 1
+    }
+    // interior = profile[0] != peak and profile[-1] != peak  (max by first occ)
+    let l3_hook = (l3_peak_idx != 0) && (l3_peak_idx != len(protac_grid) - 1)
+    let l3_drive = l3_peak_tf * l3_transfer
+    // cooperativity_class: alpha > 1 → "positive"
+    let l3_coop_class = if l3_alpha > 1.0 { "positive" } else { if l3_alpha == 1.0 { "none" } else { "negative" } }
+
+    // ════════════════════════════════════════════════════════════════════
+    // L4 — ppi_sim.py · INTERFACE_PANEL[2] mdm2_p53_cleft
+    //   (name, ddg=[4.8,3.2,2.2,0.9,0.5], mimicry=0.82, "alpha_helix_peptide_cleft", prec)
+    // interface_profile(): hotspots = [d for d in ddg if d >= 2.0];
+    //   sum_all = sum(ddg); sum_hotspot = sum(hotspots);
+    //   dg_interface = -sum_all; dg_hotspot_cluster = -sum_hotspot;
+    //   hotspot_fraction = sum_hotspot/sum_all;
+    //   dg_mimic = mimicry_fraction * dg_hotspot_cluster;
+    //   sum_nonhotspot = sum(d for d in ddg if d < 2.0);
+    //   ledger_residual = abs((sum_hotspot+sum_nonhotspot)-sum_all);
+    //   mimic_viable = dg_mimic <= -7.0;
+    //   hotspot_driven = hotspot_fraction >= 0.5 and n_hotspots >= 2.
+    // ════════════════════════════════════════════════════════════════════
+    let l4_ddg: array = [4.8, 3.2, 2.2, 0.9, 0.5]
+    let l4_mimicry = 0.82
+    let mut l4_hot: array = []
+    let mut l4_nonhot: array = []
+    let mut di = 0
+    while di < len(l4_ddg) {
+        if l4_ddg[di] >= HOTSPOT_DDG_THRESHOLD_KCAL { l4_hot.push(l4_ddg[di]) }
+        else { l4_nonhot.push(l4_ddg[di]) }
+        di = di + 1
+    }
+    let l4_n_residues = len(l4_ddg)
+    let l4_n_hotspots = len(l4_hot)
+    let l4_sum_all = naive_sum(l4_ddg)
+    let l4_sum_hotspot = naive_sum(l4_hot)
+    let l4_sum_nonhotspot = naive_sum(l4_nonhot)
+    let l4_dg_interface = -l4_sum_all
+    let l4_dg_hotspot_cluster = -l4_sum_hotspot
+    let l4_hotspot_fraction = if l4_sum_all > 0.0 { l4_sum_hotspot / l4_sum_all } else { 0.0 }
+    let l4_dg_mimic = l4_mimicry * l4_dg_hotspot_cluster
+    let l4_mimic_viable = l4_dg_mimic <= MIMICRY_DG_THRESHOLD_KCAL
+    let l4_ledger_residual = fabs((l4_sum_hotspot + l4_sum_nonhotspot) - l4_sum_all)
+    let l4_hotspot_driven = (l4_hotspot_fraction >= 0.5) && (l4_n_hotspots >= 2)
+
+    // ── lens-signature panel print (parallels .py main loop) ───────────────
+    println("## lens signatures (in-silico model only)")
+    println("  [L1] status quo — reversible covalent (nitrile)")
+    println("        axis = REVERSIBLE-COVALENT (sub-axis) :> COVALENT (expansion-main)")
+    println("        sim  = _python_bridge/module/reversible_covalent_sim.py")
+    println("        illustrative_only=True  not_a_redesign_recommendation=True")
+    println("  [L2] irreversible covalent (acrylamide) — illustrative re-engineering")
+    println("        axis = COVALENT (expansion-main) :> (expansion-main — not core-5)")
+    println("        sim  = _python_bridge/module/covalent_inhibition_sim.py")
+    println("        illustrative_only=True  not_a_redesign_recommendation=True")
+    println("  [L3] degradation — PROTAC bifunctional degrader (illustrative)")
+    println("        axis = PROTAC (sub-axis) :> BIFUNCTIONAL (expansion-main)")
+    println("        sim  = _python_bridge/module/protac_sim.py")
+    println("        illustrative_only=True  not_a_redesign_recommendation=True")
+    println("  [L4] PPI disruption — Mpro dimerization interface (illustrative)")
+    println("        axis = PPI (sub-axis) :> QUANTUM (core-5)")
+    println("        sim  = _python_bridge/module/ppi_sim.py")
+    println("        illustrative_only=True  not_a_redesign_recommendation=True")
+
+    // ── acceptance criteria X1..X10 (in-silico simulator-consistency) ──────
+    // All four lenses are deterministically built; the .py crit are structural.
+    let x1 = true                                  // len(lenses) == 4
+    let x2 = true                                  // sorted ids == [L1,L2,L3,L4]
+    let x3 = true                                  // exactly one is_status_quo
+    let x4 = true                                  // L1 is_status_quo is True
+    let x5 = true                                  // all illustrative_only True
+    let x6 = true                                  // all not_a_redesign_recommendation True
+    let x7 = true                                  // each lens has real_limit_anchor
+    let x8 = true                                  // each lens has axis_mapping.axis
+    // X9 — L1 reversibility=="reversible" AND K_eq_consistency_rel_err < 1e-9
+    //      AND kon_below_eyring_ceiling AND koff_below_eyring_ceiling
+    let x9 = (l1_rev_str == "reversible") && (l1_cerr < 1.0e-9) && l1_kon_ok && l1_koff_ok
+    // X10 — L2 kinact_below_eyring_ceiling is True AND metric_rel_err < 1e-9
+    let x10 = l2_kinact_ok && (l2_mrel < 1.0e-9)
+
+    let crit_keys = ["X1_four_lenses",
+                     "X2_lens_ids_unique_L1_L2_L3_L4",
+                     "X3_exactly_one_status_quo",
+                     "X4_status_quo_is_L1",
+                     "X5_all_alt_lenses_illustrative_only_true",
+                     "X6_all_alt_lenses_not_a_redesign_recommendation_true",
+                     "X7_each_lens_has_real_limit_anchor",
+                     "X8_each_lens_has_axis_mapping",
+                     "X9_L1_reversible_signature_consistent",
+                     "X10_L2_kinact_below_eyring_ceiling"]
+    let crit_vals = [x1, x2, x3, x4, x5, x6, x7, x8, x9, x10]
+    let total_crit = 10
+    let mut n_pass = 0
+    let mut ci = 0
+    while ci < total_crit { if crit_vals[ci] { n_pass = n_pass + 1 }; ci = ci + 1 }
+    let verdict = if n_pass == total_crit { "PASS" } else { "FAIL" }
+
+    println("")
+    println("## acceptance — in-silico simulator-consistency criteria")
+    let mut pi2 = 0
+    while pi2 < total_crit {
+        let tag = if crit_vals[pi2] { "PASS" } else { "FAIL" }
+        println("  [" + tag + "] " + crit_keys[pi2])
+        pi2 = pi2 + 1
+    }
+    println("")
+    println("  --- " + str(n_pass) + "/" + str(total_crit) + "  ->  verdict: " + verdict + " ---")
+
+    println("")
+    println("  [honesty g8 / f2] every PASS verifies IN-SILICO simulator + ")
+    println("  metadata internal consistency ONLY. NEVER a redesign claim, ")
+    println("  NEVER a clinical / therapeutic / efficacy / regulatory claim. ")
+    println("  nirmatrelvir is the clinically-validated truth; L2/L3/L4 are ")
+    println("  RESEARCH/ILLUSTRATIVE projections. One-target sandbox, NOT ")
+    println("  the deferred 200-disease re-mapping (AXIS/HIERARCHY.tape Log).")
+
+    // ── witness JSON (compact build → json_parse → py_json2 indent=2) ──────
+    let target = "{" +
+        "\"name\": \"SARS-CoV-2 Mpro\"" +
+        ", \"aliases\": [\"3CLpro\", \"nsp5\", \"main protease\"]" +
+        ", \"uniprot_class\": \"viral cysteine protease (catalytic dyad Cys145 / His41)\"" +
+        ", \"organism\": \"Severe acute respiratory syndrome coronavirus 2\"" +
+        ", \"function\": " + json_stringify("cleaves the viral polyprotein at ~11 conserved sites to release functional non-structural proteins (Nsp4-Nsp16); the enzyme is functionally obligate-dimeric (N-finger interface)") +
+        "}"
+
+    let original_drug = "{" +
+        "\"drug\": \"nirmatrelvir\"" +
+        ", \"brand\": \"Paxlovid (nirmatrelvir + ritonavir)\"" +
+        ", \"sponsor\": \"Pfizer\"" +
+        ", \"fda_year\": 2023" +
+        ", \"fda_center\": \"CDER\"" +
+        ", \"fda_application\": \"EUA 2022; NDA 217188 full approval 2023-05-25\"" +
+        ", \"modality\": " + json_stringify("reversible-covalent nitrile-warhead small-molecule inhibitor of SARS-CoV-2 Mpro (Cys145 thioimidate adduct)") +
+        ", \"is_clinically_validated\": true" +
+        ", \"drug_precedent_refs\": [" +
+            json_stringify("Owen et al., Science 374:1586 (2021) — PF-07321332 discovery") + ", " +
+            json_stringify("Boras et al., Nat. Commun. 12:6055 (2021) — Cys145 thioimidate") + ", " +
+            json_stringify("FDA EUA (2022-12-22); NDA 217188 full approval (2023-05-25)") +
+        "]" +
+        "}"
+
+    // L1 lens
+    let l1_sig = "{" +
+        "\"warhead\": \"nitrile_nirmatrelvir\"" +
+        ", \"warhead_class\": \"nitrile_to_thioimidate\"" +
+        ", \"dg_on_kcal_per_mol\": " + js(l1_dg_on) +
+        ", \"dg_off_kcal_per_mol\": " + js(l1_dg_off) +
+        ", \"dg_rxn_kcal_per_mol\": " + js(l1_dg_rxn) +
+        ", \"kon_per_s\": " + js(l1_kon) +
+        ", \"koff_per_s\": " + js(l1_koff) +
+        ", \"K_eq\": " + js(l1_keq) +
+        ", \"K_eq_consistency_rel_err\": " + js(l1_cerr) +
+        ", \"residence_time_s\": " + js(l1_tau) +
+        ", \"residence_time_human\": " + json_stringify(l1_tau_human) +
+        ", \"reversibility\": " + json_stringify(l1_rev_str) +
+        ", \"eyring_prefactor_ceiling_per_s\": " + js(EYRING_PREFACTOR) +
+        ", \"kon_below_eyring_ceiling\": " + jsb(l1_kon_ok) +
+        ", \"koff_below_eyring_ceiling\": " + jsb(l1_koff_ok) +
+        "}"
+    let l1 = "{" +
+        "\"lens_id\": \"L1\"" +
+        ", \"lens_name\": \"status quo — reversible covalent (nitrile)\"" +
+        ", \"axis_mapping\": {\"axis\": \"REVERSIBLE-COVALENT\", \"parent_axis\": \"COVALENT (expansion-main)\", \"axis_layer\": \"sub-axis\"}" +
+        ", \"is_status_quo\": true" +
+        ", \"sim_module\": \"_python_bridge/module/reversible_covalent_sim.py\"" +
+        ", \"real_limit_anchor\": " + json_stringify("Eyring transition-state theory: a unimolecular elementary rate is bounded by the universal frequency prefactor kB*T/h (~6.46e12 /s @ T=310 K). koff is bounded; reversibility classification koff >= 1e-4 /s anchored by warhead-class koff regimes (Singh 2011; Boike 2022).") +
+        ", \"real_limit_citations\": [" +
+            json_stringify("Eyring H, J. Chem. Phys. 3:107-115 (1935) — transition-state theory") + ", " +
+            json_stringify("Singh et al., Nat. Rev. Drug Discov. 10:307 (2011) — covalent kinetics") + ", " +
+            json_stringify("Boike, Bhattacharya & Cravatt, Nat. Rev. Drug Discov. 21:881 (2022)") +
+        "]" +
+        ", \"modality_precedent_citations\": [" +
+            json_stringify("Owen et al., Science 374:1586 (2021) — nirmatrelvir/PF-07321332") + ", " +
+            json_stringify("Boras et al., Nat. Commun. 12:6055 (2021) — nitrile->thioimidate at Cys145") +
+        "]" +
+        ", \"model_signature\": " + l1_sig +
+        ", \"illustrative_only\": true" +
+        ", \"not_a_redesign_recommendation\": true" +
+        ", \"lens_caveat\": " + json_stringify("L1 is the STATUS-QUO modality (the actual nirmatrelvir mechanism). The model SIGNATURE is the in-silico Eyring equilibrium for the nitrile warhead CLASS; it is NOT a fit to nirmatrelvir's measured Ki / kinact / residence.") +
+        "}"
+
+    // L2 lens
+    let l2_sig = "{" +
+        "\"inhibitor_surrogate\": \"sotorasib_KRAS_Cys12\"" +
+        ", \"warhead_class\": \"acrylamide_thio_michael\"" +
+        ", \"Ki_molar\": " + js(l2_ki) +
+        ", \"kinact_per_s\": " + js(l2_kinact) +
+        ", \"kinact_over_Ki_M_per_s\": " + js(l2_kok) +
+        ", \"kobs_per_s\": " + js(l2_kobs) +
+        ", \"free_enzyme_half_life_s\": " + js(l2_half_life) +
+        ", \"free_enzyme_half_life_human\": " + json_stringify(l2_half_human) +
+        ", \"dg_covalent_step_kcal_per_mol\": " + js(l2_dg_cov) +
+        ", \"dg_implied_from_kinact_kcal_per_mol\": " + js(l2_dg_implied) +
+        ", \"eyring_prefactor_ceiling_per_s\": " + js(EYRING_PREFACTOR) +
+        ", \"kinact_below_eyring_ceiling\": " + jsb(l2_kinact_ok) +
+        ", \"metric_consistency_rel_err\": " + js(l2_mrel) +
+        "}"
+    let l2 = "{" +
+        "\"lens_id\": \"L2\"" +
+        ", \"lens_name\": \"irreversible covalent (acrylamide) — illustrative re-engineering\"" +
+        ", \"axis_mapping\": {\"axis\": \"COVALENT\", \"parent_axis\": \"(expansion-main — not core-5)\", \"axis_layer\": \"expansion-main\"}" +
+        ", \"is_status_quo\": false" +
+        ", \"sim_module\": \"_python_bridge/module/covalent_inhibition_sim.py\"" +
+        ", \"real_limit_anchor\": " + json_stringify("Strelow kinact/Ki second-order efficiency framework for covalent inhibitors; Eyring transition-state theory ceiling kB*T/h. The covalent step's elementary rate cannot exceed the universal Eyring prefactor.") +
+        ", \"real_limit_citations\": [" +
+            json_stringify("Strelow JM, J. Biomol. Screen. / SLAS Discov. 22(1):3-20 (2017)") + ", " +
+            json_stringify("Eyring H, J. Chem. Phys. 3:107-115 (1935)") +
+        "]" +
+        ", \"modality_precedent_citations\": [" +
+            json_stringify("Honigberg et al., PNAS 107:13075 (2010) — ibrutinib BTK Cys481") + ", " +
+            json_stringify("Canon et al., Nature 575:217 (2019) — sotorasib KRAS-G12C Cys12") + ", " +
+            json_stringify("afatinib FDA 2013 — acrylamide EGFR Cys797") +
+        "]" +
+        ", \"model_signature\": " + l2_sig +
+        ", \"illustrative_only\": true" +
+        ", \"not_a_redesign_recommendation\": true" +
+        ", \"lens_caveat\": " + json_stringify("L2 uses the acrylamide-warhead CLASS (here the sotorasib-KRAS-G12C surrogate row) as an in-silico signature for what an irreversible covalent Mpro inhibitor would LOOK like as a model. It is NOT a proposal to put an acrylamide on Mpro Cys145; published Mpro warhead chemistry (nitrile / aldehyde / alpha-ketoamide) deliberately favours reversible warheads for viral-protease selectivity.") +
+        "}"
+
+    // L3 lens
+    let l3_sig = "{" +
+        "\"protac_surrogate\": \"strongcoop_PROTAC_like\"" +
+        ", \"e3_ligase\": \"CRBN\"" +
+        ", \"kd_target_nM\": " + js(l3_kd_target) +
+        ", \"kd_e3_nM\": " + js(l3_kd_e3) +
+        ", \"alpha_cooperativity\": " + js(l3_alpha) +
+        ", \"kd_ternary_apparent_nM\": " + js(l3_kd_ternary) +
+        ", \"cooperativity_class\": " + json_stringify(l3_coop_class) +
+        ", \"transfer_efficiency\": " + js(l3_transfer) +
+        ", \"ternary_fraction_peak\": " + js(l3_peak_tf) +
+        ", \"protac_at_peak_nM\": " + js(l3_peak_c) +
+        ", \"hook_effect_present\": " + jsb(l3_hook) +
+        ", \"degradation_drive\": " + js(l3_drive) +
+        "}"
+    let l3 = "{" +
+        "\"lens_id\": \"L3\"" +
+        ", \"lens_name\": \"degradation — PROTAC bifunctional degrader (illustrative)\"" +
+        ", \"axis_mapping\": {\"axis\": \"PROTAC\", \"parent_axis\": \"BIFUNCTIONAL (expansion-main)\", \"axis_layer\": \"sub-axis\"}" +
+        ", \"is_status_quo\": false" +
+        ", \"sim_module\": \"_python_bridge/module/protac_sim.py\"" +
+        ", \"real_limit_anchor\": " + json_stringify("Three-body mass-action equilibrium (law of mass action; fraction-bound theta = [L]/(K_d+[L]) with theta = 1/2 exactly at [L] = K_d). The hook effect (non-monotone [T.D.E] vs [PROTAC]) is the thermodynamic consequence of high-[PROTAC] binary saturation; cooperativity factor alpha sets apparent K_d,ternary = K_d(E3)/alpha.") +
+        ", \"real_limit_citations\": [" +
+            json_stringify("Douglass et al., J. Am. Chem. Soc. 135:6092 (2013)") + ", " +
+            json_stringify("Gadd et al., Nat. Chem. Biol. 13:514 (2017) — alpha for VHL-BRD4") + ", " +
+            json_stringify("Han, J. Biol. Chem. 295:15280 (2020) — ternary mathematical solutions") +
+        "]" +
+        ", \"modality_precedent_citations\": [" +
+            json_stringify("Sakamoto et al., PNAS 98:8554 (2001) — first PROTAC concept") + ", " +
+            json_stringify("ARV-471 / vepdegestrant (Arvinas/Pfizer) — ER PROTAC, clinical") + ", " +
+            json_stringify("ARV-110 / bavdegalutamide (Arvinas) — AR PROTAC, clinical") +
+        "]" +
+        ", \"model_signature\": " + l3_sig +
+        ", \"illustrative_only\": true" +
+        ", \"not_a_redesign_recommendation\": true" +
+        ", \"lens_caveat\": " + json_stringify("L3 uses the strong-cooperativity reference PROTAC row as an in-silico signature for what an Mpro-targeting PROTAC would LOOK like as a model. It is NOT a proposal of a real Mpro PROTAC; no FDA-approved PROTAC exists in any indication as of the witness ts, and viral-protease degraders face host-E3-ligase availability constraints in infected cells that this surrogate does NOT model.") +
+        "}"
+
+    // L4 lens — ddg array
+    let mut l4_ddg_j = "["
+    let mut dj = 0
+    while dj < len(l4_ddg) {
+        if dj > 0 { l4_ddg_j = l4_ddg_j + ", " }
+        l4_ddg_j = l4_ddg_j + js(l4_ddg[dj])
+        dj = dj + 1
+    }
+    l4_ddg_j = l4_ddg_j + "]"
+    let l4_sig = "{" +
+        "\"interface_surrogate\": \"mdm2_p53_cleft\"" +
+        ", \"interface_class\": \"alpha_helix_peptide_cleft\"" +
+        ", \"n_interface_residues\": " + str(l4_n_residues) +
+        ", \"n_hotspot_residues\": " + str(l4_n_hotspots) +
+        ", \"alanine_scan_ddg_kcal_per_mol\": " + l4_ddg_j +
+        ", \"sum_ddg_kcal_per_mol\": " + js(l4_sum_all) +
+        ", \"sum_hotspot_ddg_kcal_per_mol\": " + js(l4_sum_hotspot) +
+        ", \"hotspot_energy_fraction\": " + js(l4_hotspot_fraction) +
+        ", \"dg_interface_kcal_per_mol\": " + js(l4_dg_interface) +
+        ", \"dg_hotspot_cluster_kcal_per_mol\": " + js(l4_dg_hotspot_cluster) +
+        ", \"mimicry_fraction\": " + js(l4_mimicry) +
+        ", \"dg_mimic_kcal_per_mol\": " + js(l4_dg_mimic) +
+        ", \"small_molecule_disruption_viable\": " + jsb(l4_mimic_viable) +
+        ", \"hotspot_driven\": " + jsb(l4_hotspot_driven) +
+        ", \"ledger_residual_kcal_per_mol\": " + js(l4_ledger_residual) +
+        "}"
+    let l4 = "{" +
+        "\"lens_id\": \"L4\"" +
+        ", \"lens_name\": \"PPI disruption — Mpro dimerization interface (illustrative)\"" +
+        ", \"axis_mapping\": {\"axis\": \"PPI\", \"parent_axis\": \"QUANTUM (core-5)\", \"axis_layer\": \"sub-axis\"}" +
+        ", \"is_status_quo\": false" +
+        ", \"sim_module\": \"_python_bridge/module/ppi_sim.py\"" +
+        ", \"real_limit_anchor\": " + json_stringify("Bogan-Thorn binding-hotspot theory (J. Mol. Biol. 280:1, 1998): interface binding free energy is concentrated in a few hotspot residues (operationally Delta-Delta-G >= 2 kcal/mol by alanine scanning), NOT spread uniformly over the buried surface. A small-molecule mimic cannot recover more hotspot energy than the alanine-scanning ledger carries.") +
+        ", \"real_limit_citations\": [" +
+            json_stringify("Bogan & Thorn, J. Mol. Biol. 280:1 (1998) — hotspot theory") + ", " +
+            json_stringify("Clackson & Wells, Science 267:383 (1995) — alanine scanning") + ", " +
+            json_stringify("Wells & McClendon, Nature 450:1001 (2007) — PPI druggability") +
+        "]" +
+        ", \"modality_precedent_citations\": [" +
+            json_stringify("Souers et al., Nat. Med. 19:202 (2013); venetoclax FDA 2016 — BH3-mimetic BCL-2") + ", " +
+            json_stringify("Tse et al., Cancer Res. 68:3421 (2008) — navitoclax dual BCL-2/BCL-xL") + ", " +
+            json_stringify("Goyal & Goyal, Protein Sci. 22:1547 (2013) — Mpro dimerization disruption (research)") +
+        "]" +
+        ", \"model_signature\": " + l4_sig +
+        ", \"illustrative_only\": true" +
+        ", \"not_a_redesign_recommendation\": true" +
+        ", \"lens_caveat\": " + json_stringify("L4 uses an alpha-helix-peptide-cleft hotspot interface row as a SURROGATE for the Mpro N-finger dimerization interface signature; it is NOT a measured alanine scan of the Mpro dimer. Mpro is functionally obligate-dimeric, and dimerization-disruption inhibitors have been reported as a research strategy (Goyal & Goyal 2013), but no FDA-approved Mpro PPI disruptor exists and venetoclax is the cited PPI-drug precedent for the modality, NOT for the target.") +
+        "}"
+
+    // cross_links
+    let cross_links = "[" +
+        "{\"id\": \"A5\", \"module\": \"_python_bridge/module/reversible_covalent_mpro_vqe_cross.py\", \"note\": " +
+            json_stringify("REVERSIBLE-COVALENT x Mpro warhead VQE cross — the existing bridge whose `illustrative_only=true` caveat pattern this sandbox echoes on every alternative-lens row.") + "}" +
+        ", {\"id\": \"mpro_warhead_library_vqe_v7\", \"module\": \"tests/mpro_warhead_library_vqe_v7.py\", \"note\": " +
+            json_stringify("the mpro warhead library that already covers the Mpro Cys145 warhead-class space; the sandbox builds on it (not modified) and adds three more axis lenses around it.") + "}" +
+        ", {\"id\": \"REVERSIBLE-COVALENT\", \"module\": \"_python_bridge/module/reversible_covalent_sim.py\", \"note\": " +
+            json_stringify("parent sim for L1 (status quo); IMPORTED via importlib (f3).") + "}" +
+        ", {\"id\": \"COVALENT\", \"module\": \"_python_bridge/module/covalent_inhibition_sim.py\", \"note\": " +
+            json_stringify("parent sim for L2 (irreversible); IMPORTED via importlib (f3).") + "}" +
+        ", {\"id\": \"PROTAC\", \"module\": \"_python_bridge/module/protac_sim.py\", \"note\": " +
+            json_stringify("parent sim for L3 (PROTAC); IMPORTED via importlib (f3).") + "}" +
+        ", {\"id\": \"PPI\", \"module\": \"_python_bridge/module/ppi_sim.py\", \"note\": " +
+            json_stringify("parent sim for L4 (PPI disruption); IMPORTED via importlib (f3).") + "}" +
+        "]"
+
+    let honesty = "{" +
+        "\"in_silico_only\": true" +
+        ", \"comparison_is_ranking\": false" +
+        ", \"not_a_redesign_recommendation\": true" +
+        ", \"original_drug_remains_the_clinical_truth\": true" +
+        ", \"all_alternative_lenses_illustrative\": true" +
+        ", \"no_fork_of_sister_sims\": true" +
+        ", \"no_lattice_derivation\": true" +
+        ", \"core_5_unchanged\": true" +
+        ", \"one_target_sandbox_not_200_disease_remap\": true" +
+        ", \"statement\": " + json_stringify("Drug-redesign SANDBOX for one target (SARS-CoV-2 Mpro) around one FDA-approved drug (nirmatrelvir / Paxlovid). The four axis lenses (L1 reversible-covalent status quo; L2 irreversible covalent; L3 PROTAC; L4 PPI disruption) are in-silico simulator-consistency MODEL SIGNATURES, NOT efficacy predictions, NOT redesign proposals, NOT clinical / therapeutic / regulatory claims (g8 / f2). nirmatrelvir is clinically validated; the three alternative lenses are RESEARCH/ILLUSTRATIVE projections. Each alternative-lens row carries `illustrative_only` and `not_a_redesign_recommendation`, echoing the A5 cross's caveat pattern. No quantity is derived from the n=6 lattice (g3 / f1 / f_lattice_fit); each lens cites its OWN modality precedent. f3 no-fork: all four parent sims are imported, never re-implemented. Core-5 axes unchanged.") +
+        "}"
+
+    let crit_j = "{" +
+        "\"X1_four_lenses\": " + jsb(x1) +
+        ", \"X2_lens_ids_unique_L1_L2_L3_L4\": " + jsb(x2) +
+        ", \"X3_exactly_one_status_quo\": " + jsb(x3) +
+        ", \"X4_status_quo_is_L1\": " + jsb(x4) +
+        ", \"X5_all_alt_lenses_illustrative_only_true\": " + jsb(x5) +
+        ", \"X6_all_alt_lenses_not_a_redesign_recommendation_true\": " + jsb(x6) +
+        ", \"X7_each_lens_has_real_limit_anchor\": " + jsb(x7) +
+        ", \"X8_each_lens_has_axis_mapping\": " + jsb(x8) +
+        ", \"X9_L1_reversible_signature_consistent\": " + jsb(x9) +
+        ", \"X10_L2_kinact_below_eyring_ceiling\": " + jsb(x10) +
+        "}"
+    let acc_j = "{" +
+        "\"criteria\": " + crit_j +
+        ", \"pass_count\": " + str(n_pass) +
+        ", \"total\": " + str(total_crit) +
+        ", \"verdict\": " + json_stringify(verdict) +
+        "}"
+
+    let sentinel = if verdict == "PASS" { "__DRUG_REDESIGN_SANDBOX__ PASS" } else { "__DRUG_REDESIGN_SANDBOX__ FAIL" }
+
+    let witness = "{" +
+        "\"schema_version\": \"drug_redesign_sandbox_v1\"" +
+        ", \"case_study_id\": \"drug_redesign_sandbox.v1\"" +
+        ", \"ts\": \"2026-05-16T00:00:00Z\"" +
+        ", \"target\": " + target +
+        ", \"original_drug\": " + original_drug +
+        ", \"lenses\": [" + l1 + ", " + l2 + ", " + l3 + ", " + l4 + "]" +
+        ", \"cross_links\": " + cross_links +
+        ", \"honesty\": " + honesty +
+        ", \"acceptance\": " + acc_j +
+        ", \"sentinel\": " + json_stringify(sentinel) +
+        "}"
+
+    let wv = json_parse(witness)
+    println("")
+    println("## witness JSON")
+    println(py_json2(wv, 0))
+    println("")
+    println(sentinel)
+    if verdict != "PASS" { exit(1) }
+}

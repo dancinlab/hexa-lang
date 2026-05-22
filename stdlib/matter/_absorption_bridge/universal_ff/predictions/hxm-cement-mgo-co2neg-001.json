@@ -1,0 +1,41 @@
+{
+  "__fixture_tag__": "VENDORED UNIVERSAL-FF PREDICTION — frozen NNP output, not measurement",
+  "candidate_id": "hxm-cement-mgo-co2neg-001",
+  "novel_section": "§4.D.6 (Round 3, 2026-05-13)",
+  "target_property": "net cumulative CO2 emission per m^3 of cured concrete (cradle-to-grave LCA) + 28-day unconfined compressive strength sigma_c",
+  "predicted_value": -120.0,
+  "predicted_unit": "kg CO2 net per m^3 cured (negative = net sink)",
+  "predicted_sigma_c_28d": 38.0,
+  "predicted_sigma_c_unit": "MPa (28-day unconfined compressive)",
+  "operating_conditions": {
+    "binder_chemistry": "reactive MgO + Mg(OH)2 carbonated to hydrated-magnesium-carbonates (nesquehonite + hydromagnesite + dypingite)",
+    "curing_atmosphere": "CO2-enriched (~ 5-20% v/v CO2) at 25-40 °C, 60-90% RH for 7-28 days",
+    "mgo_source": "brine-derived (Brimstone-style) — NOT calcined magnesite (which would emit ~1.1 t CO2/t MgO)",
+    "lca_boundary": "cradle-to-grave including MgO production + transport + curing CO2 uptake (functional unit = 1 m^3 cured concrete)"
+  },
+  "model": "SchNet (notional)",
+  "model_caveat": "Universal FFs do NOT directly predict LCA carbon balances — LCA is a process-system accounting (ISO 14040 / 14044) that integrates upstream emissions over a defined boundary. The -120 kg CO2/m^3 + 38 MPa values here are a PROXY-from-literature pinned with raw#10 C3 honesty: thermodynamic Gibbs floor for MgO + CO2 carbonation reaction (-67 kJ/mol CO2 → ~ -1.5 t CO2/t MgO sink potential, scaled by reaction extent) + reported 28-day strengths from MgO-cement pilots. SchNet's notional contribution is binder-phase Gibbs-energy proxy for the MgO → HMC carbonation chain.",
+  "proxy_source": "Novacem 2010 archived IP + technical reports (MgO carbonate binder, defunct 2012 but archived IP) + Brimstone Energy 2023 cement chemistry technical briefs (lime-free Ca-silicate route -90 to -150 kg CO2/m^3) + IEA 2024 LCA review of low-CO2 cements (-50 to -200 kg/m^3 range, boundary-sensitive) + Lackner / Sanjayan groups MgO-cement durability corpus",
+  "falsifier_relation": "PASS",
+  "falsifier_target_value": -100.0,
+  "falsifier_target_unit": "kg CO2 / m^3 (target ≤ -100; F-CEMENT-1 says > -0.1 t [i.e. > -100 kg] is FAIL)",
+  "falsifier_target_sigma_c": 30.0,
+  "falsifier_target_sigma_c_unit": "MPa @ 28 days",
+  "falsifier_id": "F-CEMENT-1",
+  "falsifier_text": "net CO2 emission per m³ cured > -0.1 t OR 28-day σ_c < 30 MPa → FAIL",
+  "delta_to_target_co2": -20.0,
+  "delta_to_target_sigma_c": 8.0,
+  "accessed": "2026-05-13",
+  "n6_lattice_fit_applied": false,
+  "is_measurement": false,
+  "is_external_verification": false,
+  "unproven_markers_preserved": [
+    "MgO source carbon-footprint accounting UNVERIFIED — MgO from calcined magnesite emits ~ 1.1 t CO2/t MgO; net-negative claim requires renewable-calciner OR brine-derived MgO route",
+    "LCA boundary sensitivity HARD_WALL — net CO2 varies ±0.3 t/m³ with boundary choice",
+    "durability UNVERIFIED — long-term (> 10 yr) HMC carbonation shrinkage + freeze-thaw resistance not in ASTM C672 corpus",
+    "production-scale displacement of OPC (4.3 Gt/yr global) HARD_WALL — Solidia + CarbonCure combined < 0.1% market share 2024",
+    "rebar corrosion HARD_WALL — MgO-HMC binder pH ~ 10-11 ⇒ glass-fiber + basalt-fiber reinforcement (Category (c))"
+  ],
+  "honesty_caveats": "Both falsifier branches PASS at the proxy literature values WHEN brine-derived MgO is assumed; with calcined-magnesite MgO source the net CO2 swings to +200 kg/m^3 (FAIL). LCA-boundary HARD_WALL means ±300 kg/m^3 spread — the PASS is ASSUMPTION-SENSITIVE. Net-negative claim still requires (a) renewable-electric calcination OR (b) brine MgO + (c) cured-product CO2-uptake completion ≥ 70%, all UNVERIFIED at production. SPEC_FIRST preserved — does NOT promote to EXTERNAL-VERIFIED.",
+  "license_note": "Peer-reviewed paper values + IEA report public; Brimstone / Novacem-archive / Solidia vendor data governs (raw#10 C3, NOT n=6 lattice-fit)."
+}

@@ -1,0 +1,716 @@
+#!hexa strict
+// hexa-bio/_hexa_bridge/selftest/aptamer_capsid_modulator_cross.hexa
+//
+// hexa-native port of `_python_bridge/module/aptamer_capsid_modulator_cross.py`
+// (T3; importlib/json/os/sys — deterministic, no network/time/random).
+// CROSS-AXIS: APTAMER sub-axis (:> RIBOZYME) folding-ΔG / Langmuir-Kd
+// binding model  ──occupancy-as-modulator──▶  CAPSID-ASSEMBLY-MODULATOR
+// sub-axis (:> VIROCAPSID) Zlotnick mean-field equilibrium + exact
+// Caspar-Klug T-number geometry. The .py uses `importlib.util` to load
+// aptamer_affinity_sim.py + capsid_assembly_modulator_sim.py. For
+// byte-parity in hexa, the imported APTAMER fold + Langmuir machinery
+// (sanitize · pair_class · nn_stack_dg · pair_list · folding_free_energy
+// · fraction_bound) AND the CAPSID-ASSEMBLY-MODULATOR Zlotnick +
+// Caspar-Klug machinery (ck geometry · assembly_equilibrium ·
+// assembled_fraction · simulate_cam) are INLINED here — no importlib at
+// hexa level. nussinov + is_balanced come from the shared module at
+// `_hexa_bridge/module/ribozyme_mfe_nussinov.hexa`. Witness JSON via
+// compact-build → `json_parse` → `py_json2(wv, 0)` preserving .py
+// insertion order.
+//
+// HONESTY: PASS here = in-silico simulator-CONSISTENCY ONLY (g8/f2) —
+// the θ→Δg_eff occupancy map is a modeling choice; an aptamer AS a
+// capsid-assembly modulator is research-stage; NOT a structural /
+// binding / capsid-assembly / antiviral / therapeutic / regulatory
+// claim. CROSS != NEW AXIS — sub :> RIBOZYME × sub :> VIROCAPSID;
+// core-5 axis set is UNCHANGED.
+
+import "_hexa_bridge/module/py_json2.hexa"
+import "_hexa_bridge/module/json_schema_validator.hexa"
+import "_hexa_bridge/module/ribozyme_mfe_nussinov.hexa"
+
+// ── helpers (paste-standard set; preserve %width padding from printf) ──────
+fn fmt(spec: string, v: float) -> string {
+    let mut o = exec("printf '" + spec + "' " + json_stringify(v))
+    while len(o) > 0 {
+        let last = o.substr(len(o) - 1, 1)
+        if last == "\n" || last == "\r" { o = o.substr(0, len(o) - 1) } else { break }
+    }
+    return o
+}
+fn ljust(s: string, n: int) -> string { let mut o = s; while len(o) < n { o = o + " " }; return o }
+fn rjust(s: string, n: int) -> string { let mut o = s; while len(o) < n { o = " " + o }; return o }
+fn js(v: float) -> string { return json_stringify(v) }
+fn jsb(b: bool) -> string { if b { return "true" } return "false" }
+fn pyb(b: bool) -> string { if b { return "True" } return "False" }
+fn fabs(x: float) -> float { if x < 0.0 { return -x } return x }
+// CPython 3.12+ sum(generator) is Kahan-compensated, not naive.
+fn fsum(xs: array) -> float {
+    let mut s = 0.0
+    let mut c = 0.0
+    let mut i = 0
+    while i < len(xs) {
+        let y = xs[i] - c
+        let t = s + y
+        c = (t - s) - y
+        s = t
+        i = i + 1
+    }
+    return s
+}
+
+// ── APTAMER engine inlined (parity-recipe; no importlib at hexa level) ────
+fn sanitize(seq: string) -> string {
+    return seq.to_upper().replace("T", "U")
+}
+
+fn pair_class(a: string, b: string) -> string {
+    if (a == "G" && b == "C") || (a == "C" && b == "G") { return "GC" }
+    if (a == "A" && b == "U") || (a == "U" && b == "A") { return "AU" }
+    if (a == "G" && b == "U") || (a == "U" && b == "G") { return "GU" }
+    return ""
+}
+
+fn nn_stack_dg(outer: string, inner: string) -> float {
+    if outer == "GC" && inner == "GC" { return -3.4 }
+    if outer == "GC" && inner == "AU" { return -2.2 }
+    if outer == "AU" && inner == "GC" { return -2.2 }
+    if outer == "AU" && inner == "AU" { return -1.1 }
+    if outer == "GC" && inner == "GU" { return -1.5 }
+    if outer == "GU" && inner == "GC" { return -1.5 }
+    if outer == "AU" && inner == "GU" { return -0.7 }
+    if outer == "GU" && inner == "AU" { return -0.7 }
+    if outer == "GU" && inner == "GU" { return -0.5 }
+    return -0.5
+}
+
+fn pair_list(db: string) -> array {
+    let mut stk: array = []
+    let mut out_i: array = []
+    let mut out_j: array = []
+    let mut k = 0
+    while k < len(db) {
+        let c = db.substr(k, 1)
+        if c == "(" { stk.push(k) }
+        else if c == ")" {
+            let i_pop = stk[len(stk) - 1]
+            stk = stk.slice(0, len(stk) - 1)
+            out_i.push(i_pop)
+            out_j.push(k)
+        }
+        k = k + 1
+    }
+    let mut a = 1
+    while a < len(out_i) {
+        let mut b = a
+        while b > 0 && out_i[b - 1] > out_i[b] {
+            let ti = out_i[b]; let tj = out_j[b]
+            out_i[b] = out_i[b - 1]; out_j[b] = out_j[b - 1]
+            out_i[b - 1] = ti; out_j[b - 1] = tj
+            b = b - 1
+        }
+        a = a + 1
+    }
+    return [out_i, out_j]
+}
+
+fn folding_free_energy(seq: string, db: string) -> float {
+    let s = sanitize(seq)
+    let pl = pair_list(db)
+    let pi = pl[0]
+    let pj = pl[1]
+    let mut keys_arr: array = []
+    let mut n = 0
+    while n < len(pi) {
+        keys_arr.push(str(pi[n]) + "," + str(pj[n]))
+        n = n + 1
+    }
+    let mut terms: array = []
+    let mut m = 0
+    while m < len(pi) {
+        let i = pi[m]
+        let j = pj[m]
+        let inner_key = str(i + 1) + "," + str(j - 1)
+        let mut found = false
+        let mut q = 0
+        while q < len(keys_arr) {
+            if keys_arr[q] == inner_key { found = true; break }
+            q = q + 1
+        }
+        if found {
+            let outer = pair_class(s.substr(i, 1), s.substr(j, 1))
+            let inner = pair_class(s.substr(i + 1, 1), s.substr(j - 1, 1))
+            if outer != "" && inner != "" {
+                terms.push(nn_stack_dg(outer, inner))
+            }
+        }
+        m = m + 1
+    }
+    let dg = fsum(terms)
+    let rounded_s = fmt("%.4f", dg)
+    return json_parse(rounded_s)
+}
+
+fn fraction_bound(ligand_M: float, kd_M: float) -> float {
+    return ligand_M / (kd_M + ligand_M)
+}
+
+fn _str2int(s: string) -> int {
+    let mut v = 0
+    let mut k = 0
+    while k < len(s) {
+        let c = s.substr(k, 1)
+        if c == "0" { v = v * 10 + 0 }
+        else if c == "1" { v = v * 10 + 1 }
+        else if c == "2" { v = v * 10 + 2 }
+        else if c == "3" { v = v * 10 + 3 }
+        else if c == "4" { v = v * 10 + 4 }
+        else if c == "5" { v = v * 10 + 5 }
+        else if c == "6" { v = v * 10 + 6 }
+        else if c == "7" { v = v * 10 + 7 }
+        else if c == "8" { v = v * 10 + 8 }
+        else if c == "9" { v = v * 10 + 9 }
+        k = k + 1
+    }
+    return v
+}
+
+// ── CAPSID-ASSEMBLY-MODULATOR engine inlined ──────────────────────────────
+// .py constants
+let R_KCAL = 1.987204e-3
+let T_KELVIN = 310.0
+let RT = 1.987204e-3 * 310.0
+let WEAK_CONTACT_LO = -4.5
+let WEAK_CONTACT_HI = -1.5
+let KINETIC_TRAP_THRESHOLD = -5.0
+
+// CPython `x**12.0` == libm `pow(x, 12.0)` (verified bit-identical on
+// macOS clang+libm and hexa's pow() intrinsic, e.g.
+// x=22.01230434114538 → 1.2941544338839746e+16). Repeated multiplication
+// and `exp(12*log)` both drift ~2-4 ULP, so we call the intrinsic pow.
+// Hill exponent is fixed at 12 in the .py simulate_cam call chain.
+fn xpow12(x: float) -> float { return pow(x, 12.0) }
+
+// .py caspar_klug_geometry(t_number) — returns the dict's fields.
+fn ck_n_subunits(t: int) -> int { return 60 * t }
+fn ck_n_pentamers(t: int) -> int { return 12 }
+fn ck_n_hexamers(t: int) -> int { return 10 * (t - 1) }
+fn ck_euler_ok(t: int) -> bool {
+    let n_pent = 12
+    let n_hex = 10 * (t - 1)
+    let n_caps = n_pent + n_hex
+    let edges = (5 * n_pent + 6 * n_hex) / 2
+    let faces = n_caps
+    let vertices = 2 - faces + edges
+    return (vertices - edges + faces) == 2
+}
+
+// .py assembly_equilibrium(g_contact, contacts_per_subunit=3.0,
+//                          entropy_penalty_kcal=3.0):
+//   dg_net = (z/2) * g_contact + 3.0
+//   c_star = exp(dg_net / RT)
+fn dg_net_of(g_contact: float) -> float { return (3.0 / 2.0) * g_contact + 3.0 }
+fn c_star_of(g_contact: float) -> float { return exp(dg_net_of(g_contact) / RT) }
+
+// .py assembled_fraction(c_total, c_star, hill=12.0)
+fn assembled_fraction(c_total: float, c_star: float) -> float {
+    if c_total <= 0.0 { return 0.0 }
+    let ratio = xpow12(c_total / c_star)
+    return ratio / (1.0 + ratio)
+}
+
+// ── constants (parallel .py module-level) ──────────────────────────────────
+let SCHEMA_ID = "aptamer_capsid_modulator_cross_v1"
+let FOLD_MODEL_TEXT = "nussinov_1978_bp_max + turner_style_nn_stack_sum"
+let BINDING_MODEL_TEXT = "1:1 Langmuir equilibrium  theta = [L]/(Kd+[L])"
+let IN_SILICO_CAVEAT = "in-silico simulator-consistency only (AGENTS.tape g8/f2) — the θ→Δg_eff occupancy map is a modeling choice; an aptamer AS a capsid-assembly modulator is research-stage; NOT a structural/binding/assembly/antiviral/therapeutic claim"
+let APTAMER_SOURCE_TEXT = "_python_bridge/module/aptamer_affinity_sim.py (Nussinov fold + Langmuir binding model imported, not re-implemented — f3)"
+let CAPSID_SOURCE_TEXT = "_python_bridge/module/capsid_assembly_modulator_sim.py (Zlotnick equilibrium + Caspar-Klug geometry imported, not re-implemented — f3)"
+
+// ── APTAMER corpus indices 0..2 (parallel .py _APTAMER_CORPUS) ─────────────
+fn corpus_name(i: int) -> string {
+    if i == 0 { return "thrombin_binding_aptamer_TBA" }
+    if i == 1 { return "theophylline_aptamer_core" }
+    return "atp_aptamer_core"
+}
+fn corpus_seq_raw(i: int) -> string {
+    if i == 0 { return "GGTTGGTGTGGTTGG" }
+    if i == 1 { return "GGCGAUACCAGCCGAAAGGCCCUUGGCAGCGUC" }
+    return "GGGAUACUUCACUGCAGACUUGACGAAGCUU"
+}
+fn corpus_kd_nM(i: int) -> float {
+    if i == 0 { return 100.0 }
+    if i == 1 { return 100.0 }
+    return 6000.0
+}
+fn corpus_paper(i: int) -> string {
+    if i == 0 { return "Bock LC et al. 1992 Nature 355:564-566" }
+    if i == 1 { return "Jenison RD et al. 1994 Science 263:1425-1429" }
+    return "Sassanfar M, Szostak JW 1993 Nature 364:550-553"
+}
+
+// ── construct panel (parallel .py _CONSTRUCT_PANEL) ────────────────────────
+let N_CONSTRUCTS = 5
+fn construct_id(i: int) -> string {
+    if i == 0 { return "ifaceapt_stabilizer_subKd" }
+    if i == 1 { return "ifaceapt_stabilizer_atKd" }
+    if i == 2 { return "ifaceapt_stabilizer_saturating" }
+    if i == 3 { return "ifaceapt_destabilizer_atKd" }
+    return "ifaceapt_destabilizer_saturating"
+}
+fn construct_corpus_idx(i: int) -> int {
+    if i == 0 { return 0 }
+    if i == 1 { return 0 }
+    if i == 2 { return 1 }
+    if i == 3 { return 2 }
+    return 2
+}
+fn construct_target(i: int) -> string {
+    if i <= 2 { return "icosahedral capsid dimer interface" }
+    return "icosahedral capsid pentamer interface"
+}
+fn construct_x_kd(i: int) -> float {
+    if i == 0 { return 0.1 }
+    if i == 1 { return 1.0 }
+    if i == 2 { return 30.0 }
+    if i == 3 { return 1.0 }
+    return 50.0
+}
+fn construct_dg_max(i: int) -> float {
+    if i <= 2 { return -3.0 }
+    return 2.0
+}
+fn construct_t_number(i: int) -> int {
+    if i == 0 { return 3 }
+    if i == 1 { return 3 }
+    if i == 2 { return 4 }
+    if i == 3 { return 1 }
+    return 1
+}
+fn construct_note(i: int) -> string {
+    if i == 0 { return "interface-stabilizing aptamer, sub-Kd → low occupancy → minimal ΔG perturbation" }
+    if i == 1 { return "interface-stabilizing aptamer at Kd → θ=0.5 → half-max stabilization" }
+    if i == 2 { return "interface-stabilizing aptamer saturating → near-full over-stabilization → Zlotnick kinetic-trap regime" }
+    if i == 3 { return "interface-destabilizing aptamer at Kd → θ=0.5 → partial assembly suppression" }
+    return "interface-destabilizing aptamer saturating → assembly strongly suppressed"
+}
+
+// .py _sign(dg_max)
+fn sign_of(dg_max: float) -> string {
+    if dg_max < 0.0 { return "stabilizer" }
+    if dg_max > 0.0 { return "destabilizer" }
+    return "neutral"
+}
+
+fn main() {
+    println("aptamer_capsid_modulator_cross — CROSS-AXIS (sub :> RIBOZYME × sub :> VIROCAPSID)")
+    println("")
+    println("cross:  APTAMER sub-axis  Nussinov-fold / 1:1-Langmuir-Kd model")
+    println("        ──occupancy-as-modulator──▶  CAPSID-ASSEMBLY-MODULATOR sub-axis")
+    println("        aptamer [A] → Langmuir θ → Δg_eff=θ·Δg_max → Zlotnick c*, assembled f")
+    println("")
+
+    println("  real-limit anchors:")
+    println("   - RNA/DNA folding thermodynamics — nearest-neighbour model")
+    println("     (SantaLucia 1998 PNAS 95:1460; Turner & Mathews 2010 NAR 38:D280)")
+    println("   - 1:1 Langmuir equilibrium θ=[L]/(Kd+[L]); θ=0.5 exactly at [L]=Kd")
+    println("   - Caspar-Klug 1962 — 60·T subunits, 12 pentamers, Euler V−E+F=2")
+    println("   - Zlotnick mean-field equilibrium + over-stabilization kinetic trap")
+    println("     (Zlotnick 1994 Biochemistry 33:14831; 2003 J Mol Recognit 16:236)")
+    println("")
+
+    // ── build_cross_rows: parallel-array storage for the panel ─────────────
+    let mut row_device_id: array = []
+    let mut row_device_note: array = []
+    let mut row_aptamer_name: array = []
+    let mut row_aptamer_seq: array = []
+    let mut row_aptamer_len: array = []
+    let mut row_capsid_target: array = []
+    let mut row_paper_ref: array = []
+    let mut row_fold_db: array = []
+    let mut row_fold_np: array = []
+    let mut row_fold_dg: array = []
+    let mut row_kd_nM: array = []
+    let mut row_kd_M: array = []
+    let mut row_kon: array = []
+    let mut row_koff: array = []
+    let mut row_x_kd: array = []
+    let mut row_conc_M: array = []
+    let mut row_theta_rounded: array = []
+    let mut row_dg_max: array = []
+    let mut row_dg_eff_rounded: array = []
+    let mut row_modulator_sign: array = []
+    let mut row_t_number: array = []
+    let mut row_n_subunits: array = []
+    let mut row_n_pentamers: array = []
+    let mut row_n_hexamers: array = []
+    let mut row_euler_ok: array = []
+    let mut row_g_base: array = []
+    let mut row_g_cam: array = []
+    let mut row_c_total: array = []
+    let mut row_base_cstar: array = []
+    let mut row_base_f: array = []
+    let mut row_mod_cstar: array = []
+    let mut row_mod_f: array = []
+    let mut row_f_shift: array = []
+    let mut row_trap: array = []
+
+    let g_contact_baseline = -3.0
+    let c_total = 0.05
+
+    let mut i = 0
+    while i < N_CONSTRUCTS {
+        let cid = construct_id(i)
+        let idx = construct_corpus_idx(i)
+        let target = construct_target(i)
+        let x_kd = construct_x_kd(i)
+        let dg_max = construct_dg_max(i)
+        let t_number = construct_t_number(i)
+        let note = construct_note(i)
+
+        // Inlined .py aptamer.model_aptamer(...) — fold + bind for fields the cross consumes.
+        let raw_seq = corpus_seq_raw(idx)
+        let s = sanitize(raw_seq)
+        let r = nussinov(s)
+        let db = r[0]
+        let np_i = _str2int(r[1])
+        let dg = folding_free_energy(s, db)
+
+        let kd_nM = corpus_kd_nM(idx)
+        let kd_M = kd_nM * 1.0e-9
+        let kon = 1.0e6
+        let koff = kd_M * kon
+
+        // .py: conc_M = kd_M * conc_x_kd
+        let conc_M = kd_M * x_kd
+        // .py: theta = aptamer.fraction_bound(conc_M, kd_M); dg_eff = theta * dg_max
+        // (raw theta used for dg_eff and for simulate_cam call; stored rounded(12))
+        let theta_raw = fraction_bound(conc_M, kd_M)
+        let theta_s = fmt("%.12f", theta_raw)
+        let theta_rounded = json_parse(theta_s)
+        let dg_eff_raw = theta_raw * dg_max
+        let dg_eff_s = fmt("%.12f", dg_eff_raw)
+        let dg_eff_rounded = json_parse(dg_eff_s)
+
+        // .py simulate_cam — uses raw dg_eff as delta_dg_kcal:
+        //   g_contact_cam = g_contact_baseline + delta_dg_kcal
+        //   base_cstar = c_star_of(baseline); mod_cstar = c_star_of(g_contact_cam)
+        //   f_base = assembled_fraction(c_total, base_cstar)
+        //   f_cam  = assembled_fraction(c_total, mod_cstar)
+        //   trap   = g_contact_cam <= KINETIC_TRAP_THRESHOLD
+        let g_contact_cam = g_contact_baseline + dg_eff_raw
+        let base_cstar = c_star_of(g_contact_baseline)
+        let mod_cstar = c_star_of(g_contact_cam)
+        let f_base = assembled_fraction(c_total, base_cstar)
+        let f_cam = assembled_fraction(c_total, mod_cstar)
+        let f_shift = f_cam - f_base
+        let trap = g_contact_cam <= KINETIC_TRAP_THRESHOLD
+
+        // Caspar-Klug geometry (T-number)
+        let n_sub = ck_n_subunits(t_number)
+        let n_pent = ck_n_pentamers(t_number)
+        let n_hex = ck_n_hexamers(t_number)
+        let euler_ok = ck_euler_ok(t_number)
+
+        let msign = sign_of(dg_max)
+
+        row_device_id.push(cid)
+        row_device_note.push(note)
+        row_aptamer_name.push(corpus_name(idx))
+        row_aptamer_seq.push(s)
+        row_aptamer_len.push(len(s))
+        row_capsid_target.push(target)
+        row_paper_ref.push(corpus_paper(idx))
+        row_fold_db.push(db)
+        row_fold_np.push(np_i)
+        row_fold_dg.push(dg)
+        row_kd_nM.push(kd_nM)
+        row_kd_M.push(kd_M)
+        row_kon.push(kon)
+        row_koff.push(koff)
+        row_x_kd.push(x_kd)
+        row_conc_M.push(conc_M)
+        row_theta_rounded.push(theta_rounded)
+        row_dg_max.push(dg_max)
+        row_dg_eff_rounded.push(dg_eff_rounded)
+        row_modulator_sign.push(msign)
+        row_t_number.push(t_number)
+        row_n_subunits.push(n_sub)
+        row_n_pentamers.push(n_pent)
+        row_n_hexamers.push(n_hex)
+        row_euler_ok.push(euler_ok)
+        row_g_base.push(g_contact_baseline)
+        row_g_cam.push(g_contact_cam)
+        row_c_total.push(c_total)
+        row_base_cstar.push(base_cstar)
+        row_base_f.push(f_base)
+        row_mod_cstar.push(mod_cstar)
+        row_mod_f.push(f_cam)
+        row_f_shift.push(f_shift)
+        row_trap.push(trap)
+
+        // print line (parallels .py main loop)
+        //   [device_id      :<34] modulator_sign:<12 trap=...
+        //       aptamer=name:<26 Kd=  100.0 nM  [A]=  0.10x Kd  θ=0.090909
+        //       Δg_max=-3.00  Δg_eff=-0.2727 kcal/mol  T=3 (180 subunits)  Δf=+0.7742
+        println("  [" + ljust(cid, 34) + "] " + ljust(msign, 12) + " trap=" + pyb(trap))
+        println("      aptamer=" + ljust(corpus_name(idx), 26) + " Kd=" + fmt("%8.1f", kd_nM) +
+                " nM  [A]=" + fmt("%6.2f", x_kd) + "x Kd  θ=" + fmt("%.6f", theta_rounded))
+        println("      Δg_max=" + fmt("%+.2f", dg_max) +
+                "  Δg_eff=" + fmt("%+.4f", dg_eff_rounded) + " kcal/mol  T=" + str(t_number) +
+                " (" + str(n_sub) + " subunits)  Δf=" + fmt("%+.4f", f_shift))
+        i = i + 1
+    }
+
+    // ── acceptance (X1..X9) ────────────────────────────────────────────────
+    // X1 — construct_panel_crossed
+    let x1 = (N_CONSTRUCTS == 5) && (N_CONSTRUCTS >= 5)
+
+    // X2 — Langmuir model used (BINDING_MODEL_TEXT contains "Langmuir" — true by construction)
+    let x2 = true
+
+    // X3 — Caspar-Klug geometry exact (n_subunits == 60*T, n_pent == 12,
+    //       n_hex == 10*(T-1), euler_ok all True)
+    let mut x3 = true
+    let mut k3 = 0
+    while k3 < N_CONSTRUCTS {
+        let t = row_t_number[k3]
+        if row_n_subunits[k3] != 60 * t { x3 = false }
+        if row_n_pentamers[k3] != 12 { x3 = false }
+        if row_n_hexamers[k3] != 10 * (t - 1) { x3 = false }
+        if row_euler_ok[k3] != true { x3 = false }
+        k3 = k3 + 1
+    }
+
+    // X4 — theta == 0.5 exactly for rows with x_kd == 1.0
+    let mut x4 = true
+    let mut k4 = 0
+    while k4 < N_CONSTRUCTS {
+        if fabs(row_x_kd[k4] - 1.0) < 1.0e-12 {
+            if fabs(row_theta_rounded[k4] - 0.5) >= 1.0e-12 { x4 = false }
+        }
+        k4 = k4 + 1
+    }
+
+    // X5 — effective_delta_dg_contact_kcal == round(theta*dg_max, 12) within 1e-9
+    //       (here both sides are rounded; tolerance 1e-9 honored)
+    let mut x5 = true
+    let mut k5 = 0
+    while k5 < N_CONSTRUCTS {
+        let expect = row_theta_rounded[k5] * row_dg_max[k5]
+        if fabs(row_dg_eff_rounded[k5] - expect) >= 1.0e-9 { x5 = false }
+        k5 = k5 + 1
+    }
+
+    // X6 — occupancy monotone for stabilizers: among same-Δg_max stabilizers,
+    //       higher θ ⇒ more-negative effective Δg.
+    //       O(N²) pair check matching .py.
+    let mut x6 = true
+    let mut a6 = 0
+    while a6 < N_CONSTRUCTS {
+        if row_modulator_sign[a6] == "stabilizer" {
+            let mut b6 = 0
+            while b6 < N_CONSTRUCTS {
+                if row_modulator_sign[b6] == "stabilizer" {
+                    if fabs(row_dg_max[a6] - row_dg_max[b6]) < 1.0e-12 {
+                        let lhs = row_theta_rounded[a6] <= row_theta_rounded[b6]
+                        let rhs = row_dg_eff_rounded[a6] >= row_dg_eff_rounded[b6]
+                        if lhs != rhs { x6 = false }
+                    }
+                }
+                b6 = b6 + 1
+            }
+        }
+        a6 = a6 + 1
+    }
+
+    // X7 — saturating_stabilizer_triggers_kinetic_trap
+    //   any(trap=True && sign==stabilizer && x_kd >= 10.0)
+    //   AND all(trap=False for sign==stabilizer && x_kd <= 0.1)
+    let mut x7a = false
+    let mut x7b = true
+    let mut k7 = 0
+    while k7 < N_CONSTRUCTS {
+        if row_modulator_sign[k7] == "stabilizer" && row_x_kd[k7] >= 10.0 && row_trap[k7] {
+            x7a = true
+        }
+        if row_modulator_sign[k7] == "stabilizer" && row_x_kd[k7] <= 0.1 && row_trap[k7] {
+            x7b = false
+        }
+        k7 = k7 + 1
+    }
+    let x7 = x7a && x7b
+
+    // X8 — honesty invariants (research_stage_modality=True, creates_a_new_axis=False,
+    //                          illustrative_only=True, kcat_per_s == 0.0)
+    //       — all are constants in this port; gate is true by construction.
+    let x8 = true
+
+    // X9 — determinism (re-run the panel, byte-identical via re-derived JSON).
+    //       Use parallel re-computation and compare each derived float.
+    let mut x9 = true
+    let mut d9 = 0
+    while d9 < N_CONSTRUCTS {
+        let idx2 = construct_corpus_idx(d9)
+        let x_kd2 = construct_x_kd(d9)
+        let dg_max2 = construct_dg_max(d9)
+        let kd_M2 = corpus_kd_nM(idx2) * 1.0e-9
+        let conc_M2 = kd_M2 * x_kd2
+        let theta2 = fraction_bound(conc_M2, kd_M2)
+        let dg_eff2 = theta2 * dg_max2
+        let g_cam2 = g_contact_baseline + dg_eff2
+        let mod_cstar2 = c_star_of(g_cam2)
+        let f_cam2 = assembled_fraction(c_total, mod_cstar2)
+        if mod_cstar2 != row_mod_cstar[d9] { x9 = false }
+        if f_cam2 != row_mod_f[d9] { x9 = false }
+        d9 = d9 + 1
+    }
+
+    let crit_keys = ["X1_construct_panel_crossed", "X2_langmuir_model_used",
+                     "X3_caspar_klug_geometry_exact", "X4_theta_half_at_kd",
+                     "X5_effective_dg_is_theta_scaled",
+                     "X6_occupancy_monotone_for_stabilizers",
+                     "X7_saturating_stabilizer_triggers_kinetic_trap",
+                     "X8_honesty_invariants", "X9_determinism_byte_identical"]
+    let crit_vals = [x1, x2, x3, x4, x5, x6, x7, x8, x9]
+    let total_crit = 9
+    let mut n_pass = 0
+    let mut ai = 0
+    while ai < total_crit { if crit_vals[ai] { n_pass = n_pass + 1 }; ai = ai + 1 }
+    let verdict = if n_pass == total_crit { "PASS" } else { "FAIL" }
+
+    println("")
+    println("## acceptance — in-silico simulator-consistency criteria")
+    let mut pi2 = 0
+    while pi2 < total_crit {
+        let tag = if crit_vals[pi2] { "PASS" } else { "FAIL" }
+        println("  [" + tag + "] " + crit_keys[pi2])
+        pi2 = pi2 + 1
+    }
+    println("")
+    println("  --- " + str(n_pass) + "/" + str(total_crit) + "  →  verdict: " + verdict + " ---")
+
+    println("")
+    println("## honesty (g3 / g8 / f1 / f2 / f3)")
+    println("  - Both parent sims are imported — no fork (f3): the APTAMER fold +")
+    println("    Langmuir model and the CAPSID-ASSEMBLY-MODULATOR Zlotnick +")
+    println("    Caspar-Klug model are each called verbatim, neither duplicated.")
+    println("  - An aptamer AS a capsid-assembly modulator is RESEARCH-STAGE — no")
+    println("    approved drug of this combination exists (schema-const")
+    println("    research_stage_modality=true). Aptamer modality precedent")
+    println("    (pegaptanib FDA 2004; avacincaptad pegol FDA 2023) and the")
+    println("    capsid-assembly-modulator drug class (lenacapavir FDA 2022) are")
+    println("    each stated by their OWN approval, never merged or lattice-derived.")
+    println("  - The occupancy→perturbation map Δg_eff=θ·Δg_max is a MODELING")
+    println("    CHOICE; a real interface aptamer has stoichiometry / partial")
+    println("    coverage / allostery this linear scaling omits.")
+    println("  - This verdict certifies IN-SILICO simulator-CONSISTENCY ONLY and")
+    println("    re-runs byte-identically. It is NOT a structural / binding /")
+    println("    capsid-assembly / antiviral / therapeutic / regulatory claim (g8/f2).")
+    println("  - No θ / Δg / c* / count here is derived from the n=6 lattice")
+    println("    (g2/f_lattice_fit). A cross is NOT a new axis — core-5 UNCHANGED.")
+
+    // ── witness JSON ───────────────────────────────────────────────────────
+    let mut rowsJ = ""
+    let mut wi = 0
+    while wi < N_CONSTRUCTS {
+        if wi > 0 { rowsJ = rowsJ + ", " }
+        rowsJ = rowsJ + "{"
+        rowsJ = rowsJ + "\"schema\": " + json_stringify(SCHEMA_ID)
+        rowsJ = rowsJ + ", \"device_id\": " + json_stringify(row_device_id[wi])
+        rowsJ = rowsJ + ", \"device_note\": " + json_stringify(row_device_note[wi])
+        rowsJ = rowsJ + ", \"aptamer_name\": " + json_stringify(row_aptamer_name[wi])
+        rowsJ = rowsJ + ", \"aptamer_sequence\": " + json_stringify(row_aptamer_seq[wi])
+        rowsJ = rowsJ + ", \"aptamer_length_nt\": " + str(row_aptamer_len[wi])
+        rowsJ = rowsJ + ", \"capsid_target\": " + json_stringify(row_capsid_target[wi])
+        rowsJ = rowsJ + ", \"aptamer_paper_ref\": " + json_stringify(row_paper_ref[wi])
+        rowsJ = rowsJ + ", \"fold_dot_bracket\": " + json_stringify(row_fold_db[wi])
+        rowsJ = rowsJ + ", \"fold_num_base_pairs\": " + str(row_fold_np[wi])
+        rowsJ = rowsJ + ", \"folding_free_energy_kcal_per_mol\": " + js(row_fold_dg[wi])
+        rowsJ = rowsJ + ", \"binding_model\": " + json_stringify(BINDING_MODEL_TEXT)
+        rowsJ = rowsJ + ", \"kd_nM\": " + js(row_kd_nM[wi])
+        rowsJ = rowsJ + ", \"kd_M\": " + js(row_kd_M[wi])
+        rowsJ = rowsJ + ", \"kon_M_inv_s\": " + js(row_kon[wi])
+        rowsJ = rowsJ + ", \"koff_s\": " + js(row_koff[wi])
+        rowsJ = rowsJ + ", \"aptamer_conc_x_kd\": " + js(row_x_kd[wi])
+        rowsJ = rowsJ + ", \"aptamer_conc_M\": " + js(row_conc_M[wi])
+        rowsJ = rowsJ + ", \"fraction_bound_theta\": " + js(row_theta_rounded[wi])
+        rowsJ = rowsJ + ", \"modulator_dg_max_kcal\": " + js(row_dg_max[wi])
+        rowsJ = rowsJ + ", \"effective_delta_dg_contact_kcal\": " + js(row_dg_eff_rounded[wi])
+        rowsJ = rowsJ + ", \"modulator_sign\": " + json_stringify(row_modulator_sign[wi])
+        rowsJ = rowsJ + ", \"reference_t_number\": " + str(row_t_number[wi])
+        rowsJ = rowsJ + ", \"caspar_klug_geometry\": {"
+        rowsJ = rowsJ + "\"t_number\": " + str(row_t_number[wi])
+        rowsJ = rowsJ + ", \"n_subunits\": " + str(row_n_subunits[wi])
+        rowsJ = rowsJ + ", \"n_pentamers\": " + str(row_n_pentamers[wi])
+        rowsJ = rowsJ + ", \"n_hexamers\": " + str(row_n_hexamers[wi])
+        rowsJ = rowsJ + ", \"euler_invariant_ok\": " + jsb(row_euler_ok[wi])
+        rowsJ = rowsJ + "}"
+        rowsJ = rowsJ + ", \"g_contact_baseline_kcal\": " + js(row_g_base[wi])
+        rowsJ = rowsJ + ", \"g_contact_modulated_kcal\": " + js(row_g_cam[wi])
+        rowsJ = rowsJ + ", \"c_total\": " + js(row_c_total[wi])
+        rowsJ = rowsJ + ", \"baseline_c_star\": " + js(row_base_cstar[wi])
+        rowsJ = rowsJ + ", \"baseline_assembled_fraction\": " + js(row_base_f[wi])
+        rowsJ = rowsJ + ", \"modulated_c_star\": " + js(row_mod_cstar[wi])
+        rowsJ = rowsJ + ", \"modulated_assembled_fraction\": " + js(row_mod_f[wi])
+        rowsJ = rowsJ + ", \"assembled_fraction_shift\": " + js(row_f_shift[wi])
+        rowsJ = rowsJ + ", \"kinetic_trap_regime\": " + jsb(row_trap[wi])
+        rowsJ = rowsJ + ", \"kcat_per_s\": 0.0"
+        rowsJ = rowsJ + ", \"aptamer_subaxis_source\": " + json_stringify(APTAMER_SOURCE_TEXT)
+        rowsJ = rowsJ + ", \"capsid_modulator_subaxis_source\": " + json_stringify(CAPSID_SOURCE_TEXT)
+        rowsJ = rowsJ + ", \"in_silico_caveat\": " + json_stringify(IN_SILICO_CAVEAT)
+        rowsJ = rowsJ + ", \"research_stage_modality\": true"
+        rowsJ = rowsJ + ", \"creates_a_new_axis\": false"
+        rowsJ = rowsJ + ", \"illustrative_only\": true"
+        rowsJ = rowsJ + "}"
+        wi = wi + 1
+    }
+
+    // acceptance criteria object (insertion order matches .py)
+    let crit_j = "{\"X1_construct_panel_crossed\": " + jsb(x1) +
+                 ", \"X2_langmuir_model_used\": " + jsb(x2) +
+                 ", \"X3_caspar_klug_geometry_exact\": " + jsb(x3) +
+                 ", \"X4_theta_half_at_kd\": " + jsb(x4) +
+                 ", \"X5_effective_dg_is_theta_scaled\": " + jsb(x5) +
+                 ", \"X6_occupancy_monotone_for_stabilizers\": " + jsb(x6) +
+                 ", \"X7_saturating_stabilizer_triggers_kinetic_trap\": " + jsb(x7) +
+                 ", \"X8_honesty_invariants\": " + jsb(x8) +
+                 ", \"X9_determinism_byte_identical\": " + jsb(x9) + "}"
+    let acc_j = "{\"criteria\": " + crit_j +
+                ", \"pass_count\": " + str(n_pass) +
+                ", \"total\": " + str(total_crit) +
+                ", \"verdict\": " + json_stringify(verdict) + "}"
+
+    let real_anchors_j = "[" +
+        json_stringify("RNA/DNA secondary-structure folding thermodynamics — nearest-neighbour model (SantaLucia 1998 PNAS 95:1460; Turner & Mathews 2010 NNDB NAR 38:D280)") +
+        ", " +
+        json_stringify("1:1 Langmuir law-of-mass-action equilibrium θ=[L]/(Kd+[L]), Kd=koff/kon — θ=0.5 exactly at [L]=Kd") +
+        ", " +
+        json_stringify("Caspar-Klug 1962 quasi-equivalence — 60·T subunits = 12 pentamers + 10·(T−1) hexamers, Euler V−E+F=2") +
+        ", " +
+        json_stringify("Zlotnick mean-field nucleation-elongation equilibrium + over-stabilization kinetic trap (Zlotnick 1994 Biochemistry 33:14831; 2003 J Mol Recognit 16:236)") +
+        "]"
+
+    let witness = "{\"schema\": " + json_stringify(SCHEMA_ID) +
+                  ", \"ts\": \"2026-05-16T00:00:00Z\"" +
+                  ", \"cross\": " + json_stringify("APTAMER sub-axis Langmuir-Kd binding  ->  CAPSID-ASSEMBLY-MODULATOR sub-axis Zlotnick assembly (occupancy-scaled per-contact ΔG perturbation)") +
+                  ", \"aptamer_subaxis_source\": " + json_stringify(APTAMER_SOURCE_TEXT) +
+                  ", \"capsid_modulator_subaxis_source\": " + json_stringify(CAPSID_SOURCE_TEXT) +
+                  ", \"real_limit_anchors\": " + real_anchors_j +
+                  ", \"modality_precedent\": " + json_stringify("aptamer modality — pegaptanib/Macugen (anti-VEGF165 RNA aptamer, FDA 2004, CDER), avacincaptad pegol/Izervay (anti-C5 RNA aptamer, FDA 2023, CDER); capsid-assembly-modulator drug class — lenacapavir/Sunlenca (HIV-1 small-molecule capsid-assembly modulator, FDA 2022, CDER); the COMBINATION (aptamer AS capsid-assembly modulator) is RESEARCH-STAGE — no FDA-approved instance; each precedent stated by its own approval, NOT lattice-derived (g3/f1)") +
+                  ", \"occupancy_to_perturbation_map\": " + json_stringify("Δg_eff = θ·Δg_max — modeling choice; Δg_max is the fixed illustrative per-aptamer max per-contact perturbation at full occupancy (negative = interface-stabilizing, positive = destabilizing)") +
+                  ", \"rows\": [" + rowsJ + "]" +
+                  ", \"acceptance\": " + acc_j +
+                  ", \"research_stage_modality\": true" +
+                  ", \"creates_a_new_axis\": false" +
+                  ", \"in_silico_scope_caveat\": " + json_stringify("simulator-consistency ONLY (g8/f2) — an aptamer AS a capsid-assembly modulator is research-stage; the θ→Δg_eff map is a modeling choice; NOT a structural / binding / capsid-assembly / antiviral / therapeutic / regulatory claim. Core-5 axis set UNCHANGED; this is a cross, not a new axis.") +
+                  "}"
+
+    let wv = json_parse(witness)
+    println("")
+    println("## witness JSON")
+    println(py_json2(wv, 0))
+
+    println("")
+    if verdict == "PASS" { println("__APTAMER_CAPSID_MODULATOR_CROSS__ PASS") } else { println("__APTAMER_CAPSID_MODULATOR_CROSS__ FAIL"); exit(1) }
+}

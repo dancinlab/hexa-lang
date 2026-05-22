@@ -1,0 +1,48 @@
+#!hexa strict
+// hexa-bio/_hexa_bridge/selftest/f_tp5_e_uptake_enumerator.hexa
+//
+// F-TP5-e public-API uptake enumerator. hexa-native port of
+// `selftest/f_tp5_e_uptake_enumerator.py` (T3). Walks the repo for
+// weave_compose call-sites; with the single default root, distinct
+// consumer count is 1 iff any call-site exists, else 0.
+//   distinct ≥ 5 OR published ≥ 1 → PASS exit 0
+//   distinct ≥ 1 (else)           → SKIP exit 0 (expected state)
+//   distinct == 0                 → FAIL exit 1 (real regression)
+// Verdict lines go to stderr (eprintln), matching the .py. The
+// run_all union keys on exit code.
+
+fn shq(s: string) -> string { return "'" + s.replace("'", "'\\''") + "'" }
+
+fn main() {
+    let root = exec("pwd").trim()
+    // CALL_PATTERNS: \bweave_compose\s*\( | \bweave\.compose\s*\( | --compose\b
+    let ere = "\\bweave_compose[[:space:]]*\\(|\\bweave\\.compose[[:space:]]*\\(|--compose\\b"
+    // CODE_EXTS scan, SKIP_DIRS pruned
+    let cmd = "grep -rlE " + shq(ere) + " " + shq(root)
+        + " --include='*.py' --include='*.hexa' --include='*.sh' --include='*.md'"
+        + " --include='*.lean' --include='*.rs' --include='*.ts' --include='*.js'"
+        + " --exclude-dir=.git --exclude-dir=.venv --exclude-dir=venv"
+        + " --exclude-dir=__pycache__ --exclude-dir=node_modules"
+        + " --exclude-dir=.pnpm-store --exclude-dir=.filter-repo-backup"
+        + " --exclude-dir=build --exclude-dir=dist 2>/dev/null | head -1"
+    let hit = exec(cmd).trim()
+
+    // single root → distinct_consumers = 1 iff any call-site, else 0
+    let distinct = if hit.len() > 0 { 1 } else { 0 }
+    let published = 0
+    let overall = distinct >= 5 || published >= 1
+    let overall_s = if overall { "True" } else { "False" }
+
+    eprintln("distinct_consumers=" + str(distinct) + "  published=" + str(published) + "  overall_pass=" + overall_s)
+
+    if overall {
+        eprintln("__F_TP5E_UPTAKE__ PASS  (objective criterion met — external uptake materialized)")
+        return
+    }
+    if distinct >= 1 {
+        eprintln("__F_TP5E_UPTAKE__ SKIP  (enumerator infra OK; " + str(distinct) + " internal callsite(s), 0 external — F-TP5-e USER-DISCRETION PASS per .roadmap.weave; objective criterion not yet met but falsifier remains live + re-evaluatable)")
+        return
+    }
+    eprintln("__F_TP5E_UPTAKE__ FAIL  (0 internal callsites — the weave_compose API appears removed from hexa-bio's own modules; enumerator has nothing to scan; this IS a regression)")
+    exit(1)
+}

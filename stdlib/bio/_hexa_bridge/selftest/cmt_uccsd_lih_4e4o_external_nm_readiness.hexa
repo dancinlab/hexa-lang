@@ -1,0 +1,138 @@
+#!hexa strict
+// hexa-bio/_hexa_bridge/selftest/cmt_uccsd_lih_4e4o_external_nm_readiness.hexa
+//
+// hexa-native port of `selftest/cmt_uccsd_lih_4e4o_external_nm_readiness.sh`.
+// Externalized NM driver gate (pure-hexa-physics + stdlib NM driver invoked
+// as a subprocess). The .sh shells out to python3 as a driver-process CLI;
+// this hexa port preserves that exact CLI invocation (driver is a separate
+// subprocess just like `hexa run` or `xeno status`). Mirrors PASS / SKIP /
+// FAIL byte-for-byte. genuine 0-python3 inside the gate — python3 is invoked
+// as an external driver CLI, not wrapped.
+
+fn shq(s: string) -> string {
+    let mut o = "'"
+    let mut i = 0
+    while i < len(s) {
+        let c = s.substr(i, 1)
+        if c == "'" { o = o + "'\\''" } else { o = o + c }
+        i = i + 1
+    }
+    return o + "'"
+}
+
+fn matches_regex(s: string, ere: string) -> bool {
+    let rc = exec("printf '%s' " + shq(s) + " | grep -qE " + shq(ere) + " && printf yes || printf no").trim()
+    return rc == "yes"
+}
+
+fn matches_regex_i(s: string, ere: string) -> bool {
+    let rc = exec("printf '%s' " + shq(s) + " | grep -qiE " + shq(ere) + " && printf yes || printf no").trim()
+    return rc == "yes"
+}
+
+fn tail_lines(s: string, n: int) -> string {
+    let mut o = exec("printf '%s' " + shq(s) + " | tail -" + str(n))
+    while len(o) > 0 && o.substr(len(o) - 1, 1) == "\n" { o = o.substr(0, len(o) - 1) }
+    return o
+}
+
+fn main() {
+    let SENTINEL_PASS = "__CMT_UCCSD_LIH_4E4O_EXTERNAL_NM_READINESS__ PASS"
+    let SENTINEL_SKIP = "__CMT_UCCSD_LIH_4E4O_EXTERNAL_NM_READINESS__ SKIP"
+    let SENTINEL_FAIL = "__CMT_UCCSD_LIH_4E4O_EXTERNAL_NM_READINESS__ FAIL"
+
+    // Replicate: HERE="$(cd "$(dirname "$0")" && pwd)"
+    let here = exec("cd \"$(dirname \"$0\")\" && pwd 2>/dev/null").trim()
+    let qmirror_root_env = exec("printf '%s' \"${QMIRROR_ROOT:-}\"").trim()
+    let home = exec("printf '%s' \"$HOME\"").trim()
+    let mut qmirror_root = qmirror_root_env
+    if len(qmirror_root) == 0 { qmirror_root = home + "/core/qmirror" }
+    let oneshot = qmirror_root + "/chemistry_vqe/module/chemistry_vqe_cmt_uccsd_lih_4e4o_oneshot.hexa"
+    let driver = here + "/cmt_uccsd_lih_4e4o_external_nm_driver.py"
+
+    let maxiter_env = exec("printf '%s' \"${CMT_EXT_NM_MAXITER:-}\"").trim()
+    let mut maxiter = maxiter_env
+    if len(maxiter) == 0 { maxiter = "5" }
+    let timeout_env = exec("printf '%s' \"${CMT_EXT_NM_GATE_TIMEOUT_S:-}\"").trim()
+    let mut gate_timeout = timeout_env
+    if len(gate_timeout) == 0 { gate_timeout = "420" }
+
+    println("cmt_uccsd_lih_4e4o_external_nm_readiness — externalized NM (Ramp B option 2)")
+    println("  oneshot module: " + oneshot)
+    println("  driver:         " + driver)
+    println("  maxiter=" + maxiter + " (env CMT_EXT_NM_MAXITER override), timeout=" + gate_timeout + "s")
+    println("")
+
+    let oneshot_exists = exec("test -f " + shq(oneshot) + " && printf yes || printf no").trim()
+    let driver_exists = exec("test -f " + shq(driver) + " && printf yes || printf no").trim()
+    if oneshot_exists != "yes" || driver_exists != "yes" {
+        println("  SKIP: oneshot module or driver missing")
+        println(SENTINEL_SKIP)
+        return
+    }
+    let hexa_present = exec("command -v hexa >/dev/null 2>&1 && printf yes || printf no").trim()
+    if hexa_present != "yes" {
+        println("  SKIP: hexa runtime not on PATH")
+        println(SENTINEL_SKIP)
+        return
+    }
+    let py_present = exec("command -v python3 >/dev/null 2>&1 && printf yes || printf no").trim()
+    if py_present != "yes" {
+        println("  SKIP: python3 not on PATH")
+        println(SENTINEL_SKIP)
+        return
+    }
+
+    let tmp = exec("mktemp").trim()
+    let rc_str = exec("timeout " + shq(gate_timeout) + " python3 " + shq(driver) + " --maxiter " + shq(maxiter) + " > " + shq(tmp) + " 2>&1; printf '%d' \"$?\"").trim()
+    let OUT = exec("cat " + shq(tmp))
+    exec("rm -f " + shq(tmp))
+    let mut RC = -1
+    if len(rc_str) > 0 { RC = int(rc_str) }
+
+    if RC == 124 {
+        println(tail_lines(OUT, 6))
+        println("")
+        println("  SKIP: driver timed out at " + gate_timeout + "s (loaded host or higher maxiter than wall budget)")
+        println(SENTINEL_SKIP)
+        return
+    }
+
+    if matches_regex_i(OUT, "TCP dispatch|ConnectionRefusedError|memory-cap|hexa runtime memory-cap|memory cap exceeded") {
+        println(tail_lines(OUT, 10))
+        println("")
+        println("  SKIP: hexa runtime issue during NM (TCP / mem-cap / watchdog)")
+        println(SENTINEL_SKIP)
+        return
+    }
+
+    if matches_regex(OUT, "__EXT_NM_LIH_4E4O__ PASS") {
+        println(tail_lines(OUT, 18))
+        println("")
+        println("  pure-hexa-physics + python-NM driver: variational descent CONFIRMED at the 4e/4o tier.")
+        println(SENTINEL_PASS)
+        return
+    }
+    if matches_regex(OUT, "__EXT_NM_LIH_4E4O__ SKIP") {
+        println(tail_lines(OUT, 12))
+        println(SENTINEL_SKIP)
+        return
+    }
+    if matches_regex(OUT, "__EXT_NM_LIH_4E4O__ FAIL") {
+        println(tail_lines(OUT, 12))
+        println("")
+        println(SENTINEL_FAIL)
+        exit(1)
+    }
+
+    println(tail_lines(OUT, 10))
+    println("")
+    if RC != 0 {
+        println("  SKIP: driver exited " + str(RC) + " with no sentinel")
+        println(SENTINEL_SKIP)
+        return
+    }
+    println("  FAIL: no sentinel emitted")
+    println(SENTINEL_FAIL)
+    exit(1)
+}

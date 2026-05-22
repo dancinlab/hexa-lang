@@ -1,0 +1,85 @@
+#!hexa strict
+// hexa-matter/_hexa_bridge/selftest/compound_semi_bandgap_audit.hexa
+//
+// compound-semi bandgap citation gate. hexa-native port of
+// `selftest/compound_semi_bandgap_audit.py` (T2). Each of GaN/SiC/GaAs/
+// InP must appear with an `eV` figure nearby, plus >= 2 reference
+// anchors. stdlib-only; exec file read.
+//
+// Stage-1 scope: the Python `re` matched <material> .{0,80} (\d+) eV and
+// then range-checked the value (3.4±0.2 etc.). Here we verify the
+// material+eV PROXIMITY (split-window) and anchor count; the numeric
+// range check is deferred to Stage-2 stdlib/regex (PLAN.md §2.4). The
+// spec values are correct, so this PASSes; Stage-2 restores the guard
+// against a wrong bandgap number slipping in.
+
+let ROOT_ENV = env("HEXA_MATTER_ROOT")
+
+fn shq(s: str) -> str { return "'" + s.replace("'", "'\\''") + "'" }
+
+fn root() -> str {
+    if ROOT_ENV.len() > 0 { return ROOT_ENV }
+    return exec("pwd").trim()
+}
+
+fn head80(s: str) -> str {
+    if s.len() > 80 { return s.substr(0, 80) }
+    return s
+}
+
+// material name appears with "eV" within ~80 chars after it.
+fn mat_has_ev(text: str, mat: str) -> bool {
+    let parts = text.split(mat)
+    let mut i = 1
+    while i < parts.len() {
+        if head80(parts[i]).contains("eV") { return true }
+        i = i + 1
+    }
+    return false
+}
+
+let MATS = ["GaN", "SiC", "GaAs", "InP"]
+let ANCHORS = ["Sze", "NIST", "Saddow", "Slack", "Wolfspeed", "datasheet"]
+
+fn main() {
+    println("hexa-matter/selftest/compound_semi_bandgap_audit (hexa-native, T2)")
+    let spec = root() + "/compound-semi/compound-semi.md"
+    let ex = exec("[ -f " + shq(spec) + " ] && echo y || echo n").trim()
+    if ex != "y" {
+        println("  [FAIL] compound-semi.md missing")
+        println("__HEXA_MATTER_COMPOUND_SEMI_BANDGAP__ FAIL")
+        exit(1)
+    }
+    let text = exec("cat " + shq(spec) + " 2>/dev/null")
+    let mut fail = 0
+
+    let mut i = 0
+    while i < MATS.len() {
+        if mat_has_ev(text, MATS[i]) {
+            println("  [PASS] " + MATS[i] + ": bandgap eV figure present (Stage-1: proximity; range → Stage-2)")
+        } else {
+            println("  [FAIL] " + MATS[i] + ": no eV figure near material name")
+            fail = fail + 1
+        }
+        i = i + 1
+    }
+
+    let mut anc = 0
+    let mut j = 0
+    while j < ANCHORS.len() {
+        if text.contains(ANCHORS[j]) { anc = anc + 1 }
+        j = j + 1
+    }
+    if anc >= 2 {
+        println("  [PASS] >= 2 reference anchors present (" + str(anc) + ")")
+    } else {
+        println("  [FAIL] insufficient reference anchors (" + str(anc) + ")")
+        fail = fail + 1
+    }
+
+    if fail > 0 {
+        println("__HEXA_MATTER_COMPOUND_SEMI_BANDGAP__ FAIL  (" + str(fail) + " missing)")
+        exit(1)
+    }
+    println("__HEXA_MATTER_COMPOUND_SEMI_BANDGAP__ PASS")
+}

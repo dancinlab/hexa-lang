@@ -1,0 +1,135 @@
+#!hexa strict
+// hexa-bio/_hexa_bridge/selftest/r1_symlink_audit.hexa
+//
+// R1 SSOT symlink audit. hexa-native port of
+// `selftest/r1_symlink_audit.sh` (T3b). Lossless — `docs/n6/*` walk,
+// `readlink -e`/`realpath`/BSD-fallback resolve, `stat -f %m | -c %Y`
+// mtime, 90-day staleness + `.STALE_OK` sidecar, accepted-root prefix
+// test are all reproduced via exec; identical stdout lines and exit
+// codes (0 all-PASS / 1 broken|off-root / 2 warn-only). stdlib-only.
+
+fn shq(s: str) -> str { return "'" + s.replace("'", "'\\''") + "'" }
+
+fn root() -> str { return exec("pwd").trim() }
+
+let STALE_DAYS = 90
+
+fn resolve_link(link: str) -> str {
+    let a = exec("readlink -e " + shq(link) + " 2>/dev/null || true").trim()
+    if a.len() > 0 { return a }
+    let b = exec("r=$(realpath " + shq(link) + " 2>/dev/null || true); [ -n \"$r\" ] && [ -e \"$r\" ] && printf '%s' \"$r\" || true").trim()
+    if b.len() > 0 { return b }
+    return exec("raw=$(readlink " + shq(link) + " 2>/dev/null || true); [ -z \"$raw\" ] && exit 0; case \"$raw\" in /*) abs=\"$raw\";; *) abs=\"$(cd \"$(dirname " + shq(link) + ")\" && pwd)/$raw\";; esac; [ -e \"$abs\" ] && printf '%s/%s' \"$(cd \"$(dirname \"$abs\")\" 2>/dev/null && pwd)\" \"$(basename \"$abs\")\" || true").trim()
+}
+
+fn mtime_epoch(t: str) -> str {
+    return exec("if stat -f %m " + shq(t) + " >/dev/null 2>&1; then stat -f %m " + shq(t) + "; else stat -c %Y " + shq(t) + "; fi").trim()
+}
+
+fn to_int(s: str) -> int {
+    let mut v = 0
+    let mut seen = false
+    let D = "0123456789"
+    let mut i = 0
+    while i < s.len() {
+        let c = s.substr(i, 1)
+        if D.contains(c) && c.len() == 1 {
+            let mut d = 0
+            while d < 10 { if str(d) == c { break }; d = d + 1 }
+            v = v * 10 + d; seen = true
+        }
+        i = i + 1
+    }
+    if seen == false { return -1 }
+    return v
+}
+
+fn starts_with(s: str, pre: str) -> bool {
+    if s.len() < pre.len() { return false }
+    return s.substr(0, pre.len()) == pre
+}
+
+fn ends_with(s: str, suf: str) -> bool {
+    if s.len() < suf.len() { return false }
+    return s.substr(s.len() - suf.len(), suf.len()) == suf
+}
+
+fn main() {
+    let r = root()
+    let docs_n6 = r + "/docs/n6"
+    let home = env("HOME")
+    // ACCEPTED_ROOTS = ( $REPO_ROOT , $HOME/core/nexus/canon-infra/legacy-canon )
+    let root1 = r
+    let root2 = home + "/core/nexus/canon-infra/legacy-canon"
+
+    if exec("[ -d " + shq(docs_n6) + " ] && echo y || echo n").trim() != "y" {
+        println("FAIL: docs/n6/ directory not found at " + docs_n6)
+        exit(1)
+    }
+
+    let now_epoch = to_int(exec("date +%s").trim())
+    let stale_threshold = STALE_DAYS * 86400
+
+    let mut fail = 0
+    let mut warn = 0
+    let mut checked = 0
+
+    // for entry in DOCS_N6/* (glob; include symlinks)
+    let listing = exec("for e in " + shq(docs_n6) + "/*; do [ -e \"$e\" ] || [ -L \"$e\" ] || continue; printf '%s\\n' \"$e\"; done").trim()
+    if listing.len() > 0 {
+        let entries = listing.split("\n")
+        let mut i = 0
+        while i < entries.len() {
+            let entry = entries[i]
+            if entry.len() == 0 { i = i + 1; continue }
+            // base = basename
+            let base = exec("basename " + shq(entry)).trim()
+            // skip *.STALE_OK sidecars
+            if ends_with(base, ".STALE_OK") { i = i + 1; continue }
+            checked = checked + 1
+
+            let resolved = resolve_link(entry)
+            if resolved.len() == 0 {
+                let raw = exec("readlink " + shq(entry) + " 2>/dev/null || echo '?'").trim()
+                println("FAIL [broken]    " + base + " -> " + raw)
+                fail = fail + 1
+                i = i + 1
+                continue
+            }
+
+            // (c) inside an accepted root
+            let mut in_root = false
+            if starts_with(resolved, root1 + "/") { in_root = true }
+            if in_root == false && starts_with(resolved, root2 + "/") { in_root = true }
+            if in_root == false {
+                println("FAIL [off-root]  " + base + " -> " + resolved + "  (not under any of: " + root1 + " " + root2 + ")")
+                fail = fail + 1
+                i = i + 1
+                continue
+            }
+
+            // (b) staleness
+            let tgt_mtime = to_int(mtime_epoch(resolved))
+            let age = now_epoch - tgt_mtime
+            let aged = age / 86400
+            if age > stale_threshold {
+                let sidecar = entry + ".STALE_OK"
+                if exec("[ -f " + shq(sidecar) + " ] && echo y || echo n").trim() == "y" {
+                    println("OK   [stale-ok]  " + base + " (age " + str(aged) + "d, STALE_OK annotation present)")
+                } else {
+                    println("WARN [stale]    " + base + " (age " + str(aged) + "d > " + str(STALE_DAYS) + "d, no STALE_OK annotation)")
+                    warn = warn + 1
+                }
+            } else {
+                println("OK              " + base + " (age " + str(aged) + "d)")
+            }
+            i = i + 1
+        }
+    }
+
+    println("---")
+    println("checked=" + str(checked) + "  fail=" + str(fail) + "  warn=" + str(warn))
+
+    if fail > 0 { exit(1) }
+    if warn > 0 { exit(2) }
+}

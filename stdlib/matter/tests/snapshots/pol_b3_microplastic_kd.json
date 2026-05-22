@@ -1,0 +1,29 @@
+{
+  "__fixture_tag__": "VENDORED SOURCE SNAPSHOT — government dataset, frozen citation",
+  "gate_id": "pol_b3_microplastic_kd",
+  "claim": {
+    "property": "partition coefficient log K_d (sorbent: microplastic; sorbate: hydrophobic organics)",
+    "material": "PE / PP / PS microplastic fragments",
+    "value_range_log10": [4.0, 6.0],
+    "unit": "log10 (L/kg)",
+    "condition": "marine seawater, 25 C, equilibrium ~ 28 d"
+  },
+  "source": {
+    "kind": "GOVERNMENT_DATASET",
+    "primary": "NOAA Marine Debris Program — microplastic-sorbed pollutant Kd compilation",
+    "secondary": "Mato et al. 2001 Environ. Sci. Technol. 35, 318; Rochman et al. 2013 Sci. Rep. 3, 3263",
+    "citation": "NOAA Marine Debris Program + Mato 2001 ES&T 35, 318 + Rochman 2013 Sci. Rep. 3, 3263 — microplastic-PCB/PAH log Kd 4-6"
+  },
+  "tolerance": {
+    "log10_abs": 0.5,
+    "unit": "log decades",
+    "basis": "polymer-type + chain-length dependent; NOAA aggregate range spans ~ 2 decades"
+  },
+  "spec_doc": {
+    "path": "biodegradable-plastics/biodegradable-plastics.md",
+    "line_hint": "microplastic Kd reference (cross-link)"
+  },
+  "unproven": false,
+  "accessed": "2026-05-13",
+  "n6_lattice_fit_applied": false
+}

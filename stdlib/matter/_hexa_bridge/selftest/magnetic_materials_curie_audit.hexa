@@ -1,0 +1,106 @@
+#!hexa strict
+// hexa-matter/_hexa_bridge/selftest/magnetic_materials_curie_audit.hexa
+//
+// magnetic-materials Curie + (BH)max + family + anchor gate. hexa-native
+// port of `selftest/magnetic_materials_curie_audit.py` (T2).
+// stdlib-only; exec file read.
+//
+// Stage-1: Python `re` proximity (Curie .{0,120} \d K ; (BH)max .{0,200}
+// \d MGOe) → split-window proximity + unit token. Numeric range is not
+// asserted by the original (only presence), so this is behaviour-equal
+// for presence; Stage-2 stdlib/regex tightens the digit shape.
+
+let ROOT_ENV = env("HEXA_MATTER_ROOT")
+
+fn shq(s: str) -> str { return "'" + s.replace("'", "'\\''") + "'" }
+
+fn root() -> str {
+    if ROOT_ENV.len() > 0 { return ROOT_ENV }
+    return exec("pwd").trim()
+}
+
+fn headn(s: str, n: int) -> str {
+    if s.len() > n { return s.substr(0, n) }
+    return s
+}
+
+// `key` appears with any unit in `units` within `win` chars after it.
+fn near_unit(text: str, key: str, win: int, units: [str]) -> bool {
+    let parts = text.split(key)
+    let mut i = 1
+    while i < parts.len() {
+        let h = headn(parts[i], win)
+        let mut u = 0
+        while u < units.len() {
+            if h.contains(units[u]) { return true }
+            u = u + 1
+        }
+        i = i + 1
+    }
+    return false
+}
+
+let MATS = ["NdFeB", "Nd₂Fe₁₄B", "Nd2Fe14B", "SmCo", "SmCo₅", "SmCo5", "Sm₂Co₁₇", "Sm2Co17"]
+let ANCHORS = ["Hitachi Metals", "TDK", "Arnold", "Vacuumschmelze", "Coey", "datasheet", "Stoner-Wohlfarth"]
+let CURIE_U = ["K", "°C", " C"]
+let BH_U = ["MGOe", "kJ/m³", "kJ/m^3", "kJ/m3"]
+
+fn main() {
+    println("hexa-matter/selftest/magnetic_materials_curie_audit (hexa-native, T2)")
+    let spec = root() + "/magnetic-materials/magnetic-materials.md"
+    let ex = exec("[ -f " + shq(spec) + " ] && echo y || echo n").trim()
+    if ex != "y" {
+        println("  [FAIL] magnetic-materials.md missing")
+        println("__HEXA_MATTER_MAGNETIC_CURIE__ FAIL")
+        exit(1)
+    }
+    let text = exec("cat " + shq(spec) + " 2>/dev/null")
+    let mut fail = 0
+
+    if near_unit(text, "Curie", 120, CURIE_U) {
+        println("  [PASS] Curie temperature anchor present")
+    } else {
+        println("  [FAIL] no Curie anchor")
+        fail = fail + 1
+    }
+
+    let bh = near_unit(text, "BH)max", 200, BH_U) || near_unit(text, "BHmax", 200, BH_U) || near_unit(text, "(BH)_max", 200, BH_U)
+    if bh {
+        println("  [PASS] (BH)max anchor present")
+    } else {
+        println("  [FAIL] no (BH)max anchor")
+        fail = fail + 1
+    }
+
+    let mut mf = 0
+    let mut i = 0
+    while i < MATS.len() {
+        if text.contains(MATS[i]) { mf = mf + 1 }
+        i = i + 1
+    }
+    if mf > 0 {
+        println("  [PASS] hard-magnet families named (" + str(mf) + ")")
+    } else {
+        println("  [FAIL] no NdFeB/SmCo family")
+        fail = fail + 1
+    }
+
+    let mut anc = 0
+    let mut j = 0
+    while j < ANCHORS.len() {
+        if text.contains(ANCHORS[j]) { anc = anc + 1 }
+        j = j + 1
+    }
+    if anc >= 1 {
+        println("  [PASS] reference anchor present (" + str(anc) + ")")
+    } else {
+        println("  [FAIL] no vendor/canonical anchor")
+        fail = fail + 1
+    }
+
+    if fail > 0 {
+        println("__HEXA_MATTER_MAGNETIC_CURIE__ FAIL  (" + str(fail) + " missing)")
+        exit(1)
+    }
+    println("__HEXA_MATTER_MAGNETIC_CURIE__ PASS")
+}

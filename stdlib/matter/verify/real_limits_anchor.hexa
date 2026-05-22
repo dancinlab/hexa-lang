@@ -1,0 +1,120 @@
+#!hexa strict
+// hexa-matter/verify/real_limits_anchor.hexa — real-limits-first anchor.
+//
+// Per LATTICE_POLICY.md §1.3 rule 2: each project's verify must use at
+// least one anchor from §1.2 (Shannon · Kolmogorov · Bekenstein · c · ℏ ·
+// k · Stefan-Boltzmann · Carnot · ASML throughput · ERCOT · etc.) and
+// at least one engineering/industry threshold.
+//
+// hexa-matter's real-limits audit lives in LIMIT_BREAKTHROUGH.md (Wave M,
+// 2026-05-12). This script confirms that file is present and references
+// the canonical material-science HARD walls (L1–L12) so any agent has a
+// pointer from verify→audit.
+//
+// Honesty: no value here is computed against the n=6 lattice. Each constant
+// is sourced from NIST WebBook / CRC Handbook / ASM / Frenkel 1926 /
+// Hales 2017 / Cedillos-Barraza 2016 as cited in LIMIT_BREAKTHROUGH.md.
+
+let HOME = env("HOME")
+let HEXA_MATTER_ROOT_ENV = env("HEXA_MATTER_ROOT")
+
+fn shq(s: str) -> str {
+    return "'" + s.replace("'", "'\\''") + "'"
+}
+
+fn _resolve_root() -> str {
+    if HEXA_MATTER_ROOT_ENV.len() > 0 { return HEXA_MATTER_ROOT_ENV }
+    let oldpwd = env("OLDPWD")
+    if oldpwd.len() > 0 {
+        let t = exec("[ -f " + shq(oldpwd) + "/hexa.toml ] && echo y || echo n").trim()
+        if t == "y" { return oldpwd }
+    }
+    let pwd = env("PWD")
+    if pwd.len() > 0 {
+        let t = exec("[ -f " + shq(pwd) + "/hexa.toml ] && echo y || echo n").trim()
+        if t == "y" { return pwd }
+    }
+    return HOME + "/core/hexa-matter"
+}
+
+fn _file_exists(p: str) -> bool {
+    let r = exec("[ -f " + shq(p) + " ] && echo yes || echo no").trim()
+    return r == "yes"
+}
+
+fn _file_contains(p: str, needle: str) -> bool {
+    let cmd = "grep -F " + shq(needle) + " " + shq(p) + " >/dev/null 2>&1 && echo yes || echo no"
+    let r = exec(cmd).trim()
+    return r == "yes"
+}
+
+fn main() {
+    let root = _resolve_root()
+    println("hexa-matter/verify/real_limits_anchor — real-limits-first check")
+    println("  root: " + root)
+    println("")
+    println("  policy: LATTICE_POLICY §1.3 rule 2 — at least 1 real limit anchor required")
+    println("  source: LIMIT_BREAKTHROUGH.md (Wave M, materials-science audit)")
+    println("")
+
+    let mut ok = 0
+    let mut bad = 0
+
+    // 1. Audit file must exist.
+    let audit = root + "/LIMIT_BREAKTHROUGH.md"
+    if _file_exists(audit) {
+        println("  [PASS] LIMIT_BREAKTHROUGH.md present")
+        ok = ok + 1
+    } else {
+        println("  [FAIL] LIMIT_BREAKTHROUGH.md missing (abs: " + audit + ")")
+        bad = bad + 1
+    }
+
+    // 2. Audit must reference canonical material-science HARD walls.
+    //    Each anchor is a sourced HARD/SOFT wall from LIMIT_BREAKTHROUGH.md §2.
+    let anchors = [
+        ["Frenkel σ_th ≈ E/10",          "Frenkel"],          // L1 strength theoretical
+        ["Mohs hardness 10 (diamond)",    "Mohs"],             // L4 hardness ceiling
+        ["Refractory T_m ~4200 K (TaHfC)", "Cedillos"],        // L5 melting point
+        ["Os density 22.59 g/cm³",        "Osmium"],           // L6 density (HARD)
+        ["Kepler packing 0.7405",         "Hales"],            // L11 packing fraction
+        ["NIST WebBook",                  "NIST WebBook"],     // sourcing canonical
+        ["CRC Handbook",                  "CRC Handbook"],     // sourcing canonical
+    ]
+    for a in anchors {
+        let label = a[0]
+        let needle = a[1]
+        if _file_contains(audit, needle) {
+            println("  [PASS] anchor referenced: " + label)
+            ok = ok + 1
+        } else {
+            println("  [FAIL] anchor missing: " + label + " (needle: '" + needle + "')")
+            bad = bad + 1
+        }
+    }
+
+    // 3. Honesty caveat: LK-99 / metallic-hydrogen room-T claims must remain
+    let unproven = [
+        ["LK-99 room-T SC",              "LK-99"],
+        ["Metallic hydrogen at room T",  "Metallic hydrogen"],
+    ]
+    for u in unproven {
+        let label = u[0]
+        let needle = u[1]
+        if _file_contains(audit, needle) {
+            println("  [PASS] unproven-claim caveat preserved: " + label)
+            ok = ok + 1
+        } else {
+            println("  [FAIL] unproven-claim caveat MISSING: " + label)
+            bad = bad + 1
+        }
+    }
+
+    println("")
+    println("  anchors verified: " + str(ok) + "  failures: " + str(bad))
+    if bad > 0 {
+        println("__HEXA_MATTER_REAL_LIMITS_ANCHOR__ FAIL")
+        exit(1)
+    }
+    println("__HEXA_MATTER_REAL_LIMITS_ANCHOR__ PASS")
+}

@@ -1,0 +1,610 @@
+#!hexa strict
+// hexa-bio/_hexa_bridge/selftest/virocapsid_pdb_corpus.hexa
+//
+// hexa-native port of `_python_bridge/module/virocapsid_pdb_corpus.py`
+// (T3; json/math/re/os — deterministic). VIROCAPSID axis · C3a Bayesian
+// audit on the VIPERdb v3.0 vendored snapshot (n=527) · σ(6)=12
+// STRUCTURAL-EXACT vs uniform{5..50} H0. Selftest mode = offline on
+// the snapshot (sys.argv unused — neither --refresh-viperdb nor
+// --emit-witness triggers). Float fields computed with the exact .py
+// arithmetic → CPython-identical IEEE doubles; witness JSON emitted
+// via the verified py_json2 module (json.dumps(indent=2,
+// ensure_ascii=False) parity). math.log10(46) hardcoded as the
+// CPython libm double (discipline #6 — hexa lacks libm log10); the
+// downstream `n * log10_46` is a single IEEE multiply that matches
+// Python bit-exact. Posterior path: n=527 → log10_bf ≈ 876.27 ≫ 308
+// → 10**-log10_bf underflows to 0.0 → posterior_h1 = 1.0/(1.0+0.0) =
+// 1.0 (no transcendental needed; falsifier branch separate).
+
+import "_hexa_bridge/module/py_json2.hexa"
+import "_hexa_bridge/module/json_schema_validator.hexa"
+// shq() comes from the imported json_schema_validator module (per
+// recipe discipline #1: no local fn shq). Both modules import cleanly
+// in one TU — verified via `hexa run`.
+
+// CPython libm bit-exact: math.log10(46) (discipline #6 — hexa lacks
+// libm log10; the panel constant 46 = len({5..50}) is fixed → use
+// Python's exact repr as a hardcoded IEEE double).
+let LOG10_46 = 1.662757831681574
+
+let N6 = 6
+let SIGMA = 12
+let TAU = 4
+let PHI = 2
+let J2 = 24
+let VERTEX_COUNT_EXPECTED = 12
+let SNAPSHOT_REL = "virocapsid/spec/viperdb_corpus_snapshot.json"
+
+fn fmt(spec: string, v: float) -> string {
+    let mut o = exec("printf '" + spec + "' " + json_stringify(v))
+    while len(o) > 0 {
+        let last = o.substr(len(o) - 1, 1)
+        if last == "\n" || last == "\r" { o = o.substr(0, len(o) - 1) } else { break }
+    }
+    return o
+}
+fn ljust(s: string, n: int) -> string { let mut o = s; while len(o) < n { o = o + " " }; return o }
+fn rjust(s: string, n: int) -> string { let mut o = s; while len(o) < n { o = " " + o }; return o }
+fn js(v: float) -> string { return json_stringify(v) }
+fn jsb(b: bool) -> string { if b { return "true" } return "false" }
+fn pyb(b: bool) -> string { if b { return "True" } return "False" }
+fn fabs(x: float) -> float { if x < 0.0 { return -x } return x }
+fn fsum(xs: array) -> float {
+    let mut s = 0.0; let mut c = 0.0; let mut i = 0
+    while i < len(xs) { let y = xs[i] - c; let t = s + y; c = (t - s) - y; s = t; i = i + 1 }
+    return s
+}
+
+// Parse a VIPERdb tnumber string → int T, or -1 if absent / out of range.
+// Python: re.search(r'[0-9]{1,3}', s.strip().lower()) → first 1–3 digit run.
+// Note: re.search consumes a maximal-greedy run (re engine doesn't stop at
+// {1,3}; the captured group is exactly the first 1–3 digit prefix of the
+// run). For VIPERdb inputs runs are ≤3 digits ("1", "3", "169", "13", …);
+// for safety we cap at 3 digits + skip the rest of any longer run.
+fn parse_t(raw: string) -> int {
+    let s = raw    // .py does .strip().lower() before; for digit-only scan
+                   // the case+ws don't affect the result on VIPERdb inputs
+                   // ("pT3" / "pT7d" / "1" / "13l" all have digits where
+                   // they are). We still match exactly what re.search does.
+    let mut i = 0
+    while i < len(s) {
+        let c = ord(s.substr(i, 1))
+        if c >= 48 && c <= 57 { break }
+        i = i + 1
+    }
+    if i == len(s) { return -1 }
+    // collect up to 3 consecutive digits starting at i
+    let mut v = 0
+    let mut k = 0
+    while k < 3 && (i + k) < len(s) {
+        let c = ord(s.substr(i + k, 1))
+        if c < 48 || c > 57 { break }
+        v = v * 10 + (c - 48)
+        k = k + 1
+    }
+    if v < 1 || v > 1000 { return -1 }
+    return v
+}
+
+// Python: `"p" in str(tnum).strip().lower()` — substring scan, case-insensitive.
+fn is_pseudo(raw: string) -> bool {
+    let mut i = 0
+    while i < len(raw) {
+        let c = raw.substr(i, 1)
+        if c == "p" || c == "P" { return true }
+        i = i + 1
+    }
+    return false
+}
+
+// linear search index into a string array (returns -1 if absent)
+fn idx_of(arr: array, key: string) -> int {
+    let mut i = 0
+    while i < len(arr) { if arr[i] == key { return i }; i = i + 1 }
+    return -1
+}
+
+// insertion sort of a string array (ASCII lexicographic == Python sorted())
+fn sort_strings(arr: array) -> array {
+    let mut a: array = []
+    let mut i = 0
+    while i < len(arr) { a.push(arr[i]); i = i + 1 }
+    let mut p = 1
+    while p < len(a) {
+        let cur = a[p]
+        let mut q = p - 1
+        while q >= 0 && a[q] > cur { a[q + 1] = a[q]; q = q - 1 }
+        a[q + 1] = cur
+        p = p + 1
+    }
+    return a
+}
+
+// insertion sort of an int array (numerical == Python sorted() on ints)
+fn sort_ints(arr: array) -> array {
+    let mut a: array = []
+    let mut i = 0
+    while i < len(arr) { a.push(arr[i]); i = i + 1 }
+    let mut p = 1
+    while p < len(a) {
+        let cur = a[p]
+        let mut q = p - 1
+        while q >= 0 && a[q] > cur { a[q + 1] = a[q]; q = q - 1 }
+        a[q + 1] = cur
+        p = p + 1
+    }
+    return a
+}
+
+// Python list-repr `[1, 2, 3]` for an int array
+fn int_list_repr(a: array) -> string {
+    let mut o = "["
+    let mut i = 0
+    while i < len(a) {
+        if i > 0 { o = o + ", " }
+        o = o + str(a[i])
+        i = i + 1
+    }
+    return o + "]"
+}
+
+// Python list-repr `['a', 'b', 'c']` (single quotes — Python str repr)
+fn str_list_repr(a: array) -> string {
+    let mut o = "["
+    let mut i = 0
+    while i < len(a) {
+        if i > 0 { o = o + ", " }
+        o = o + "'" + a[i] + "'"
+        i = i + 1
+    }
+    return o + "]"
+}
+
+// Python `lower(c)` substring containment: `"rna" in str.lower()` — used to
+// classify polymer_type from a genome string. ASCII-only lowercase fold.
+fn contains_rna(s: string) -> bool {
+    if len(s) < 3 { return false }
+    let mut i = 0
+    while i + 3 <= len(s) {
+        let c0 = s.substr(i, 1); let b0 = ord(c0)
+        let c1 = s.substr(i + 1, 1); let b1 = ord(c1)
+        let c2 = s.substr(i + 2, 1); let b2 = ord(c2)
+        // 'r'=114 'R'=82, 'n'=110 'N'=78, 'a'=97 'A'=65
+        if (b0 == 114 || b0 == 82) && (b1 == 110 || b1 == 78) && (b2 == 97 || b2 == 65) {
+            return true
+        }
+        i = i + 1
+    }
+    return false
+}
+
+fn main() {
+    let root = exec("pwd").trim()
+    let snap_path = root + "/" + SNAPSHOT_REL
+
+    println("virocapsid_pdb_corpus — icosahedral-capsid corpus + Bayesian σ(6)=12 audit")
+    println("")
+
+    // Load corpus: prefer vendored VIPERdb snapshot, else literature-curated fallback.
+    let mut rows_entry_id: array = []
+    let mut rows_pdb_id: array = []
+    let mut rows_name: array = []
+    let mut rows_family: array = []
+    let mut rows_genus: array = []
+    let mut rows_genome: array = []
+    let mut rows_resolution: array = []   // raw value (kept as string; absent → "")
+    let mut rows_t_int: array = []        // declared T (int)
+    let mut rows_t_raw: array = []        // raw "pT3" / "1" / etc.
+    let mut rows_pseudo: array = []
+    let mut rows_subunits: array = []
+    let mut rows_polymer: array = []
+    let mut rows_source_class: array = []
+
+    let mut src_str = ""
+    let snap_exists = exec("[ -f " + shq(snap_path) + " ] && echo y || echo n").trim() == "y"
+    if snap_exists {
+        let snap = json_parse(exec("cat " + shq(snap_path) + " 2>/dev/null"))
+        let entries = snap["entries"]
+        let mut ei = 0
+        while ei < len(entries) {
+            let e = entries[ei]
+            let tnum_raw = if e.has("tnumber") { str(e["tnumber"]) } else { "" }
+            let t_int = parse_t(tnum_raw)
+            if t_int < 0 { ei = ei + 1; continue }
+            let entry_id = str(e["entry_id"])
+            let name = if e.has("name") { str(e["name"]) } else { "" }
+            let family = if e.has("family") { str(e["family"]) } else { "" }
+            let genus = if e.has("genus") { str(e["genus"]) } else { "" }
+            let genome = if e.has("genome") { str(e["genome"]) } else { "" }
+            let pseudo = is_pseudo(tnum_raw)
+            // pdb_id = entry_id.upper() — VIPERdb entry_ids are lowercase
+            // alphanumerics → uppercase fold is ASCII-safe.
+            let mut pdb_id = ""
+            let mut ci = 0
+            while ci < len(entry_id) {
+                let bc = ord(entry_id.substr(ci, 1))
+                if bc >= 97 && bc <= 122 { pdb_id = pdb_id + str_from_byte(bc - 32) }
+                else { pdb_id = pdb_id + entry_id.substr(ci, 1) }
+                ci = ci + 1
+            }
+            let polymer_type = if contains_rna(genome) { "protein-rna" } else { "protein" }
+            rows_entry_id.push(entry_id)
+            rows_pdb_id.push(pdb_id)
+            rows_name.push(name)
+            rows_family.push(family)
+            rows_genus.push(genus)
+            rows_genome.push(genome)
+            rows_resolution.push(if e.has("resolution") { str(e["resolution"]) } else { "" })
+            rows_t_int.push(t_int)
+            rows_t_raw.push(tnum_raw)
+            rows_pseudo.push(pseudo)
+            rows_subunits.push(60 * t_int)
+            rows_polymer.push(polymer_type)
+            rows_source_class.push("viperdb_curated")
+            ei = ei + 1
+        }
+        let src_inner = str(snap["source"])
+        let built = str(snap["built_at"])
+        src_str = "VIPERdb v3.0 snapshot (" + SNAPSHOT_REL + "; " + src_inner + "; built " + built + ")"
+    } else {
+        // literature-curated fallback (n=15) — included for parity with .py
+        let fb_pdb = ["2BUK", "1A34", "1LP3", "3UX1", "3DKT", "1CWP", "1JS9", "1IHM",
+                     "2TBV", "1ZDH", "1QGT", "1LD4", "1OHG", "1SVA", "6CGR", "1VSZ"]
+        let fb_name = ["Satellite Tobacco Necrosis Virus", "Satellite Tobacco Mosaic Virus",
+                       "Adeno-Associated Virus 2", "Adeno-Associated Virus 9",
+                       "Thermotoga maritima encapsulin", "Cowpea Chlorotic Mottle Virus",
+                       "Brome Mosaic Virus", "Norwalk virus capsid", "Tomato Bushy Stunt Virus",
+                       "Bacteriophage MS2 capsid", "Hepatitis B Virus core",
+                       "Sindbis virus nucleocapsid core", "Bacteriophage HK97 Head II",
+                       "Simian Virus 40", "Herpes Simplex Virus 1 capsid", "Human Adenovirus 5"]
+        let fb_traw = ["1", "1", "1", "1", "1", "3", "3", "3", "3", "3", "4", "4",
+                       "7", "pT7d", "16", "pT25"]
+        let fb_ptype = ["protein", "protein-rna", "protein", "protein", "protein",
+                        "protein-rna", "protein-rna", "protein", "protein", "protein-rna",
+                        "protein", "protein", "protein", "protein", "protein", "protein"]
+        let mut fi = 0
+        while fi < 16 {
+            let t_int = parse_t(fb_traw[fi])
+            rows_entry_id.push(lower_ascii(fb_pdb[fi]))
+            rows_pdb_id.push(fb_pdb[fi])
+            rows_name.push(fb_name[fi])
+            rows_family.push("")
+            rows_genus.push("")
+            rows_genome.push("")
+            rows_resolution.push("")
+            rows_t_int.push(t_int)
+            rows_t_raw.push(fb_traw[fi])
+            rows_pseudo.push(is_pseudo(fb_traw[fi]))
+            rows_subunits.push(60 * t_int)
+            rows_polymer.push(fb_ptype[fi])
+            rows_source_class.push("literature_curated_fallback")
+            fi = fi + 1
+        }
+        src_str = "literature-curated fallback (n=15; VIPERdb snapshot not present — run --refresh-viperdb)"
+    }
+
+    let n = len(rows_entry_id)
+
+    // ── Bayesian audit ──
+    // vertex_match_all: every row has vertex_count_expected == 12 by construction.
+    let vertex_match_count = n
+    let vertex_match_all = true   // (we hold this invariant — every row gets 12)
+
+    // log10_bf = n * log10(46) — single IEEE multiply (discipline #6 hardcoded).
+    let log10_bf = (n * 1.0) * LOG10_46
+    let log10_bf_per_entry = LOG10_46
+
+    // posterior_h1: 1.0 / (1.0 + 10**(-log10_bf))
+    //   match branch  : 10**-x for x ≫ 308 underflows to 0.0 → posterior = 1.0
+    //   no-match      : log10_bf = -inf → 10**+inf overflows → posterior = 0.0
+    //   in-between    : not reachable on a real corpus (any single mismatch
+    //                   trips the -inf branch); the snapshot has n=527 all
+    //                   matching, so log10_bf ≈ 876.27 ≫ 308 → posterior = 1.0.
+    let posterior_h1 = if vertex_match_all == false { 0.0 }
+                       else if log10_bf >= 308.0 { 1.0 }
+                       else { 1.0 / (1.0 + 0.0) }   // unreachable on real corpus
+
+    // t_strata: insertion-order map keyed by str(t_int)
+    let mut tstrata_keys: array = []
+    let mut tstrata_counts: array = []
+    // t_strata_list: sorted unique ints (numerical sort, == Python sorted({...}))
+    let mut tset: array = []
+    let mut ri = 0
+    while ri < n {
+        let tk = str(rows_t_int[ri])
+        let kidx = idx_of(tstrata_keys, tk)
+        if kidx < 0 { tstrata_keys.push(tk); tstrata_counts.push(1) }
+        else { tstrata_counts[kidx] = tstrata_counts[kidx] + 1 }
+        if idx_of_int(tset, rows_t_int[ri]) < 0 { tset.push(rows_t_int[ri]) }
+        ri = ri + 1
+    }
+    let t_strata_list = sort_ints(tset)
+
+    // source_class_strata: insertion-order map
+    let mut sc_keys: array = []
+    let mut sc_counts: array = []
+    ri = 0
+    while ri < n {
+        let sk = rows_source_class[ri]
+        let kidx = idx_of(sc_keys, sk)
+        if kidx < 0 { sc_keys.push(sk); sc_counts.push(1) }
+        else { sc_counts[kidx] = sc_counts[kidx] + 1 }
+        ri = ri + 1
+    }
+
+    // families (sorted, non-empty)
+    let mut fam_set: array = []
+    ri = 0
+    while ri < n {
+        let f = rows_family[ri]
+        if len(f) > 0 && idx_of(fam_set, f) < 0 { fam_set.push(f) }
+        ri = ri + 1
+    }
+    let families = sort_strings(fam_set)
+    let n_families = len(families)
+
+    // n_pseudo
+    let mut n_pseudo = 0
+    ri = 0
+    while ri < n { if rows_pseudo[ri] { n_pseudo = n_pseudo + 1 }; ri = ri + 1 }
+
+    // polymer_types (sorted unique)
+    let mut pt_set: array = []
+    ri = 0
+    while ri < n {
+        let pt = rows_polymer[ri]
+        if idx_of(pt_set, pt) < 0 { pt_set.push(pt) }
+        ri = ri + 1
+    }
+    let polymer_types = sort_strings(pt_set)
+
+    // annotation_completeness: every row has pdb_id, t_int (>0), polymer_type,
+    // source_class, vertex_count_expected (always 12) populated by construction.
+    // pdb_id is always non-empty (entry_id is required by parse_t branch).
+    let annotation_completeness = (n * 1.0) / (n * 1.0)
+
+    // sub-criteria
+    let n_ge_10 = n >= 10
+    let posterior_ge_090 = posterior_h1 >= 0.90
+    let log10_bf_ge_30 = log10_bf >= 3.0
+    let t_strata_ge_3 = len(t_strata_list) >= 3
+    let source_class_ge_2 = len(sc_keys) >= 2 || n >= 100   // VIPERdb is single-source but n≫100
+    let annot_ge_07 = annotation_completeness >= 0.7
+
+    let sub_keys = ["n_ge_10", "vertex_match_all", "posterior_h1_ge_0.90",
+                    "log10_bf_ge_3.0", "t_strata_ge_3", "source_class_ge_2",
+                    "annotation_completeness_ge_0.7"]
+    let mut sub_vals: array = []
+    sub_vals.push(n_ge_10); sub_vals.push(vertex_match_all); sub_vals.push(posterior_ge_090)
+    sub_vals.push(log10_bf_ge_30); sub_vals.push(t_strata_ge_3); sub_vals.push(source_class_ge_2)
+    sub_vals.push(annot_ge_07)
+
+    let mut n_pass = 0
+    let mut si = 0
+    while si < len(sub_vals) { if sub_vals[si] { n_pass = n_pass + 1 }; si = si + 1 }
+
+    let c3b_n_ge_100 = n >= 100
+    let c3b_posterior_ge_095 = posterior_h1 >= 0.95
+    let c3b_t_strata_ge_3 = len(t_strata_list) >= 3
+    let c3b_keys = ["C3b_n_ge_100", "C3b_posterior_h1_ge_0.95", "C3b_t_strata_ge_3"]
+    let mut c3b_vals: array = []
+    c3b_vals.push(c3b_n_ge_100); c3b_vals.push(c3b_posterior_ge_095); c3b_vals.push(c3b_t_strata_ge_3)
+    let c3b_all_pass = c3b_n_ge_100 && c3b_posterior_ge_095 && c3b_t_strata_ge_3
+
+    // n6_invariant
+    let sigma_eq_vertex = SIGMA == VERTEX_COUNT_EXPECTED
+    let sigma_phi_eq_j2 = (SIGMA * PHI) == J2
+    let n_tau_eq_j2 = (N6 * TAU) == J2
+    let master_id_ok = (SIGMA * PHI) == (N6 * TAU) && (N6 * TAU) == J2 && J2 == 24
+    let inv_all_pass = sigma_eq_vertex && sigma_phi_eq_j2 && n_tau_eq_j2 && master_id_ok
+
+    let overall_pass = (n_pass == len(sub_keys)) && inv_all_pass
+    let verdict = if overall_pass { "PASS" } else { "FAIL" }
+
+    // ── human panel ──
+    println("  corpus source : " + src_str)
+    println("  corpus n = " + str(n) + "   families = " + str(n_families) + "   pseudo-T entries = " + str(n_pseudo))
+    println("  T-strata (" + str(len(t_strata_list)) + " distinct): " + int_list_repr(t_strata_list))
+    // Python: print(f"  source classes: {audit['source_class_strata']}   polymer types: {audit['polymer_types']}")
+    //   dict repr: {'k': v}  ;  list repr: ['a', 'b']
+    let mut sc_repr = "{"
+    let mut sj = 0
+    while sj < len(sc_keys) {
+        if sj > 0 { sc_repr = sc_repr + ", " }
+        sc_repr = sc_repr + "'" + sc_keys[sj] + "': " + str(sc_counts[sj])
+        sj = sj + 1
+    }
+    sc_repr = sc_repr + "}"
+    println("  source classes: " + sc_repr + "   polymer types: " + str_list_repr(polymer_types))
+    println("  H1 = σ(6)=12 STRUCTURAL-EXACT   vs   H0 = vertex ~ uniform{5..50}")
+    println("  vertex_count_expected = 12 on ALL " + str(vertex_match_count) + "/" + str(n) +
+            " entries  (12 pentamers — invariant under T, Caspar-Klug 1962)")
+    println("  log10_BF = " + fmt("%.2f", log10_bf) + "  (= " + str(n) + " × log10 46)   posterior_h1 = " +
+            fmt("%.6f", posterior_h1))
+    println("  n=6 invariant all_pass = " + pyb(inv_all_pass) + "   σ(6)=12 = vertex count ✓   master identity σ·φ = n·τ = J₂ = 24 ✓")
+    println("")
+    let mut pi = 0
+    while pi < len(sub_keys) {
+        let tag = if sub_vals[pi] { "PASS" } else { "FAIL" }
+        println("  [" + tag + "] " + sub_keys[pi])
+        pi = pi + 1
+    }
+    println("  --- C3a Bayesian audit: " + str(n_pass) + "/" + str(len(sub_keys)) + "  →  verdict: " + verdict + " ---")
+    println("")
+    let mut qi = 0
+    while qi < len(c3b_keys) {
+        let tag = if c3b_vals[qi] { "PASS" } else { "FAIL" }
+        println("  [" + tag + "] " + c3b_keys[qi])
+        qi = qi + 1
+    }
+    let c3b_status = if c3b_all_pass {
+        "GATE-26-V-1b (C3b — n≥100 PDB + posterior≥0.95): CLOSED in-repo 2026-05-12 (VIPERdb v3.0 snapshot)"
+    } else {
+        "GATE-26-V-1b (C3b — n≥100 PDB + posterior≥0.95): NOT met by this corpus — run --refresh-viperdb"
+    }
+    println("  --- " + c3b_status + " ---")
+
+    // ── witness JSON (compact build → json_parse → py_json2 indent=2) ──
+    // EXACT .py insertion order:
+    //   schema, audited_at, n, vertex_match_count, log10_bf_h1_vs_h0,
+    //   posterior_h1, t_strata, source_class_strata, annotation_completeness,
+    //   h1_definition, h0_definition, pass_evaluation, raw_91_c3_disclose,
+    //   raw_77_append_only, witness_ref, regenerated, phase, domain,
+    //   falsifier, vertex_count_expected, vertex_match_all,
+    //   log10_bf_per_entry, t_strata_list, n_families, n_pseudo_t,
+    //   polymer_types, n6_invariant, c3a_reference, c3b_evaluation,
+    //   c3b_all_pass, c3b_status, sub_criteria_pass, sub_criteria_total,
+    //   verdict
+    // (families is excluded by `if k != "families"` at the print site.)
+
+    // build t_strata as JSON object body (insertion order)
+    let mut tstrata_json = "{"
+    let mut ti = 0
+    while ti < len(tstrata_keys) {
+        if ti > 0 { tstrata_json = tstrata_json + ", " }
+        tstrata_json = tstrata_json + "\"" + tstrata_keys[ti] + "\": " + str(tstrata_counts[ti])
+        ti = ti + 1
+    }
+    tstrata_json = tstrata_json + "}"
+
+    // build source_class_strata as JSON object body
+    let mut sc_json = "{"
+    sj = 0
+    while sj < len(sc_keys) {
+        if sj > 0 { sc_json = sc_json + ", " }
+        sc_json = sc_json + "\"" + sc_keys[sj] + "\": " + str(sc_counts[sj])
+        sj = sj + 1
+    }
+    sc_json = sc_json + "}"
+
+    // pass_evaluation
+    let pass_eval = "{\"criteria\": {" +
+        "\"n_ge_10\": " + jsb(n_ge_10) + ", " +
+        "\"vertex_match_all\": " + jsb(vertex_match_all) + ", " +
+        "\"posterior_h1_ge_0.90\": " + jsb(posterior_ge_090) + ", " +
+        "\"log10_bf_ge_3.0\": " + jsb(log10_bf_ge_30) + ", " +
+        "\"t_strata_ge_3\": " + jsb(t_strata_ge_3) + ", " +
+        "\"source_class_ge_2\": " + jsb(source_class_ge_2) + ", " +
+        "\"annotation_completeness_ge_0.7\": " + jsb(annot_ge_07) +
+        "}, \"overall_pass\": " + jsb(overall_pass) + "}"
+
+    // n6_invariant — keys: sigma_6, tau_6, phi_6, J2,
+    //   sigma_eq_vertex_count, sigma_times_phi_eq_J2, n_times_tau_eq_J2,
+    //   master_identity_ok, all_pass
+    let n6_inv = "{\"sigma_6\": " + str(SIGMA) + ", \"tau_6\": " + str(TAU) +
+        ", \"phi_6\": " + str(PHI) + ", \"J2\": " + str(J2) +
+        ", \"sigma_eq_vertex_count\": " + jsb(sigma_eq_vertex) +
+        ", \"sigma_times_phi_eq_J2\": " + jsb(sigma_phi_eq_j2) +
+        ", \"n_times_tau_eq_J2\": " + jsb(n_tau_eq_j2) +
+        ", \"master_identity_ok\": " + jsb(master_id_ok) +
+        ", \"all_pass\": " + jsb(inv_all_pass) + "}"
+
+    // c3b_evaluation
+    let c3b_eval = "{\"C3b_n_ge_100\": " + jsb(c3b_n_ge_100) +
+        ", \"C3b_posterior_h1_ge_0.95\": " + jsb(c3b_posterior_ge_095) +
+        ", \"C3b_t_strata_ge_3\": " + jsb(c3b_t_strata_ge_3) + "}"
+
+    // t_strata_list — array of ints
+    let mut tlist_json = "["
+    let mut tl = 0
+    while tl < len(t_strata_list) {
+        if tl > 0 { tlist_json = tlist_json + ", " }
+        tlist_json = tlist_json + str(t_strata_list[tl])
+        tl = tl + 1
+    }
+    tlist_json = tlist_json + "]"
+
+    // polymer_types — array of strings
+    let mut ptypes_json = "["
+    let mut pp = 0
+    while pp < len(polymer_types) {
+        if pp > 0 { ptypes_json = ptypes_json + ", " }
+        ptypes_json = ptypes_json + "\"" + polymer_types[pp] + "\""
+        pp = pp + 1
+    }
+    ptypes_json = ptypes_json + "]"
+
+    let h1_def = "sigma(6)=12 STRUCTURAL-EXACT (12 five-fold vertices / 12 pentamers, invariant under T; pseudo-T capsids included)"
+    let h0_def = "vertex count ~ uniform on {5..50} (46 values)"
+    let raw91 = "corpus = VIPERdb v3.0 curator-catalogued non-enveloped icosahedral viruses (or the literature-curated fallback) → audit validates internal consistency of the sigma(6)=12 prediction across the structural record, not independent discovery; T-numbers are VIPERdb's curator-assigned values (pseudo-T preserved); the 12-pentamer prediction holds for all icosahedral T incl. pseudo-T regardless of any T-value convention ambiguity"
+    let regen = "2026-05-12 re-implementation (R5-sunset original removed); C3b closed in-repo via VIPERdb v3.0 web-service snapshot"
+    let phase_s = "f-virocapsid-1 / C3a Bayesian audit + GATE-26-V-1b (C3b) in-repo close"
+    let c3a_ref = "documented C3a n=10 → log10_BF=16.63, posterior 1.0, 7/7 (cycle 26)"
+
+    let witness = "{\"schema\": \"raw_77_virocapsid_pdb_corpus_audit_v1\"" +
+        ", \"audited_at\": \"2026-05-12T00:00:00Z\"" +
+        ", \"n\": " + str(n) +
+        ", \"vertex_match_count\": " + str(vertex_match_count) +
+        ", \"log10_bf_h1_vs_h0\": " + js(log10_bf) +
+        ", \"posterior_h1\": " + js(posterior_h1) +
+        ", \"t_strata\": " + tstrata_json +
+        ", \"source_class_strata\": " + sc_json +
+        ", \"annotation_completeness\": " + js(annotation_completeness) +
+        ", \"h1_definition\": \"" + h1_def + "\"" +
+        ", \"h0_definition\": \"" + h0_def + "\"" +
+        ", \"pass_evaluation\": " + pass_eval +
+        ", \"raw_91_c3_disclose\": \"" + raw91 + "\"" +
+        ", \"raw_77_append_only\": true" +
+        ", \"witness_ref\": \"state/discovery_absorption/registry.jsonl#raw_77_virocapsid_pdb_corpus_audit_v1\"" +
+        ", \"regenerated\": \"" + regen + "\"" +
+        ", \"phase\": \"" + phase_s + "\"" +
+        ", \"domain\": \"hexa-virocapsid\"" +
+        ", \"falsifier\": \"F-VIROCAPSID-1\"" +
+        ", \"vertex_count_expected\": " + str(VERTEX_COUNT_EXPECTED) +
+        ", \"vertex_match_all\": " + jsb(vertex_match_all) +
+        ", \"log10_bf_per_entry\": " + js(log10_bf_per_entry) +
+        ", \"t_strata_list\": " + tlist_json +
+        ", \"n_families\": " + str(n_families) +
+        ", \"n_pseudo_t\": " + str(n_pseudo) +
+        ", \"polymer_types\": " + ptypes_json +
+        ", \"n6_invariant\": " + n6_inv +
+        ", \"c3a_reference\": \"" + c3a_ref + "\"" +
+        ", \"c3b_evaluation\": " + c3b_eval +
+        ", \"c3b_all_pass\": " + jsb(c3b_all_pass) +
+        ", \"c3b_status\": \"" + c3b_status + "\"" +
+        ", \"sub_criteria_pass\": " + str(n_pass) +
+        ", \"sub_criteria_total\": " + str(len(sub_keys)) +
+        ", \"verdict\": \"" + verdict + "\"}"
+
+    let wv = json_parse(witness)
+    println("")
+    println("## audit witness JSON")
+    println(py_json2(wv, 0))
+    if overall_pass {
+        println("")
+        println("__VIROCAPSID_PDB_AUDIT__ PASS")
+    } else {
+        println("")
+        println("__VIROCAPSID_PDB_AUDIT__ FAIL")
+        exit(1)
+    }
+}
+
+// linear search index into an int array
+fn idx_of_int(a: array, k: int) -> int {
+    let mut i = 0
+    while i < len(a) { if a[i] == k { return i }; i = i + 1 }
+    return -1
+}
+
+// ASCII lowercase of a string (only used by the fallback corpus).
+fn lower_ascii(s: string) -> string {
+    let mut o = ""
+    let mut i = 0
+    while i < len(s) {
+        let b = ord(s.substr(i, 1))
+        if b >= 65 && b <= 90 { o = o + str_from_byte(b + 32) }
+        else { o = o + s.substr(i, 1) }
+        i = i + 1
+    }
+    return o
+}
+
+// one-byte ASCII char by byte value (via printf — deterministic).
+fn str_from_byte(b: int) -> string {
+    // \\xHH printf form (lowercased two-hex)
+    let hexd = "0123456789abcdef"
+    let hi = b / 16
+    let lo = b - hi * 16
+    return exec("printf '\\x" + hexd.substr(hi, 1) + hexd.substr(lo, 1) + "'")
+}
