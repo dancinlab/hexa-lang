@@ -22,6 +22,17 @@
 
 ## 0. 현재 상태 (2026-05-17)
 
+> **ARCHITECTURE NOTE (2026-05-22)** — 아래 cycle log 의 HXC sidecar /
+> `dist/atlas.hxc` / `compiler/atlas/hxc_loader.hexa` 관련 항목은
+> **HISTORICAL**. PR #312 + #314 (main) 가 hxc sidecar 를 폐기하고
+> `n6/atlas.n6` (3.43 MB, 15,952 nodes) 를 단일 SSOT 로 확정함.
+> 현재 `compiler/atlas/static_index.hexa::static_atlas()` 는
+> `compiler/atlas/merger::load_atlas` 를 통해 atlas.n6 를 직접 파싱
+> (HEXA_ATLAS_N6 env 또는 `~/core/hexa-lang/n6/` fallback). 거버넌스 =
+> `project.tape :: @D h_atlas_single_export`. dist/atlas.hxc /
+> tool/atlas_build_hxc.hexa / compiler/atlas/hxc_loader.hexa 는 deploy 후
+> sequenced delete. 자세한 내용 = `inbox/notes/2026-05-22-atlas-n6-ssot-recovery.md`.
+
 **interp-retirement R3-R6 substantially LANDED** (PLAN-interp-retirement.md 가 1차 SSOT, 본 파일이 신규 cycle log SSOT).
 
 - aprime_cc-direct path: 60-broad sweep **39/60 (65%)** byte-identical (재측정 2026-05-17, char-literal fix 반영; 세션 trajectory 45→50→57→65%)

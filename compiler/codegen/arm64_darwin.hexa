@@ -1554,8 +1554,11 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
         // proven C reference path (codegen_c2) emits
         // `container = hexa_index_set(container, key, value)`. The
         // arm64 path previously dropped the return, so a container
-        // built by `let mut a = []` + push (e.g. hxc_loader.hexa
-        // `dense`) kept a STALE array header in its slot; after the
+        // built by `let mut a = []` + push (historically observed in
+        // the now-retired hxc_loader.hexa `dense` rebuild — atlas
+        // path now uses compiler/atlas/merger.hexa per @D
+        // h_atlas_single_export, 2026-05-22) kept a STALE array
+        // header in its slot; after the
         // runtime's arena dirty-slot / heapify relocated the backing
         // on a later allocation, `_build_node(dense)` received a
         // dangling/garbage array → non-deterministic "container is
