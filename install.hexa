@@ -72,7 +72,7 @@ fn need_cmd(name) {
 
 fn install_hx() {
     bold("▸ installing hx (package manager)")
-    let url = "https://raw.githubusercontent.com/" + hexa_repo + "/main/pkg/hx"
+    let url = "https://raw.githubusercontent.com/" + hexa_repo + "/main/tool/pkg/hx"
     exec("curl -fsSL '" + url + "' -o '" + hx_bin + "/hx'")
     exec("chmod +x '" + hx_bin + "/hx'")
     green("  ✓ " + hx_bin + "/hx")
@@ -110,18 +110,26 @@ fn install_hexa() {
 
     exec("tar -xzf '" + tmp + "/hexa.tar.gz' -C '" + tmp + "'")
 
-    // Archive layout: hexa-{target}/{hexa, build/hexa_interp}
-    // The dispatcher resolves interp relative to argv[0] (<dir>/build/hexa_interp),
-    // so we preserve the build/ directory alongside the hexa binary.
+    // Archive layout: hexa-{target}/{hexa, build/}
     let mut src = tmp + "/hexa-" + target
     if !file_exists(src) {
         src = tmp
     }
 
-    exec("install -m 0755 '" + src + "/hexa' '" + hx_bin + "/hexa'")
-    if file_exists(src + "/build/hexa_interp") {
+    // Install the native binary under a private name and place a thin shim
+    // at $HX_BIN/hexa that exec's it with an absolute argv[0]. The dispatcher
+    // resolves its sidecar interpreter via dirname(argv[0]); a bare
+    // PATH-resolved "hexa" (argv[0] has no slash) would misresolve to cwd.
+    // Mirrors the source-tree `hexa` -> `hexa.real` shim and install.sh.
+    exec("install -m 0755 '" + src + "/hexa' '" + hx_bin + "/hexa.real'")
+    write_file(hx_bin + "/hexa",
+        "#!/bin/bash\nexec \"" + hx_bin + "/hexa.real\" \"$@\"\n")
+    exec("chmod 0755 '" + hx_bin + "/hexa'")
+    // Copy build/ verbatim so any sidecar the release ships
+    // (hexa_stage0 / hexa_interp / future) resolves next to hexa.real.
+    if file_exists(src + "/build") {
         exec("mkdir -p '" + hx_bin + "/build'")
-        exec("install -m 0755 '" + src + "/build/hexa_interp' '" + hx_bin + "/build/hexa_interp'")
+        exec("cp -R '" + src + "/build/.' '" + hx_bin + "/build/'")
     }
     green("  ✓ " + hx_bin + "/hexa")
 
