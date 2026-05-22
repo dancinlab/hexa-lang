@@ -1123,7 +1123,6 @@ static int __attribute__((noinline)) hxlcl_darwin_check_fd_set_overflow(int fd, 
 #include <unistd.h>
 #include <fcntl.h>
 #include <sys/types.h>
-#include <dirent.h>          /* opendir/readdir/closedir — see hexa_list_dir (2026-05-22 segfault fix) */
 #include <sys/stat.h>
 #include <sys/mman.h>
 #include <sys/select.h>
@@ -9951,6 +9950,14 @@ HexaVal rt_delete_file(HexaVal path) {
 // quote-escape the path (same shellout-shape limitation: entries with
 // '\n' lost — inherent, matches interp). Needed by
 // compiler/atlas/merger.hexa::list_dir for the atlas_cli binary.
+/* opendir/readdir for hexa_list_dir (2026-05-22 fix). Included here
+ * (immediately before the use site) instead of at top-of-file so it
+ * applies to every platform branch — the platform-specific #if/#elif
+ * blocks above include their own subsets and one of them (the Linux
+ * x86_64 fallback) used to mask this header inside an inactive branch
+ * on the Darwin build. */
+#include <dirent.h>
+
 HexaVal hexa_list_dir(HexaVal path) {
     if (!HX_IS_STR(path) || !HX_STR(path) || !HX_STR(path)[0]) return hexa_array_new();
     const char* p = HX_STR(path);
