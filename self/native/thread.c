@@ -115,7 +115,7 @@ HexaVal hexa_thread_join(HexaVal tid_val) {
     if (idx < 0 || idx >= HEXA_THREAD_MAX) return hexa_str("");
     HexaThreadSlot* slot = &g_threads[idx];
     if (!slot->active) return hexa_str("");
-    if (hxlcl_pthread_join(slot->tid, NULL) != 0) return hexa_str("");
+    if (hxlcl_pthread_join((void*)(uintptr_t)slot->tid, NULL) != 0) return hexa_str("");
     HexaVal r = slot->result;
     hxlcl_pthread_mutex_lock(&g_threads_lock);
     hxlcl_pthread_mutex_destroy(&slot->done_lock);
