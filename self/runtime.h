@@ -160,6 +160,55 @@ static inline HexaVal __map_ptr_eq(HexaVal a, HexaVal b) {
 }
 #endif
 
+/* Step 3 cycle 105 — paired items-allocator inline builtins for the array
+ * allocator ports (RUNTIME.md 잔여 #6). aprime_cc codegen inlines
+ * `__arr_alloc_items_zero{,_int}(n)` to a statement-expr building a complete
+ * pre-zeroed TAG_ARRAY at the call site (self/codegen_c2.hexa near
+ * __arr_set_cap). The stale hexa_v2 bootstrap emits
+ * `hexa_call1(__arr_alloc_items_zero, n)`; the static-inline defs below
+ * satisfy that indirect-call path via the `hexa_call1` _Generic dispatch on
+ * `HexaVal (*)(HexaVal)`. Result is byte-identical to the legacy
+ * hexa_array_zeros_float / _alloc C fast-paths. Unlike __arr_set_cap (cap
+ * only, items NULL → push SIGSEGV), these return the fully-formed array.
+ * Direct field access (.arr_ptr->{items,len,cap}) — the HX_SET_ARR_* setter
+ * macros live in runtime_core.c, not this header; HexaArr + .arr_ptr ARE
+ * header-visible, so the fallbacks stay self-contained like __vs_ptr_eq.
+ * Mirror lives in self/runtime_core.c for the aprime/single-TU build. */
+#ifndef __arr_alloc_items_zero_DEFINED
+#define __arr_alloc_items_zero_DEFINED
+static inline HexaVal __arr_alloc_items_zero(HexaVal nv) {
+    HexaVal out = {.tag=TAG_ARRAY};
+    out.arr_ptr = (HexaArr*)calloc(1, sizeof(HexaArr));
+    int64_t n = HX_INT(nv);
+    if (n > 0) {
+        HexaVal* items = (HexaVal*)malloc(sizeof(HexaVal) * (size_t)n);
+        HexaVal zero = {.tag=TAG_FLOAT, .f=0.0};
+        for (int64_t i = 0; i < n; i++) items[i] = zero;
+        out.arr_ptr->items = items;
+        out.arr_ptr->len = (int)n;
+        out.arr_ptr->cap = (int)n;
+    }
+    return out;
+}
+#endif
+#ifndef __arr_alloc_items_zero_int_DEFINED
+#define __arr_alloc_items_zero_int_DEFINED
+static inline HexaVal __arr_alloc_items_zero_int(HexaVal nv) {
+    HexaVal out = {.tag=TAG_ARRAY};
+    out.arr_ptr = (HexaArr*)calloc(1, sizeof(HexaArr));
+    int64_t n = HX_INT(nv);
+    if (n > 0) {
+        HexaVal* items = (HexaVal*)malloc(sizeof(HexaVal) * (size_t)n);
+        HexaVal zero = {.tag=TAG_INT, .i=0};
+        for (int64_t i = 0; i < n; i++) items[i] = zero;
+        out.arr_ptr->items = items;
+        out.arr_ptr->len = (int)n;
+        out.arr_ptr->cap = (int)n;
+    }
+    return out;
+}
+#endif
+
 /* HexaFn / HexaClo descriptor field accessors (read + write) */
 #define HX_FN_PTR(v)         ((v).fn_ptr_d->fn_ptr)
 #define HX_FN_ARITY(v)       ((v).fn_ptr_d->arity)
