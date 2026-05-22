@@ -84,9 +84,9 @@ fn cmd_help() {
     println("  qrng selftest | chain | meta --backend=NAME")
     println("                                          provider sweep · resolved chain · backend meta")
     println("    e.g. hexa qrng collect --bytes=32 --source=mock_qrng --seed=42")
-    println("  cloud [run|nohup|poll|copy-to|copy-from] <host> [--port N] [--insecure] -- <argv...>")
-    println("                                          structured-argv remote dispatch (PR #81/#84/#86/#88)")
-    println("    e.g. hexa cloud run ubu-2 -- python3 train.py    (also: cloud copy-to / copy-from)")
+    println("  cloud [run|nohup|poll|copy-to|copy-from|copy-dir-to|copy-dir-from|preflight]")
+    println("                                          structured-argv remote dispatch + $0 preflight")
+    println("    e.g. hexa cloud run ubu-2 -- python3 train.py    (see: hexa cloud --help)")
     println("  sim-universe [status|selftest|anu|multiverse|qpu|qrng|bostrom|godel|")
     println("                fvd|stark|qdarwin|ca-qm|supremacy|mbs|dtc|z2gauge|")
     println("                preheating|multipolar|surface-code|ssh|hofstadter|dqpt|wdw]")
@@ -4693,11 +4693,13 @@ if len(av) < 3 {
     } else if sub == "cloud" {
         // stdlib/cloud dispatch (PR #81 cycle A · #84 cloud_copy · #86 runpod · #88 CLI-first).
         // stdlib/cloud/cloud_cli.hexa parses argv subcommand
-        // (run / nohup / poll / copy-to / copy-from / help / version;
-        // --port / --insecure connection flags) and dispatches to
-        // cloud_run / cloud_nohup / cloud_poll / cloud_copy_to /
-        // cloud_copy_from. Structured-argv discipline — every element
-        // POSIX-quoted, no remote-shell re-parse class.
+        // (run / nohup / poll / copy-to / copy-from / copy-dir-to /
+        // copy-dir-from / preflight / help / version; --port / --strict
+        // connection flags) and dispatches to cloud_run / cloud_nohup /
+        // cloud_poll / cloud_copy_to / cloud_copy_from /
+        // cloud_copy_dir_{to,from} / _cmd_preflight. Structured-argv
+        // discipline — every element POSIX-quoted, no remote-shell
+        // re-parse class.
         //
         // Preferred path = standalone compiled bin/hexa-cloud binary built
         // by `hexa build stdlib/cloud/cloud_cli.hexa`. Falls back to
@@ -4732,6 +4734,11 @@ if len(av) < 3 {
             println("  cloud copy-to   <host> <local> <remote> [conn]         upload local file to host:remote (scp)")
             println("  cloud copy-from <host> <remote> <local> [conn]         download host:remote file to local (scp)")
             println("")
+            println("usage (directory transfer — whole tree, one scp -r):")
+            println("  cloud copy-dir-to   <host> <local-dir> <remote-dir> [conn]   upload a whole directory tree")
+            println("  cloud copy-dir-from <host> <remote-dir> <local-dir> [conn]   download a whole directory tree")
+            println("                                                              the tree lands at <local-dir>/<basename(remote-dir)>")
+            println("")
             println("usage (cycle C — preflight $0 gates):")
             println("  cloud preflight [spec-flags]                           run mem-budget + capability + cli-quirk + secret gates")
             println("                                                         exit 0 = green, exit 2 = refused (BudgetExceededError, etc.)")
@@ -4741,7 +4748,9 @@ if len(av) < 3 {
             println("")
             println("connection flags [conn] (before `--`):")
             println("  --port <n>     ssh to a non-22 port (RunPod / vast.ai)")
-            println("  --insecure     accept a changing/unknown host key (ephemeral pods)")
+            println("  --strict       enforce host-key checking (default OFF — cloud pods")
+            println("                 are ephemeral; insecure host-key policy is the default)")
+            println("  --insecure     (deprecated no-op — insecure is now the default)")
             println("")
             println("preflight spec flags:")
             println("  --n-params-m <int>          parameter count in millions (8.92B → 8920)")
