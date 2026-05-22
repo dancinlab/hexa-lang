@@ -57,14 +57,14 @@ fn _main_label_for(target: string) -> string {
     return "main:"
 }
 
-// Resolve a local hexa interpreter binary.
+// Resolve a local hexa driver binary.
 //
 // Background — Gap 6 from M0 smoke report (commit b437a77c):
 //   The shell wrapper at $HOME/.hx/bin/hexa unconditionally routes
 //   `hexa run` to a remote TCP server (resource toolkit hexa-r ubu-1),
 //   dropping --target/--emit/-o and ignoring RESOURCE_LOCAL_HEXA.
-//   $HOME/.hx/packages/hexa/build/hexa_interp.real and the in-tree
-//   build/hexa_interp.real are ALSO routing wrappers, not binaries.
+//   Some candidate paths are themselves routing wrappers, not local
+//   binaries, so the probe rejects any carrying the routing marker.
 //
 // Strategy — delegate to tool/find_local_hexa.sh, which probes a known
 // priority list and rejects any candidate whose first 4KB contain the
@@ -74,7 +74,7 @@ fn _resolve_hexa_bin() -> string {
     if len(pick) > 0 && _exists(pick) { return pick }
     // Last-resort PATH lookup. The harness will fail loudly if PATH
     // hexa is itself the routing wrapper — that is the signal that
-    // the user must vendor a local binary or set HEXA_INTERP.
+    // the user must vendor a local binary or set HEXA_BIN.
     return "hexa"
 }
 

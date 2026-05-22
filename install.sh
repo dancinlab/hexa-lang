@@ -77,13 +77,13 @@ install_hexa() {
 
     tar -xzf "$tmp/hexa.tar.gz" -C "$tmp"
 
-    # Archive layout: hexa-{target}/{hexa, build/hexa_interp}
-    # Dispatcher resolves interp relative to argv[0] (<dir>/build/hexa_interp),
+    # Archive layout: hexa-{target}/{hexa, build/<sidecar binaries>}
+    # Dispatcher resolves sidecar binaries relative to argv[0] (<dir>/build/),
     # so preserve the build/ directory alongside the hexa binary.
     src="$tmp/hexa-${target}"
     [ -d "$src" ] || src="$tmp"
 
-    # Dispatcher resolves its sidecar interpreter via dirname(argv[0]).
+    # Dispatcher resolves its sidecar binaries via dirname(argv[0]).
     # When invoked through PATH, argv[0]="hexa" has no slash and resolution
     # falls back to cwd — wrong. Install the native binary under a private
     # name and place a thin shim at $HX_BIN/hexa that exec's it with an
@@ -94,8 +94,8 @@ install_hexa() {
 exec "$HX_BIN/hexa.real" "\$@"
 EOF
     chmod 0755 "$HX_BIN/hexa"
-    # Copy build/ verbatim so any sidecar name the release ships
-    # (hexa_stage0 / hexa_interp / future) just works.
+    # Copy build/ verbatim so any sidecar binary the release ships
+    # (e.g. hexa_module_loader) just works.
     if [ -d "$src/build" ]; then
         mkdir -p "$HX_BIN/build"
         cp -R "$src/build/." "$HX_BIN/build/"
