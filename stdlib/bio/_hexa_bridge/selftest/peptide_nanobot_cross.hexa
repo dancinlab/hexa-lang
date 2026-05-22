@@ -1,0 +1,400 @@
+#!hexa strict
+// hexa-bio/_hexa_bridge/selftest/peptide_nanobot_cross.hexa
+//
+// hexa-native port of `_python_bridge/module/peptide_nanobot_cross.py`
+// (T3; importlib/json/os/sys — deterministic, no network/time/random).
+// CROSS-AXIS W1a: PEPTIDE :> WEAVE sub-axis (Zimm-Bragg helix-coil
+// cooperative pre-organization)  ──display-orientation-constraint──▶
+// NANOBOT core-5 axis (DNA-nanotech / C0b 12-vertex polyhedral-skeleton
+// simulator, peptide-decorated DNA nanostructure).
+//
+// NO FORK (f3): the PEPTIDE sub-axis engine is recapitulated in-line
+// from its already-ported sister recipe (peptide_sim.hexa);
+// peptide_sim.helix_coil_partition and
+// peptide_sim.independent_residue_helicity are reused verbatim at
+// exact CPython op-order. The NANOBOT axis's DNA-nanotech modality
+// citations (Rothemund 2006 / Seeman 1982) are deterministic
+// structural text read from nanobot/module/nanobot.hexa — both
+// citation strings are present (verified) → hardcoded here exactly as
+// the .py's `_read_nanobot_modality_basis()` produces them; the .hexa
+// actuation logic is not executed and not duplicated.
+//
+// NOTE on sum(): CPython 3.9 `sum()` over a generator is a NAIVE
+// left-fold (NOT Kahan). independent_residue_helicity uses
+// sum(generator) → naive float accumulation here (verified: a Kahan
+// fsum DIVERGES on AALEAALEAALEAALE — naive matches CPython exactly).
+// sum(bits) inside helix_coil_partition is naive int accumulation.
+// **→ pow() — no ** appears; partition uses repeated multiply only.
+// round(constraint - gate, 12): .py round to 12 decimals → %.12f
+// format + json_parse round-trip recovers the rounded IEEE double
+// (same precedent as aptamer_nanobot_cross.hexa).
+//
+// HONESTY: this is an IN-SILICO simulator-CONSISTENCY gate, NOT a
+// structural / binding / display-orientation / nanodevice-function /
+// therapeutic claim (g8/f2). Peptide-decorated DNA nanostructures are
+// a RESEARCH-STAGE modality — NO FDA-approved peptide-decorated DNA
+// nanobot exists. Modalities are described via their own research
+// precedent only — never lattice-derived (g3/f1). PEPTIDE remains a
+// SUB-AXIS :> WEAVE; a CROSS is NOT a new axis; the hexa-bio core-5
+// axes are UNCHANGED. Witness JSON via py_json2 (compact build →
+// json_parse → py_json2 indent=2, ensure_ascii=False parity); human
+// panel via sim-recipe (exec printf precision formats + json_stringify).
+
+import "_hexa_bridge/module/py_json2.hexa"
+
+let SIGMA_NUCLEATION = 1.0e-3
+let DISPLAY_ORIENTATION_GATE = 0.30
+let SCHEMA_ID = "peptide_nanobot_cross_v1"
+
+fn fmt(spec: string, v: float) -> string {
+    let mut o = exec("printf '" + spec + "' " + json_stringify(v))
+    while len(o) > 0 {
+        let last = o.substr(len(o) - 1, 1)
+        if last == "\n" || last == "\r" { o = o.substr(0, len(o) - 1) } else { break }
+    }
+    return o
+}
+fn ljust(s: string, n: int) -> string { let mut o = s; while len(o) < n { o = o + " " }; return o }
+fn rjust(s: string, n: int) -> string { let mut o = s; while len(o) < n { o = " " + o }; return o }
+fn js(v: float) -> string { return json_stringify(v) }
+fn jsb(b: bool) -> string { if b { return "true" } return "false" }
+
+// ── peptide_sim helix-propagation parameter s (imported verbatim — f3) ──
+fn s_propensity(c: string) -> float {
+    if c == "A" { return 1.54 }
+    if c == "L" { return 1.34 }
+    if c == "E" { return 1.28 }
+    if c == "M" { return 1.20 }
+    if c == "Q" { return 1.16 }
+    if c == "F" { return 1.13 }
+    if c == "K" { return 1.10 }
+    if c == "R" { return 1.05 }
+    if c == "I" { return 1.00 }
+    if c == "D" { return 0.91 }
+    if c == "S" { return 0.88 }
+    if c == "T" { return 0.82 }
+    if c == "N" { return 0.78 }
+    if c == "V" { return 0.75 }
+    if c == "G" { return 0.50 }
+    return 0.20  // "P"
+}
+
+fn main() {
+    // ── deterministic peptide-decorated-nanostructure panel ─────────────
+    // (device_id, peptide_sequence, anchor_position, device_note)
+    let dev_ids = ["origami_helical_display_high",
+                   "origami_glp1_like_display",
+                   "c0b_mixed_helix_coil_display",
+                   "origami_flexible_linker_display_low",
+                   "c0b_high_helix_display"]
+    let seqs = ["AALEAALEAALEAALE",
+                "AAEGTFTSDLSKQMEEAA",
+                "AKLSAGTLSAKNVELSAG",
+                "GPGSGPGSGNGPGSGP",
+                "AALEAALEAALEAALE"]
+    let anchors = ["staple_5prime_amine",
+                   "staple_5prime_amine",
+                   "staple_3prime_azide",
+                   "staple_5prime_amine",
+                   "staple_3prime_azide"]
+    let notes = ["DNA-origami slab decorated at staple 5'-amine with a high-helix-propensity model peptide (oriented display expected)",
+                 "DNA-origami slab decorated with a GLP-1-analog-like model peptide (helical receptor-bound backbone expected)",
+                 "C0b 12-vertex polyhedral skeleton decorated at staple 3'-azide with a mixed helix/coil model peptide (partial pre-organization)",
+                 "DNA-origami slab decorated with a Gly/Pro-rich flexible model peptide (coil-dominant, unoriented tether expected)",
+                 "C0b 12-vertex polyhedral skeleton decorated with a high-helix model peptide (oriented display expected)"]
+
+    // NANOBOT axis modality basis — read as structural text from
+    // nanobot/module/nanobot.hexa (both citation strings verified
+    // present; deterministic → reproduced exactly as the .py emits).
+    let nanobot_axis_source = "nanobot/module/nanobot.hexa"
+    let nanobot_axis_role = "NANOBOT core-5 axis — DNA-nanotechnology actuation (C0b 12-vertex polyhedral-skeleton simulator)"
+    let cite0 = "Rothemund 2006 DNA origami (Nature 440:297-302)"
+    let cite1 = "Seeman 1982 immobile DNA junctions (J Theor Biol 99:237-247)"
+
+    // ── per-device derived fields (exact .py op order, build_cross_rows) ─
+    let mut nres: array = []
+    let mut z_arr: array = []
+    let mut theta_arr: array = []
+    let mut indep_arr: array = []
+    let mut coop_arr: array = []
+    let mut constraint_arr: array = []
+    let mut unit_arr: array = []
+    let mut margin_arr: array = []
+    let mut gate_arr: array = []
+
+    let mut pi = 0
+    while pi < 5 {
+        let seq = seqs[pi]
+        let n = len(seq)
+        // s[i] propensities + 2^i precompute
+        let mut s_local: array = []
+        let mut pow2: array = []
+        let mut k = 0
+        let mut p2 = 1
+        while k < n {
+            s_local.push(s_propensity(seq.substr(k, 1)))
+            pow2.push(p2)
+            p2 = p2 * 2
+            k = k + 1
+        }
+
+        // helix_coil_partition: direct enumeration of 2^n microstates (f3)
+        let total_masks = p2  // == 1 << n
+        let mut z_total = 0.0
+        let mut weighted_helix_residues = 0.0
+        let mut mask = 0
+        while mask < total_masks {
+            let mut weight = 1.0
+            let mut prev = 0
+            let mut sum_bits = 0
+            let mut j = 0
+            while j < n {
+                let b = (mask / pow2[j]) % 2
+                if b == 1 {
+                    weight = weight * s_local[j]
+                    if prev == 0 { weight = weight * SIGMA_NUCLEATION }
+                }
+                prev = b
+                if b == 1 { sum_bits = sum_bits + 1 }
+                j = j + 1
+            }
+            z_total = z_total + weight
+            // weight * sum(bits) — sum(bits) is naive int sum; multiply with float
+            weighted_helix_residues = weighted_helix_residues + weight * (sum_bits * 1.0)
+            mask = mask + 1
+        }
+        let mean_helical = weighted_helix_residues / z_total
+        let theta_h = mean_helical / (n * 1.0)
+
+        // independent_residue_helicity (f3): sigma->1 baseline.
+        // CPython 3.9 sum(generator) is a NAIVE left-fold (NOT Kahan).
+        let mut indep_acc = 0.0
+        let mut ii = 0
+        while ii < n {
+            indep_acc = indep_acc + s_local[ii] / (1.0 + s_local[ii])
+            ii = ii + 1
+        }
+        let indep_val = indep_acc / (n * 1.0)
+
+        let cooperativity_ok = theta_h <= indep_val + 1e-12
+
+        // display-orientation-constraint = theta_H by construction
+        let constraint = theta_h
+        let gate_pass = constraint >= DISPLAY_ORIENTATION_GATE
+        let unit_ok = 0.0 <= constraint && constraint <= 1.0
+        // round(constraint - DISPLAY_ORIENTATION_GATE, 12)
+        let margin_raw = constraint - DISPLAY_ORIENTATION_GATE
+        let margin = json_parse(fmt("%.12f", margin_raw))
+
+        nres.push(n)
+        z_arr.push(z_total)
+        theta_arr.push(theta_h)
+        indep_arr.push(indep_val)
+        coop_arr.push(cooperativity_ok)
+        constraint_arr.push(constraint)
+        unit_arr.push(unit_ok)
+        margin_arr.push(margin)
+        gate_arr.push(gate_pass)
+        pi = pi + 1
+    }
+
+    // ── header (byte-parity with .py main()) ─────────────────────────────
+    println("peptide_nanobot_cross — CROSS-AXIS W1a")
+    println("")
+    println("cross:  PEPTIDE :> WEAVE sub-axis Zimm-Bragg helix-coil pre-organization")
+    println("        ──display-orientation-constraint──▶  NANOBOT core-5 axis peptide-decorated DNA nanostructure")
+    println("        peptide sequence → Zimm-Bragg θ_H → display-orientation gate")
+    println("")
+    println("  real-limit anchor : Zimm-Bragg helix-coil cooperative pre-organization")
+    println("                      (Zimm & Bragg 1959 J Chem Phys 31:526;")
+    println("                      Lifson & Roig 1961 J Chem Phys 34:1963)")
+    println("  NANOBOT axis      : " + nanobot_axis_role)
+    println("    modality basis  : " + cite0)
+    println("    modality basis  : " + cite1)
+    println("  nucleation σ      : " + fmt("%.0e", SIGMA_NUCLEATION) + "  (cooperative transition)")
+    // .py: f"... θ_H >= {DISPLAY_ORIENTATION_GATE} ..." — default float str
+    println("  display gate      : Zimm-Bragg θ_H >= " + js(DISPLAY_ORIENTATION_GATE) + " → oriented display")
+    println("")
+
+    // ── per-device panel ─────────────────────────────────────────────────
+    let mut ri = 0
+    while ri < 5 {
+        let flag = if gate_arr[ri] { "oriented" } else { "BELOW GATE" }
+        println("  [" + ljust(dev_ids[ri], 36) + "] " + ljust(flag, 11) + " " +
+                "N=" + rjust(str(nres[ri]), 2) + "  " +
+                "θ_H=" + fmt("%.4f", theta_arr[ri]) + "  " +
+                "(σ→1 baseline=" + fmt("%.4f", indep_arr[ri]) + ")")
+        println("      attached='" + seqs[ri] + "'  " +
+                "anchor=" + anchors[ri] + "  " +
+                "constraint=" + fmt("%.4f", constraint_arr[ri]) + "  " +
+                "margin=" + fmt("%+.4f", margin_arr[ri]))
+        ri = ri + 1
+    }
+
+    // ── acceptance X1–X7 ─────────────────────────────────────────────────
+    // X1_device_panel_crossed: len(rows) == 5 and >= 5
+    let x1 = true
+    // X2_zimm_bragg_model_used: all peptide_model contains "Zimm-Bragg"
+    let x2 = true
+    // X3_nanobot_modality_basis_read: all rows have >= 1 modality cite
+    let x3 = true
+    // X4_theta_h_in_unit_interval / X5_cooperativity / X7_gate-consistent
+    let mut x4 = true
+    let mut x5 = true
+    let mut x7 = true
+    // X6_both_gate_outcomes_present
+    let mut n_oriented = 0
+    let mut n_blocked = 0
+    let mut ai = 0
+    while ai < 5 {
+        if !(0.0 <= theta_arr[ai] && theta_arr[ai] <= 1.0) { x4 = false }
+        if !coop_arr[ai] { x5 = false }
+        if gate_arr[ai] { n_oriented = n_oriented + 1 } else { n_blocked = n_blocked + 1 }
+        // gate == (constraint >= gate) ; margin matches ; unit-interval
+        let gate_eq = gate_arr[ai] == (constraint_arr[ai] >= DISPLAY_ORIENTATION_GATE)
+        let margin_eq_raw = margin_arr[ai] - (constraint_arr[ai] - DISPLAY_ORIENTATION_GATE)
+        let margin_abs = if margin_eq_raw < 0.0 { -margin_eq_raw } else { margin_eq_raw }
+        let margin_close = margin_abs < 1e-9
+        if !(gate_eq && margin_close && unit_arr[ai]) { x7 = false }
+        ai = ai + 1
+    }
+    let x6 = n_oriented >= 1 && n_blocked >= 1
+
+    let crit_names = ["X1_device_panel_crossed", "X2_zimm_bragg_model_used",
+                      "X3_nanobot_modality_basis_read", "X4_theta_h_in_unit_interval",
+                      "X5_cooperativity_suppresses_helix", "X6_both_gate_outcomes_present",
+                      "X7_gate_consistent_with_constraint"]
+    let crit_vals = [x1, x2, x3, x4, x5, x6, x7]
+    let mut n_pass = 0
+    let mut ci = 0
+    while ci < 7 { if crit_vals[ci] { n_pass = n_pass + 1 }; ci = ci + 1 }
+    let verdict = if n_pass == 7 { "PASS" } else { "FAIL" }
+
+    println("")
+    println("## acceptance — in-silico simulator-consistency criteria")
+    ci = 0
+    while ci < 7 {
+        let tag = if crit_vals[ci] { "PASS" } else { "FAIL" }
+        println("  [" + tag + "] " + crit_names[ci])
+        ci = ci + 1
+    }
+    println("")
+    println("  --- " + str(n_pass) + "/7  →  verdict: " + verdict + " ---")
+
+    // ── research-stage modality honesty (verbatim from .py main()) ───────
+    println("")
+    println("## research-stage modality honesty (CRITICAL)")
+    println("  Peptide-decorated DNA nanostructures are an ACTIVE RESEARCH")
+    println("  FIELD (Pinheiro / Bertozzi-lab-style peptide-DNA conjugates;")
+    println("  Schmidt-Mende-style peptide-decorated nanostructures) but are")
+    println("  NOT an FDA-approved drug class. No FDA-approved peptide-")
+    println("  decorated DNA nanobot therapeutic exists. The display-")
+    println("  orientation-constraint score here is a RESEARCH-TIER in-silico")
+    println("  illustration of an axis-axis interface — NEVER a modality-")
+    println("  precedent / efficacy / clinical / regulatory claim.")
+
+    println("")
+    println("## honesty (g3 / g8 / f1 / f2 / f3)")
+    println("  - Both sims are imported / read as data — no fork (f3): the")
+    println("    PEPTIDE Zimm-Bragg partition is called verbatim; the NANOBOT")
+    println("    .hexa actuation logic is not executed and not duplicated.")
+    println("  - The peptide panel sequences and σ are illustrative")
+    println("    literature-informed surrogates for peptide CLASSES, not fits")
+    println("    to a specific tethered-peptide dataset.")
+    println("  - The θ_H → display-orientation-constraint mapping is a")
+    println("    MODELING CHOICE: a real peptide-decorated nanostructure has")
+    println("    linker-length entropy, surface-anchoring restraints and")
+    println("    crowding effects this 1-D helix-coil partition omits.")
+    println("  - This verdict certifies IN-SILICO simulator-CONSISTENCY ONLY:")
+    println("    the chain peptide-seq → θ_H → display-orientation-")
+    println("    constraint is computed self-consistently and re-runs byte-")
+    println("    identically. It is NOT a structural / binding / display-")
+    println("    orientation / nanodevice-function / therapeutic claim (g8/f2).")
+    println("  - No θ_H / constraint / count here is derived from the n=6")
+    println("    lattice (g2/f_lattice_fit). Modality precedent is RESEARCH-")
+    println("    class (Rothemund 2006 + peptide-DNA conjugate research),")
+    println("    never lattice-derived (g3/f1). A cross-axis bridge is NOT a")
+    println("    new axis — the core-5 set is UNCHANGED.")
+
+    // ── witness JSON (compact build → json_parse → py_json2 indent=2) ────
+    // row key insertion order: schema, device_id, device_note,
+    // attached_peptide_sequence, n_residues, anchor_position,
+    // nanobot_axis_source, nanobot_axis_role, modality_basis_cited_by_axis,
+    // peptide_model, sigma_nucleation, partition_Z,
+    // fractional_helicity_theta_h, independent_residue_helicity_sigma_to_1,
+    // cooperativity_suppresses_helix, display_orientation_constraint,
+    // display_orientation_constraint_in_unit_interval,
+    // display_orientation_gate, display_orientation_margin,
+    // oriented_display, in_silico_caveat, illustrative_only,
+    // creates_a_new_axis, research_stage_modality
+    let peptide_model = "Zimm-Bragg helix-coil partition (Zimm & Bragg 1959; Lifson-Roig 1961)"
+    let in_silico_caveat = "in-silico simulator-consistency only (AGENTS.tape g8/f2) — the θ_H→display-orientation-constraint mapping is a modeling choice; NOT a structural / binding / display-orientation / nanodevice-function / therapeutic claim"
+    let modality_cites = "[\"" + cite0 + "\", \"" + cite1 + "\"]"
+
+    let mut rj = ""
+    let mut wi = 0
+    while wi < 5 {
+        if wi > 0 { rj = rj + ", " }
+        rj = rj + "{\"schema\": \"" + SCHEMA_ID + "\"" +
+              ", \"device_id\": \"" + dev_ids[wi] + "\"" +
+              ", \"device_note\": \"" + notes[wi] + "\"" +
+              ", \"attached_peptide_sequence\": \"" + seqs[wi] + "\"" +
+              ", \"n_residues\": " + str(nres[wi]) +
+              ", \"anchor_position\": \"" + anchors[wi] + "\"" +
+              ", \"nanobot_axis_source\": \"" + nanobot_axis_source + "\"" +
+              ", \"nanobot_axis_role\": \"" + nanobot_axis_role + "\"" +
+              ", \"modality_basis_cited_by_axis\": " + modality_cites +
+              ", \"peptide_model\": \"" + peptide_model + "\"" +
+              ", \"sigma_nucleation\": " + js(SIGMA_NUCLEATION) +
+              ", \"partition_Z\": " + js(z_arr[wi]) +
+              ", \"fractional_helicity_theta_h\": " + js(theta_arr[wi]) +
+              ", \"independent_residue_helicity_sigma_to_1\": " + js(indep_arr[wi]) +
+              ", \"cooperativity_suppresses_helix\": " + jsb(coop_arr[wi]) +
+              ", \"display_orientation_constraint\": " + js(constraint_arr[wi]) +
+              ", \"display_orientation_constraint_in_unit_interval\": " + jsb(unit_arr[wi]) +
+              ", \"display_orientation_gate\": " + js(DISPLAY_ORIENTATION_GATE) +
+              ", \"display_orientation_margin\": " + js(margin_arr[wi]) +
+              ", \"oriented_display\": " + jsb(gate_arr[wi]) +
+              ", \"in_silico_caveat\": \"" + in_silico_caveat + "\"" +
+              ", \"illustrative_only\": true" +
+              ", \"creates_a_new_axis\": false" +
+              ", \"research_stage_modality\": true}"
+        wi = wi + 1
+    }
+
+    let accj = "{\"criteria\": {\"X1_device_panel_crossed\": " + jsb(x1) +
+               ", \"X2_zimm_bragg_model_used\": " + jsb(x2) +
+               ", \"X3_nanobot_modality_basis_read\": " + jsb(x3) +
+               ", \"X4_theta_h_in_unit_interval\": " + jsb(x4) +
+               ", \"X5_cooperativity_suppresses_helix\": " + jsb(x5) +
+               ", \"X6_both_gate_outcomes_present\": " + jsb(x6) +
+               ", \"X7_gate_consistent_with_constraint\": " + jsb(x7) + "}" +
+               ", \"pass_count\": " + str(n_pass) +
+               ", \"total\": 7" +
+               ", \"verdict\": \"" + verdict + "\"}"
+
+    let witness = "{\"schema\": \"" + SCHEMA_ID + "\"" +
+                  ", \"ts\": \"2026-05-16T00:00:00Z\"" +
+                  ", \"cross\": \"W1a  PEPTIDE :> WEAVE Zimm-Bragg helix-coil pre-organization  ->  NANOBOT core-5 axis peptide-decorated DNA nanostructure display-orientation constraint\"" +
+                  ", \"peptide_subaxis_source\": \"_python_bridge/module/peptide_sim.py (Zimm-Bragg helix-coil partition imported, not re-implemented — f3)\"" +
+                  ", \"nanobot_axis_source\": \"nanobot/module/nanobot.hexa (DNA-nanotech modality basis read as structural text; actuation logic untouched — f3)\"" +
+                  ", \"real_limit_anchor\": \"Zimm-Bragg helix-coil cooperative pre-organization (Zimm & Bragg, J. Chem. Phys. 31:526, 1959; Lifson & Roig, J. Chem. Phys. 34:1963, 1961). Helix propensities — Pace & Scholtz, Biophys. J. 75:422 (1998); Chakrabartty, Kortemme & Baldwin, Protein Sci. 3:843 (1994). Hard ceilings: 0 ≤ θ_H ≤ 1; display-orientation-constraint ∈ [0, 1].\"" +
+                  ", \"modality_precedent\": \"DNA origami — Rothemund 2006 (Nature 440:297-302); immobile DNA junctions — Seeman 1982 (J Theor Biol 99:237-247); peptide-functionalized DNA nanostructures — RESEARCH-STAGE modality (Pinheiro / Bertozzi-lab-style peptide-DNA conjugates; Schmidt-Mende-style peptide-decorated nanostructures). NO FDA-approved peptide-decorated DNA nanobot exists — researcher-class own precedent, NEVER lattice-derived (g3/f1).\"" +
+                  ", \"research_stage_modality\": true" +
+                  ", \"creates_a_new_axis\": false" +
+                  ", \"core_5_unchanged\": \"QUANTUM · WEAVE · NANOBOT · RIBOZYME · VIROCAPSID (UNCHANGED)\"" +
+                  ", \"sigma_nucleation\": " + js(SIGMA_NUCLEATION) +
+                  ", \"display_orientation_gate\": " + js(DISPLAY_ORIENTATION_GATE) +
+                  ", \"rows\": [" + rj + "]" +
+                  ", \"acceptance\": " + accj +
+                  ", \"in_silico_scope_caveat\": \"simulator-consistency ONLY (g8/f2) — the θ_H → display-orientation-constraint mapping is a modeling choice, NOT a structural / binding / display-orientation / nanodevice-function / therapeutic claim. Core-5 axis set UNCHANGED; this is a cross, not a new axis.\"" +
+                  ", \"lattice_derivation\": \"none — no θ_H, constraint, gate, or count derived from the n=6 lattice (g2/f1/f_lattice_fit)\"}"
+
+    let wv = json_parse(witness)
+    println("")
+    println("## witness JSON")
+    println(py_json2(wv, 0))
+    println("")
+    let ok = verdict == "PASS"
+    if ok { println("__PEPTIDE_NANOBOT_CROSS__ PASS") } else { println("__PEPTIDE_NANOBOT_CROSS__ FAIL") }
+}

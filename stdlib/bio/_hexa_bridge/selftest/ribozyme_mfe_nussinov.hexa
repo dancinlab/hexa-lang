@@ -1,0 +1,94 @@
+#!hexa strict
+// hexa-bio/_hexa_bridge/selftest/ribozyme_mfe_nussinov.hexa
+//
+// Nussinov MFE solver self-check gate. hexa-native port of the
+// `_selfcheck()` in `_python_bridge/module/ribozyme_mfe_nussinov.py`.
+// Uses the shared hexa lib at `_hexa_bridge/module/`.
+
+import "_hexa_bridge/module/ribozyme_mfe_nussinov.hexa"
+
+fn shq(s: string) -> string { return "'" + s.replace("'", "'\\''") + "'" }
+
+fn ljust(s: string, n: int) -> string {
+    let mut o = s
+    while len(o) < n { o = o + " " }
+    return o
+}
+
+fn rjust(s: string, n: int) -> string {
+    let mut o = s
+    while len(o) < n { o = " " + o }
+    return o
+}
+
+let CASE_NAME = ["hammerhead_min_12nt_core", "trna_acceptor_arm",
+                 "simple_hairpin", "palindrome_8nt", "no_pair_possible",
+                 "wobble_only"]
+let CASE_SEQ  = ["CUGAUGAGGCCG",
+                 "GGGGCCAUAGCUCAGUGGUAGAGCGCAUGCUUUGCAUGUAUGAGGCCCCGGUUCAAUUCCGGGUGGUCCACCA",
+                 "GGGAAAUCCC", "GCGCGCGC", "AAAAAAAA", "GUGUGUGUGU"]
+let CASE_MIN  = [1, 15, 3, 2, 0, 2]
+
+fn main() {
+    println("ribozyme_mfe_nussinov.py — Nussinov MFE solver self-check")
+    println("  (pair set: AU/UA/GC/CG/GU/UG · min hairpin loop = 3 nt)")
+    println("")
+
+    let mut fails = 0
+    let mut i = 0
+    while i < len(CASE_NAME) {
+        let r = nussinov(CASE_SEQ[i])
+        let db = r[0]
+        let np_v = r[1]                          // string of int
+        let mut np_i = 0
+        let mut k = 0
+        while k < len(np_v) {
+            let c = np_v.substr(k, 1)
+            if c == "0" { np_i = np_i * 10 + 0 }
+            else if c == "1" { np_i = np_i * 10 + 1 }
+            else if c == "2" { np_i = np_i * 10 + 2 }
+            else if c == "3" { np_i = np_i * 10 + 3 }
+            else if c == "4" { np_i = np_i * 10 + 4 }
+            else if c == "5" { np_i = np_i * 10 + 5 }
+            else if c == "6" { np_i = np_i * 10 + 6 }
+            else if c == "7" { np_i = np_i * 10 + 7 }
+            else if c == "8" { np_i = np_i * 10 + 8 }
+            else if c == "9" { np_i = np_i * 10 + 9 }
+            k = k + 1
+        }
+        let ok_len = len(db) == len(CASE_SEQ[i])
+        let ok_bal = is_balanced(db)
+        let ok_min = np_i >= CASE_MIN[i]
+        let pass = ok_len && ok_bal && ok_min
+        let verdict = if pass { "PASS" } else { "FAIL" }
+        if pass == false { fails = fails + 1 }
+        println("  [" + verdict + "] " + ljust(CASE_NAME[i], 28) + " n=" + rjust(str(len(CASE_SEQ[i])), 3) + "  pairs=" + rjust(str(np_i), 2) + "  (min=" + str(CASE_MIN[i]) + ")  db=" + db)
+        if ok_len == false { println("         ✗ length mismatch: db=" + str(len(db)) + " seq=" + str(len(CASE_SEQ[i]))) }
+        if ok_bal == false { println("         ✗ unbalanced dot-bracket") }
+        if ok_min == false { println("         ✗ fewer pairs than min (" + str(np_i) + " < " + str(CASE_MIN[i]) + ")") }
+        i = i + 1
+    }
+
+    // determinism check
+    println("")
+    let seq_repro = "CUGAUGAGGCCGAUCGAAGCUUGCAA"
+    let r1 = nussinov(seq_repro)
+    let r2 = nussinov(seq_repro)
+    if r1[0] == r2[0] && r1[1] == r2[1] {
+        println("  [PASS] determinism — byte-identical re-run on n=" + str(len(seq_repro)) + " sequence")
+    } else {
+        fails = fails + 1
+        println("  [FAIL] determinism — output drift between runs")
+    }
+
+    println("")
+    let total = len(CASE_NAME) + 1
+    if fails == 0 {
+        println("  --- summary --- " + str(total) + " / " + str(total) + " PASS → verdict: PASS")
+        println("__RIBOZYME_MFE_NUSSINOV__ PASS")
+        return
+    }
+    println("  --- summary --- " + str(fails) + " FAIL → verdict: FAIL")
+    println("__RIBOZYME_MFE_NUSSINOV__ FAIL")
+    exit(1)
+}

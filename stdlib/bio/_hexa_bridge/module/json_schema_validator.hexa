@@ -1,0 +1,221 @@
+#!hexa strict
+// hexa-bio/_hexa_bridge/module/json_schema_validator.hexa
+//
+// JSON Schema (draft-07 subset) validator — shared hexa lib.
+// Port of `selftest/json_schema_validator.py` (T3 shared dependency).
+//
+// Subset: type · required · properties · additionalProperties · enum ·
+// const · pattern (re.search → grep -E) · minimum · exclusiveMinimum ·
+// maximum · exclusiveMaximum · minItems · maxItems · items · minLength ·
+// maxLength · format (date-time, regex check).
+//
+// VERDICT byte-parity vs the .py (errors list empty ⇔ Python errors list
+// empty). Error STRINGS use a cleaner hexa formatting (the validator's
+// callers consume `len(errs)`; Python !r repr formatting is not
+// reproduced verbatim — documented limitation; verdict is exact).
+//
+// Pattern semantics: Python `re.search` ↔ `grep -E`. Identical for the
+// cage_output_v1 fixture (literal-anchored `^state/.../raw_77_`).
+// Python-`re`-specific syntax (lookaround, `\d`/`\w`/`\s` shortcuts beyond
+// POSIX) would diverge — flagged in PLAN.md; current corpus is ERE-friendly.
+
+fn shq(s: string) -> string { return "'" + s.replace("'", "'\\''") + "'" }
+
+fn _has_key(m, k: string) -> bool {
+    let ks = dict_keys(m)
+    let mut i = 0
+    while i < len(ks) { if ks[i] == k { return true }; i = i + 1 }
+    return false
+}
+
+// JSON Schema type → hexa type_of() check
+fn _check_type1(instance, t: string) -> bool {
+    let h = type_of(instance)
+    if t == "string"  { return h == "string" }
+    if t == "integer" { return h == "int" }                 // bool != int (hexa type_of distinct)
+    if t == "number"  { return (h == "int" || h == "float") && h != "bool" }
+    if t == "boolean" { return h == "bool" }
+    if t == "array"   { return h == "array" }
+    if t == "object"  { return h == "map" }
+    if t == "null"    { return h == "void" }
+    return true                                              // unknown spec → permissive
+}
+
+fn _check_type(instance, type_spec) -> bool {
+    let h = type_of(type_spec)
+    if h == "void" { return true }
+    if h == "array" {
+        let mut i = 0
+        while i < len(type_spec) {
+            if _check_type1(instance, type_spec[i]) { return true }
+            i = i + 1
+        }
+        return false
+    }
+    if h == "string" { return _check_type1(instance, type_spec) }
+    return true
+}
+
+// deep structural equality (recursive map/array/scalar; const + enum use it)
+fn _deep_eq(a, b) -> bool {
+    let ta = type_of(a)
+    let tb = type_of(b)
+    if ta != tb { return false }
+    if ta == "void" { return true }
+    if ta == "bool" || ta == "int" || ta == "float" || ta == "string" { return a == b }
+    if ta == "array" {
+        if len(a) != len(b) { return false }
+        let mut i = 0
+        while i < len(a) { if _deep_eq(a[i], b[i]) == false { return false }; i = i + 1 }
+        return true
+    }
+    if ta == "map" {
+        let ka = dict_keys(a)
+        let kb = dict_keys(b)
+        if len(ka) != len(kb) { return false }
+        let mut i = 0
+        while i < len(ka) {
+            let k = ka[i]
+            if _has_key(b, k) == false { return false }
+            if _deep_eq(a[k], b[k]) == false { return false }
+            i = i + 1
+        }
+        return true
+    }
+    return a == b
+}
+
+fn _in_array(a, arr) -> bool {
+    let mut i = 0
+    while i < len(arr) { if _deep_eq(a, arr[i]) { return true }; i = i + 1 }
+    return false
+}
+
+// `re.search` ↔ `grep -E` (for the corpus this validator faces today).
+fn _pat_search(s: string, pat: string) -> bool {
+    let n = exec("printf '%s' " + shq(s) + " | grep -cE " + shq(pat) + " 2>/dev/null | head -1").trim()
+    return n != "" && n != "0"
+}
+
+// ISO_DATETIME_RE: ^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})$
+let _ISO_DT_ERE = "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?(Z|[+-][0-9]{2}:?[0-9]{2})$"
+
+fn _is_iso_datetime(s: string) -> bool {
+    return _pat_search(s, _ISO_DT_ERE)
+}
+
+// validate(instance, schema, path) → array of error-string entries.
+// Empty array == valid (Python parity on the truthy-test).
+fn validate(instance, schema, path: string) -> array {
+    let mut errs: array = []
+    if type_of(schema) != "map" { return errs }
+
+    if _has_key(schema, "type") {
+        let ts = schema["type"]
+        if type_of(ts) != "void" && _check_type(instance, ts) == false {
+            errs.push(path + ": expected type " + json_stringify(ts) + ", got " + type_of(instance))
+            return errs                                        // type failure cascades
+        }
+    }
+
+    if _has_key(schema, "const") && _deep_eq(instance, schema["const"]) == false {
+        errs.push(path + ": const mismatch (got " + json_stringify(instance) + ")")
+    }
+    if _has_key(schema, "enum") && _in_array(instance, schema["enum"]) == false {
+        errs.push(path + ": enum mismatch (got " + json_stringify(instance) + ")")
+    }
+
+    let h = type_of(instance)
+
+    if h == "string" {
+        if _has_key(schema, "pattern") && _pat_search(instance, schema["pattern"]) == false {
+            errs.push(path + ": pattern mismatch (got " + json_stringify(instance) + ")")
+        }
+        if _has_key(schema, "minLength") && len(instance) < schema["minLength"] {
+            errs.push(path + ": minLength " + json_stringify(schema["minLength"]) + " (got " + str(len(instance)) + ")")
+        }
+        if _has_key(schema, "maxLength") && len(instance) > schema["maxLength"] {
+            errs.push(path + ": maxLength " + json_stringify(schema["maxLength"]) + " (got " + str(len(instance)) + ")")
+        }
+        if _has_key(schema, "format") && schema["format"] == "date-time" {
+            if _is_iso_datetime(instance) == false {
+                errs.push(path + ": format date-time mismatch (got " + json_stringify(instance) + ")")
+            }
+        }
+    }
+
+    if (h == "int" || h == "float") && h != "bool" {
+        if _has_key(schema, "minimum") && instance < schema["minimum"] {
+            errs.push(path + ": minimum " + json_stringify(schema["minimum"]) + " (got " + json_stringify(instance) + ")")
+        }
+        if _has_key(schema, "exclusiveMinimum") && instance <= schema["exclusiveMinimum"] {
+            errs.push(path + ": exclusiveMinimum " + json_stringify(schema["exclusiveMinimum"]) + " (got " + json_stringify(instance) + ")")
+        }
+        if _has_key(schema, "maximum") && instance > schema["maximum"] {
+            errs.push(path + ": maximum " + json_stringify(schema["maximum"]) + " (got " + json_stringify(instance) + ")")
+        }
+        if _has_key(schema, "exclusiveMaximum") && instance >= schema["exclusiveMaximum"] {
+            errs.push(path + ": exclusiveMaximum " + json_stringify(schema["exclusiveMaximum"]) + " (got " + json_stringify(instance) + ")")
+        }
+    }
+
+    if h == "array" {
+        if _has_key(schema, "minItems") && len(instance) < schema["minItems"] {
+            errs.push(path + ": minItems " + json_stringify(schema["minItems"]) + " (got " + str(len(instance)) + ")")
+        }
+        if _has_key(schema, "maxItems") && len(instance) > schema["maxItems"] {
+            errs.push(path + ": maxItems " + json_stringify(schema["maxItems"]) + " (got " + str(len(instance)) + ")")
+        }
+        if _has_key(schema, "items") {
+            let item_schema = schema["items"]
+            let mut i = 0
+            while i < len(instance) {
+                let sub = validate(instance[i], item_schema, path + "[" + str(i) + "]")
+                let mut s = 0
+                while s < len(sub) { errs.push(sub[s]); s = s + 1 }
+                i = i + 1
+            }
+        }
+    }
+
+    if h == "map" {
+        if _has_key(schema, "required") {
+            let req = schema["required"]
+            let mut i = 0
+            while i < len(req) {
+                if _has_key(instance, req[i]) == false {
+                    errs.push(path + "." + req[i] + ": required property missing")
+                }
+                i = i + 1
+            }
+        }
+        if _has_key(schema, "properties") {
+            let props = schema["properties"]
+            let pks = dict_keys(props)
+            let mut i = 0
+            while i < len(pks) {
+                let k = pks[i]
+                if _has_key(instance, k) {
+                    let sub = validate(instance[k], props[k], path + "." + k)
+                    let mut s = 0
+                    while s < len(sub) { errs.push(sub[s]); s = s + 1 }
+                }
+                i = i + 1
+            }
+        }
+        if _has_key(schema, "additionalProperties") && schema["additionalProperties"] == false {
+            let props = if _has_key(schema, "properties") { schema["properties"] } else { {} }
+            let iks = dict_keys(instance)
+            let mut i = 0
+            while i < len(iks) {
+                let k = iks[i]
+                if _has_key(props, k) == false {
+                    errs.push(path + "." + k + ": additional property not allowed")
+                }
+                i = i + 1
+            }
+        }
+    }
+
+    return errs
+}
