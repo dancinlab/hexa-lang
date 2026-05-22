@@ -325,17 +325,22 @@ fn _dfs_cite_in_atlas(cand: Candidate, view: AtlasView) -> bool {
     return false
 }
 
-// English-only heuristic (axis 10f). Rejects any non-ASCII byte (>= 0x80),
-// which covers CJK/Hangul; the atlas itself is ASCII ("phi * n"), so an
-// ASCII-only proposal is the right contract. Counts non-ASCII bytes
-// portably by deleting every ASCII byte (0x00-0x7f) and measuring the
-// remainder -- robust across BSD/GNU `tr` and `sh`, unlike grep's `\xHH`
-// byte-class which is implementation-defined (it silently matched ASCII
-// letters under sh+BSD grep and rejected all English; caught by Phase J).
+// English-only heuristic (axis 10f). Rejects CJK/Hangul specifically while
+// ALLOWING the math notation this atlas lives on -- Greek sigma/tau/phi
+// (2-byte 0xCE/0xCF), Latin-1 mid-dot (0xC2), em-dash/arrows (0xE2). Counts
+// only bytes in 0xE3-0xED, the 3-byte UTF-8 lead-byte band for CJK
+// ideographs (0xE4-0xE9) + Hangul (0xEA-0xED) + CJK symbols (0xE3); these
+// never occur as UTF-8 continuation bytes (0x80-0xBF), so the count is exact.
+// `tr -cd` keeps only that band; >0 means CJK present.
+//
+// History: first used grep `[\xe4-\xed]` (matched ASCII letters under
+// sh+BSD grep -> rejected all English, caught Phase J); then `tr -d
+// '\0-\177'` (rejected ALL non-ASCII -> rejected sigma/tau/phi math, caught
+// by the monitored real-LLM run). This band-only form is the correct gate.
 fn _dfs_has_cjk(s: string) -> bool {
     let tmp = "/tmp/hexa_loop_dfs_cjk_" + to_string(_dfs_now_epoch()) + ".txt"
     let _ = write_text(tmp, s)
-    let cnt = exec("LC_ALL=C tr -d '\\0-\\177' < " + _dfs_shq(tmp) + " | wc -c | tr -d ' '").trim()
+    let cnt = exec("LC_ALL=C tr -cd '\\343-\\355' < " + _dfs_shq(tmp) + " | wc -c | tr -d ' '").trim()
     let _ = exec("rm -f " + _dfs_shq(tmp))
     return _dfs_atoi(cnt) > 0
 }
