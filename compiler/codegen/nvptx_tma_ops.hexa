@@ -1,0 +1,267 @@
+// HEXA Native Compiler — Codegen / NVPTX TMA opcode table  [RFC 067 N202 scaffold]
+//
+// @version 0.0.1
+// @capabilities [pure]
+//
+// SCAFFOLD ONLY — RFC 067 N202 (TMA codegen wiring scaffold). Zero behavior
+// change: nothing in the compiler imports this file yet, no MIR lowers to
+// these mnemonics, and the existing nvptx_target.hexa emit pass is byte-
+// identically untouched (F-RFC055-CPU-CODEGEN-UNTOUCHED extends here).
+//
+// This file enumerates the PTX TMA (Tensor Memory Accelerator) mnemonics
+// the NVPTX codegen target will lower MIR into ONCE the matmul + sgemm
+// lane on sm_120a is wired source-to-silicon. It is the sibling table to
+// `nvptx_ptx_ops.hexa` — same PtxOpEntry shape, same opcode-table
+// pattern, same RFC 055 §3 "informational scaffold first, codegen second"
+// discipline.
+//
+// ─────────────────────────────────────────────────────────────────────
+// PROVENANCE — N196 + N200 SMOKE on RTX 5070 (sm_120, driver 580)
+// ─────────────────────────────────────────────────────────────────────
+//
+// N196 finding (`450ad0cc` on origin/main): TMA available on RTX 5070
+// consumer Blackwell BUT only at `.target sm_120a + .version 8.7`.
+// Forward-compat from `sm_90a` does NOT work — TMA opcodes parse but the
+// driver-JIT-compiled kernel produces wrong results (silent miscompare).
+// The `_a` ("architecture-specific") suffix is mandatory.
+//
+// N200 SMOKE (`c5840f19` on origin/main, artifact
+// `inbox/fires/rfc067_ptma_named_bar_hilbert_2026_05_22/`): first hexa-
+// shaped TMA+SGEMM kernel bit-exact on sm_120. 11 TMA opcode sites in
+// `sgemm_tma_smoke.ptx`:
+//   * `cp.async.bulk.tensor.2d.shared::cluster.global.tile.mbarrier::complete_tx::bytes`
+//   * `mbarrier.init.shared.b64`
+//   * `mbarrier.arrive.expect_tx.release.cta.shared::cta.b64`
+//   * `mbarrier.try_wait.parity.shared::cta.b64`
+//   * `fence.proxy.async.shared::cta`
+//   * `cvta.param.u64`
+//
+// ─────────────────────────────────────────────────────────────────────
+// HONEST SCOPE (RFC 055 §8 / @D g3)
+// ─────────────────────────────────────────────────────────────────────
+//
+//   IS  — the opcode constants + the informational PtxOpEntry table the
+//         future TMA lowering will consume to validate emitted mnemonics.
+//   NOT — a working TMA lowering pass. No MIR walk emits these. No
+//         `@gpu_tma_*` builtin is parsed. No descriptor is generated.
+//         `cuTensorMapEncodeTiled` host-side encoding is a separate
+//         runtime builtin (see
+//         `inbox/notes/2026-05-22-tma-runtime-builtin-requirements.md`).
+//
+// PTX mnemonics, opcode suffixes, and proxy/state-space qualifiers below
+// are NVIDIA hardware facts cited from the PTX ISA 8.7 documentation —
+// never derived from the n=6 lattice (@D f1).
+//   ref: NVIDIA PTX ISA 8.7 §9.7.8.24 (cp.async.bulk.tensor) +
+//        §9.7.12.15 (mbarrier) + §8.5 (proxy fence) + §9.7.9.6 (cvta).
+
+import "./nvptx_ptx_ops.hexa"
+
+// ── Architecture target gate ───────────────────────────────────
+//
+// TMA + the architecture-specific PTX subset land on `.target sm_120a +
+// .version 8.7` for RTX 5070 (consumer Blackwell). The `_a` suffix is
+// mandatory — forward-compat from sm_90a silently miscompiles (N196).
+//
+// These two constants are the ONLY values the TMA emit path may use for
+// the PTX module header when the kernel contains TMA opcodes.
+pub let NVPTX_ARCH_SM120A: string         = "sm_120a"
+pub let NVPTX_PTX_VERSION_SM120A: string  = "8.7"
+pub let NVPTX_TARGET_SM120A: string       = "nvptx64-nvidia-cuda-sm120a"
+
+// ── TMA bulk tensor opcodes (PTX ISA 8.7 §9.7.8.24) ───────────
+//
+// `cp.async.bulk.tensor` — TMA bulk load from global to shared (the
+// "tile" mode is the 2-D dense rectangle path SGEMM uses). The full
+// mnemonic includes proxy + state-space + completion qualifiers; we
+// store the canonical sm_120a 2-D form here.
+//   ref: PTX ISA 8.7 §9.7.8.24 (cp.async.bulk.tensor)
+pub let PTX_OP_CP_ASYNC_BULK_TENSOR_2D: string =
+    "cp.async.bulk.tensor.2d.shared::cluster.global.tile.mbarrier::complete_tx::bytes"
+
+// `cp.async.bulk.tensor.5d.*` — placeholder for the 5-D tile form
+// (used by convolution-shaped tensors). Same proxy/state-space chain
+// as 2-D. Not yet exercised on silicon — listed for symmetry only.
+pub let PTX_OP_CP_ASYNC_BULK_TENSOR_5D: string =
+    "cp.async.bulk.tensor.5d.shared::cluster.global.tile.mbarrier::complete_tx::bytes"
+
+// ── mbarrier opcodes (PTX ISA 8.7 §9.7.12.15) ─────────────────
+//
+// TMA loads complete asynchronously and signal an mbarrier in shared
+// memory. The producer side issues `arrive.expect_tx` with the byte
+// count; the consumer side spins on `try_wait.parity` until the
+// transfer completes.
+//   ref: PTX ISA 8.7 §9.7.12.15 (mbarrier)
+
+// `mbarrier.init.shared.b64 [addr], thread_count;` — initialize the
+// mbarrier with the expected arrival count.
+pub let PTX_OP_MBARRIER_INIT: string =
+    "mbarrier.init.shared.b64"
+
+// `mbarrier.arrive.expect_tx.release.cta.shared::cta.b64 tok, [addr], bytes;`
+// — producer announces an upcoming TMA transfer of `bytes` bytes.
+pub let PTX_OP_MBARRIER_ARRIVE_EXPECT_TX: string =
+    "mbarrier.arrive.expect_tx.release.cta.shared::cta.b64"
+
+// `mbarrier.try_wait.parity.shared::cta.b64 done, [addr], parity;` —
+// consumer polls; `done` is a predicate. Parity flips per K-iter so
+// the same mbarrier slot can be reused across iterations.
+pub let PTX_OP_MBARRIER_TRY_WAIT_PARITY: string =
+    "mbarrier.try_wait.parity.shared::cta.b64"
+
+// ── Proxy fence (PTX ISA 8.7 §8.5) ────────────────────────────
+//
+// The TMA "async proxy" sees a different view of shared memory from
+// the "generic proxy" (regular ld.shared/st.shared). A fence is
+// required between TMA arrival and consumer access. The CTA scope
+// suffices for single-CTA SGEMM; cluster scope is needed for
+// multi-CTA persistent kernels.
+//   ref: PTX ISA 8.7 §8.5 (proxy fence)
+pub let PTX_OP_FENCE_PROXY_ASYNC_SHARED_CTA: string =
+    "fence.proxy.async.shared::cta"
+
+// ── Address-space conversion for TMA descriptor (PTX ISA 8.7 §9.7.9.6) ──
+//
+// The TMA descriptor (`CUtensorMap`, 128 B, alignment 64) is passed as a
+// `.param .align 64 .b8 tmap_param[128]` value-param. To feed it to
+// `cp.async.bulk.tensor`, the kernel converts the param-space address
+// to a generic-space u64 via `cvta.param.u64`. This is the only legal
+// way to materialise the descriptor address inside the kernel.
+//   ref: PTX ISA 8.7 §9.7.9.6 (cvta) + §7.1.7 (param state space)
+pub let PTX_OP_CVTA_PARAM_U64: string =
+    "cvta.param.u64"
+
+// ── TMA descriptor ABI constants (CUDA host side) ─────────────
+//
+// `CUtensorMap` opaque struct from `cuda.h`. Host calls
+// `cuTensorMapEncodeTiled(...)` to fill it; kernel receives it as a
+// 128-byte `.param .align 64 .b8` value-param (NOT a pointer).
+// NVIDIA-fact constants — not lattice-derived.
+//   ref: CUDA Driver API — cuTensorMapEncodeTiled
+pub let NVPTX_TMA_DESC_BYTES: i64        = 128
+pub let NVPTX_TMA_DESC_ALIGNMENT: i64    = 64
+pub let NVPTX_TMA_DESC_PARAM_TYPE: string = ".param .align 64 .b8"
+
+// Max rank a `CUtensorMap` can describe — NVIDIA fact, CUDA 12.0+.
+pub let NVPTX_TMA_MAX_RANK: i64 = 5
+
+// ── Descriptor-handling helper sequence (informational) ───────
+//
+// The canonical param-space-to-generic conversion the kernel emits per
+// TMA descriptor (mirrors N200 SMOKE artifact lines 70-72):
+//
+//   ld.param.u64    %tmap_pp, [tmap_param];     // param-space addr -> u64
+//   cvta.param.u64  %tmap_addr, %tmap_pp;       // generic-space addr
+//   // (then feed %tmap_addr to cp.async.bulk.tensor.2d)
+//
+// This is documented here as the canonical opcode chain; the actual
+// emit happens in the future TMA lowering pass (N203+).
+
+// ── Opcode-table entry (sibling of nvptx_ptx_ops::PtxOpEntry) ──
+//
+// PtxTmaOpEntry — one TMA opcode row + the sm_120a arch gate. Mirrors
+// the per-target opcode-table pattern (RFC 055 §3 / lir.hexa note) so
+// the future TMA lowering can introspect the legal mnemonic set.
+pub struct PtxTmaOpEntry {
+    mnemonic: string,         // PTX mnemonic, e.g. "cp.async.bulk.tensor.2d..."
+    arity: i64,               // operand count (rough — TMA opcodes have
+                              //   complex `[addr], {coords}, [mbar]` shapes)
+    requires_arch: string,    // arch gate, "sm_120a" for the N196 set
+    requires_version: string, // min PTX ISA version, "8.7" for sm_120a
+    note: string              // human-readable role
+}
+
+// _ptx_tma_op_entry — PtxTmaOpEntry constructor.
+fn _ptx_tma_op_entry(mnemonic: string, arity: i64, requires_arch: string,
+                     requires_version: string, note: string) -> PtxTmaOpEntry {
+    return PtxTmaOpEntry {
+        mnemonic: mnemonic,
+        arity: arity,
+        requires_arch: requires_arch,
+        requires_version: requires_version,
+        note: note
+    }
+}
+
+// ptx_tma_ops — the TMA-subset opcode table for the RFC 067 N202 scaffold.
+//
+// RFC 067 N202 — informational scaffold only. The future TMA lowering
+// pass (N203+) consumes this table to validate emitted mnemonics; today
+// it is unreferenced (zero behavior change). Every row pins the arch
+// gate to `sm_120a + 8.7` per N196 — emitting any of these opcodes
+// under a lower target is undefined behavior on RTX 5070.
+pub fn ptx_tma_ops() -> [PtxTmaOpEntry] {
+    let mut t = []
+    t.push(_ptx_tma_op_entry(PTX_OP_CP_ASYNC_BULK_TENSOR_2D, 4,
+        NVPTX_ARCH_SM120A, NVPTX_PTX_VERSION_SM120A,
+        "TMA 2-D bulk load global -> shared (tile mode, signals mbarrier on complete)"))
+    t.push(_ptx_tma_op_entry(PTX_OP_CP_ASYNC_BULK_TENSOR_5D, 7,
+        NVPTX_ARCH_SM120A, NVPTX_PTX_VERSION_SM120A,
+        "TMA 5-D bulk load global -> shared (convolution-shaped, placeholder)"))
+    t.push(_ptx_tma_op_entry(PTX_OP_MBARRIER_INIT, 2,
+        NVPTX_ARCH_SM120A, NVPTX_PTX_VERSION_SM120A,
+        "mbarrier init in shared memory with expected arrival count"))
+    t.push(_ptx_tma_op_entry(PTX_OP_MBARRIER_ARRIVE_EXPECT_TX, 3,
+        NVPTX_ARCH_SM120A, NVPTX_PTX_VERSION_SM120A,
+        "mbarrier producer-arrive announcing TMA byte count (release.cta)"))
+    t.push(_ptx_tma_op_entry(PTX_OP_MBARRIER_TRY_WAIT_PARITY, 3,
+        NVPTX_ARCH_SM120A, NVPTX_PTX_VERSION_SM120A,
+        "mbarrier consumer poll with parity (alternates per K-iter)"))
+    t.push(_ptx_tma_op_entry(PTX_OP_FENCE_PROXY_ASYNC_SHARED_CTA, 0,
+        NVPTX_ARCH_SM120A, NVPTX_PTX_VERSION_SM120A,
+        "proxy fence between TMA async proxy and generic-proxy shared access"))
+    t.push(_ptx_tma_op_entry(PTX_OP_CVTA_PARAM_U64, 2,
+        NVPTX_ARCH_SM120A, NVPTX_PTX_VERSION_SM120A,
+        "param-space -> generic-space addr conversion for TMA descriptor"))
+    return t
+}
+
+// ── Feature-flag predicate (RFC 067 N202 scaffold gate) ───────
+//
+// `nvptx_tma_codegen_enabled` — predicate the emit pass calls to decide
+// whether to take the TMA path (cp.async.bulk.tensor + mbarrier) or
+// fall back to the existing `cp.async.cg` cooperative-load path (N149
+// era). Wired in N206 to read `HEXA_NVPTX_TMA` from the process env via
+// the hexa-builtin `env_var` (codegen_c2.hexa:5154 -> hexa_env_var):
+//   * `HEXA_NVPTX_TMA=1` → TMA codegen ON
+//   * unset / empty / "0" → OFF (default — byte-identical existing emit)
+//
+// The env var IS the flag mechanism per the N202 requirements doc
+// (`inbox/notes/2026-05-22-tma-runtime-builtin-requirements.md` §
+// "Per-shape TMA descriptor generation"). Default OFF preserves the
+// F-RFC067-NVPTX-TMA-CODEGEN-SCAFFOLD guarantee (32/32 lower_test PASS
+// without env) and keeps the existing nvptx_target.hexa emit path
+// byte-identical when the flag is not set.
+pub fn nvptx_tma_codegen_enabled() -> bool {
+    let v = env_var("HEXA_NVPTX_TMA")
+    return v == "1"
+}
+
+// ── Module header emit for TMA (RFC 067 N202 scaffold) ────────
+//
+// `nvptx_emit_module_header_for_tma` — stub helper that builds the
+// PTX module header text for the sm_120a + 8.7 gate. Sibling to
+// `_emit_ptx_header_versioned` in `nvptx_target.hexa`; kept here so
+// the TMA-specific header logic is co-located with the TMA opcode
+// table.
+//
+// Caller contract:
+//   target_sm == "sm_120a" -> emits the canonical N196 header
+//   target_sm == anything  -> returns "" (fall-through; caller must
+//                             use the regular header emitter)
+//
+// HONEST: this function is NOT yet called by the emit pipeline. It
+// exists so a follow-on cycle can wire it via `codegen_emit_ptx_for_sm`
+// when `nvptx_tma_codegen_enabled()` flips on. The string format
+// matches the N200 SMOKE artifact byte-for-byte (header lines
+// 13-15 of `sgemm_tma_smoke.ptx`).
+pub fn nvptx_emit_module_header_for_tma(target_sm: string) -> string {
+    if target_sm != NVPTX_ARCH_SM120A {
+        return ""
+    }
+    let mut s = ""
+    s = s + "// RFC 067 N202 - hexa-native NVPTX TMA emit | target=" + NVPTX_TARGET_SM120A + "\n"
+    s = s + PTX_VERSION_DIRECTIVE + " " + NVPTX_PTX_VERSION_SM120A + "\n"
+    s = s + PTX_TARGET_DIRECTIVE + " " + NVPTX_ARCH_SM120A + "\n"
+    s = s + PTX_ADDRSIZE_DIRECTIVE + " 64\n"
+    return s
+}
