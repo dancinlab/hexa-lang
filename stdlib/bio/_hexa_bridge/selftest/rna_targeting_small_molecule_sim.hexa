@@ -1,0 +1,443 @@
+#!hexa strict
+// hexa-bio/_hexa_bridge/selftest/rna_targeting_small_molecule_sim.hexa
+//
+// hexa-native port of `_python_bridge/module/rna_targeting_small_molecule_sim.py`
+// (T3-sim; deterministic; no random/network/time). RNA-TARGETING-SMALL-MOLECULE
+// sub-axis (:> RIBOZYME). Reuses the in-repo Nussinov solver
+// (`_hexa_bridge/module/ribozyme_mfe_nussinov.hexa`) so the constrained-fold
+// helper does not shadow-reimplement the parent algorithm. Soft Boltzmann-style
+// ensemble fraction uses hexa exp() (glibc libm, bit-exact vs CPython math.exp)
+// for the deterministic illustrative SOFT_KT weighting. Printed fractions use
+// `exec printf` for %.3f / %+.3f / %-12s / %-38s width/precision parity. All
+// selftest cases use uppercase ACGU input — _sanitize is identity here.
+
+import "_hexa_bridge/module/py_json2.hexa"
+import "_hexa_bridge/module/ribozyme_mfe_nussinov.hexa"
+
+let SOFT_KT = 2.0
+
+// ── formatting helpers ────────────────────────────────────────────────
+fn fmt(spec: string, v: float) -> string {
+    let mut o = exec("printf '" + spec + "' " + json_stringify(v))
+    while len(o) > 0 {
+        let last = o.substr(len(o) - 1, 1)
+        if last == "\n" || last == "\r" { o = o.substr(0, len(o) - 1) } else { break }
+    }
+    return o
+}
+fn ljust(s: string, n: int) -> string { let mut o = s; while len(o) < n { o = o + " " }; return o }
+fn rjust(s: string, n: int) -> string { let mut o = s; while len(o) < n { o = " " + o }; return o }
+fn js(v: float) -> string { return json_stringify(v) }
+fn jsb(b: bool) -> string { if b { return "true" } return "false" }
+fn pyb(b: bool) -> string { if b { return "True" } return "False" }
+fn fabs(x: float) -> float { if x < 0.0 { return -x } return x }
+fn fsum(xs: array) -> float {
+    let mut s = 0.0; let mut c = 0.0; let mut i = 0
+    while i < len(xs) { let y = xs[i]-c; let t = s+y; c = (t-s)-y; s = t; i = i+1 }
+    return s
+}
+
+// Python round(x, 6) — banker's (round-half-to-even). For our deterministic
+// inputs the .3f print never lands on a half-LSB boundary, so a plain
+// truncation-to-1e-6 of f-via-printf would be brittle; instead we compute
+// f exactly and let printf %.3f do IEEE-754 round-half-to-even on the 7th
+// decimal (matches CPython's `f"{x:.3f}"` after a prior round(x,6) when the
+// 7th decimal is not exactly 5 — none of our cases hit that boundary).
+// We DO emulate round-to-6 for the JSON-fed fields by re-quantizing.
+fn round6(x: float) -> float {
+    // round-half-to-even at 1e-6. CPython round() uses _Py_dg_stdnan-aware
+    // banker's; for our finite, non-NaN values an explicit scale+rint via
+    // printf "%.6f" + parse matches. printf rounds half-to-even on glibc.
+    let s = fmt("%.6f", x)
+    // parse s back to float by feeding through json_stringify trick:
+    // we want a numeric float, so re-emit via json_parse on a number token.
+    let v = json_parse(s)
+    return v
+}
+
+// ── RNA pairing primitives (mirrors _PAIRS / _can_pair / _sanitize) ──
+fn _can_pair(a: string, b: string) -> bool {
+    if a == "A" && b == "U" { return true }
+    if a == "U" && b == "A" { return true }
+    if a == "G" && b == "C" { return true }
+    if a == "C" && b == "G" { return true }
+    if a == "G" && b == "U" { return true }
+    if a == "U" && b == "G" { return true }
+    return false
+}
+
+fn _sanitize(seq: string) -> string {
+    let mut s = ""
+    let mut i = 0
+    while i < len(seq) {
+        let c = seq.substr(i, 1)
+        let mut u = c
+        if c == "a" { u = "A" } else if c == "c" { u = "C" } else if c == "g" { u = "G" }
+        else if c == "u" { u = "U" } else if c == "t" { u = "U" } else if c == "T" { u = "U" }
+        s = s + u
+        i = i + 1
+    }
+    return s
+}
+
+// is_balanced reused from the imported nussinov module.
+
+// (paired_count, paired_fraction) for half-open [lo, hi).
+fn _stem_paired_count(db: string, lo: int, hi: int) -> int {
+    let width = hi - lo
+    if width <= 0 { return 0 }
+    let mut p = 0
+    let mut k = lo
+    while k < hi {
+        let c = db.substr(k, 1)
+        if c == "(" || c == ")" { p = p + 1 }
+        k = k + 1
+    }
+    return p
+}
+fn _stem_paired_fraction(db: string, lo: int, hi: int) -> float {
+    let width = hi - lo
+    if width <= 0 { return 0.0 }
+    let p = _stem_paired_count(db, lo, hi)
+    return (p + 0.0) / (width + 0.0)
+}
+
+// db → sorted list of (i,j) pair indices (mirrors to_pair_list)
+// Returns parallel arrays [is, js] in same order CPython appends:
+// on ')' pop stk → append (i,k). Python then `sorted(pairs)` by i.
+fn _to_pair_list(db: string) -> array {
+    let mut stk: array = []
+    let mut pis: array = []
+    let mut pjs: array = []
+    let mut k = 0
+    while k < len(db) {
+        let c = db.substr(k, 1)
+        if c == "(" {
+            stk.push(k)
+        } else if c == ")" {
+            let top = stk[len(stk) - 1]
+            stk = stk.slice(0, len(stk) - 1)
+            pis.push(top); pjs.push(k)
+        }
+        k = k + 1
+    }
+    // sort by i (canonical insertion order in dict-of-pairs)
+    // simple insertion sort over parallel arrays
+    let mut a = 1
+    while a < len(pis) {
+        let ki = pis[a]
+        let kj = pjs[a]
+        let mut b = a - 1
+        while b >= 0 && pis[b] > ki {
+            pis[b + 1] = pis[b]
+            pjs[b + 1] = pjs[b]
+            b = b - 1
+        }
+        pis[b + 1] = ki
+        pjs[b + 1] = kj
+        a = a + 1
+    }
+    return [pis, pjs]
+}
+
+// forbid_set membership test via in-array search (set semantics)
+fn _in_forbid(idx: int, fs: array) -> bool {
+    let mut i = 0
+    while i < len(fs) { if fs[i] == idx { return true }; i = i + 1 }
+    return false
+}
+
+// any index that appears as either endpoint of an existing pair
+fn _idx_in_pairs(idx: int, pa: array, pb: array) -> bool {
+    let mut i = 0
+    while i < len(pa) { if pa[i] == idx || pb[i] == idx { return true }; i = i + 1 }
+    return false
+}
+
+// crossing (pseudoknot) test against canonical (a<b) pairs only
+fn _crosses(ci: int, cj: int, pa: array, pb: array) -> bool {
+    let mut k = 0
+    while k < len(pa) {
+        let a = pa[k]
+        let b = pb[k]
+        if (ci < a && a < cj && cj < b) || (a < ci && ci < b && b < cj) { return true }
+        k = k + 1
+    }
+    return false
+}
+
+// ── _constrained_fold ─────────────────────────────────────────────────
+// Folds seq under a binding constraint.
+//   force: array of [i, j] arrays  (ligand-stabilized pairs)
+//   forbid: array of int           (occluded indices)
+// Mask occluded bases → re-fold the kept substring with the parent
+// Nussinov solver → splice back position-by-position. Then add force-
+// pairs if complementary, neither index already paired, neither in forbid,
+// and pair does not cross an existing pair (nesting preserved).
+fn _constrained_fold(seq: string, force: array, forbid: array) -> string {
+    let s = _sanitize(seq)
+    let n = len(s)
+
+    let mut db_arr: array = []
+    if len(forbid) > 0 {
+        // build sub_seq from kept positions; remember orig_idx for splice-back
+        let mut sub_seq = ""
+        let mut kept_orig: array = []
+        let mut k = 0
+        while k < n {
+            if _in_forbid(k, forbid) == false {
+                sub_seq = sub_seq + s.substr(k, 1)
+                kept_orig.push(k)
+            }
+            k = k + 1
+        }
+        let res = nussinov(sub_seq)
+        let sub_db = res[0]
+        // init all-dots, splice sub_db back into orig positions
+        let mut z = 0
+        while z < n { db_arr.push("."); z = z + 1 }
+        let mut slot = 0
+        while slot < len(kept_orig) {
+            db_arr[kept_orig[slot]] = sub_db.substr(slot, 1)
+            slot = slot + 1
+        }
+    } else {
+        let res = nussinov(s)
+        let db0 = res[0]
+        let mut z = 0
+        while z < n { db_arr.push(db0.substr(z, 1)); z = z + 1 }
+    }
+
+    // refolded string for to_pair_list
+    let mut refolded = ""
+    let mut z2 = 0
+    while z2 < n { refolded = refolded + db_arr[z2]; z2 = z2 + 1 }
+
+    // pairs: parallel arrays pis[k]<pjs[k] in dict-insertion order.
+    let plist = _to_pair_list(refolded)
+    let mut pis = plist[0]
+    let mut pjs = plist[1]
+
+    // iterate force pairs in given order
+    let mut fk = 0
+    while fk < len(force) {
+        let p = force[fk]
+        let mut ci = p[0]
+        let mut cj = p[1]
+        if ci > cj { let t = ci; ci = cj; cj = t }
+        let skip1 = (ci < 0) || (cj >= n) || (cj - ci < 4)
+        let skip2 = _in_forbid(ci, forbid) || _in_forbid(cj, forbid)
+        let skip3 = _idx_in_pairs(ci, pis, pjs) || _idx_in_pairs(cj, pis, pjs)
+        let skip4 = _can_pair(s.substr(ci, 1), s.substr(cj, 1)) == false
+        let skip5 = _crosses(ci, cj, pis, pjs)
+        if skip1 || skip2 || skip3 || skip4 || skip5 {
+            fk = fk + 1
+            continue
+        }
+        pis.push(ci); pjs.push(cj)
+        fk = fk + 1
+    }
+
+    // build dot-bracket from pairs
+    let mut out_arr: array = []
+    let mut zz = 0
+    while zz < n { out_arr.push("."); zz = zz + 1 }
+    let mut pi = 0
+    while pi < len(pis) {
+        out_arr[pis[pi]] = "("
+        out_arr[pjs[pi]] = ")"
+        pi = pi + 1
+    }
+    let mut out = ""
+    let mut oz = 0
+    while oz < n { out = out + out_arr[oz]; oz = oz + 1 }
+    return out
+}
+
+// ── soft Boltzmann-style ensemble fraction ────────────────────────────
+fn _soft_ensemble_fraction(seq: string, candidates: array, lo: int, hi: int) -> float {
+    let mut ws: array = []
+    let mut wfs: array = []
+    let mut ci = 0
+    while ci < len(candidates) {
+        let db = candidates[ci]
+        if len(db) == len(seq) && is_balanced(db) {
+            // count "(" in db
+            let mut npairs = 0
+            let mut k = 0
+            while k < len(db) {
+                if db.substr(k, 1) == "(" { npairs = npairs + 1 }
+                k = k + 1
+            }
+            let w = exp((npairs + 0.0) / SOFT_KT)
+            let frac = _stem_paired_fraction(db, lo, hi)
+            ws.push(w)
+            wfs.push(w * frac)
+        }
+        ci = ci + 1
+    }
+    let total_w = fsum(ws)
+    if total_w == 0.0 { return 0.0 }
+    let acc = fsum(wfs)
+    return acc / total_w
+}
+
+// ── simulate one case ─────────────────────────────────────────────────
+// Returns a flat array [base_db, base_pairs_str, base_cnt, base_frac,
+//                       base_ens, bound_db, bound_pairs_count_int,
+//                       bound_cnt, bound_frac, bound_ens, shift, ens_shift,
+//                       direction_consistent_bool]
+fn simulate_one(transcript: string, lo: int, hi: int, mode: string,
+                force: array, forbid: array) -> array {
+    let seq = _sanitize(transcript)
+    let n = len(seq)
+
+    let bres = nussinov(seq)
+    let base_db = bres[0]
+    // base_pairs: int from string
+    let base_pairs_s = bres[1]
+    let base_cnt = _stem_paired_count(base_db, lo, hi)
+    let base_frac = _stem_paired_fraction(base_db, lo, hi)
+
+    let bound_db = _constrained_fold(seq, force, forbid)
+    // bound_pairs = bound_db.count("(")
+    let mut bound_pairs = 0
+    let mut k = 0
+    while k < len(bound_db) {
+        if bound_db.substr(k, 1) == "(" { bound_pairs = bound_pairs + 1 }
+        k = k + 1
+    }
+    let bound_cnt = _stem_paired_count(bound_db, lo, hi)
+    let bound_frac = _stem_paired_fraction(bound_db, lo, hi)
+
+    let cand1: array = [base_db, bound_db]
+    let cand2: array = [bound_db, base_db, bound_db]
+    let base_ens = _soft_ensemble_fraction(seq, cand1, lo, hi)
+    let bound_ens = _soft_ensemble_fraction(seq, cand2, lo, hi)
+
+    let shift = round6(bound_frac - base_frac)
+    let ens_shift = round6(bound_ens - base_ens)
+
+    let mut consistent = true
+    if mode == "stabilizer" { consistent = shift >= 0.0 }
+    else { consistent = shift <= 0.0 }
+
+    return [base_db, base_pairs_s, base_cnt, base_frac, base_ens,
+            bound_db, bound_pairs, bound_cnt, bound_frac, bound_ens,
+            shift, ens_shift, consistent]
+}
+
+fn main() {
+    // 3-case demo corpus (mirrors _CASES in the .py exactly)
+    let ids = ["rtsm.stabilizer.exon_inclusion.v1",
+               "rtsm.destabilizer.exon_skipping.v1",
+               "rtsm.stabilizer.prefolded_stem.v1"]
+    let transcripts = ["CCCCCCAAAAAAAAAAGGGGGGAAUUCCCCCCAAAAAAAAAA",
+                       "GCGCGCGCAUAUAUAUGCGCGCGCAUAUAUAU",
+                       "GGGGCCCCAAAGGGGCCCCAAA"]
+    let stems_lo = [16, 0, 0]
+    let stems_hi = [32, 12, 8]
+    let modes = ["stabilizer", "destabilizer", "stabilizer"]
+    let force0: array = []
+    let force1: array = []
+    let force2: array = [[0, 7]]
+    let forces = [force0, force1, force2]
+    let forbid0: array = [0, 1, 2, 3, 4, 5]
+    let forbid1: array = [0, 1, 2, 3, 4, 5]
+    let forbid2: array = []
+    let forbids = [forbid0, forbid1, forbid2]
+
+    println("rna_targeting_small_molecule_sim.py — RNA-TARGETING-SMALL-MOLECULE")
+    println("  sub-axis ( :> RIBOZYME core ) — RNA structural-ensemble shift")
+    println("  under a small-molecule binding constraint.")
+    println("  real-limit anchor: RNA secondary-structure thermodynamics")
+    println("    (Nussinov 1978 SIAM J Appl Math 35:68; Turner-Mathews NNDB")
+    println("     2010 NAR 38:D280) · modality precedent: risdiplam/Evrysdi")
+    println("    (Ratni 2018 J Med Chem 61:6501; Campagne 2019 Nat Chem Biol")
+    println("     15:1191) + branaplam — cited for modality only.")
+    println("")
+
+    let mut fails = 0
+    let mut rid = 0
+    while rid < 3 {
+        let r = simulate_one(transcripts[rid], stems_lo[rid], stems_hi[rid],
+                             modes[rid], forces[rid], forbids[rid])
+        let base_db = r[0]
+        let bound_db = r[5]
+        let base_frac = r[3]
+        let base_ens = r[4]
+        let bound_frac = r[8]
+        let bound_ens = r[9]
+        let shift = r[10]
+        let ens_shift = r[11]
+        let ok_dir = r[12]
+
+        let tlen = len(_sanitize(transcripts[rid]))
+        let ok_struct = is_balanced(base_db) && is_balanced(bound_db)
+                        && len(base_db) == tlen && len(bound_db) == tlen
+        let pass = ok_struct && ok_dir
+        let verdict = if pass { "PASS" } else { "FAIL" }
+        if pass == false { fails = fails + 1 }
+
+        println("  [" + verdict + "] " + ljust(ids[rid], 38) + " mode=" + ljust(modes[rid], 12))
+        println("         baseline stem-paired   = " + fmt("%.3f", base_frac) +
+                "  ensemble = " + fmt("%.3f", base_ens))
+        println("         ligand-bound stem-paired = " + fmt("%.3f", bound_frac) +
+                "  ensemble = " + fmt("%.3f", bound_ens))
+        println("         structural shift (MFE)  = " + fmt("%+.3f", shift) +
+                "   (ensemble) = " + fmt("%+.3f", ens_shift))
+        if ok_struct == false { println("         x structure invalid (unbalanced / length mismatch)") }
+        if ok_dir == false { println("         x shift direction inconsistent with " + modes[rid]) }
+
+        rid = rid + 1
+    }
+
+    // Determinism: byte-identical re-run.
+    println("")
+    // Compare each run's full result tuple; since simulate_one is pure
+    // (no globals mutated, no I/O), equal inputs ⇒ equal outputs.
+    let mut drift = false
+    let mut di = 0
+    while di < 3 {
+        let r1 = simulate_one(transcripts[di], stems_lo[di], stems_hi[di],
+                              modes[di], forces[di], forbids[di])
+        let r2 = simulate_one(transcripts[di], stems_lo[di], stems_hi[di],
+                              modes[di], forces[di], forbids[di])
+        if r1[0] != r2[0] || r1[5] != r2[5] { drift = true }
+        if fabs(r1[3] - r2[3]) > 0.0 { drift = true }
+        if fabs(r1[4] - r2[4]) > 0.0 { drift = true }
+        if fabs(r1[8] - r2[8]) > 0.0 { drift = true }
+        if fabs(r1[9] - r2[9]) > 0.0 { drift = true }
+        if fabs(r1[10] - r2[10]) > 0.0 { drift = true }
+        if fabs(r1[11] - r2[11]) > 0.0 { drift = true }
+        di = di + 1
+    }
+    if drift == false {
+        println("  [PASS] determinism — byte-identical re-run over 3 cases")
+    } else {
+        fails = fails + 1
+        println("  [FAIL] determinism — output drift between runs")
+    }
+
+    println("")
+    println("  ── in-silico honesty caveat (governance g8 / f2) ──")
+    println("  Every PASS above certifies IN-SILICO simulator + metadata")
+    println("  internal consistency ONLY. It is NOT a therapeutic, clinical,")
+    println("  splicing-correction, efficacy, or regulatory claim. RNA-")
+    println("  TARGETING-SMALL-MOLECULE is a SUB-AXIS that specializes the")
+    println("  RIBOZYME core axis's RNA-secondary-structure modeling; the")
+    println("  core-5 RIBOZYME axis is UNCHANGED. RIBOZYME = catalytic RNA;")
+    println("  this sub = small molecules targeting RNA structure. risdiplam")
+    println("  / branaplam are cited for their published modality only —")
+    println("  no n=6-lattice derivation is used (g3 / f1 / f_lattice_fit).")
+    println("")
+
+    let total = 4
+    if fails == 0 {
+        println("  --- summary --- " + str(total) + " / " + str(total) + " PASS -> verdict: PASS")
+        println("__RNA_TARGETING_SMALL_MOLECULE__ PASS")
+    } else {
+        println("  --- summary --- " + str(fails) + " FAIL -> verdict: FAIL")
+        println("__RNA_TARGETING_SMALL_MOLECULE__ FAIL")
+    }
+}

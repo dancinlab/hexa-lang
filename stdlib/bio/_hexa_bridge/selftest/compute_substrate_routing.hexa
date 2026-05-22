@@ -1,0 +1,225 @@
+#!hexa strict
+// hexa-bio/_hexa_bridge/selftest/compute_substrate_routing.hexa
+//
+// Compute-substrate routing decision-table self-consistency check.
+// hexa-native port of `selftest/compute_substrate_routing.py` (T3-text;
+// always PASSes — it's a static-table consistency check). Probes for
+// substrate-presence paths via exec; identical workload routing rules
+// and output formatting (incl. unicode icons ✅ ⏳ 🔬 ○).
+
+fn shq(s: string) -> string { return "'" + s.replace("'", "'\\''") + "'" }
+
+fn _exists(p_rel_home: string) -> bool {
+    let home = env("HOME")
+    let p = if len(p_rel_home) > 0 && p_rel_home.substr(0, 1) == "~" { home + p_rel_home.substr(1, len(p_rel_home) - 1) } else { p_rel_home }
+    return exec("[ -e " + shq(p) + " ] && echo y || echo n").trim() == "y"
+}
+
+fn _xeno_present() -> bool { return _exists("~/core/xeno/bin/xeno") || _exists("~/core/xeno") }
+
+fn ljust(s: string, n: int) -> string {
+    let mut o = s
+    while len(o) < n { o = o + " " }
+    return o
+}
+
+// substrate registry (parallel arrays — order matches SUBSTRATES dict)
+let SUBS = ["qmirror_state_vector", "qmirror_chemistry_vqe_h2",
+            "qmirror_chemistry_vqe_pyscf", "xeno_akida", "xeno_loihi3",
+            "xeno_ionq", "xeno_organoid", "qrng", "vendor_quantum",
+            "classical_cpu"]
+let SUB_READY_IF = ["ready", "ready", "ready", "pending", "unexplored",
+                    "unexplored", "unexplored", "ready", "ready", "ready"]
+let SUB_GATING = [
+    "—",
+    "—",
+    "F-Q-6-E ramp — needs a classical-chemistry integral backend (PySCF) to build the active-space Hamiltonian before the quantum solver runs; pure-hexa kernel can't (qmirror caveat 1). See COMPUTE_PORTFOLIO.md §4.",
+    "AKD1000 physical chip arrival (ordered 2026-04-29, ETA pending; AKIDA Cloud live 2026-05-08) + xeno Phase 1.5 `falsifier` subcommand. Probed by selftest/akida_workload_readiness.sh.",
+    "no hexa-bio workload identified; xeno roadmap (.roadmap.loihi3) tracks substrate-side readiness",
+    "needs an IonQ vendor account configured via xeno; no hexa-bio workload currently needs real-noise gate-model (all quantum workloads are fine on qmirror's noiseless ≤30q state-vector)",
+    "potential 3-layer use (organoid = EEG/EMG training-data source, AKIDA = inference engine, hexa-bio = workload spec — DishBrain-Pong precedent) — far-future, xeno Phase ramp dependent",
+    "—",
+    "no hexa-bio workload needs >30 qubit OR real superconducting noise; fault-tolerant is a 10-year horizon (vendor partnership, not procurement)",
+    "—"
+]
+let SUB_FALLBACK = [
+    "classical numpy/scipy state-vector (~10-qubit ceiling, slow) — or just skip the live VQE; hexa-bio prints its Phase + falsifier snapshot regardless",
+    "skip the live H2 VQE; the cond.14 verdict is then 'not exercised on this host', not FAIL",
+    "DESIGN-AUDIT proxy (selftest/cmt_side_effect_avoidance_audit.py + cmt_library_ranking.py for CMT) — the in-repo-verifiable closure that substitutes for the VQE-binding closure until the backend lands",
+    "CPU brute-force (ribozyme off-target: RIsearch2 on commodity CPU; medical-device: standard ML inference; nanobot: standard pose estimation) — slower but no AKIDA needed. The AKIDA path is an accelerator, not a dependency.",
+    "n/a — no workload routed here yet",
+    "qmirror noiseless state-vector — sufficient for all current hexa-bio quantum workloads (real-noise modeling is a future need, not a current one)",
+    "n/a — speculative, no workload routed here",
+    "Python `secrets` module / `os.urandom` — cryptographically-secure-enough for falsifier seeds (Monte Carlo enumeration etc.); quantum entropy is a 'nice to have', not required",
+    "qmirror ≤30q state-vector covers all current workloads; xeno→IonQ bridges real-noise gate-model when needed; >30q fault-tolerant is genuinely far future",
+    "(this IS the universal fallback — every substrate above degrades to here)"
+]
+
+fn _probe(idx: int) -> bool {
+    if idx == 0 { return _exists("~/core/qmirror/cli/qmirror.hexa") || _exists("~/core/qmirror") }
+    if idx == 1 { return _exists("~/core/qmirror/chemistry_vqe/module/chemistry_vqe.hexa") }
+    if idx == 2 { return false }
+    if idx == 3 { return _xeno_present() && _exists("~/core/xeno/roadmaps/.roadmap.akida") }
+    if idx == 4 { return _xeno_present() && _exists("~/core/xeno/roadmaps/.roadmap.loihi3") }
+    if idx == 5 { return _xeno_present() && _exists("~/core/xeno/roadmaps/.roadmap.ionq") }
+    if idx == 6 { return _xeno_present() && (_exists("~/core/xeno/roadmaps/.roadmap.finalspark") || _exists("~/core/xeno/roadmaps/.roadmap.cortical_labs")) }
+    if idx == 7 { return _exists("~/core/qmirror") || _xeno_present() }
+    if idx == 8 { return false }
+    if idx == 9 { return true }
+    return false
+}
+
+fn _sub_index(name: string) -> int {
+    let mut i = 0
+    while i < len(SUBS) { if SUBS[i] == name { return i }; i = i + 1 }
+    return -1
+}
+
+// returns [status, gating, fallback] for substrate idx
+fn readiness(idx: int) -> array {
+    let base = SUB_READY_IF[idx]
+    let present = _probe(idx)
+    if present == false {
+        let status = if base == "ready" { "absent" } else { base }
+        let gating = if base != "ready" { SUB_GATING[idx] } else { "(substrate not installed on this host — use fallback)" }
+        return [status, gating, SUB_FALLBACK[idx]]
+    }
+    return [base, SUB_GATING[idx], SUB_FALLBACK[idx]]
+}
+
+// workload table (parallel arrays — id, kind, qubits, molecule, noise, note)
+let W_ID = ["n6_axis_deductive", "falsifier_mc_seed", "qmirror_cond14_h2",
+            "mpro_pocket_vqe", "warhead_library_vqe", "cmt_hd6_pocket_vqe",
+            "cmt_sar1_pocket_vqe", "ribozyme_offtarget_scan",
+            "medical_device_eeg_seizure", "nanobot_pose_controller",
+            "real_noise_vqe_future", "ft_quantum_future"]
+let W_KIND = ["deductive", "random", "chemistry_vqe", "quantum_vqe",
+              "quantum_vqe", "chemistry_vqe", "chemistry_vqe", "edge_ai",
+              "edge_ai", "edge_ai", "quantum_vqe", "quantum_vqe"]
+let W_QUBITS = [0, 0, 0, 2, 4, 0, 0, 0, 0, 0, 4, 100]
+let W_MOL = ["", "", "H2_canonical", "", "", "arbitrary", "arbitrary",
+             "", "", "", "", ""]
+let W_NOISE = ["", "", "", "noiseless", "noiseless", "", "", "", "", "",
+               "real", "noiseless"]
+let W_NOTE = [
+    "σ/τ/φ/J₂ + master identity (42/42 deductive)",
+    "Monte Carlo enumeration seeds for randomized falsifiers",
+    "qmirror cond.14 spectroscopic-accuracy gate",
+    "Mpro pocket cluster 2e/2o → 2 qubit VQE (F-Q-6-D)",
+    "5-warhead covalent-Mpro-inhibitor library ranking (F-Q-6-F)",
+    "CMT hxq-cmt-hd6-001 vs HDAC6 catalytic pocket (F-disease-cmt-Q-2) — BLOCKED on PySCF backend",
+    "CMT hxq-cmt-sar1-001 vs SARM1 TIR pocket (F-disease-cmt-Q-6) — BLOCKED on PySCF backend",
+    "G26-RB-3 GENCODE v47 off-target Hamming scan (~106k transcripts × 28nt) — AKIDA spike pattern matching candidate",
+    "EEG seizure detection (1W continuous wear) — AKIDA flagship use case",
+    "in-vivo actuation 4-state pose inference (sub-mW implant) — AKIDA niche",
+    "(future) real-noise gate-model VQE — would route to IonQ via xeno",
+    "(future) >30-qubit fault-tolerant — vendor partnership, 10-year horizon"
+]
+
+// route(workload_idx) → substrate name (first-match-wins)
+fn route_w(i: int) -> string {
+    let kind = W_KIND[i]
+    if kind == "deductive" { return "classical_cpu" }
+    if kind == "random" { return "qrng" }
+    if kind == "chemistry_vqe" && W_MOL[i] == "H2_canonical" { return "qmirror_chemistry_vqe_h2" }
+    if kind == "chemistry_vqe" && W_MOL[i] == "arbitrary" { return "qmirror_chemistry_vqe_pyscf" }
+    if kind == "quantum_vqe" && W_NOISE[i] == "real" { return "xeno_ionq" }
+    if kind == "quantum_vqe" && W_QUBITS[i] > 30 { return "vendor_quantum" }
+    if kind == "quantum_vqe" { return "qmirror_state_vector" }
+    if kind == "edge_ai" { return "xeno_akida" }
+    if kind == "wf_recursion" { return "xeno_loihi3" }
+    return "classical_cpu"
+}
+
+fn icon_for(status: string) -> string {
+    if status == "ready" { return "✅" }
+    if status == "pending" { return "⏳" }
+    if status == "unexplored" { return "🔬" }
+    if status == "absent" { return "○" }
+    return "?"
+}
+
+fn main() {
+    println("compute_substrate_routing — workload → substrate routing table + readiness check")
+    // substrates: 10 (a, b, c, ...)
+    let mut subs_csv = ""
+    let mut si = 0
+    while si < len(SUBS) {
+        if si > 0 { subs_csv = subs_csv + ", " }
+        subs_csv = subs_csv + SUBS[si]
+        si = si + 1
+    }
+    println("  substrates: " + str(len(SUBS)) + " (" + subs_csv + ")")
+    println("  routing rules: 9 (first-match-wins, ultimate fallback = classical_cpu)")
+    println("  representative workloads: " + str(len(W_ID)))
+    println("")
+    println("  ── routing decisions ──")
+
+    let mut issues: array = []
+
+    let mut wi = 0
+    while wi < len(W_ID) {
+        let sub_name = route_w(wi)
+        let idx = _sub_index(sub_name)
+        let r = readiness(idx)
+        let status = r[0]
+        let ic = icon_for(status)
+        println("  " + ic + " " + ljust(W_ID[wi], 28) + " → " + ljust(sub_name, 32) + " [" + status + "]")
+        println("       " + W_NOTE[wi])
+        if status == "pending" || status == "unexplored" || status == "absent" {
+            println("       gating:   " + r[1])
+            println("       fallback: " + r[2])
+        }
+        // (a) routed to known? always (route_w only returns SUBS entries)
+        // (b) non-empty fallback
+        if len(r[2]) == 0 { issues.push(W_ID[wi] + " → " + sub_name + ": empty fallback") }
+        wi = wi + 1
+    }
+    println("")
+
+    // (c) classical_cpu must be ready
+    let cpu_r = readiness(_sub_index("classical_cpu"))
+    if cpu_r[0] != "ready" {
+        issues.push("classical_cpu (universal fallback) is " + cpu_r[0] + ", must be 'ready'")
+    }
+
+    // (d) every substrate has all fields — parallel arrays are full by construction; readiness_if_present in valid set
+    let mut di = 0
+    while di < len(SUBS) {
+        let b = SUB_READY_IF[di]
+        if (b == "ready" || b == "pending" || b == "unexplored") == false {
+            issues.push("substrate " + SUBS[di] + ": readiness_if_present invalid")
+        }
+        di = di + 1
+    }
+
+    // (e) readiness summary
+    println("  ── readiness summary (this host) ──")
+    let states = ["ready", "pending", "unexplored", "absent"]
+    let mut counts = [0, 0, 0, 0]
+    let mut k = 0
+    while k < len(W_ID) {
+        let sn = route_w(k)
+        let rk = readiness(_sub_index(sn))
+        let st = rk[0]
+        let mut s = 0
+        while s < len(states) { if states[s] == st { counts[s] = counts[s] + 1 }; s = s + 1 }
+        k = k + 1
+    }
+    let mut s = 0
+    while s < len(states) {
+        println("    " + ljust(states[s], 11) + ": " + str(counts[s]) + " workload(s)")
+        s = s + 1
+    }
+    println("    → no substrate absence produces a FAIL; absent/pending workloads degrade to their documented fallback.")
+    println("")
+
+    if len(issues) == 0 {
+        println("__COMPUTE_SUBSTRATE_ROUTING__ PASS")
+        return
+    }
+    println("__COMPUTE_SUBSTRATE_ROUTING__ FAIL")
+    let mut i = 0
+    while i < len(issues) { println("  issue: " + issues[i]); i = i + 1 }
+    exit(1)
+}
