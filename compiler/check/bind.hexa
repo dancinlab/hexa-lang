@@ -1110,6 +1110,10 @@ fn _bind_builtin_names() -> [string] {
         // + get hexa-ported, set/remove remain CORE-final).
         "__map_has_cstr_v", "__map_get_cstr_v",
         "__map_order_key_at", "__map_order_val_at",
+        // RUNTIME.md step-3 cycle 108 — map set/remove aliasing port
+        // (잔여 #5 full surface closure 6/6). Hexa-source wrappers
+        // rt_map_set + rt_map_remove in stdlib/runtime/numeric.hexa.
+        "__map_set_cstr_v", "__map_remove_cstr_v",
         // RFC 071 P5++ — GPU matmul builtins. Source-level entry points
         // that the HIR→MIR lowering pattern-synthesises into the
         // STMT_LOAD + STMT_LOAD + STMT_BINOP("matmul"/_NT_a/_NT_b) +

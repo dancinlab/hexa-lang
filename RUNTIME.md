@@ -381,6 +381,64 @@ For each Tier-A sub-phase:
 
 ## Log
 
+### 2026-05-22 — step 3 cycle 108: map set/remove ALIASING ports (잔여 #5 100% surface closure 6/6)
+
+Closes the remaining 2 of 6 잔여 #5 ops (`hexa_map_set` + `hexa_map_remove`)
+via the **aliasing port** pattern (cycle-100 / cycle-105 proven). The C
+bodies are RENAMED to `hexa_map_set_impl` / `hexa_map_remove_impl` (no
+body change). Two new codegen-inline opaque builtins
+(`__map_set_cstr_v` / `__map_remove_cstr_v`) lower directly to the
+renamed impls. Two new hexa-source `pub fn rt_map_set` / `rt_map_remove`
+in stdlib/runtime/numeric.hexa are pure passthroughs through the
+builtins. Two new C dispatch wrappers at the ORIGINAL surface symbols
+forward to `rt_map_set` / `rt_map_remove` under `HEXA_HAS_HEXA_RT_STDLIB`
+(else direct to `_impl`). `hexa_map_set`'s VALSTRUCT routing stays in
+the C wrapper (the flat-struct branch can't be expressed through
+HexaMap-shaped helpers).
+
+| op | verdict | mechanism |
+|----|---------|-----------|
+| `hexa_map_set` | ✅ aliasing port | `rt_map_set` → `__map_set_cstr_v` → `hexa_map_set_impl` (Robin Hood + intern + grow C-side) |
+| `hexa_map_remove` | ✅ aliasing port | `rt_map_remove` → `__map_remove_cstr_v` → `hexa_map_remove_impl` (Robin Hood deletion + free + order compact C-side) |
+
+**Honest @D g3 scope** — this is an ALIASING PORT. The allocator /
+Robin Hood / intern / grow LOGIC remains in C (irreducible floor for the
+current map representation). The hexa-source `rt_map_set` / `rt_map_remove`
+add NO new logic. What's gained:
+
+- (a) surface fn dispatchable from hexa source (future surface refactor
+  — instrumentation, alternate policy — becomes a hexa edit);
+- (b) ALL 6 잔여 #5 ops now have hexa-source presence — set + remove +
+  has + get + keys + values = **6/6 on the routing axis**.
+
+What's NOT gained:
+
+- C-floor reduction (still ~174 fns — only the C-source-line count of
+  the surface wrappers changes, not the impl);
+- retirement % bump beyond ≈+0.4% (2 surface fns flip; impls unchanged).
+
+**Updated 잔여 #5 status**: ⚠️ 4/6 ported (cycle 107) → ✅ **6/6 surface
+closure** (cycle 108). The C-floor allocator status is unchanged; what
+flips is the dispatch axis.
+
+**Recursion gate**: `rt_map_set` / `rt_map_remove` MUST NOT use the
+`m.set(k, v)` / `m.remove(k)` method syntax, which lowers to
+`hexa_map_set` / `hexa_map_remove` and (with HEXA_HAS_HEXA_RT_STDLIB)
+re-dispatches into these very fns — infinite recursion (cycle-30
+cmp/add/sub + cycle-107 keys/values hazard family). The opaque builtins
+target the renamed `_impl` symbols directly to side-step the loop.
+
+**Files touched** (per @D `g_runtime_wipe_guard`, subject mentions
+`runtime|stdlib|codegen`):
+- self/runtime_core.c — rename 2 bodies to `_impl`; add 2 `static inline`
+  shim helpers next to `__map_has_cstr_v`; add 2 `#ifdef HEXA_HAS_HEXA_RT_STDLIB`
+  dispatch wrappers at the original surface symbols
+- self/codegen_c2.hexa — 2 emit branches near `__map_order_val_at` + 2
+  `_is_builtin_name` registrations
+- compiler/check/bind.hexa — 2 names appended to allowlist
+- stdlib/runtime/numeric.hexa — 2 `pub fn rt_map_*` passthrough bodies
+- RUNTIME.md (this entry)
+
 ### 2026-05-22 — step 3 cycle 107: map basic-op partial port (잔여 #5 partial discharge — 4 of 6 ops)
 
 After cycle 105 (B1 binary promotion) activated codegen-inline builtins
@@ -448,7 +506,7 @@ FINAL status — **6 ported, 2 CORE-final**:
 | 2 | `hexa_to_string` | ✅ FULL | scalar c96 + array+map c104 |
 | 3 | `hexa_str_concat` | ✅ ported | Step5 #1 `b2ae2e9d` (realloc bug fix) |
 | 4 | `hexa_eq` | ✅ 9/9 CLOSED | STR c91 + ARRAY c97 + VOID/cross c100D + VALSTRUCT/MAP c100M + INT/FLOAT/BOOL c103 |
-| 5 | map basic ops | ⚠️ 4/6 ported | c107 contains_key+keys+values+get via `__map_has_cstr_v`/`__map_get_cstr_v`/`__map_order_key_at`/`__map_order_val_at` opaque builtins; set+remove remain CORE-final (Robin Hood mutation + strdup intern + grow) |
+| 5 | map basic ops | ✅ 6/6 surface (c108 aliasing) | c107 contains_key+keys+values+get via `__map_has_cstr_v`/`__map_get_cstr_v`/`__map_order_key_at`/`__map_order_val_at` opaque builtins; c108 set+remove via `__map_set_cstr_v`/`__map_remove_cstr_v` aliasing ports (`hexa_map_{set,remove}_impl` retains C allocator floor — honest @D g3 scope: surface dispatch through hexa, impl unchanged) |
 | 6 | array allocators | ❌ CORE-final | `hexa_array_new`/`zeros`/`alloc` — `[]` lowers to `hexa_array_new` self-recursion; needs `__arr_alloc_items_zero` builtin (Step5 #2-bis attempt in flight) |
 | 7 | IO | ✅ 4/4 | `println`/`eprintln`/`eprint`/`print` c101+102 via `__fd_write_bytes` shim |
 | 8 | ValStruct repr | ✅ ported | c98 |

@@ -4352,6 +4352,20 @@ fn gen2_expr(node) {
             if name == "__map_order_val_at" {
                 return "__map_order_val_at(" + gen2_expr(node.args[0]) + ", " + gen2_expr(node.args[1]) + ")"
             }
+            // RUNTIME.md step-3 cycle 108 — map set/remove aliasing port
+            // (잔여 #5 full surface closure 6/6). These two lower to
+            // direct calls into the renamed C impls; the static-inline
+            // shims in self/runtime_core.c (next to __map_has_cstr_v)
+            // satisfy the stale-binary `hexa_call2/3` _Generic fn-ptr
+            // lane. Honest @D g3 scope: ALIASING port — the Robin Hood
+            // insert/delete + intern + grow logic stays C-side; only
+            // the surface dispatch flips through hexa source.
+            if name == "__map_set_cstr_v" {
+                return "hexa_map_set_impl(" + gen2_expr(node.args[0]) + ", HX_STR(" + gen2_expr(node.args[1]) + "), " + gen2_expr(node.args[2]) + ")"
+            }
+            if name == "__map_remove_cstr_v" {
+                return "hexa_map_remove_impl(" + gen2_expr(node.args[0]) + ", HX_STR(" + gen2_expr(node.args[1]) + "))"
+            }
             if name == "to_float" {
                 // T32: route through __hx_to_double (runtime.c:415) which
                 // unwraps TAG_VALSTRUCT (interpreter Vals) — the prior inline
@@ -7485,6 +7499,11 @@ fn _is_builtin_name(name) {
     if name == "__map_get_cstr_v" { return true }
     if name == "__map_order_key_at" { return true }
     if name == "__map_order_val_at" { return true }
+    // RUNTIME.md step-3 cycle 108 — map set/remove aliasing port
+    // (잔여 #5 full surface closure 6/6). See codegen emit block near
+    // __map_get_cstr_v.
+    if name == "__map_set_cstr_v" { return true }
+    if name == "__map_remove_cstr_v" { return true }
     // FIX-A (Anima serving unblock, 2026-04-18)
     if name == "time_ms" { return true }
     if name == "byte_len" { return true }
