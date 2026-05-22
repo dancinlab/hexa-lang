@@ -1188,3 +1188,59 @@ pub fn rt_valstruct_repr(v: HexaVal) -> HexaVal {
 pub fn rt_len(v: HexaVal) -> int {
     return byte_len(v) as int
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// Step 3 cycle 103 — hexa_eq same-tag scalar branches (잔여 #4 → 9/9)
+// ─────────────────────────────────────────────────────────────────────
+// Closes the final three same-tag scalar cases of the polymorphic
+// hexa_eq C body (TAG_INT / TAG_FLOAT / TAG_BOOL). The C wrapper enters
+// these only after the cross-type numeric coercion + HX_TAG(a)==HX_TAG(b)
+// guard, so both operands are guaranteed the same scalar tag here.
+//
+// Recursion-safety (the cycle-30 cmp/add/sub blocker): a hexa-source `==`
+// on two HexaVals lowers to `hexa_eq(...)` (codegen_c2.hexa:4067) — which
+// the C wrapper redirects right back into these rt_ fns → infinite loop.
+// The cycle-100 codegen restore (`as`-cast init registers known-int/float)
+// only fires for MODULE-GLOBAL lets; a fn-body local `let ai: int =
+// a as int` is short-circuited to `false` by the 2026-05-19 fn-local-
+// shadowing guard (`_is_known_int_name` L7117 → `_gen2_name_in_cur_lets`),
+// so `ai == bi` STILL lowers to `hexa_eq(ai, bi)`. Transpile-verified:
+// the local-let body recursion-traps. (The cycle-76 typed-int-param fast
+// path is also not active in the current hexa_v2 binary.)
+//
+// Recursion-safe formulation: express equality with ORDERED comparisons,
+// which lower to `hexa_cmp_le`/`hexa_cmp_ge` (codegen_c2.hexa:4071-4074).
+// Those C helpers (runtime_core.c:6695/6702) compare via HX_INT / __hx_to_
+// double directly and NEVER call hexa_eq, and the C wrapper does NOT
+// redirect them — so no recursion. `(a <= b) && (a >= b)` is byte-exact
+// for both TAG_INT (HX_INT compare) and TAG_FLOAT, including NaN: NaN<=x
+// and NaN>=x are both false → returns false, matching the C body's
+// IEEE `HX_FLOAT(a) == HX_FLOAT(b)`. Transpile-verified: emits
+// `hexa_bool(hexa_truthy(hexa_cmp_le(a,b)) && hexa_truthy(hexa_cmp_ge(a,b)))`
+// — 0 hexa_eq call sites.
+//
+// TAG_BOOL avoids `==`/comparison entirely: `let ab: bool = a as bool`
+// lowers to `hexa_bool(hexa_truthy(a))` (codegen_c2.hexa:4113), and
+// `if ab { return bb } return !bb` lowers to `if (hexa_truthy(ab))` +
+// `hexa_bool(!hexa_truthy(bb))` (codegen_c2.hexa:4129) — non-recursive,
+// 0 hexa_eq call sites (transpile-verified).
+
+// TAG_INT same-tag branch. Both operands guaranteed TAG_INT by the C
+// wrapper's tag guard. `(a <= b) && (a >= b)` ⟺ `HX_INT(a) == HX_INT(b)`.
+pub fn rt_eq_int(a: HexaVal, b: HexaVal) -> bool {
+    return a <= b && a >= b
+}
+
+// TAG_FLOAT same-tag branch (byte-exact incl. NaN — see header).
+pub fn rt_eq_float(a: HexaVal, b: HexaVal) -> bool {
+    return a <= b && a >= b
+}
+
+// TAG_BOOL same-tag branch. Phrased without `==`/comparison on HexaVals
+// so it is recursion-safe with no fast-path dependence.
+pub fn rt_eq_bool(a: HexaVal, b: HexaVal) -> bool {
+    let ab: bool = a as bool
+    let bb: bool = b as bool
+    if ab { return bb }
+    return !bb
+}

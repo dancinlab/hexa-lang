@@ -5665,9 +5665,32 @@ HexaVal hexa_eq(HexaVal a, HexaVal b) {
     if (HX_IS_FLOAT(a) && HX_IS_INT(b)) return hexa_bool(HX_FLOAT(a) == (double)HX_INT(b));
     if (HX_TAG(a) != HX_TAG(b)) return hexa_bool(0);
     switch (HX_TAG(a)) {
+#ifdef HEXA_HAS_HEXA_RT_STDLIB
+        /* Step-3 cycle 103 — same-tag scalar branches ported to hexa
+           source (RUNTIME.md 잔여 #4 → 9/9 candidate branches). Both
+           operands are guaranteed the same scalar tag here (cross-type
+           numeric coercion + HX_TAG(a)==HX_TAG(b) guard already passed).
+           rt_eq_int/float express equality via ordered comparisons
+           (hexa_cmp_le/ge — NOT redirected, byte-exact incl. NaN);
+           rt_eq_bool avoids comparison on HexaVals entirely. None lower
+           to a hexa_eq call site, so no recursion (transpile-verified). */
+        case TAG_INT: {
+            extern HexaVal rt_eq_int(HexaVal a, HexaVal b);
+            return hexa_bool(hexa_truthy(rt_eq_int(a, b)));
+        }
+        case TAG_FLOAT: {
+            extern HexaVal rt_eq_float(HexaVal a, HexaVal b);
+            return hexa_bool(hexa_truthy(rt_eq_float(a, b)));
+        }
+        case TAG_BOOL: {
+            extern HexaVal rt_eq_bool(HexaVal a, HexaVal b);
+            return hexa_bool(hexa_truthy(rt_eq_bool(a, b)));
+        }
+#else
         case TAG_INT: return hexa_bool(HX_INT(a) == HX_INT(b));
         case TAG_FLOAT: return hexa_bool(HX_FLOAT(a) == HX_FLOAT(b));
         case TAG_BOOL: return hexa_bool(HX_BOOL(a) == HX_BOOL(b));
+#endif
         case TAG_STR: {
             /* Intern fast-path stays C (HX_STR pointer identity). */
             if (HX_STR(a) == HX_STR(b)) return hexa_bool(1);
