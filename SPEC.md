@@ -210,7 +210,7 @@ RFC-020.
 | Aspect | Status |
 |---|---|
 | `enum Shape { Circle(Int), Rect(Int), Unit }` parser declaration | working |
-| `match s { Shape::Circle(r) -> ... }` pattern binding (interpreter mode) | working |
+| `match s { Shape::Circle(r) -> ... }` pattern binding | working |
 | 7 match patterns (wildcard / literal / binding / variant / struct / tuple / guard) | working |
 | `E::Variant(x)` construction syntax (parse_primary line 3016) | missing |
 | Typechecker variant payload type registry | missing |

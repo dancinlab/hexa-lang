@@ -155,7 +155,7 @@ Snapshot derived from `git log` on main; full tables at `SPEC.yaml::phases_compl
 
 Six choices that shape everything else, pinned in [`SPEC.yaml`](SPEC.yaml):
 
-1. **Native compiled, direct codegen** — no LLVM, no C-transpile. The interpreter survives only as bootstrap stage0 and retires once stage3 hits a byte-equal fixed point.
+1. **Native compiled, direct codegen** — no LLVM, no C-transpile. The tree-walking interpreter is retired: the self-host stage reached a byte-equal fixed point, and `hexa run` compiles then executes.
 2. **Atlas static-baked into the compiler binary** — `ATLAS_HASH` pinned, drift handled by CI auto-rebuild. Runtime atlas-load cost: 0 ms.
 3. **Strict compile-time fatal lint** — Python `SyntaxError` + TypeScript `strict` model. S0–S5 + S8 always fatal. No `--unsafe`. No `HEXA_STRICT=0`.
 4. **`@grace` is the only opt-out** — `@grace(HXxxxx, until="...", reason="...")` per site, every site emits HX9000 at every compile, CI requires `Acked-grace:` trailer.
@@ -185,7 +185,7 @@ The installer drops `hexa`, `hx`, `hexa_ld`, and the atlas seed into `~/.hx/`; b
 hexa parse <file>.hexa                 # cheapest signal — syntax + reserved-word + @plugin attr check
 hexa build <entry>.hexa -o build/X     # full pipeline → static binary
 hexa cc <file>.hexa -o build/X.o       # just lower → object (HIR → MIR → LIR → emit)
-hexa run <file>.hexa [<args>...]       # interpreter — bootstrap stage0 + selftest fallback
+hexa run <file>.hexa [<args>...]       # compile then execute a single file
 hexa explain HX8004                    # what does this diagnostic mean
 hexa atlas search "<query>"            # search atlas for a primitive / law / constant
 hexa atlas lookup L <id>               # exact citation lookup
@@ -197,7 +197,7 @@ hx update                              # pull updates for all installed packages
 hx list                                # what's installed under ~/.hx/bin/
 ```
 
-The interpreter is intentionally slower than the compiled path — every release-grade build goes through `hexa build`. `hexa run` exists for stage0 bootstrap and per-file scripting.
+`hexa run` compiles a file then executes it in one shot — convenient for single-file scripting. Release-grade builds go through `hexa build`, which produces a reusable static binary.
 
 ### Compile speed
 
@@ -274,7 +274,7 @@ Citing a tombstoned `L[id]` fires `HX1099` and fails the build. Bypass is `@grac
 
 ## Highlights
 
-- transitioned from interpreter to native compiler — no LLVM, no C-transpile
+- native compiled — direct codegen, no LLVM, no C-transpile
 - 4.2 MB atlas baked statically into the compiler binary; runtime cost 0 ms
 - 8-stage strict lint S0–S5 + S8 enforced at compile time, fatal by default
 - ε self-proof: `@verify` / `@discover` → atlas auto-promote → tombstone retroactive sweep
