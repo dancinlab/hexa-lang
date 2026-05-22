@@ -1,0 +1,205 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "hexa-bio/_python_bridge/spec/metallodrug_cryptic_pocket_cross_v1.schema.json",
+  "title": "metallodrug_cryptic_pocket_cross_v1 — CROSS-AXIS BB2 output rows (METALLODRUG x CRYPTIC-POCKET)",
+  "description": "Output schema for _python_bridge/module/metallodrug_cryptic_pocket_cross.py. CROSS-AXIS BB2: the cisplatin Pt(II)-N7(guanine) intrastrand d(GpG) crosslink bends B-DNA by ~30-40 deg at the platination site (Takahara, Rosenzweig, Frederick & Lippard, Nature 377:649, 1995). The Pt-DNA adduct shifts a B-DNA <=> bent-DNA conformational equilibrium toward the bent state; HMG-domain proteins (HMGB1, hUBF, SRY) preferentially recognise the bent-DNA state (Pil & Lippard, Science 256:234, 1992). That is structurally the SAME conformational-selection logic the CRYPTIC-POCKET sub-axis encodes for proteins (closed/open Boltzmann equilibrium with a binder that selects the rare conformer and pays the opening cost out of its intrinsic binding budget — Hammes, Chang & Oas, PNAS 106:13737, 2009). The chemical event is DIFFERENT (covalent Pt-N7 coordination vs reversible / non-covalent cryptic-pocket binding); the equilibrium framework is the SAME. Both parent sims (metallodrug_coordination_sim.py, cryptic_pocket_sim.py) are IMPORTED — never re-implemented (AGENTS.tape f3 no-fork). HONESTY: cisplatin is FDA-approved (1978); the cross is a MODEL-LEVEL UNIFICATION mapping the cryptic_pocket_sim closed/open Boltzmann ledger onto the Pt-DNA-induced B-DNA / bent-DNA equilibrium. It is NOT a claim that all metallodrugs act via cryptic pockets, NOT a binding-affinity / cytotoxicity / antitumor / regulatory claim, and NOT a ranking of metallodrug vs cryptic-pocket modalities. In-silico simulator-consistency only (AGENTS.tape g8/f2). A CROSS is NOT a new axis: METALLODRUG remains an expansion-main axis and CRYPTIC-POCKET remains a sub-axis :> QUANTUM core; the hexa-bio core-5 axes are UNCHANGED. No quantity is derived from the n=6 lattice (HEXA-METALLODRUG.tape f_lattice_fit / n6_honest_stance).",
+  "type": "object",
+  "required": [
+    "schema",
+    "anchor_event",
+    "pt_n7_anchor_angstrom",
+    "metallodrug_view",
+    "cryptic_view",
+    "cross_axis_consistency",
+    "comparison_is_ranking",
+    "creates_a_new_axis",
+    "illustrative_only",
+    "model_level_unification_only",
+    "real_limit_citations",
+    "lattice_stance",
+    "in_silico_only"
+  ],
+  "properties": {
+    "schema": {
+      "type": "string",
+      "const": "metallodrug_cryptic_pocket_cross_v1"
+    },
+    "anchor_event": {
+      "type": "string",
+      "const": "cisplatin Pt(II)-N7(guanine) intrastrand d(GpG) crosslink bending B-DNA toward HMG-recognisable bent-DNA",
+      "description": "The single chemical event the two axis views describe. METALLODRUG view supplies the covalent Pt-N7 coordinate-bond anchor; CRYPTIC-POCKET view supplies the closed/open Boltzmann conformational-selection ledger applied to the B-DNA <=> bent-DNA equilibrium."
+    },
+    "pt_n7_anchor_angstrom": {
+      "type": "number",
+      "exclusiveMinimum": 0,
+      "description": "Pt-N7 coordinate-bond distance anchor (~2.0 A; Takahara et al. Nature 377:649, 1995). Imported from metallodrug_coordination_sim.PT_N7_BOND_ANGSTROM; the METALLODRUG view keys off this value and the CRYPTIC-POCKET-style ledger is conditioned on the covalent adduct being formed."
+    },
+    "metallodrug_view": {
+      "type": "object",
+      "required": [
+        "axis",
+        "d_count",
+        "geometry",
+        "pt_n7_recomputed_angstrom",
+        "pt_n7_anchor_match",
+        "citation"
+      ],
+      "properties": {
+        "axis": {
+          "type": "string",
+          "const": "METALLODRUG"
+        },
+        "d_count": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 10,
+          "description": "Pt(II) d-electron count (= 8 for square-planar cisplatin)."
+        },
+        "geometry": {
+          "type": "string",
+          "const": "square-planar",
+          "description": "d8 square-planar Pt(II) coordination geometry."
+        },
+        "pt_n7_recomputed_angstrom": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "Pt-N radial distance recomputed by metallodrug_coordination_sim.square_planar_geometry at the Pt-N7 anchor."
+        },
+        "pt_n7_anchor_match": {
+          "type": "boolean",
+          "description": "True iff the recomputed Pt-N distance is within the parent module tolerance of the ~2.0 A anchor (Takahara 1995)."
+        },
+        "citation": {
+          "type": "string",
+          "description": "Pt-N7 coordinate-bond / cisplatin DNA-adduct crystal-structure literature anchor (Takahara 1995)."
+        }
+      }
+    },
+    "cryptic_view": {
+      "type": "object",
+      "required": [
+        "axis",
+        "conformational_states",
+        "dg_bend_kcal_per_mol",
+        "p_bent_apo",
+        "p_bent_with_pt_adduct",
+        "population_shift_bent",
+        "bent_state_selector_is_conformational",
+        "hmg_recognition_implication",
+        "citation"
+      ],
+      "properties": {
+        "axis": {
+          "type": "string",
+          "const": "CRYPTIC-POCKET"
+        },
+        "conformational_states": {
+          "type": "string",
+          "const": "B-DNA (canonical) <=> bent-DNA (~30-40 deg at d(GpG))",
+          "description": "Two-state DNA-conformational ensemble mapped onto cryptic_pocket_sim's closed (B-DNA, conformer that does not recruit HMG) <=> open (bent-DNA, conformer recognised by HMG-domain proteins) framework."
+        },
+        "dg_bend_kcal_per_mol": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "Free-energy cost of spontaneously bending naked B-DNA to the ~30-40 deg adduct-like conformer (kcal/mol, >0 — bent-DNA is rare in apo / unplatinated DNA, just as a cryptic open state is rare in apo protein). Illustrative literature-informed surrogate, NOT a fit."
+        },
+        "p_bent_apo": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "exclusiveMaximum": 1,
+          "description": "Boltzmann population of the bent-DNA state in unplatinated apo B-DNA, computed via cryptic_pocket_sim.open_population (imported, not re-implemented — f3)."
+        },
+        "p_bent_with_pt_adduct": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "exclusiveMaximum": 1,
+          "description": "Bent-DNA population AFTER the Pt-N7 covalent adduct forms, computed via the same cryptic_pocket_sim Boltzmann formula on the ledger dg_open_eff = dg_bend + dg_pt_adduct_kcal (the covalent adduct re-pays the bending cost — exactly the cryptic-pocket conformational-selection ledger from cryptic_pocket_sim)."
+        },
+        "population_shift_bent": {
+          "type": "number",
+          "description": "Population shift delta_P = p_bent_with_pt_adduct - p_bent_apo. Positive: the Pt-DNA adduct shifts the conformational ensemble toward the bent-DNA state — the cryptic-pocket-style conformational selection by the covalent metallodrug event."
+        },
+        "bent_state_selector_is_conformational": {
+          "type": "boolean",
+          "description": "True iff population_shift_bent > 0 — the Pt-DNA adduct acts as a conformational selector for the bent-DNA state, exactly as a cryptic-pocket binder acts as a selector for the open protein state."
+        },
+        "hmg_recognition_implication": {
+          "type": "string",
+          "description": "HMG-domain-recognition consequence implied by the population shift (Pil & Lippard, Science 256:234, 1992): HMGB1 / hUBF / SRY HMG-box proteins preferentially bind the bent-DNA state — a downstream consequence of the conformational-selection event, NOT a measured affinity / efficacy claim."
+        },
+        "citation": {
+          "type": "string",
+          "description": "DNA-bend + HMG-domain recognition literature anchor (Takahara 1995; Pil & Lippard 1992) and the conformational-selection thermodynamic-cycle anchor (Hammes, Chang & Oas, PNAS 106:13737, 2009) inherited from cryptic_pocket_sim."
+        }
+      }
+    },
+    "cross_axis_consistency": {
+      "type": "object",
+      "required": [
+        "same_pt_dna_event_across_axes",
+        "metallodrug_anchor_passes",
+        "cryptic_ledger_conserved",
+        "cryptic_population_shift_positive",
+        "both_views_consistent"
+      ],
+      "properties": {
+        "same_pt_dna_event_across_axes": {
+          "type": "boolean",
+          "description": "Both axis views identify the SAME Pt(II)-N7(guanine) intrastrand d(GpG) crosslink event — the cross-axis consistency core."
+        },
+        "metallodrug_anchor_passes": {
+          "type": "boolean",
+          "description": "METALLODRUG view: Pt-N distance matches the ~2.0 A Takahara 1995 anchor."
+        },
+        "cryptic_ledger_conserved": {
+          "type": "boolean",
+          "description": "CRYPTIC view: dg_open_eff = dg_bend + dg_pt_adduct_kcal to numerical precision — the conformational free-energy ledger from cryptic_pocket_sim is conserved when transplanted onto the B-DNA <=> bent-DNA equilibrium."
+        },
+        "cryptic_population_shift_positive": {
+          "type": "boolean",
+          "description": "CRYPTIC view: p_bent_with_pt_adduct > p_bent_apo whenever the covalent Pt-N7 adduct contributes a favourable (<0) effective stabilisation of the bent state — the metallodrug-as-conformational-selector signature."
+        },
+        "both_views_consistent": {
+          "type": "boolean",
+          "description": "Conjunction of the above — METALLODRUG and CRYPTIC-POCKET views agree the Pt-DNA event is the conformational-selection event for the bent-DNA / HMG-recognition step under each respective model."
+        }
+      }
+    },
+    "comparison_is_ranking": {
+      "type": "boolean",
+      "const": false,
+      "description": "MUST be false. This cross is a MODEL-LEVEL MAPPING between the cryptic_pocket_sim closed/open Boltzmann ledger and the Pt-DNA-induced B-DNA / bent-DNA equilibrium — never a ranking of METALLODRUG vs CRYPTIC-POCKET modalities, never a ranking of drugs, never an efficacy / cytotoxicity / potency comparison."
+    },
+    "creates_a_new_axis": {
+      "type": "boolean",
+      "const": false,
+      "description": "MUST be false. A cross does NOT introduce a new axis. METALLODRUG remains an expansion-main axis; CRYPTIC-POCKET remains a sub-axis :> QUANTUM core; the hexa-bio core-5 axes are UNCHANGED."
+    },
+    "illustrative_only": {
+      "type": "boolean",
+      "const": true,
+      "description": "MUST be true. ΔG_bend and ΔG_pt_adduct values are literature-informed surrogates for the conformational-selection ledger class — NOT fits to a specific DNA sequence / adduct geometry / temperature."
+    },
+    "model_level_unification_only": {
+      "type": "boolean",
+      "const": true,
+      "description": "MUST be true. This cross shows the cryptic-pocket closed/open Boltzmann conformational-selection ledger applies to the Pt-DNA-induced B-DNA <=> bent-DNA equilibrium. It is NOT a claim that all metallodrugs work via cryptic pockets, NOT a claim that the Pt-DNA adduct IS a cryptic pocket in the protein sense — the chemical event is covalent (Pt-N7 coordinate bond) and the conformational substrate is DNA, not a protein pocket. The unification is at the level of the two-state conformational-selection math."
+    },
+    "real_limit_citations": {
+      "type": "array",
+      "minItems": 3,
+      "items": {"type": "string"},
+      "description": "At least three literature anchors: Pt-N7 coordinate bond + DNA bend (Takahara 1995); HMG-domain recognition of cisplatin-DNA bent adducts (Pil & Lippard 1992); conformational-selection / cryptic-pocket thermodynamic cycle (Hammes, Chang & Oas 2009)."
+    },
+    "lattice_stance": {
+      "type": "string",
+      "description": "Explicit statement that no n=6 lattice arithmetic is performed; the metallodrug precedent (cisplatin/carboplatin/oxaliplatin — FDA 1978/1989/2002) and the cryptic-pocket precedent (KRAS-G12C switch-II / sotorasib — FDA 2021) are own-precedent descriptions, never lattice-derived (AGENTS.tape g3/f1; HEXA-METALLODRUG.tape f_lattice_fit / n6_honest_stance)."
+    },
+    "in_silico_only": {
+      "type": "boolean",
+      "const": true,
+      "description": "MUST be true. The row certifies in-silico simulator+metadata consistency only (AGENTS.tape g8/f2); never a therapeutic / cytotoxic / antitumor / immunogenic / efficacy / regulatory claim."
+    }
+  },
+  "additionalProperties": true
+}
