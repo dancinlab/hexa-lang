@@ -875,7 +875,16 @@ fn os_clang_cflags() {
 }
 fn os_clang_ldflags() {
     let mut base = " -lpthread"
-    if exec("uname 2>/dev/null | tr -d ' \\n\\t'") == "Linux" { base = " -lm -lpthread" }
+    // rfc_006 §5 / ubu-2 unblock (2026-05-22): GNU ld is strict about
+    // duplicate symbol definitions. The transpiled per-program C does
+    // `#include "runtime.c"` while the build command also adds runtime.c
+    // as a separate TU — macOS ld tolerates the duplicates, GNU ld
+    // fails with "multiple definition of ..." for every runtime symbol.
+    // `--allow-multiple-definition` accepts the duplicates (identical
+    // symbols resolve correctly). Cheap unblock pending a longer-term
+    // fix (transpiler emits `#include "runtime.h"` with declarations
+    // only, or build command stops adding runtime.c as separate TU).
+    if exec("uname 2>/dev/null | tr -d ' \\n\\t'") == "Linux" { base = " -lm -lpthread -Wl,--allow-multiple-definition" }
     // 2026-05-14: libsodium link flags (when found via pkg-config or brew).
     let probe = exec("pkg-config --libs libsodium 2>/dev/null")
     if probe != "" { base = base + " " + probe.trim() }
