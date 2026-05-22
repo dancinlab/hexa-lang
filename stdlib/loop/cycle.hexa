@@ -91,6 +91,9 @@ fn cmd_loop_help() {
     println("  --no-cache      disable dist/llm_cache.hxc sidecar")
     println("  --allow-llm     gate real LLM calls (else stub-only)")
     println("  --option        alias for default DFS+LLM config")
+    println("  --target-absorb N (alias --target N) — batch absorption: loop")
+    println("                    cycles until N verified children accumulate,")
+    println("                    then open ONE PR. Hard cycle ceiling 50.")
     println("")
     println("PHASE STATUS")
     println("  RFC 065 Phase C-4 — atlas view + state I/O wired")
@@ -319,7 +322,8 @@ struct DfsConfig {
     allow_llm: bool,
     families: string,
     no_cache: bool,
-    do_resume: bool   // `resume` is a reserved word in the transpiler
+    do_resume: bool,    // `resume` is a reserved word in the transpiler
+    target_absorb: int  // Phase M — N children to accumulate across cycles (0 = single-cycle per-PR mode)
 }
 
 // RFC 080 DFS+LLM stage — runs between DRAFT and AUDIT when --dfs is set.
@@ -348,10 +352,14 @@ fn cycle_dfs(seeds: array, view: AtlasView, cycle_no: int, cfg: DfsConfig) {
           + " depth=" + to_string(cfg.depth)
           + " beam=" + to_string(cfg.beam)
           + " allow_llm=" + _bool_str(cfg.allow_llm))
+    // Phase M — in --target-absorb mode, defer the per-cycle PR; main() loops
+    // run_one_cycle and ships ONE batched PR at the end of the session.
+    let defer = cfg.target_absorb > 0
     let emitted = dfs_run(active_seeds, view, cycle_no,
                           cfg.cmd, cfg.depth, cfg.beam,
                           cfg.max_calls, cfg.max_usd, cfg.max_secs,
-                          cfg.allow_llm, cfg.families, cfg.no_cache)
+                          cfg.allow_llm, cfg.families, cfg.no_cache,
+                          defer)
     println("  [dfs]  children emitted=" + to_string(emitted))
 }
 
@@ -408,6 +416,7 @@ fn main() {
     let mut no_cache = false
     let mut option_alias = false
     let mut allow_llm = false
+    let mut target_absorb = ""
 
     let mut k = start
     while k < n {
@@ -461,6 +470,10 @@ fn main() {
         }
         if a == "--llm-families" {
             if k + 1 < n { llm_families = argv[k + 1]; k = k + 2; continue }
+            k = k + 1; continue
+        }
+        if a == "--target-absorb" || a == "--target" {
+            if k + 1 < n { target_absorb = argv[k + 1]; k = k + 2; continue }
             k = k + 1; continue
         }
 
@@ -517,8 +530,39 @@ fn main() {
         allow_llm: allow_llm,
         families: llm_families,
         no_cache: no_cache,
-        do_resume: resume_mode
+        do_resume: resume_mode,
+        target_absorb: to_int(target_absorb)
     }
     println("")
+
+    // Phase M — when --target-absorb N is set, loop run_one_cycle until the
+    // cumulative session-wide absorbed count reaches N or no cycle adds any
+    // new children (exhaustion). cycle_dfs is told to defer the per-cycle PR;
+    // we ship ONE batched PR at the end with the entire harvest.
+    if dfs_cfg.target_absorb > 0 {
+        dfs_session_reset()
+        let target = dfs_cfg.target_absorb
+        let max_cycles = 50   // hard ceiling against runaway (cost+PR-noise guard)
+        let mut cycle_idx = 0
+        while cycle_idx < max_cycles {
+            let before = dfs_session_count()
+            run_one_cycle(no_fire, dry_run, dfs_cfg)
+            let after = dfs_session_count()
+            cycle_idx = cycle_idx + 1
+            println("[loop:target] cycle " + to_string(cycle_idx) + " — session_absorbed=" + to_string(after) + "/" + to_string(target))
+            if after - before == 0 {
+                println("[loop:target] no new children this cycle — exhausted")
+                break
+            }
+            if after >= target {
+                println("[loop:target] target " + to_string(target) + " reached")
+                break
+            }
+        }
+        println("[loop:target] opening batched PR with " + to_string(dfs_session_count()) + " absorbed children")
+        dfs_session_open_pr()
+        return
+    }
+
     run_one_cycle(no_fire, dry_run, dfs_cfg)
 }

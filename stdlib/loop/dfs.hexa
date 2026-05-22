@@ -35,6 +35,13 @@ use "stdlib/io"
 let DFS_USD_PER_MTOK = 5.0
 let DFS_CHARS_PER_TOK = 4
 
+// Phase M (--target-absorb N) — session-wide accumulator. When the user
+// runs hexa loop --dfs with `--target-absorb N`, individual dfs_run calls
+// defer their per-cycle PR; verified children pile up here across cycles
+// until the cumulative count reaches N (or progress halts), at which
+// point one PR is opened with the entire batch.
+let mut _g_dfs_session_absorbed: array = []
+
 // ── tiny local helpers (state.hexa equivalents are private) ──────────
 
 fn _dfs_shq(s: string) -> string {
@@ -571,6 +578,28 @@ fn _dfs_open_pr(children: array, cycle_no: int) {
     let _ = exec("git -C " + _dfs_shq(repo) + " worktree prune 2>/dev/null")
 }
 
+// ── Phase M: --target-absorb N session helpers ──────────────────────
+//
+// In target mode the caller (cycle.hexa main) wraps run_one_cycle in a
+// multi-cycle loop and passes defer_pr=true through to dfs_run. Each
+// dfs_run still verifies + emits to inbox + pushes children into the
+// module-level `_g_dfs_session_absorbed` but skips opening a per-cycle
+// PR. When the cycle loop terminates (target met OR exhausted), the
+// caller invokes `dfs_session_open_pr()` to ship ONE batched PR with
+// the entire session's harvest.
+
+pub fn dfs_session_reset() {
+    _g_dfs_session_absorbed = []
+}
+
+pub fn dfs_session_count() -> int {
+    return len(_g_dfs_session_absorbed)
+}
+
+pub fn dfs_session_open_pr() {
+    _dfs_open_pr(_g_dfs_session_absorbed, 0)
+}
+
 // ── Phase F: frontier persistence for --resume ──────────────────────
 //
 // When a cycle exhausts its budget mid-walk, the unprocessed frontier is
@@ -719,7 +748,8 @@ fn _dfs_emit_child(parent_slug: string, child: Candidate, depth: int) {
 pub fn dfs_run(seeds: array, view: AtlasView, cycle_no: int,
                cmd: string, max_depth: int, beam: int,
                max_calls: int, max_usd: float, max_secs: int,
-               allow_llm: bool, families_csv: string, no_cache: bool) -> int {
+               allow_llm: bool, families_csv: string, no_cache: bool,
+               defer_pr: bool) -> int {
     let start_epoch = _dfs_now_epoch()
     let mut frontier = seeds
     let mut calls = 0
@@ -795,6 +825,7 @@ pub fn dfs_run(seeds: array, view: AtlasView, cycle_no: int,
                 _dfs_emit_child(parent.slug, child, depth + 1)
                 _dfs_chain_append(cycle_no, parent.slug, child.slug, child.family, depth + 1, call_cost)
                 absorbed.push(child)   // Phase L — batch for end-of-run absorption PR (replaces Phase K overlay write)
+                _g_dfs_session_absorbed.push(child)   // Phase M — also accumulate session-wide for --target-absorb batched PR
                 emitted = emitted + 1
                 // fire_needed at depth>0 defers (axis 5.iv) — not carried.
                 if child.fire_needed == false && len(next) < frontier_max {
@@ -823,8 +854,9 @@ pub fn dfs_run(seeds: array, view: AtlasView, cycle_no: int,
     if budget_hit == false { dfs_frontier_clear() }
 
     // Phase L — single end-of-run absorption PR with every verified child
-    // (replaces Phase K per-child local overlay write).
-    _dfs_open_pr(absorbed, cycle_no)
+    // (replaces Phase K per-child local overlay write). Skipped when
+    // defer_pr is true (Phase M --target-absorb batches across cycles).
+    if defer_pr == false { _dfs_open_pr(absorbed, cycle_no) }
 
     println("  [dfs] done: depth_reached=" + to_string(depth)
           + " calls=" + to_string(calls)
