@@ -1,0 +1,120 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "hexa-bio/_python_bridge/spec/allosteric_cryptic_pocket_cross_v1.schema.json",
+  "title": "allosteric_cryptic_pocket_cross_v1 — CROSS-AXIS G2 output rows",
+  "description": "Output schema for _python_bridge/module/allosteric_cryptic_pocket_cross.py. CROSS-AXIS integration G2: the ALLOSTERIC sub-axis (MWC two-state allosteric model from allosteric_sim.py) and the CRYPTIC-POCKET sub-axis (closed/open conformational equilibrium from cryptic_pocket_sim.py) are unified as the SAME two-state conformational-equilibrium math. The map R<->open, T<->closed gives the MWC isomerisation constant L = exp(dg_open/RT); a cryptic-pocket binder that selects the open state shifts the conformational ensemble — that is precisely an MWC R-state stabiliser (an allosteric event in the population-shift sense). Both sub-axis libraries are IMPORTED, not re-implemented (AGENTS.tape f3 — no shadow of sister logic). This is a MODEL-LEVEL UNIFICATION of two two-state conformational-equilibrium frameworks; it is NOT a claim that every allosteric site is cryptic or vice versa, NOT a binding-affinity / potency / therapeutic claim. In-silico simulator-consistency only (AGENTS.tape g8/f2). Both sub-axes hang off the QUANTUM core (:>); a CROSS is NOT a new axis.",
+  "type": "object",
+  "required": [
+    "schema",
+    "pocket",
+    "pocket_class",
+    "dg_open_kcal_per_mol",
+    "apo_open_state_population_cryptic",
+    "mwc_L_isomerisation_constant",
+    "mwc_p_R_apo",
+    "two_state_identity_rel_err",
+    "alpha_cryptic_binder",
+    "alpha_classification",
+    "p_open_with_binder",
+    "population_shift_open",
+    "illustrative_only"
+  ],
+  "properties": {
+    "schema": {
+      "type": "string",
+      "const": "allosteric_cryptic_pocket_cross_v1"
+    },
+    "pocket": {
+      "type": "string",
+      "description": "Pocket identifier inherited from the cryptic_pocket_sim deterministic panel."
+    },
+    "pocket_class": {
+      "type": "string",
+      "description": "Cryptic-pocket structural class label."
+    },
+    "drug_precedent": {
+      "type": "string",
+      "description": "Own drug precedent for the modality (g3/f1 — described by precedent, never lattice-derived)."
+    },
+    "temperature_K": {
+      "type": "number",
+      "exclusiveMinimum": 0,
+      "description": "Temperature used for the Boltzmann populations and the L=exp(dg_open/RT) map (K)."
+    },
+    "rt_kcal_per_mol": {
+      "type": "number",
+      "exclusiveMinimum": 0,
+      "description": "Thermal energy RT (kcal/mol) at the simulation temperature."
+    },
+    "dg_open_kcal_per_mol": {
+      "type": "number",
+      "description": "Cryptic-pocket conformational opening free energy closed->open (kcal/mol). >0 for a cryptic pocket."
+    },
+    "dg_bind_open_kcal_per_mol": {
+      "type": "number",
+      "description": "Intrinsic cryptic-pocket binding free energy to the already-open pocket (kcal/mol, <0 favourable)."
+    },
+    "apo_open_state_population_cryptic": {
+      "type": "number",
+      "exclusiveMinimum": 0,
+      "exclusiveMaximum": 1,
+      "description": "Apo open-state population P_open computed by cryptic_pocket_sim's Boltzmann formula."
+    },
+    "mwc_L_isomerisation_constant": {
+      "type": "number",
+      "exclusiveMinimum": 0,
+      "description": "MWC two-state isomerisation constant L = [T]/[R] = [closed]/[open] = exp(dg_open/RT). The bridge between the two sub-axis frameworks: large L <-> low P_open <-> deeply cryptic."
+    },
+    "mwc_p_R_apo": {
+      "type": "number",
+      "exclusiveMinimum": 0,
+      "exclusiveMaximum": 1,
+      "description": "MWC apo R-state (active/open) population P_R = 1/(1+L). Identical numerically to apo_open_state_population_cryptic when R<->open is the chosen map."
+    },
+    "mwc_p_T_apo": {
+      "type": "number",
+      "exclusiveMinimum": 0,
+      "exclusiveMaximum": 1,
+      "description": "MWC apo T-state (inactive/closed) population P_T = L/(1+L). Equals 1 - P_R."
+    },
+    "two_state_identity_rel_err": {
+      "type": "number",
+      "minimum": 0,
+      "description": "Relative error |P_open - P_R| / max(|P_open|,1e-12). The unification identity — must be ~0 to numerical precision."
+    },
+    "alpha_cryptic_binder": {
+      "type": "number",
+      "exclusiveMinimum": 0,
+      "description": "MWC-style cooperativity factor alpha = K_T/K_R for a binder that selects the open state, computed as alpha = exp(-|dg_bind_open|/RT) / 1 = exp(-|dg_bind_open|/RT) when the closed (T) state does not bind (K_T -> infinity gives alpha -> 0; we use a bounded K_T/K_R surrogate from the dg_bind_open budget — see module docstring). The binder is an R-state stabiliser whenever alpha < 1 (population shifted toward open)."
+    },
+    "alpha_classification": {
+      "type": "string",
+      "enum": ["R_state_stabiliser_population_shift", "neutral", "T_state_stabiliser"],
+      "description": "MWC classification of the cryptic-pocket binder in conformational terms. A cryptic-pocket binder that opens the pocket is an R-state stabiliser — i.e. an allosteric population-shifter in the MWC sense."
+    },
+    "p_open_with_binder": {
+      "type": "number",
+      "exclusiveMinimum": 0,
+      "exclusiveMaximum": 1,
+      "description": "Open-state population P_open^bound after a cryptic-pocket binder selects the open state. Computed via the ledger dg_open_eff = dg_open + dg_bind_open (the bound-state effective opening cost) and the same Boltzmann formula. P_open^bound > P_open^apo whenever |dg_bind_open| > 0 — the population SHIFT."
+    },
+    "population_shift_open": {
+      "type": "number",
+      "description": "Population shift delta_P = P_open^bound - P_open^apo. Positive: binder shifts the ensemble toward the open (R) state — the MWC allosteric population shift."
+    },
+    "binder_is_allosteric_population_shifter": {
+      "type": "boolean",
+      "description": "True iff population_shift_open > 0 — i.e. the cryptic-pocket binder IS an MWC allosteric (R-state) population-shifter."
+    },
+    "ledger_sum_holds": {
+      "type": "boolean",
+      "description": "True iff dg_open_eff = dg_open + dg_bind_open to numerical precision (the conformational free-energy ledger from cryptic_pocket_sim, conserved)."
+    },
+    "illustrative_only": {
+      "type": "boolean",
+      "const": true,
+      "description": "Always true — this row is a model-level unification of two two-state conformational-equilibrium frameworks. NOT a binding-affinity / potency / therapeutic claim, NOT a claim that every allosteric site is cryptic or vice versa."
+    }
+  },
+  "additionalProperties": true
+}

@@ -1,0 +1,316 @@
+#!hexa strict
+// hexa-bio/_hexa_bridge/selftest/macrocycle_sim.hexa
+//
+// hexa-native port of `_python_bridge/module/macrocycle_sim.py` (T3;
+// json/math/sys — deterministic). MACROCYCLE sub-axis :> WEAVE
+// (core). Conformational-entropy microstate count W_conf = Π g_b,
+// Boltzmann S_conf = R·ln W_conf, pre-organization free-energy gain
+// ΔΔG_preorg = −T·[S(acyclic) − S(macrocycle)], bRo5 classifier.
+// CPython libm log/exp values hardcoded bit-exact per row (discipline
+// #6 — hexa lacks libm); downstream chain (S_j, S_cal, penalty) is
+// single-op multiplications that match Python exactly. Witness JSON
+// emitted via the verified py_json2 module (json.dumps(indent=2,
+// ensure_ascii=False) parity).
+
+import "_hexa_bridge/module/py_json2.hexa"
+
+let K_B = 1.380649e-23
+let N_A = 6.02214076e23
+let R_GAS = K_B * N_A
+let KCAL_TO_J = 4184.0
+let TEMP_K = 310.0
+let SCHEMA_ID = "macrocycle_v1"
+let ROTAMER_MULTIPLICITY_FREE = 3.0
+let RING_CONSTRAINT_FACTOR = 0.40
+let RO5_MW_MAX = 500.0
+let RO5_HBD_MAX = 5
+let RO5_HBA_MAX = 10
+let RO5_CLOGP_MAX = 5.0
+
+fn fmt(spec: string, v: float) -> string {
+    let mut o = exec("printf '" + spec + "' " + json_stringify(v))
+    while len(o) > 0 {
+        let last = o.substr(len(o) - 1, 1)
+        if last == "\n" || last == "\r" { o = o.substr(0, len(o) - 1) } else { break }
+    }
+    return o
+}
+fn ljust(s: string, n: int) -> string { let mut o = s; while len(o) < n { o = o + " " }; return o }
+fn js(v: float) -> string { return json_stringify(v) }
+fn jsb(b: bool) -> string { if b { return "true" } return "false" }
+fn pyb(b: bool) -> string { if b { return "True" } return "False" }
+fn fabs(x: float) -> float { if x < 0.0 { return -x } return x }
+
+fn main() {
+    // ── panel: name, n_rot, n_ring, mw, hbd, hba, clogp, is_macro, modality_note, precedent ──
+    let names = ["cyclosporine_macrocycle", "cyclosporine_acyclic_analog",
+                 "lorlatinib_macrocycle", "lorlatinib_acyclic_analog",
+                 "rapamycin_macrocycle", "rapamycin_acyclic_analog"]
+    let n_rot = [33, 33, 8, 8, 26, 26]
+    let n_ring = [30, 0, 5, 0, 22, 0]
+    let mw = [1202.6, 1202.6, 406.4, 406.4, 914.2, 914.2]
+    let hbd = [5, 5, 1, 1, 3, 3]
+    let hba = [12, 12, 5, 5, 13, 13]
+    let clogp = [3.0, 3.0, 2.3, 2.3, 6.0, 6.0]
+    let is_macro = [true, false, true, false, true, false]
+    let modality = ["cyclic-undecapeptide immunosuppressant (macrocycle, bRo5)",
+                    "hypothetical ring-opened acyclic analog (all bonds free)",
+                    "synthetic macrocyclic ALK/ROS1 kinase inhibitor",
+                    "ring-opened acyclic analog of the lorlatinib pharmacophore",
+                    "macrolide natural-product macrocycle (mTOR)",
+                    "ring-opened acyclic analog of the rapamycin macrolide"]
+    let precedent = ["cyclosporine — cyclic undecapeptide; canonical macrocyclic drug",
+                     "cyclosporine — acyclic-analog contrast for pre-organization",
+                     "lorlatinib — synthetic macrocyclic ALK inhibitor (FDA 2018)",
+                     "lorlatinib — acyclic-analog contrast for pre-organization",
+                     "rapamycin / sirolimus — macrolide-class macrocyclic drug",
+                     "rapamycin / sirolimus — acyclic-analog contrast"]
+
+    // ── per-row CPython-libm values hardcoded bit-exact (discipline #6) ──
+    // ln_w = n_free * math.log(3.0) + n_ring * math.log(0.40*3.0)
+    // w_conf = math.exp(ln_w)
+    // Verified: `python3 -c 'import math; ...'` matches.
+    let ln_w = [8.765483569822972, 36.25420552604762, 4.207444649974103,
+                8.788898309344878, 8.405523404139444, 28.563919505370855]
+    let w_conf = [6409.160472593814, 5559060566555526.0, 67.18464000000003,
+                  6561.000000000005, 4471.697655190751, 2541865828329.0073]
+
+    // ── downstream: single-op chain matches Python exactly ──
+    let g_free = ROTAMER_MULTIPLICITY_FREE
+    let g_ring = RING_CONSTRAINT_FACTOR * ROTAMER_MULTIPLICITY_FREE
+    let mut n_free_a: array = []
+    let mut s_j: array = []
+    let mut s_cal: array = []
+    let mut pen: array = []
+    let mut violations_a: array = []
+    let mut vcount: array = []
+    let mut bro5: array = []
+    let mut i = 0
+    while i < 6 {
+        let nf = n_rot[i] - n_ring[i]
+        let sj = R_GAS * ln_w[i]
+        let sc = sj / (KCAL_TO_J / 1000.0)
+        let pn = TEMP_K * sj / KCAL_TO_J
+        n_free_a.push(nf); s_j.push(sj); s_cal.push(sc); pen.push(pn)
+        let mut v: array = []
+        if mw[i] > RO5_MW_MAX { v.push("MW>500") }
+        if hbd[i] > RO5_HBD_MAX { v.push("HBD>5") }
+        if hba[i] > RO5_HBA_MAX { v.push("HBA>10") }
+        if clogp[i] > RO5_CLOGP_MAX { v.push("cLogP>5") }
+        violations_a.push(v)
+        vcount.push(len(v))
+        bro5.push(len(v) >= 2)
+        i = i + 1
+    }
+
+    // ── header ──
+    println("macrocycle_sim — MACROCYCLE sub-axis :> WEAVE (core)")
+    println("")
+    println("model:  W_conf = Π g_b   S_conf = R·ln W_conf   ΔΔG_preorg = −T·[S(acyclic) − S(macrocycle)]")
+    println("")
+    println("  real-limit anchor : macrocyclization pre-organization entropy; Boltzmann S = R·ln W")
+    println("                      (Mallinson & Collins 2012; Villar et al. 2014; Driggers et al. 2008)")
+    println("  hard ceiling      : a ring can only REMOVE conformers ⇒ W_macro ≤ W_acyclic ⇒ ΔΔG_preorg ≤ 0")
+    println("  ring constraint   : f_ring = " + js(RING_CONSTRAINT_FACTOR) + "  (in-ring effective rotamer multiplicity = f_ring·3)")
+    println("")
+
+    // ── per-row print ──
+    i = 0
+    while i < 6 {
+        let kind = if is_macro[i] { "macrocycle" } else { "acyclic   " }
+        println("  [" + ljust(names[i], 28) + "] " + kind + "  W_conf=" + fmt("%.3e", w_conf[i]))
+        println("      S_conf=" + fmt("%.2f", s_cal[i]) + " cal/mol·K  " +
+                "binding-entropy-penalty=" + fmt("%.2f", pen[i]) + " kcal/mol  " +
+                "bRo5=" + pyb(bro5[i]))
+        i = i + 1
+    }
+
+    // ── pre-organization pairs: (macro idx, acyclic idx) = (0,1), (2,3), (4,5) ──
+    let pair_m = [0, 2, 4]
+    let pair_a = [1, 3, 5]
+    let mut ddg: array = []
+    let mut favourable: array = []
+    let mut k = 0
+    while k < 3 {
+        let d = pen[pair_m[k]] - pen[pair_a[k]]
+        ddg.push(d)
+        favourable.push(d <= 0.0)
+        k = k + 1
+    }
+
+    println("")
+    println("## macrocyclization pre-organization (macrocycle vs acyclic analog)")
+    k = 0
+    while k < 3 {
+        let mi = pair_m[k]; let ai = pair_a[k]
+        println("  " + ljust(names[mi], 28) + " ΔΔG_preorg = " + fmt("%+.2f", ddg[k]) + " kcal/mol " +
+                "(favourable=" + pyb(favourable[k]) + ")")
+        println("      S_conf: macrocycle=" + fmt("%.2f", s_cal[mi]) + " < " +
+                "acyclic=" + fmt("%.2f", s_cal[ai]) + " cal/mol·K")
+        k = k + 1
+    }
+
+    // ── acceptance ──
+    let mut c1 = len(names) >= 6
+    let mut c2 = true
+    let mut c5_macro = 0
+    let mut c5_acyc = 0
+    let mut c6 = true
+    let mut c7 = false
+    i = 0
+    while i < 6 {
+        if s_j[i] < 0.0 { c2 = false }
+        if is_macro[i] { c5_macro = c5_macro + 1 } else { c5_acyc = c5_acyc + 1 }
+        // C6: abs(S_J - R*ln_w) <= 1e-6 * max(1.0, abs(S_J))
+        let diff = fabs(s_j[i] - R_GAS * ln_w[i])
+        let absj = fabs(s_j[i])
+        let scale = if absj > 1.0 { absj } else { 1.0 }
+        if diff > 1.0e-6 * scale { c6 = false }
+        if is_macro[i] && bro5[i] { c7 = true }
+        i = i + 1
+    }
+    let c5 = c5_macro >= 1 && c5_acyc >= 1
+    let mut c3 = true
+    let mut c4 = true
+    k = 0
+    while k < 3 {
+        if !favourable[k] { c3 = false }
+        if !(s_cal[pair_m[k]] < s_cal[pair_a[k]]) { c4 = false }
+        k = k + 1
+    }
+    let crit_keys = ["C1_panel_non_empty", "C2_entropy_non_negative", "C3_preorg_favourable",
+                     "C4_macrocycle_fewer_microstates", "C5_both_classes_present",
+                     "C6_entropy_equals_R_ln_W", "C7_bro5_macrocycle_present"]
+    let crit_vals = [c1, c2, c3, c4, c5, c6, c7]
+    let mut npass = 0
+    let mut ci = 0
+    while ci < 7 { if crit_vals[ci] { npass = npass + 1 }; ci = ci + 1 }
+    let verdict = if npass == 7 { "PASS" } else { "FAIL" }
+
+    println("")
+    println("## acceptance — in-silico simulator-consistency criteria")
+    ci = 0
+    while ci < 7 {
+        let tag = if crit_vals[ci] { "PASS" } else { "FAIL" }
+        println("  [" + tag + "] " + crit_keys[ci])
+        ci = ci + 1
+    }
+    println("")
+    println("  --- " + str(npass) + "/7  →  verdict: " + verdict + " ---")
+
+    println("")
+    println("## WEAVE-overlap honesty (HIERARCHY.tape criterion #2)")
+    println("  MACROCYCLE is a SUB-axis :> WEAVE core (strong own precedent,")
+    println("  WEAVE-adjacent). WEAVE = structural quasi-equivalence (closed")
+    println("  capsomer lattice); MACROCYCLE specializes toward single-molecule")
+    println("  ring-closure conformational thermodynamics. Sub-axis, NOT a 6th")
+    println("  core axis — core-5 (AXIS/AXIS.tape) UNCHANGED.")
+
+    println("")
+    println("## C-honesty (g8 / f2): this verdict is IN-SILICO simulator+metadata")
+    println("  internal consistency ONLY — conformational microstate counts,")
+    println("  S_conf = R·ln W, ΔΔG_preorg and the bRo5 flag computed")
+    println("  self-consistently. NOT a binding-affinity, potency, permeability or")
+    println("  therapeutic-efficacy claim. Rotamer multiplicities, ring-constraint")
+    println("  factor and properties are literature-informed surrogates for ligand")
+    println("  CLASSES, not fits to a specific compound.")
+
+    // ── witness JSON (compact build → json_parse → py_json2 indent=2) ──
+    // Row insertion order matches Python: schema, ligand, is_macrocycle,
+    // modality_note, drug_precedent, temperature_K, ring_constraint_factor,
+    // molecular_weight, h_bond_donors, h_bond_acceptors, clogp,
+    // (row.update(ent):) n_rotatable_bonds, n_bonds_in_ring, n_bonds_free,
+    //   rotamer_multiplicity_free, rotamer_multiplicity_in_ring,
+    //   conformational_microstates_W, ln_W_conf, S_conf_cal_per_mol_K,
+    //   S_conf_J_per_mol_K, binding_entropy_penalty_kcal_per_mol,
+    // (row.update(ro5):) ro5_violations, ro5_violation_count, beyond_rule_of_5
+    let mut rj = ""
+    i = 0
+    while i < 6 {
+        if i > 0 { rj = rj + ", " }
+        let mut va = "["
+        let v = violations_a[i]
+        let mut vi = 0
+        while vi < len(v) {
+            if vi > 0 { va = va + ", " }
+            va = va + "\"" + v[vi] + "\""
+            vi = vi + 1
+        }
+        va = va + "]"
+        rj = rj + "{\"schema\": \"" + SCHEMA_ID + "\"" +
+              ", \"ligand\": \"" + names[i] + "\"" +
+              ", \"is_macrocycle\": " + jsb(is_macro[i]) +
+              ", \"modality_note\": \"" + modality[i] + "\"" +
+              ", \"drug_precedent\": \"" + precedent[i] + "\"" +
+              ", \"temperature_K\": " + js(TEMP_K) +
+              ", \"ring_constraint_factor\": " + js(RING_CONSTRAINT_FACTOR) +
+              ", \"molecular_weight\": " + js(mw[i]) +
+              ", \"h_bond_donors\": " + str(hbd[i]) +
+              ", \"h_bond_acceptors\": " + str(hba[i]) +
+              ", \"clogp\": " + js(clogp[i]) +
+              ", \"n_rotatable_bonds\": " + str(n_rot[i]) +
+              ", \"n_bonds_in_ring\": " + str(n_ring[i]) +
+              ", \"n_bonds_free\": " + str(n_free_a[i]) +
+              ", \"rotamer_multiplicity_free\": " + js(g_free) +
+              ", \"rotamer_multiplicity_in_ring\": " + js(g_ring) +
+              ", \"conformational_microstates_W\": " + js(w_conf[i]) +
+              ", \"ln_W_conf\": " + js(ln_w[i]) +
+              ", \"S_conf_cal_per_mol_K\": " + js(s_cal[i]) +
+              ", \"S_conf_J_per_mol_K\": " + js(s_j[i]) +
+              ", \"binding_entropy_penalty_kcal_per_mol\": " + js(pen[i]) +
+              ", \"ro5_violations\": " + va +
+              ", \"ro5_violation_count\": " + str(vcount[i]) +
+              ", \"beyond_rule_of_5\": " + jsb(bro5[i]) + "}"
+        i = i + 1
+    }
+    let preorg_note = "ring closure removes accessible conformers, so the macrocycle freezes a smaller conformational entropy on binding than its acyclic analog — ΔΔG_preorg ≤ 0, a favourable pre-organization free-energy difference."
+    let mut pj = ""
+    k = 0
+    while k < 3 {
+        if k > 0 { pj = pj + ", " }
+        let mi = pair_m[k]; let ai = pair_a[k]
+        pj = pj + "{\"macrocycle\": \"" + names[mi] + "\"" +
+              ", \"acyclic_analog\": \"" + names[ai] + "\"" +
+              ", \"drug_precedent\": \"" + precedent[mi] + "\"" +
+              ", \"S_conf_macrocycle_cal_per_mol_K\": " + js(s_cal[mi]) +
+              ", \"S_conf_acyclic_cal_per_mol_K\": " + js(s_cal[ai]) +
+              ", \"binding_penalty_macrocycle_kcal_per_mol\": " + js(pen[mi]) +
+              ", \"binding_penalty_acyclic_kcal_per_mol\": " + js(pen[ai]) +
+              ", \"ddg_preorg_kcal_per_mol\": " + js(ddg[k]) +
+              ", \"preorg_is_favourable\": " + jsb(favourable[k]) +
+              ", \"note\": \"" + preorg_note + "\"}"
+        k = k + 1
+    }
+    let acc = "{\"criteria\": {\"C1_panel_non_empty\": " + jsb(c1) +
+              ", \"C2_entropy_non_negative\": " + jsb(c2) +
+              ", \"C3_preorg_favourable\": " + jsb(c3) +
+              ", \"C4_macrocycle_fewer_microstates\": " + jsb(c4) +
+              ", \"C5_both_classes_present\": " + jsb(c5) +
+              ", \"C6_entropy_equals_R_ln_W\": " + jsb(c6) +
+              ", \"C7_bro5_macrocycle_present\": " + jsb(c7) + "}" +
+              ", \"pass_count\": " + str(npass) +
+              ", \"total\": 7, \"verdict\": \"" + verdict + "\"}"
+    let witness = "{\"schema\": \"" + SCHEMA_ID + "\"" +
+              ", \"ts\": \"2026-05-16T00:00:00Z\"" +
+              ", \"sub_axis\": \"MACROCYCLE\"" +
+              ", \"parent_axis\": \"WEAVE (core-5, AXIS/AXIS.tape — UNCHANGED)\"" +
+              ", \"registration\": \"AXIS/HIERARCHY.tape @D sub_under_weave\"" +
+              ", \"real_limit_anchor\": \"macrocyclization pre-organization entropy (Mallinson & Collins, Future Med. Chem. 4:1409, 2012; Villar et al., Nat. Chem. Biol. 10:723, 2014; Driggers et al., Nat. Rev. Drug Discov. 7:608, 2008); Boltzmann S = R·ln W\"" +
+              ", \"bro5_source\": \"Doak, Over, Giordanetto & Kihlberg, Chem. Biol. 21:1115 (2014); rule of 5 — Lipinski et al., Adv. Drug Deliv. Rev. 23:3 (1997)\"" +
+              ", \"weave_overlap_note\": \"MACROCYCLE :> WEAVE core — WEAVE-adjacent with strong own precedent; specializes toward single-molecule ring-closure conformational thermodynamics (HIERARCHY.tape criterion #2)\"" +
+              ", \"temperature_K\": " + js(TEMP_K) +
+              ", \"ring_constraint_factor\": " + js(RING_CONSTRAINT_FACTOR) +
+              ", \"rows\": [" + rj + "]" +
+              ", \"preorganization\": [" + pj + "]" +
+              ", \"acceptance\": " + acc +
+              ", \"in_silico_scope_caveat\": \"simulator+metadata internal consistency ONLY (g8/f2) — not a binding-affinity, permeability or therapeutic claim\"" +
+              ", \"lattice_derivation\": \"none — no count, entropy, or parameter derived from the n=6 lattice (g2/f1/f_lattice_fit)\"}"
+
+    let wv = json_parse(witness)
+    println("")
+    println("## witness JSON")
+    println(py_json2(wv, 0))
+    println("")
+    let sentinel = if verdict == "PASS" { "__MACROCYCLE__ PASS" } else { "__MACROCYCLE__ FAIL" }
+    println(sentinel)
+}
