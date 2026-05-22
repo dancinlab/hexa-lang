@@ -137,6 +137,42 @@ path), `g_plan_consolidation` (compiler/PLAN.md entry per cycle),
 | H | `tests/loop/dfs_test.hexa` (parse + verify + run + budget) | landed `a4a7cd9c` |
 | I | this RFC + PLAN entry + governance proposal | landed `a4a7cd9c` |
 | J | **behavioral validation — compiled (`hexac build`), 14/14 PASS on Mac arm64** | **landed `3264dcdd`** |
+| K | **atlas overlay absorption — verified children auto-flow to `atlas.overlay.n6` (drill-shared)** | this PR |
+
+## 5a. Phase K — auto-absorption to the unified discovery stream
+
+The DFS engine's emitted children land in `inbox/atlas_candidates/dfs_*/`
+(PR-only) AND auto-append a tape-format `@P` entry to
+`<HX_DATA_DIR>/atlas.overlay.n6`, the *same* overlay file
+`compiler/drill/round.hexa::_cand_to_n6` writes (drill round discoveries).
+This unifies the two discovery streams into one corpus that the existing
+"discovery → 3+ hits → promote into baked atlas" pipeline already governs.
+
+Tape format mirrors drill's, adapted for the proposal-bearing Candidate:
+
+```
+@P <child-slug> :: dfs [3?]
+  <- <cite_id>, <cite_id>
+  => "<one-paragraph English proposal>"
+```
+
+Grade `[3?]` = tier-3 hypothesis pending verification (cf.
+`tool/verify_cli.hexa` rubric — 🔵/🟡/🟠/⚪). The `dfs` source tag
+distinguishes from drill's `smash`/`free`/`absolute`/etc.
+
+**Governance preserved.** `compiler/atlas/overlay.hexa` documents the
+overlay as EXPORT-ONLY — its runtime load path is retired-to-empty, so
+`build_atlas_view` does NOT pick up new overlay entries; the binary atlas
+(`embedded.gen`) is still the only runtime source of truth. Auto-absorption
+feeds the PROMOTION pipeline (which is human/PR-gated), not the runtime
+view. `@D g_atlas_binary_builtin` stays intact.
+
+**Implementation note.** `_dfs_absorb_to_overlay` writes directly via
+`exec("printf … >> $(overlay_path)")` rather than calling
+`overlay_append_lines`. Same on-disk format; bypasses
+`overlay.hexa`'s `_g_overlay_meta` module-level cache, which corrupts
+under repeated calls in the compiled binary (SIGSEGV reproduced; the
+direct-write path is what `_dfs_chain_append` already uses for chain.jsonl).
 
 ## 6. Validation
 
