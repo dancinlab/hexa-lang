@@ -76,6 +76,7 @@
 import "../ir/mir.hexa"
 import "../ir/lir.hexa"
 import "./nvptx_ptx_ops.hexa"
+import "./nvptx_tma_ops.hexa"
 
 // ── LModule target tags ───────────────────────────────────────
 //
@@ -2524,8 +2525,10 @@ let _NVPTX_PTX_VERSION: string = "7.8"
 // _nvptx_arch_for_target — the PTX `.target` arch string for an LModule
 // target tag. Defaults to the sm_90 arch for an unrecognized tag.
 fn _nvptx_arch_for_target(target: string) -> string {
-    if target == NVPTX_TARGET_SM80  { return NVPTX_ARCH_SM80  }
-    if target == NVPTX_TARGET_SM120 { return NVPTX_ARCH_SM120 }
+    if target == NVPTX_TARGET_SM80   { return NVPTX_ARCH_SM80   }
+    if target == NVPTX_TARGET_SM120  { return NVPTX_ARCH_SM120  }
+    // RFC 067 N206 — sm_120a arch-specific target (TMA gate).
+    if target == NVPTX_TARGET_SM120A { return NVPTX_ARCH_SM120A }
     return NVPTX_ARCH_SM90
 }
 
@@ -2535,8 +2538,10 @@ fn _nvptx_arch_for_target(target: string) -> string {
 // tags fall through to SM90 — same conservative default as
 // `_nvptx_arch_for_target`. Pure data; no side effects on CPU codegen.
 fn _nvptx_target_tag_for_sm_arch(sm_arch: string) -> string {
-    if sm_arch == NVPTX_ARCH_SM80  { return NVPTX_TARGET_SM80  }
-    if sm_arch == NVPTX_ARCH_SM120 { return NVPTX_TARGET_SM120 }
+    if sm_arch == NVPTX_ARCH_SM80   { return NVPTX_TARGET_SM80   }
+    if sm_arch == NVPTX_ARCH_SM120  { return NVPTX_TARGET_SM120  }
+    // RFC 067 N206 — sm_120a (arch-specific Blackwell consumer, TMA gate).
+    if sm_arch == NVPTX_ARCH_SM120A { return NVPTX_TARGET_SM120A }
     return NVPTX_TARGET_SM90
 }
 
@@ -2550,8 +2555,10 @@ fn _nvptx_target_tag_for_sm_arch(sm_arch: string) -> string {
 // `_emit_ptx_header` byte-output is preserved for any caller that does
 // not route through the per-arch path.
 fn _nvptx_ptx_version_for_sm_arch(sm_arch: string) -> string {
-    if sm_arch == NVPTX_ARCH_SM80  { return "7.0" }
-    if sm_arch == NVPTX_ARCH_SM120 { return "8.0" }
+    if sm_arch == NVPTX_ARCH_SM80   { return "7.0" }
+    if sm_arch == NVPTX_ARCH_SM120  { return "8.0" }
+    // RFC 067 N206 — sm_120a requires PTX ISA 8.7+ (N196 finding).
+    if sm_arch == NVPTX_ARCH_SM120A { return NVPTX_PTX_VERSION_SM120A }
     return "7.8"
 }
 
@@ -4820,7 +4827,17 @@ fn _nvptx_emit_matmul_NT_b_body(name: string) -> string {
 // `op_kind` ∈ {"matmul", "matmul_NT_a", "matmul_NT_b"}; any other
 // value falls through to the canonical matmul body (defensive — the
 // dispatcher in `codegen_emit_ptx_for_sm` only passes one of the three).
+//
+// RFC 067 N206 — TMA dispatch axis: when `target` is the sm_120a arch-
+// specific target AND `nvptx_tma_codegen_enabled()` (env `HEXA_NVPTX_TMA=1`),
+// route to `_nvptx_emit_matmul_tma_module` which uses cp.async.bulk.tensor
+// + mbarrier instead of the WMMA load/store path. Default OFF preserves
+// every existing fixture byte-identically.
 fn _nvptx_emit_matmul_module(name: string, op_kind: string, target: string, ptx_version: string) -> string {
+    // RFC 067 N206 — TMA path gate: sm_120a target + flag on.
+    if target == NVPTX_TARGET_SM120A && nvptx_tma_codegen_enabled() {
+        return _nvptx_emit_matmul_tma_module(name, target, ptx_version)
+    }
     let mut s = _emit_ptx_header_versioned(target, ptx_version)
     s = s + "\n"
     s = s + PTX_DIRECTIVE_ENTRY + " " + name + " "
@@ -4832,5 +4849,164 @@ fn _nvptx_emit_matmul_module(name: string, op_kind: string, target: string, ptx_
     } else {
         s = s + _nvptx_emit_matmul_body(name)
     }
+    return s
+}
+
+// ════════════════════════════════════════════════════════════════════
+// RFC 067 N206 — TMA matmul module emit (sm_120a, SMOKE-level)
+// ════════════════════════════════════════════════════════════════════
+//
+// `_nvptx_emit_matmul_tma_module` — codegen-emit the SMOKE-level TMA
+// matmul module text for the sm_120a + PTX 8.7 gate (N196 finding).
+// The body mirrors the proven N200 SMOKE artifact
+// (`inbox/fires/rfc067_ptma_named_bar_hilbert_2026_05_22/sgemm_tma_smoke.ptx`)
+// byte-for-byte for the kernel core; only the kernel entry name is
+// parameterised so the upstream MFunc-name dispatch threads through.
+//
+// HONEST SCOPE (per @D g3 + task's tightest-scope clause):
+//   * SMOKE-level: TMA loads A and B via cp.async.bulk.tensor; the
+//     mma.sync chain is NOT yet emitted (the SMOKE artifact writes the
+//     TMA-loaded smem_a back to C as fp32 to prove TMA reached shared).
+//   * Param signature mirrors N200 SMOKE: 2 × .param .align 64 .b8
+//     [128] (A/B TMA descriptors, host-side cuTensorMapEncodeTiled),
+//     plus 1 × .param .u64 (C global pointer).
+//   * NOT yet: the full mma.sync.m16n8k16 chain + Hilbert swizzle from
+//     N200-full. That is a follow-on cycle that codegen-emits the K-iter
+//     load/mma/store loop. The N128 WMMA dispatch is still used for the
+//     non-sm_120a / flag-off paths.
+//   * Runtime-builtin gap (per
+//     `inbox/notes/2026-05-22-tma-runtime-builtin-requirements.md`):
+//     `gpu_tma_encode_tiled_2d` is NOT yet implemented; the host driver
+//     for the source-to-silicon fire calls `cuTensorMapEncodeTiled`
+//     directly (see N200 SMOKE host.c). Codegen only emits the kernel
+//     side; host-side descriptor encoding stays out of the compiler.
+//
+// PROVENANCE: every PTX line below is byte-matched to the N200 SMOKE
+// artifact except the .visible .entry name (parameterised here).
+pub fn _nvptx_emit_matmul_tma_module(name: string, target: string, ptx_version: string) -> string {
+    let mut s = ""
+    // ── PTX header (sm_120a + 8.7 + .address_size 64) ──
+    // Inline the canonical header rather than going through
+    // `_emit_ptx_header_versioned` so the comment lead-in matches the
+    // N200 SMOKE artifact format (lets the test substring checks key on
+    // the same marker string the artifact carries).
+    s = s + "//\n"
+    s = s + "// RFC 067 N206 -- hexa-emitted TMA matmul (SMOKE-level) on sm_120a\n"
+    s = s + "// Mirrors N200 SMOKE artifact (codegen-emit form).\n"
+    s = s + "//\n"
+    s = s + "\n"
+    s = s + PTX_VERSION_DIRECTIVE + " " + ptx_version + "\n"
+    s = s + PTX_TARGET_DIRECTIVE + " " + NVPTX_ARCH_SM120A + "\n"
+    s = s + PTX_ADDRSIZE_DIRECTIVE + " 64\n"
+    s = s + "\n"
+    // ── shared memory tiles + mbarrier ──
+    s = s + ".shared .align 16 .b8 smem_a[2048];   // A: 64 rows x 16 cols fp16\n"
+    s = s + ".shared .align 16 .b8 smem_b[2048];   // B: 16 rows x 64 cols fp16\n"
+    s = s + ".shared .align 8  .b8 smem_mbar[8];   // mbarrier 8 B\n"
+    s = s + "\n"
+    // ── entry directive + TMA param bank ──
+    s = s + PTX_DIRECTIVE_ENTRY + " " + name + "(\n"
+    s = s + "    " + NVPTX_TMA_DESC_PARAM_TYPE + " tmap_a_param[128],\n"
+    s = s + "    " + NVPTX_TMA_DESC_PARAM_TYPE + " tmap_b_param[128],\n"
+    s = s + "    .param .u64 c_ptr_param\n"
+    s = s + ") {\n"
+    // ── register declarations ──
+    s = s + "    .reg .b32 %tx, %lane, %wid, %warp_m, %warp_n;\n"
+    s = s + "    .reg .b32 %k_iter, %k_off, %tx_count;\n"
+    s = s + "    .reg .b64 %tmap_a_pp, %tmap_b_pp, %tmap_a_addr, %tmap_b_addr;\n"
+    s = s + "    .reg .b64 %c_addr;\n"
+    s = s + "    .reg .b32 %smem_a_lo, %smem_b_lo, %smem_mbar_lo;\n"
+    s = s + "    .reg .b32 %arr_count;\n"
+    s = s + "    .reg .b64 %tok;\n"
+    s = s + "    .reg .pred %p0, %pdone;\n"
+    s = s + "    .reg .b32 %x0, %y0, %x1, %y1;\n"
+    s = s + "\n"
+    // ── thread-index + warp compose ──
+    s = s + "    mov.u32 %tx, %tid.x;\n"
+    s = s + "    and.b32 %lane, %tx, 31;\n"
+    s = s + "    shr.u32 %wid, %tx, 5;\n"
+    s = s + "    and.b32 %warp_n, %wid, 1;\n"
+    s = s + "    shr.u32 %warp_m, %wid, 1;\n"
+    s = s + "\n"
+    // ── TMA descriptor + C ptr loads (param-space) ──
+    // The canonical cvta.param.u64 chain per PTX ISA 8.7 §9.7.9.6 +
+    // nvptx_tma_ops::PTX_OP_CVTA_PARAM_U64.
+    s = s + "    mov.b64 %tmap_a_pp, tmap_a_param;\n"
+    s = s + "    " + PTX_OP_CVTA_PARAM_U64 + " %tmap_a_addr, %tmap_a_pp;\n"
+    s = s + "    mov.b64 %tmap_b_pp, tmap_b_param;\n"
+    s = s + "    " + PTX_OP_CVTA_PARAM_U64 + " %tmap_b_addr, %tmap_b_pp;\n"
+    s = s + "    ld.param.u64 %c_addr, [c_ptr_param];\n"
+    s = s + "    mov.u32 %smem_a_lo, smem_a;\n"
+    s = s + "    mov.u32 %smem_b_lo, smem_b;\n"
+    s = s + "    mov.u32 %smem_mbar_lo, smem_mbar;\n"
+    s = s + "\n"
+    // ── mbarrier init (thread 0 only) ──
+    s = s + "    setp.eq.s32 %p0, %tx, 0;\n"
+    s = s + "    @!%p0 bra L_init_done;\n"
+    s = s + "    mov.u32 %arr_count, 1;\n"
+    s = s + "    " + PTX_OP_MBARRIER_INIT + " [%smem_mbar_lo], %arr_count;\n"
+    s = s + "    " + PTX_OP_FENCE_PROXY_ASYNC_SHARED_CTA + ";\n"
+    s = s + "L_init_done:\n"
+    s = s + "    bar.sync 0;\n"
+    s = s + "\n"
+    // ── K-loop (4 K-iters of 16 cols each, M=N=K=64) ──
+    s = s + "    mov.u32 %k_iter, 0;\n"
+    s = s + "L_kloop:\n"
+    s = s + "    mul.lo.s32 %k_off, %k_iter, 16;\n"
+    s = s + "\n"
+    s = s + "    setp.eq.s32 %p0, %tx, 0;\n"
+    s = s + "    @!%p0 bra L_skip_issue;\n"
+    s = s + "\n"
+    // ── A TMA load: 64 rows x 16 cols at (col=k_off, row=0) ──
+    s = s + "    mov.u32 %x0, %k_off;\n"
+    s = s + "    mov.u32 %y0, 0;\n"
+    s = s + "    " + PTX_OP_CP_ASYNC_BULK_TENSOR_2D + "\n"
+    s = s + "        [%smem_a_lo], [%tmap_a_addr, {%x0, %y0}], [%smem_mbar_lo];\n"
+    // ── B TMA load: 16 rows x 64 cols at (col=0, row=k_off) ──
+    s = s + "    mov.u32 %x1, 0;\n"
+    s = s + "    mov.u32 %y1, %k_off;\n"
+    s = s + "    " + PTX_OP_CP_ASYNC_BULK_TENSOR_2D + "\n"
+    s = s + "        [%smem_b_lo], [%tmap_b_addr, {%x1, %y1}], [%smem_mbar_lo];\n"
+    s = s + "    mov.u32 %tx_count, 4096;\n"
+    s = s + "    " + PTX_OP_MBARRIER_ARRIVE_EXPECT_TX + "\n"
+    s = s + "        %tok, [%smem_mbar_lo], %tx_count;\n"
+    s = s + "L_skip_issue:\n"
+    s = s + "\n"
+    // ── mbarrier wait (parity flips per K-iter) ──
+    s = s + "    .reg .b32 %parity;\n"
+    s = s + "    and.b32 %parity, %k_iter, 1;\n"
+    s = s + "L_wait:\n"
+    s = s + "    " + PTX_OP_MBARRIER_TRY_WAIT_PARITY + " %pdone, [%smem_mbar_lo], %parity;\n"
+    s = s + "    @!%pdone bra L_wait;\n"
+    s = s + "    bar.sync 0;\n"
+    s = s + "\n"
+    // ── SMOKE write-back: smem_a -> C as fp32 (proves TMA reached shared) ──
+    s = s + "    .reg .b32 %off_smem;\n"
+    s = s + "    .reg .b16 %h0, %h1;\n"
+    s = s + "    .reg .f32 %f0, %f1;\n"
+    s = s + "    mul.lo.s32 %off_smem, %tx, 8;\n"
+    s = s + "    setp.lt.s32 %p0, %tx, 128;\n"
+    s = s + "    @!%p0 bra L_skip_store;\n"
+    s = s + "    add.s32 %off_smem, %smem_a_lo, %off_smem;\n"
+    s = s + "    ld.shared.b16 %h0, [%off_smem];\n"
+    s = s + "    ld.shared.b16 %h1, [%off_smem+2];\n"
+    s = s + "    cvt.f32.f16 %f0, %h0;\n"
+    s = s + "    cvt.f32.f16 %f1, %h1;\n"
+    s = s + "    .reg .b64 %c_off, %c_dst;\n"
+    s = s + "    cvt.u64.u32 %c_off, %tx;\n"
+    s = s + "    mul.lo.u64 %c_off, %c_off, 8;\n"
+    s = s + "    add.u64 %c_dst, %c_addr, %c_off;\n"
+    s = s + "    st.global.f32 [%c_dst], %f0;\n"
+    s = s + "    st.global.f32 [%c_dst+4], %f1;\n"
+    s = s + "L_skip_store:\n"
+    s = s + "    bar.sync 0;\n"
+    s = s + "\n"
+    // ── K-loop back-edge ──
+    s = s + "    add.s32 %k_iter, %k_iter, 1;\n"
+    s = s + "    setp.lt.s32 %p0, %k_iter, 4;\n"
+    s = s + "    @%p0 bra L_kloop;\n"
+    s = s + "\n"
+    s = s + "    ret;\n"
+    s = s + "}\n"
     return s
 }

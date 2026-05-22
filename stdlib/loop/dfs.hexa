@@ -27,6 +27,7 @@
 
 use "compiler/lenses/types"
 use "compiler/atlas/parser"
+use "compiler/atlas/embed_fold"   // Phase O — canonical absorption (@D g_atlas_absorb_direct)
 use "stdlib/loop/state"
 use "stdlib/io"
 
@@ -543,27 +544,47 @@ fn _dfs_open_pr(children: array, cycle_no: int) {
         return
     }
 
-    let shard_rel = "n6/atlas.append.dfs_cycle_" + to_string(cycle_no) + "_" + ts + ".n6"
-    let shard_path = workdir + "/" + shard_rel
-    let mut content = "# Auto-absorbed by hexa loop --dfs (RFC 080 Phase L)\n"
-                    + "# cycle " + to_string(cycle_no) + " · "
-                    + to_string(n) + " verified DFS children\n\n"
+    // Phase O — fold each verified child directly into the worktree's
+    // compiler/atlas/embedded.gen.hexa via embed_fold_into (canonical
+    // @D g_atlas_absorb_direct pipeline; no .n6 shard, no markdown
+    // intermediate). The PR diff is the spliced AtlasNode struct literals.
+    let embed_path = embed_gen_path(workdir)
+    let src_file = "dfs-autoabsorb-cycle-" + to_string(cycle_no) + "-" + ts
+    let mut folded = 0
+    let mut skipped = 0
     let mut i = 0
     while i < n {
-        content = content + _dfs_cand_to_n6(children[i]) + "\n\n"
+        let raw_body = _dfs_cand_to_n6(children[i])
+        let node_text = embed_build_node_struct_text("P", children[i].slug, raw_body, src_file, cycle_no)
+        let err = embed_fold_into(embed_path, "P", node_text, children[i].slug)
+        if len(err) == 0 {
+            folded = folded + 1
+        } else {
+            skipped = skipped + 1
+            println("  [dfs] absorption skip slug=" + children[i].slug + " : " + err)
+        }
         i = i + 1
     }
-    let _ = write_text(shard_path, content)
+    if folded == 0 {
+        println("  [dfs] absorption: 0 children folded (all duplicates or empty embed)")
+        let _ = exec("git -C " + _dfs_shq(repo) + " worktree remove --force " + _dfs_shq(workdir) + " 2>/dev/null")
+        let _ = exec("git -C " + _dfs_shq(repo) + " worktree prune 2>/dev/null")
+        return
+    }
 
-    let title = "absorb(dfs): cycle " + to_string(cycle_no) + " — " + to_string(n) + " verified DFS children"
-    let body = "Auto-absorbed by `hexa loop --dfs` (RFC 080 Phase L).\n\n"
-             + to_string(n) + " verified children, tape format `@P <slug> :: dfs [3?]`. "
-             + "Per `@D h_atlas_single_export`, this staging shard merges into `n6/atlas.n6` on merge.\n\n"
-             + "Children pending verify — promote any tier-3? entry by running `hexa verify <slug>`.\n\n"
+    let title = "absorb(dfs): " + to_string(folded) + " verified DFS children -> embedded.gen.hexa"
+    let body = "Auto-absorbed by `hexa loop --dfs` (RFC 080 Phase O).\n\n"
+             + to_string(folded) + " AtlasNode P-kind entries spliced directly into "
+             + "`compiler/atlas/embedded.gen.hexa` via the canonical "
+             + "`embed_fold_into` pipeline (@D g_atlas_absorb_direct) — "
+             + "no `.n6` staging shard, no inbox markdown intermediate. "
+             + (if skipped > 0 { to_string(skipped) + " duplicate(s) skipped. " } else { "" })
+             + "Each entry's `raw` carries the tape header `@P <slug> :: dfs [3?]` "
+             + "(tier-3 hypothesis pending verify — promote by running `hexa verify <slug>`).\n\n"
              + "Generated with [Claude Code](https://claude.com/claude-code)\n"
 
-    let _ = exec("git -C " + _dfs_shq(workdir) + " add " + _dfs_shq(shard_rel))
-    let commit_msg = title + "\n\nAuto-absorbed by hexa loop --dfs (RFC 080 Phase L).\n\nCo-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>\n"
+    let _ = exec("git -C " + _dfs_shq(workdir) + " add compiler/atlas/embedded.gen.hexa")
+    let commit_msg = title + "\n\nAuto-absorbed by hexa loop --dfs (RFC 080 Phase O — fold-into-embedded.gen via @D g_atlas_absorb_direct).\n\nCo-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>\n"
     let _ = exec("git -C " + _dfs_shq(workdir) + " commit -m " + _dfs_shq(commit_msg) + " 2>&1")
     let push_out = exec("git -C " + _dfs_shq(workdir) + " push -u origin " + _dfs_shq(branch) + " 2>&1").trim()
     if push_out.index_of("error") >= 0 || push_out.index_of("fatal") >= 0 {
