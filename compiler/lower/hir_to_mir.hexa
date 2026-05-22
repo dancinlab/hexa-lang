@@ -2891,12 +2891,29 @@ fn _hir_param_name(it: HItem, idx: i64) -> string {
     return ""
 }
 
+// `_hir_strip_mut_prefix` — strip a leading `mut:` from a let's text.
+// The desugar emits the loop index var as a MUTABLE let, whose HExpr
+// text the parser/ast_to_hir encodes as `mut:__for_idx_*` (see
+// ast_to_hir.hexa:1377 `t = "mut:" + name` + the hir_to_mir.hexa:3289
+// strip site). The N143 matcher must tolerate this — the hand-built
+// mir_test case (g) used the bare `__for_idx_*` form, so the original
+// helpers (no strip) passed the test but never matched real parse
+// output, leaving the natural-loop auto-synth latent (N153/N164 found
+// 0 WMMA from the natural fixture). Stripping here closes that gap.
+fn _hir_strip_mut_prefix(nm: string) -> string {
+    if len(nm) >= 4 && nm.substring(0, 4) == "mut:" {
+        return nm.substring(4, len(nm))
+    }
+    return nm
+}
+
 // `_hir_is_for_idx_let` — true iff the HExpr is the `let __for_idx_*`
 // the desugar produces. The text prefix is the desugar's invariant
-// (`__for_idx_` followed by the per-for uid).
+// (`__for_idx_` followed by the per-for uid), modulo an optional
+// `mut:` prefix on the mutable index let.
 fn _hir_is_for_idx_let(e: HExpr) -> bool {
     if e.kind != "let" { return false }
-    let nm = e.text
+    let nm = _hir_strip_mut_prefix(e.text)
     let cs = nm.chars()
     if len(cs) < 11 { return false }
     // Prefix check: "__for_idx_"
@@ -2913,10 +2930,10 @@ fn _hir_is_for_idx_let(e: HExpr) -> bool {
     return true
 }
 
-// `_hir_is_for_it_let` — companion: `let __for_it_*`.
+// `_hir_is_for_it_let` — companion: `let __for_it_*` (also `mut:`-tolerant).
 fn _hir_is_for_it_let(e: HExpr) -> bool {
     if e.kind != "let" { return false }
-    let nm = e.text
+    let nm = _hir_strip_mut_prefix(e.text)
     let cs = nm.chars()
     if len(cs) < 10 { return false }
     if cs[0] != '_' { return false }
@@ -3020,18 +3037,63 @@ fn _hir_is_nested_matmul_body(body: HExpr) -> bool {
     // outer_body.children[2] is the outer __for_idx_X = __for_idx_X + 1 assign.
     let middle_body = _hir_desugared_for_while_body(middle)
     if middle_body.kind != "block" { return false }
-    if len(middle_body.children) != 5 { return false }
+    // The middle for-while body shape depends on how the accumulator
+    // init was written in source:
+    //   * `let sum = 0.0`  → 5 children: [let j, let sum, <inner-for>,
+    //                         assign c[…]=sum, idx++].
+    //   * `var sum = 0.0`  → 6 children: the untyped `var` desugars into
+    //                         a stray `ident "var"` node + a separate
+    //                         `assign sum = 0.0`, giving [let j,
+    //                         ident "var", assign sum=0.0, <inner-for>,
+    //                         assign c[…]=sum, idx++].
+    // Both forms share: first child = `let j`, the inner desugared-for
+    // block, then the c-store assign, then the trailing idx++ assign.
+    // We locate the inner-for-block by scan (the sole nested
+    // desugared-for-block) and require the c-store assign to sit right
+    // after it, with the idx++ as the final child.
+    let mw = len(middle_body.children)
+    if mw != 5 && mw != 6 { return false }
     if middle_body.children[0].kind != "let" { return false }    // let j = __for_it_Y[__for_idx_Y]
-    if middle_body.children[1].kind != "let" { return false }    // let sum = 0.0
-    let inner = middle_body.children[2]
-    if !_hir_is_desugared_for_block(inner) { return false }
-    if middle_body.children[3].kind != "assign" { return false } // c[i*N+j] = sum
-    // middle_body.children[4] is the middle __for_idx_Y += 1.
+    // Find the inner desugared-for-block among the middle children.
+    let mut inner_ix = -1
+    let mut mi = 1
+    while mi < mw {
+        if _hir_is_desugared_for_block(middle_body.children[mi]) {
+            inner_ix = mi
+        }
+        mi = mi + 1
+    }
+    if inner_ix < 0 { return false }
+    let inner = middle_body.children[inner_ix]
+    // The sum accumulator init must appear before the inner loop, as
+    // either a `let sum` (5-child form) or an `assign sum = 0.0`
+    // (6-child `var` form). Require at least one let/assign with a
+    // float-literal rhs in [1 .. inner_ix).
+    let mut found_sum_init = false
+    let mut si = 1
+    while si < inner_ix {
+        let s = middle_body.children[si]
+        if s.kind == "let" || s.kind == "assign" {
+            if len(s.children) >= 1 {
+                let rhs = s.children[len(s.children) - 1]
+                if rhs.kind == "literal_float" { found_sum_init = true }
+            }
+        }
+        si = si + 1
+    }
+    if !found_sum_init { return false }
+    // The c-store assign sits immediately after the inner loop; the
+    // final middle child is the idx++ assign.
+    if inner_ix + 1 >= mw { return false }
+    let cstore = middle_body.children[inner_ix + 1]
+    if cstore.kind != "assign" { return false }                  // c[i*N+j] = sum
     // Validate the c-store has an index-expr LHS (otherwise it's e.g.
     // a bare scalar assign, not the matmul-shape result write).
-    let cstore = middle_body.children[3]
     if len(cstore.children) < 2 { return false }
     if cstore.children[0].kind != "index" { return false }
+    // The idx++ assign is the final middle child, immediately after the
+    // c-store: c-store at inner_ix+1, idx++ at inner_ix+2 == mw-1.
+    if inner_ix + 3 != mw { return false }
     let inner_body = _hir_desugared_for_while_body(inner)
     if inner_body.kind != "block" { return false }
     if len(inner_body.children) != 3 { return false }
