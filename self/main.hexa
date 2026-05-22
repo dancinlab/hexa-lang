@@ -1888,24 +1888,27 @@ fn _build_nvptx_emit_driver(src_path, sm_arch) {
     if !file_exists(src_path) { return 1 }
     // ── P3 source-derived MIR pipeline (mirror of compiler/cli/
     //    build_nvptx.hexa::_build_nvptx_source_module body) ──
-    let source     = to_string(read_file(src_path))
-    let tokens     = lex(source, src_path)
-    let module_ast = parse(tokens, src_path)
-    let atlas      = static_atlas()
-    let hmodule    = lower(module_ast, atlas)
-    let mmodule    = lower_hir(hmodule)
+    // iter-2b/2e GATE re-applied 2026-05-22 (bf406f08 wipe reverted PR #295).
+    // Live pipeline calls lex/parse/static_atlas/lower/lower_hir/
+    // codegen_emit_ptx_for_sm; bodies in compiler/ modules NOT linked by
+    // bootstrap Stage 1 -> 6 undefined symbols. Gated until Path C.
+    // Standalone driver: compiler/cli/build_nvptx.hexa.
+    println("[nvptx] GATED RFC071-P3-PathB src=" + src_path + " sm=" + sm_arch)
+    return 1
+    // let source     = to_string(read_file(src_path))
+    // let tokens     = lex(source, src_path)
+    // let module_ast = parse(tokens, src_path)
+    // let atlas      = static_atlas()
+    // let hmodule    = lower(module_ast, atlas)
+    // let mmodule    = lower_hir(hmodule)
     // codegen_emit_ptx_for_sm filters MFuncs by gpu_kind != GPU_KIND_CPU
     // internally (see compiler/codegen/nvptx_target.hexa:1399-1437);
     // CPU-only files emit an empty kernel section but still produce a
     // parse-clean PTX shell. Source-with-@gpu_kernel emits the
     // .visible .entry <kernel_name> header that the F-RFC071-MODULE-
     // LOADER-BRIDGE-RUNTIME falsifier substring-checks.
-    let ptx_text = codegen_emit_ptx_for_sm(mmodule, sm_arch)
-    let out_path = src_path + ".ptx"
-    write_file(out_path, ptx_text)
-    if !file_exists(out_path) { return 1 }
-    println("[nvptx] target=" + sm_arch + " src=" + src_path + " out=" + out_path + " phase=P3-PATH-B")
-    return 0
+    // let ptx_text = codegen_emit_ptx_for_sm(mmodule, sm_arch)
+    // (live pipeline gated; restore when compiler modules link into stage1)
 }
 
 fn cmd_build(src, out, c_only, target, shared) {
