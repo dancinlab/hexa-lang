@@ -1,0 +1,77 @@
+#!/usr/bin/env bash
+# .githooks/commit-msg — runtime/codegen silent-wipe guard (enforcement)
+# Background: see inbox/notes/2026-05-22-wipe-governance-proposal.md
+# Opt-in via:  git config core.hooksPath .githooks
+#
+# This guard lives in commit-msg (NOT pre-commit) because only the
+# commit-msg hook is reliably handed the final commit message file as $1.
+# A pre-commit hook reads a STALE .git/COMMIT_EDITMSG and cannot apply the
+# subject-keyword / WIPE-OK predicate correctly. The companion
+# .githooks/pre-commit is an informational warning only.
+set -euo pipefail
+
+# Paths we guard (matched against `git diff --cached`)
+GUARD_GLOBS=(
+  'stdlib/runtime/'
+  'self/runtime.c'
+  'self/runtime_core.c'
+  'self/runtime_arena.c'
+  'self/codegen_c2.hexa'
+  'compiler/check/bind.hexa'
+  'self/rt/core.hexa'
+)
+
+# Sum staged deletions in guarded paths
+dels=$(git diff --cached --numstat -- "${GUARD_GLOBS[@]}" 2>/dev/null \
+  | awk '{ sum += $2 } END { print sum+0 }')
+
+if [ "${dels:-0}" -lt 50 ]; then
+  exit 0
+fi
+
+# $1 is the commit message file, supplied by git to the commit-msg hook.
+msg_file="${1:-}"
+[ -n "$msg_file" ] && [ -f "$msg_file" ] || msg_file=$(git rev-parse --git-dir)/COMMIT_EDITMSG
+subject=""
+body=""
+if [ -f "$msg_file" ]; then
+  subject=$(grep -v '^#' "$msg_file" | head -n 1 || true)
+  body=$(grep -v '^#' "$msg_file" || true)
+fi
+
+# Allow if subject mentions any expected scope keyword
+if echo "$subject" | grep -qiE 'runtime|stdlib|codegen|rt_|RUNTIME|restore|re-land|recover'; then
+  exit 0
+fi
+
+# Escape hatch: WIPE-OK: <reason> trailer
+if echo "$body" | grep -qE '^WIPE-OK:'; then
+  exit 0
+fi
+
+# Block
+echo ""
+echo "------------------------------------------------------------"
+echo "BLOCKED: commit-msg silent-wipe guard"
+echo "------------------------------------------------------------"
+echo ""
+echo "This commit deletes ${dels} lines in runtime/codegen guarded paths"
+echo "but the subject line does not mention runtime/stdlib/codegen."
+echo ""
+echo "Subject: $subject"
+echo ""
+echo "Guarded files with staged deletions:"
+git diff --cached --numstat -- "${GUARD_GLOBS[@]}" \
+  | awk '$2 > 0 { printf "  -%-5d %s\n", $2, $3 }'
+echo ""
+echo "If this is intentional, add to commit message body:"
+echo ""
+echo "    WIPE-OK: <one-line reason>"
+echo ""
+echo "Otherwise restage without those files:"
+echo ""
+echo "    git restore --staged <file>"
+echo ""
+echo "Background: inbox/notes/2026-05-22-wipe-governance-proposal.md"
+echo "------------------------------------------------------------"
+exit 1

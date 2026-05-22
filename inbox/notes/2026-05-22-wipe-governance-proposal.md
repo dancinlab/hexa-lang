@@ -1,7 +1,12 @@
 # 2026-05-22 — Silent runtime/codegen wipe governance proposal
 
-**Status**: PROPOSAL · awaiting user approval
-**Branch**: main · doc-only (no hook installed yet)
+**Status**: IMPLEMENTED (hooks + project.tape @D landed) · activation awaiting user opt-in
+**Branch**: main · hooks installed in-repo, NOT activated (no `core.hooksPath` set)
+**Impl note**: enforcement moved from `.githooks/pre-commit` to `.githooks/commit-msg`
+— a pre-commit hook reads a STALE `.git/COMMIT_EDITMSG` and cannot apply the
+subject-keyword / WIPE-OK predicate. `commit-msg` is the only hook git hands
+the final message ($1). `.githooks/pre-commit` is retained as a non-blocking
+early-warning. Activate with: `git config core.hooksPath .githooks`
 **Author**: audit agent (read-only host pin = local)
 **SSOT corollary**: memory `feedback_worktree_merge_silent_filedrop` +
 `feedback_runtime_c_deploy_regen_wipe` (both pre-existing)

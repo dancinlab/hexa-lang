@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+# .githooks/pre-commit — runtime/codegen silent-wipe guard (early warning)
+# Background: see inbox/notes/2026-05-22-wipe-governance-proposal.md
+# Opt-in via:  git config core.hooksPath .githooks
+#
+# NOTE: enforcement (block/allow based on the commit subject + WIPE-OK
+# trailer) lives in the companion .githooks/commit-msg hook, because the
+# pre-commit phase cannot reliably read the final commit message
+# (.git/COMMIT_EDITMSG is stale here; git only hands the message file to
+# the commit-msg hook). This pre-commit hook only prints an EARLY WARNING
+# when a large guarded deletion is staged, so the author sees it before
+# the commit-msg gate fires. It never blocks.
+set -euo pipefail
+
+# Paths we guard (matched against `git diff --cached`)
+GUARD_GLOBS=(
+  'stdlib/runtime/'
+  'self/runtime.c'
+  'self/runtime_core.c'
+  'self/runtime_arena.c'
+  'self/codegen_c2.hexa'
+  'compiler/check/bind.hexa'
+  'self/rt/core.hexa'
+)
+
+# Sum staged deletions in guarded paths
+dels=$(git diff --cached --numstat -- "${GUARD_GLOBS[@]}" 2>/dev/null \
+  | awk '{ sum += $2 } END { print sum+0 }')
+
+if [ "${dels:-0}" -lt 50 ]; then
+  exit 0
+fi
+
+echo ""
+echo "------------------------------------------------------------"
+echo "NOTICE: pre-commit silent-wipe guard (early warning)"
+echo "------------------------------------------------------------"
+echo "This commit stages ${dels} deleted lines in runtime/codegen"
+echo "guarded paths. The commit-msg hook will BLOCK it unless the"
+echo "subject mentions runtime|stdlib|codegen|restore|... or the body"
+echo "carries a 'WIPE-OK: <reason>' trailer."
+echo ""
+echo "Guarded files with staged deletions:"
+git diff --cached --numstat -- "${GUARD_GLOBS[@]}" \
+  | awk '$2 > 0 { printf "  -%-5d %s\n", $2, $3 }'
+echo "------------------------------------------------------------"
+# Informational only — do not block here.
+exit 0
