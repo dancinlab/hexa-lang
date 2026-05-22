@@ -381,6 +381,60 @@ For each Tier-A sub-phase:
 
 ## Log
 
+### 2026-05-22 — step 3 cycle 107: map basic-op partial port (잔여 #5 partial discharge — 4 of 6 ops)
+
+After cycle 105 (B1 binary promotion) activated codegen-inline builtins
+in the shipped hexa_v2 binary, the **opaque-pointer escape** that was
+declared scope-creep for HexaMapTable now lands as a legitimate cycle.
+4 of 6 RUNTIME.md 잔여 #5 ops port from C to hexa-source:
+
+| op | verdict | new builtin / mechanism |
+|----|---------|--------------------------|
+| `hexa_map_contains_key` | ✅ ported | `__map_has_cstr_v(m, k)` → `static inline` `HX_MAP_TBL` + `hmap_find` + `hexa_fnv1a_str` |
+| `hexa_map_get` (hash branch) | ✅ ported | `__map_get_cstr_v(m, k)`; VALSTRUCT routing + miss diagnostic stay C-side |
+| `hexa_map_keys` | ✅ ported | `__map_order_key_at(m, i)` walks `t->order_keys` |
+| `hexa_map_values` | ✅ ported | `__map_order_val_at(m, i)` walks `t->order_vals` |
+| `hexa_map_set` | ❌ CORE-final | Robin Hood slot insert + `hxlcl_strdup` key intern + `hmap_grow` allocator |
+| `hexa_map_remove` | ❌ CORE-final | Robin Hood deletion + `free` + order-array compact |
+
+**Mechanism**: 4 new codegen-inline opaque builtins in self/codegen_c2.hexa
+(mirror of cycle-100 `__vs_ptr_eq` / `__map_ptr_eq` pattern). Each lowers
+to a single inline call into a `static inline` helper in self/runtime.h
+that reads `HexaMapTable` fields directly. To make those helpers possible,
+`hmap_find` + `hexa_fnv1a_str` had their `static` modifier dropped
+(additive extern, no semantic change) and re-declared in runtime.h.
+
+**Recursion gate**: the hexa-source bodies (`rt_map_keys` / `rt_map_values`
+/ `rt_map_contains_key_b` / `rt_map_get_v` in stdlib/runtime/numeric.hexa)
+MUST NOT use `m.keys()` / `m.get(k)` / `m.values()` method syntax —
+those lower to `hexa_map_*` which (with HEXA_HAS_HEXA_RT_STDLIB) dispatch
+back into rt_ for infinite recursion. The opaque builtins side-step by
+reading HexaMapTable directly. Same hazard pattern as cycle-30 cmp/add/sub
+and the `rt_str_byte_at` aliasing trap.
+
+**C dispatch wiring** (self/runtime_core.c) follows the cycle-38 pattern:
+`#ifdef HEXA_HAS_HEXA_RT_STDLIB` extern + `if (!HX_MAP_TBL(m)) return ...`
+guard + delegate. `hexa_map_get`'s VALSTRUCT branch + fprintf miss
+diagnostic stay C-side; the rt_ port returns TAG_VOID on miss and the C
+wrapper detects that and replays the legacy diagnostic.
+
+**Honest assessment**: 잔여 #5 moves from ❌ CORE-final to ⚠️ 4/6 ported.
+The remaining 2 (set + remove) are genuinely allocator-bound (key intern +
+table grow + Robin Hood deletion compact). 8/8 closure cannot be claimed
+— honest status is **6/8 ➜ 6/8** (set/remove + array allocator stay
+CORE-final, IO already closed via Step 5 #4). The cycle is meaningful
+progress on a previously-declared CORE-final item.
+
+**Files touched** (per @D `g_runtime_wipe_guard`):
+- self/runtime.h — 4 new `static inline` helpers + 2 extern decls
+- self/runtime_core.c — 4 `#ifdef HEXA_HAS_HEXA_RT_STDLIB` dispatch
+  sites; `hmap_find` + `hexa_fnv1a_str` de-staticized
+- self/codegen_c2.hexa — 4 emit branches near `__map_ptr_eq` + 4
+  `_is_builtin_name` registrations
+- compiler/check/bind.hexa — 4 names appended to allowlist
+- stdlib/runtime/numeric.hexa — 4 `pub fn rt_map_*` bodies
+- RUNTIME.md (this entry)
+
 ### 2026-05-22 — Step 3+4+5 COMPLETE (113 fns · 6/8 잔여 ported · 2 CORE-final · 5-wipe saga closed by hook)
 
 Cumulative across step 3 + step 4 + step 5: **~113 fns ported** to
@@ -394,7 +448,7 @@ FINAL status — **6 ported, 2 CORE-final**:
 | 2 | `hexa_to_string` | ✅ FULL | scalar c96 + array+map c104 |
 | 3 | `hexa_str_concat` | ✅ ported | Step5 #1 `b2ae2e9d` (realloc bug fix) |
 | 4 | `hexa_eq` | ✅ 9/9 CLOSED | STR c91 + ARRAY c97 + VOID/cross c100D + VALSTRUCT/MAP c100M + INT/FLOAT/BOOL c103 |
-| 5 | map basic ops | ❌ CORE-final | set/get/keys/values/remove — surface builtins lower to them; Robin Hood + intern malloc C-internal |
+| 5 | map basic ops | ⚠️ 4/6 ported | c107 contains_key+keys+values+get via `__map_has_cstr_v`/`__map_get_cstr_v`/`__map_order_key_at`/`__map_order_val_at` opaque builtins; set+remove remain CORE-final (Robin Hood mutation + strdup intern + grow) |
 | 6 | array allocators | ❌ CORE-final | `hexa_array_new`/`zeros`/`alloc` — `[]` lowers to `hexa_array_new` self-recursion; needs `__arr_alloc_items_zero` builtin (Step5 #2-bis attempt in flight) |
 | 7 | IO | ✅ 4/4 | `println`/`eprintln`/`eprint`/`print` c101+102 via `__fd_write_bytes` shim |
 | 8 | ValStruct repr | ✅ ported | c98 |

@@ -592,7 +592,7 @@ static uint32_t hexa_fnv1a(const char* s, size_t len) {
 }
 
 // Also used by the hash-map (#10)
-static uint32_t hexa_fnv1a_str(const char* s) {
+uint32_t hexa_fnv1a_str(const char* s) {
     uint32_t h = 2166136261u;
     for (; *s; s++) {
         h ^= (uint8_t)*s;
@@ -2160,7 +2160,7 @@ static void hmap_grow(HexaMapTable* t) {
 }
 
 // Find slot index for key, or -1 if not found.
-static int hmap_find(HexaMapTable* t, const char* key, uint32_t h) {
+int hmap_find(HexaMapTable* t, const char* key, uint32_t h) {
     uint32_t mask = (uint32_t)(t->ht_cap - 1);
     uint32_t idx = h & mask;
     while (t->slots[idx].key) {
@@ -2170,6 +2170,55 @@ static int hmap_find(HexaMapTable* t, const char* key, uint32_t h) {
     }
     return -1;
 }
+
+/* Step 3 cycle 107 - map basic-op opaque-pointer escape (RUNTIME.md
+ * remaining #5 partial discharge: contains_key + keys + values + get-by-
+ * cstr ported, set/remove remain CORE-final). The inline builtins
+ * __map_has_cstr_v / __map_get_cstr_v / __map_order_key_at /
+ * __map_order_val_at lower to direct accesses on HexaMapTable fields +
+ * hmap_find / hexa_fnv1a_str (de-staticized above). No new runtime
+ * symbol; helpers compose existing primitives.
+ *
+ * Placed in runtime_core.c (not runtime.h) so user-transpiled TUs which
+ * sed-include runtime.c (build_aprime stage 3) see the symbols. The
+ * codegen-inline emit in self/codegen_c2.hexa fully expands the call
+ * site to a direct invocation of these helpers; stale hexa_v2 binaries
+ * emit hexa_call2(__map_has_cstr_v, m, k) which resolves via the
+ * _Generic fn-ptr lane (HexaVal (*)(HexaVal, HexaVal)). */
+static inline HexaVal __map_has_cstr_v(HexaVal m, HexaVal key) {
+    HexaMapTable* t = HX_MAP_TBL(m);
+    if (!t) return hexa_bool(0);
+    const char* k = HX_STR(key);
+    if (!k) return hexa_bool(0);
+    return hexa_bool(hmap_find(t, k, hexa_fnv1a_str(k)) >= 0);
+}
+
+static inline HexaVal __map_get_cstr_v(HexaVal m, HexaVal key) {
+    HexaMapTable* t = HX_MAP_TBL(m);
+    if (!t) return hexa_void();
+    const char* k = HX_STR(key);
+    if (!k) return hexa_void();
+    int si = hmap_find(t, k, hexa_fnv1a_str(k));
+    if (si < 0) return hexa_void();
+    return t->vals[si];
+}
+
+static inline HexaVal __map_order_key_at(HexaVal m, HexaVal i) {
+    HexaMapTable* t = HX_MAP_TBL(m);
+    if (!t) return hexa_void();
+    int idx = (int)HX_INT(i);
+    if (idx < 0 || idx >= t->len) return hexa_void();
+    return hexa_str(t->order_keys[idx]);
+}
+
+static inline HexaVal __map_order_val_at(HexaVal m, HexaVal i) {
+    HexaMapTable* t = HX_MAP_TBL(m);
+    if (!t) return hexa_void();
+    int idx = (int)HX_INT(i);
+    if (idx < 0 || idx >= t->len) return hexa_void();
+    return t->order_vals[idx];
+}
+
 
 HexaVal hexa_map_new() {
     if (_hx_stats_on()) _hx_stats_map_new++;
@@ -2347,6 +2396,30 @@ HexaVal hexa_map_set(HexaVal m, const char* key, HexaVal val) {
     return m;
 }
 
+// Step-3 cycle 107 port (RUNTIME.md remaining #5 partial discharge):
+// dispatch the hash-lookup branch to rt_map_get_v when hexa-source
+// stdlib is present. VALSTRUCT routing + miss-diagnostic stays C-side
+// (cycle-38 pattern: HexaVal-typed surface, C handles tag-dispatch +
+// fprintf). rt_map_get_v returns void on miss; C wrapper detects
+// TAG_VOID and emits the diagnostic (matches the legacy semantic
+// exactly).
+#ifdef HEXA_HAS_HEXA_RT_STDLIB
+extern HexaVal rt_map_get_v(HexaVal m, HexaVal key);
+HexaVal hexa_map_get(HexaVal m, const char* key) {
+    if (HX_IS_VALSTRUCT(m)) {
+        return hexa_valstruct_get_by_key(m, key);
+    }
+    if (!HX_MAP_TBL(m)) {
+        fprintf(stderr, "map key '%s' not found\n", key);
+        return hexa_void();
+    }
+    HexaVal v = rt_map_get_v(m, hexa_str(key));
+    if (HX_TAG(v) == TAG_VOID) {
+        fprintf(stderr, "map key '%s' not found\n", key);
+    }
+    return v;
+}
+#else
 HexaVal hexa_map_get(HexaVal m, const char* key) {
     // rt 32-G: route Val field access to flat struct accessor.
     if (HX_IS_VALSTRUCT(m)) {
@@ -2363,6 +2436,7 @@ HexaVal hexa_map_get(HexaVal m, const char* key) {
     fprintf(stderr, "map key '%s' not found\n", key);
     return hexa_void();
 }
+#endif
 
 // ── rt#37: Inline cache for field access ─────────────────
 // Each call site of `obj.field` gets a static HexaIC slot. On hit, we skip
@@ -2455,6 +2529,16 @@ HexaVal hexa_map_get_ic_slow(HexaVal m, const char* key, HexaIC* ic) {
            : hexa_map_get_ic_slow(__ic_m, (KEY), __ic); })
 
 
+// Step-3 cycle 107 port (RUNTIME.md remaining #5 partial discharge):
+// dispatch to rt_map_keys when hexa-source stdlib is present. C body
+// retained for runtime.c standalone link.
+#ifdef HEXA_HAS_HEXA_RT_STDLIB
+extern HexaVal rt_map_keys(HexaVal m);
+HexaVal hexa_map_keys(HexaVal m) {
+    if (!HX_MAP_TBL(m)) return hexa_array_new();
+    return rt_map_keys(m);
+}
+#else
 HexaVal hexa_map_keys(HexaVal m) {
     HexaVal arr = hexa_array_new();
     if (!HX_MAP_TBL(m)) return arr;
@@ -2465,7 +2549,17 @@ HexaVal hexa_map_keys(HexaVal m) {
     }
     return arr;
 }
+#endif
 
+// Step-3 cycle 107 port (RUNTIME.md remaining #5 partial discharge):
+// dispatch to rt_map_values when hexa-source stdlib is present.
+#ifdef HEXA_HAS_HEXA_RT_STDLIB
+extern HexaVal rt_map_values(HexaVal m);
+HexaVal hexa_map_values(HexaVal m) {
+    if (!HX_MAP_TBL(m)) return hexa_array_new();
+    return rt_map_values(m);
+}
+#else
 HexaVal hexa_map_values(HexaVal m) {
     HexaVal arr = hexa_array_new();
     if (!HX_MAP_TBL(m)) return arr;
@@ -2476,12 +2570,27 @@ HexaVal hexa_map_values(HexaVal m) {
     }
     return arr;
 }
+#endif
 
+// Step-3 cycle 107 port (RUNTIME.md remaining #5 partial discharge):
+// dispatch to rt_map_contains_key_b when hexa-source stdlib is present.
+// C wrapper handles the const char* -> HexaVal string boxing so the hexa
+// port can stay HexaVal-typed end-to-end.
+#ifdef HEXA_HAS_HEXA_RT_STDLIB
+// rt_ port returns HexaVal (bool tag wrapper); hexa_truthy unwraps to int
+// (cycle-54 int-return bridge pattern).
+extern HexaVal rt_map_contains_key_b(HexaVal m, HexaVal key);
+int hexa_map_contains_key(HexaVal m, const char* key) {
+    if (!HX_MAP_TBL(m)) return 0;
+    return hexa_truthy(rt_map_contains_key_b(m, hexa_str(key)));
+}
+#else
 int hexa_map_contains_key(HexaVal m, const char* key) {
     if (!HX_MAP_TBL(m)) return 0;
     uint32_t h = hexa_fnv1a_str(key);
     return hmap_find(HX_MAP_TBL(m), key, h) >= 0;
 }
+#endif
 
 // entries: flat array of [key, value] pairs. Keys come out as strings
 // (HexaMap stores keys as char*). Matches interpreter semantics at

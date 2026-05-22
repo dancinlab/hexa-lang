@@ -1105,6 +1105,11 @@ fn _bind_builtin_names() -> [string] {
         // stdlib/runtime/numeric.hexa::rt_eq_valstruct + rt_eq_map_ptr can
         // express raw struct-pointer compare from hexa source.
         "__vs_ptr_eq", "__map_ptr_eq",
+        // RUNTIME.md step-3 cycle 107 — map basic-op opaque-pointer
+        // escape (잔여 #5 partial discharge: contains_key + keys + values
+        // + get hexa-ported, set/remove remain CORE-final).
+        "__map_has_cstr_v", "__map_get_cstr_v",
+        "__map_order_key_at", "__map_order_val_at",
         // RFC 071 P5++ — GPU matmul builtins. Source-level entry points
         // that the HIR→MIR lowering pattern-synthesises into the
         // STMT_LOAD + STMT_LOAD + STMT_BINOP("matmul"/_NT_a/_NT_b) +
