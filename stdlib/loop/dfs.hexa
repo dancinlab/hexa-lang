@@ -27,7 +27,6 @@
 
 use "compiler/lenses/types"
 use "compiler/atlas/parser"
-use "compiler/atlas/overlay"
 use "stdlib/loop/state"
 use "stdlib/io"
 
@@ -35,6 +34,13 @@ use "stdlib/io"
 // token usage, so cost is necessarily an over-estimate; see RFC 080 §honest).
 let DFS_USD_PER_MTOK = 5.0
 let DFS_CHARS_PER_TOK = 4
+
+// Phase M (--target-absorb N) — session-wide accumulator. When the user
+// runs hexa loop --dfs with `--target-absorb N`, individual dfs_run calls
+// defer their per-cycle PR; verified children pile up here across cycles
+// until the cumulative count reaches N (or progress halts), at which
+// point one PR is opened with the entire batch.
+let mut _g_dfs_session_absorbed: array = []
 
 // ── tiny local helpers (state.hexa equivalents are private) ──────────
 
@@ -450,26 +456,27 @@ fn _dfs_chain_append(cycle: int, parent_slug: string, child_slug: string, family
     let _ = exec("printf '%s' " + _dfs_shq(row) + " >> " + _dfs_shq(path))
 }
 
-// ── Phase K: atlas overlay absorption ───────────────────────────────
+// ── Phase L: direct-PR absorption (supersedes Phase K overlay write) ──
 //
-// Verified DFS children flow into the SAME overlay export stream the drill
-// engine already uses (`<HX_DATA_DIR>/atlas.overlay.n6`, see
-// compiler/atlas/overlay.hexa + compiler/drill/round.hexa::_cand_to_n6).
-// This is the established "discovery → 3+ hits → promote" pipeline:
+// Phase K wrote verified children to <HX_DATA_DIR>/atlas.overlay.n6 — a
+// LOCAL discovery stream awaiting human "3+ hits → promote" PR. Phase L
+// removes that local-file intermediate: each dfs_run with verified
+// children produces a GitHub PR directly. The PR adds an
+// `n6/atlas.append.dfs_<cycle>_<ts>.n6` shard (per @D h_atlas_single_export:
+// staging shards merge into the atlas SSOT n6/atlas.n6). On merge, the
+// `compiler/atlas/merger::load_atlas` path picks the new nodes up.
 //
-//   • overlay is EXPORT-ONLY (overlay.hexa explicitly retires the runtime
-//     load path — atlas remains binary built-in, governance @D
-//     g_atlas_binary_builtin preserved)
-//   • DFS + drill share one overlay stream → unified discovery corpus
-//   • promotion to embedded.gen stays PR-only (the human gate)
+// Tape line format mirrors drill's `_cand_to_n6`: `@P <slug> :: dfs [3?]`
+// header + `<- cite1, cite2` (depends_on) + `=> "<proposal>"`
+// (applications). Grade `3?` = tier-3 hypothesis pending verification
+// (cf. tool/verify_cli.hexa rubric — 🔵/🟡/🟠/⚪). `dfs` source tag
+// distinguishes from drill's `smash/free/absolute/...`.
 //
-// Tape line format mirrors drill's `_cand_to_n6`, adapted for the
-// proposal-bearing Candidate: `@P <slug> :: dfs [3?]` header +
-// `<- cite1, cite2` (depends_on) + `=> "<proposal>"` (applications).
-// Grade `3?` follows nexus convention: tier-3 hypothesis pending
-// verification (cf. tool/verify_cli.hexa's tier rubric — 🔵/🟡/🟠/⚪).
+// Governance: @D g_llm_pluggable + g_atlas_binary_builtin both honored.
+// The PR adds a STAGING shard (not embedded.gen), and a human reviews
+// the PR before the merger absorbs it into the baked atlas.
 
-fn _dfs_cand_to_n6(c: Candidate) -> string {
+pub fn _dfs_cand_to_n6(c: Candidate) -> string {
     let mut parts: array = []
     parts.push("@P ")
     parts.push(c.slug)
@@ -493,18 +500,104 @@ fn _dfs_cand_to_n6(c: Candidate) -> string {
     return parts.join("")
 }
 
-// Append a verified Candidate to the overlay export stream. Uses
-// overlay_path() to share the canonical location with drill, but writes
-// directly via exec append (mirrors _dfs_chain_append) instead of going
-// through overlay_append_lines — the latter mutates a module-level
-// _g_overlay_meta cache that destabilizes after repeated calls in this
-// compile target. The on-disk format is identical, so the merged-discovery
-// pipeline (drill rounds + DFS children share atlas.overlay.n6) is intact.
-fn _dfs_absorb_to_overlay(c: Candidate) {
-    let path = overlay_path()
-    let _ = exec("mkdir -p \"$(dirname " + _dfs_shq(path) + ")\"")
-    let line = _dfs_cand_to_n6(c) + "\n"
-    let _ = exec("printf '%s' " + _dfs_shq(line) + " >> " + _dfs_shq(path))
+// Open a GitHub PR with the cycle's verified DFS children as an atlas
+// staging shard (n6/atlas.append.dfs_<cycle>_<ts>.n6). Replaces Phase K's
+// local overlay write — no intermediate file in ~/.hx/data; the PR itself
+// IS the absorption record. Uses a throw-away git worktree under /tmp so
+// the user's working tree is untouched.
+//
+// Repo location: $HEXA_LANG (the hexa-lang clone). gh + git inherit the
+// user's credentials. No-op silently if HEXA_LANG missing, gh not on PATH,
+// or len(children)==0 (callers gate on those preconditions but defense
+// in depth).
+fn _dfs_open_pr(children: array, cycle_no: int) {
+    let n = len(children)
+    if n == 0 { return }
+    // Test-mode guard — set by `tests/loop/dfs_test.hexa` runner so the
+    // self-test does NOT push to origin / open a real PR.
+    if env("HEXA_DFS_NO_PR") == "1" {
+        println("  [dfs] absorption: skipped (HEXA_DFS_NO_PR=1, test mode) — would PR " + to_string(n) + " children")
+        return
+    }
+    let repo = env("HEXA_LANG")
+    if len(repo) == 0 {
+        println("  [dfs] absorption skipped — HEXA_LANG unset (cannot locate repo)")
+        return
+    }
+    let gh_check = exec("command -v gh >/dev/null 2>&1 && echo Y || echo N").trim()
+    if gh_check != "Y" {
+        println("  [dfs] absorption skipped — gh CLI not on PATH")
+        return
+    }
+
+    let ts = to_string(_dfs_now_epoch())
+    let branch = "rfc-080-dfs-cycle-" + to_string(cycle_no) + "-" + ts
+    let workdir = "/tmp/dfs-pr-" + ts
+
+    // Stage the shard in a throw-away worktree off origin/main so the
+    // user's working tree never flips branches mid-run.
+    let _ = exec("git -C " + _dfs_shq(repo) + " fetch origin main 2>/dev/null")
+    let add = exec("git -C " + _dfs_shq(repo) + " worktree add " + _dfs_shq(workdir) + " -b " + _dfs_shq(branch) + " origin/main 2>&1").trim()
+    if add.index_of("fatal") >= 0 {
+        println("  [dfs] absorption skipped — worktree add failed: " + add)
+        return
+    }
+
+    let shard_rel = "n6/atlas.append.dfs_cycle_" + to_string(cycle_no) + "_" + ts + ".n6"
+    let shard_path = workdir + "/" + shard_rel
+    let mut content = "# Auto-absorbed by hexa loop --dfs (RFC 080 Phase L)\n"
+                    + "# cycle " + to_string(cycle_no) + " · "
+                    + to_string(n) + " verified DFS children\n\n"
+    let mut i = 0
+    while i < n {
+        content = content + _dfs_cand_to_n6(children[i]) + "\n\n"
+        i = i + 1
+    }
+    let _ = write_text(shard_path, content)
+
+    let title = "absorb(dfs): cycle " + to_string(cycle_no) + " — " + to_string(n) + " verified DFS children"
+    let body = "Auto-absorbed by `hexa loop --dfs` (RFC 080 Phase L).\n\n"
+             + to_string(n) + " verified children, tape format `@P <slug> :: dfs [3?]`. "
+             + "Per `@D h_atlas_single_export`, this staging shard merges into `n6/atlas.n6` on merge.\n\n"
+             + "Children pending verify — promote any tier-3? entry by running `hexa verify <slug>`.\n\n"
+             + "Generated with [Claude Code](https://claude.com/claude-code)\n"
+
+    let _ = exec("git -C " + _dfs_shq(workdir) + " add " + _dfs_shq(shard_rel))
+    let commit_msg = title + "\n\nAuto-absorbed by hexa loop --dfs (RFC 080 Phase L).\n\nCo-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>\n"
+    let _ = exec("git -C " + _dfs_shq(workdir) + " commit -m " + _dfs_shq(commit_msg) + " 2>&1")
+    let push_out = exec("git -C " + _dfs_shq(workdir) + " push -u origin " + _dfs_shq(branch) + " 2>&1").trim()
+    if push_out.index_of("error") >= 0 || push_out.index_of("fatal") >= 0 {
+        println("  [dfs] absorption push failed: " + push_out)
+    } else {
+        let pr_out = exec("gh pr create --repo dancinlab/hexa-lang --base main --head " + _dfs_shq(branch) + " --title " + _dfs_shq(title) + " --body " + _dfs_shq(body) + " 2>&1").trim()
+        println("  [dfs] absorbed -> PR: " + pr_out)
+    }
+
+    // Clean up the throw-away worktree; branch stays on origin.
+    let _ = exec("git -C " + _dfs_shq(repo) + " worktree remove --force " + _dfs_shq(workdir) + " 2>/dev/null")
+    let _ = exec("git -C " + _dfs_shq(repo) + " worktree prune 2>/dev/null")
+}
+
+// ── Phase M: --target-absorb N session helpers ──────────────────────
+//
+// In target mode the caller (cycle.hexa main) wraps run_one_cycle in a
+// multi-cycle loop and passes defer_pr=true through to dfs_run. Each
+// dfs_run still verifies + emits to inbox + pushes children into the
+// module-level `_g_dfs_session_absorbed` but skips opening a per-cycle
+// PR. When the cycle loop terminates (target met OR exhausted), the
+// caller invokes `dfs_session_open_pr()` to ship ONE batched PR with
+// the entire session's harvest.
+
+pub fn dfs_session_reset() {
+    _g_dfs_session_absorbed = []
+}
+
+pub fn dfs_session_count() -> int {
+    return len(_g_dfs_session_absorbed)
+}
+
+pub fn dfs_session_open_pr() {
+    _dfs_open_pr(_g_dfs_session_absorbed, 0)
 }
 
 // ── Phase F: frontier persistence for --resume ──────────────────────
@@ -655,12 +748,14 @@ fn _dfs_emit_child(parent_slug: string, child: Candidate, depth: int) {
 pub fn dfs_run(seeds: array, view: AtlasView, cycle_no: int,
                cmd: string, max_depth: int, beam: int,
                max_calls: int, max_usd: float, max_secs: int,
-               allow_llm: bool, families_csv: string, no_cache: bool) -> int {
+               allow_llm: bool, families_csv: string, no_cache: bool,
+               defer_pr: bool) -> int {
     let start_epoch = _dfs_now_epoch()
     let mut frontier = seeds
     let mut calls = 0
     let mut cost = 0.0
     let mut emitted = 0
+    let mut absorbed: array = []   // Phase L — verified children for the end-of-run absorption PR
     let mut budget_hit = false
     let mut bstart = -1   // index of first unprocessed parent when budget hit (Phase F resume)
 
@@ -729,7 +824,8 @@ pub fn dfs_run(seeds: array, view: AtlasView, cycle_no: int,
                 }
                 _dfs_emit_child(parent.slug, child, depth + 1)
                 _dfs_chain_append(cycle_no, parent.slug, child.slug, child.family, depth + 1, call_cost)
-                _dfs_absorb_to_overlay(child)   // Phase K — feed unified discovery stream (drill shares this overlay)
+                absorbed.push(child)   // Phase L — batch for end-of-run absorption PR (replaces Phase K overlay write)
+                _g_dfs_session_absorbed.push(child)   // Phase M — also accumulate session-wide for --target-absorb batched PR
                 emitted = emitted + 1
                 // fire_needed at depth>0 defers (axis 5.iv) — not carried.
                 if child.fire_needed == false && len(next) < frontier_max {
@@ -757,10 +853,16 @@ pub fn dfs_run(seeds: array, view: AtlasView, cycle_no: int,
     // Clean completion (no budget cut) — drop any stale resume frontier.
     if budget_hit == false { dfs_frontier_clear() }
 
+    // Phase L — single end-of-run absorption PR with every verified child
+    // (replaces Phase K per-child local overlay write). Skipped when
+    // defer_pr is true (Phase M --target-absorb batches across cycles).
+    if defer_pr == false { _dfs_open_pr(absorbed, cycle_no) }
+
     println("  [dfs] done: depth_reached=" + to_string(depth)
           + " calls=" + to_string(calls)
           + " cost_usd_est=" + to_string(cost)
           + " emitted=" + to_string(emitted)
+          + " absorbed=" + to_string(len(absorbed)) + " (PR if >0)"
           + " budget_hit=" + _dfs_bool_str(budget_hit))
     return emitted
 }
