@@ -1123,7 +1123,6 @@ static int __attribute__((noinline)) hxlcl_darwin_check_fd_set_overflow(int fd, 
 #include <unistd.h>
 #include <fcntl.h>
 #include <sys/types.h>
-#include <dirent.h>          /* opendir/readdir/closedir — see hexa_list_dir (2026-05-22 segfault fix) */
 #include <sys/stat.h>
 #include <sys/mman.h>
 #include <sys/select.h>
