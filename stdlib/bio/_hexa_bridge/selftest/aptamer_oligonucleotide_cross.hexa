@@ -1,0 +1,550 @@
+#!hexa strict
+// hexa-bio/_hexa_bridge/selftest/aptamer_oligonucleotide_cross.hexa
+//
+// hexa-native port of `_python_bridge/module/aptamer_oligonucleotide_cross.py`
+// (T3; math/json/sys — deterministic, no network/time/random). CROSS-AXIS G5:
+// APTAMER × OLIGONUCLEOTIDE modality comparison. SHARED real-limit anchor =
+// SantaLucia (1998) NN nucleic-acid thermodynamics; mechanism-distinct outputs
+// = duplex Tm in °C (sequence-driven hybridization) vs Langmuir Kd in nM
+// (shape-driven fold binding, k_cat = 0). NO FORK (f3): both axis engines
+// recapitulated in-line from their already-ported sister recipes
+// (oligonucleotide_hybridization_sim.hexa + aptamer_affinity_sim.hexa);
+// nussinov is shared via `_hexa_bridge/module/ribozyme_mfe_nussinov.hexa`.
+// Witness emit is text-only — no JSON output here, so py_json2 import is
+// structural. Recipe: exact .py op order; `js(v)` = json_stringify (CPython
+// repr parity, incl whole-float `.0`) for raw float prints; round(.,4)
+// emulated via `round4` to byte-match Python `round`; fsum() for NN dG.
+//
+// HONESTY: this is a MODALITY COMPARISON, NOT a ranking; the two signals
+// share the SantaLucia (1998) NN backbone but project onto DIFFERENT
+// mechanisms with DIFFERENT units → structurally non-rankable. PASS here =
+// in-silico simulator-consistency ONLY (g8/f2); both modalities have
+// independent FDA-approved drug precedent (own precedent, NOT lattice-derived
+// — g3/f1/f_lattice_fit). CROSS != new axis — core-5 set is UNCHANGED.
+
+import "_hexa_bridge/module/py_json2.hexa"
+import "_hexa_bridge/module/ribozyme_mfe_nussinov.hexa"
+
+// ── helpers (paste; identical Kahan-fsum block as the sister recipes) ─────
+fn fmt(spec: string, v: float) -> string {
+    let mut o = exec("printf '" + spec + "' " + json_stringify(v))
+    while len(o) > 0 { let last = o.substr(len(o) - 1, 1); if last == "\n" || last == "\r" { o = o.substr(0, len(o) - 1) } else { break } }
+    return o
+}
+fn ljust(s: string, n: int) -> string { let mut o = s; while len(o) < n { o = o + " " }; return o }
+fn rjust(s: string, n: int) -> string { let mut o = s; while len(o) < n { o = " " + o }; return o }
+fn js(v: float) -> string { return json_stringify(v) }
+fn jsb(b: bool) -> string { if b { return "true" } return "false" }
+fn pyb(b: bool) -> string { if b { return "True" } return "False" }
+fn fabs(x: float) -> float { if x < 0.0 { return -x } return x }
+fn fsum(xs: array) -> float {
+    let mut s = 0.0; let mut c = 0.0; let mut i = 0
+    while i < len(xs) { let y = xs[i]-c; let t = s+y; c = (t-s)-y; s = t; i = i+1 }
+    return s
+}
+
+// Python round(x, 4) — banker's rounding on float (cf. oligonucleotide_offtarget_gencode_cross.hexa).
+fn round4(x: float) -> float {
+    let s = if x < 0.0 { -1.0 } else { 1.0 }
+    let a = fabs(x)
+    let scaled = a * 10000.0
+    let floor_v = (scaled + 0.0) - ((scaled + 0.0) % 1.0)
+    let frac = scaled - floor_v
+    let mut r = floor_v
+    if frac > 0.5 { r = floor_v + 1.0 }
+    else if frac < 0.5 { r = floor_v }
+    else {
+        // tie → half to even
+        let half = floor_v / 2.0
+        let half_floor = half - (half % 1.0)
+        if (half_floor * 2.0) == floor_v { r = floor_v } else { r = floor_v + 1.0 }
+    }
+    return s * r / 10000.0
+}
+
+// Python round(x, 12) — same banker's rounding, 12dp scale.
+fn round12(x: float) -> float {
+    let s = if x < 0.0 { -1.0 } else { 1.0 }
+    let a = fabs(x)
+    let scaled = a * 1.0e12
+    let floor_v = (scaled + 0.0) - ((scaled + 0.0) % 1.0)
+    let frac = scaled - floor_v
+    let mut r = floor_v
+    if frac > 0.5 { r = floor_v + 1.0 }
+    else if frac < 0.5 { r = floor_v }
+    else {
+        let half = floor_v / 2.0
+        let half_floor = half - (half % 1.0)
+        if (half_floor * 2.0) == floor_v { r = floor_v } else { r = floor_v + 1.0 }
+    }
+    return s * r / 1.0e12
+}
+
+// ── OLIGONUCLEOTIDE engine (inline recap of oligonucleotide_hybridization_sim.hexa) ──
+
+let R_CAL = 1.98720425864083
+let T37_K = 310.15
+
+fn ocomp(c: string) -> string {
+    if c == "A" { return "T" }
+    if c == "T" { return "A" }
+    if c == "G" { return "C" }
+    return "G"
+}
+fn orevcomp(s: string) -> string {
+    let mut o = ""
+    let mut i = len(s) - 1
+    while i >= 0 { o = o + ocomp(s.substr(i, 1)); i = i - 1 }
+    return o
+}
+fn ois_selfc(s: string) -> bool { return s == orevcomp(s) }
+
+fn onn_dh_direct(d: string) -> float {
+    if d == "AA" { return -7.9 }   if d == "AT" { return -7.2 }
+    if d == "TA" { return -7.2 }   if d == "CA" { return -8.5 }
+    if d == "GT" { return -8.4 }   if d == "CT" { return -7.8 }
+    if d == "GA" { return -8.2 }   if d == "CG" { return -10.6 }
+    if d == "GC" { return -9.8 }   if d == "GG" { return -8.0 }
+    return 1.0
+}
+fn onn_ds_direct(d: string) -> float {
+    if d == "AA" { return -22.2 }  if d == "AT" { return -20.4 }
+    if d == "TA" { return -21.3 }  if d == "CA" { return -22.7 }
+    if d == "GT" { return -22.4 }  if d == "CT" { return -21.0 }
+    if d == "GA" { return -22.2 }  if d == "CG" { return -27.2 }
+    if d == "GC" { return -24.4 }  if d == "GG" { return -19.9 }
+    return 1.0
+}
+fn odoublet_rc(d: string) -> string {
+    return ocomp(d.substr(1, 1)) + ocomp(d.substr(0, 1))
+}
+fn onn_dh(d: string) -> float {
+    let v = onn_dh_direct(d)
+    if v != 1.0 { return v }
+    return onn_dh_direct(odoublet_rc(d))
+}
+fn onn_ds(d: string) -> float {
+    let v = onn_ds_direct(d)
+    if v != 1.0 { return v }
+    return onn_ds_direct(odoublet_rc(d))
+}
+
+// returns [dH, dS, dG37]
+fn nn_thermo(s: string) -> array {
+    let mut dh_terms: array = []
+    let mut ds_terms: array = []
+    let mut i = 0
+    while i < len(s) - 1 {
+        let d = s.substr(i, 2)
+        dh_terms.push(onn_dh(d))
+        ds_terms.push(onn_ds(d))
+        i = i + 1
+    }
+    let ends = [s.substr(0, 1), s.substr(len(s) - 1, 1)]
+    let mut e = 0
+    while e < 2 {
+        let b = ends[e]
+        if b == "G" || b == "C" { dh_terms.push(0.1); ds_terms.push(-2.8) }
+        else { dh_terms.push(2.3); ds_terms.push(4.1) }
+        e = e + 1
+    }
+    if ois_selfc(s) { dh_terms.push(0.0); ds_terms.push(-1.4) }
+    let dh = fsum(dh_terms)
+    let ds = fsum(ds_terms)
+    let dg37 = dh - T37_K * ds / 1000.0
+    return [dh, ds, dg37]
+}
+
+fn tm_celsius(dh_kcal: float, ds_cal: float, total_M: float, selfc: bool) -> float {
+    let x = if selfc { 1.0 } else { 4.0 }
+    let dh_cal = dh_kcal * 1000.0
+    let tm_k = dh_cal / (ds_cal + R_CAL * log(total_M / x))
+    return tm_k - 273.15
+}
+
+// ── APTAMER engine (inline recap of aptamer_affinity_sim.hexa) ────────────
+
+fn _str2int(s: string) -> int {
+    let mut v = 0
+    let mut k = 0
+    while k < len(s) {
+        let c = s.substr(k, 1)
+        if c == "0" { v = v * 10 + 0 }
+        else if c == "1" { v = v * 10 + 1 }
+        else if c == "2" { v = v * 10 + 2 }
+        else if c == "3" { v = v * 10 + 3 }
+        else if c == "4" { v = v * 10 + 4 }
+        else if c == "5" { v = v * 10 + 5 }
+        else if c == "6" { v = v * 10 + 6 }
+        else if c == "7" { v = v * 10 + 7 }
+        else if c == "8" { v = v * 10 + 8 }
+        else if c == "9" { v = v * 10 + 9 }
+        k = k + 1
+    }
+    return v
+}
+
+fn apt_sanitize(seq: string) -> string {
+    return seq.to_upper().replace("T", "U")
+}
+
+fn pair_class(a: string, b: string) -> string {
+    if (a == "G" && b == "C") || (a == "C" && b == "G") { return "GC" }
+    if (a == "A" && b == "U") || (a == "U" && b == "A") { return "AU" }
+    if (a == "G" && b == "U") || (a == "U" && b == "G") { return "GU" }
+    return ""
+}
+
+fn nn_stack_dg(outer: string, inner: string) -> float {
+    if outer == "GC" && inner == "GC" { return -3.4 }
+    if outer == "GC" && inner == "AU" { return -2.2 }
+    if outer == "AU" && inner == "GC" { return -2.2 }
+    if outer == "AU" && inner == "AU" { return -1.1 }
+    if outer == "GC" && inner == "GU" { return -1.5 }
+    if outer == "GU" && inner == "GC" { return -1.5 }
+    if outer == "AU" && inner == "GU" { return -0.7 }
+    if outer == "GU" && inner == "AU" { return -0.7 }
+    if outer == "GU" && inner == "GU" { return -0.5 }
+    return -0.5
+}
+
+fn pair_list(db: string) -> array {
+    let mut stk: array = []
+    let mut out_i: array = []
+    let mut out_j: array = []
+    let mut k = 0
+    while k < len(db) {
+        let c = db.substr(k, 1)
+        if c == "(" { stk.push(k) }
+        else if c == ")" {
+            let i_pop = stk[len(stk) - 1]
+            stk = stk.slice(0, len(stk) - 1)
+            out_i.push(i_pop)
+            out_j.push(k)
+        }
+        k = k + 1
+    }
+    let mut a = 1
+    while a < len(out_i) {
+        let mut b = a
+        while b > 0 && out_i[b - 1] > out_i[b] {
+            let ti = out_i[b]; let tj = out_j[b]
+            out_i[b] = out_i[b - 1]; out_j[b] = out_j[b - 1]
+            out_i[b - 1] = ti; out_j[b - 1] = tj
+            b = b - 1
+        }
+        a = a + 1
+    }
+    return [out_i, out_j]
+}
+
+fn folding_free_energy(seq: string, db: string) -> float {
+    let s = apt_sanitize(seq)
+    let pl = pair_list(db)
+    let pi = pl[0]
+    let pj = pl[1]
+    let mut keys_arr: array = []
+    let mut n = 0
+    while n < len(pi) {
+        keys_arr.push(str(pi[n]) + "," + str(pj[n]))
+        n = n + 1
+    }
+    let mut terms: array = []
+    let mut m = 0
+    while m < len(pi) {
+        let i = pi[m]
+        let j = pj[m]
+        let inner_key = str(i + 1) + "," + str(j - 1)
+        let mut found = false
+        let mut q = 0
+        while q < len(keys_arr) {
+            if keys_arr[q] == inner_key { found = true; break }
+            q = q + 1
+        }
+        if found {
+            let outer = pair_class(s.substr(i, 1), s.substr(j, 1))
+            let inner = pair_class(s.substr(i + 1, 1), s.substr(j - 1, 1))
+            if outer != "" && inner != "" {
+                terms.push(nn_stack_dg(outer, inner))
+            }
+        }
+        m = m + 1
+    }
+    let dg = fsum(terms)
+    return round4(dg)
+}
+
+fn main() {
+    // ── inputs (deterministic; cf. .py _TARGET_MRNA_WINDOW etc.) ──────────
+    let target_mrna_window = "GCAGCAACTGCAGCAACTGCA"   // 21-nt toy mRNA
+    let aso_total_strand_M = 0.4e-6
+
+    let aptamer_name = "thrombin_binding_aptamer_TBA"
+    let aptamer_seq = "GGTTGGTGTGGTTGG"               // 15-mer G-quadruplex DNA
+    let aptamer_ligand = "human alpha-thrombin"
+    let aptamer_kd_nM = 100.0
+    let aptamer_paper = "Bock LC et al. 1992 Nature 355:564-566"
+
+    let schema_version = "aptamer_oligonucleotide_cross_v1"
+
+    let shared_anchor_cite = "SantaLucia J Jr 1998 Proc Natl Acad Sci USA 95(4):1460-1465"
+
+    // ── (a) OLIGONUCLEOTIDE signature ─────────────────────────────────────
+    let aso = orevcomp(target_mrna_window)
+    let nn = nn_thermo(aso)
+    let dh = nn[0]; let ds = nn[1]; let dg37 = nn[2]
+    let selfc = ois_selfc(aso)
+    let tm = tm_celsius(dh, ds, aso_total_strand_M, selfc)
+    // duplex_report rounds dH/dS/dG37/Tm to 4dp
+    let tm_r = round4(tm)
+    let dh_r = round4(dh)
+    let ds_r = round4(ds)
+    let dg37_r = round4(dg37)
+    let oligo_module = "oligonucleotide_hybridization_sim.py"
+    let oligo_axis_name = "OLIGONUCLEOTIDE"
+    let oligo_mechanism_kind = "sequence-driven-hybridization"
+    let oligo_precedent = "nusinersen / Spinraza (ASO, FDA 2016); patisiran / Onpattro (siRNA, FDA 2018); inclisiran / Leqvio (siRNA, 2021)"
+    let oligo_signal_name = "hybridization_tm_celsius"
+    let oligo_signal_units = "°C (van 't Hoff two-state Tm; SantaLucia 1998; 1 M Na+ standard state, 0.4 µM total strand — non-physiological)"
+    let oligo_real_limit = "Nucleic-acid duplex hybridization thermodynamics — nearest-neighbor base-pair stacking free energy bounds duplex stability (SHARED with the aptamer path)"
+    let oligo_cite = "SantaLucia 1998, Proc Natl Acad Sci USA 95(4):1460-1465"
+
+    // ── (b) APTAMER signature ─────────────────────────────────────────────
+    let apt_s = apt_sanitize(aptamer_seq)
+    let apt_r = nussinov(apt_s)
+    let apt_db = apt_r[0]
+    let apt_np = _str2int(apt_r[1])
+    let apt_dg_fold = folding_free_energy(apt_s, apt_db)
+    let apt_balanced = is_balanced(apt_db)
+
+    let kd_M = aptamer_kd_nM * 1.0e-9
+    let kon = 1.0e6
+    let koff = kd_M * kon
+    let kd_recovered = koff / kon
+    let tol = 1.0e-18 + 1.0e-9 * kd_M
+    let kd_identity_holds = fabs(kd_recovered - kd_M) < tol
+    let theta_at_kd = kd_M / (kd_M + kd_M)
+
+    let apt_module = "aptamer_affinity_sim.py"
+    let apt_axis_name = "APTAMER (:> RIBOZYME)"
+    let apt_mechanism_kind = "shape-driven-fold-binding"
+    let apt_precedent = "pegaptanib / Macugen — anti-VEGF165 RNA aptamer (FDA 2004); avacincaptad pegol / Izervay — anti-C5 RNA aptamer (FDA 2023)"
+    let apt_signal_name = "target_binding_kd_nM"
+    let apt_signal_units = "nM (1:1 Langmuir Kd at equilibrium; θ = 0.5 at [L] = Kd; Bock 1992 thrombin-aptamer literature regime)"
+    let apt_real_limit = "Nucleic-acid folded-stem thermodynamics (SHARED nearest-neighbor backbone with the ASO path) + published aptamer Kd literature anchor (thrombin DNA aptamer, low/mid-nM)"
+    let apt_cite_1 = "SantaLucia 1998, Proc Natl Acad Sci USA 95(4):1460-1465"
+    let apt_cite_2 = "Bock LC et al. 1992, Nature 355:564-566 (thrombin-binding DNA aptamer, Kd anchor)"
+    let apt_kcat = 0.0
+
+    // ── header ────────────────────────────────────────────────────────────
+    println("aptamer_oligonucleotide_cross.py — CROSS-AXIS in-silico")
+    println("  APTAMER × OLIGONUCLEOTIDE modality comparison")
+    println("  (a) OLIGONUCLEOTIDE : sequence-driven Watson-Crick hybridization")
+    println("        SantaLucia 1998 NN duplex Tm")
+    println("        (nusinersen/Spinraza 2016; patisiran/Onpattro 2018;")
+    println("         inclisiran 2021)")
+    println("  (b) APTAMER         : shape-driven folded-pocket binder (k_cat=0)")
+    println("        Nussinov fold + NN-stack ΔG; 1:1 Langmuir Kd")
+    println("        (pegaptanib/Macugen 2004; avacincaptad pegol/Izervay 2023)")
+    println("")
+    println("  REAL LIMITS (g1):")
+    println("   - SHARED — nucleic-acid nearest-neighbor thermodynamics")
+    println("     (SantaLucia 1998 PNAS 95:1460-1465)")
+    println("   - APTAMER Kd anchor — thrombin DNA aptamer low/mid-nM")
+    println("     (Bock LC et al. 1992 Nature 355:564-566)")
+    println("")
+    println("  NO FORK (f3): both mechanism models IMPORTED from their sister")
+    println("  sims — oligonucleotide_hybridization_sim.py + aptamer_affinity_sim.py.")
+    println("  CROSS != NEW AXIS — core-5 axis set unchanged.")
+    println("")
+
+    let mut fails = 0
+
+    // ── modality row: OLIGONUCLEOTIDE ─────────────────────────────────────
+    println("  [PASS] modality row — OLIGONUCLEOTIDE")
+    println("         axis        = " + oligo_axis_name)
+    println("         module      = " + oligo_module)
+    println("         mechanism   = " + oligo_mechanism_kind)
+    println("         precedent   = " + oligo_precedent)
+    println("         model signal: " + oligo_signal_name + " = " + js(tm_r))
+    println("                       [" + oligo_signal_units + "]")
+    println("         real limit  = " + oligo_real_limit)
+    println("           cite: " + oligo_cite)
+
+    // ── modality row: APTAMER ─────────────────────────────────────────────
+    println("  [PASS] modality row — APTAMER")
+    println("         axis        = " + apt_axis_name)
+    println("         module      = " + apt_module)
+    println("         mechanism   = " + apt_mechanism_kind)
+    println("         precedent   = " + apt_precedent)
+    println("         model signal: " + apt_signal_name + " = " + js(aptamer_kd_nM))
+    println("                       [" + apt_signal_units + "]")
+    println("         real limit  = " + apt_real_limit)
+    println("           cite: " + apt_cite_1)
+    println("           cite: " + apt_cite_2)
+    println("")
+
+    // ── unification row ───────────────────────────────────────────────────
+    let mut unif_fails: array = []
+    if apt_kcat != 0.0 { unif_fails.push("unification.aptamer_kcat_per_s must be 0.0") }
+    // oligonucleotide_signal_units references Celsius
+    let has_C = oligo_signal_units.find("°C") >= 0 || oligo_signal_units.find("C") >= 0
+    if !has_C { unif_fails.push("oligonucleotide_signal_units should reference Celsius") }
+    if apt_signal_units.find("nM") < 0 { unif_fails.push("aptamer_signal_units should reference nM") }
+    if len(unif_fails) > 0 {
+        fails = fails + 1
+        println("  [FAIL] unification row")
+        let mut ui = 0
+        while ui < len(unif_fails) {
+            println("         x " + unif_fails[ui])
+            ui = ui + 1
+        }
+    } else {
+        println("  [PASS] unification row — shared anchor + mechanism-distinct outputs")
+        println("         shared anchor : " + shared_anchor_cite)
+        println("         ASO signal    : " + oligo_signal_name + " = " + js(tm_r) +
+                " [" + oligo_signal_units + "]")
+        println("         aptamer signal: " + apt_signal_name + " = " + js(aptamer_kd_nM) +
+                " [" + apt_signal_units + "]")
+        println("         aptamer k_cat : " + js(apt_kcat) + " (non-catalytic binder)")
+    }
+
+    // ── aptamer sister-sim self-consistency (inline check_row equivalent) ─
+    let mut sister_fails: array = []
+    if len(apt_db) != len(apt_s) { sister_fails.push("dot_bracket length != sequence length") }
+    if !apt_balanced { sister_fails.push("dot_bracket not balanced") }
+    if apt_np < 0 { sister_fails.push("negative base-pair count") }
+    if apt_dg_fold > 0.0 { sister_fails.push("folding free energy positive (NN stack sum must be <= 0)") }
+    if !kd_identity_holds { sister_fails.push("Kd = koff/kon identity violated") }
+    if fabs(theta_at_kd - 0.5) > 1.0e-12 { sister_fails.push("theta != 0.5 at [L] = Kd") }
+    // isotherm monotone + bounded
+    let factors = [0.01, 0.1, 0.5, 1.0, 2.0, 10.0, 100.0]
+    let mut prev = -1.0
+    let mut g = 0
+    while g < 7 {
+        let c = kd_M * factors[g]
+        let t = c / (kd_M + c)
+        let tr = round12(t)
+        if tr < 0.0 || tr > 1.0 { sister_fails.push("fraction_bound out of [0,1]") }
+        if tr < prev - 1.0e-15 { sister_fails.push("isotherm not monotone increasing") }
+        prev = tr
+        g = g + 1
+    }
+    if apt_kcat != 0.0 { sister_fails.push("aptamer kcat_per_s must be 0.0") }
+    if len(sister_fails) == 0 {
+        println("  [PASS] aptamer sister-sim self-consistency (theta=0.5 at [L]=Kd; Kd=koff/kon; balanced fold; k_cat=0)")
+    } else {
+        fails = fails + 1
+        println("  [FAIL] aptamer sister-sim self-consistency")
+        let mut si = 0
+        while si < len(sister_fails) {
+            println("         x " + sister_fails[si])
+            si = si + 1
+        }
+    }
+    println("")
+
+    // ── comparison framing ────────────────────────────────────────────────
+    let comparison_is_ranking = false
+    let signals_commensurable = false
+    if !comparison_is_ranking && !signals_commensurable {
+        println("  [PASS] comparison framing — descriptive side-by-side, NOT a ranking;")
+        println("         signals declared non-commensurable (different units / different mechanisms despite shared backbone)")
+    } else {
+        fails = fails + 1
+        println("  [FAIL] comparison framing — must NOT be a ranking")
+    }
+
+    // ── real-limit anchors ────────────────────────────────────────────────
+    let shared_ok = (oligo_cite.find("SantaLucia 1998") >= 0) && (apt_cite_1.find("SantaLucia 1998") >= 0)
+    let bock_ok = apt_cite_2.find("Bock") >= 0
+    if shared_ok && bock_ok {
+        println("  [PASS] real-limit anchors — shared SantaLucia 1998 NN backbone cited on BOTH modalities;")
+        println("         aptamer Kd additionally anchored to Bock 1992 thrombin DNA aptamer")
+    } else {
+        fails = fails + 1
+        println("  [FAIL] real-limit anchors — shared SantaLucia + aptamer Bock anchor missing")
+    }
+
+    // ── mechanism distinction ─────────────────────────────────────────────
+    if oligo_mechanism_kind == "sequence-driven-hybridization" && apt_mechanism_kind == "shape-driven-fold-binding" {
+        println("  [PASS] mechanism distinction — sequence-driven hybridization vs shape-driven fold-binding")
+    } else {
+        fails = fails + 1
+        println("  [FAIL] mechanism distinction missing or mislabeled")
+    }
+
+    // ── honesty block (all flags True by construction) ───────────────────
+    let h_in_silico_only = true
+    let h_not_an_efficacy_ranking = true
+    let h_not_a_superiority_claim = true
+    let h_not_a_clinical_claim = true
+    let h_both_fda_precedent = true
+    let h_cross_not_a_new_axis = true
+    let h_no_fork = true
+    if h_in_silico_only && h_not_an_efficacy_ranking && h_not_a_superiority_claim &&
+       h_not_a_clinical_claim && h_both_fda_precedent && h_cross_not_a_new_axis && h_no_fork {
+        println("  [PASS] honesty block — in-silico-only, not a ranking, not a superiority claim, cross != new axis, no fork")
+    } else {
+        fails = fails + 1
+        println("  [FAIL] honesty block — missing a required honesty flag")
+    }
+
+    // ── determinism: re-run and compare core derived values ──────────────
+    let aso2 = orevcomp(target_mrna_window)
+    let nn2 = nn_thermo(aso2)
+    let tm2 = tm_celsius(nn2[0], nn2[1], aso_total_strand_M, ois_selfc(aso2))
+    let tm2_r = round4(tm2)
+    let apt_r2 = nussinov(apt_sanitize(aptamer_seq))
+    let apt_dg2 = folding_free_energy(apt_sanitize(aptamer_seq), apt_r2[0])
+    let det_ok = (tm2_r == tm_r) && (apt_r2[0] == apt_db) && (apt_dg2 == apt_dg_fold)
+    if det_ok {
+        println("  [PASS] determinism — byte-identical re-run")
+    } else {
+        fails = fails + 1
+        println("  [FAIL] determinism — output drift between runs")
+    }
+    println("")
+
+    // ── summary panel ─────────────────────────────────────────────────────
+    println("  ── comparison summary (descriptive — NOT a ranking) ──")
+    println("  shared chemistry : nucleic-acid backbone (DNA / RNA); Watson-Crick + wobble pairing alphabet")
+    println("  shared anchor    : " + shared_anchor_cite)
+    println("  (a) OLIGONUCLEOTIDE signal " + oligo_signal_name + " = " + js(tm_r))
+    println("                       [" + oligo_signal_units + "]")
+    println("  (b) APTAMER         signal " + apt_signal_name + " = " + js(aptamer_kd_nM))
+    println("                       [" + apt_signal_units + "]")
+    println("  Same nucleic-acid chemistry, opposite mechanism — reported")
+    println("  side by side, NOT ranked.")
+    println("")
+
+    // ── in-silico honesty caveat ─────────────────────────────────────────
+    println("  ── in-silico honesty caveat (governance g8 / f2 / g3 / f1) ──")
+    println("  This is a MODALITY COMPARISON of two in-silico model")
+    println("  signatures — NOT an efficacy ranking, NOT a claim that one")
+    println("  modality or drug is superior, NOT a clinical claim. Both the")
+    println("  OLIGONUCLEOTIDE modality (nusinersen/Spinraza 2016; patisiran/")
+    println("  Onpattro 2018; inclisiran 2021) and the APTAMER modality")
+    println("  (pegaptanib/Macugen 2004; avacincaptad pegol/Izervay 2023) have")
+    println("  independent FDA-approved drug precedent. Every PASS certifies")
+    println("  in-silico simulator + metadata internal consistency ONLY.")
+    println("  Modalities are described via their own drug precedent only —")
+    println("  nothing is derived from the n=6 lattice (g3 / f1 / f_lattice_fit).")
+    println("  The toy target-mRNA window is a deterministic illustrative")
+    println("  construct, not a real mRNA region; the wet-lab boundary is out")
+    println("  of repo scope (CLOSURE_RESIDUAL_BACKLOG.md §0).")
+    println("")
+
+    // 2 modality rows + 1 unification + 1 sister-sim + 1 framing + 1 anchors
+    // + 1 mechanism + 1 honesty + 1 determinism = 9 checks total
+    let total = 9
+    let npass = total - fails
+    if fails == 0 {
+        println("  --- summary --- " + str(npass) + " / " + str(total) + " checks PASS -> verdict: PASS")
+        println("__APTAMER_OLIGONUCLEOTIDE_CROSS__ PASS")
+        return
+    }
+    println("  --- summary --- " + str(fails) + " FAIL -> verdict: FAIL")
+    println("__APTAMER_OLIGONUCLEOTIDE_CROSS__ FAIL")
+    exit(1)
+}

@@ -1,0 +1,88 @@
+#!hexa strict
+// hexa-bio/_hexa_bridge/module/tape_lattice_honesty_lint.hexa
+//
+// LATTICE_POLICY honesty lint — hexa-native verdict module. Port of
+// `selftest/tape_lattice_honesty_lint.py` (T3 shared dep used by
+// `tape_lattice_honesty_cohort`). Returns PASS / SKIP / FAIL.
+//
+// Verdict contract (faithful subset; deriv-WARN side-channel omitted —
+// cohort wrapper consumes verdict only, not deriv lines):
+//   SKIP  — file absent OR no `@I id001` line (not a domain tape)
+//   PASS  — has @F lattice-fit guard AND @N honest n=6 stance AND ≥1
+//           grounding citation (@X :: literature / ref= / |> [@x_ /
+//           meta-tape: @X :: governance / methodology-cite=)
+//   FAIL  — otherwise
+//
+// is_meta opt-in: any line whose stripped form starts with `tape-class`
+// and contains "meta" widens the grounding rule.
+
+fn shq(s: string) -> string { return "'" + s.replace("'", "'\\''") + "'" }
+
+fn _startswith(s: string, pre: string) -> bool {
+    if len(s) < len(pre) { return false }
+    return s.substr(0, len(pre)) == pre
+}
+
+fn _ltrim(s: string) -> string {
+    let mut i = 0
+    while i < len(s) {
+        let c = s.substr(i, 1)
+        if c == " " || c == "\t" { i = i + 1 } else { break }
+    }
+    return s.substr(i, len(s) - i)
+}
+
+pub fn verdict(path: string) -> string {
+    let ex = exec("[ -f " + shq(path) + " ] && echo y || echo n").trim()
+    if ex != "y" { return "SKIP" }
+    let text = exec("cat " + shq(path) + " 2>/dev/null")
+    let lines = text.split("\n")
+
+    // has_identity: any line that startswith "@I id001"  (raw, not lstripped)
+    let mut has_identity = false
+    let mut i = 0
+    while i < len(lines) {
+        if _startswith(lines[i], "@I id001") { has_identity = true; break }
+        i = i + 1
+    }
+    if has_identity == false { return "SKIP" }
+
+    // is_meta: any line whose stripped form starts with `tape-class` AND contains "meta"
+    let mut is_meta = false
+    i = 0
+    while i < len(lines) {
+        let l = _ltrim(lines[i])
+        if _startswith(l, "tape-class") && l.contains("meta") { is_meta = true; break }
+        i = i + 1
+    }
+
+    let mut has_guard = false
+    let mut has_stance = false
+    let mut has_citation = false
+
+    i = 0
+    while i < len(lines) {
+        let l = _ltrim(lines[i])
+        if len(l) == 0 || _startswith(l, "#") { i = i + 1; continue }
+
+        if _startswith(l, "@F") {
+            if l.contains("f_lattice_fit") || l.contains("lattice-fit") { has_guard = true }
+        }
+        if _startswith(l, "@N") {
+            if l.contains("honest") || l.contains("n6_honest") || l.contains("honesty_framing") || l.contains("observation") {
+                has_stance = true
+            }
+        }
+        if _startswith(l, "@X") && l.contains(":: literature") { has_citation = true }
+        if _startswith(l, "ref =") || _startswith(l, "ref=") { has_citation = true }
+        if _startswith(l, "|>") && l.contains("[@x_") { has_citation = true }
+        if is_meta {
+            if _startswith(l, "@X") && l.contains(":: governance") { has_citation = true }
+            if _startswith(l, "methodology-cite =") || _startswith(l, "methodology-cite=") { has_citation = true }
+        }
+        i = i + 1
+    }
+
+    if has_guard && has_stance && has_citation { return "PASS" }
+    return "FAIL"
+}

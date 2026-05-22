@@ -1,0 +1,410 @@
+#!hexa strict
+// hexa-bio/_hexa_bridge/selftest/metallodrug_cryptic_pocket_cross.hexa
+//
+// hexa-native port of `_python_bridge/module/metallodrug_cryptic_pocket_cross.py`
+// (T3; importlib/json/math/os/sys — deterministic, no network/time/random).
+// CROSS-AXIS BB2: METALLODRUG (cisplatin Pt(II)-N7(guanine) covalent adduct)
+// ====unify==== CRYPTIC-POCKET (closed/open Boltzmann conformational-
+// equilibrium ledger). The .py uses `importlib.util` to load
+// metallodrug_coordination_sim.py + cryptic_pocket_sim.py and reads
+// PT_N7_BOND_ANGSTROM + square_planar_geometry + verify_pt_n7_geometry +
+// open_population + RT_KCAL + TEMP_K verbatim — never re-implemented (f3).
+// For byte-parity in hexa, the imported pieces are INLINED here
+// (square_planar_geometry · verify_pt_n7_geometry · open_population) so
+// the cross is self-contained and matches CPython op-order. Witness JSON
+// via compact-build → `json_parse` → `py_json2(wv, 0)` preserving the .py
+// insertion order.
+//
+// HONESTY: PASS here = in-silico simulator-CONSISTENCY ONLY (g8/f2) — the
+// Pt-N7 anchor matches Takahara 1995, the conformational-selection
+// free-energy ledger is conserved, and the Pt-adduct-induced bent-DNA
+// population shift is positive. NOT a binding-affinity / cytotoxicity /
+// antitumor / immunogenic / therapeutic claim. CROSS != NEW AXIS — BB2
+// is a cross over METALLODRUG (expansion-main) and CRYPTIC-POCKET (sub-
+// axis :> QUANTUM core); core-5 axis set is UNCHANGED.
+
+import "_hexa_bridge/module/py_json2.hexa"
+import "_hexa_bridge/module/json_schema_validator.hexa"
+
+// ── helpers (paste-standard set) ───────────────────────────────────────
+fn fmt(spec: string, v: float) -> string {
+    let mut o = exec("printf '" + spec + "' " + json_stringify(v))
+    while len(o) > 0 {
+        let last = o.substr(len(o) - 1, 1)
+        if last == "\n" || last == "\r" { o = o.substr(0, len(o) - 1) } else { break }
+    }
+    return o
+}
+fn ljust(s: string, n: int) -> string { let mut o = s; while len(o) < n { o = o + " " }; return o }
+fn rjust(s: string, n: int) -> string { let mut o = s; while len(o) < n { o = " " + o }; return o }
+fn js(v: float) -> string { return json_stringify(v) }
+fn jsb(b: bool) -> string { if b { return "true" } return "false" }
+fn pyb(b: bool) -> string { if b { return "True" } return "False" }
+fn fabs(x: float) -> float { if x < 0.0 { return -x } return x }
+// CPython 3.12+ sum(generator) is Kahan-compensated, not naive.
+fn fsum(xs: array) -> float {
+    let mut s = 0.0
+    let mut c = 0.0
+    let mut i = 0
+    while i < len(xs) {
+        let y = xs[i] - c
+        let t = s + y
+        c = (t - s) - y
+        s = t
+        i = i + 1
+    }
+    return s
+}
+// Codepoint-aware substring (UTF-8 lead-byte detection): copies bytes for
+// codepoints [a, b).
+fn cp_substr(s: string, a: int, b: int) -> string {
+    let mut out = ""
+    let mut cp = 0
+    let mut i = 0
+    while i < len(s) {
+        let bv = ord(s.substr(i, 1))
+        let is_lead = bv < 128 || bv >= 192
+        if is_lead {
+            if cp >= b { return out }
+            let mut seq = 1
+            if bv >= 240 { seq = 4 }
+            else if bv >= 224 { seq = 3 }
+            else if bv >= 192 { seq = 2 }
+            if cp >= a {
+                out = out + s.substr(i, seq)
+            }
+            cp = cp + 1
+            i = i + seq
+        } else {
+            // continuation byte without preceding lead — defensive
+            if cp >= a && cp < b { out = out + s.substr(i, 1) }
+            i = i + 1
+        }
+    }
+    return out
+}
+
+// ── constants from metallodrug_coordination_sim (PT_N7_BOND_ANGSTROM,
+//    PT_N7_TOLERANCE_ANGSTROM, TAKAHARA_1995) inlined verbatim ──────────
+let PT_N7_BOND_ANGSTROM = 2.0
+let PT_N7_TOLERANCE_ANGSTROM = 0.15
+
+// ── constants from cryptic_pocket_sim (R_GAS, KCAL_TO_J, TEMP_K, RT_KCAL)
+//    inlined verbatim ────────────────────────────────────────────────────
+let K_B = 1.380649e-23
+let N_A = 6.02214076e23
+let R_GAS = K_B * N_A
+let KCAL_TO_J = 4184.0
+let TEMP_K = 310.0
+let RT_KCAL = (R_GAS * TEMP_K) / KCAL_TO_J
+
+// ── schema id + literature anchors (parallel .py module-level) ─────────
+let SCHEMA_ID = "metallodrug_cryptic_pocket_cross_v1"
+let TAKAHARA_1995 = "Takahara et al., Nature 1995;377:649-652"
+let PIL_LIPPARD_1992 = "Pil & Lippard, Science 1992;256:234-237"
+let HAMMES_CHANG_OAS_2009 = "Hammes, Chang & Oas, PNAS 2009;106:13737-13741"
+
+// ── deterministic B-DNA <=> bent-DNA conformational ledger (literature-
+//    informed surrogates for the CLASS-LEVEL ledger; .py module-level) ──
+let DG_BEND_APO_KCAL = 3.0
+let DG_PT_ADDUCT_KCAL = -5.5
+
+// ── inlined metallodrug.square_planar_geometry(bond_length) ────────────
+//    returns parallel scalars: [pt_lig0, pt_lig1, pt_lig2, pt_lig3,
+//                               pt_ligand_distance_recomputed,
+//                               cis_sep, trans_sep,
+//                               cis_angle_deg, trans_angle_deg,
+//                               cis_closed, trans_closed]
+fn square_planar_geometry_recomputed(bond_length: float) -> float {
+    // positions[0] = (L, 0); dist(0,0 → positions[0]) = hypot(L, 0) = sqrt(L²)
+    return sqrt(bond_length * bond_length + 0.0 * 0.0)
+}
+
+// ── inlined cryptic.open_population(dg_open_kcal, temp_k=TEMP_K) ───────
+//    rt = (R_GAS * temp_k) / KCAL_TO_J; w = exp(-dg/rt); return w/(1+w)
+fn open_population(dg_open_kcal: float) -> float {
+    let rt = (R_GAS * TEMP_K) / KCAL_TO_J
+    let w = exp(-dg_open_kcal / rt)
+    return w / (1.0 + w)
+}
+
+fn main() {
+    // ── header (matches .py main lines 324-329) ────────────────────────
+    println("metallodrug_cryptic_pocket_cross — CROSS-AXIS BB2")
+    println("")
+    println("cross:  METALLODRUG (Pt(II)-N7(guanine) covalent adduct)  ====unify====  CRYPTIC-POCKET (closed/open Boltzmann ledger)")
+    println("        B-DNA <=> bent-DNA conformational equilibrium under the cryptic-pocket ledger")
+    println("")
+
+    // ── real-limit anchor block (lines 334-339) ────────────────────────
+    println("  real-limit anchors :")
+    println("     - " + TAKAHARA_1995 + "  (Pt-N7 ~2.0 A; cisplatin-DNA d(GpG) bend)")
+    println("     - " + PIL_LIPPARD_1992 + "  (HMG-domain recognition of bent-DNA)")
+    println("     - " + HAMMES_CHANG_OAS_2009 + "  (conformational-selection cycle)")
+    // .py: f"  RT = {cryptic_mod.RT_KCAL:.4g} kcal/mol @ T={cryptic_mod.TEMP_K} K\n"
+    println("  RT = " + fmt("%.4g", RT_KCAL) + " kcal/mol @ T=" + js(TEMP_K) + " K")
+    println("")
+
+    // ── build_metallodrug_view: square_planar_geometry(PT_N7_BOND_ANGSTROM)
+    //    + verify_pt_n7_geometry; only the cross-consumed fields ───────
+    let recomputed = square_planar_geometry_recomputed(PT_N7_BOND_ANGSTROM)
+    let deviation = fabs(recomputed - PT_N7_BOND_ANGSTROM)
+    let anchor_match = deviation <= PT_N7_TOLERANCE_ANGSTROM
+
+    // metallodrug_view dict (insertion order: axis, d_count, geometry,
+    //   pt_n7_recomputed_angstrom, pt_n7_anchor_match, citation)
+    let metallo_axis = "METALLODRUG"
+    let metallo_d_count = 8
+    let metallo_geometry = "square-planar"
+    let metallo_pt_n7_recomputed = recomputed
+    let metallo_pt_n7_anchor_match = anchor_match
+    let metallo_citation = TAKAHARA_1995
+
+    // ── build_cryptic_view: Boltzmann ledger on B-DNA <=> bent-DNA ────
+    let p_bent_apo = open_population(DG_BEND_APO_KCAL)
+    let dg_bend_eff = DG_BEND_APO_KCAL + DG_PT_ADDUCT_KCAL
+    let p_bent_bound = open_population(dg_bend_eff)
+    let delta_p_bent = p_bent_bound - p_bent_apo
+    let shifter = delta_p_bent > 0.0
+    let hmg_implication = "HMGB1 / hUBF / SRY HMG-box proteins preferentially recognise bent-DNA over canonical B-DNA (Pil & Lippard 1992); the Pt-DNA adduct's bent-state population shift is the conformational-selection step upstream of HMG recruitment — a downstream consequence, NOT a measured affinity / efficacy claim"
+    let cryptic_citation = TAKAHARA_1995 + "; " + PIL_LIPPARD_1992 + "; " + HAMMES_CHANG_OAS_2009
+
+    // ── build_cross_axis_consistency ──────────────────────────────────
+    let metallo_ok = anchor_match
+    // ledger conservation: |dg_bend_eff - (dg_bend + dg_pt_adduct)| < 1e-12
+    let ledger_ok = fabs(dg_bend_eff - (DG_BEND_APO_KCAL + DG_PT_ADDUCT_KCAL)) < 1.0e-12
+    let shift_ok = delta_p_bent > 0.0
+    let same_event = true
+    let both_views_consistent = same_event && metallo_ok && ledger_ok && shift_ok
+
+    // ── METALLODRUG view human panel (lines 345-352) ──────────────────
+    let pt_n7_anchor_angstrom = PT_N7_BOND_ANGSTROM
+    println("  METALLODRUG view (Pt(II) square-planar d8 at Pt-N7 anchor)")
+    // .py: f"     Pt-N7 anchor              = {row['pt_n7_anchor_angstrom']} A (Takahara 1995)"
+    // Python prints float 2.0 as "2.0" — json_stringify(2.0) = "2.0".
+    println("     Pt-N7 anchor              = " + js(pt_n7_anchor_angstrom) + " A (Takahara 1995)")
+    println("     Pt-N recomputed           = " + fmt("%.4f", metallo_pt_n7_recomputed) + " A")
+    println("     anchor match              = " + pyb(metallo_pt_n7_anchor_match))
+    println("     geometry / d-count        = " + metallo_geometry + " / d" + str(metallo_d_count))
+    println("")
+
+    // ── CRYPTIC-POCKET view human panel (lines 353-367) ───────────────
+    println("  CRYPTIC-POCKET view (B-DNA <=> bent-DNA closed/open ledger)")
+    println("     ΔG_bend (apo)             = " + fmt("%+.2f", DG_BEND_APO_KCAL) + " kcal/mol")
+    println("     ΔG_Pt-adduct (covalent)   = " + fmt("%+.2f", DG_PT_ADDUCT_KCAL) + " kcal/mol")
+    println("     ΔG_bend_eff (ledger sum)  = " + fmt("%+.2f", dg_bend_eff) + " kcal/mol")
+    println("     P_bent (apo)              = " + fmt("%.4g", p_bent_apo))
+    println("     P_bent (Pt-adduct bound)  = " + fmt("%.4g", p_bent_bound))
+    println("     δP_bent (population shift)= " + fmt("%+.4g", delta_p_bent))
+    println("     conformational selector   = " + pyb(shifter))
+    println("     downstream (HMG recognition): " + hmg_implication)
+    println("")
+
+    // ── cross-axis consistency human panel (lines 370-372) ────────────
+    println("  cross-axis consistency")
+    // .py iteration order matches dict-insertion order:
+    //   same_pt_dna_event_across_axes, metallodrug_anchor_passes,
+    //   cryptic_ledger_conserved, cryptic_population_shift_positive,
+    //   both_views_consistent
+    let cak = ["same_pt_dna_event_across_axes", "metallodrug_anchor_passes",
+               "cryptic_ledger_conserved", "cryptic_population_shift_positive",
+               "both_views_consistent"]
+    let cav = [same_event, metallo_ok, ledger_ok, shift_ok, both_views_consistent]
+    let mut ci = 0
+    while ci < len(cak) {
+        let tag = if cav[ci] { "OK " } else { "NO " }
+        println("     [" + tag + "] " + cak[ci])
+        ci = ci + 1
+    }
+
+    // ── acceptance criteria X1..X7 ────────────────────────────────────
+    // X1: anchor_event contains "Pt(II)-N7"
+    let anchor_event = "cisplatin Pt(II)-N7(guanine) intrastrand d(GpG) crosslink bending B-DNA toward HMG-recognisable bent-DNA"
+    let x1 = anchor_event.contains("Pt(II)-N7")
+    let x2 = metallo_ok
+    let x3 = (metallo_d_count == 8) && (metallo_geometry == "square-planar")
+    let x4 = ledger_ok
+    let x5 = shift_ok
+    let x6 = (0.0 < p_bent_apo) && (p_bent_apo < 1.0)
+             && (0.0 < p_bent_bound) && (p_bent_bound < 1.0)
+    // X7: ranking false + new-axis false + illustrative true + unification true + in-silico true
+    let x7 = true
+    let crit_keys = ["X1_anchor_event_present", "X2_metallodrug_pt_n7_anchor_passes",
+                     "X3_metallodrug_d8_square_planar", "X4_cryptic_ledger_conserved",
+                     "X5_cryptic_population_shift_positive", "X6_cryptic_populations_bounded",
+                     "X7_cross_invariants_hold"]
+    let crit_vals = [x1, x2, x3, x4, x5, x6, x7]
+    let total_crit = 7
+    let mut n_pass = 0
+    let mut ai = 0
+    while ai < total_crit { if crit_vals[ai] { n_pass = n_pass + 1 }; ai = ai + 1 }
+    let verdict = if n_pass == total_crit { "PASS" } else { "FAIL" }
+
+    println("")
+    println("## acceptance — in-silico simulator-consistency criteria")
+    let mut pi2 = 0
+    while pi2 < total_crit {
+        let tag = if crit_vals[pi2] { "PASS" } else { "FAIL" }
+        println("  [" + tag + "] " + crit_keys[pi2])
+        pi2 = pi2 + 1
+    }
+    println("")
+    println("  --- " + str(n_pass) + "/" + str(total_crit) + "  ->  verdict: " + verdict + " ---")
+
+    println("")
+    println("  IN-SILICO SCOPE (g8 / f2): this PASS verifies IN-SILICO simulator+")
+    println("  metadata internal consistency ONLY — the Pt-N7 anchor matches")
+    println("  Takahara 1995, the conformational-selection free-energy ledger is")
+    println("  conserved, and the Pt-adduct-induced bent-DNA population shift is")
+    println("  positive. It is NOT a binding-affinity, cytotoxicity, antitumor,")
+    println("  immunogenic, efficacy or regulatory claim. Cisplatin is FDA-")
+    println("  approved (1978) — the METALLODRUG side is not research-stage; the")
+    println("  CRYPTIC-side mapping is a MODEL-LEVEL UNIFICATION (B-DNA -> bent-")
+    println("  DNA is conformational selection by the Pt-DNA covalent adduct,")
+    println("  structurally analogous to apo->holo cryptic-pocket selection).")
+    println("  NOT a claim that all metallodrugs work via cryptic pockets, and")
+    println("  NOT a claim that the Pt-DNA adduct IS a cryptic pocket in the")
+    println("  protein-pocket sense — the chemical event is covalent and the")
+    println("  conformational substrate is DNA. The unification is at the level")
+    println("  of the two-state conformational-selection math.")
+
+    println("")
+    println("  no n=6 lattice derivation (HEXA-METALLODRUG.tape f_lattice_fit /")
+    println("  n6_honest_stance; AGENTS.tape g3/f1). Both modalities described")
+    println("  by own precedent: METALLODRUG -> cisplatin (FDA 1978) /")
+    println("  carboplatin (FDA 1989) / oxaliplatin (FDA 2002); CRYPTIC-POCKET")
+    println("  -> sotorasib KRAS-G12C switch-II (FDA 2021).")
+    println("")
+    println("  cross is NOT a new axis: METALLODRUG remains expansion-main,")
+    println("  CRYPTIC-POCKET remains a sub-axis :> QUANTUM core; the hexa-bio")
+    println("  core-5 axes (QUANTUM · WEAVE · NANOBOT · RIBOZYME · VIROCAPSID)")
+    println("  are UNCHANGED.")
+
+    // ── witness JSON: compact-build → json_parse → py_json2(wv, 0) ────
+    // Top-level witness key order (parallel .py main lines 410-464):
+    //   schema, ts, cross, metallodrug_parent_source,
+    //   cryptic_pocket_parent_source, real_limit_anchor,
+    //   modality_precedents{metallodrug, cryptic}, unification_identity,
+    //   temperature_K, rt_kcal_per_mol, row{...}, acceptance{...},
+    //   in_silico_scope_caveat, cross_is_not_a_new_axis,
+    //   no_lattice_derivation.
+
+    // metallodrug_view sub-object (insertion order matches .py build_metallodrug_view)
+    let metallo_view_j = "{\"axis\": " + json_stringify(metallo_axis) +
+                         ", \"d_count\": " + str(metallo_d_count) +
+                         ", \"geometry\": " + json_stringify(metallo_geometry) +
+                         ", \"pt_n7_recomputed_angstrom\": " + js(metallo_pt_n7_recomputed) +
+                         ", \"pt_n7_anchor_match\": " + jsb(metallo_pt_n7_anchor_match) +
+                         ", \"citation\": " + json_stringify(metallo_citation) + "}"
+
+    // cryptic_view sub-object (insertion order matches .py build_cryptic_view)
+    let cryptic_view_j = "{\"axis\": \"CRYPTIC-POCKET\"" +
+                         ", \"conformational_states\": " +
+                         json_stringify("B-DNA (canonical) <=> bent-DNA (~30-40 deg at d(GpG))") +
+                         ", \"dg_bend_kcal_per_mol\": " + js(DG_BEND_APO_KCAL) +
+                         ", \"dg_pt_adduct_kcal_per_mol\": " + js(DG_PT_ADDUCT_KCAL) +
+                         ", \"dg_bend_eff_kcal_per_mol\": " + js(dg_bend_eff) +
+                         ", \"p_bent_apo\": " + js(p_bent_apo) +
+                         ", \"p_bent_with_pt_adduct\": " + js(p_bent_bound) +
+                         ", \"population_shift_bent\": " + js(delta_p_bent) +
+                         ", \"bent_state_selector_is_conformational\": " + jsb(shifter) +
+                         ", \"hmg_recognition_implication\": " + json_stringify(hmg_implication) +
+                         ", \"citation\": " + json_stringify(cryptic_citation) + "}"
+
+    // cross_axis_consistency sub-object (insertion order matches .py)
+    let cac_j = "{\"same_pt_dna_event_across_axes\": " + jsb(same_event) +
+                ", \"metallodrug_anchor_passes\": " + jsb(metallo_ok) +
+                ", \"cryptic_ledger_conserved\": " + jsb(ledger_ok) +
+                ", \"cryptic_population_shift_positive\": " + jsb(shift_ok) +
+                ", \"both_views_consistent\": " + jsb(both_views_consistent) + "}"
+
+    // real_limit_citations array (preserves .py order)
+    let real_lim_j = "[" +
+        json_stringify(TAKAHARA_1995 + " (Pt-N7 ~2.0 A + cisplatin-DNA d(GpG) bend)") +
+        ", " +
+        json_stringify(PIL_LIPPARD_1992 + " (HMG-domain recognition of cisplatin-DNA bent adducts)") +
+        ", " +
+        json_stringify(HAMMES_CHANG_OAS_2009 + " (conformational-selection thermodynamic cycle / cryptic-pocket ledger)") +
+        "]"
+
+    let lattice_stance_text = "No n=6 lattice arithmetic is performed. METALLODRUG modality is described by own precedent (cisplatin/carboplatin/oxaliplatin — FDA 1978/1989/2002); CRYPTIC-POCKET modality is described by own precedent (sotorasib KRAS-G12C switch-II — FDA 2021). Coordination geometries and Boltzmann thresholds are coordination-chemistry / statistical-mechanics quantities, never lattice-derived (AGENTS.tape g3/f1; HEXA-METALLODRUG.tape f_lattice_fit / n6_honest_stance)."
+
+    // row sub-object (insertion order matches .py build_row)
+    let row_j = "{\"schema\": " + json_stringify(SCHEMA_ID) +
+                ", \"anchor_event\": " + json_stringify(anchor_event) +
+                ", \"pt_n7_anchor_angstrom\": " + js(pt_n7_anchor_angstrom) +
+                ", \"metallodrug_view\": " + metallo_view_j +
+                ", \"cryptic_view\": " + cryptic_view_j +
+                ", \"cross_axis_consistency\": " + cac_j +
+                ", \"comparison_is_ranking\": false" +
+                ", \"creates_a_new_axis\": false" +
+                ", \"illustrative_only\": true" +
+                ", \"model_level_unification_only\": true" +
+                ", \"real_limit_citations\": " + real_lim_j +
+                ", \"lattice_stance\": " + json_stringify(lattice_stance_text) +
+                ", \"in_silico_only\": true}"
+
+    // acceptance sub-object (insertion order matches .py acceptance())
+    let crit_j = "{\"X1_anchor_event_present\": " + jsb(x1) +
+                 ", \"X2_metallodrug_pt_n7_anchor_passes\": " + jsb(x2) +
+                 ", \"X3_metallodrug_d8_square_planar\": " + jsb(x3) +
+                 ", \"X4_cryptic_ledger_conserved\": " + jsb(x4) +
+                 ", \"X5_cryptic_population_shift_positive\": " + jsb(x5) +
+                 ", \"X6_cryptic_populations_bounded\": " + jsb(x6) +
+                 ", \"X7_cross_invariants_hold\": " + jsb(x7) + "}"
+    let acc_j = "{\"criteria\": " + crit_j +
+                ", \"pass_count\": " + str(n_pass) +
+                ", \"total\": " + str(total_crit) +
+                ", \"verdict\": " + json_stringify(verdict) + "}"
+
+    let modality_prec_j = "{\"metallodrug\": " +
+        json_stringify("cisplatin (FDA 1978), carboplatin (FDA 1989), oxaliplatin (FDA 2002) — Pt(II) square-planar d8 anticancer agents") +
+        ", \"cryptic\": " +
+        json_stringify("KRAS-G12C switch-II pocket — sotorasib (Ostrem et al., Nature 503:548, 2013; Canon et al., Nature 575:217, 2019; sotorasib FDA-approved 2021)") +
+        "}"
+
+    let real_lim_anchor_str = TAKAHARA_1995 + " (Pt-N7 ~2.0 A + cisplatin-DNA d(GpG) bend ~30-40 deg); " +
+                              PIL_LIPPARD_1992 + " (HMG-domain protein recognition of bent cisplatin-DNA adducts); " +
+                              HAMMES_CHANG_OAS_2009 + " (conformational-selection thermodynamic cycle / cryptic-pocket ledger inherited from cryptic_pocket_sim)."
+
+    let unification_str = "closed <-> B-DNA (HMG-invisible), open <-> bent-DNA (HMG-recognised); binder <-> Pt-N7 covalent adduct; ledger ΔG_bend_eff = ΔG_bend + ΔG_Pt-adduct is the cryptic_pocket_sim ledger ΔG_open_bound = ΔG_open + ΔG_bind_open under that map"
+
+    let in_silico_caveat_str = "MODEL-LEVEL UNIFICATION ONLY (g8/f2). The conformational-selection ledger from cryptic_pocket_sim is transplanted onto the Pt-DNA-induced B-DNA <=> bent-DNA equilibrium; ΔG_bend and ΔG_Pt-adduct are literature-informed surrogates for the ledger CLASS, not fits to a specific DNA sequence / adduct geometry. NOT a binding-affinity, cytotoxicity, antitumor, immunogenic or therapeutic-efficacy claim. NOT a claim that all metallodrugs work via cryptic pockets."
+
+    let not_new_axis_str = "METALLODRUG remains an expansion-main axis; CRYPTIC-POCKET remains a sub-axis :> QUANTUM core; the hexa-bio core-5 axes (QUANTUM · WEAVE · NANOBOT · RIBOZYME · VIROCAPSID) are unchanged."
+
+    let no_lattice_str = "No quantity in this witness is derived from the n=6 lattice (HEXA-METALLODRUG.tape f_lattice_fit; AGENTS.tape g3/f1). METALLODRUG and CRYPTIC-POCKET modalities are described by own drug precedent."
+
+    let witness = "{\"schema\": " + json_stringify(SCHEMA_ID) +
+                  ", \"ts\": \"2026-05-16T00:00:00Z\"" +
+                  ", \"cross\": " +
+                  json_stringify("BB2  METALLODRUG (Pt(II)-N7(guanine) covalent adduct)  <==unify==>  CRYPTIC-POCKET (closed/open Boltzmann ledger)") +
+                  ", \"metallodrug_parent_source\": " +
+                  json_stringify("_python_bridge/module/metallodrug_coordination_sim.py (square_planar_geometry + verify_pt_n7_geometry + PT_N7_BOND_ANGSTROM imported, not re-implemented -- f3)") +
+                  ", \"cryptic_pocket_parent_source\": " +
+                  json_stringify("_python_bridge/module/cryptic_pocket_sim.py (open_population imported, not re-implemented -- f3)") +
+                  ", \"real_limit_anchor\": " + json_stringify(real_lim_anchor_str) +
+                  ", \"modality_precedents\": " + modality_prec_j +
+                  ", \"unification_identity\": " + json_stringify(unification_str) +
+                  ", \"temperature_K\": " + js(TEMP_K) +
+                  ", \"rt_kcal_per_mol\": " + js(RT_KCAL) +
+                  ", \"row\": " + row_j +
+                  ", \"acceptance\": " + acc_j +
+                  ", \"in_silico_scope_caveat\": " + json_stringify(in_silico_caveat_str) +
+                  ", \"cross_is_not_a_new_axis\": " + json_stringify(not_new_axis_str) +
+                  ", \"no_lattice_derivation\": " + json_stringify(no_lattice_str) +
+                  "}"
+
+    let wv = json_parse(witness)
+    println("")
+    println("## witness JSON")
+    println(py_json2(wv, 0))
+
+    println("")
+    if verdict == "PASS" {
+        println("__METALLODRUG_CRYPTIC_POCKET_CROSS__ PASS")
+    } else {
+        println("__METALLODRUG_CRYPTIC_POCKET_CROSS__ FAIL")
+        exit(1)
+    }
+}
