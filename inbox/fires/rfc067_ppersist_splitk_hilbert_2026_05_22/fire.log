@@ -1,0 +1,22 @@
+Device: NVIDIA GeForce RTX 5070 sm_120 (num_SMs=48)
+CUDA driver=13000 runtime=12090
+Persistent slots (kernel-baked) = 48, K splits = 4, grid_x = 192
+loaded hexa-PPSH PTX shape 4096 (sgemm_ppsh_4096x4096_grid)
+  shape 4096: regs/thd=64, shmem=8192 B, max_thd=1024
+loaded hexa-PPSH PTX shape 6144 (sgemm_ppsh_6144x6144_grid)
+  shape 6144: regs/thd=64, shmem=8192 B, max_thd=1024
+loaded hexa-PPSH PTX shape 8192 (sgemm_ppsh_8192x8192_grid)
+  shape 8192: regs/thd=64, shmem=8192 B, max_thd=1024
+Device VRAM free=11601.19 MB total=11772.44 MB
+[M=4096] allocating 128.00 MB device memory (A=32768 KB + B=32768 KB + C=65536 KB)
+[M=4096] cuBLAS HGEMM             median=1.980384 ms  std=0.004160  TFLOPS= 69.4002
+[M=4096] hexa-PPSH (with memset)  median=3.950576 ms  std=0.018704  TFLOPS= 34.7896  ratio=0.5013  maxabs=0.0000  maxrel=0.0000  ulp_rel=0.00  grid_x=192  regs=64
+[M=4096] hexa-PPSH (kernel-only)  median=3.885600 ms  std=0.019685  TFLOPS= 35.3714  ratio_kernel_only=0.5097
+[M=6144] allocating 288.00 MB device memory (A=73728 KB + B=73728 KB + C=147456 KB)
+[M=6144] cuBLAS HGEMM             median=6.607072 ms  std=0.010764  TFLOPS= 70.2061
+[M=6144] hexa-PPSH (with memset)  median=20.803456 ms  std=0.139892  TFLOPS= 22.2971  ratio=0.3176  maxabs=0.0000  maxrel=0.0000  ulp_rel=0.00  grid_x=192  regs=64
+[M=6144] hexa-PPSH (kernel-only)  median=20.592432 ms  std=0.135820  TFLOPS= 22.5256  ratio_kernel_only=0.3208
+[M=8192] allocating 512.00 MB device memory (A=131072 KB + B=131072 KB + C=262144 KB)
+[M=8192] cuBLAS HGEMM             median=15.667312 ms  std=0.002091  TFLOPS= 70.1787
+[M=8192] hexa-PPSH (with memset)  median=115.972126 ms  std=0.594761  TFLOPS=  9.4808  ratio=0.1351  maxabs=0.0000  maxrel=0.0000  ulp_rel=0.00  grid_x=192  regs=64
+[M=8192] hexa-PPSH (kernel-only)  median=115.591328 ms  std=0.565614  TFLOPS=  9.5121  ratio_kernel_only=0.1355
