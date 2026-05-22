@@ -1,0 +1,15 @@
+=== shape 4096 (sgemm_ppsh_4096x4096_grid) ===
+
+
+shape 4096 cuFuncGetAttribute: regs/thd=64, shmem=8192 B, max_thd=1024
+
+=== shape 6144 (sgemm_ppsh_6144x6144_grid) ===
+
+
+shape 6144 cuFuncGetAttribute: regs/thd=64, shmem=8192 B, max_thd=1024
+
+=== shape 8192 (sgemm_ppsh_8192x8192_grid) ===
+
+
+shape 8192 cuFuncGetAttribute: regs/thd=64, shmem=8192 B, max_thd=1024
+
