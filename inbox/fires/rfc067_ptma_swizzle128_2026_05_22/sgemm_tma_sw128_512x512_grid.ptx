@@ -1,0 +1,616 @@
+//
+// RFC 067 N201 -- TMA SWIZZLE_128B + mma.sync.m16n8k16 + Hilbert d2xy.
+// M=N=K=512. Per-CTA 64x64 tile, 4-warp 2x2.
+// Outer K-tiles: K/64 = 8 (each TMA loads 64 K-cols = 128 B inner).
+// Each outer K-iter runs 4 inner mma K-steps (16 K-cols each).
+// Hilbert: p=8 (next_pow2(gx=8)).
+// TMA: 2 descriptors, box [K_TILE_INNER=64, 64 rows] = 8192 B per tile.
+//      SWIZZLE_128B (XOR mask = (row & 7) per 16-byte atom in K direction).
+// expect_tx per K-iter: 16384 B = 8192 A + 8192 B.
+// ASCII-only PTX. .target sm_120a + .version 8.7.
+//
+
+.version 8.7
+.target sm_120a
+.address_size 64
+
+.shared .align 128 .b8 _tg_a[8192];
+.shared .align 128 .b8 _tg_b[8192];
+.shared .align 8   .b8 _tg_mbar[16];
+
+.visible .entry sgemm_tma_sw128_512x512_grid (
+    .param .align 64 .b8 tmap_a_param[128],
+    .param .align 64 .b8 tmap_b_param[128],
+    .param .u64 c_ptr_param,
+    .param .u64 k_tiles_outer_param
+)
+{
+    .reg .u64 %rd<32>;
+    .reg .u32 %r<200>;
+    .reg .pred %p1, %pwait, %pt0;
+    .reg .pred %prx0, %prx1, %prxr;
+    .reg .pred %phlbx, %phlby, %phlb_oob;
+    .reg .pred %p_off;
+    .reg .b32 %ra<8>;
+    .reg .b32 %rbl<4>;
+    .reg .b32 %rbh<4>;
+    .reg .f32 %fc<32>;
+    .reg .b64 %tok;
+    .reg .b32 %parity;
+    .reg .b32 %k_iter;
+    .reg .b32 %k_off;
+    .reg .b32 %tx_count;
+    .reg .b32 %arr_count;
+    .reg .b32 %x0, %y0, %x1, %y1;
+    .reg .b32 %smem_a_lo, %smem_b_lo, %smem_mbar_lo;
+    .reg .b64 %tmap_a_pp, %tmap_b_pp, %tmap_a_addr, %tmap_b_addr;
+    .reg .b64 %c_addr;
+
+    // ---- TMA descriptor + C ptr loads (param-space) ----
+    mov.b64 %tmap_a_pp, tmap_a_param;
+    cvta.param.u64 %tmap_a_addr, %tmap_a_pp;
+    mov.b64 %tmap_b_pp, tmap_b_param;
+    cvta.param.u64 %tmap_b_addr, %tmap_b_pp;
+    ld.param.u64 %c_addr, [c_ptr_param];
+    ld.param.u64 %rd3, [k_tiles_outer_param];
+
+    // ---- Hilbert d2xy CTA-swizzle (byte-identical to N149/N200) ----
+    //   grid = p x p, p = 8 (next_pow2(gx=8)); d = ctaid.y*p + ctaid.x
+    mov.u32 %r100, %ctaid.x;
+    mov.u32 %r101, %ctaid.y;
+    mul.lo.u32 %r120, %r101, 8;
+    add.u32    %r120, %r120, %r100;
+    mov.u32 %r121, 0;
+    mov.u32 %r122, 0;
+    // -- Hilbert round 0: s = 1 --
+    shr.u32 %r126, %r120, 1;
+    and.b32 %r123, %r126, 1;
+    xor.b32 %r127, %r120, %r123;
+    and.b32 %r124, %r127, 1;
+    setp.eq.u32 %prx0, %r124, 0;
+    setp.eq.u32 %prx1, %r123, 1;
+    and.pred %prxr, %prx0, %prx1;
+    sub.u32 %r128, 0, %r121;
+    sub.u32 %r129, 0, %r122;
+    selp.b32 %r121, %r128, %r121, %prxr;
+    selp.b32 %r122, %r129, %r122, %prxr;
+    selp.b32 %r128, %r122, %r121, %prx0;
+    selp.b32 %r122, %r121, %r122, %prx0;
+    mov.u32 %r121, %r128;
+    mul.lo.u32 %r128, %r123, 1;
+    add.u32 %r121, %r121, %r128;
+    mul.lo.u32 %r129, %r124, 1;
+    add.u32 %r122, %r122, %r129;
+    shr.u32 %r120, %r120, 2;
+    // -- Hilbert round 1: s = 2 --
+    shr.u32 %r126, %r120, 1;
+    and.b32 %r123, %r126, 1;
+    xor.b32 %r127, %r120, %r123;
+    and.b32 %r124, %r127, 1;
+    setp.eq.u32 %prx0, %r124, 0;
+    setp.eq.u32 %prx1, %r123, 1;
+    and.pred %prxr, %prx0, %prx1;
+    sub.u32 %r128, 1, %r121;
+    sub.u32 %r129, 1, %r122;
+    selp.b32 %r121, %r128, %r121, %prxr;
+    selp.b32 %r122, %r129, %r122, %prxr;
+    selp.b32 %r128, %r122, %r121, %prx0;
+    selp.b32 %r122, %r121, %r122, %prx0;
+    mov.u32 %r121, %r128;
+    mul.lo.u32 %r128, %r123, 2;
+    add.u32 %r121, %r121, %r128;
+    mul.lo.u32 %r129, %r124, 2;
+    add.u32 %r122, %r122, %r129;
+    shr.u32 %r120, %r120, 2;
+    // -- Hilbert round 2: s = 4 --
+    shr.u32 %r126, %r120, 1;
+    and.b32 %r123, %r126, 1;
+    xor.b32 %r127, %r120, %r123;
+    and.b32 %r124, %r127, 1;
+    setp.eq.u32 %prx0, %r124, 0;
+    setp.eq.u32 %prx1, %r123, 1;
+    and.pred %prxr, %prx0, %prx1;
+    sub.u32 %r128, 3, %r121;
+    sub.u32 %r129, 3, %r122;
+    selp.b32 %r121, %r128, %r121, %prxr;
+    selp.b32 %r122, %r129, %r122, %prxr;
+    selp.b32 %r128, %r122, %r121, %prx0;
+    selp.b32 %r122, %r121, %r122, %prx0;
+    mov.u32 %r121, %r128;
+    mul.lo.u32 %r128, %r123, 4;
+    add.u32 %r121, %r121, %r128;
+    mul.lo.u32 %r129, %r124, 4;
+    add.u32 %r122, %r122, %r129;
+    mov.u32 %r11, %r121;             // sw_x
+    mov.u32 %r10, %r122;             // sw_y
+    setp.ge.u32 %phlbx, %r11, 8;
+    setp.ge.u32 %phlby, %r10, 8;
+    or.pred %phlb_oob, %phlbx, %phlby;
+    @%phlb_oob bra $hilbert_oob_ret;
+
+    // ---- thread/warp ids ----
+    mov.u32 %r1, %tid.x;
+    shr.u32 %r2, %r1, 5;        // warp id in [0, 4)
+    shr.u32 %r3, %r2, 1;        // m_tile = warp >> 1
+    and.b32 %r4, %r2, 1;        // n_tile = warp & 1
+    and.b32 %r50, %r1, 31;      // lane id
+
+    mov.u32 %smem_a_lo, _tg_a;
+    mov.u32 %smem_b_lo, _tg_b;
+    mov.u32 %smem_mbar_lo, _tg_mbar;
+
+    // ---- mbarrier init ----
+    setp.eq.s32 %pt0, %r1, 0;
+    @!%pt0 bra $L_init_done;
+    mov.u32 %arr_count, 1;
+    mbarrier.init.shared.b64 [%smem_mbar_lo], %arr_count;
+    fence.proxy.async.shared::cta;
+$L_init_done:
+    bar.sync 0;
+
+    // ---- per-warp band offsets (units = bytes) ----
+    // A band: m_tile * 32 rows -> m_tile * 32 * 128 = m_tile * 4096
+    mul.lo.u32 %r22, %r3, 4096;
+    // B band: n_tile * 32 rows -> n_tile * 4096
+    mul.lo.u32 %r24, %r4, 4096;
+
+    // ---- per-lane row_idx and atom_off ----
+    shr.u32 %r51, %r50, 3;             // lane >> 3 in [0,4)
+    and.b32 %r52, %r50, 7;             // lane & 7
+    shr.u32 %r53, %r51, 1;             // (lane >> 4) & 1 ... no: (lane >> 3) >> 1 = lane >> 4
+    shl.b32 %r54, %r53, 3;             // ((lane >> 4) << 3) wait that's (lane>>4 & 1) * 8? lane in 0..31, lane>>4 in {0,1}
+    add.u32 %r55, %r54, %r52;          // row_idx = (lane&7) + ((lane>>4)&1)*8 ... HOLD: that gives row in [0,16)? lane=0..7: row=0..7. lane=8..15: row=0..7 (since lane>>4=0). lane=16..23: row=8..15. lane=24..31: row=8..15.
+    // That's not matching N200-full. N200-full does: r51 = lane>>3 (0..3), r52=lane&7, r53=r51>>1, r54=r53<<3, r55 = r54+r52. So r53 = (lane>>3)>>1 = lane>>4 in {0,1}, r54 = (lane>>4)<<3 in {0,8}, r55 = (lane&7) + ((lane>>4)<<3). lane 0-7: r55=0-7. lane 8-15: r55=0-7. lane 16-23: r55=8-15. lane 24-31: r55=8-15. So row_idx covers [0,16) with each row appearing TWICE -- once with atom_off=0 and once with atom_off=1. Good.
+    and.b32 %r56, %r51, 1;             // (lane>>3) & 1 = atom_off_in_step (lanes 0..7 -> 0, lanes 8..15 -> 1, lanes 16..23 -> 0, lanes 24..31 -> 1)
+    setp.ne.u32 %p_off, %r56, 0;       // predicate: lane needs atom_off=1
+    and.b32 %r71, %r55, 7;             // row_idx & 7  (swizzle XOR mask)
+
+    // ---- C base address (under Hilbert swizzle) ----
+    mul.lo.u32 %r5, %r10, 131072;
+    mul.lo.u32 %r6, %r3, 65536;
+    add.u32 %r7, %r5, %r6;
+    mul.lo.u32 %r8, %r11, 256;
+    add.u32 %r7, %r7, %r8;
+    mul.lo.u32 %r8, %r4, 128;
+    add.u32 %r7, %r7, %r8;
+    cvt.u64.u32 %rd6, %r7;
+    add.u64 %rd12, %c_addr, %rd6;
+
+    // ---- init 32 f32 accumulators ----
+    mov.f32 %fc0,  0f00000000; mov.f32 %fc1,  0f00000000; mov.f32 %fc2,  0f00000000; mov.f32 %fc3,  0f00000000;
+    mov.f32 %fc4,  0f00000000; mov.f32 %fc5,  0f00000000; mov.f32 %fc6,  0f00000000; mov.f32 %fc7,  0f00000000;
+    mov.f32 %fc8,  0f00000000; mov.f32 %fc9,  0f00000000; mov.f32 %fc10, 0f00000000; mov.f32 %fc11, 0f00000000;
+    mov.f32 %fc12, 0f00000000; mov.f32 %fc13, 0f00000000; mov.f32 %fc14, 0f00000000; mov.f32 %fc15, 0f00000000;
+    mov.f32 %fc16, 0f00000000; mov.f32 %fc17, 0f00000000; mov.f32 %fc18, 0f00000000; mov.f32 %fc19, 0f00000000;
+    mov.f32 %fc20, 0f00000000; mov.f32 %fc21, 0f00000000; mov.f32 %fc22, 0f00000000; mov.f32 %fc23, 0f00000000;
+    mov.f32 %fc24, 0f00000000; mov.f32 %fc25, 0f00000000; mov.f32 %fc26, 0f00000000; mov.f32 %fc27, 0f00000000;
+    mov.f32 %fc28, 0f00000000; mov.f32 %fc29, 0f00000000; mov.f32 %fc30, 0f00000000; mov.f32 %fc31, 0f00000000;
+
+    // ---- K-loop (OUTER, K_TILES_OUTER iterations) ----
+    // m_off (rows in A box) = sw_y * 64
+    // n_off (rows in B box) = sw_x * 64
+    mul.lo.u32 %r70, %r10, 64;
+    mul.lo.u32 %r172, %r11, 64;
+
+    mov.u32 %k_iter, 0;
+$L_kloop:
+    // k_off = k_iter * 64 (K_TILE_INNER cols per TMA)
+    mul.lo.s32 %k_off, %k_iter, 64;
+
+    setp.eq.s32 %pt0, %r1, 0;
+    @!%pt0 bra $L_skip_issue;
+    mov.u32 %x0, %k_off;
+    mov.u32 %y0, %r70;
+    cp.async.bulk.tensor.2d.shared::cluster.global.tile.mbarrier::complete_tx::bytes
+        [%smem_a_lo], [%tmap_a_addr, {%x0, %y0}], [%smem_mbar_lo];
+    mov.u32 %x1, %k_off;
+    mov.u32 %y1, %r172;
+    cp.async.bulk.tensor.2d.shared::cluster.global.tile.mbarrier::complete_tx::bytes
+        [%smem_b_lo], [%tmap_b_addr, {%x1, %y1}], [%smem_mbar_lo];
+    mov.u32 %tx_count, 16384;
+    mbarrier.arrive.expect_tx.release.cta.shared::cta.b64
+        %tok, [%smem_mbar_lo], %tx_count;
+$L_skip_issue:
+
+    and.b32 %parity, %k_iter, 1;
+$L_wait:
+    mbarrier.try_wait.parity.shared::cta.b64 %pwait, [%smem_mbar_lo], %parity;
+    @!%pwait bra $L_wait;
+    bar.sync 0;
+
+    // ---- 4 inner mma K-steps over the resident smem tile ----
+
+    // ==== K-step 0 (atoms 0, 1 of outer K-iter) ====
+    // A: swizzled byte_off = full_row * 128 + (atom_k XOR (row_idx & 7)) * 16
+    //   per lane: atom_k = 0 + atom_off_in_step
+    //             swizzled_atom = atom_k XOR (row_idx & 7)
+    //             byte_off_in_row = swizzled_atom * 16
+    // r71 = row_idx & 7
+    // Pre-K-step (per lane): swizzled_atom_lo = 0 XOR r71
+    //                         swizzled_atom_hi = 1 XOR r71
+    // Lane atom-off picks between lo (r74) and hi (r75)
+    mov.u32 %r150, 0;
+    xor.b32 %r74, %r150, %r71;       // swizzled_atom for atom_off=0 lanes
+    mov.u32 %r151, 1;
+    xor.b32 %r75, %r151, %r71;       // swizzled_atom for atom_off=1 lanes
+    selp.b32 %r76, %r75, %r74, %p_off;
+    shl.b32 %r77, %r76, 4;            // byte_off_in_row = swizzled_atom * 16
+
+    // top half: full_row_a = m_tile*32 + row_idx
+    //          byte_off_a_top = full_row_a * 128 + r77
+    shl.b32 %r78, %r55, 7;            // row_idx * 128 (within full tile)
+    add.u32 %r79, %r22, %r78;         // m_tile_base_bytes + row_idx * 128 [top]
+    add.u32 %r79, %r79, %r77;
+    add.u32 %r60, %smem_a_lo, %r79;
+    // bot half: full_row = m_tile*32 + 16 + row_idx -> + 16*128 = +2048
+    add.u32 %r62, %r60, 2048;
+
+    ldmatrix.sync.aligned.m8n8.x4.shared.b16
+        {%ra0, %ra1, %ra2, %ra3}, [%r60];
+    ldmatrix.sync.aligned.m8n8.x4.shared.b16
+        {%ra4, %ra5, %ra6, %ra7}, [%r62];
+
+    // B (same swizzle math, base = smem_b + n_tile*32*128)
+    add.u32 %r80, %r24, %r78;
+    add.u32 %r80, %r80, %r77;
+    add.u32 %r61, %smem_b_lo, %r80;
+    add.u32 %r63, %r61, 2048;
+
+    ldmatrix.sync.aligned.m8n8.x4.trans.shared.b16
+        {%rbl0, %rbl1, %rbl2, %rbl3}, [%r61];
+    ldmatrix.sync.aligned.m8n8.x4.trans.shared.b16
+        {%rbh0, %rbh1, %rbh2, %rbh3}, [%r63];
+
+    // 8 mma.m16n8k16 (identical to N200-full)
+    mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32
+        {%fc0, %fc1, %fc2, %fc3},
+        {%ra0, %ra1, %ra2, %ra3},
+        {%rbl0, %rbl2},
+        {%fc0, %fc1, %fc2, %fc3};
+    mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32
+        {%fc4, %fc5, %fc6, %fc7},
+        {%ra0, %ra1, %ra2, %ra3},
+        {%rbl1, %rbl3},
+        {%fc4, %fc5, %fc6, %fc7};
+    mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32
+        {%fc8, %fc9, %fc10, %fc11},
+        {%ra0, %ra1, %ra2, %ra3},
+        {%rbh0, %rbh2},
+        {%fc8, %fc9, %fc10, %fc11};
+    mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32
+        {%fc12, %fc13, %fc14, %fc15},
+        {%ra0, %ra1, %ra2, %ra3},
+        {%rbh1, %rbh3},
+        {%fc12, %fc13, %fc14, %fc15};
+    mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32
+        {%fc16, %fc17, %fc18, %fc19},
+        {%ra4, %ra5, %ra6, %ra7},
+        {%rbl0, %rbl2},
+        {%fc16, %fc17, %fc18, %fc19};
+    mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32
+        {%fc20, %fc21, %fc22, %fc23},
+        {%ra4, %ra5, %ra6, %ra7},
+        {%rbl1, %rbl3},
+        {%fc20, %fc21, %fc22, %fc23};
+    mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32
+        {%fc24, %fc25, %fc26, %fc27},
+        {%ra4, %ra5, %ra6, %ra7},
+        {%rbh0, %rbh2},
+        {%fc24, %fc25, %fc26, %fc27};
+    mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32
+        {%fc28, %fc29, %fc30, %fc31},
+        {%ra4, %ra5, %ra6, %ra7},
+        {%rbh1, %rbh3},
+        {%fc28, %fc29, %fc30, %fc31};
+
+
+    // ==== K-step 1 (atoms 2, 3 of outer K-iter) ====
+    // A: swizzled byte_off = full_row * 128 + (atom_k XOR (row_idx & 7)) * 16
+    //   per lane: atom_k = 2 + atom_off_in_step
+    //             swizzled_atom = atom_k XOR (row_idx & 7)
+    //             byte_off_in_row = swizzled_atom * 16
+    // r71 = row_idx & 7
+    // Pre-K-step (per lane): swizzled_atom_lo = 2 XOR r71
+    //                         swizzled_atom_hi = 3 XOR r71
+    // Lane atom-off picks between lo (r74) and hi (r75)
+    mov.u32 %r150, 2;
+    xor.b32 %r74, %r150, %r71;       // swizzled_atom for atom_off=0 lanes
+    mov.u32 %r151, 3;
+    xor.b32 %r75, %r151, %r71;       // swizzled_atom for atom_off=1 lanes
+    selp.b32 %r76, %r75, %r74, %p_off;
+    shl.b32 %r77, %r76, 4;            // byte_off_in_row = swizzled_atom * 16
+
+    // top half: full_row_a = m_tile*32 + row_idx
+    //          byte_off_a_top = full_row_a * 128 + r77
+    shl.b32 %r78, %r55, 7;            // row_idx * 128 (within full tile)
+    add.u32 %r79, %r22, %r78;         // m_tile_base_bytes + row_idx * 128 [top]
+    add.u32 %r79, %r79, %r77;
+    add.u32 %r60, %smem_a_lo, %r79;
+    // bot half: full_row = m_tile*32 + 16 + row_idx -> + 16*128 = +2048
+    add.u32 %r62, %r60, 2048;
+
+    ldmatrix.sync.aligned.m8n8.x4.shared.b16
+        {%ra0, %ra1, %ra2, %ra3}, [%r60];
+    ldmatrix.sync.aligned.m8n8.x4.shared.b16
+        {%ra4, %ra5, %ra6, %ra7}, [%r62];
+
+    // B (same swizzle math, base = smem_b + n_tile*32*128)
+    add.u32 %r80, %r24, %r78;
+    add.u32 %r80, %r80, %r77;
+    add.u32 %r61, %smem_b_lo, %r80;
+    add.u32 %r63, %r61, 2048;
+
+    ldmatrix.sync.aligned.m8n8.x4.trans.shared.b16
+        {%rbl0, %rbl1, %rbl2, %rbl3}, [%r61];
+    ldmatrix.sync.aligned.m8n8.x4.trans.shared.b16
+        {%rbh0, %rbh1, %rbh2, %rbh3}, [%r63];
+
+    // 8 mma.m16n8k16 (identical to N200-full)
+    mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32
+        {%fc0, %fc1, %fc2, %fc3},
+        {%ra0, %ra1, %ra2, %ra3},
+        {%rbl0, %rbl2},
+        {%fc0, %fc1, %fc2, %fc3};
+    mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32
+        {%fc4, %fc5, %fc6, %fc7},
+        {%ra0, %ra1, %ra2, %ra3},
+        {%rbl1, %rbl3},
+        {%fc4, %fc5, %fc6, %fc7};
+    mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32
+        {%fc8, %fc9, %fc10, %fc11},
+        {%ra0, %ra1, %ra2, %ra3},
+        {%rbh0, %rbh2},
+        {%fc8, %fc9, %fc10, %fc11};
+    mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32
+        {%fc12, %fc13, %fc14, %fc15},
+        {%ra0, %ra1, %ra2, %ra3},
+        {%rbh1, %rbh3},
+        {%fc12, %fc13, %fc14, %fc15};
+    mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32
+        {%fc16, %fc17, %fc18, %fc19},
+        {%ra4, %ra5, %ra6, %ra7},
+        {%rbl0, %rbl2},
+        {%fc16, %fc17, %fc18, %fc19};
+    mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32
+        {%fc20, %fc21, %fc22, %fc23},
+        {%ra4, %ra5, %ra6, %ra7},
+        {%rbl1, %rbl3},
+        {%fc20, %fc21, %fc22, %fc23};
+    mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32
+        {%fc24, %fc25, %fc26, %fc27},
+        {%ra4, %ra5, %ra6, %ra7},
+        {%rbh0, %rbh2},
+        {%fc24, %fc25, %fc26, %fc27};
+    mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32
+        {%fc28, %fc29, %fc30, %fc31},
+        {%ra4, %ra5, %ra6, %ra7},
+        {%rbh1, %rbh3},
+        {%fc28, %fc29, %fc30, %fc31};
+
+
+    // ==== K-step 2 (atoms 4, 5 of outer K-iter) ====
+    // A: swizzled byte_off = full_row * 128 + (atom_k XOR (row_idx & 7)) * 16
+    //   per lane: atom_k = 4 + atom_off_in_step
+    //             swizzled_atom = atom_k XOR (row_idx & 7)
+    //             byte_off_in_row = swizzled_atom * 16
+    // r71 = row_idx & 7
+    // Pre-K-step (per lane): swizzled_atom_lo = 4 XOR r71
+    //                         swizzled_atom_hi = 5 XOR r71
+    // Lane atom-off picks between lo (r74) and hi (r75)
+    mov.u32 %r150, 4;
+    xor.b32 %r74, %r150, %r71;       // swizzled_atom for atom_off=0 lanes
+    mov.u32 %r151, 5;
+    xor.b32 %r75, %r151, %r71;       // swizzled_atom for atom_off=1 lanes
+    selp.b32 %r76, %r75, %r74, %p_off;
+    shl.b32 %r77, %r76, 4;            // byte_off_in_row = swizzled_atom * 16
+
+    // top half: full_row_a = m_tile*32 + row_idx
+    //          byte_off_a_top = full_row_a * 128 + r77
+    shl.b32 %r78, %r55, 7;            // row_idx * 128 (within full tile)
+    add.u32 %r79, %r22, %r78;         // m_tile_base_bytes + row_idx * 128 [top]
+    add.u32 %r79, %r79, %r77;
+    add.u32 %r60, %smem_a_lo, %r79;
+    // bot half: full_row = m_tile*32 + 16 + row_idx -> + 16*128 = +2048
+    add.u32 %r62, %r60, 2048;
+
+    ldmatrix.sync.aligned.m8n8.x4.shared.b16
+        {%ra0, %ra1, %ra2, %ra3}, [%r60];
+    ldmatrix.sync.aligned.m8n8.x4.shared.b16
+        {%ra4, %ra5, %ra6, %ra7}, [%r62];
+
+    // B (same swizzle math, base = smem_b + n_tile*32*128)
+    add.u32 %r80, %r24, %r78;
+    add.u32 %r80, %r80, %r77;
+    add.u32 %r61, %smem_b_lo, %r80;
+    add.u32 %r63, %r61, 2048;
+
+    ldmatrix.sync.aligned.m8n8.x4.trans.shared.b16
+        {%rbl0, %rbl1, %rbl2, %rbl3}, [%r61];
+    ldmatrix.sync.aligned.m8n8.x4.trans.shared.b16
+        {%rbh0, %rbh1, %rbh2, %rbh3}, [%r63];
+
+    // 8 mma.m16n8k16 (identical to N200-full)
+    mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32
+        {%fc0, %fc1, %fc2, %fc3},
+        {%ra0, %ra1, %ra2, %ra3},
+        {%rbl0, %rbl2},
+        {%fc0, %fc1, %fc2, %fc3};
+    mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32
+        {%fc4, %fc5, %fc6, %fc7},
+        {%ra0, %ra1, %ra2, %ra3},
+        {%rbl1, %rbl3},
+        {%fc4, %fc5, %fc6, %fc7};
+    mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32
+        {%fc8, %fc9, %fc10, %fc11},
+        {%ra0, %ra1, %ra2, %ra3},
+        {%rbh0, %rbh2},
+        {%fc8, %fc9, %fc10, %fc11};
+    mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32
+        {%fc12, %fc13, %fc14, %fc15},
+        {%ra0, %ra1, %ra2, %ra3},
+        {%rbh1, %rbh3},
+        {%fc12, %fc13, %fc14, %fc15};
+    mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32
+        {%fc16, %fc17, %fc18, %fc19},
+        {%ra4, %ra5, %ra6, %ra7},
+        {%rbl0, %rbl2},
+        {%fc16, %fc17, %fc18, %fc19};
+    mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32
+        {%fc20, %fc21, %fc22, %fc23},
+        {%ra4, %ra5, %ra6, %ra7},
+        {%rbl1, %rbl3},
+        {%fc20, %fc21, %fc22, %fc23};
+    mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32
+        {%fc24, %fc25, %fc26, %fc27},
+        {%ra4, %ra5, %ra6, %ra7},
+        {%rbh0, %rbh2},
+        {%fc24, %fc25, %fc26, %fc27};
+    mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32
+        {%fc28, %fc29, %fc30, %fc31},
+        {%ra4, %ra5, %ra6, %ra7},
+        {%rbh1, %rbh3},
+        {%fc28, %fc29, %fc30, %fc31};
+
+
+    // ==== K-step 3 (atoms 6, 7 of outer K-iter) ====
+    // A: swizzled byte_off = full_row * 128 + (atom_k XOR (row_idx & 7)) * 16
+    //   per lane: atom_k = 6 + atom_off_in_step
+    //             swizzled_atom = atom_k XOR (row_idx & 7)
+    //             byte_off_in_row = swizzled_atom * 16
+    // r71 = row_idx & 7
+    // Pre-K-step (per lane): swizzled_atom_lo = 6 XOR r71
+    //                         swizzled_atom_hi = 7 XOR r71
+    // Lane atom-off picks between lo (r74) and hi (r75)
+    mov.u32 %r150, 6;
+    xor.b32 %r74, %r150, %r71;       // swizzled_atom for atom_off=0 lanes
+    mov.u32 %r151, 7;
+    xor.b32 %r75, %r151, %r71;       // swizzled_atom for atom_off=1 lanes
+    selp.b32 %r76, %r75, %r74, %p_off;
+    shl.b32 %r77, %r76, 4;            // byte_off_in_row = swizzled_atom * 16
+
+    // top half: full_row_a = m_tile*32 + row_idx
+    //          byte_off_a_top = full_row_a * 128 + r77
+    shl.b32 %r78, %r55, 7;            // row_idx * 128 (within full tile)
+    add.u32 %r79, %r22, %r78;         // m_tile_base_bytes + row_idx * 128 [top]
+    add.u32 %r79, %r79, %r77;
+    add.u32 %r60, %smem_a_lo, %r79;
+    // bot half: full_row = m_tile*32 + 16 + row_idx -> + 16*128 = +2048
+    add.u32 %r62, %r60, 2048;
+
+    ldmatrix.sync.aligned.m8n8.x4.shared.b16
+        {%ra0, %ra1, %ra2, %ra3}, [%r60];
+    ldmatrix.sync.aligned.m8n8.x4.shared.b16
+        {%ra4, %ra5, %ra6, %ra7}, [%r62];
+
+    // B (same swizzle math, base = smem_b + n_tile*32*128)
+    add.u32 %r80, %r24, %r78;
+    add.u32 %r80, %r80, %r77;
+    add.u32 %r61, %smem_b_lo, %r80;
+    add.u32 %r63, %r61, 2048;
+
+    ldmatrix.sync.aligned.m8n8.x4.trans.shared.b16
+        {%rbl0, %rbl1, %rbl2, %rbl3}, [%r61];
+    ldmatrix.sync.aligned.m8n8.x4.trans.shared.b16
+        {%rbh0, %rbh1, %rbh2, %rbh3}, [%r63];
+
+    // 8 mma.m16n8k16 (identical to N200-full)
+    mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32
+        {%fc0, %fc1, %fc2, %fc3},
+        {%ra0, %ra1, %ra2, %ra3},
+        {%rbl0, %rbl2},
+        {%fc0, %fc1, %fc2, %fc3};
+    mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32
+        {%fc4, %fc5, %fc6, %fc7},
+        {%ra0, %ra1, %ra2, %ra3},
+        {%rbl1, %rbl3},
+        {%fc4, %fc5, %fc6, %fc7};
+    mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32
+        {%fc8, %fc9, %fc10, %fc11},
+        {%ra0, %ra1, %ra2, %ra3},
+        {%rbh0, %rbh2},
+        {%fc8, %fc9, %fc10, %fc11};
+    mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32
+        {%fc12, %fc13, %fc14, %fc15},
+        {%ra0, %ra1, %ra2, %ra3},
+        {%rbh1, %rbh3},
+        {%fc12, %fc13, %fc14, %fc15};
+    mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32
+        {%fc16, %fc17, %fc18, %fc19},
+        {%ra4, %ra5, %ra6, %ra7},
+        {%rbl0, %rbl2},
+        {%fc16, %fc17, %fc18, %fc19};
+    mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32
+        {%fc20, %fc21, %fc22, %fc23},
+        {%ra4, %ra5, %ra6, %ra7},
+        {%rbl1, %rbl3},
+        {%fc20, %fc21, %fc22, %fc23};
+    mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32
+        {%fc24, %fc25, %fc26, %fc27},
+        {%ra4, %ra5, %ra6, %ra7},
+        {%rbh0, %rbh2},
+        {%fc24, %fc25, %fc26, %fc27};
+    mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32
+        {%fc28, %fc29, %fc30, %fc31},
+        {%ra4, %ra5, %ra6, %ra7},
+        {%rbh1, %rbh3},
+        {%fc28, %fc29, %fc30, %fc31};
+
+
+    bar.sync 0;
+
+    add.s32 %k_iter, %k_iter, 1;
+    setp.lt.s32 %p1, %k_iter, 8;
+    @%p1 bra $L_kloop;
+
+    // ---- epilogue: store 32 acc registers to C ----
+    shr.u32 %r80, %r50, 2;
+    and.b32 %r81, %r50, 3;
+    mul.lo.u32 %r82, %r80, 2048;
+    shl.b32 %r83, %r81, 3;
+    add.u32 %r84, %r82, %r83;
+    cvt.u64.u32 %rd20, %r84;
+    add.u64 %rd20, %rd12, %rd20;
+
+    add.u64 %rd21, %rd20, 16384;
+    add.u64 %rd22, %rd20, 32768;
+    add.u64 %rd23, %rd20, 49152;
+
+    st.global.f32 [%rd20 +     0], %fc0;
+    st.global.f32 [%rd20 +     4], %fc1;
+    st.global.f32 [%rd21 +     0], %fc2;
+    st.global.f32 [%rd21 +     4], %fc3;
+    st.global.f32 [%rd20 +    32], %fc4;
+    st.global.f32 [%rd20 +    36], %fc5;
+    st.global.f32 [%rd21 +    32], %fc6;
+    st.global.f32 [%rd21 +    36], %fc7;
+    st.global.f32 [%rd20 +    64], %fc8;
+    st.global.f32 [%rd20 +    68], %fc9;
+    st.global.f32 [%rd21 +    64], %fc10;
+    st.global.f32 [%rd21 +    68], %fc11;
+    st.global.f32 [%rd20 +    96], %fc12;
+    st.global.f32 [%rd20 +   100], %fc13;
+    st.global.f32 [%rd21 +    96], %fc14;
+    st.global.f32 [%rd21 +   100], %fc15;
+
+    st.global.f32 [%rd22 +     0], %fc16;
+    st.global.f32 [%rd22 +     4], %fc17;
+    st.global.f32 [%rd23 +     0], %fc18;
+    st.global.f32 [%rd23 +     4], %fc19;
+    st.global.f32 [%rd22 +    32], %fc20;
+    st.global.f32 [%rd22 +    36], %fc21;
+    st.global.f32 [%rd23 +    32], %fc22;
+    st.global.f32 [%rd23 +    36], %fc23;
+    st.global.f32 [%rd22 +    64], %fc24;
+    st.global.f32 [%rd22 +    68], %fc25;
+    st.global.f32 [%rd23 +    64], %fc26;
+    st.global.f32 [%rd23 +    68], %fc27;
+    st.global.f32 [%rd22 +    96], %fc28;
+    st.global.f32 [%rd22 +   100], %fc29;
+    st.global.f32 [%rd23 +    96], %fc30;
+    st.global.f32 [%rd23 +   100], %fc31;
+
+    ret;
+
+$hilbert_oob_ret:
+    ret;
+}
