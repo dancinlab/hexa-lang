@@ -381,6 +381,53 @@ For each Tier-A sub-phase:
 
 ## Log
 
+### 2026-05-22 — Step 3+4+5 COMPLETE (113 fns · 6/8 잔여 ported · 2 CORE-final · 5-wipe saga closed by hook)
+
+Cumulative across step 3 + step 4 + step 5: **~113 fns ported** to
+hexa source. With cycles 103 (`hexa_eq` 9/9 closure) and 104
+(`hexa_to_string` array+map) landed, the **8 잔여** items reach their
+FINAL status — **6 ported, 2 CORE-final**:
+
+| # | item | status | cycles |
+|---|------|--------|--------|
+| 1 | `hexa_len` | ✅ ported | c99 alias + Step5 #2 raw-len builtins |
+| 2 | `hexa_to_string` | ✅ FULL | scalar c96 + array+map c104 |
+| 3 | `hexa_str_concat` | ✅ ported | Step5 #1 `b2ae2e9d` (realloc bug fix) |
+| 4 | `hexa_eq` | ✅ 9/9 CLOSED | STR c91 + ARRAY c97 + VOID/cross c100D + VALSTRUCT/MAP c100M + INT/FLOAT/BOOL c103 |
+| 5 | map basic ops | ❌ CORE-final | set/get/keys/values/remove — surface builtins lower to them; Robin Hood + intern malloc C-internal |
+| 6 | array allocators | ❌ CORE-final | `hexa_array_new`/`zeros`/`alloc` — `[]` lowers to `hexa_array_new` self-recursion; needs `__arr_alloc_items_zero` builtin (Step5 #2-bis attempt in flight) |
+| 7 | IO | ✅ 4/4 | `println`/`eprintln`/`eprint`/`print` c101+102 via `__fd_write_bytes` shim |
+| 8 | ValStruct repr | ✅ ported | c98 |
+
+**Step 5 4-unblocker campaign — all 4 resolved**:
+- #1 arena/realloc — `hexa_str_concat` made arena-safe (`b2ae2e9d`)
+- #2 raw-len builtins — `__arr_raw_len` family codegen-inline lowering
+- #3 HexaMapTable — declared **CORE-final** (opaque hash-table escape)
+- #4 `__fd_write_bytes` codegen builtin shim — unblocks IO (잔여 #7)
+
+**hexa_eq cycle 103 key insight**: a same-tag scalar `as`-cast body
+(`let ai: int = a as int; return ai == bi`) recursion-traps into
+`rt_eq_int` because the fn-local-shadowing guard short-circuits the
+known-int registration. The recursion-safe formulation is the
+**ordered comparison** `(a <= b) && (a >= b)` via `hexa_cmp_le`/
+`hexa_cmp_ge` — 0 `hexa_eq` call sites, byte-exact incl. NaN.
+
+**5-WIPE saga** (memory `feedback_runtime_c_deploy_regen_wipe`):
+commits `c39afbbe` + `0d59c419` + `724c38b3` + `c4c721bc` + `e8c2dc1c`
+each silent-wiped codegen builtin blocks (GPU/docs/wip commits) — **5
+re-lands** required. Governance closure: **wipe-guard hook landed**
+(commit `b0a58149`, `.githooks/commit-msg` + `.githooks/pre-commit`,
+opt-in via `git config core.hooksPath .githooks`) + project.tape @D
+`g_runtime_wipe_guard`.
+
+**Remaining Step 6+ work**:
+- (a) 잔여 #5 (map basic) + #6 (array alloc) need allocator / hash-table
+  builtins, or accept CORE-final
+- (b) hexa_v2 regen **Phase C.2** (cross-module forward decls — currently
+  a C-shim workaround for the IO / `hexa_eq` builtins)
+- (c) full self-host regen so all codegen-inline builtins activate
+  without hand-patching
+
 ### 2026-05-20 — Phase 0 closure
 
 - 🛸 cycle 41 `2392d901` — S3 fixpoint full closure PROVEN (gen1 ≡
