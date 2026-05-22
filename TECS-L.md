@@ -269,8 +269,33 @@ SSOT: `inbox/rfc_drafts_2026_05_22/rfc_080_hexa_loop_dfs.md`
 
 ---
 
-## 8. 다음 행동
+## 8. 진행 상태 (2026-05-22 갱신)
 
-1. 본 문서 (TECS-L.md) commit
-2. 사용자 승인 or redirect 대기
-3. 승인시 Phase A 진입 (`stdlib/loop/cycle.hexa` arg block 확장)
+작업 위치: 전용 worktree `/Users/ghost/core/hexa-lang-rfc080` (branch `rfc-080-dfs`).
+세션 중 shared main dir이 `main`으로 flip돼 격리 worktree로 relocate함.
+
+| Phase | 내용 | 상태 | commit |
+|---|---|---|---|
+| A | CLI flags + `--option` alias (VERSION 0.1.0) | ✅ | `17211a25` (dfflibmap) |
+| B | `dfs_llm_invoke` pluggable shellout | ✅ | `d8257dd6` |
+| C | prompt/parse/`dfs_run` beam-search + `cycle_dfs` + `build_atlas_view` | ✅ | `d8257dd6` |
+| D | verify gate (cite-required·cite-in-atlas·English-only·drop-log) | ✅ | `d8257dd6` |
+| E | 3-way AND budget + `--allow-llm` exec gate | ✅ | `d8257dd6` |
+| F | chain/telemetry ✅ · `--resume`+frontier persist | 부분 | — |
+| G | sha256 content cache | ✅ | `d8257dd6` |
+| H | `tests/loop/dfs_test.hexa` (parse+verify+run+budget) | 작성✅ compile검증 대기 | — |
+| I | RFC `inbox/rfc_drafts_2026_05_22/rfc_080_hexa_loop_dfs.md` + governance proposal | ✅ | — |
+| J | real-LLM oracle (claude `--allow-llm`) 비용/품질 측정 | 대기 (pool offload) | — |
+
+검증: `hexa parse` (로컬 OOM-free) → dfs.hexa + cycle.hexa + dfs_test.hexa 전부 PASS.
+behavioral(compiled)은 `HEXA_MODULE_LOADER`+build artifacts 필요 → Mac 부하 회피 위해
+pool(mini/ubu-2) offload.
+
+함정 기록: dfs.hexa 첫 작성 시 string literal에 NUL byte(0x00) 혼입 → hexa C-string
+lexer가 종료로 읽어 EOF까지 swallow. `cat -v`의 `^@`로 검출·수정. hexa string은 ASCII 필수.
+
+### 다음 행동
+1. pool offload로 dfs_test.hexa 컴파일+실행 (Phase H 검증)
+2. Phase J real-LLM oracle (claude 1회, cost ≤ $0.05 목표)
+3. (선택) Phase F `--resume` 완성 또는 follow-up RFC로 이월
+4. governance `@D g_llm_pluggable` 사용자 ratify 후 CLAUDE.md/AGENTS.tape 등록
