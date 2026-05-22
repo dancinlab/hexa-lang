@@ -156,8 +156,21 @@ path), `g_plan_consolidation` (compiler/PLAN.md entry per cycle),
     `grep -c '[\xe4-\xed]'`, but plain grep does not interpret `\xHH`; under
     sh+BSD grep the bracket matched ASCII letters, rejecting ALL English
     proposals. Fixed to a portable `tr -d '\0-\177' | wc -c` non-ASCII count.
-- Optional follow-up: one real `claude -p` expansion under
-  `--allow-llm --llm-calls 1` to measure live cost / quality.
+- **Real-LLM oracle, DONE:** the full `hexa loop` binary
+  (`hexac build stdlib/loop/cycle.hexa`) ran
+  `--dfs --allow-llm --llm-cmd "claude -p" --llm-calls 1 --depth 1 --beam 2`
+  on the real atlas: 153 lens seeds → **1 real Claude call → 2 verified
+  children emitted**, 152 frontier seeds saved for `--resume`. Estimated
+  cost ~$0.003. Sample child (parent
+  `empty_space.unmapped_axis.grade_distribution`):
+  `empty_space.unmapped_axis.ungraded_pair_isolate` (family
+  `counterexample_mine`, cite `[n]`) — "isolate the 2 ungraded P entries;
+  determine structurally-exempt vs merely-unscored" — a coherent,
+  cited, deeper hypothesis. Confirms the TECS-L depth-first descent works
+  with a live model end-to-end.
+- Note: `resume` is a transpiler reserved word — the DfsConfig field is
+  `do_resume` (the `hexa parse` checker accepts `resume` as an identifier
+  but the codegen transpiler does not; caught only at compiled build).
 
 ## 7. Non-scope (follow-up RFCs)
 
