@@ -25,11 +25,15 @@
 // Wired from self/main.hexa (`verify` → this). Runnable now:
 //   hexa run tool/verify_cli.hexa <id>
 
-use "compiler/atlas/hxc_loader"
+use "compiler/atlas/static_index"
+use "compiler/atlas/merger"
 use "compiler/atlas/symbolic/congruence_chain_engine"
 use "self/stdlib/fs"
 
-let HXC_PATH: string = "dist/atlas.hxc"
+// HXC retired 2026-05-22 — verify now reads from static_atlas() which
+// parses n6/atlas.n6 via the merger (no hxc). HXC_PATH constant kept as
+// a no-op string only so any external reference still resolves.
+let HXC_PATH: string = "n6/atlas.n6"
 let ABSORB_LEDGER: string = "atlas/inbox/verified_equations.tape"
 
 // --absorb anywhere in argv → fold a 🔵 verdict into the g7 inbox.
@@ -207,29 +211,38 @@ fn cmd_verify_id(rest) {
         exit(2)
     }
     let target = to_string(rest[0])
-    let nodes = load_atlas_hxc(HXC_PATH)
-    if len(nodes) == 0 {
+    // hxc retired 2026-05-22: pull the bucketed AtlasIndex from static_atlas
+    // (which parses n6/atlas.n6 via the merger) and walk all 9 kinds.
+    let idx = static_atlas()
+    let total = len(idx.p_nodes) + len(idx.c_nodes) + len(idx.l_nodes) + len(idx.e_nodes) + len(idx.f_nodes) + len(idx.r_nodes) + len(idx.s_nodes) + len(idx.x_nodes) + len(idx.q_nodes)
+    if total == 0 {
         println("verify " + target)
         println("  tier   = 🟠 INSUFFICIENT")
-        println("  reason = binary built-in atlas (dist/atlas.hxc) empty/absent")
+        println("  reason = atlas (n6/atlas.n6) empty/absent")
         return
     }
+    let kinds = ["P", "C", "L", "E", "F", "R", "S", "X", "Q"]
     let mut found = false
     let mut nraw = ""
     let mut nkind = ""
-    let mut i = 0
-    while i < len(nodes) {
-        let nd = nodes[i]
-        if nd.id == target {
-            found = true
-            nraw = nd.raw
-            nkind = nd.kind
-            i = len(nodes)
-        } else {
-            i = i + 1
+    let mut ki = 0
+    while ki < len(kinds) && !found {
+        let bucket = nodes_of_kind(idx, kinds[ki])
+        let mut i = 0
+        while i < len(bucket) {
+            let nd = bucket[i]
+            if nd.id == target {
+                found = true
+                nraw = nd.raw
+                nkind = nd.kind
+                i = len(bucket)
+            } else {
+                i = i + 1
+            }
         }
+        ki = ki + 1
     }
-    println("verify " + target + "   (binary built-in atlas: " + to_string(len(nodes)) + " nodes)")
+    println("verify " + target + "   (atlas: " + to_string(total) + " nodes from atlas.n6)")
     if !found {
         println("  tier   = 🟠 INSUFFICIENT")
         println("  reason = id not in atlas; no closed-form to recompute")

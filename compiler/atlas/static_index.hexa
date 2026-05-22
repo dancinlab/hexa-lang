@@ -34,7 +34,8 @@ use "compiler/atlas/parser"
 use "compiler/atlas/merger"
 use "compiler/atlas/overlay"
 use "compiler/atlas/prefix_index"
-use "compiler/atlas/hxc_loader"     // DEPRECATED 2026-05-22 — hxc retired; static_atlas now parses n6/atlas.n6. Kept until dist/atlas.hxc + this loader are removed post-redeploy.
+// (2026-05-22 — `use "compiler/atlas/hxc_loader"` removed; hxc retired,
+//  static_atlas now parses n6/atlas.n6 via merger::load_atlas.)
 
 // R7 track B (2026-05-18): `use "compiler/atlas/embedded.gen"` severed.
 // The module_loader cycle-safety fix made atlas_cli flatten succeed, but
