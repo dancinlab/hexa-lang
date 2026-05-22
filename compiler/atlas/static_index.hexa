@@ -34,7 +34,8 @@ use "compiler/atlas/parser"
 use "compiler/atlas/merger"
 use "compiler/atlas/overlay"
 use "compiler/atlas/prefix_index"
-use "compiler/atlas/hxc_loader"     // Path Y — HXC sidecar fast path
+// (2026-05-22 — `use "compiler/atlas/hxc_loader"` removed; hxc retired,
+//  static_atlas now parses n6/atlas.n6 via merger::load_atlas.)
 
 // R7 track B (2026-05-18): `use "compiler/atlas/embedded.gen"` severed.
 // The module_loader cycle-safety fix made atlas_cli flatten succeed, but
@@ -86,41 +87,33 @@ pub let ATLAS_HASH_MAX: string = ""
 // static path — those are merger-time signals and were resolved at
 // compiler-build time, not preserved across the embed boundary.
 pub fn static_atlas() -> AtlasIndex {
-    // Path Y (2026-05-15) — TWO-TIER FALLBACK:
-    //   1. Try dist/atlas.hxc (the HXC sidecar). If present, bucket
-    //      [AtlasNode] by kind and serve from that. Bypasses the
-    //      10-min interp hang on the 7,398-row embedded.gen.hexa
-    //      const-literal load.
-    //   2. If sidecar is missing or empty, fall back to the source
-    //      rodata path (ATLAS_*_NODES from embedded.gen.hexa).
-    let hxc_nodes = load_atlas_hxc("dist/atlas.hxc")
-    if len(hxc_nodes) > 0 {
-        println("atlas: loaded " + to_string(len(hxc_nodes)) + " nodes from hxc")
-        return _bucket_by_kind(hxc_nodes)
+    // SSOT = n6/atlas.n6 — the single full corpus (15,952 nodes, all 9
+    // kinds P/C/L/E/F/R/X/S/Q). NO HXC sidecar, NO embedded.gen
+    // struct-literal `use`. (2026-05-22 directive: "no hxc — atlas.n6 is
+    // the single artifact".)
+    //
+    // Why this is safe perf-wise re: the original hxc rationale: the cost
+    // hxc was built to dodge was the COMPILE-TIME const-literal load
+    // (7,398 `AtlasNode { ... }` literals via `use embedded.gen.hexa` →
+    // O(n²) codegen, 231 GiB OOM / 10-min interp hang). Parsing n6 as TEXT
+    // at load time never builds those literals into the binary, so it
+    // avoids the OOM exactly as the retired hxc text-parse did — just via
+    // the n6 grammar (compiler/atlas/merger::load_atlas).
+    //
+    // Resolution is NOT CWD-relative (that was the footgun that triggered
+    // the 2026-05-22 atlas-shrink incident): HEXA_ATLAS_N6 (an absolute dir
+    // containing atlas.n6) wins; an empty root makes the merger fall back
+    // to the stable ~/core/hexa-lang/n6 path.
+    let root = env("HEXA_ATLAS_N6")
+    let idx = load_atlas(root)
+    let n = len(idx.p_nodes) + len(idx.c_nodes) + len(idx.l_nodes) + len(idx.e_nodes) + len(idx.f_nodes) + len(idx.r_nodes) + len(idx.s_nodes) + len(idx.x_nodes) + len(idx.q_nodes)
+    if n > 0 {
+        println("atlas: loaded " + to_string(n) + " nodes from atlas.n6")
+    } else {
+        eprintln("atlas: no nodes parsed from atlas.n6 — serving EMPTY index")
+        eprintln("atlas: expected n6/atlas.n6 under the repo, or set HEXA_ATLAS_N6=/abs/dir-containing-atlas.n6")
     }
-    // R7 track B (2026-05-18): no-sidecar fallback. Previously returned
-    // the 4.9 MB ATLAS_*_NODES const arrays from embedded.gen.hexa; that
-    // `use` is now severed (see top-of-file note) so this returns an
-    // empty index + an honest regenerate hint. Unreachable in practice —
-    // dist/atlas.hxc is tracked + canonical (Path Y above always taken).
-    eprintln("atlas: dist/atlas.hxc sidecar missing/empty — serving EMPTY index")
-    eprintln("atlas: regenerate via `hexa run tool/atlas_build_hxc.hexa`")
-    eprintln("atlas: (embedded.gen.hexa remains the text SSOT for that tool)")
-    return AtlasIndex {
-        p_nodes: [],
-        c_nodes: [],
-        l_nodes: [],
-        e_nodes: [],
-        f_nodes: [],
-        r_nodes: [],
-        s_nodes: [],
-        x_nodes: [],
-        q_nodes: [],
-        hash: ATLAS_HASH,
-        source_count: ATLAS_SOURCE_COUNT,
-        duplicates: [],
-        skipped_oversize: []
-    }
+    return idx
 }
 
 // _bucket_by_kind — partition a flat [AtlasNode] into the 9 per-kind

@@ -358,8 +358,8 @@ fn cmd_append_witness(rest: array) {
             exit(2)
         }
     }
-    if kind != "P" && kind != "C" && kind != "L" && kind != "E" {
-        println("error: --kind must be one of P|C|L|E (got: " + kind + ")")
+    if kind != "P" && kind != "C" && kind != "L" && kind != "E" && kind != "F" && kind != "R" && kind != "S" && kind != "X" && kind != "Q" {
+        println("error: --kind must be one of P|C|L|E|F|R|S|X|Q (got: " + kind + ")")
         exit(2)
     }
     if len(id) == 0 {
@@ -370,6 +370,33 @@ fn cmd_append_witness(rest: array) {
     if len(raw) == 0 {
         println("error: --raw <content> or --stdin required")
         exit(2)
+    }
+
+    // Auto-wrap (2026-05-22): if --raw does not begin with a "@<KIND>" node
+    // header line, wrap it as a proper n6 node block. Without this, the
+    // merger detects ZERO nodes from the shard — parser.hexa::_is_header_sigil
+    // scans for "@<KIND> ..." lines, and a body-only raw produces 0 nodes,
+    // silently losing the absorbed knowledge (observed 2026-05-22: 6/6
+    // recent witness shards were orphan). Detection skips leading whitespace
+    // and checks the "@<KIND>" prefix followed by a separator.
+    let mut _j = 0
+    while _j < len(raw) {
+        let _c = raw.substring(_j, _j + 1)
+        if _c != " " && _c != "\t" && _c != "\n" && _c != "\r" { break }
+        _j = _j + 1
+    }
+    let _trimmed = raw.substring(_j, len(raw))
+    let _sigil = "@" + kind
+    let mut _has_sigil = false
+    if _trimmed.starts_with(_sigil + " ") { _has_sigil = true }
+    if _trimmed.starts_with(_sigil + "\n") { _has_sigil = true }
+    if _trimmed == _sigil { _has_sigil = true }
+    if !_has_sigil {
+        // Quoted single-line body. Escape backslashes first, then quotes,
+        // then newlines (so multi-line raw becomes one quoted line — the
+        // merger's quoted-string rule accepts a single quoted body).
+        let _esc = raw.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", " ").replace("\r", " ")
+        raw = "@" + kind + " " + id + "\n  \"" + _esc + "\""
     }
     let mut dir = dir_override
     if len(dir) == 0 { dir = _resolve_staging_dir() }
@@ -802,8 +829,8 @@ fn register_from_event(ev: DiscoveryEvent, auto_pr: bool, atlas_root: string,
         return "register_from_event: refusing event with verdict='" + ev.verdict +
                "' (only 🔵 SUPPORTED-FORMAL is promotable; adapter should have degraded)"
     }
-    if len(ev.kind) == 0 || (ev.kind != "P" && ev.kind != "C" && ev.kind != "L" && ev.kind != "E" && ev.kind != "F") {
-        return "register_from_event: invalid kind='" + ev.kind + "' (must be P|C|L|E|F)"
+    if len(ev.kind) == 0 || (ev.kind != "P" && ev.kind != "C" && ev.kind != "L" && ev.kind != "E" && ev.kind != "F" && ev.kind != "R" && ev.kind != "S" && ev.kind != "X" && ev.kind != "Q") {
+        return "register_from_event: invalid kind='" + ev.kind + "' (must be P|C|L|E|F|R|S|X|Q)"
     }
     if len(ev.id) == 0 {
         return "register_from_event: empty id (adapter must mint a stable id)"
