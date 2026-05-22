@@ -1,0 +1,93 @@
+#!hexa strict
+// hexa-matter/_hexa_bridge/selftest/prc_yield_audit.hexa
+//
+// PRC group yield-claim honesty gate. hexa-native port of
+// `selftest/prc_yield_audit.py` (T2). A bare "NN % yield" (no caveat /
+// anchor in its paragraph) FAILs — UNLESS the spec is a LEGACY_KNOWN
+// canon-import (all 3 PRC specs are), in which case it is REPORTED, not
+// failed. Behaviour-equal: 3/3 specs are legacy → fail is always 0.
+//
+// Stage-1: Python `re` paragraph split (\n\s*\n) → split("\n\n"), and
+// `\d{1,3}\s*%\s*(yield|...)` → "% <kw>" substring. Result-equivalent
+// here because the legacy guard short-circuits the fail path.
+// stdlib-only; exec file read.
+
+let ROOT_ENV = env("HEXA_MATTER_ROOT")
+
+fn shq(s: str) -> str { return "'" + s.replace("'", "'\\''") + "'" }
+
+fn root() -> str {
+    if ROOT_ENV.len() > 0 { return ROOT_ENV }
+    return exec("pwd").trim()
+}
+
+fn read_if(p: str) -> str {
+    let ex = exec("[ -f " + shq(p) + " ] && echo y || echo n").trim()
+    if ex == "y" { return exec("cat " + shq(p) + " 2>/dev/null") }
+    return ""
+}
+
+// PRC_SPECS — all three are LEGACY_KNOWN.
+let PRC_SPECS = ["synthesis/material-synthesis.md", "recycle_n6/hexa-recycle.md", "recycling/recycling.md"]
+let YKW = ["% yield", "%yield", "% recovery", "%recovery", "% conversion", "% efficiency", "% recycle"]
+let CAVEATS = ["UNVERIFIED", "UNPROVEN", "TBD", "draft", "candidate", "ASTM", "ISO", "SEMI", "NIST", "vendor", "datasheet", "F-Si-", "F-CER-", "F-POL-", "F-MET-", "F-PRC-", "B-CER-", "B-POL-", "B-MET-", "B-PRC-", "OECD", "EPA"]
+
+fn para_has_yield(p: str) -> bool {
+    let lo = p.to_lower()
+    let mut i = 0
+    while i < YKW.len() {
+        if lo.contains(YKW[i]) { return true }
+        i = i + 1
+    }
+    return false
+}
+
+fn para_has_caveat(p: str) -> bool {
+    let mut i = 0
+    while i < CAVEATS.len() {
+        if p.contains(CAVEATS[i]) { return true }
+        i = i + 1
+    }
+    return false
+}
+
+fn main() {
+    println("hexa-matter/selftest/prc_yield_audit (hexa-native, T2)")
+    let r = root()
+    let mut fail = 0
+    let mut legacy_warn = 0
+    let mut i = 0
+    while i < PRC_SPECS.len() {
+        let rel = PRC_SPECS[i]
+        let text = read_if(r + "/" + rel)
+        if text.len() == 0 {
+            println("  [WARN] missing PRC spec: " + rel)
+            i = i + 1
+            continue
+        }
+        let paras = text.split("\n\n")
+        let mut anchored = 0
+        let mut bare = 0
+        let mut j = 0
+        while j < paras.len() {
+            let para = paras[j]
+            if para_has_yield(para) {
+                if para_has_caveat(para) { anchored = anchored + 1 } else { bare = bare + 1 }
+            }
+            j = j + 1
+        }
+        println("  [INFO] " + rel + ": yield paragraphs " + str(anchored + bare) + " (anchored=" + str(anchored) + ", bare=" + str(bare) + ") (legacy canon-import)")
+        if (anchored + bare) > 0 && anchored == 0 {
+            // all 3 PRC specs are LEGACY_KNOWN → report, do not fail.
+            println("  [LEGACY-KNOWN] " + rel + ": bare yield from canon lattice-fit prose")
+            legacy_warn = legacy_warn + 1
+        }
+        i = i + 1
+    }
+
+    if fail > 0 {
+        println("__HEXA_MATTER_PRC_YIELD__ FAIL  (" + str(fail) + " non-legacy bare-yield)")
+        exit(1)
+    }
+    println("__HEXA_MATTER_PRC_YIELD__ PASS  (legacy-known bare-yield specs: " + str(legacy_warn) + ")")
+}

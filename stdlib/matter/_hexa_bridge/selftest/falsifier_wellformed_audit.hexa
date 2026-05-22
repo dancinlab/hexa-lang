@@ -1,0 +1,228 @@
+#!hexa strict
+// hexa-matter/_hexa_bridge/selftest/falsifier_wellformed_audit.hexa
+//
+// falsifier well-formedness gate (#31). hexa-native port of
+// `selftest/falsifier_wellformed_audit.py` (T2).
+//
+// Lossless: ROW_RE / CAND_RE.fullmatch / FTAG_RE are hand-rolled to the
+// exact char classes; NUM_UNIT_RE (\d+(?:\.\d+)?\s*UNIT, big unit
+// alternation) is run via grep -E whose ERE is the literal equivalent
+// (\d→[0-9], \s→[[:space:]], (?:..)→(..), [·\*]→[·*]); the row/​nbhd
+// "OR" collapses to nbhd alone (row line ⊂ ±5 nbhd, so a row-text match
+// is necessarily a nbhd match); CIT_HINT only consulted for HARD
+// status. PASS iff K(nonconforming) == 0. stdlib-only; exec.
+
+let ROOT_ENV = env("HEXA_MATTER_ROOT")
+
+fn shq(s: str) -> str { return "'" + s.replace("'", "'\\''") + "'" }
+
+fn root() -> str {
+    if ROOT_ENV.len() > 0 { return ROOT_ENV }
+    return exec("pwd").trim()
+}
+let G_ROOT = root()
+let NOVELP = G_ROOT + "/NOVEL.md"
+
+let WCH = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_"
+fn is_word_ch(c: str) -> bool { return c.len() == 1 && WCH.contains(c) }
+fn is_ws(c: str) -> bool { return c == " " || c == "\t" }
+fn is_dig(c: str) -> bool { return c.len() == 1 && "0123456789".contains(c) }
+fn is_lo09(c: str) -> bool { return c.len() == 1 && "abcdefghijklmnopqrstuvwxyz0123456789".contains(c) }
+fn is_AZ09(c: str) -> bool { return c.len() == 1 && "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789".contains(c) }
+fn is_cls2(c: str) -> bool { return is_word_ch(c) || c == "-" }   // [a-zA-Z0-9_-]
+
+// ROW_RE: ^\|\s*`(hxm-[a-zA-Z0-9_-]+)`\s*\|(.+)$  → [id,g2] or []
+fn parse_row(line: str) -> [str] {
+    let empty: [str] = []
+    if line.len() == 0 || line.substr(0, 1) != "|" { return empty }
+    let mut p = 1
+    while p < line.len() && is_ws(line.substr(p, 1)) { p = p + 1 }
+    if p >= line.len() || line.substr(p, 1) != "`" { return empty }
+    p = p + 1
+    let s0 = p
+    while p < line.len() && line.substr(p, 1) != "`" { p = p + 1 }
+    if p >= line.len() { return empty }
+    let id = line.substr(s0, p - s0)
+    if id.len() < 4 || id.substr(0, 4) != "hxm-" { return empty }
+    let mut ci = 0
+    while ci < id.len() { if is_cls2(id.substr(ci, 1)) == false { return empty }; ci = ci + 1 }
+    p = p + 1
+    while p < line.len() && is_ws(line.substr(p, 1)) { p = p + 1 }
+    if p >= line.len() || line.substr(p, 1) != "|" { return empty }
+    p = p + 1
+    if p >= line.len() { return empty }
+    return [id, line.substr(p, line.len() - p)]
+}
+
+// CAND_RE fullmatch: ^hxm-[a-z0-9]+-[a-zA-Z0-9_-]+-[0-9]{3}$
+fn cand_full(cid: str) -> bool {
+    if cid.len() < 4 || cid.substr(0, 4) != "hxm-" { return false }
+    let rest = cid.substr(4, cid.len() - 4)
+    // seg1 = [a-z0-9]+ up to first '-'
+    let mut p1 = -1
+    let mut i = 0
+    while i < rest.len() {
+        if rest.substr(i, 1) == "-" { p1 = i; break }
+        i = i + 1
+    }
+    if p1 < 1 { return false }
+    let mut j = 0
+    while j < p1 { if is_lo09(rest.substr(j, 1)) == false { return false }; j = j + 1 }
+    let rem = rest.substr(p1 + 1, rest.len() - p1 - 1)
+    let L = rem.len()
+    if L < 5 { return false }
+    // last 3 digits, char before = '-'
+    let mut d = L - 3
+    while d < L { if is_dig(rem.substr(d, 1)) == false { return false }; d = d + 1 }
+    if rem.substr(L - 4, 1) != "-" { return false }
+    // class2 = rem[0:L-4], len>=1, all [a-zA-Z0-9_-]
+    if L - 4 < 1 { return false }
+    let mut k = 0
+    while k < L - 4 { if is_cls2(rem.substr(k, 1)) == false { return false }; k = k + 1 }
+    return true
+}
+
+// FTAG_RE: \bF-[A-Z0-9][A-Z0-9_-]*-[0-9]+\b
+fn has_ftag(s: str) -> bool {
+    let n = s.len()
+    let mut k = 0
+    while k + 2 <= n {
+        if s.substr(k, 2) == "F-" {
+            let mut bok = true
+            if k > 0 { if is_word_ch(s.substr(k - 1, 1)) { bok = false } }
+            if bok {
+                if k + 2 < n && is_AZ09(s.substr(k + 2, 1)) {
+                    // scan for '-'<digits> with [A-Z0-9_-]* between
+                    let mut q = k + 3
+                    while q < n {
+                        if s.substr(q, 1) == "-" {
+                            let mut dd = q + 1
+                            let mut dn = 0
+                            while dd < n && is_dig(s.substr(dd, 1)) { dd = dd + 1; dn = dn + 1 }
+                            if dn >= 1 {
+                                let endb = dd >= n || is_word_ch(s.substr(dd, 1)) == false
+                                let mut good = true
+                                let mut t = k + 3
+                                while t < q && good {
+                                    let c = s.substr(t, 1)
+                                    if (is_AZ09(c) || c == "_" || c == "-") == false { good = false }
+                                    t = t + 1
+                                }
+                                if good && endb { return true }
+                            }
+                        }
+                        q = q + 1
+                    }
+                }
+            }
+        }
+        k = k + 1
+    }
+    return false
+}
+
+let NUM_UNIT = "[0-9]+(\\.[0-9]+)?[[:space:]]*(mAh/g|GPa|MPa|S/cm|mS/cm|nm|μm|cm[²2]|°C|K|mV|V|h|ppm|Wh/L|wt[[:space:]]*%|%|kJ/mol|J/g|W/\\(?m[·*]?K\\)?|F/g|pC/N|μW/\\(?m[·*]?K[²2]\\)?|dB|Jones|fJ/bit|sun|EUR|USD|kg/m[³3]|g/cm[³3]|MGOe|cycles?|mol/g|mmol/g|μmol|μs|ms|ns|fs|atm|bar|Pa|T|H|Hz|GHz|MHz|kg|t|m|km|Å)"
+
+let CIT_HINT = "sample[-[:space:]]?ID|lab[[:space:]]+citation|external[[:space:]]+lab|DOI:|arxiv:|NIST|CRC|ASM|ASTM|SEMI|TAPPI|ISO|GIA|AATCC"
+
+fn ge(text: str, ere: str) -> bool {
+    let n = exec("printf '%s' " + shq(text) + " | grep -cE " + shq(ere) + " 2>/dev/null | head -1").trim()
+    return n.len() > 0 && n != "0"
+}
+fn gi(text: str, ere: str) -> bool {
+    let n = exec("printf '%s' " + shq(text) + " | grep -ciE " + shq(ere) + " 2>/dev/null | head -1").trim()
+    return n.len() > 0 && n != "0"
+}
+
+fn has_any(t: str, xs: [str]) -> bool {
+    let mut i = 0
+    while i < xs.len() { if t == xs[i] { return true }; i = i + 1 }
+    return false
+}
+
+let ALLOWED = ["DESIGN", "SIM-DFT", "SIM-MD", "SIM-NNP", "SIM-NNP-PROXY",
+               "SYNTH-ROUTE", "UNVERIFIED", "FALSIFIED"]
+let HARD = ["EXTERNAL-VERIFIED", "VERIFIED"]
+
+fn strip_bt(s: str) -> str {
+    let mut a = 0
+    while a < s.len() && s.substr(a, 1) == "`" { a = a + 1 }
+    let mut b = s.len()
+    while b > a && s.substr(b - 1, 1) == "`" { b = b - 1 }
+    return s.substr(a, b - a)
+}
+
+fn main() {
+    println("hexa-matter/selftest/falsifier_wellformed_audit (hexa-native, T2)")
+    println("  root: " + G_ROOT)
+    if exec("[ -f " + shq(NOVELP) + " ] && echo y || echo n").trim() != "y" {
+        println("__HEXA_MATTER_FALSIFIER_WELLFORMED__ FAIL (NOVEL.md missing)")
+        exit(1)
+    }
+    let lines = exec("cat " + shq(NOVELP) + " 2>/dev/null").split("\n")
+
+    let mut n_cand = 0
+    let mut wellformed = 0
+    let mut nonconf = 0
+    let mut shown = 0
+
+    let mut idx = 0
+    while idx < lines.len() {
+        let line = lines[idx]
+        let pr = parse_row(line)
+        if pr.len() == 2 && line.contains("PLACEHOLDER") == false {
+            let cid = pr[0]
+            if cand_full(cid) {
+                let g2 = pr[1]
+                let cells = g2.split("|")
+                if cells.len() >= 5 {
+                    n_cand = n_cand + 1
+                    let status = strip_bt(cells[3].trim())
+                    let falsifier = cells[4].trim()
+                    // ±5 neighborhood (row line ⊂ nbhd ⟹ row|nbhd ≡ nbhd)
+                    let mut lo = idx - 5
+                    if lo < 0 { lo = 0 }
+                    let mut hi = idx + 6
+                    if hi > lines.len() { hi = lines.len() }
+                    let mut nbhd = ""
+                    let mut w = lo
+                    while w < hi { nbhd = nbhd + lines[w] + "\n"; w = w + 1 }
+
+                    let mut msg = ""
+                    if has_ftag(nbhd) == false {
+                        msg = "missing F-tag in falsifier section"
+                    } else if ge(nbhd, NUM_UNIT) == false {
+                        msg = "missing number+unit pair (quantitative evidence)"
+                    } else if nbhd.contains("→ FAIL") == false && nbhd.contains("→ FALSIFIED") == false {
+                        msg = "missing '→ FAIL' boundary within 5 lines of F-tag"
+                    } else if has_any(status, HARD) && gi(line, CIT_HINT) == false {
+                        msg = "status '" + status + "' without external-lab citation on row"
+                    } else if has_any(status, ALLOWED) == false && has_any(status, HARD) == false {
+                        msg = "unknown status '" + status + "'"
+                    }
+
+                    if msg.len() == 0 {
+                        wellformed = wellformed + 1
+                    } else {
+                        nonconf = nonconf + 1
+                        if shown < 25 { println("  - " + cid + ": " + msg); shown = shown + 1 }
+                    }
+                }
+            }
+        }
+        idx = idx + 1
+    }
+
+    println("  candidates: " + str(n_cand))
+    if nonconf == 0 {
+        println("  [PASS] all " + str(wellformed) + " candidate rows wellformed")
+    } else {
+        println("  [FAIL] " + str(nonconf) + " nonconforming candidate row(s)")
+    }
+    println("")
+    if nonconf > 0 {
+        println("__HEXA_MATTER_FALSIFIER_WELLFORMED__ FAIL (" + str(n_cand) + " candidates, " + str(wellformed) + " wellformed, " + str(nonconf) + " nonconforming)")
+        exit(1)
+    }
+    println("__HEXA_MATTER_FALSIFIER_WELLFORMED__ PASS (" + str(n_cand) + " candidates, " + str(wellformed) + " wellformed, " + str(nonconf) + " nonconforming)")
+}

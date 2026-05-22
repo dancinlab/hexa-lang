@@ -1,0 +1,106 @@
+#!hexa strict
+// hexa-matter/verify/spec_presence.hexa — 36-verb spec doc presence verifier.
+//
+// Closure anchor #1 for hexa-matter (spec-first substrate):
+// each of the 36 verbs (17 v1.0.0 + 12 Phase D + 4 Phase D follow-on
+// + 3 Phase D'' 2026-05-13) declared in hexa.toml [verbs] must resolve
+// to a real spec markdown at <subdir>/<filename>. This is the *honest*
+// closure check for a spec-first repo — file presence, not behavioural promise.
+//
+// Per LATTICE_POLICY §1.3: spec-presence is real engineering verification
+// (files exist on disk); not a lattice tautology.
+
+let HOME = env("HOME")
+let HEXA_MATTER_ROOT_ENV = env("HEXA_MATTER_ROOT")
+
+fn shq(s: str) -> str {
+    return "'" + s.replace("'", "'\\''") + "'"
+}
+
+fn _resolve_root() -> str {
+    if HEXA_MATTER_ROOT_ENV.len() > 0 { return HEXA_MATTER_ROOT_ENV }
+    let oldpwd = env("OLDPWD")
+    if oldpwd.len() > 0 {
+        let t = exec("[ -f " + shq(oldpwd) + "/hexa.toml ] && echo y || echo n").trim()
+        if t == "y" { return oldpwd }
+    }
+    let pwd = env("PWD")
+    if pwd.len() > 0 {
+        let t = exec("[ -f " + shq(pwd) + "/hexa.toml ] && echo y || echo n").trim()
+        if t == "y" { return pwd }
+    }
+    return HOME + "/core/hexa-matter"
+}
+
+fn _file_exists(p: str) -> bool {
+    let r = exec("[ -f " + shq(p) + " ] && echo yes || echo no").trim()
+    return r == "yes"
+}
+
+// 36-verb spec registry — must match cli/hexa-matter.hexa VERBS and hexa.toml [verbs].
+let VERBS = [
+    ["ceramics",               "ceramics/ceramics.md"],
+    ["concrete",               "concrete/concrete.md"],
+    ["concrete_tech",          "concrete_tech/concrete-technology.md"],
+    ["glass",                  "glass/hexa-glass.md"],
+    ["silicon",                "silicon/silicon.md"],
+    ["compound-semi",          "compound-semi/compound-semi.md"],
+    ["perovskite",             "perovskite/perovskite.md"],
+    ["2d-materials",           "2d-materials/2d-materials.md"],
+    ["mof",                    "mof/mof.md"],
+    ["carbon",                 "carbon/carbon.md"],
+    ["glass-ceramic",          "glass-ceramic/glass-ceramic.md"],
+    ["geopolymer",             "geopolymer/geopolymer.md"],
+    ["aerogel-foam",           "aerogel-foam/aerogel-foam.md"],
+    ["refractory",             "refractory/refractory.md"],
+    ["electrode-material",     "electrode-material/electrode-material.md"],
+    ["aramid",                 "aramid/aramid.md"],
+    ["epoxy",                  "epoxy/epoxy.md"],
+    ["nylon",                  "nylon/nylon.md"],
+    ["pet_film",               "pet_film/pet-film.md"],
+    ["tire_cord",              "tire_cord/tire-cord.md"],
+    ["elastomer",              "elastomer/elastomer.md"],
+    ["adhesive",               "adhesive/adhesive.md"],
+    ["liquid-crystal",         "liquid-crystal/liquid-crystal.md"],
+    ["biodegradable-plastics", "biodegradable-plastics/biodegradable-plastics.md"],
+    ["ionic-liquid",           "ionic-liquid/ionic-liquid.md"],
+    ["photoresist",            "photoresist/photoresist.md"],
+    ["fabric",                 "fabric/hexa-fabric.md"],
+    ["paper",                  "paper/paper.md"],
+    ["wood-cellulose",         "wood-cellulose/wood-cellulose.md"],
+    ["gemology",               "gemology/gemology.md"],
+    ["metallurgy",             "metallurgy/swordsmithing.md"],
+    ["superalloy",             "superalloy/superalloy.md"],
+    ["magnetic-materials",     "magnetic-materials/magnetic-materials.md"],
+    ["synthesis",              "synthesis/material-synthesis.md"],
+    ["recycle_n6",             "recycle_n6/hexa-recycle.md"],
+    ["recycling",              "recycling/recycling.md"],
+]
+
+fn main() {
+    let root = _resolve_root()
+    println("hexa-matter/verify/spec_presence — 36-verb spec doc presence")
+    println("  root: " + root)
+    println("")
+    let mut ok = 0
+    let mut bad = 0
+    for row in VERBS {
+        let verb = row[0]
+        let rel = row[1]
+        let abs_p = root + "/" + rel
+        if _file_exists(abs_p) {
+            println("  [PASS] " + verb + " -> " + rel)
+            ok = ok + 1
+        } else {
+            println("  [FAIL] " + verb + " -> " + rel + " MISSING (abs: " + abs_p + ")")
+            bad = bad + 1
+        }
+    }
+    println("")
+    println("  spec docs present: " + str(ok) + " / 36")
+    if bad > 0 {
+        println("__HEXA_MATTER_SPEC_PRESENCE__ FAIL")
+        exit(1)
+    }
+    println("__HEXA_MATTER_SPEC_PRESENCE__ PASS")
+}

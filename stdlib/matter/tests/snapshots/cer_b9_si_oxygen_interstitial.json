@@ -1,0 +1,30 @@
+{
+  "__fixture_tag__": "VENDORED SOURCE SNAPSHOT — ASTM standard, frozen",
+  "gate_id": "cer_b9_si_oxygen_interstitial",
+  "claim": {
+    "property": "interstitial oxygen concentration [O_i] in CZ Si wafer",
+    "material": "Czochralski-grown silicon wafer (300 mm prime)",
+    "value_range_ppma": [10.0, 30.0],
+    "value_range_cm3": [5.0e17, 1.5e18],
+    "unit": "ppma (ASTM old) or cm^-3 (new)",
+    "condition": "FTIR 1107 cm^-1 absorption, ASTM F121 (old) or F1188 (new) calibration"
+  },
+  "source": {
+    "kind": "ASTM_STANDARD",
+    "primary": "ASTM F121-83 — FTIR interstitial oxygen in silicon (old calibration)",
+    "secondary": "ASTM F1188-93 — FTIR interstitial oxygen (new IOC calibration)",
+    "citation": "ASTM F121 / F1188 — CZ Si wafer [O_i] typical 10-30 ppma (5-15 x 10^17 cm^-3) by FTIR at 1107 cm^-1"
+  },
+  "tolerance": {
+    "rel": 0.15,
+    "unit": "fractional",
+    "basis": "ASTM F121 inter-lab reproducibility ~ 10-15%"
+  },
+  "spec_doc": {
+    "path": "silicon/silicon.md",
+    "line_hint": "Si-L9 [O_i] anchor row"
+  },
+  "unproven": false,
+  "accessed": "2026-05-13",
+  "n6_lattice_fit_applied": false
+}

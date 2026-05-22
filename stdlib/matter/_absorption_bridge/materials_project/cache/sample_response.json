@@ -1,0 +1,35 @@
+{
+  "__fixture_tag__": "SAMPLE FIXTURE — not real data, for selftest replay only",
+  "__source__": "Materials Project API record schema (illustrative); real fetch via mp-api SDK",
+  "__captured__": "2026-05-13 (hexa-matter Phase G)",
+  "material_id": "mp-149",
+  "formula_pretty": "Si",
+  "elements": ["Si"],
+  "nsites": 2,
+  "volume": 40.888,
+  "density": 2.329,
+  "symmetry": {
+    "crystal_system": "Cubic",
+    "symbol": "Fd-3m",
+    "number": 227
+  },
+  "structure": {
+    "lattice": {
+      "a": 5.4307,
+      "b": 5.4307,
+      "c": 5.4307,
+      "alpha": 90.0,
+      "beta": 90.0,
+      "gamma": 90.0
+    },
+    "sites": [
+      {"species": [{"element": "Si", "occu": 1.0}], "abc": [0.0,  0.0,  0.0]},
+      {"species": [{"element": "Si", "occu": 1.0}], "abc": [0.25, 0.25, 0.25]}
+    ]
+  },
+  "band_gap": 0.612,
+  "is_gap_direct": false,
+  "formation_energy_per_atom": 0.0,
+  "energy_above_hull": 0.0,
+  "license": "CC-BY 4.0 (Materials Project; Persson et al. 2013 APL Materials)"
+}

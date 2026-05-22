@@ -1,0 +1,69 @@
+#!hexa strict
+// hexa-matter/_hexa_bridge/selftest/met_alloy_classification.hexa
+//
+// MET group alloy-family coverage gate. hexa-native port of
+// `selftest/met_alloy_classification.py` (T2). PASS iff >= 3 canonical
+// alloy families surface across the MET spec corpus.
+// stdlib-only; file reads via exec.
+
+let ROOT_ENV = env("HEXA_MATTER_ROOT")
+
+fn shq(s: str) -> str { return "'" + s.replace("'", "'\\''") + "'" }
+
+fn root() -> str {
+    if ROOT_ENV.len() > 0 { return ROOT_ENV }
+    return exec("pwd").trim()
+}
+
+fn read_if(p: str) -> str {
+    let ex = exec("[ -f " + shq(p) + " ] && echo y || echo n").trim()
+    if ex == "y" { return exec("cat " + shq(p) + " 2>/dev/null") }
+    return ""
+}
+
+fn has_str(xs: [str], v: str) -> bool {
+    let mut i = 0
+    while i < xs.len() {
+        if xs[i] == v { return true }
+        i = i + 1
+    }
+    return false
+}
+
+let MET_SPECS = ["metallurgy/swordsmithing.md", "superalloy/superalloy.md", "magnetic-materials/magnetic-materials.md", "METALLURGY-DEEP.md", "SWORDSMITHING.md"]
+
+// Flattened (family-tag, keyword) — 8 families.
+let FN = ["ni","ni","ni","ni","ni","ni","ni","co","co","co","co","feni","feni","feni","ti","ti","ti","ndfeb","ndfeb","ndfeb","smco","smco","smco","smco","smco","soft","soft","soft","soft","soft","steel","steel","steel","steel","steel","steel"]
+let FK = ["Ni-based","Ni-base","Inconel","Nimonic","CMSX","Rene","Hastelloy","Co-based","Co-base","Stellite","HAYNES","Fe-Ni-based","Fe-Ni-base","Incoloy","Ti-6Al-4V","Ti-alloy","titanium alloy","NdFeB","Nd2Fe14B","Nd₂Fe₁₄B","SmCo","Sm2Co17","Sm₂Co₁₇","SmCo5","SmCo₅","Metglas","Finemet","Si-Fe","permalloy","Permalloy","AISI","Eurofer","RAFM","austenite","bainite","martensite"]
+
+fn main() {
+    println("hexa-matter/selftest/met_alloy_classification (hexa-native, T2)")
+    let r = root()
+    let mut corpus = ""
+    let mut i = 0
+    while i < MET_SPECS.len() {
+        let body = read_if(r + "/" + MET_SPECS[i])
+        if body.len() > 0 {
+            corpus = corpus + "\n" + body
+            println("  [OK]   loaded " + MET_SPECS[i])
+        }
+        i = i + 1
+    }
+
+    let mut hitfam: [str] = []
+    let mut k = 0
+    while k < FK.len() {
+        if corpus.contains(FK[k]) {
+            if has_str(hitfam, FN[k]) == false { hitfam.push(FN[k]) }
+        }
+        k = k + 1
+    }
+
+    println("  alloy families covered: " + str(hitfam.len()) + " / 8")
+    if hitfam.len() >= 3 {
+        println("__HEXA_MATTER_MET_ALLOY_CLASSIFICATION__ PASS  (" + str(hitfam.len()) + " families)")
+    } else {
+        println("__HEXA_MATTER_MET_ALLOY_CLASSIFICATION__ FAIL  (only " + str(hitfam.len()) + "; need >= 3)")
+        exit(1)
+    }
+}
