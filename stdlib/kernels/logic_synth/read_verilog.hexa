@@ -988,7 +988,67 @@ fn _rv_elab_primary(toks: [str], pos: int, m_in: Module, tab: SymTab) -> ElabRes
                 err: "read_verilog: expr: expected `)` got `" + toks[inner.pos] + "`"
             }
         }
-        return ElabResult { wire: inner.wire, m: m, pos: inner.pos + 1, err: "" }
+        // rfc_006 §5 d4 ±5% FINAL closure (2026-05-22): handle post-paren
+        // `[…]` selects. Token-level function-inline rewrites
+        //   f(pkt)            →  ( ( pkt ) [ 6 : 4 ] )
+        // i.e. each arg is wrapped in `(arg)` AND the body is wrapped in
+        // `(body)`. When the body has the shape `arg[hi:lo]` (bit-select
+        // on a function arg), the inlined output becomes `((pkt)[6:4])`
+        // — a parenthesised expression followed by a `[...]` group. The
+        // bare-wire path at L1051 already swallows trailing index groups;
+        // mirror that here so `(expr)[range]` parses identically to
+        // `expr[range]`. Without this, the inner-paren primary returns
+        // at `pos = 3` (just past `)`), the outer `_rv_elab_expr` breaks
+        // at `[` (no binop), and the OUTER paren primary then complains
+        // "expected `)` got `[`" → probe ok=0 → SSA path bails to legacy
+        // unroll → no inner-if dyn-idx → 5 `out_valid[k]` `_const0_` ties
+        // (router_d4 Δ 10.07% residual).
+        //
+        // For const-foldable indices we append `[<val>]` to the wire name
+        // (legacy behaviour). For range / dyn-idx we silently drop the
+        // bracket group (honest gap — same as bare-wire path L1093+ when
+        // the array bound is 0). Multi-dim falls through naturally.
+        let mut cur_w = inner.wire
+        let mut cur_pos = inner.pos + 1
+        while cur_pos < n && toks[cur_pos] == "[" {
+            let mut _idx2: [str] = []
+            let mut _np2 = cur_pos + 1
+            let mut _bd2 = 1
+            while _np2 < n {
+                let _it2 = toks[_np2]
+                if _it2 == "[" { _bd2 = _bd2 + 1; _idx2 = _idx2.push(_it2); _np2 = _np2 + 1; continue }
+                if _it2 == "]" {
+                    _bd2 = _bd2 - 1
+                    if _bd2 == 0 { break }
+                    _idx2 = _idx2.push(_it2); _np2 = _np2 + 1; continue
+                }
+                _idx2 = _idx2.push(_it2); _np2 = _np2 + 1
+            }
+            // Only const-fold simple `[<const>]` for now. Range / dyn-idx
+            // is silently dropped (whole-word retained) — matches the
+            // bare-wire path's behaviour when `_rv_array_bound == 0` (the
+            // parent wire is a fresh `$rvexpr$N`, not a registered array).
+            let mut _isrange2 = 0
+            let mut _kk = 0
+            let mut _rd2 = 0
+            while _kk < len(_idx2) {
+                let _tk2 = _idx2[_kk]
+                if _tk2 == "[" { _rd2 = _rd2 + 1 }
+                if _tk2 == "]" { _rd2 = _rd2 - 1 }
+                if _rd2 == 0 && (_tk2 == ":" || _tk2 == "-:" || _tk2 == "+:") {
+                    _isrange2 = 1
+                }
+                _kk = _kk + 1
+            }
+            if _isrange2 == 0 {
+                let _ev2 = _rv_eval_expr(_idx2, 0, tab, 1)
+                if len(_ev2.err) == 0 {
+                    cur_w = cur_w + "[" + str(_ev2.value) + "]"
+                }
+            }
+            cur_pos = _np2 + 1
+        }
+        return ElabResult { wire: cur_w, m: m, pos: cur_pos, err: "" }
     }
     if t == "1'b0" { return ElabResult { wire: "$const_0", m: m, pos: pos + 1, err: "" } }
     if t == "1'b1" { return ElabResult { wire: "$const_1", m: m, pos: pos + 1, err: "" } }
@@ -5176,12 +5236,33 @@ fn _rv_parse_always(st_in: PState, m_in: Module, tab: SymTab) -> RvStep {
                             let _ssa_rw = _rv_ssa_rewrite_preloop_for(m, s, _ssa_snapshot_n)
                             m = _ssa_rw.m
                             if _ssa_rw.rewrote == 0 {
-                                // No pre-loop direct write to `s` —
-                                // emit the legacy alias so iter-0 reads
-                                // see whatever drove `s` before the
-                                // always-block (or the same-cycle value
-                                // when no prior driver exists).
-                                m = rtlil_module_connect(m, s0, s)
+                                // rfc_006 §5 d4 ±5% FINAL closure (2026-05-22):
+                                // No pre-loop direct write to `s` — previously
+                                // emitted `connect(s__ssa0, s)` (alias from
+                                // declared reg). But the post-loop publish
+                                // also emits `connect(s, s__ssa<P>)`, and the
+                                // per-iter default-hold chains `s__ssa<k+1>`
+                                // ← `s__ssa<k>`. Combined: `s__ssa0 ← s ←
+                                // s__ssa<P> ← ... ← s__ssa0` — COMBINATIONAL
+                                // LOOP. ABC `strash` detects the cycle and
+                                // ties the entire cone to `_const0_`, which is
+                                // EXACTLY the residual 5 `out_valid[k]` D-pin
+                                // `_const0_` symptom (router_d4 `idx` is the
+                                // only tracked signal without a pre-loop write
+                                // — the `if (out_ready[grant_out])` then-body
+                                // reads cone roots back into `idx__ssa0`).
+                                //
+                                // Fix: emit `connect(s__ssa0, $const_0)` for
+                                // signals without a pre-loop write. Matches
+                                // Verilog 4-state "uninitialized reg ≡ X"
+                                // semantics under a worst-case-safe synth
+                                // convention (X is conventionally 0 for
+                                // synth — IEEE 1364-2005 §5.1.1 + Yosys
+                                // proc_init.cc default).
+                                if rtlil_find_wire(m, "$const_0") < 0 {
+                                    m = rtlil_module_add_wire(m, rtlil_wire("$const_0", 1, 0, 0))
+                                }
+                                m = rtlil_module_connect(m, s0, "$const_0")
                             }
                             _ssa_si = _ssa_si + 1
                         }
@@ -8214,6 +8295,138 @@ fn main() {
         if _yw78 != 8 {
             println("FAIL T78b dffe_d_width got " + str(_yw78) + " (expected 8)")
             fails = fails + 1
+        }
+    }
+
+    // T79 — RFC 006 §5 d4 ±5% FINAL closure: comb-always dynamic-index READ
+    // in an inner if-condition (router_d4 priority arbiter L88
+    // `if (out_ready[grant_out]) ...`). After SSA rename the if-condition
+    // becomes `out_ready[grant_out__ssa0]` and elaborates via the L1133+
+    // unpacked-array dynamic-index mux chain. The pre-fix bug: the
+    // dyn-idx chain was NEVER emitted for the inner if-condition because
+    // `_rv_elab_expr(inner_cond)` ran with the SAME `m` as the outer
+    // emit but with `tab` containing the OUTER SymTab (no SSA wires).
+    // Post-fix: the inner if-cond elaborates the per-slot `$eq`+`$mux`
+    // cascade so `rdy[0..N-1]` per-slot reads appear as live consumers
+    // (NOT dangling `.inputs` declarations).
+    //
+    // Falsifier: read the cells emitted for the inner-if condition and
+    // assert ≥1 `$mux` cell references `rdy[k]` slot wires on the A/B
+    // pins. Pre-fix: 0 (the dyn-idx silently fell through). Post-fix: ≥4
+    // (P-1 mux levels for P=5 slots).
+    total = total + 1
+    // Reproduces router_d4 arbiter shape EXACTLY: outer if with nested
+    // dyn-idx read of unpacked-array port, write to a DIFFERENT tracked
+    // reg between the outer if condition and inner if. **Critical detail:
+    // `idx` is tracked (blocking-LHS in body + read in body) but has NO
+    // pre-loop write — only its in-loop write `idx = i[2:0]`.** Pre-fix
+    // bug: `connect(idx__ssa0, idx)` legacy-alias combined with post-loop
+    // publish `connect(idx, idx__ssa5)` closes a comb loop. ABC strash
+    // collapses the entire downstream cone to `_const0_`. Fix at L5184+
+    // drives `idx__ssa0` from `$const_0` instead of `idx`.
+    let _v79 = "module m79 ( input clk , input rdy [ 0 : 4 ] , input ge [ 0 : 4 ] , output reg f ) ;\n"
+        + "  integer i ; reg [ 2 : 0 ] idx , gr ; reg any ;\n"
+        + "  always @ * begin\n"
+        + "    any = 1'b0 ; gr = 3'd0 ;\n"
+        + "    for ( i = 0 ; i < 5 ; i = i + 1 ) begin\n"
+        + "      idx = i [ 2 : 0 ] ;\n"
+        + "      if ( ! any && ! ge [ idx ] ) begin\n"
+        + "        gr = idx ;\n"
+        + "        if ( rdy [ gr ] ) begin any = 1'b1 ; end\n"
+        + "      end\n"
+        + "    end\n"
+        + "  end\n"
+        + "  always @ ( posedge clk ) f <= any ;\n"
+        + "endmodule"
+    // Counter helper: count $mux cells with B pin = rdy[<digit>]
+    // (per-slot fan-in of the dyn-idx mux cascade).
+    let _r79 = read_verilog(_v79)
+    if _r79.ok != 1 {
+        println("FAIL T79 comb_dyn_idx_read: " + _r79.message); fails = fails + 1
+    } else {
+        let _m79 = _r79.design.modules[0]
+        // Count $mux cells whose B pin matches `rdy[<digit>]` shape
+        // (per-slot select in the dyn-idx fan-in cascade). Pre-fix: 0.
+        let mut _mux_slot_hits = 0
+        let mut _ci79 = 0
+        while _ci79 < len(_m79.cells) {
+            if _m79.cells[_ci79].cell_type == "$mux" {
+                let mut _pi79 = 0
+                while _pi79 < len(_m79.cells[_ci79].conns) {
+                    if _m79.cells[_ci79].conns[_pi79].pin == "B" {
+                        let _bn = _m79.cells[_ci79].conns[_pi79].net
+                        if len(_bn) >= 5 {
+                            if _bn.substring(0, 4) == "rdy[" {
+                                _mux_slot_hits = _mux_slot_hits + 1
+                            }
+                        }
+                    }
+                    _pi79 = _pi79 + 1
+                }
+            }
+            _ci79 = _ci79 + 1
+        }
+        if _mux_slot_hits < 4 {
+            println("FAIL T79 comb_dyn_idx_read_mux got " + str(_mux_slot_hits) + " mux B-pin rdy[k] hits (expected >=4)")
+            fails = fails + 1
+        }
+        // T79b — comb-cycle falsifier: assert `idx__ssa0` is NOT driven
+        // by an alias of `idx` (which would close idx__ssa0 ← idx ←
+        // idx__ssa<P> ← ... ← idx__ssa0). Pre-fix: connect_rhs == "idx".
+        // Post-fix: connect_rhs == "$const_0".
+        let mut _idx_ssa0_rhs = ""
+        let mut _ki79 = 0
+        while _ki79 < len(_m79.connect_lhs) {
+            if _m79.connect_lhs[_ki79] == "idx__ssa0" {
+                _idx_ssa0_rhs = _m79.connect_rhs[_ki79]
+            }
+            _ki79 = _ki79 + 1
+        }
+        if _idx_ssa0_rhs == "idx" {
+            println("FAIL T79b idx__ssa0 driven by `idx` — closes comb cycle via post-publish")
+            fails = fails + 1
+        }
+    }
+
+    // T79c — RFC 006 §5 d4 ±5% FINAL closure: post-paren bracket-select
+    // shape `(expr)[range]` emitted by token-level function-inline. The
+    // inliner wraps each arg in `(arg)` AND wraps the body in `(body)`
+    // (see `_rv_inline_func_calls` L2095-2122), so `f(pkt)` with body
+    // `f = x[6:4]` becomes `( ( pkt ) [ 6 : 4 ] )` — a parenthesised
+    // expression followed by a `[…]` group. Pre-fix: `_rv_elab_primary`
+    // (`(` branch L976) returned immediately after the matching `)`,
+    // causing `_rv_elab_expr` to break at the trailing `[` (no binop),
+    // then the OUTER paren primary errored "expected `)` got `[`".
+    // Probe ok=0 → SSA path bails to legacy unroll → 5 `out_valid[k]`
+    // `_const0_` ties. Post-fix: swallow trailing `[…]` groups after the
+    // closing `)` (range is silently dropped, const-fold appends to name).
+    total = total + 1
+    let _v79c = "module m79c ( input clk , input [ 7 : 0 ] pkt , output reg [ 2 : 0 ] gr ) ;\n"
+        + "  function automatic [ 2 : 0 ] g ( input [ 7 : 0 ] x ) ; g = x [ 6 : 4 ] ; endfunction\n"
+        + "  always @ ( posedge clk ) gr <= g ( pkt ) ;\n"
+        + "endmodule"
+    let _r79c = read_verilog(_v79c)
+    if _r79c.ok != 1 {
+        println("FAIL T79c post_paren_bracket_select: " + _r79c.message); fails = fails + 1
+    } else {
+        let _m79c = _r79c.design.modules[0]
+        // Falsifier: `gr` D-input must reach back to `pkt` (the actual
+        // function argument), not be stranded on `$const_0`. Look for a
+        // $dff cell whose D pin sources from a chain that mentions `pkt`.
+        let mut _saw_pkt = 0
+        let mut _ci79c = 0
+        while _ci79c < len(_m79c.cells) {
+            let mut _pi79c = 0
+            while _pi79c < len(_m79c.cells[_ci79c].conns) {
+                if _m79c.cells[_ci79c].conns[_pi79c].net == "pkt" {
+                    _saw_pkt = 1
+                }
+                _pi79c = _pi79c + 1
+            }
+            _ci79c = _ci79c + 1
+        }
+        if _saw_pkt == 0 {
+            println("FAIL T79c post_paren_bracket_select: `pkt` not referenced — function inline didn't elaborate"); fails = fails + 1
         }
     }
 
