@@ -1,0 +1,9 @@
+Device: NVIDIA GeForce RTX 5070 sm_120  stages=2
+{
+  "sm": "sm_120",
+  "stages": 2,
+  "final_slot": 1,
+  "mismatch": 0,
+  "total_cells": 256,
+  "verdict": "TMA_MULTISTAGE_SMOKE_PASS"
+}
