@@ -1102,7 +1102,7 @@ the 8 잔여 items have settled to:
 | # | item | status | cycle / verdict |
 |---|------|--------|-----------------|
 | 1 | hexa_len polymorphic | ✅ ported | cycle 99 (alias dispatch via `byte_len`) |
-| 2 | hexa_to_string | ✅ partial | cycle 96 (scalar branches: int/float/bool/void/str). Array/Map recursive + ValStruct stay C |
+| 2 | hexa_to_string | ✅ ported | cycle 96 (scalar branches: int/float/bool/void/str) + cycle C2-retry (Array/Map recursive via rt_to_string_array/_map). Small-int cache + non-int-float %g + ValStruct repr (cycle 98) remain in C wrapper |
 | 3 | hexa_str_concat heap-only | ❌ REVERT | arena nesting hazard (cycle-30 family). Inner-fn `__hexa_fn_arena_enter` frame corrupts outer arena array storage. Step 5+ work |
 | 4 | hexa_eq deep eq | ✅ partial | cycles 91 (TAG_STR strcmp) + 97 (TAG_ARRAY deep). 2/9 branches ported |
 | 5 | Map basic ops (set/get/keys/values/contains_key/remove) | ❌ CORE | foundation primitives — surface builtins LOWER to them. Robin Hood deletion + hash slot insert + key-interning malloc all C-internal |
@@ -1117,6 +1117,40 @@ the 8 잔여 items have settled to:
 - `__fd_write_bytes` codegen builtin → unblocks #7
 
 **Wipe pattern recurrence** (memory `feedback_runtime_c_deploy_regen_wipe`): commits c39afbbe + 0d59c419 silently overwrote stdlib/runtime/numeric.hexa + ctype.hexa + self/runtime_core.c entries cycles 91-96 between original land and re-land. Cherry-picks `3fc62729 + 459be02c + f0be7ace + 7bdb4aba + 85150013` recovered the work. Sub-agent worktree leak also observed (#4 agent's branch HEAD propagated into main worktree's index via shared git object store — fixed by `cd` back to session worktree).
+
+### 2026-05-22 — step 5 #3 cycle C2-retry: hexa_to_string TAG_ARRAY + TAG_MAP recursive port (잔여 #2 fully discharged)
+
+- ✅ `_hexa_to_string_rec`'s TAG_ARRAY + TAG_MAP cases (self/runtime_core.c)
+  split via `#ifdef HEXA_HAS_HEXA_RT_STDLIB`. The depth-cap (`depth >= 8`)
+  + NULL-ptr guards (`!v.arr_ptr`, `!HX_MAP_TBL(v)`) stay C; the element
+  loop / cap / overflow-trailer dispatch to `rt_to_string_array(v, depth)`
+  and `rt_to_string_map(v, depth)` in stdlib/runtime/numeric.hexa
+- **Stale-binary guard**: agent C's earlier cycle-C2 prototype (branch
+  `cyc-C2-array-map`, `05757ff3`) used `__arr_raw_len(arr)` (Step 5 #2
+  codegen builtin → `hexa_int((int64_t)HX_ARR_LEN(...))`). That builtin is
+  codegen-ONLY (no real C symbol). The Mac hexa_v2 binary at re-land time
+  still lacks the inline-lowering branch — probe emits
+  `hexa_call1(__arr_raw_len, v)` → link failure. Retry uses `len(v)` (→
+  `hexa_int(hexa_len(v))`), which is always stable and recursion-safe:
+  `hexa_len` → rt_len → `byte_len` (→ hexa_byte_len, NOT hexa_to_string)
+- Hexa body: array iterates `len(arr)` + `arr[i]`; map iterates `m.keys()`
+  (→ hexa_map_keys, insertion-order, byte-matches the C `order_keys[i]`
+  walk) + `m.get(k)` (→ hexa_map_get). Per element, `type_of(elem)` (→
+  hexa_type_of) dispatches: "array"→rt_to_string_array(depth+1),
+  "map"→rt_to_string_map(depth+1), else `to_string(elem)` (→ C
+  hexa_to_string → rt_to_string_scalar for scalars / _hexa_to_string_rec
+  for ValStruct). Nested-container recursion stays in hexa, preserving the
+  depth-8 cyclic guard
+- `@no_arena` on both fns: the C hexa_to_string caller is not arena-wrapped,
+  so the ports share the caller's arena scope to keep the returned string
+  live after return. Step 5 #1 (b2ae2e9d) made hexa_str_concat arena-safe
+  so the `+` accumulator (→ hexa_add → hexa_str_concat) works without a
+  per-fn `__hexa_fn_arena_enter` frame
+- ABI note: hexa `depth: int` lowers to `HexaVal depth` in generated C (all
+  rt externs do this). C call sites wrap via `hexa_int(depth)`
+- 잔여 #2 now FULLY ported (scalar cycle 96 + container this cycle). C
+  wrapper retains only cheap fast-paths: small-int cache, non-int float
+  `%g`, and depth/NULL guards
 
 ### 2026-05-22 — step 3 cycle 97: hexa_eq TAG_ARRAY deep-eq loop via rt_eq_array_deep (잔여 #4 partial discharge — 2 of 9 branches ported)
 
