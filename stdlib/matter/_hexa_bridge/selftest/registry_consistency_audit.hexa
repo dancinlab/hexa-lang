@@ -1,0 +1,138 @@
+#!hexa strict
+// hexa-matter/_hexa_bridge/selftest/registry_consistency_audit.hexa
+//
+// 5-source verb-count cross-check. hexa-native port of
+// `selftest/registry_consistency_audit.py` (T2).
+//
+// Lossless — each Python `re` is reproduced by the identical extraction:
+//   cli/verify  `\["([^"]+)",`         → sed VERBS block + grep -oE
+//   toml        `[verbs]` block, per `=\s*\[` line `"([^"]+)"`
+//   readme      `verbs-([0-9]+)[-_]` then `\*{0,2}([0-9]+)-verb`
+//   axis        `\*\*([0-9]+) dispatchable verbs\*\*` then `=\s*\*\*([0-9]+)\*\*`
+// Count uses list length (not set); set parity uses `sort -u` string
+// equality == Python `set(a) == set(b)`. stdlib-only; exec.
+
+let ROOT_ENV = env("HEXA_MATTER_ROOT")
+let EXPECTED = 36
+
+fn shq(s: str) -> str { return "'" + s.replace("'", "'\\''") + "'" }
+
+fn root() -> str {
+    if ROOT_ENV.len() > 0 { return ROOT_ENV }
+    return exec("pwd").trim()
+}
+
+fn digit(c: str) -> int {
+    if c == "0" { return 0 }
+    if c == "1" { return 1 }
+    if c == "2" { return 2 }
+    if c == "3" { return 3 }
+    if c == "4" { return 4 }
+    if c == "5" { return 5 }
+    if c == "6" { return 6 }
+    if c == "7" { return 7 }
+    if c == "8" { return 8 }
+    if c == "9" { return 9 }
+    return -1
+}
+
+fn to_int(s: str) -> int {
+    let mut v = 0
+    let mut seen = false
+    let mut i = 0
+    while i < s.len() {
+        let d = digit(s.substr(i, 1))
+        if d >= 0 { v = v * 10 + d; seen = true }
+        i = i + 1
+    }
+    if seen == false { return -1 }
+    return v
+}
+
+fn count_lines(s: str) -> int {
+    let t = s.trim()
+    if t.len() == 0 { return 0 }
+    return t.split("\n").len()
+}
+
+fn main() {
+    println("hexa-matter/selftest/registry_consistency_audit (hexa-native, T2)")
+    let r = root()
+    let rq = shq(r)
+    println("  root: " + r)
+    println("")
+
+    // VERBS-block name extraction (cli + verify): first quoted of each ["x",...]
+    let cli_extract = "cd " + rq + " && sed -n '/let VERBS = \\[/,/^\\]/p' cli/hexa-matter.hexa | grep -oE '\\[\"[^\"]+\",' | sed -e 's/^\\[\"//' -e 's/\",$//'"
+    let ver_extract = "cd " + rq + " && sed -n '/let VERBS = \\[/,/^\\]/p' verify/spec_presence.hexa | grep -oE '\\[\"[^\"]+\",' | sed -e 's/^\\[\"//' -e 's/\",$//'"
+    // toml [verbs] block, only `= [ ... ]` lines, all quoted tokens
+    let toml_extract = "cd " + rq + " && awk '/^\\[verbs\\]/{f=1;next} /^\\[/{f=0} f' hexa.toml | grep -E '=[[:space:]]*\\[' | grep -oE '\"[^\"]+\"' | tr -d '\"'"
+
+    let cli_list = exec(cli_extract + " 2>/dev/null")
+    let ver_list = exec(ver_extract + " 2>/dev/null")
+    let toml_list = exec(toml_extract + " 2>/dev/null")
+
+    let cli_n = count_lines(cli_list)
+    let ver_n = count_lines(ver_list)
+    let toml_n = count_lines(toml_list)
+
+    // README verb-count badge / prose
+    let mut readme_n = to_int(exec("grep -oE 'verbs-[0-9]+[-_]' " + shq(r + "/README.md") + " 2>/dev/null | head -1").trim())
+    if readme_n < 0 {
+        readme_n = to_int(exec("grep -oE '[*]{0,2}[0-9]+-verb' " + shq(r + "/README.md") + " 2>/dev/null | head -1").trim())
+    }
+    // AXIS dispatchable-verbs claim
+    let mut axis_n = to_int(exec("grep -oE '\\*\\*[0-9]+ dispatchable verbs\\*\\*' " + shq(r + "/AXIS.md") + " 2>/dev/null | head -1").trim())
+    if axis_n < 0 {
+        axis_n = to_int(exec("grep -oE '=[[:space:]]*\\*\\*[0-9]+\\*\\*' " + shq(r + "/AXIS.md") + " 2>/dev/null | head -1").trim())
+    }
+
+    println("  cli/hexa-matter.hexa VERBS:      " + str(cli_n) + " verbs")
+    println("  hexa.toml [verbs]:               " + str(toml_n) + " verbs")
+    println("  verify/spec_presence.hexa VERBS: " + str(ver_n) + " verbs")
+    println("  README.md verb badge:            " + str(readme_n))
+    println("  AXIS.md dispatchable verbs:      " + str(axis_n))
+    println("")
+
+    let mut fail = 0
+
+    fail = fail + report_count("cli", cli_n)
+    fail = fail + report_count("toml", toml_n)
+    fail = fail + report_count("verify", ver_n)
+    fail = fail + report_count("readme", readme_n)
+    fail = fail + report_count("axis", axis_n)
+
+    // set parity: sort -u string equality == Python set() ==
+    let cli_set = exec("printf '%s' " + shq(cli_list) + " | sort -u").trim()
+    let toml_set = exec("printf '%s' " + shq(toml_list) + " | sort -u").trim()
+    let ver_set = exec("printf '%s' " + shq(ver_list) + " | sort -u").trim()
+
+    if cli_set == toml_set {
+        println("  [PASS] cli set == toml set")
+    } else {
+        println("  [FAIL] cli != toml set-diff")
+        fail = fail + 1
+    }
+    if cli_set == ver_set {
+        println("  [PASS] cli set == verify set")
+    } else {
+        println("  [FAIL] cli != verify set-diff")
+        fail = fail + 1
+    }
+
+    println("")
+    if fail > 0 {
+        println("__HEXA_MATTER_REGISTRY_CONSISTENCY__ FAIL  (" + str(fail) + " mismatch)")
+        exit(1)
+    }
+    println("__HEXA_MATTER_REGISTRY_CONSISTENCY__ PASS")
+}
+
+fn report_count(src: str, n: int) -> int {
+    if n != EXPECTED {
+        println("  [FAIL] " + src + " count = " + str(n) + " (expected " + str(EXPECTED) + ")")
+        return 1
+    }
+    println("  [PASS] " + src + " count = " + str(EXPECTED))
+    return 0
+}

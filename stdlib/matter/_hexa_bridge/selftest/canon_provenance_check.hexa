@@ -1,0 +1,84 @@
+#!hexa strict
+// hexa-matter/_hexa_bridge/selftest/canon_provenance_check.hexa
+//
+// canon-import file-presence gate. hexa-native port of
+// `selftest/canon_provenance_check.py` (T2). Parse IMPORTED_FROM_CANON.md
+// table rows (first backtick path per `| ... |` row), verify each local
+// path exists (or its verb dir holds some .md), PASS iff presence >= 90%.
+// Lossless — ROW_RE `^\|\s*`([^`]+)`` is exact via trim + backtick split.
+// stdlib-only; exec file ops.
+
+let ROOT_ENV = env("HEXA_MATTER_ROOT")
+
+fn shq(s: str) -> str { return "'" + s.replace("'", "'\\''") + "'" }
+
+fn root() -> str {
+    if ROOT_ENV.len() > 0 { return ROOT_ENV }
+    return exec("pwd").trim()
+}
+
+fn ends_md(s: str) -> bool {
+    if s.len() < 3 { return false }
+    return s.substr(s.len() - 3, 3) == ".md"
+}
+
+fn main() {
+    println("hexa-matter/selftest/canon_provenance_check (hexa-native, T2)")
+    let r = root()
+    let ledger = r + "/IMPORTED_FROM_CANON.md"
+    let ex = exec("[ -f " + shq(ledger) + " ] && echo y || echo n").trim()
+    if ex != "y" {
+        println("  [FAIL] IMPORTED_FROM_CANON.md not found")
+        println("__HEXA_MATTER_CANON_PROVENANCE__ FAIL")
+        exit(1)
+    }
+    let lines = exec("cat " + shq(ledger) + " 2>/dev/null").split("\n")
+
+    let mut paths: [str] = []
+    let mut i = 0
+    while i < lines.len() {
+        let line = lines[i]
+        let t = line.trim()
+        if t.len() >= 1 && t.substr(0, 1) == "|" {
+            let parts = line.split("`")
+            if parts.len() >= 2 {
+                let p = parts[1].trim()
+                let skip = p == "Local path" || p == "------------"
+                let notpath = p.contains("/") == false && ends_md(p) == false
+                if skip == false && notpath == false {
+                    paths.push(p)
+                }
+            }
+        }
+        i = i + 1
+    }
+    println("  parsed " + str(paths.len()) + " local-path rows")
+
+    let mut present = 0
+    let mut missing = 0
+    let mut k = 0
+    while k < paths.len() {
+        let ap = r + "/" + paths[k]
+        let e = exec("[ -e " + shq(ap) + " ] && echo y || echo n").trim()
+        if e == "y" {
+            present = present + 1
+        } else {
+            let chk = exec("d=$(dirname " + shq(ap) + "); [ -d \"$d\" ] && ls \"$d\"/*.md >/dev/null 2>&1 && echo y || echo n").trim()
+            if chk == "y" { present = present + 1 } else { missing = missing + 1 }
+        }
+        k = k + 1
+    }
+    println("  present = " + str(present) + " / " + str(paths.len()) + "   missing = " + str(missing))
+
+    if paths.len() == 0 {
+        println("__HEXA_MATTER_CANON_PROVENANCE__ PASS  (vacuous — empty ledger)")
+        return
+    }
+    // presence >= 90%  ⇔  present*100 >= total*90  (integer, no float)
+    if present * 100 >= paths.len() * 90 {
+        println("__HEXA_MATTER_CANON_PROVENANCE__ PASS  (presence >= 90%)")
+    } else {
+        println("__HEXA_MATTER_CANON_PROVENANCE__ FAIL  (presence < 90%)")
+        exit(1)
+    }
+}

@@ -1,0 +1,29 @@
+{
+  "__fixture_tag__": "VENDORED SOURCE SNAPSHOT — frozen citation, not live data",
+  "gate_id": "met_b5_os_density",
+  "claim": {
+    "property": "density (highest-density stable element)",
+    "material": "Os (osmium, hcp, 293 K)",
+    "value": 22.59,
+    "unit": "g/cm^3"
+  },
+  "source": {
+    "kind": "CRC_HANDBOOK",
+    "edition": "105th",
+    "year": 2024,
+    "page": "4-87 (Physical Constants of Inorganic Compounds — Os)",
+    "secondary": "NIST WebBook (osmium element page); IUPAC 2018 reassessment maintains Os > Ir within 1 sigma",
+    "citation": "CRC 105th / NIST — Os rho = 22.59 g/cm^3, densest stable element (Ir = 22.56)"
+  },
+  "tolerance": {
+    "abs": 0.02,
+    "unit": "g/cm^3",
+    "basis": "Os/Ir density gap is 0.03 g/cm^3 (within combined uncertainty); CRC tabulated precision 0.01"
+  },
+  "spec_doc": {
+    "path": "LIMIT_BREAKTHROUGH.md",
+    "line_hint": "L6 row '22.59 g/cm^3; densest stable element'"
+  },
+  "accessed": "2026-05-13",
+  "n6_lattice_fit_applied": false
+}

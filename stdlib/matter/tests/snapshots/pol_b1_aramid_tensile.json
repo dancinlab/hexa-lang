@@ -1,0 +1,34 @@
+{
+  "__fixture_tag__": "VENDORED SOURCE SNAPSHOT — frozen citation, not live data",
+  "gate_id": "pol_b1_aramid_tensile",
+  "claim": {
+    "property": "tensile strength (single-fiber, ASTM D885)",
+    "material": "Kevlar 49 (para-aramid, PPTA)",
+    "min_value": 3.0,
+    "unit": "GPa",
+    "secondary": {
+      "modulus_E_min_GPa": 112,
+      "density_g_cm3": 1.44
+    }
+  },
+  "source": {
+    "kind": "ASTM_STANDARD",
+    "standard": "ASTM D885",
+    "title": "Standard Test Methods for Tire Cords, Tire Cord Fabrics, and Industrial Filament Yarns Made from Manufactured Organic-Base Fibers",
+    "secondary": "DuPont Kevlar 49 technical datasheet (Para-aramid yarn type 965); ASM Handbook vol. 21",
+    "year": 2019,
+    "citation": "ASTM D885 / DuPont Kevlar 49 datasheet / ASM vol. 21 — sigma_f >= 3.0 GPa baseline"
+  },
+  "tolerance": {
+    "kind": "min_threshold",
+    "abs_min": 3.0,
+    "unit": "GPa",
+    "basis": "spec value must be >= 3.0 GPa per ASTM D885 / DuPont published yarn baseline"
+  },
+  "spec_doc": {
+    "path": "aramid/aramid.md",
+    "line_hint": "F-AR-Q1 falsifier row (Kevlar 49 sigma_f >= 3.0 GPa)"
+  },
+  "accessed": "2026-05-13",
+  "n6_lattice_fit_applied": false
+}

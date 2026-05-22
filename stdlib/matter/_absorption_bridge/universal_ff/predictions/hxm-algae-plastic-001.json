@@ -1,0 +1,42 @@
+{
+  "__fixture_tag__": "VENDORED UNIVERSAL-FF PREDICTION — frozen NNP output, not measurement",
+  "candidate_id": "hxm-algae-plastic-001",
+  "novel_section": "§4.F.13 (Tier-2 wave, 2026-05-14)",
+  "target_property": "tensile strength σ_t plus commercial cost per kg for an algae-derived PHA (polyhydroxyalkanoate) bioplastic via fermentation route",
+  "predicted_value": 35.0,
+  "predicted_unit": "MPa (tensile strength)",
+  "predicted_cost_usd_per_kg": 4.0,
+  "operating_conditions": {
+    "test_temperature_C": 23,
+    "test_humidity_RH_percent": 50,
+    "specimen_type": "injection-molded dogbone per ASTM D638 Type I",
+    "polymer_grade": "PHA copolymer (PHB-co-PHV variant, algae-fermented feedstock)",
+    "cost_basis": "FOB plant gate, 2024-2025 commercial pilot pricing"
+  },
+  "model": "SchNet (notional)",
+  "model_caveat": "Universal FFs are atomistic — they predict polymer backbone + side-chain energetics + chain-folding geometry, NOT bulk tensile strength (a semi-crystalline + processing-history dependent property). Tensile σ_t is set by crystallinity fraction + amorphous-tie-chain density + molding history. The 35 MPa + $4/kg values here are a PROXY-from-literature pinned with raw#10 C3 honesty: Algenesis (Pyratel) algae-PHA injection-molded specimens + Newlight AirCarbon commercial pricing 2024.",
+  "proxy_source": "Algenesis Materials 2024 Pyratel TPU + PHA technical brief (algae-derived bioplastic σ_t 30-40 MPa, pilot cost $3.5-5/kg); Newlight Technologies AirCarbon 2024 commercial PHA pricing ($4-6/kg, methane-feedstock cousin chemistry); Danimer Scientific Nodax PHA 2023 datasheet (PHB-co-PHV σ_t = 25-35 MPa); NatureWorks Ingeo PLA 2024 ($2.5-3/kg, comparator bioplastic baseline)",
+  "falsifier_relation": "PASS",
+  "falsifier_target_value": 30.0,
+  "falsifier_target_unit": "MPa",
+  "falsifier_target_cost": 5.0,
+  "falsifier_target_cost_unit": "$/kg (commercial)",
+  "falsifier_id": "F-ALGAE-1",
+  "falsifier_text": "tensile σ < 30 MPa OR commercial cost > $5/kg → FAIL",
+  "delta_to_target_tensile": 5.0,
+  "delta_to_target_cost": -1.0,
+  "accessed": "2026-05-14",
+  "n6_lattice_fit_applied": false,
+  "is_measurement": false,
+  "is_external_verification": false,
+  "tier": "Tier-2",
+  "unproven_markers_preserved": [
+    "algae-PHA marine-biodegradable claim UNVERIFIED preserved verbatim per §3.16 + `biodegradable-plastics/biodegradable-plastics.md` + NatureWorks / Danimer vendor authority",
+    "algae feedstock production cost at scale UNVERIFIED (pond + harvest energy not in $/kg ledger)",
+    "PHA processing window narrow — degradation onset at ~ 160 °C HARD_WALL on injection-molding cycle time",
+    "competing PLA / PE petrochemical baseline $1-2/kg (raw resin) — PHA is a 2-4× cost-premium bioplastic, UNVERIFIED at commodity-scale cost parity",
+    "ASTM D6691 marine + D5511 industrial-compost certification per Danimer / NatureWorks lab only — field validation pending"
+  ],
+  "honesty_caveats": "Both falsifier branches PASS at the proxy vendor + paper values. PASS does NOT close the candidate — the marine-PHA UNVERIFIED marker (per `biodegradable-plastics/biodegradable-plastics.md` + §3.16) stays in place; pilot cost $4/kg is pilot scale only, commodity parity UNVERIFIED. SPEC_FIRST preserved — does NOT promote to EXTERNAL-VERIFIED.",
+  "license_note": "Vendor datasheet + commercial-pricing values per Algenesis / Newlight / Danimer public literature; peer-reviewed paper values per CC-BY publisher terms (raw#10 C3, NOT n=6 lattice-fit)."
+}

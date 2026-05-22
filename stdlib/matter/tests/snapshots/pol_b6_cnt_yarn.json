@@ -1,0 +1,30 @@
+{
+  "__fixture_tag__": "VENDORED SOURCE SNAPSHOT — peer-reviewed lab data, frozen",
+  "gate_id": "pol_b6_cnt_yarn",
+  "claim": {
+    "property": "CNT yarn tensile strength sigma_t",
+    "material": "Carbon nanotube macroscopic yarn (densified DWNT, lab-mm scale)",
+    "value": 80.0,
+    "unit": "GPa",
+    "condition": "single yarn, sub-mm gauge length, lab-scale measurement"
+  },
+  "source": {
+    "kind": "PEER_REVIEWED_LAB",
+    "primary": "Bai et al. 2018 Nature Nanotechnol. 13, 589 (Tsinghua) — DWNT bundle sigma_t = 80 GPa",
+    "secondary": "Behabtu et al. 2013 Science 339, 182 (Rice + Teijin); IBS Korea CNT-yarn studies",
+    "citation": "Bai 2018 Nat. Nanotechnol. 13, 589 (Tsinghua) — CNT macroscopic yarn sigma_t ~ 80 GPa at lab-mm gauge"
+  },
+  "tolerance": {
+    "rel": 0.15,
+    "unit": "fractional",
+    "basis": "lab-to-lab and sample-to-sample variance ~ 10-15% on densified DWNT bundles"
+  },
+  "spec_doc": {
+    "path": "carbon/carbon.md",
+    "line_hint": "CNT yarn 80 GPa lab-mm-scale UNPROVEN row"
+  },
+  "unproven": true,
+  "unproven_reason": "lab-mm gauge only; commercial CNT yarn at km scale remains 1-3 GPa (40-80x gap); NOT reproduced at commodity yarn scale",
+  "accessed": "2026-05-13",
+  "n6_lattice_fit_applied": false
+}

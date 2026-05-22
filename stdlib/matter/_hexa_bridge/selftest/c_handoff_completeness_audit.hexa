@@ -1,0 +1,277 @@
+#!hexa strict
+// hexa-matter/_hexa_bridge/selftest/c_handoff_completeness_audit.hexa
+//
+// §C handoff-completeness gate (#29). hexa-native port of
+// `selftest/c_handoff_completeness_audit.py` (T2).
+//
+// Lossless: §C extraction + C-row shape are exact (line-level, no regex
+// digit-shape needed); DEST/​wall/​handoff are exact substring sets; the
+// 6 n=6-lattice-fit anti-patterns are run via `grep -ioE` with ERE that
+// is the literal equivalent of the Python `re` (\s→[[:space:]],
+// [-\s]?→[-[:space:]]?, (?:a|b)→(a|b)), and the 20-char negation
+// look-behind is reproduced precisely in hexa per match occurrence
+// (only ~26 single-line rows → cheap). stdlib-only; exec.
+
+let ROOT_ENV = env("HEXA_MATTER_ROOT")
+
+fn shq(s: str) -> str { return "'" + s.replace("'", "'\\''") + "'" }
+
+fn root() -> str {
+    if ROOT_ENV.len() > 0 { return ROOT_ENV }
+    return exec("pwd").trim()
+}
+
+let WCH = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_"
+
+fn is_word_ch(c: str) -> bool {
+    if c.len() != 1 { return false }
+    return WCH.contains(c)
+}
+
+fn is_upper(c: str) -> bool {
+    return "ABCDEFGHIJKLMNOPQRSTUVWXYZ".contains(c) && c.len() == 1
+}
+
+fn is_dig(c: str) -> bool {
+    return "0123456789".contains(c) && c.len() == 1
+}
+
+fn is_ws(c: str) -> bool {
+    return c == " " || c == "\t"
+}
+
+// index of first occurrence of `needle` in `hay` at/after `from`, or -1.
+fn find_sub(hay: str, needle: str, from: int) -> int {
+    let nl = needle.len()
+    if nl == 0 { return -1 }
+    let hl = hay.len()
+    let mut k = from
+    while k + nl <= hl {
+        if hay.substr(k, nl) == needle { return k }
+        k = k + 1
+    }
+    return -1
+}
+
+// \b(no|not|without|never)\b (case-insensitive) anywhere in `w`
+fn has_negation(w: str) -> bool {
+    let lo = w.to_lower()
+    let words = ["no", "not", "without", "never"]
+    let mut i = 0
+    while i < words.len() {
+        let nw = words[i]
+        let nl = nw.len()
+        let mut k = 0
+        while k + nl <= lo.len() {
+            if lo.substr(k, nl) == nw {
+                let mut ok = true
+                if k > 0 { if is_word_ch(lo.substr(k - 1, 1)) { ok = false } }
+                if ok && k + nl < lo.len() { if is_word_ch(lo.substr(k + nl, 1)) { ok = false } }
+                if ok { return true }
+            }
+            k = k + 1
+        }
+        i = i + 1
+    }
+    return false
+}
+
+fn to_int_digits(s: str) -> int {
+    let mut v = 0
+    let mut seen = false
+    let mut i = 0
+    while i < s.len() {
+        if is_dig(s.substr(i, 1)) {
+            v = v * 10 + find_sub("0123456789", s.substr(i, 1), 0)
+            seen = true
+        }
+        i = i + 1
+    }
+    if seen == false { return -1 }
+    return v
+}
+
+// ^\|\s*(C-[A-Z]{3}-[0-9]+)\s*\|  → return id or ""
+fn c_row_id(line: str) -> str {
+    if line.len() == 0 || line.substr(0, 1) != "|" { return "" }
+    let mut i = 1
+    while i < line.len() && is_ws(line.substr(i, 1)) { i = i + 1 }
+    let start = i
+    if i + 2 > line.len() || line.substr(i, 2) != "C-" { return "" }
+    i = i + 2
+    let mut u = 0
+    while i < line.len() && is_upper(line.substr(i, 1)) { i = i + 1; u = u + 1 }
+    if u != 3 { return "" }
+    if i >= line.len() || line.substr(i, 1) != "-" { return "" }
+    i = i + 1
+    let mut d = 0
+    while i < line.len() && is_dig(line.substr(i, 1)) { i = i + 1; d = d + 1 }
+    if d < 1 { return "" }
+    let id = line.substr(start, i - start)
+    while i < line.len() && is_ws(line.substr(i, 1)) { i = i + 1 }
+    if i >= line.len() || line.substr(i, 1) != "|" { return "" }
+    return id
+}
+
+// row.strip().strip('|').split('|') cells; DEST = cells[2]
+fn dest_nonempty(line: str) -> bool {
+    let t = line.trim()
+    // strip all leading/trailing '|'
+    let mut a = 0
+    while a < t.len() && t.substr(a, 1) == "|" { a = a + 1 }
+    let mut b = t.len()
+    while b > a && t.substr(b - 1, 1) == "|" { b = b - 1 }
+    if b <= a { return false }
+    let core = t.substr(a, b - a)
+    let cells = core.split("|")
+    if cells.len() < 3 { return false }
+    return cells[2].trim().len() > 0
+}
+
+let WALL = ["hard_wall", "soft_wall", "breakable_with_tech", "breakable",
+            "unclear", "out-of-software", "out-of-repo"]
+let HANDOFF = ["vendor", "dest:", "cross-domain"]
+
+fn mentions_wall_or_dest(line: str) -> bool {
+    let lo = line.to_lower()
+    let mut i = 0
+    while i < WALL.len() { if lo.contains(WALL[i]) { return true }; i = i + 1 }
+    let mut j = 0
+    while j < HANDOFF.len() { if lo.contains(HANDOFF[j]) { return true }; j = j + 1 }
+    return false
+}
+
+let N6_PATS = [
+    "fit(ted)?[[:space:]]+to[[:space:]]+n[[:space:]]*=[[:space:]]*6",
+    "n[[:space:]]*=[[:space:]]*6[[:space:]]+lattice[-[:space:]]?fit",
+    "lattice[-[:space:]]?derived[[:space:]]+value",
+    "lattice[-[:space:]]?fit[[:space:]]+applied",
+    "χ²[[:space:]]+(to|against)[[:space:]]+lattice",
+    "chi[-[:space:]]?square[[:space:]]+(to|against)[[:space:]]+lattice"]
+
+// positive n=6 lattice-fit assertion, ignoring honest disclaimers where a
+// negation token is within 20 chars before the match (Python row_has_n6_fit)
+fn row_has_n6_fit(line: str) -> bool {
+    let lo = line.to_lower()
+    let mut p = 0
+    while p < N6_PATS.len() {
+        let ms = exec("printf '%s' " + shq(line) + " | grep -ioE " + shq(N6_PATS[p]) + " 2>/dev/null").trim()
+        if ms.len() > 0 {
+            let occ = ms.split("\n")
+            let mut oi = 0
+            while oi < occ.len() {
+                let m = occ[oi].to_lower()
+                if m.len() > 0 {
+                    let mut from = 0
+                    while true {
+                        let at = find_sub(lo, m, from)
+                        if at < 0 { break }
+                        let mut ws = at - 20
+                        if ws < 0 { ws = 0 }
+                        let win = lo.substr(ws, at - ws)
+                        if has_negation(win) == false { return true }
+                        from = at + 1
+                    }
+                }
+                oi = oi + 1
+            }
+        }
+        p = p + 1
+    }
+    return false
+}
+
+fn main() {
+    println("hexa-matter/selftest/c_handoff_completeness_audit (hexa-native, T2)")
+    let r = root()
+    let ledger = r + "/CLOSURE_RESIDUAL_BACKLOG.md"
+    if exec("[ -f " + shq(ledger) + " ] && echo y || echo n").trim() != "y" {
+        println("  [FAIL] CLOSURE_RESIDUAL_BACKLOG.md not found")
+        println("__HEXA_MATTER_C_HANDOFF__ FAIL  (ledger missing)")
+        exit(1)
+    }
+    let lines = exec("cat " + shq(ledger) + " 2>/dev/null").split("\n")
+
+    // §C block bounds via grep -nE (byte-safe — '§' is multibyte).
+    // header  ^##\s+§C\b      → ^##[[:space:]]+§C([^[:alnum:]_]|$)
+    // end     ^##\s+§[A-Z] | ^---\s*$ , first line strictly after header
+    let lq = shq(ledger)
+    let cs_raw = exec("grep -nE '^##[[:space:]]+§C([^[:alnum:]_]|$)' " + lq + " 2>/dev/null | head -1 | cut -d: -f1").trim()
+    let cstart1 = to_int_digits(cs_raw)
+    if cstart1 < 1 {
+        println("  [FAIL] §C section not found in ledger")
+        println("__HEXA_MATTER_C_HANDOFF__ FAIL  (no §C)")
+        exit(1)
+    }
+    let cstart = cstart1 - 1
+    let ends = exec("grep -nE '^##[[:space:]]+§[A-Z]|^---[[:space:]]*$' " + lq + " 2>/dev/null | cut -d: -f1").trim()
+    let mut cend = lines.len()
+    if ends.len() > 0 {
+        let erows = ends.split("\n")
+        let mut ei = 0
+        while ei < erows.len() {
+            let en = to_int_digits(erows[ei])
+            if en > cstart1 { cend = en - 1; break }
+            ei = ei + 1
+        }
+    }
+
+    // collect C-rows
+    let mut ids: [str] = []
+    let mut rowtexts: [str] = []
+    let mut k = cstart
+    while k < cend {
+        let id = c_row_id(lines[k])
+        if id.len() > 0 {
+            ids.push(id)
+            rowtexts.push(lines[k])
+        }
+        k = k + 1
+    }
+    let n_rows = ids.len()
+    println("  discovered §C rows: " + str(n_rows))
+
+    let mut incomplete = 0
+    let mut fail = 0
+    let mut ri = 0
+    while ri < n_rows {
+        let line = rowtexts[ri]
+        let mut prob = ""
+        if dest_nonempty(line) == false { prob = prob + "empty DEST cell; " }
+        if mentions_wall_or_dest(line) == false { prob = prob + "no wall/DEST token; " }
+        if row_has_n6_fit(line) { prob = prob + "n=6 lattice-fit pattern present; " }
+        if prob.len() > 0 {
+            incomplete = incomplete + 1
+            fail = fail + 1
+            println("  [FAIL] " + ids[ri] + ": " + prob)
+        } else {
+            println("  [PASS] " + ids[ri])
+        }
+        ri = ri + 1
+    }
+
+    // §C summary count parity (ALL N (c) items) — WARN-skip if absent
+    let mut block = ""
+    let mut bi = cstart
+    while bi < cend { block = block + lines[bi] + "\n"; bi = bi + 1 }
+    let sumhit = exec("printf '%s' " + shq(block) + " | grep -oE 'ALL[[:space:]]+[0-9]+[[:space:]]+\\(c\\)[[:space:]]+items' 2>/dev/null | head -1").trim()
+    if sumhit.len() == 0 {
+        println("  [WARN] §C summary 'ALL N (c) items' line not found; skipping count parity")
+    } else {
+        let sv = to_int_digits(sumhit)
+        if sv != n_rows {
+            fail = fail + 1
+            println("  [FAIL] §C summary claims " + str(sv) + " items but " + str(n_rows) + " rows discovered")
+        } else {
+            println("  [PASS] §C summary count " + str(sv) + " matches discovered rows " + str(n_rows))
+        }
+    }
+
+    println("")
+    if fail == 0 && n_rows > 0 {
+        println("__HEXA_MATTER_C_HANDOFF__ PASS  (" + str(n_rows) + "/" + str(n_rows) + " items, 0 incomplete)")
+        return
+    }
+    println("__HEXA_MATTER_C_HANDOFF__ FAIL  (" + str(incomplete) + " incomplete of " + str(n_rows) + " items, " + str(fail) + " total failures)")
+    exit(1)
+}

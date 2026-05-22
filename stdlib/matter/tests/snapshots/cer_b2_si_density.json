@@ -1,0 +1,29 @@
+{
+  "__fixture_tag__": "VENDORED SOURCE SNAPSHOT — frozen citation, not live data",
+  "gate_id": "cer_b2_si_density",
+  "claim": {
+    "property": "density",
+    "material": "Si (silicon, crystalline, 293 K)",
+    "value": 2.329,
+    "unit": "g/cm^3"
+  },
+  "source": {
+    "kind": "CRC_HANDBOOK",
+    "edition": "105th",
+    "year": 2024,
+    "page": "4-87",
+    "table": "Physical Constants of Inorganic Compounds",
+    "citation": "CRC Handbook of Chemistry and Physics, 105th ed. (2024)"
+  },
+  "tolerance": {
+    "abs": 0.002,
+    "unit": "g/cm^3",
+    "basis": "CRC tabulated precision (last digit ± half) and ASTM F1798 wafer density"
+  },
+  "spec_doc": {
+    "path": "silicon/silicon.md",
+    "line_hint": "Si-L6 row in §3 ceiling table"
+  },
+  "accessed": "2026-05-13",
+  "n6_lattice_fit_applied": false
+}

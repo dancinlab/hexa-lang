@@ -1,0 +1,221 @@
+#!hexa strict
+// hexa-matter/cli/hexa-matter.hexa — standalone hexa-matter CLI router
+//
+// 36-verb 소재 substrate (HEXA family) router. Spec-first dispatcher: each
+// verb subcmd resolves its spec doc path and prints headline (head -30).
+// Phase D (2026-05-13) added 12 new verbs: elastomer, compound-semi,
+// perovskite, 2d-materials, adhesive, magnetic-materials, mof,
+// liquid-crystal, superalloy, biodegradable-plastics, wood-cellulose, carbon.
+// Phase D follow-on (2026-05-13) added 4 more verbs (29→33):
+// glass-ceramic, geopolymer, aerogel-foam, ionic-liquid.
+// Phase D'' (2026-05-13) added 3 more verbs (33→36):
+// refractory, photoresist, electrode-material.
+//
+// for those, call `hexa-chip materials` directly — do NOT proxy here.
+//
+// Root resolution: $HEXA_MATTER_ROOT env, else inferred from $0.
+//
+
+let VERSION = "1.0.0"
+
+let HOME = env("HOME")
+let HEXA_MATTER_ROOT_ENV = env("HEXA_MATTER_ROOT")
+
+fn hexa_matter_root() -> str {
+    if HEXA_MATTER_ROOT_ENV.len() > 0 { return HEXA_MATTER_ROOT_ENV }
+    let inferred = exec("dirname \"$(dirname \"$0\")\" 2>/dev/null || true").trim()
+    if inferred.len() > 0 { return inferred }
+    return HOME + "/.hexa-matter"  // @allow-devpath
+}
+
+let HM = hexa_matter_root()
+
+// 36-verb spec doc registry: verb_name → (subdir, filename)
+let VERBS = [
+    ["ceramics",               "ceramics",               "ceramics.md"],
+    ["concrete",               "concrete",               "concrete.md"],
+    ["concrete_tech",          "concrete_tech",          "concrete-technology.md"],
+    ["glass",                  "glass",                  "hexa-glass.md"],
+    ["silicon",                "silicon",                "silicon.md"],
+    ["compound-semi",          "compound-semi",          "compound-semi.md"],
+    ["perovskite",             "perovskite",             "perovskite.md"],
+    ["2d-materials",           "2d-materials",           "2d-materials.md"],
+    ["mof",                    "mof",                    "mof.md"],
+    ["carbon",                 "carbon",                 "carbon.md"],
+    ["glass-ceramic",          "glass-ceramic",          "glass-ceramic.md"],
+    ["geopolymer",             "geopolymer",             "geopolymer.md"],
+    ["aerogel-foam",           "aerogel-foam",           "aerogel-foam.md"],
+    ["refractory",             "refractory",             "refractory.md"],
+    ["electrode-material",     "electrode-material",     "electrode-material.md"],
+    ["aramid",                 "aramid",                 "aramid.md"],
+    ["epoxy",                  "epoxy",                  "epoxy.md"],
+    ["nylon",                  "nylon",                  "nylon.md"],
+    ["pet_film",               "pet_film",               "pet-film.md"],
+    ["tire_cord",              "tire_cord",              "tire-cord.md"],
+    ["elastomer",              "elastomer",              "elastomer.md"],
+    ["adhesive",               "adhesive",               "adhesive.md"],
+    ["liquid-crystal",         "liquid-crystal",         "liquid-crystal.md"],
+    ["biodegradable-plastics", "biodegradable-plastics", "biodegradable-plastics.md"],
+    ["ionic-liquid",           "ionic-liquid",           "ionic-liquid.md"],
+    ["photoresist",            "photoresist",            "photoresist.md"],
+    ["fabric",                 "fabric",                 "hexa-fabric.md"],
+    ["paper",                  "paper",                  "paper.md"],
+    ["wood-cellulose",         "wood-cellulose",         "wood-cellulose.md"],
+    ["gemology",               "gemology",               "gemology.md"],
+    ["metallurgy",             "metallurgy",             "swordsmithing.md"],
+    ["superalloy",             "superalloy",             "superalloy.md"],
+    ["magnetic-materials",     "magnetic-materials",     "magnetic-materials.md"],
+    ["synthesis",              "synthesis",              "material-synthesis.md"],
+    ["recycle_n6",             "recycle_n6",             "hexa-recycle.md"],
+    ["recycling",              "recycling",              "recycling.md"],
+]
+
+fn shq(s: str) -> str {
+    return "'" + s.replace("'", "'\\''") + "'"
+}
+
+fn _file_exists(p: str) -> bool {
+    let r = exec("[ -f " + shq(p) + " ] && echo yes || echo no").trim()
+    return r == "yes"
+}
+
+fn _spec_path(subdir: str, fname: str) -> str {
+    return HM + "/" + subdir + "/" + fname
+}
+
+fn _print_spec_headline(verb: str, spec_path: str) {
+    if _file_exists(spec_path) == false {
+        println("ERROR: spec doc not found: " + spec_path)
+        println("  (set HEXA_MATTER_ROOT or run from repo root)")
+        return
+    }
+    println("hexa-matter " + verb + " — spec doc:")
+    println("  " + spec_path)
+    println("")
+    println("--- doc head (first 30 lines) ---")
+    let raw = exec("head -30 " + shq(spec_path) + " 2>&1")
+    println(raw.trim())
+    println("--- end doc head ---")
+    println("")
+    println("__HEXA_MATTER_" + verb.to_upper() + "__ PASS")
+}
+
+fn _print_caveats() {
+    println("")
+    println("  1. 36/36 verbs ship as SPEC docs (17 v1.0.0 + 12 Phase D + 4 Phase D follow-on")
+    println("     + 3 Phase D'' 2026-05-13: refractory, photoresist, electrode-material)")
+    println("     — working .hexa numerical sandboxes are TBD per per-verb F-* gates.")
+    println("  2. chip-grade semiconductor materials live in hexa-chip:")
+    println("     `hexa-chip materials` — do NOT proxy through hexa-matter.")
+    println("     (silicon + photoresist verbs here are MATERIAL layer only — wafer /")
+    println("      poly-Si / SiO₂ / SiC + photopolymer chemistry — device fab + lithography")
+    println("      process stay in hexa-chip per CROSS_LINK §3.2.)")
+    println("  3. electrode-material verb is ACTIVE MATERIAL only:")
+    println("     cell engineering (coating, calendering, formation, BMS, pack)")
+    println("     belongs to hexa-energy per CROSS_LINK §3.3.")
+    println("  4. n=6 invariant lattice (σ=12, τ=4, φ=2, J₂=24) projected")
+    println("     per-verb; empirical Bayesian audit pending.")
+}
+
+fn cmd_status(a: [str]) {
+    println("hexa-matter " + VERSION + " status — 36-verb 소재 substrate (HEXA family)")
+    println("")
+    println("  group                verbs")
+    println("  -------------------- ------------------------------------------------")
+    println("  ceramic_inorganic    ceramics · concrete · concrete_tech · glass · silicon")
+    println("                       · compound-semi · perovskite · 2d-materials · mof · carbon")
+    println("                       · glass-ceramic · geopolymer · aerogel-foam")
+    println("                       · refractory · electrode-material")
+    println("  polymer              aramid · epoxy · nylon · pet_film · tire_cord")
+    println("                       · elastomer · adhesive · liquid-crystal · biodegradable-plastics · ionic-liquid")
+    println("                       · photoresist")
+    println("  fiber_paper          fabric · paper · wood-cellulose")
+    println("  gem_mineral          gemology")
+    println("  metal                metallurgy · superalloy · magnetic-materials")
+    println("  synthesis            synthesis (material-synthesis platform)")
+    println("  recycle              recycle_n6 · recycling")
+    println("")
+    println("  verdict: SPEC_FIRST (36/36 verbs spec-only — 17 v1.0.0 + 12 Phase D + 4 Phase D follow-on + 3 Phase D'')")
+    println("  cross-link: chip materials → `hexa-chip materials` (sibling CLI)")
+    println("              silicon + photoresist HERE are material layer only")
+    println("              electrode-material HERE is active material only; cell engineering → hexa-energy")
+    _print_caveats()
+}
+
+fn cmd_verb(verb: str) {
+    for row in VERBS {
+        if row[0] == verb {
+            _print_spec_headline(verb, _spec_path(row[1], row[2]))
+            return
+        }
+    }
+    println("hexa-matter: unknown verb: " + verb)
+    println("(try `hexa-matter status` for the verb list)")
+    exit(2)
+}
+
+fn cmd_selftest(a: [str]) {
+    println("hexa-matter selftest — 36-verb spec doc presence check")
+    println("")
+    let mut count = 0
+    for row in VERBS {
+        let verb = row[0]
+        let path = _spec_path(row[1], row[2])
+        if _file_exists(path) {
+            println("  [PASS] " + verb)
+            count = count + 1
+        } else {
+            println("  [FAIL] " + verb + " (missing: " + path + ")")
+        }
+    }
+    println("")
+    println("verbs_present = " + str(count) + " / 36")
+    if count == 36 {
+        println("__HEXA_MATTER_SELFTEST__ PASS")
+    } else {
+        println("__HEXA_MATTER_SELFTEST__ FAIL")
+        exit(1)
+    }
+}
+
+fn cmd_version() {
+    println("hexa-matter " + VERSION)
+    println("standalone n=6 소재 substrate (HEXA family — extracted from canon@47c70cbf on 2026-05-09)")
+    println("license: MIT")
+    println("repo:    https://github.com/dancinlab/hexa-matter")
+}
+
+fn cmd_help() {
+    println("hexa-matter " + VERSION + " — standalone 소재 substrate CLI")
+    println("")
+    println("usage: hexa-matter <subcmd> [flags...]")
+    println("")
+    println("verb subcommands (36-verb materials substrate):")
+    for row in VERBS {
+        println("  " + row[0])
+    }
+    println("")
+    println("utility:")
+    println("  status          36-verb table + cross-link + caveats")
+    println("  selftest        36-verb spec doc presence check")
+    println("")
+    println("global flags: --version, --help, -h")
+    println("env:          HEXA_MATTER_ROOT (override repo root)")
+    println("")
+    println("cross-link (call sibling CLI directly):")
+    println("  chip-grade semiconductor materials → hexa-chip materials")
+}
+
+fn main(args: [str]) {
+    if args.len() < 2 { cmd_help(); return }
+    let sub = args[1]
+
+    if sub == "--version" || sub == "-v" { cmd_version(); return }
+    if sub == "--help"    || sub == "-h" { cmd_help();    return }
+
+    if sub == "status"   { cmd_status(args);   return }
+    if sub == "selftest" { cmd_selftest(args); return }
+    if sub == "help"     { cmd_help();         return }
+
+    cmd_verb(sub)
+}

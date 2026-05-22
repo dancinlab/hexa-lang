@@ -1,0 +1,23 @@
+{
+  "__fixture_tag__": "SAMPLE FIXTURE — not real data, for selftest replay only",
+  "__source__": "Meta AI OMat24 dataset schema (illustrative); real fetch via HuggingFace datasets",
+  "__captured__": "2026-05-13 (hexa-matter Phase G)",
+  "__honest_note__": "OMat24 = 110M structures (Barroso-Luque et al. 2024). MACE-OMat checkpoint trained on these.",
+  "omat24_id": "OMAT-SAMPLE-0000001",
+  "formula": "Fe2O3",
+  "elements": ["Fe", "O"],
+  "nsites": 30,
+  "dft_total_energy_eV": -283.45,
+  "dft_energy_per_atom_eV": -9.448,
+  "max_force_eV_per_A": 0.018,
+  "structure": {
+    "lattice": {
+      "a": 5.0383, "b": 5.0383, "c": 13.7497,
+      "alpha": 90.0, "beta": 90.0, "gamma": 120.0
+    },
+    "space_group_symbol": "R-3c",
+    "space_group_number": 167
+  },
+  "checkpoint_recommendation": "MACE-OMat v1 (Meta AI; HuggingFace `fairchem/MACE-OMat-2024`)",
+  "license": "CC-BY 4.0 (Meta AI OMat24 release; Barroso-Luque et al. 2024)"
+}
