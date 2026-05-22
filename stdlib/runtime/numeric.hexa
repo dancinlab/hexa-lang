@@ -1312,3 +1312,71 @@ pub fn rt_to_string_map(m: HexaVal, depth: int) -> HexaVal {
     out = out + "}"
     return out
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// Step 3 cycle 107 — map basic-op partial port (잔여 #5 partial discharge)
+// ─────────────────────────────────────────────────────────────────────
+// Ports 4 of 6 RUNTIME.md 잔여 #5 ops:
+//   • rt_map_keys              ← hexa_map_keys
+//   • rt_map_values            ← hexa_map_values
+//   • rt_map_contains_key_b    ← hexa_map_contains_key (int-return bridge)
+//   • rt_map_get_v             ← hexa_map_get hash-lookup branch
+//
+// Skipped (genuine CORE-final):
+//   • hexa_map_set    — Robin Hood slot insert + hxlcl_strdup key intern
+//                       + hmap_grow allocator + order_keys/vals realloc
+//   • hexa_map_remove — Robin Hood deletion + free + order array compact
+//
+// Uses the new codegen-inline opaque builtins from self/codegen_c2.hexa
+// cycle 107 (matching the cycle-100 __vs_ptr_eq / __map_ptr_eq pattern):
+//   __map_has_cstr_v(m, key_v)   — hash lookup, returns bool
+//   __map_get_cstr_v(m, key_v)   — hash lookup, returns val or void
+//   __map_order_key_at(m, i)     — t->order_keys[i] as TAG_STR
+//   __map_order_val_at(m, i)     — t->order_vals[i] as HexaVal
+//
+// Critically, these CANNOT use `m.keys()` / `m.get(k)` / `m.values()`
+// because those method-call sites lower to `hexa_map_keys(m)` etc, which
+// (with HEXA_HAS_HEXA_RT_STDLIB) dispatch back here — infinite recursion.
+// The opaque builtins side-step the recursion by reading HexaMapTable
+// directly via static-inline helpers in self/runtime.h.
+
+pub fn rt_map_keys(m: HexaVal) -> HexaVal {
+    let n: int = __map_raw_len(m) as int
+    let mut out: HexaVal = []
+    let mut i: int = 0
+    while i < n {
+        let k = __map_order_key_at(m, i)
+        out = out.push(k)
+        i = i + 1
+    }
+    return out
+}
+
+pub fn rt_map_values(m: HexaVal) -> HexaVal {
+    let n: int = __map_raw_len(m) as int
+    let mut out: HexaVal = []
+    let mut i: int = 0
+    while i < n {
+        let v = __map_order_val_at(m, i)
+        out = out.push(v)
+        i = i + 1
+    }
+    return out
+}
+
+// int-return bridge (cycle-54 pattern) — C wrapper expects int 0/1, hexa
+// returns bool, codegen lowers bool-return to int via hexa_truthy at the
+// extern boundary. The _b suffix marks the bool-return form per the
+// cycle-56 (rt_str_starts_with_b / rt_str_ends_with_b) convention.
+pub fn rt_map_contains_key_b(m: HexaVal, key: HexaVal) -> bool {
+    let hit = __map_has_cstr_v(m, key)
+    return hit as bool
+}
+
+// Hash-lookup branch port. C wrapper handles VALSTRUCT routing + the
+// fprintf miss-diagnostic. We return TAG_VOID on miss; the C side
+// detects that and replays the diagnostic + void return.
+pub fn rt_map_get_v(m: HexaVal, key: HexaVal) -> HexaVal {
+    return __map_get_cstr_v(m, key)
+}
+

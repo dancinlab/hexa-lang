@@ -4331,6 +4331,27 @@ fn gen2_expr(node) {
             if name == "__map_ptr_eq" {
                 return "hexa_bool((HX_MAP_TBL(" + gen2_expr(node.args[0]) + ") == HX_MAP_TBL(" + gen2_expr(node.args[1]) + ")))"
             }
+            // RUNTIME.md step-3 cycle 107 — map basic-op opaque-pointer
+            // escape (잔여 #5 partial discharge: 4 of 6 ops). Each builtin
+            // lowers to a single inline call into the static-inline helper
+            // in self/runtime.h that composes HX_MAP_TBL / hmap_find /
+            // hexa_fnv1a_str + order_keys/order_vals walks. No new C
+            // runtime symbol — the helpers de-staticize hmap_find +
+            // hexa_fnv1a_str (additive extern declarations) and read
+            // HexaMapTable directly. set/remove remain CORE-final (Robin
+            // Hood mutation + strdup key intern + hmap_grow allocator).
+            if name == "__map_has_cstr_v" {
+                return "__map_has_cstr_v(" + gen2_expr(node.args[0]) + ", " + gen2_expr(node.args[1]) + ")"
+            }
+            if name == "__map_get_cstr_v" {
+                return "__map_get_cstr_v(" + gen2_expr(node.args[0]) + ", " + gen2_expr(node.args[1]) + ")"
+            }
+            if name == "__map_order_key_at" {
+                return "__map_order_key_at(" + gen2_expr(node.args[0]) + ", " + gen2_expr(node.args[1]) + ")"
+            }
+            if name == "__map_order_val_at" {
+                return "__map_order_val_at(" + gen2_expr(node.args[0]) + ", " + gen2_expr(node.args[1]) + ")"
+            }
             if name == "to_float" {
                 // T32: route through __hx_to_double (runtime.c:415) which
                 // unwraps TAG_VALSTRUCT (interpreter Vals) — the prior inline
@@ -7457,6 +7478,13 @@ fn _is_builtin_name(name) {
     // RUNTIME.md step-3 잔여 #4 pointer-eq inline builtins (cycle 100).
     if name == "__vs_ptr_eq" { return true }
     if name == "__map_ptr_eq" { return true }
+    // RUNTIME.md step-3 cycle 107 — map basic-op opaque-pointer escape
+    // (잔여 #5 partial discharge: 4 of 6 ops). See codegen emit block
+    // near __map_ptr_eq.
+    if name == "__map_has_cstr_v" { return true }
+    if name == "__map_get_cstr_v" { return true }
+    if name == "__map_order_key_at" { return true }
+    if name == "__map_order_val_at" { return true }
     // FIX-A (Anima serving unblock, 2026-04-18)
     if name == "time_ms" { return true }
     if name == "byte_len" { return true }
