@@ -36,6 +36,7 @@
 use "compiler/atlas/parser"
 use "compiler/atlas/merger"
 use "compiler/atlas/static_index"
+use "self/stdlib/fs"               // read_file_safe (used by cmd_append_witness)
 use "compiler/atlas/audit"
 use "compiler/atlas/audit_rodata"
 use "compiler/atlas/overlay"

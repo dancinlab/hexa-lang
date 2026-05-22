@@ -1281,14 +1281,6 @@ static int hxlcl_posix_openpt(int flags);
 #define ftell(fp)          hxlcl_ftell((void *)(fp))
 #define fseek(fp,o,w)      hxlcl_fseek((void *)(fp), (long)(o), (int)(w))
 #define fdopen(fd,m)       ((FILE *)hxlcl_fdopen((int)(fd), (const char *)(m)))
-// fileno MUST decode the fake FILE* (= (void*)(fd+1) from hxlcl_fdopen /
-// hxlcl_popen) via _hxlcl_fp_fd, exactly like fread/fwrite/fseek do. The
-// real glibc fileno() dereferences its argument as a struct _IO_FILE*;
-// handing it a fake (void*)(fd+1) (e.g. 0x4 for fd 3) SIGSEGVs. This bit
-// hexa_pipe_buf_enlarge_kernel() (runtime_core.c) on the very first
-// hexa_exec() during install_dir_from_argv0(), crashing the compiled CLI
-// driver at startup before --version could print.
-#define fileno(fp)         _hxlcl_fp_fd((void *)(fp))
 #define flock(fd,op)       hxlcl_flock((int)(fd), (int)(op))
 #define setvbuf(fp,b,m,sz) hxlcl_setvbuf((void *)(fp), (char *)(b), (int)(m), (size_t)(sz))
 // Cycle 62 — ctype.h pre-defines isalnum/isalpha as `__istype(...)`
@@ -9958,30 +9950,34 @@ HexaVal rt_delete_file(HexaVal path) {
 // quote-escape the path (same shellout-shape limitation: entries with
 // '\n' lost — inherent, matches interp). Needed by
 // compiler/atlas/merger.hexa::list_dir for the atlas_cli binary.
+/* opendir/readdir for hexa_list_dir (2026-05-22 fix). Included here
+ * (immediately before the use site) instead of at top-of-file so it
+ * applies to every platform branch — the platform-specific #if/#elif
+ * blocks above include their own subsets and one of them (the Linux
+ * x86_64 fallback) used to mask this header inside an inactive branch
+ * on the Darwin build. */
+#include <dirent.h>
+
 HexaVal hexa_list_dir(HexaVal path) {
     if (!HX_IS_STR(path) || !HX_STR(path) || !HX_STR(path)[0]) return hexa_array_new();
     const char* p = HX_STR(path);
-    size_t pl = hxlcl_strlen(p), cap = pl * 4 + 32, n = 0;
-    char* cmd = (char*)malloc(cap);
-    const char* pre = "ls -1 '";
-    hxlcl_memcpy(cmd, pre, hxlcl_strlen(pre)); n = hxlcl_strlen(pre);
-    for (size_t i = 0; i < pl; i++) {
-        if (p[i] == '\'') { hxlcl_memcpy(cmd + n, "'\\''", 4); n += 4; }
-        else cmd[n++] = p[i];
-    }
-    const char* post = "' 2>/dev/null";
-    hxlcl_memcpy(cmd + n, post, hxlcl_strlen(post)); n += hxlcl_strlen(post); cmd[n] = 0;
-    FILE* fp = hxlcl_popen(cmd, "r");
-    free(cmd);
-    if (!fp) return hexa_array_new();
+    /* 2026-05-22 fix: switched from popen("ls -1 …") + getline() to
+     * opendir/readdir. The old shell-out path called libc getline() on a
+     * hxlcl_popen FAKE FILE* (encoded as (void*)(fd+1)) — getline's
+     * internal flockfile() dereferences the pointer as a real FILE* and
+     * segfaults (EXC_BAD_ACCESS at +0x6c). Discovered while wiring the
+     * no-hxc atlas SSOT: static_atlas → load_atlas → _discover →
+     * list_dir → CRASH. opendir/readdir is the canonical POSIX path,
+     * shell-free, and matches ls -1 default semantics (skip hidden). */
+    DIR* d = opendir(p);
+    if (!d) return hexa_array_new();
     HexaVal arr = hexa_array_new();
-    char* line = NULL; size_t lcap = 0; ssize_t got;
-    while ((got = getline(&line, &lcap, fp)) >= 0) {
-        while (got > 0 && (line[got-1] == '\n' || line[got-1] == '\r')) line[--got] = 0;
-        if (got > 0) arr = hexa_array_push(arr, hexa_str(line));
+    struct dirent* ent;
+    while ((ent = readdir(d)) != NULL) {
+        if (ent->d_name[0] == '.') continue;     /* skip ., .., and hidden */
+        arr = hexa_array_push(arr, hexa_str(ent->d_name));
     }
-    if (line) free(line);
-    hxlcl_pclose(fp);
+    closedir(d);
     return arr;
 }
 
