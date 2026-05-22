@@ -281,21 +281,26 @@ SSOT: `inbox/rfc_drafts_2026_05_22/rfc_080_hexa_loop_dfs.md`
 | C | prompt/parse/`dfs_run` beam-search + `cycle_dfs` + `build_atlas_view` | ✅ | `d8257dd6` |
 | D | verify gate (cite-required·cite-in-atlas·English-only·drop-log) | ✅ | `d8257dd6` |
 | E | 3-way AND budget + `--allow-llm` exec gate | ✅ | `d8257dd6` |
-| F | chain/telemetry ✅ · `--resume`+frontier persist | 부분 | — |
+| F | chain/telemetry ✅ · `--resume`+frontier persist | 부분(resume follow-up) | — |
 | G | sha256 content cache | ✅ | `d8257dd6` |
-| H | `tests/loop/dfs_test.hexa` (parse+verify+run+budget) | 작성✅ compile검증 대기 | — |
-| I | RFC `inbox/rfc_drafts_2026_05_22/rfc_080_hexa_loop_dfs.md` + governance proposal | ✅ | — |
-| J | real-LLM oracle (claude `--allow-llm`) 비용/품질 측정 | 대기 (pool offload) | — |
+| H | `tests/loop/dfs_test.hexa` (parse+verify+run+budget) | ✅ | `a4a7cd9c` |
+| I | RFC `inbox/rfc_drafts_2026_05_22/rfc_080_hexa_loop_dfs.md` + governance proposal | ✅ | `a4a7cd9c` |
+| J | **behavioral validation (compiled) — 14/14 PASS** | ✅ | `3264dcdd` |
 
-검증: `hexa parse` (로컬 OOM-free) → dfs.hexa + cycle.hexa + dfs_test.hexa 전부 PASS.
-behavioral(compiled)은 `HEXA_MODULE_LOADER`+build artifacts 필요 → Mac 부하 회피 위해
-pool(mini/ubu-2) offload.
+검증: `hexa parse` (로컬 OOM-free) → 3개 파일 PASS. **behavioral CLOSED (local Mac arm64):**
+`hexac build tests/loop/dfs_test.hexa` → Mach-O arm64 binary → **14/14 checks PASS** (compiled
+path). parse·verify gate·dfs_run emit(2 children→inbox)·budget cap·chain.jsonl persist 전부 확인.
+stub LLM(`cat fixture`), $0.
 
-함정 기록: dfs.hexa 첫 작성 시 string literal에 NUL byte(0x00) 혼입 → hexa C-string
-lexer가 종료로 읽어 EOF까지 swallow. `cat -v`의 `^@`로 검출·수정. hexa string은 ASCII 필수.
+**호스트 제약:** `runtime.c`의 RUNTIME.md hexa-native syscall layer가 `#if __aarch64__` + Darwin
+`svc #0x80`으로 **macOS-arm64 전용** → x86_64 Linux(ubu-1/ubu-2)는 link 불가. arm64 Mac에서만 빌드.
 
-### 다음 행동
-1. pool offload로 dfs_test.hexa 컴파일+실행 (Phase H 검증)
-2. Phase J real-LLM oracle (claude 1회, cost ≤ $0.05 목표)
-3. (선택) Phase F `--resume` 완성 또는 follow-up RFC로 이월
-4. governance `@D g_llm_pluggable` 사용자 ratify 후 CLAUDE.md/AGENTS.tape 등록
+함정 기록: (1) dfs.hexa string literal에 NUL byte(0x00) → lexer EOF swallow (`cat -v` `^@`로 검출).
+(2) **`_dfs_has_cjk` 버그** (behavioral이 잡음): `grep -c '[\xe4-\xed]'`는 plain grep이 `\xHH` 미해석
+→ ASCII letter 매칭 → 모든 English reject. fix=`tr -d '\0-\177'|wc -c` (non-ASCII byte count, 이식적).
+
+### 다음 행동 (선택)
+1. (선택) Phase J real-LLM oracle — claude `--allow-llm --llm-calls 1` 실호출 1회로 live cost/quality 측정
+2. (선택) Phase F `--resume`+dfs_frontier.jsonl 완성 또는 follow-up RFC로 이월
+3. governance `@D g_llm_pluggable` 사용자 ratify 후 CLAUDE.md/AGENTS.tape 등록
+4. rfc-080-dfs → main rebase + PR (현재 17211a25 base)

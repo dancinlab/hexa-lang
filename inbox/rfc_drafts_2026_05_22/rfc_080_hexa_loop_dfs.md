@@ -134,17 +134,30 @@ path), `g_plan_consolidation` (compiler/PLAN.md entry per cycle),
 | E | 3-way AND budget + `--allow-llm` exec gate | landed `d8257dd6` |
 | F | chain/telemetry landed; `--resume` + `dfs_frontier.jsonl` persist | **partial** |
 | G | sha256 content cache | landed `d8257dd6` |
-| H | `tests/loop/dfs_test.hexa` (parse + verify + run + budget) | written, compile-validate pending |
-| I | this RFC + PLAN entry + governance proposal | this commit |
-| J | real-LLM oracle (`--allow-llm` + claude) cost/quality measurement | pending (pool offload) |
+| H | `tests/loop/dfs_test.hexa` (parse + verify + run + budget) | landed `a4a7cd9c` |
+| I | this RFC + PLAN entry + governance proposal | landed `a4a7cd9c` |
+| J | **behavioral validation — compiled (`hexac build`), 14/14 PASS on Mac arm64** | **landed `3264dcdd`** |
 
 ## 6. Validation
 
 - `hexa parse` (local, OOM-free): dfs.hexa + cycle.hexa + dfs_test.hexa all PASS.
-- Behavioral (compiled): needs `HEXA_MODULE_LOADER` + build artifacts; per
-  Mac-load policy this is **pool-offloaded** (mini / ubu-2), not built locally.
-- Phase J: one real `claude -p` expansion under `--allow-llm --llm-calls 1`,
-  measuring cost (target ≤ $0.05), verified-child count, and cache-hit on rerun.
+- **Behavioral (compiled), DONE:** `hexac build tests/loop/dfs_test.hexa` →
+  Mach-O arm64 binary → **14/14 checks PASS**. Covers markdown parse (2
+  children), verify gate (accept good + drop no-cite/cite-not-in-atlas/
+  trivial/non-english), `dfs_run` emit (2 children to
+  `inbox/atlas_candidates/dfs_<parent>/`), budget cap (`--llm-calls 1` stops
+  after one call), and chain.jsonl persistence (parent_slug/depth/cost).
+  Stub LLM (`cat <fixture>`), $0.
+  - **Host constraint:** the RUNTIME.md hexa-native syscall layer
+    (`runtime.c` `#if defined(__aarch64__)` + Darwin `svc #0x80`) is
+    macOS-arm64-only, so this builds only on an arm64 Mac — x86_64 Linux
+    (ubu-1/ubu-2) physically cannot link it.
+  - **Bug caught by behavioral testing (Phase J):** `_dfs_has_cjk` used
+    `grep -c '[\xe4-\xed]'`, but plain grep does not interpret `\xHH`; under
+    sh+BSD grep the bracket matched ASCII letters, rejecting ALL English
+    proposals. Fixed to a portable `tr -d '\0-\177' | wc -c` non-ASCII count.
+- Optional follow-up: one real `claude -p` expansion under
+  `--allow-llm --llm-calls 1` to measure live cost / quality.
 
 ## 7. Non-scope (follow-up RFCs)
 
