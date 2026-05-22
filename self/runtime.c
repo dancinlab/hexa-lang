@@ -705,22 +705,44 @@ static void __attribute__((noinline)) hxlcl_perror(const char *s) {
 // blocks are wired (Tier-A.4 path), `mmap` itself can be syscall-
 // inlined and the family becomes zero-extern.
 #define HXLCL_ALLOC_CHUNK_SZ (4u * 1024u * 1024u)
+// Step 5 fix (2026-05-22 잔여 #3 unblocker): track each allocation's
+// size in a 16-byte header so realloc knows how many bytes are safe to
+// read from the source. Pre-fix: hxlcl_realloc unconditionally copied
+// `n` bytes from `p` regardless of `p`'s original allocation size,
+// over-reading past chunk boundaries when n > old_size — latent
+// SIGSEGV in geometric hexa_array_push growth. Surfaced by the
+// `rt_str_concat` hexa port (RUNTIME.md 잔여 #3) which pushes la+lb
+// HexaVal int elements during atlas_hxc load (la, lb in the thousands).
+//
+// Header layout: HXLCL_HDR_BYTES (16) bytes at raw_ptr; first 8 bytes
+// store `size_t user_n`; remaining 8 bytes reserved (alignment pad).
+// User pointer = raw_ptr + 16. All hxlcl_{malloc,realloc,calloc}
+// allocations carry the header so hxlcl_realloc's memcpy can clamp
+// the copy count to old_n.
+//
+// Memory cost: +16 B per allocation. The bump allocator is mmap-backed,
+// 16-byte aligned, never frees — header cost is amortised across the
+// one-shot compiler lifetime. Smoke binary size delta ≈ 0 (header runs
+// inside the same 4 MB chunk).
+#define HXLCL_HDR_BYTES 16
 static char *_hxlcl_alloc_ptr = (char *)0;
 static char *_hxlcl_alloc_end = (char *)0;
 static void *__attribute__((noinline)) hxlcl_malloc(size_t n) {
     if (n == 0) n = 1;
-    n = (n + (size_t)15) & ~(size_t)15;
-    if (!_hxlcl_alloc_ptr || _hxlcl_alloc_ptr + n > _hxlcl_alloc_end) {
-        size_t chunk = (n > HXLCL_ALLOC_CHUNK_SZ) ? n : HXLCL_ALLOC_CHUNK_SZ;
+    size_t total = n + HXLCL_HDR_BYTES;
+    total = (total + (size_t)15) & ~(size_t)15;
+    if (!_hxlcl_alloc_ptr || _hxlcl_alloc_ptr + total > _hxlcl_alloc_end) {
+        size_t chunk = (total > HXLCL_ALLOC_CHUNK_SZ) ? total : HXLCL_ALLOC_CHUNK_SZ;
         void *m = hxlcl_mmap((void *)0, chunk, PROT_READ | PROT_WRITE,
                        MAP_PRIVATE | MAP_ANON, -1, 0);
         if (m == MAP_FAILED) return (void *)0;
         _hxlcl_alloc_ptr = (char *)m;
         _hxlcl_alloc_end = _hxlcl_alloc_ptr + chunk;
     }
-    void *p = _hxlcl_alloc_ptr;
-    _hxlcl_alloc_ptr += n;
-    return p;
+    char *raw = _hxlcl_alloc_ptr;
+    _hxlcl_alloc_ptr += total;
+    *(size_t *)raw = n;  // record user-requested size for safe realloc
+    return (void *)(raw + HXLCL_HDR_BYTES);
 }
 static void __attribute__((noinline)) hxlcl_free(void *p) {
     (void)p;
@@ -730,9 +752,14 @@ static void *__attribute__((noinline)) hxlcl_realloc(void *p, size_t n) {
     if (n == 0) return (void *)0;
     void *np = hxlcl_malloc(n);
     if (!np) return (void *)0;
+    // Header-tracked old size: clamp the memcpy so we never read past
+    // the original allocation's end (the pre-fix over-read crashed when
+    // n > old_n and old_n's chunk boundary fell inside [p .. p+n)).
+    size_t old_n = *(size_t *)((char *)p - HXLCL_HDR_BYTES);
+    size_t copy_n = (n < old_n) ? n : old_n;
     unsigned char *d = (unsigned char *)np;
     const unsigned char *s = (const unsigned char *)p;
-    for (size_t i = 0; i < n; i++) d[i] = s[i];
+    for (size_t i = 0; i < copy_n; i++) d[i] = s[i];
     return np;
 }
 static void *__attribute__((noinline)) hxlcl_calloc(size_t nmemb, size_t size) {
