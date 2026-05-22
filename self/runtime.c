@@ -1281,6 +1281,14 @@ static int hxlcl_posix_openpt(int flags);
 #define ftell(fp)          hxlcl_ftell((void *)(fp))
 #define fseek(fp,o,w)      hxlcl_fseek((void *)(fp), (long)(o), (int)(w))
 #define fdopen(fd,m)       ((FILE *)hxlcl_fdopen((int)(fd), (const char *)(m)))
+// fileno MUST decode the fake FILE* (= (void*)(fd+1) from hxlcl_fdopen /
+// hxlcl_popen) via _hxlcl_fp_fd, exactly like fread/fwrite/fseek do. The
+// real glibc fileno() dereferences its argument as a struct _IO_FILE*;
+// handing it a fake (void*)(fd+1) (e.g. 0x4 for fd 3) SIGSEGVs. This bit
+// hexa_pipe_buf_enlarge_kernel() (runtime_core.c) on the very first
+// hexa_exec() during install_dir_from_argv0(), crashing the compiled CLI
+// driver at startup before --version could print.
+#define fileno(fp)         _hxlcl_fp_fd((void *)(fp))
 #define flock(fd,op)       hxlcl_flock((int)(fd), (int)(op))
 #define setvbuf(fp,b,m,sz) hxlcl_setvbuf((void *)(fp), (char *)(b), (int)(m), (size_t)(sz))
 // Cycle 62 — ctype.h pre-defines isalnum/isalpha as `__istype(...)`
