@@ -94,8 +94,24 @@ static inline void hexa_pipe_buf_enlarge_kernel(FILE* fp) {
     if (!fp) return;
 #ifdef __linux__
 #ifdef F_SETPIPE_SZ
-    int fd = fileno(fp);
-    if (fd >= 0) {
+    // rfc_006 §5 d4 / ubu-2 x86_64 self-host unblock (2026-05-22): the
+    // FILE* here comes from hxlcl_popen / hxlcl_fdopen which use the
+    // fake-pointer model `(void*)(uintptr_t)(fd + 1)` (runtime.c
+    // hxlcl_fdopen L832, hxlcl_popen L1675). Real glibc `fileno()` on
+    // such a small-int pointer dereferences `fp->_fileno` and SIGSEGVs.
+    // The macro override block at runtime.c L1278+ redefines
+    // fread/fclose/fdopen to the hxlcl variants but `fileno` was not
+    // in the override list, so this single call was the lone real-glibc
+    // stdio touch on a fake FILE* — every parse/build on ubu-2 crashed
+    // here (rc=139, gdb bt: cmd_parse → hexa_exec → __GI___fileno fp=0x4).
+    // Decode inline (mirrors _hxlcl_fp_fd at runtime.c L780) so the fix
+    // is self-contained and doesn't depend on macro ordering:
+    //   v < 0x1000  → small-int fake FILE* (fd = v - 1)
+    //   v >= 0x1000 → real libc FILE* — skip (we'd need glibc fileno,
+    //                  which would work, but no use case here)
+    uintptr_t v = (uintptr_t)fp;
+    int fd = (v < 0x1000) ? ((int)v - 1) : -1;
+    if (fd >= 3) {
         (void)hxlcl_fcntl(fd, F_SETPIPE_SZ, 1 << 20);
         // Ignore errno (EPERM/EINVAL) — kernel may reject; default size
         // still works correctly, only throughput differs.
