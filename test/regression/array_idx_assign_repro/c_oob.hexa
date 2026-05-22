@@ -1,5 +1,0 @@
-fn main() {
-  let mut a: [int] = [1, 2, 3]
-  a[10] = 99
-  println("done")
-}
