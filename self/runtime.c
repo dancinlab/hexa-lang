@@ -1106,7 +1106,104 @@ static int __attribute__((noinline)) hxlcl_darwin_check_fd_set_overflow(int fd, 
     (void)fd; (void)p; (void)n;
     return 0;  // never overflowing
 }
-#endif  /* arm64 */
+#elif defined(__x86_64__) && defined(__linux__)
+// iter-2d (2026-05-22) — Option L: libc-fallback syscall layer for x86_64
+// Linux. The arm64 branch above traps directly via `svc #0x80` because
+// aprime_cc targets Mach-O arm64 (macOS/iOS), where the raw-trap path was
+// chosen to avoid pulling libSystem wrappers. On x86_64 Linux there is a
+// universal glibc, the Darwin SYS_* numbers do not apply (Linux uses a
+// different syscall table + the `syscall` instruction, not `svc`), and the
+// CI bootstrap toolchain always links libc — so we route the hxlcl_*
+// wrappers through thin glibc calls. This unblocks linux-x86_64 Stage 0
+// without a full x86_64 raw-syscall port. arm64 path is UNCHANGED.
+//
+// Note: cycle-66 already used this exact pattern for read/write/close/dup2/
+// pipe/fork/waitpid on arm64 (carry-flag + EINTR + pair-return bugs in the
+// raw trap). Here we extend the same libc-wrapper approach to the full set.
+#include <unistd.h>
+#include <fcntl.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <sys/mman.h>
+#include <sys/select.h>
+#include <sys/wait.h>
+#include <sys/ioctl.h>
+#include <signal.h>
+#include <poll.h>
+#include <time.h>
+#include <stdarg.h>
+
+static long __attribute__((noinline)) hxlcl_read(int fd, void *buf, unsigned long n) {
+    return (long)read(fd, buf, (size_t)n);
+}
+static long __attribute__((noinline)) hxlcl_write(int fd, const void *buf, unsigned long n) {
+    return (long)write(fd, buf, (size_t)n);
+}
+static int __attribute__((noinline)) hxlcl_close(int fd) {
+    return close(fd);
+}
+static int __attribute__((noinline)) hxlcl_getpid(void) {
+    return (int)getpid();
+}
+static int __attribute__((noinline)) hxlcl_dup2(int oldfd, int newfd) {
+    return dup2(oldfd, newfd);
+}
+static int __attribute__((noinline)) hxlcl_pipe(int fds[2]) {
+    return pipe(fds);
+}
+static int __attribute__((noinline)) hxlcl_fork(void) {
+    return (int)fork();
+}
+static int __attribute__((noinline)) hxlcl_kill(int pid, int sig) {
+    return kill((pid_t)pid, sig);
+}
+static int __attribute__((noinline)) hxlcl_fcntl(int fd, int cmd, long arg) {
+    return fcntl(fd, cmd, arg);
+}
+static int __attribute__((noinline)) hxlcl_ioctl(int fd, unsigned long req, void *arg) {
+    return ioctl(fd, req, arg);
+}
+static long __attribute__((noinline)) hxlcl_lseek(int fd, long off, int whence) {
+    return (long)lseek(fd, (off_t)off, whence);
+}
+static int __attribute__((noinline)) hxlcl_select(int nfds, void *r, void *w, void *e, void *t) {
+    return select(nfds, (fd_set *)r, (fd_set *)w, (fd_set *)e, (struct timeval *)t);
+}
+static int __attribute__((noinline)) hxlcl_poll(void *fds, unsigned int nfds, int timeout) {
+    return poll((struct pollfd *)fds, (nfds_t)nfds, timeout);
+}
+static int __attribute__((noinline)) hxlcl_waitpid(int pid, int *status, int options) {
+    return (int)waitpid((pid_t)pid, status, options);
+}
+/* variadic to handle both 2-arg and 3-arg open() callers (matches arm64). */
+static int __attribute__((noinline)) hxlcl_open_sys(const char *path, int flags, ...) {
+    int mode = 0;
+    va_list ap;
+    va_start(ap, flags);
+    mode = va_arg(ap, int);
+    va_end(ap);
+    return open(path, flags, mode);
+}
+static int __attribute__((noinline)) hxlcl_fstat(int fd, void *buf) {
+    return fstat(fd, (struct stat *)buf);
+}
+static int __attribute__((noinline)) hxlcl_stat(const char *path, void *buf) {
+    return stat(path, (struct stat *)buf);
+}
+static void __attribute__((noinline, noreturn)) hxlcl_exit(int code) {
+    _exit(code);
+}
+static void *__attribute__((noinline)) hxlcl_mmap(void *addr, unsigned long len, int prot, int flags, int fd, long off) {
+    return mmap(addr, (size_t)len, prot, flags, fd, (off_t)off);
+}
+static int __attribute__((noinline)) hxlcl_clock_gettime(int clk, void *ts) {
+    return clock_gettime((clockid_t)clk, (struct timespec *)ts);
+}
+static int __attribute__((noinline)) hxlcl_darwin_check_fd_set_overflow(int fd, const void *p, int n) {
+    (void)fd; (void)p; (void)n;
+    return 0;  // never overflowing
+}
+#endif  /* arm64 / x86_64-linux */
 // cycle 6: time/term/mach forward decls — bodies after #include
 static int hxlcl_time(int *t);
 static int hxlcl_nanosleep(const void *req, void *rem);
@@ -11547,6 +11644,16 @@ static void _hexa_init_fn_shims(void) {
  * Implementation: native/signal_flock.c (see header comment for full
  * contract + semantics).
  * ═══════════════════════════════════════════════════════════════════ */
+/* iter-2c (2026-05-22): on Linux glibc, <sys/file.h> declares
+ * `extern int flock(int __fd, int __operation)`. The `#define flock(fd,op)
+ * hxlcl_flock(...)` macro at runtime.c:1187 textually replaces the
+ * prototype's parameter names with a call expression, so the parser sees
+ * `int hxlcl_flock((int)(__fd), (int)(__operation));` and dies at the `(`.
+ * macOS clang's <sys/file.h> does not expose a function-like flock so the
+ * macro is a no-op there. Undef just for this include; signal_flock.c uses
+ * the libc `flock(fd, op)` form internally (LOCK_EX/LOCK_UN), which is the
+ * intended behavior on both platforms. Minimal scope: only this include. */
+#undef flock
 #include "native/signal_flock.c"
 
 /* ═══════════════════════════════════════════════════════════════════
