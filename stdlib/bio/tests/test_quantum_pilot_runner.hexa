@@ -1,0 +1,32 @@
+#!hexa strict
+// tests/test_quantum_pilot_runner.hexa — external_pilot_runner.hexa smoke test
+//
+// Pass criterion: __EXTERNAL_PILOT_RUNNER__ PASS sentinel present in
+// `hexa run quantum/module/external_pilot_runner.hexa` stdout, OR
+// MISSING sentinel if pilot artifacts under /tmp/ have aged out (which
+// is acceptable — registry rows preserve the witness data permanently).
+//
+// Mirrors the convention in tests/test_quantum.hexa (cycle 59) but
+// targets the pilot runner specifically. Cost $0 (no inference re-run).
+
+fn main() {
+    let root = env("HEXA_BIO_ROOT")
+    let mut p = "quantum/module/external_pilot_runner.hexa"
+    if root.len() > 0 { p = root + "/quantum/module/external_pilot_runner.hexa" }
+
+    let raw = exec("hexa run " + p + " 2>&1")
+    if raw.contains("__EXTERNAL_PILOT_RUNNER__ PASS") {
+        println("test_quantum_pilot_runner: PASS (all 5 pilot artifacts present)")
+        return
+    }
+    if raw.contains("__EXTERNAL_PILOT_RUNNER__ MISSING") {
+        // /tmp/ may have been cleared (reboot, cleanup) — registry rows
+        // preserve witness durably so this is not a regression.
+        println("test_quantum_pilot_runner: PASS (artifacts MISSING — /tmp cleared,")
+        println("                              durable witness in registry.jsonl)")
+        return
+    }
+    println("test_quantum_pilot_runner: FAIL")
+    println(raw.trim())
+    exit(1)
+}

@@ -1,0 +1,40 @@
+#!hexa strict
+// tests/test_nanobot_c2_aml.hexa — C2 cell N·α (NANOBOT × α=AML) smoke test
+//
+// Two-path mirror:
+//   - Without HEXA_BIO_WITH_NUMPY=1: stub-skip path, expects cached print + sentinel.
+//   - With HEXA_BIO_WITH_NUMPY=1: full decorated-skeleton candidate verification
+//     via F-NB-4 actuation simulator; expects __N_ALPHA_AML_C2__ PASS.
+
+fn main() {
+    let root = env("HEXA_BIO_ROOT")
+    let mut p = "nanobot/module/nanobot.hexa"
+    if root.len() > 0 { p = root + "/nanobot/module/nanobot.hexa" }
+
+    let with_numpy = env("HEXA_BIO_WITH_NUMPY")
+    let raw = exec("hexa run " + p + " --c2-aml 2>&1")
+
+    if raw.contains("__HEXA_BIO_NANOBOT__ PASS") == false {
+        println("test_nanobot_c2_aml: FAIL (skeleton sentinel missing)")
+        println(raw.trim())
+        exit(1)
+    }
+
+    if with_numpy == "1" {
+        if raw.contains("__N_ALPHA_AML_C2__ PASS") {
+            println("test_nanobot_c2_aml: PASS (full candidate path)")
+            return
+        }
+        println("test_nanobot_c2_aml: FAIL (candidate sentinel missing under opt-in)")
+        println(raw.trim())
+        exit(1)
+    }
+
+    if raw.contains("CD33") {
+        println("test_nanobot_c2_aml: PASS (stub-skip path; set HEXA_BIO_WITH_NUMPY=1 for full candidate)")
+        return
+    }
+    println("test_nanobot_c2_aml: FAIL (cached print missing)")
+    println(raw.trim())
+    exit(1)
+}

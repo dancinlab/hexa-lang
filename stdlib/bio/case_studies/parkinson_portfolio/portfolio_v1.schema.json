@@ -1,0 +1,315 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/dancinlab/hexa-bio/case_studies/parkinson_portfolio/portfolio_v1.schema.json",
+  "title": "Parkinson disease portfolio case-study witness (v1)",
+  "description": "In-silico simulator-consistency witness for the Parkinson disease (PD) portfolio case study. HONESTY SHOWCASE: Parkinson disease is another 'CDER-but-no-clean-axis-mapping' case alongside Alzheimer (ZERO in-scope) and Type 2 Diabetes (SGLT2 inhibitors no-axis-map). Most FDA-approved PD drugs are old (1970s-1990s) CDER small molecules whose mechanisms — symptomatic dopaminergic replacement (levodopa), MAO-B inhibition (rasagiline / selegiline), COMT inhibition (entacapone / opicapone), reversible MAO-B + glutamate modulation (safinamide) — do not map cleanly onto the new expansion-layer axes. The two MAO-B IRREVERSIBLE propargylamines (rasagiline, selegiline) borderline-map onto the COVALENT axis: they DO form a covalent bond, but to the flavin N5 of FAD (not the cysteine warhead palette the COVALENT axis was registered for). They are flagged as IN-SCOPE-BORDERLINE-COVALENT with `borderline_axis_mapping: true` and explicit honest caveats; the parent covalent_inhibition_sim.py is invoked via importlib (f3 no-fork) and its Eyring TST real-limit anchor is carried forward. The other four CDER drugs (levodopa, entacapone, opicapone, safinamide) go to cder_in_scope_no_axis_mapping[] with `cder_in_scope_but_no_axis_mapping: const true` (the T2DM-portfolio honesty const). Research-stage CBER gene-therapy candidates (AAV-based, no FDA approval) are listed in not_in_scope_drugs[] as research-stage CBER UNPLACED. This is NEVER a therapeutic, clinical, motor-symptom, efficacy, immunogenic, regulatory, or portfolio-recommendation claim (g8 / f2). NOT the deferred 200-disease re-mapping; one-disease PD pilot only.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "case_study_id",
+    "disease",
+    "in_scope_drugs",
+    "cder_in_scope_no_axis_mapping",
+    "not_in_scope_drugs",
+    "cross_axis_touch_point",
+    "honesty",
+    "sentinel"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "parkinson_portfolio_v1"
+    },
+    "case_study_id": {
+      "type": "string",
+      "const": "parkinson_portfolio.v1"
+    },
+    "disease": {
+      "type": "object",
+      "required": ["name", "abbreviation", "primary_pathology", "honest_modality_landscape"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {"type": "string"},
+        "abbreviation": {"type": "string", "const": "PD"},
+        "primary_pathology": {"type": "string"},
+        "honest_modality_landscape": {"type": "string"}
+      }
+    },
+    "in_scope_drugs": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 2,
+      "description": "FDA-approved Parkinson drugs flagged as IN-SCOPE-BORDERLINE-COVALENT. The two MAO-B irreversible propargylamines (rasagiline, selegiline) DO form a covalent bond, but to the flavin N5 of FAD (not the cysteine-warhead palette anchoring the modern COVALENT axis: ibrutinib/sotorasib/adagrasib acrylamides on Cys). They are placed under COVALENT honestly as BORDERLINE — observational covalency present, but mechanistic anchor partially mismatched. `borderline_axis_mapping: true` documents this; force-fitting without the borderline flag would be f1. The parent covalent_inhibition_sim.py is invoked via importlib (f3 no-fork) and its Eyring TST real-limit ceiling is carried forward as the row anchor.",
+      "items": {
+        "type": "object",
+        "required": [
+          "drug_name",
+          "brand",
+          "sponsor",
+          "fda_year",
+          "fda_center",
+          "modality",
+          "axis",
+          "axis_layer",
+          "axis_module",
+          "in_scope",
+          "borderline_axis_mapping",
+          "borderline_reason",
+          "real_limit_anchor",
+          "real_limit_citations",
+          "drug_precedent_citations",
+          "sim_module",
+          "sim_panel_surrogate",
+          "kinact_eyring_tst_per_s",
+          "eyring_prefactor_ceiling_per_s",
+          "kinact_tst_below_eyring_ceiling",
+          "in_silico_only"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "drug_name": {"type": "string"},
+          "brand": {"type": "string"},
+          "sponsor": {"type": "string"},
+          "fda_year": {"type": "integer", "minimum": 1900, "maximum": 2100},
+          "fda_center": {"type": "string", "const": "CDER"},
+          "modality": {"type": "string"},
+          "axis": {"type": "string", "const": "COVALENT"},
+          "axis_layer": {
+            "type": "string",
+            "enum": ["expansion-main", "expansion-sub"]
+          },
+          "axis_module": {"type": "string"},
+          "in_scope": {"type": "boolean", "const": true},
+          "borderline_axis_mapping": {
+            "type": "boolean",
+            "const": true,
+            "description": "True — the axis mapping is BORDERLINE, not clean. The drug forms a covalent bond (observational covalency) but the warhead chemistry (propargylamine adduct to FAD N5) lies outside the cysteine-acrylamide palette that anchors the COVALENT axis (ibrutinib / sotorasib / adagrasib / afatinib). Flagging as borderline keeps the placement honest; omitting the flag would be lattice-fit-on-external-entity (f1)."
+          },
+          "borderline_reason": {
+            "type": "string",
+            "description": "Per-row explanation of WHY this placement is borderline rather than clean."
+          },
+          "real_limit_anchor": {
+            "type": "string",
+            "description": "The parent sim's real-limit anchor carried forward (Eyring TST universal frequency ceiling kB*T/h for an elementary covalent step, anchoring the COVALENT axis per g1)."
+          },
+          "real_limit_citations": {
+            "type": "array",
+            "minItems": 1,
+            "items": {"type": "string"}
+          },
+          "drug_precedent_citations": {
+            "type": "array",
+            "minItems": 1,
+            "items": {"type": "string"}
+          },
+          "sim_module": {
+            "type": "string",
+            "const": "covalent_inhibition_sim",
+            "description": "Parent sim module imported via importlib (f3 no-fork)."
+          },
+          "sim_panel_surrogate": {
+            "type": "string",
+            "description": "Name of the panel-class surrogate row from covalent_inhibition_sim used to exercise the kinact / Eyring TST arithmetic — NOT a fit to the drug. The parent sim's own honesty note (literature-informed warhead-class surrogates) governs."
+          },
+          "kinact_eyring_tst_per_s": {"type": "number"},
+          "eyring_prefactor_ceiling_per_s": {"type": "number"},
+          "kinact_tst_below_eyring_ceiling": {"type": "boolean", "const": true},
+          "in_silico_only": {"type": "boolean", "const": true}
+        }
+      }
+    },
+    "cder_in_scope_no_axis_mapping": {
+      "type": "array",
+      "minItems": 4,
+      "maxItems": 4,
+      "description": "FDA-approved CDER small molecules whose mechanism does not map onto any expansion-layer axis. Distinct from `not_in_scope_drugs` (CBER UNPLACED): these drugs PASS criterion #4 drug-only/CDER but no axis fits. Schema-const `cder_in_scope_but_no_axis_mapping: true` distinguishes the category from the CBER UNPLACED bucket (same convention as case_studies/type2_diabetes_portfolio/). Four entries: levodopa (dopamine precursor amino-acid replacement therapy — not a folded peptide, not a metallodrug, no axis fit), entacapone (reversible COMT inhibitor — classical enzyme inhibition, no axis fit), opicapone (newer reversible COMT inhibitor — same class as entacapone), safinamide (reversible MAO-B inhibitor + glutamate modulator — classical reversible pharmacology, no axis fit).",
+      "items": {
+        "type": "object",
+        "required": [
+          "drug_name",
+          "brand",
+          "sponsor",
+          "fda_year",
+          "fda_center",
+          "modality",
+          "axis",
+          "in_scope_by_cder_discipline",
+          "no_axis_mapping",
+          "cder_in_scope_but_no_axis_mapping",
+          "no_axis_map_reason",
+          "drug_precedent_citations",
+          "reported_not_run",
+          "symptomatic_not_disease_modifying"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "drug_name": {"type": "string"},
+          "brand": {"type": "string"},
+          "sponsor": {"type": "string"},
+          "fda_year": {"type": "integer", "minimum": 1900, "maximum": 2100},
+          "fda_center": {
+            "type": "string",
+            "const": "CDER",
+            "description": "CDER — this category PASSES the drug-only/CDER criterion #4 (unlike the CBER UNPLACED bucket which FAILS it)."
+          },
+          "modality": {"type": "string"},
+          "axis": {
+            "description": "Null — no expansion-layer axis maps onto the mechanism. The criterion #4 gate is PASSED (CDER); the axis-mapping gap is INSIDE the criterion #4 boundary, not outside.",
+            "type": "null"
+          },
+          "in_scope_by_cder_discipline": {
+            "type": "boolean",
+            "const": true,
+            "description": "True — the drug satisfies the CDER scope discipline (criterion #4)."
+          },
+          "no_axis_mapping": {
+            "type": "boolean",
+            "const": true,
+            "description": "True — no in-repo expansion-layer axis maps onto the drug's mechanism."
+          },
+          "cder_in_scope_but_no_axis_mapping": {
+            "type": "boolean",
+            "const": true,
+            "description": "Schema-const distinguishing this honest category from CBER UNPLACED. CDER-pass + axis-tree-gap. Same convention as case_studies/type2_diabetes_portfolio/."
+          },
+          "no_axis_map_reason": {
+            "type": "string",
+            "description": "Per-row explanation of why this CDER small molecule does not map onto any of the expansion-layer axes (g1 honest documentation)."
+          },
+          "drug_precedent_citations": {
+            "type": "array",
+            "minItems": 1,
+            "items": {"type": "string"}
+          },
+          "reported_not_run": {
+            "type": "boolean",
+            "const": true,
+            "description": "Reported in the witness for honest portfolio coverage; NOT modeled (no axis sim run — no axis fits)."
+          },
+          "symptomatic_not_disease_modifying": {
+            "type": "boolean",
+            "const": true,
+            "description": "These are SYMPTOMATIC palliatives — they manage motor / non-motor symptoms but do not slow neurodegeneration. Not a disease-modifying claim."
+          }
+        }
+      }
+    },
+    "not_in_scope_drugs": {
+      "type": "array",
+      "minItems": 1,
+      "description": "Parkinson candidates that are HONESTLY UNPLACED — fall outside the criterion #4 drug-only/CDER scope boundary. Research-stage AAV-based gene therapy candidates (no FDA approval) are CBER-class biologics under the PHSA §351 BLA pathway. Same UNPLACED pattern as the SMA portfolio's Zolgensma row and the AXIS/HIERARCHY.tape @N genetic_medicine_status note.",
+      "items": {
+        "type": "object",
+        "required": [
+          "candidate_class",
+          "fda_approved",
+          "fda_center_if_filed",
+          "axis",
+          "in_scope",
+          "status",
+          "reason",
+          "unplaced_precedent_in_repo",
+          "reported_not_run"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "candidate_class": {"type": "string"},
+          "fda_approved": {"type": "boolean", "const": false},
+          "fda_center_if_filed": {
+            "type": "string",
+            "const": "CBER",
+            "description": "CBER — the candidate class would fall under CBER review (PHSA §351 BLA) if/when filed, outside criterion #4 CDER discipline."
+          },
+          "axis": {
+            "description": "Null — UNPLACED by design (CBER biologic class, no code axis).",
+            "type": "null"
+          },
+          "in_scope": {"type": "boolean", "const": false},
+          "status": {
+            "type": "string",
+            "description": "research-stage / clinical-trial-stage — explicitly NOT FDA-approved."
+          },
+          "reason": {"type": "string"},
+          "unplaced_precedent_in_repo": {
+            "type": "string",
+            "description": "Pointer to the in-repo precedent for honest UNPLACED handling (e.g. AXIS/HIERARCHY.tape @N genetic_medicine_status, case_studies/sma_portfolio/ Zolgensma row)."
+          },
+          "reported_not_run": {
+            "type": "boolean",
+            "const": true,
+            "description": "Reported in the witness for honest portfolio coverage; NOT modeled (no axis sim run)."
+          }
+        }
+      }
+    },
+    "cross_axis_touch_point": {
+      "type": "object",
+      "description": "Honest acknowledgement that this case study has NO clean cross-axis touch point. The two borderline-COVALENT rows do not bridge to a sister axis cleanly (the borderline placement is the whole point); the four CDER-no-axis-mapping rows have no axis to bridge from.",
+      "required": ["bridge_id", "module", "honesty_note"],
+      "additionalProperties": false,
+      "properties": {
+        "bridge_id": {
+          "type": "null",
+          "description": "Null — no cross-axis bridge applies."
+        },
+        "module": {
+          "type": "null",
+          "description": "Null — no cross-axis module invoked."
+        },
+        "honesty_note": {"type": "string"}
+      }
+    },
+    "honesty": {
+      "type": "object",
+      "required": [
+        "in_silico_only",
+        "not_a_portfolio_recommendation",
+        "not_an_efficacy_ranking",
+        "not_a_superiority_claim",
+        "not_a_clinical_claim",
+        "all_in_scope_drugs_fda_approved",
+        "all_cder_no_axis_drugs_fda_approved",
+        "borderline_placement_documented",
+        "borderline_is_honest_not_force_fit",
+        "cder_in_scope_no_axis_mapping_is_honest_gap",
+        "research_stage_cber_unplaced_honestly",
+        "axes_designed_for_new_modalities_not_legacy_neuropharmacology",
+        "no_lattice_derivation",
+        "scope_is_one_disease_pilot",
+        "statement"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "in_silico_only": {"type": "boolean", "const": true},
+        "not_a_portfolio_recommendation": {"type": "boolean", "const": true},
+        "not_an_efficacy_ranking": {"type": "boolean", "const": true},
+        "not_a_superiority_claim": {"type": "boolean", "const": true},
+        "not_a_clinical_claim": {"type": "boolean", "const": true},
+        "all_in_scope_drugs_fda_approved": {"type": "boolean", "const": true},
+        "all_cder_no_axis_drugs_fda_approved": {"type": "boolean", "const": true},
+        "borderline_placement_documented": {
+          "type": "boolean",
+          "const": true,
+          "description": "True — the MAO-B propargylamine rows carry explicit `borderline_axis_mapping: true` + `borderline_reason` so the placement is honest, not silent."
+        },
+        "borderline_is_honest_not_force_fit": {
+          "type": "boolean",
+          "const": true,
+          "description": "True — borderline placement with documented caveats is the honest call. Silent placement would be f1 lattice-fit-on-external-entity."
+        },
+        "cder_in_scope_no_axis_mapping_is_honest_gap": {"type": "boolean", "const": true},
+        "research_stage_cber_unplaced_honestly": {"type": "boolean", "const": true},
+        "axes_designed_for_new_modalities_not_legacy_neuropharmacology": {"type": "boolean", "const": true},
+        "no_lattice_derivation": {"type": "boolean", "const": true},
+        "scope_is_one_disease_pilot": {"type": "boolean", "const": true},
+        "statement": {"type": "string"}
+      }
+    },
+    "sentinel": {
+      "type": "string",
+      "const": "__PARKINSON_PORTFOLIO__ PASS"
+    }
+  }
+}
