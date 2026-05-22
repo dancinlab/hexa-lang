@@ -92,8 +92,11 @@
 //   @D g6 citation-enforced — formula-bearing lines @cite their RFC
 //        anchor (RFC 071 §3.A key, §3.B layout, §3.E invalidation).
 //   @D g_hxc — cache file is HXC v2 envelope (machine-readable
-//        surface). Second in-repo HXC v2 consumer after
-//        compiler/atlas/hxc_loader.hexa.
+//        surface). This is now the sole in-repo HXC v2 consumer;
+//        the prior atlas hxc_loader.hexa path was retired
+//        2026-05-22 (PRs #312 + #314, @D h_atlas_single_export)
+//        — atlas SSOT moved to n6/atlas.n6 via
+//        compiler/atlas/merger.hexa.
 //   @D g_atlas_binary_builtin — orthogonal. Cache lives at
 //        ${HEXA_LANG}/cache/link/<output_hash>/, not in the atlas.
 //   @D g3 real-limits-first — falsifiers anchor on SHA-256

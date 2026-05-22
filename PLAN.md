@@ -325,9 +325,19 @@ consciousness.hexa ─┼─ target esp32  → no_std Rust → flash      ✅ co
 
 **장점**: 신규 언어 기능 불필요, 모든 const-array 자동 혜택. **단점**: 작업량 가장 큼 (flatten + typecheck + codegen 3단계 모두 손).
 
-### 17.Y — Path Y: HXC sidecar (선택지 3 — 진행 중)
+### 17.Y — Path Y: HXC sidecar (선택지 3 — RETIRED 2026-05-22)
 
-`tool/atlas_build_hxc.hexa` 한 번 생성 → `dist/atlas.hxc` 런타임 로드. feasibility 결과 도착 시 17.Y-N 항목으로 채움.
+> **RETIRED 2026-05-22 (PRs #312 + #314)** — hxc sidecar 폐기. 단일 SSOT는
+> `n6/atlas.n6` (3.43 MB, 15,952 nodes) + `n6/atlas.append.*.n6` 샤드들.
+> `compiler/atlas/static_index.hexa::static_atlas()` 는 이제
+> `compiler/atlas/merger::load_atlas` 로 atlas.n6 를 직접 파싱한다
+> (HEXA_ATLAS_N6 env 또는 `~/core/hexa-lang/n6/` fallback).
+> 거버넌스: `project.tape :: @D h_atlas_single_export`.
+> 삭제 예정: `dist/atlas.hxc`, `tool/atlas_build_hxc.hexa`,
+> `compiler/atlas/hxc_loader.hexa` (deploy 후 sequenced delete —
+> 자세한 내용은 `inbox/notes/2026-05-22-atlas-n6-ssot-recovery.md`).
+
+(historical) `tool/atlas_build_hxc.hexa` 한 번 생성 → `dist/atlas.hxc` 런타임 로드. feasibility 결과 도착 시 17.Y-N 항목으로 채움.
 
 ## HEXA만의 불가침 영역
 

@@ -437,9 +437,14 @@ fn cmd_status() {
 //  builtins with no `use` (the transpiler emits extern-only for `use`,
 //  which would force build_dispatch surgery). SSOT of the parsing logic
 //  is vendored from the sibling repo ~/core/tape/algorithms (tape_grep/
-//  tape_index) and compiler/atlas/hxc_loader.hexa; verified standalone
-//  via interp before this inline. Uses main.hexa's own read_file /
-//  file_exists builtins (no stdlib/fs dependency).
+//  tape_index) and (historically) compiler/atlas/hxc_loader.hexa —
+//  the latter was retired 2026-05-22 (PRs #312 + #314,
+//  @D h_atlas_single_export) when the atlas SSOT moved to
+//  n6/atlas.n6; the inlined hxc-decode logic below remains as a
+//  generic HXC v2 reader for non-atlas use (e.g. `hexa hxc <f>`).
+//  Verified standalone via interp before this inline. Uses
+//  main.hexa's own read_file / file_exists builtins (no stdlib/fs
+//  dependency).
 // ═══════════════════════════════════════════════════════════════════
 
 // One parsed .tape header + its continuation-block summary.
@@ -665,7 +670,8 @@ fn tape_dump(path: string) -> i64 {
     return 0
 }
 
-// ── HXC v2 generic decode (generalized from compiler/atlas/hxc_loader) ─
+// ── HXC v2 generic decode (generalized from the retired compiler/atlas/hxc_loader; ─
+// atlas now uses n6/atlas.n6 via compiler/atlas/merger per @D h_atlas_single_export, 2026-05-22) ─
 
 // Count trailing backslashes; true if odd (escaped-pipe false split).
 fn _hxc_ends_odd_bs(s: string) -> bool {
@@ -732,8 +738,10 @@ fn _hxc_unesc_pipe(s: string) -> string {
 
 // Decode HXC v2 text into a schema-agnostic table. Const columns are
 // appended after active schema columns and materialized into every row
-// (full logical table, the way hxc_loader rebuilds dense rows — but with
-// no hard-coded column set).
+// (full logical table, the way the retired atlas hxc_loader rebuilt
+// dense rows — but with no hard-coded column set; the atlas path itself
+// is now n6/atlas.n6 via compiler/atlas/merger per
+// @D h_atlas_single_export, 2026-05-22).
 fn hxc_decode(text: string) -> HxcTable {
     let lines = text.split("\n")
     let mut tag = ""
@@ -4388,8 +4396,10 @@ if len(av) < 3 {
             cmd_url(av[3])
         }
     } else if sub == "verify" {
-        // Single verification entry-point: binary built-in atlas (dist/atlas.hxc
-        // via hxc_loader fast-path) lookup + hexa-native calculators recompute
+        // Single verification entry-point: binary built-in atlas (n6/atlas.n6
+        // via compiler/atlas/merger::load_atlas — was dist/atlas.hxc + hxc_loader
+        // pre-2026-05-22, retired by PRs #312 + #314 / @D h_atlas_single_export)
+        // lookup + hexa-native calculators recompute
         // → tier (🔵 SUPPORTED-FORMAL / 🟡 CITATION / 🟠 INSUFFICIENT-DEFERRED /
         // ⚪ SPECULATION-FENCED). Cross-project rubric: atlas g_self_verify +
         // TECS-L n6-replication Tier1/2/3 + anima HEXAD g_verdict_tier_blue +
@@ -4526,16 +4536,20 @@ if len(av) < 3 {
             cmd_run(calc_script, calc_args)
         }
     } else if sub == "atlas" {
-        // ATLAS_N6_RETIREMENT_PLAN.md §0b Phase 2: hexa-native atlas surface.
+        // hexa-native atlas surface (see project.tape :: @D h_atlas_single_export +
+        // inbox/notes/2026-05-22-atlas-n6-ssot-recovery.md).
         // tool/atlas_cli.hexa reads the embedded static_atlas() — zero fs I/O,
         // zero nexus dependency. Supersedes the prior nexus-cli proxy path
         // for "atlas" (the other subs — smash/free/etc — still proxy).
         // R7 track B (2026-05-18): preferred path = standalone compiled
         // bin/hexa-atlas. The module_loader cycle-safe DFS fix
         // (static_index↔prefix_index 2-cycle was ping-ponging 60k× →
-        // OOM) + embedded.gen sever (dist/atlas.hxc is the canonical
-        // runtime SSOT) + list_dir codegen mapping unblocked the build.
-        // cmd_run fallback retained when binary absent.
+        // OOM) unblocked the build. (Historical: an `embedded.gen sever`
+        // made dist/atlas.hxc the runtime SSOT pre-2026-05-22; that hxc
+        // sidecar is retired — static_atlas() now parses n6/atlas.n6 via
+        // compiler/atlas/merger::load_atlas, PRs #312 + #314.) list_dir
+        // codegen mapping completed the build wiring. cmd_run fallback
+        // retained when binary absent.
         let __inst_a = install_dir_from_argv0()
         let mut atlas_args = []
         let mut ai = 3

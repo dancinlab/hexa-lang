@@ -856,10 +856,12 @@ fn parse_primary() -> Expr {
         // ArrayLit to lower/codegen → the O(n²) returns. Dropping the
         // children makes the compile path O(n²)-free in ALL modes (clean
         // AND ignore-errors). Semantics: an oversize literal has no
-        // compile-time value — serve it at runtime / via the HXC sidecar
-        // (@D g_hxc). For the embedded-atlas arrays this is sound:
-        // static_atlas() prefers dist/atlas.hxc and only falls back to the
-        // const arrays when the sidecar is absent.
+        // compile-time value — serve it at runtime / via the atlas.n6 SSOT
+        // (@D h_atlas_single_export). For the embedded-atlas arrays this
+        // is sound: static_atlas() parses n6/atlas.n6 via
+        // compiler/atlas/merger::load_atlas. (Historical: HXC sidecar at
+        // dist/atlas.hxc + compiler/atlas/hxc_loader.hexa retired
+        // 2026-05-22 — PRs #312 + #314.)
         if len(elems) > 1024 {
             _push_parse_diag("HX0013", lb.span, to_string(len(elems)))
             return Expr {
