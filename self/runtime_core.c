@@ -6861,3 +6861,18 @@ HexaVal hexa_format_float_sci(HexaVal f, HexaVal prec) {
 }
 #endif
 
+// rfc_006 §5 / ubu-2 unblock (2026-05-22): retired-shim bridge for the
+// stale dist/linux-x86_64/hexa_v2 transpiler (April 2026). The current
+// codegen emits `rt_read_file` / `rt_str_trim` directly (shims retired
+// per comments at runtime_core.c L4302/L6481, runtime.c L3143), but
+// the stale Linux transpiler still emits the old `hexa_*` names. Until
+// a fresh Linux hexa_v2 is built, these one-line forwarders let
+// transpiled programs link. UNCONDITIONAL — must live outside the
+// HEXA_HAS_HEXA_RT_STDLIB #ifndef/#else so it is included in every
+// build profile (the stale transpiler emits `hexa_read_file` /
+// `hexa_str_trim` regardless of stdlib-link mode).
+extern HexaVal rt_read_file(HexaVal path);
+extern HexaVal rt_str_trim(HexaVal s);
+static inline HexaVal hexa_read_file(HexaVal path) { return rt_read_file(path); }
+static inline HexaVal hexa_str_trim(HexaVal s) { return rt_str_trim(s); }
+
