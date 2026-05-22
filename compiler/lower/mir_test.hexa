@@ -582,6 +582,481 @@ fn _case_f_check(ok_in: bool, callee: string, binop_op: string) -> bool {
     return ok
 }
 
+// (g) RFC 071 P5++ follow-on (N101) — nested-loop matmul auto-synth.
+//
+// Same source-level intent as case (f) but the user writes a triple-
+// nested for-loop instead of calling the `gpu_matmul(...)` builtin
+// explicitly:
+//
+//     @gpu_kernel
+//     fn matmul_naive(a, b, c, M, N, K) {
+//         for i in 0..M {
+//             for j in 0..N {
+//                 var sum: f32 = 0.0
+//                 for k in 0..K {
+//                     sum += a[i*K+k] * b[k*N+j]
+//                 }
+//                 c[i*N+j] = sum
+//             }
+//         }
+//     }
+//
+// ast_to_hir's C19 `_desugar_for` rewrites each `for` into the
+// canonical `block { let __for_it_*, let __for_idx_*, while ... }`
+// shape BEFORE hir_to_mir runs. The new `_hir_is_nested_matmul_body`
+// matcher in `_lower_fn` walks that canonical desugared shape and
+// synthesises the SAME 4-stmt skeleton case (f) lands. Test asserts
+// the entry block carries the matmul-shape skeleton — same positive
+// + negative contract as case (f).
+//
+// HONEST SCOPE (@D g3): the matcher is conservative on purpose. It
+// requires:
+//   * `@gpu_kernel` annotation on the fn.
+//   * Param names (a, b, c, …).
+//   * Body = block containing one outer desugared-for-block, with the
+//     middle and inner desugared-for-blocks nested two levels deeper
+//     in the standard `_build_for_body` splice shape.
+//   * Middle-body has an accumulator `let sum = 0.0` before the inner
+//     loop + a `c[...] = sum` index-assign after it.
+//   * Inner-body has an accumulator `assign sum = … * …` with rhs a
+//     `*` binop of two `index` exprs (the a/b loads).
+// Anything outside this template (transposed-input variant, bounds-
+// check wrappers, accumulator hoisted outside the j-loop, fused MAC
+// helper calls) falls through to the normal nested-while lowering
+// with zero behaviour change. The transposed `gpu_matmul_NT_a` /
+// `gpu_matmul_NT_b` shapes still require the explicit builtin call
+// (no source-loop pattern is canonical enough to discriminate the
+// transpose direction unambiguously).
+
+// HItem builder — like `_hfn` but also injects a `@gpu_kernel`
+// annotation so `_lower_fn`'s matmul auto-synth sees the kernel
+// classifier the bind/check pass would inject for a real source
+// `@gpu_kernel fn …`.
+fn _hfn_gpu_kernel(name: string, param_names: [string], param_types: [Type], ret: Type, body: HExpr) -> HItem {
+    let mut anns: [Annotation] = []
+    // param_names annotation (mirrors _hfn).
+    let mut name_args: [Expr] = []
+    let mut p = 0
+    while p < len(param_names) {
+        name_args.push(Expr {
+            kind: ExprKind::Ident,
+            span: _empty_span(),
+            text: param_names[p],
+            children: [],
+            atlas_ref: AtlasRef { kind: "", id: "", span: _empty_span() }
+        })
+        p = p + 1
+    }
+    anns.push(Annotation { name: "param_names", args: name_args, span: _empty_span() })
+    // gpu_kernel annotation (mirrors the bind/check pass injection).
+    let mut empty_args: [Expr] = []
+    anns.push(Annotation { name: "gpu_kernel", args: empty_args, span: _empty_span() })
+    return HItem {
+        kind: "ITEM_FN",
+        def: _miss_def(),
+        name: name,
+        span: _empty_span(),
+        annotations: anns,
+        sig_params: param_types,
+        sig_return: ret,
+        body: body,
+        is_pub: false,
+        discoverable: false,
+        proof_hash: "",
+        verifier_version: ""
+    }
+}
+
+// Build the canonical desugared `for x in iter` HExpr block. Mirrors
+// `_desugar_for` (compiler/lower/ast_to_hir.hexa L1518) exactly —
+// `block { let __for_it_<uid>, let __for_idx_<uid>, while ... }`.
+// `body` is the inner block spliced per `_build_for_body` — caller
+// is responsible for including the `let <loop_var>`, the user's body
+// stmts, and the `__for_idx_<uid> += 1` tail.
+fn _desugared_for_block(uid: i64, iter_e: HExpr, while_body: HExpr) -> HExpr {
+    let it_name  = "__for_it_"  + to_string(uid)
+    let idx_name = "__for_idx_" + to_string(uid)
+    let let_it  = _hlet(it_name, iter_e)
+    let let_idx = _hlet(idx_name, _lit_int("0"))
+    // while cond — `__for_idx_<uid> < len(__for_it_<uid>)`. The
+    // matcher does not look at the cond, so any well-formed expr
+    // works. We hand-build a `binop("<", idx, len(it))` to match
+    // the desugar shape.
+    let cond = _binop("<",
+                      _ident(idx_name, _t_i64()),
+                      _hexpr("call", _t_i64(), "len",
+                             [_ident("len", _t_unit()),
+                              _ident(it_name, _t_unit())]),
+                      _t_bool())
+    let wh = _hwhile(cond, while_body)
+    let mut kids: [HExpr] = []
+    kids.push(let_it)
+    kids.push(let_idx)
+    kids.push(wh)
+    return _block(kids)
+}
+
+// (g) Triple-nested for-loop matmul — canonical desugared HIR
+// hand-built. Asserts the matcher fires + the synthesis lands.
+fn _build_case_g() -> HModule {
+    // Inner for body — splice shape per _build_for_body:
+    //   [ let k = __for_it_2[__for_idx_2],
+    //     assign sum = sum + a[i*K+k] * b[k*N+j],
+    //     assign __for_idx_2 = __for_idx_2 + 1 ]
+    let inner_k_let = _hlet("k",
+        _hexpr("index", _t_i64(), "",
+            [_ident("__for_it_2", _t_unit()),
+             _ident("__for_idx_2", _t_i64())]))
+    // a[i*K+k] — index expr with arr=a + idx=binop("+", binop("*", i, K), k)
+    let a_idx = _binop("+",
+        _binop("*", _ident("i", _t_i64()), _ident("K", _t_i64()), _t_i64()),
+        _ident("k", _t_i64()), _t_i64())
+    let a_load = _hexpr("index", _t_f16(), "",
+                        [_ident("a", _t_f16()), a_idx])
+    // b[k*N+j] — index expr with arr=b + idx=binop("+", binop("*", k, N), j)
+    let b_idx = _binop("+",
+        _binop("*", _ident("k", _t_i64()), _ident("N", _t_i64()), _t_i64()),
+        _ident("j", _t_i64()), _t_i64())
+    let b_load = _hexpr("index", _t_f16(), "",
+                        [_ident("b", _t_f16()), b_idx])
+    // sum + a[...] * b[...] — binop("+", sum, binop("*", a_load, b_load))
+    let acc_rhs = _binop("+",
+        _ident("sum", _t_f32()),
+        _binop("*", a_load, b_load, _t_f32()),
+        _t_f32())
+    let inner_acc = _hassign(_ident("sum", _t_f32()), acc_rhs)
+    let inner_idx_inc = _hassign(
+        _ident("__for_idx_2", _t_i64()),
+        _binop("+", _ident("__for_idx_2", _t_i64()), _lit_int("1"), _t_i64()))
+    let inner_body = _block([inner_k_let, inner_acc, inner_idx_inc])
+    // Inner-for `iter` — irrelevant to the matcher (it never looks
+    // inside the let_it rhs); hand-build a placeholder ident.
+    let inner_for = _desugared_for_block(2, _ident("K_range", _t_unit()), inner_body)
+
+    // Middle for body — splice shape:
+    //   [ let j = __for_it_1[__for_idx_1],
+    //     let sum = 0.0,
+    //     <inner for block>,
+    //     assign c[i*N+j] = sum,
+    //     assign __for_idx_1 = __for_idx_1 + 1 ]
+    let middle_j_let = _hlet("j",
+        _hexpr("index", _t_i64(), "",
+            [_ident("__for_it_1", _t_unit()),
+             _ident("__for_idx_1", _t_i64())]))
+    let sum_let = _hlet("sum",
+        _hexpr("literal_float", _t_f32(), "0.0", []))
+    // c[i*N+j] = sum — index expr with arr=c + idx=binop("+", binop("*", i, N), j)
+    let c_idx = _binop("+",
+        _binop("*", _ident("i", _t_i64()), _ident("N", _t_i64()), _t_i64()),
+        _ident("j", _t_i64()), _t_i64())
+    let c_store_lhs = _hexpr("index", _t_f32(), "",
+                             [_ident("c", _t_f32()), c_idx])
+    let c_store = _hassign(c_store_lhs, _ident("sum", _t_f32()))
+    let middle_idx_inc = _hassign(
+        _ident("__for_idx_1", _t_i64()),
+        _binop("+", _ident("__for_idx_1", _t_i64()), _lit_int("1"), _t_i64()))
+    let middle_body = _block([middle_j_let, sum_let, inner_for, c_store, middle_idx_inc])
+    let middle_for = _desugared_for_block(1, _ident("N_range", _t_unit()), middle_body)
+
+    // Outer for body — splice shape:
+    //   [ let i = __for_it_0[__for_idx_0],
+    //     <middle for block>,
+    //     assign __for_idx_0 = __for_idx_0 + 1 ]
+    let outer_i_let = _hlet("i",
+        _hexpr("index", _t_i64(), "",
+            [_ident("__for_it_0", _t_unit()),
+             _ident("__for_idx_0", _t_i64())]))
+    let outer_idx_inc = _hassign(
+        _ident("__for_idx_0", _t_i64()),
+        _binop("+", _ident("__for_idx_0", _t_i64()), _lit_int("1"), _t_i64()))
+    let outer_body = _block([outer_i_let, middle_for, outer_idx_inc])
+    let outer_for = _desugared_for_block(0, _ident("M_range", _t_unit()), outer_body)
+
+    // Fn body — `block { <outer for block> }` (the for-expr is the
+    // single top-level statement in the fn body).
+    let fn_body = _block([outer_for])
+
+    let mut pn: [string] = []
+    pn.push("a")
+    pn.push("b")
+    pn.push("c")
+    pn.push("M")
+    pn.push("N")
+    pn.push("K")
+    let mut pt: [Type] = []
+    pt.push(_t_f16())   // a
+    pt.push(_t_f16())   // b
+    pt.push(_t_f32())   // c
+    pt.push(_t("i32"))  // M
+    pt.push(_t("i32"))  // N
+    pt.push(_t("i32"))  // K
+    let it = _hfn_gpu_kernel("matmul_naive", pn, pt, _t_unit(), fn_body)
+    let mut items: [HItem] = []
+    items.push(it)
+    return HModule { file: "case_g.hexa", items: items }
+}
+
+// Build a NEGATIVE-control case (g'): same HItem but WITHOUT
+// `@gpu_kernel`. The matcher must NOT fire — the nested-while
+// lowering must produce blocks > 1 (header/body/after × 3) and the
+// entry block must NOT carry STMT_BINOP("matmul").
+fn _build_case_g_no_gpu() -> HModule {
+    let m = _build_case_g()
+    let it0 = m.items[0]
+    // Replace the gpu_kernel annotation injection — keep param_names
+    // only, drop the gpu_kernel ann.
+    let mut anns2: [Annotation] = []
+    let mut i = 0
+    while i < len(it0.annotations) {
+        if it0.annotations[i].name != "gpu_kernel" {
+            anns2.push(it0.annotations[i])
+        }
+        i = i + 1
+    }
+    let it2 = HItem {
+        kind: it0.kind,
+        def: it0.def,
+        name: it0.name,
+        span: it0.span,
+        annotations: anns2,
+        sig_params: it0.sig_params,
+        sig_return: it0.sig_return,
+        body: it0.body,
+        is_pub: it0.is_pub,
+        discoverable: it0.discoverable,
+        proof_hash: it0.proof_hash,
+        verifier_version: it0.verifier_version
+    }
+    let mut items2: [HItem] = []
+    items2.push(it2)
+    return HModule { file: "case_g_no_gpu.hexa", items: items2 }
+}
+
+// Build a NEGATIVE-control case (g''): same HItem but the c-store
+// LHS is a bare ident `sum` (instead of `c[i*N+j]`) — i.e. the body
+// is a triple-nested for-loop that is NOT a matmul. The matcher must
+// NOT fire (the `c_store.children[0].kind != "index"` guard rejects
+// it).
+fn _build_case_g_no_index_store() -> HModule {
+    // Inner for body identical to case (g).
+    let inner_k_let = _hlet("k",
+        _hexpr("index", _t_i64(), "",
+            [_ident("__for_it_2", _t_unit()),
+             _ident("__for_idx_2", _t_i64())]))
+    let a_idx = _binop("+",
+        _binop("*", _ident("i", _t_i64()), _ident("K", _t_i64()), _t_i64()),
+        _ident("k", _t_i64()), _t_i64())
+    let a_load = _hexpr("index", _t_f16(), "",
+                        [_ident("a", _t_f16()), a_idx])
+    let b_idx = _binop("+",
+        _binop("*", _ident("k", _t_i64()), _ident("N", _t_i64()), _t_i64()),
+        _ident("j", _t_i64()), _t_i64())
+    let b_load = _hexpr("index", _t_f16(), "",
+                        [_ident("b", _t_f16()), b_idx])
+    let acc_rhs = _binop("+",
+        _ident("sum", _t_f32()),
+        _binop("*", a_load, b_load, _t_f32()),
+        _t_f32())
+    let inner_acc = _hassign(_ident("sum", _t_f32()), acc_rhs)
+    let inner_idx_inc = _hassign(
+        _ident("__for_idx_2", _t_i64()),
+        _binop("+", _ident("__for_idx_2", _t_i64()), _lit_int("1"), _t_i64()))
+    let inner_body = _block([inner_k_let, inner_acc, inner_idx_inc])
+    let inner_for = _desugared_for_block(2, _ident("K_range", _t_unit()), inner_body)
+
+    let middle_j_let = _hlet("j",
+        _hexpr("index", _t_i64(), "",
+            [_ident("__for_it_1", _t_unit()),
+             _ident("__for_idx_1", _t_i64())]))
+    let sum_let = _hlet("sum",
+        _hexpr("literal_float", _t_f32(), "0.0", []))
+    // The "broken" piece: the store is `assign sum = sum` instead of
+    // `assign c[i*N+j] = sum`. The `cstore.children[0].kind != "index"`
+    // guard must reject this.
+    let bare_store = _hassign(_ident("sum", _t_f32()), _ident("sum", _t_f32()))
+    let middle_idx_inc = _hassign(
+        _ident("__for_idx_1", _t_i64()),
+        _binop("+", _ident("__for_idx_1", _t_i64()), _lit_int("1"), _t_i64()))
+    let middle_body = _block([middle_j_let, sum_let, inner_for, bare_store, middle_idx_inc])
+    let middle_for = _desugared_for_block(1, _ident("N_range", _t_unit()), middle_body)
+
+    let outer_i_let = _hlet("i",
+        _hexpr("index", _t_i64(), "",
+            [_ident("__for_it_0", _t_unit()),
+             _ident("__for_idx_0", _t_i64())]))
+    let outer_idx_inc = _hassign(
+        _ident("__for_idx_0", _t_i64()),
+        _binop("+", _ident("__for_idx_0", _t_i64()), _lit_int("1"), _t_i64()))
+    let outer_body = _block([outer_i_let, middle_for, outer_idx_inc])
+    let outer_for = _desugared_for_block(0, _ident("M_range", _t_unit()), outer_body)
+    let fn_body = _block([outer_for])
+
+    let mut pn: [string] = []
+    pn.push("a")
+    pn.push("b")
+    pn.push("c")
+    pn.push("M")
+    pn.push("N")
+    pn.push("K")
+    let mut pt: [Type] = []
+    pt.push(_t_f16())
+    pt.push(_t_f16())
+    pt.push(_t_f32())
+    pt.push(_t("i32"))
+    pt.push(_t("i32"))
+    pt.push(_t("i32"))
+    let it = _hfn_gpu_kernel("matmul_broken", pn, pt, _t_unit(), fn_body)
+    let mut items: [HItem] = []
+    items.push(it)
+    return HModule { file: "case_g_no_index_store.hexa", items: items }
+}
+
+// _case_g_check — verify the 4-stmt matmul-shape skeleton lands at
+// the start of the entry block for the auto-synthesised case (mirrors
+// `_case_f_check`).
+fn _case_g_check(ok_in: bool) -> bool {
+    let m = lower_hir(_build_case_g())
+    let mut ok = ok_in
+    let mut local_ok = true
+    if len(m.funcs) != 1 {
+        println("  FAIL: case (g) expected 1 MFunc, got " + to_string(len(m.funcs)))
+        return false
+    }
+    let mf = m.funcs[0]
+    if len(mf.blocks) == 0 {
+        println("  FAIL: case (g) expected >=1 block, got 0")
+        return false
+    }
+    let entry = mf.blocks[0]
+    if len(entry.stmts) < 4 {
+        println("  FAIL: case (g) expected >=4 entry stmts, got " + to_string(len(entry.stmts)))
+        return false
+    }
+    if entry.stmts[0].kind != STMT_LOAD {
+        println("  FAIL: case (g) stmts[0] kind got " + entry.stmts[0].kind + ", want STMT_LOAD")
+        local_ok = false
+    }
+    if entry.stmts[1].kind != STMT_LOAD {
+        println("  FAIL: case (g) stmts[1] kind got " + entry.stmts[1].kind + ", want STMT_LOAD")
+        local_ok = false
+    }
+    if entry.stmts[2].kind != STMT_BINOP {
+        println("  FAIL: case (g) stmts[2] kind got " + entry.stmts[2].kind + ", want STMT_BINOP")
+        local_ok = false
+    }
+    if entry.stmts[2].op != "matmul" {
+        println("  FAIL: case (g) stmts[2] op got `" + entry.stmts[2].op + "`, want `matmul`")
+        local_ok = false
+    }
+    if entry.stmts[3].kind != STMT_STORE {
+        println("  FAIL: case (g) stmts[3] kind got " + entry.stmts[3].kind + ", want STMT_STORE")
+        local_ok = false
+    }
+    // The synthesised body has exactly 1 block (the synthesised
+    // skeleton + trailing implicit STMT_RETURN). If we see > 1
+    // block, the body recursion fired in addition to the synthesis
+    // — that would double-emit and break codegen.
+    if len(mf.blocks) > 1 {
+        println("  FAIL: case (g) expected 1 block (synthesis-only), got " + to_string(len(mf.blocks)) + " (body recursion fired in addition to synthesis)")
+        local_ok = false
+    }
+    // Negative — there must be NO STMT_BR or STMT_BR_COND (no while-
+    // loop CFG lowered).
+    let mut bi = 0
+    while bi < len(mf.blocks) {
+        let b = mf.blocks[bi]
+        let mut si = 0
+        while si < len(b.stmts) {
+            if b.stmts[si].kind == STMT_BR || b.stmts[si].kind == STMT_BR_COND {
+                println("  FAIL: case (g) unexpected " + b.stmts[si].kind + " — body recursion lowered the nested whiles")
+                local_ok = false
+            }
+            si = si + 1
+        }
+        bi = bi + 1
+    }
+    if local_ok {
+        println("  OK:   case (g) nested-for-loop matmul → STMT_LOAD + STMT_LOAD + STMT_BINOP(`matmul`) + STMT_STORE")
+    } else {
+        ok = false
+    }
+    return ok
+}
+
+// _case_g_no_gpu_check — verify the matcher does NOT fire when the
+// `@gpu_kernel` annotation is absent. The nested-while lowering must
+// produce more than one block AND no STMT_BINOP("matmul") anywhere.
+fn _case_g_no_gpu_check(ok_in: bool) -> bool {
+    let m = lower_hir(_build_case_g_no_gpu())
+    let mut ok = ok_in
+    let mut local_ok = true
+    if len(m.funcs) != 1 {
+        println("  FAIL: case (g-no-gpu) expected 1 MFunc, got " + to_string(len(m.funcs)))
+        return false
+    }
+    let mf = m.funcs[0]
+    if len(mf.blocks) <= 1 {
+        println("  FAIL: case (g-no-gpu) expected >1 block (nested-while CFG), got " + to_string(len(mf.blocks)) + " — matcher fired on a non-@gpu_kernel fn")
+        local_ok = false
+    }
+    let mut bi = 0
+    while bi < len(mf.blocks) {
+        let b = mf.blocks[bi]
+        let mut si = 0
+        while si < len(b.stmts) {
+            if b.stmts[si].kind == STMT_BINOP && b.stmts[si].op == "matmul" {
+                println("  FAIL: case (g-no-gpu) unexpected STMT_BINOP(`matmul`) — matcher fired on a non-@gpu_kernel fn")
+                local_ok = false
+            }
+            si = si + 1
+        }
+        bi = bi + 1
+    }
+    if local_ok {
+        println("  OK:   case (g-no-gpu) no @gpu_kernel ann → matcher correctly skipped, nested-while CFG lowered")
+    } else {
+        ok = false
+    }
+    return ok
+}
+
+// _case_g_no_index_store_check — verify the matcher does NOT fire
+// when the body lacks a `c[…] = sum` index-store (the predicate
+// `cstore.children[0].kind == "index"` must reject it).
+fn _case_g_no_index_store_check(ok_in: bool) -> bool {
+    let m = lower_hir(_build_case_g_no_index_store())
+    let mut ok = ok_in
+    let mut local_ok = true
+    if len(m.funcs) != 1 {
+        println("  FAIL: case (g-no-index-store) expected 1 MFunc, got " + to_string(len(m.funcs)))
+        return false
+    }
+    let mf = m.funcs[0]
+    let mut found_matmul = false
+    let mut bi = 0
+    while bi < len(mf.blocks) {
+        let b = mf.blocks[bi]
+        let mut si = 0
+        while si < len(b.stmts) {
+            if b.stmts[si].kind == STMT_BINOP && b.stmts[si].op == "matmul" {
+                found_matmul = true
+            }
+            si = si + 1
+        }
+        bi = bi + 1
+    }
+    if found_matmul {
+        println("  FAIL: case (g-no-index-store) unexpected STMT_BINOP(`matmul`) — matcher fired on a non-matmul body shape")
+        local_ok = false
+    }
+    if local_ok {
+        println("  OK:   case (g-no-index-store) bare `sum = sum` store → matcher correctly skipped")
+    } else {
+        ok = false
+    }
+    return ok
+}
+
 // ── Driver ───────────────────────────────────────────────────
 
 fn main() {
@@ -875,6 +1350,13 @@ fn main() {
     ok = _case_f_check(ok, "gpu_matmul",      "matmul")
     ok = _case_f_check(ok, "gpu_matmul_NT_a", "matmul_NT_a")
     ok = _case_f_check(ok, "gpu_matmul_NT_b", "matmul_NT_b")
+
+    // (g) RFC 071 P5++ follow-on (N101) — nested-loop matmul auto-synth.
+    println("")
+    println("── (g) RFC 071 P5++ follow-on (N101) — nested-loop matmul auto-synth ──")
+    ok = _case_g_check(ok)
+    ok = _case_g_no_gpu_check(ok)
+    ok = _case_g_no_index_store_check(ok)
 
     println("")
     println("══════════════════════════════════════════════")
