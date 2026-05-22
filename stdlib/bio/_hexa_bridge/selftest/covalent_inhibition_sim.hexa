@@ -1,0 +1,307 @@
+#!hexa strict
+// hexa-bio/_hexa_bridge/selftest/covalent_inhibition_sim.hexa
+//
+// hexa-native port of `_python_bridge/module/covalent_inhibition_sim.py`
+// (T3; json/math/sys — deterministic). COVALENT axis (EXPANSION-MAIN,
+// NOT core-5). Two-step covalent inhibition: E + I <=>(Ki) E.I
+// -kinact-> E-I. kinact/Ki efficiency metric (Strelow 2017) + Eyring
+// TST rate / inverted barrier (Eyring 1935). hexa exp()/log() = glibc
+// libm bit-exact vs CPython math; %.3e/%.1f/%.0e/%.3g via sim-recipe;
+// witness JSON via py_json2.
+
+import "_hexa_bridge/module/py_json2.hexa"
+
+let VERSION = "1.0.0"
+let AXIS = "COVALENT"
+let AXIS_LAYER = "expansion-main (NOT core-5)"
+let SCHEMA_ID = "covalent_inhibition_v1"
+
+let K_B = 1.380649e-23
+let H_PLANCK = 6.62607015e-34
+let N_A = 6.02214076e23
+let R_GAS = 1.380649e-23 * 6.02214076e23
+let KCAL_TO_J = 4184.0
+let TEMP_K = 310.0
+let EYRING_PREFACTOR = 1.380649e-23 * 310.0 / 6.62607015e-34
+
+let STRELOW_2017 = "Strelow JM, J Biomol Screen / SLAS Discovery 2017;22(1):3-20 (kinact/Ki covalent-inhibitor framework)"
+let EYRING_1935 = "Eyring H, J. Chem. Phys. 1935;3:107-115 (transition-state theory)"
+
+let REFERENCE_INHIBITOR_CONC_M = 1.0e-6
+
+fn fmt(spec: string, v: float) -> string {
+    let mut o = exec("printf '" + spec + "' " + json_stringify(v))
+    while len(o) > 0 {
+        let last = o.substr(len(o) - 1, 1)
+        if last == "\n" || last == "\r" { o = o.substr(0, len(o) - 1) } else { break }
+    }
+    return o
+}
+fn ljust(s: string, n: int) -> string { let mut o = s; while len(o) < n { o = o + " " }; return o }
+fn js(v: float) -> string { return json_stringify(v) }
+fn jsb(b: bool) -> string { if b { return "true" } return "false" }
+fn fabs(x: float) -> float { if x < 0.0 { return -x } return x }
+
+fn eyring_rate(dg_kcal: float) -> float {
+    let dg_j = dg_kcal * KCAL_TO_J
+    return (K_B * TEMP_K / H_PLANCK) * exp(-dg_j / (R_GAS * TEMP_K))
+}
+
+fn implied_barrier_kcal(rate_per_s: float) -> float {
+    let dg_j = -R_GAS * TEMP_K * log(rate_per_s * H_PLANCK / (K_B * TEMP_K))
+    return dg_j / KCAL_TO_J
+}
+
+fn human_time(s: float) -> string {
+    if s < 60.0 { return fmt("%.3g", s) + " s" }
+    if s < 3600.0 { return fmt("%.3g", s / 60.0) + " min" }
+    if s < 86400.0 { return fmt("%.3g", s / 3600.0) + " h" }
+    if s < 31557600.0 { return fmt("%.3g", s / 86400.0) + " d" }
+    return fmt("%.3g", s / 31557600.0) + " yr"
+}
+
+fn main() {
+    let names = ["ibrutinib_BTK_Cys481", "afatinib_EGFR_Cys797",
+                 "sotorasib_KRAS_Cys12", "adagrasib_KRAS_Cys12",
+                 "chloroacetamide_probe"]
+    let ki   = [1.5e-8, 5.0e-10, 3.0e-7, 2.0e-7, 4.0e-6]
+    let kin  = [2.3e-3, 1.0e-3, 1.2e-3, 1.6e-3, 5.0e-4]
+    let dgc  = [19.0, 19.5, 19.4, 19.2, 20.0]
+    let wclass = ["acrylamide_thio_michael", "acrylamide_thio_michael",
+                  "acrylamide_thio_michael", "acrylamide_thio_michael",
+                  "chloroacetamide"]
+    let prec = ["ibrutinib — covalent BTK inhibitor (acrylamide, Cys481; FDA 2013)",
+                "afatinib — covalent EGFR inhibitor (acrylamide, Cys797; FDA 2013)",
+                "sotorasib — covalent KRAS-G12C inhibitor (acrylamide, Cys12; FDA 2021)",
+                "adagrasib — covalent KRAS-G12C inhibitor (acrylamide, Cys12; FDA 2022)",
+                "chloroacetamide-warhead chemical-probe class (covalent cysteine probe)"]
+
+    let mut kovk: array = []
+    let mut sat: array = []
+    let mut kobs: array = []
+    let mut kobs_lo: array = []
+    let mut kovk_fk: array = []
+    let mut cerr: array = []
+    let mut hl: array = []
+    let mut hl_h: array = []
+    let mut eyr: array = []
+    let mut dgi: array = []
+    let mut bel: array = []
+    let mut belt: array = []
+
+    let mut i = 0
+    while i < 5 {
+        let kov = kin[i] / ki[i]
+        let s = REFERENCE_INHIBITOR_CONC_M / ki[i]
+        let ko = (kin[i] * s) / (1.0 + s)
+        let kolo = kov * REFERENCE_INHIBITOR_CONC_M
+        let kovfk = kolo / REFERENCE_INHIBITOR_CONC_M
+        let ce = fabs(kov - kovfk) / kov
+        let h = log(2.0) / ko
+        let er = eyring_rate(dgc[i])
+        let di = implied_barrier_kcal(kin[i])
+        kovk.push(kov); sat.push(s); kobs.push(ko); kobs_lo.push(kolo)
+        kovk_fk.push(kovfk); cerr.push(ce); hl.push(h); hl_h.push(human_time(h))
+        eyr.push(er); dgi.push(di)
+        bel.push(kin[i] < EYRING_PREFACTOR)
+        belt.push(er < EYRING_PREFACTOR)
+        i = i + 1
+    }
+
+    println("covalent_inhibition_sim — COVALENT axis (EXPANSION-MAIN, NOT core-5) v" + VERSION)
+    println("")
+    println("model:  E + I <=>(Ki) E.I -kinact-> E-I   (two-step covalent inhibition)")
+    println("")
+    println("  real-limit anchors (AGENTS.tape g1 -- real-limits-first):")
+    println("    kinact/Ki framework : " + STRELOW_2017)
+    println("    Eyring TST          : " + EYRING_1935)
+    println("    Eyring prefactor ceiling kB.T/h = " + fmt("%.3e", EYRING_PREFACTOR) +
+            " /s @ T=" + js(TEMP_K) + " K  (hard ceiling on every covalent-step rate)")
+    println("")
+    println("  panel — two-step covalent-inhibitor kinetics")
+    println("  (reference [I] = " + fmt("%.0e", REFERENCE_INHIBITOR_CONC_M) + " M):")
+    i = 0
+    while i < 5 {
+        println("    [" + ljust(names[i], 24) + "] " + wclass[i])
+        println("      Ki=" + fmt("%.3e", ki[i]) + " M  kinact=" + fmt("%.3e", kin[i]) +
+                "/s  kinact/Ki=" + fmt("%.3e", kovk[i]) + " /M/s")
+        println("      kobs=" + fmt("%.3e", kobs[i]) + "/s  t_1/2(free E)=" + hl_h[i] +
+                "  DG_cov=" + fmt("%.1f", dgc[i]) + " kcal/mol (Eyring-implied " +
+                fmt("%.1f", dgi[i]) + ")")
+        i = i + 1
+    }
+
+    // ranking: sort indices by kovk desc (stable; preserve input order on ties)
+    let mut order: array = [0, 1, 2, 3, 4]
+    let mut a = 0
+    while a < 5 {
+        let mut b = 0
+        while b < 4 - a {
+            if kovk[order[b + 1]] > kovk[order[b]] {
+                let tmp = order[b]
+                order[b] = order[b + 1]
+                order[b + 1] = tmp
+            }
+            b = b + 1
+        }
+        a = a + 1
+    }
+
+    println("")
+    println("## kinact/Ki efficiency ranking (Strelow 2017)")
+    i = 0
+    while i < 5 {
+        let idx = order[i]
+        println("  " + str(i + 1) + ". " + ljust(names[idx], 24) +
+                " kinact/Ki=" + fmt("%.3e", kovk[idx]) + " /M/s")
+        i = i + 1
+    }
+
+    // acceptance criteria (always PASS for this panel; we still compute booleans)
+    let c1 = 5 >= 5
+    let mut c2 = true
+    let mut c3 = true
+    let mut c4 = true
+    let mut c5 = true
+    let mut c6 = true
+    let mut c7 = true
+    i = 0
+    while i < 5 {
+        if !(bel[i] && belt[i]) { c2 = false }
+        if !(cerr[i] < 1.0e-9) { c3 = false }
+        if !(fabs(kovk[i] - kin[i] / ki[i]) <= 1.0e-6 * kovk[i]) { c4 = false }
+        if !(fabs(eyring_rate(dgi[i]) - kin[i]) <= 1.0e-6 * kin[i]) { c5 = false }
+        if !(ki[i] > 0.0 && kin[i] > 0.0 && kovk[i] > 0.0) { c6 = false }
+        if !(fabs(hl[i] - log(2.0) / kobs[i]) <= 1.0e-6 * hl[i]) { c7 = false }
+        i = i + 1
+    }
+    let crit_keys = ["C1_panel_non_empty", "C2_eyring_ceiling_respected",
+                     "C3_kinact_over_Ki_self_consistent",
+                     "C4_kinact_over_Ki_equals_kinact_div_Ki",
+                     "C5_eyring_roundtrip_consistent", "C6_positive_kinetics",
+                     "C7_half_life_follows_kobs"]
+    let crit_vals = [c1, c2, c3, c4, c5, c6, c7]
+    let mut npass = 0
+    let mut ci = 0
+    while ci < 7 { if crit_vals[ci] { npass = npass + 1 }; ci = ci + 1 }
+    let verdict = if npass == 7 { "PASS" } else { "FAIL" }
+
+    println("")
+    println("## acceptance — in-silico simulator-consistency criteria")
+    ci = 0
+    while ci < 7 {
+        let tag = if crit_vals[ci] { "PASS" } else { "FAIL" }
+        println("  [" + tag + "] " + crit_keys[ci])
+        ci = ci + 1
+    }
+    println("")
+    println("  --- " + str(npass) + "/7  ->  verdict: " + verdict + " ---")
+
+    let lattice_stance = "No n=6 lattice arithmetic is performed. Ki, kinact, kinact/Ki, the covalent-step barrier, and the choice of cysteine as the targeted nucleophile are enzyme-kinetics / physical-chemistry facts (Strelow 2017; Eyring 1935), NOT lattice derivations (HEXA-COVALENT.tape f_lattice_fit / n6_honest_stance)."
+    let subaxis_note = "COVALENT is the GENERAL covalent-inhibition modality. Its reversible-warhead specialization is the REVERSIBLE-COVALENT SUB-AXIS (reversible_covalent_sim.py) — this module does NOT duplicate it."
+    let in_silico_scope = "PASS verifies IN-SILICO simulator+metadata consistency ONLY -- two-step kinetics arithmetic (kinact/Ki recomputed two ways agree; Eyring rate respects the kB.T/h ceiling; kobs and t_1/2 follow from kinact/Ki). NOT a binding-affinity, potency, selectivity, or therapeutic-efficacy claim. The COVALENT axis is UNPROVEN at the wet-lab boundary (AGENTS.tape g8_in_silico_only / f2)."
+
+    println("")
+    println("## n=6 lattice stance: " + lattice_stance)
+    println("")
+    println("## sub-axis note: " + subaxis_note)
+    println("")
+    println("## IN-SILICO SCOPE (g8/f2): " + in_silico_scope)
+
+    // ─── witness JSON build ───
+    let model_str = "E + I <=>(Ki) E.I -kinact-> E-I  (two-step covalent inhibition)"
+    let two_step_mech = "E + I <=>(Ki) E.I -kinact-> E-I"
+
+    // rows
+    let mut rj = ""
+    i = 0
+    while i < 5 {
+        if i > 0 { rj = rj + ", " }
+        rj = rj + "{\"schema\": \"" + SCHEMA_ID + "\"" +
+              ", \"inhibitor\": \"" + names[i] + "\"" +
+              ", \"warhead_class\": \"" + wclass[i] + "\"" +
+              ", \"drug_precedent\": \"" + prec[i] + "\"" +
+              ", \"temperature_K\": " + js(TEMP_K) +
+              ", \"two_step_mechanism\": \"" + two_step_mech + "\"" +
+              ", \"Ki_molar\": " + js(ki[i]) +
+              ", \"kinact_per_s\": " + js(kin[i]) +
+              ", \"kinact_over_Ki_M_per_s\": " + js(kovk[i]) +
+              ", \"inhibitor_conc_M\": " + js(REFERENCE_INHIBITOR_CONC_M) +
+              ", \"saturation_I_over_Ki\": " + js(sat[i]) +
+              ", \"kobs_per_s\": " + js(kobs[i]) +
+              ", \"kobs_low_I_limit_per_s\": " + js(kobs_lo[i]) +
+              ", \"kinact_over_Ki_from_kobs_M_per_s\": " + js(kovk_fk[i]) +
+              ", \"metric_consistency_rel_err\": " + js(cerr[i]) +
+              ", \"free_enzyme_half_life_s\": " + js(hl[i]) +
+              ", \"free_enzyme_half_life_human\": \"" + hl_h[i] + "\"" +
+              ", \"dg_covalent_step_kcal_per_mol\": " + js(dgc[i]) +
+              ", \"kinact_eyring_tst_per_s\": " + js(eyr[i]) +
+              ", \"dg_implied_from_kinact_kcal_per_mol\": " + js(dgi[i]) +
+              ", \"eyring_prefactor_ceiling_per_s\": " + js(EYRING_PREFACTOR) +
+              ", \"kinact_below_eyring_ceiling\": " + jsb(bel[i]) +
+              ", \"kinact_tst_below_eyring_ceiling\": " + jsb(belt[i]) + "}"
+        i = i + 1
+    }
+
+    // ranking entries
+    let mut rkj = ""
+    i = 0
+    while i < 5 {
+        let idx = order[i]
+        if i > 0 { rkj = rkj + ", " }
+        rkj = rkj + "{\"inhibitor\": \"" + names[idx] + "\"" +
+              ", \"kinact_over_Ki_M_per_s\": " + js(kovk[idx]) +
+              ", \"drug_precedent\": \"" + prec[idx] + "\"}"
+        i = i + 1
+    }
+    let rank_note = "kinact/Ki is the field-standard second-order efficiency constant for covalent inhibitors; it ranks them the way kcat/Km ranks substrates. This is an in-silico ranking of the panel's surrogate inputs, NOT a potency claim about the named drugs."
+    let rankj = "{\"metric\": \"kinact/Ki (M^-1 s^-1)\"" +
+                ", \"framework_citation\": \"" + STRELOW_2017 + "\"" +
+                ", \"ranking\": [" + rkj + "]" +
+                ", \"note\": \"" + rank_note + "\"}"
+
+    // acceptance
+    let mut critj = "{"
+    ci = 0
+    while ci < 7 {
+        if ci > 0 { critj = critj + ", " }
+        critj = critj + "\"" + crit_keys[ci] + "\": " + jsb(crit_vals[ci])
+        ci = ci + 1
+    }
+    critj = critj + "}"
+    let accj = "{\"criteria\": " + critj +
+               ", \"pass_count\": " + str(npass) +
+               ", \"total\": 7" +
+               ", \"verdict\": \"" + verdict + "\"}"
+
+    let rla = "{\"kinact_over_Ki_framework_citation\": \"" + STRELOW_2017 + "\"" +
+              ", \"eyring_tst_citation\": \"" + EYRING_1935 + "\"" +
+              ", \"eyring_prefactor_ceiling_per_s\": " + js(EYRING_PREFACTOR) +
+              ", \"temperature_K\": " + js(TEMP_K) + "}"
+
+    let witness = "{\"schema\": \"" + SCHEMA_ID + "\"" +
+              ", \"ts\": \"2026-05-16T00:00:00Z\"" +
+              ", \"axis\": \"" + AXIS + "\"" +
+              ", \"axis_layer\": \"" + AXIS_LAYER + "\"" +
+              ", \"version\": \"" + VERSION + "\"" +
+              ", \"model\": \"" + model_str + "\"" +
+              ", \"real_limit_anchors\": " + rla +
+              ", \"reference_inhibitor_conc_M\": " + js(REFERENCE_INHIBITOR_CONC_M) +
+              ", \"rows\": [" + rj + "]" +
+              ", \"potency_ranking\": " + rankj +
+              ", \"acceptance\": " + accj +
+              ", \"pass_count\": " + str(npass) +
+              ", \"total_criteria\": 7" +
+              ", \"verdict\": \"" + verdict + "\"" +
+              ", \"subaxis_note\": \"" + subaxis_note + "\"" +
+              ", \"lattice_stance\": \"" + lattice_stance + "\"" +
+              ", \"in_silico_scope\": \"" + in_silico_scope + "\"}"
+
+    let wv = json_parse(witness)
+    println("")
+    println("## witness JSON")
+    println(py_json2(wv, 0))
+    println("")
+    let sentinel = if verdict == "PASS" { "__COVALENT_INHIBITION__ PASS" } else { "__COVALENT_INHIBITION__ FAIL" }
+    println(sentinel)
+}

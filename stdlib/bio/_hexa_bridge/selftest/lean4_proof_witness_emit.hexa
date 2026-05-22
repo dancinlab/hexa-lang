@@ -1,0 +1,329 @@
+#!hexa strict
+// hexa-bio/_hexa_bridge/selftest/lean4_proof_witness_emit.hexa
+//
+// hexa-native port of `_python_bridge/module/lean4_proof_witness_emit.py`
+// (T3; io/json/os/sys/textwrap). Loads canon_lean4_state_ref.json (runtime
+// json_parse), prints the WEAVE-mechanical 4-axis consumer-contract layer
+// summary + Theorem B + GATE-26-2 (textwrap.wrap width=110), and emits 4
+// raw_77_lean4_proof_witness_v0 witness rows via py_json2 (indent=2).
+//
+// shq() comes from json_schema_validator (discipline #1: no local dup).
+// Recorded_at is fixed ("2026-05-12T00:00:00Z" — matches .py constant) →
+// deterministic re-runs (no datetime.now()). `--refresh` / `--emit-witness`
+// path NOT ported (orchestrator never passes them; pure no-args output is
+// the contract). Discipline #4: parallel-tracked arrays, no in-place
+// mutation. Discipline #2: no hardcoded paths (root via `pwd`).
+
+import "_hexa_bridge/module/py_json2.hexa"
+import "_hexa_bridge/module/json_schema_validator.hexa"
+
+let REF_REL          = "weave/spec/canon_lean4_state_ref.json"
+let WITNESS_SCHEMA   = "raw_77_lean4_proof_witness_v0"
+let RECORDED_AT      = "2026-05-12T00:00:00Z"
+let LAST_MOD_CYCLE   = 30
+let CANON_REPO_REF   = "dancinlab/hexa-meta@main:formal/lean4/"
+
+fn ljust(s: string, n: int) -> string { let mut o=s; while len(o)<n { o=o+" " }; return o }
+fn rjust(s: string, n: int) -> string { let mut o=s; while len(o)<n { o=" "+o }; return o }
+
+// Codepoint count (UTF-8 leading byte = !(0x80..=0xBF)) — for textwrap.
+fn clen(s: string) -> int {
+    let mut n = 0; let mut i = 0
+    while i < len(s) {
+        let b = ord(s.substr(i, 1))
+        if b < 128 || b >= 192 { n = n + 1 }
+        i = i + 1
+    }
+    return n
+}
+
+// Codepoint-aware substring: copies bytes for codepoints [a, b).
+fn cp_substr(s: string, a: int, b: int) -> string {
+    let mut out = ""
+    let mut cp = 0
+    let mut i = 0
+    while i < len(s) {
+        let bv = ord(s.substr(i, 1))
+        let is_lead = bv < 128 || bv >= 192
+        if is_lead {
+            if cp >= b { return out }
+            // determine UTF-8 sequence length from lead byte
+            let mut seq = 1
+            if bv >= 240 { seq = 4 }
+            else if bv >= 224 { seq = 3 }
+            else if bv >= 192 { seq = 2 }
+            if cp >= a {
+                out = out + s.substr(i, seq)
+            }
+            cp = cp + 1
+            i = i + seq
+        } else {
+            // continuation byte at unexpected position — advance defensively
+            i = i + 1
+        }
+    }
+    return out
+}
+
+// Whitespace test (ASCII space/tab/newline — matches textwrap default
+// wordsep_simple_re behaviour for our prose corpus).
+fn is_ws(c: string) -> bool {
+    let b = ord(c)
+    return b == 32 || b == 9 || b == 10 || b == 13
+}
+
+// Split text on runs of whitespace → array of word tokens (codepoint
+// boundaries respected because byte-i advance is character-safe: any
+// non-leading byte is by definition non-whitespace).
+fn split_words(s: string) -> array {
+    let mut words: array = []
+    let mut cur = ""
+    let mut i = 0
+    while i < len(s) {
+        let c = s.substr(i, 1)
+        if is_ws(c) {
+            if len(cur) > 0 { words.push(cur); cur = "" }
+        } else {
+            cur = cur + c
+        }
+        i = i + 1
+    }
+    if len(cur) > 0 { words.push(cur) }
+    return words
+}
+
+// ASCII-letter predicate (matches textwrap's %(lt)s = [^\d\W] for the
+// ASCII corpus we wrap; non-ASCII letters in the GATE-26-2 summary do
+// NOT occur adjacent to hyphens in golden output).
+fn is_letter_byte(b: int) -> bool {
+    return (b >= 65 && b <= 90) || (b >= 97 && b <= 122)
+}
+fn cp_is_letter(s: string, i: int) -> bool {
+    // single-byte ASCII check at codepoint i (returns false if cp i is
+    // non-ASCII — close enough; golden corpus has no non-ASCII letters
+    // bordering hyphens). Walks codepoints; cheap because words are short.
+    let mut byte_i = 0
+    let mut cp = 0
+    while byte_i < len(s) {
+        let bv = ord(s.substr(byte_i, 1))
+        let is_lead = bv < 128 || bv >= 192
+        if is_lead {
+            if cp == i { return is_letter_byte(bv) }
+            let mut seq = 1
+            if bv >= 240 { seq = 4 }
+            else if bv >= 224 { seq = 3 }
+            else if bv >= 192 { seq = 2 }
+            cp = cp + 1
+            byte_i = byte_i + seq
+        } else {
+            byte_i = byte_i + 1
+        }
+    }
+    return false
+}
+
+// Codepoint at index i (returns "" if OOB).
+fn cp_at(s: string, i: int) -> string {
+    let mut byte_i = 0
+    let mut cp = 0
+    while byte_i < len(s) {
+        let bv = ord(s.substr(byte_i, 1))
+        let is_lead = bv < 128 || bv >= 192
+        if is_lead {
+            let mut seq = 1
+            if bv >= 240 { seq = 4 }
+            else if bv >= 224 { seq = 3 }
+            else if bv >= 192 { seq = 2 }
+            if cp == i { return s.substr(byte_i, seq) }
+            cp = cp + 1
+            byte_i = byte_i + seq
+        } else {
+            byte_i = byte_i + 1
+        }
+    }
+    return ""
+}
+
+// Mirror textwrap's wordsep_re hyphen-break rule (break_on_hyphens=True):
+// split a word at hyphen-position i iff the 2 codepoints BEFORE the hyphen
+// are letters AND ((2 codepoints AFTER are letters) OR (1 letter-then-
+// hyphen-then-letter sequence after)). Hyphen stays on the left piece.
+// Returns array of pieces (≥1).
+fn split_word_on_hyphens(w: string) -> array {
+    let n = clen(w)
+    let mut pieces: array = []
+    let mut start = 0
+    let mut i = 0
+    while i < n {
+        if cp_at(w, i) == "-" && i >= 2 && i + 1 < n {
+            let left2  = cp_is_letter(w, i - 2) && cp_is_letter(w, i - 1)
+            let aft1   = cp_is_letter(w, i + 1)
+            let aft2   = (i + 2 < n) && cp_is_letter(w, i + 2)
+            let aft_hl = (i + 3 < n) && cp_at(w, i + 2) == "-" && cp_is_letter(w, i + 3)
+            let right_ok = aft1 && (aft2 || aft_hl)
+            if left2 && right_ok {
+                pieces.push(cp_substr(w, start, i + 1))   // include hyphen
+                start = i + 1
+            }
+        }
+        i = i + 1
+    }
+    pieces.push(cp_substr(w, start, n))
+    return pieces
+}
+
+// Greedy word-wrap to `width` codepoints with break_on_hyphens (mirrors
+// textwrap.wrap defaults). Pieces from the same source word are packed
+// without an inter-piece separator; new words are space-separated.
+fn wrap_text(s: string, width: int) -> array {
+    let words = split_words(s)
+    let mut lines: array = []
+    let mut cur = ""
+    let mut cur_cp = 0
+    let mut wi = 0
+    while wi < len(words) {
+        let pieces = split_word_on_hyphens(words[wi])
+        // Pieces are packed left-to-right; word boundary between distinct
+        // words is a single space, between pieces of same word is empty.
+        let mut pi = 0
+        let mut first_piece_of_word = true
+        while pi < len(pieces) {
+            let p = pieces[pi]
+            let pc = clen(p)
+            let sep_cp = if cur_cp == 0 { 0 } else { if first_piece_of_word { 1 } else { 0 } }
+            if cur_cp == 0 {
+                cur = p; cur_cp = pc
+            } else {
+                if cur_cp + sep_cp + pc <= width {
+                    if sep_cp == 1 { cur = cur + " " + p } else { cur = cur + p }
+                    cur_cp = cur_cp + sep_cp + pc
+                } else {
+                    lines.push(cur)
+                    cur = p; cur_cp = pc
+                }
+            }
+            first_piece_of_word = false
+            pi = pi + 1
+        }
+        wi = wi + 1
+    }
+    if cur_cp > 0 { lines.push(cur) }
+    return lines
+}
+
+fn main() {
+    let root = exec("pwd").trim()
+    let ref_path = root + "/" + REF_REL
+
+    println("lean4_proof_witness_emit — canon lean4 mechanical-layer proof-state witnesses (raw_77_lean4_proof_witness_v0)")
+    println("")
+
+    if exec("[ -f " + shq(ref_path) + " ] && echo y || echo n").trim() != "y" {
+        println("  FAIL: " + REF_REL + " not vendored — run --refresh (needs ~/mac_home/core/canon@mk1) or restore it.")
+        println("__LEAN4_PROOF_WITNESS__ FAIL")
+        exit(1)
+    }
+    let ref = json_parse(exec("cat " + shq(ref_path) + " 2>/dev/null"))
+
+    let stub      = ref["formal_lean4_consumer_contract_stub_layer"]
+    let tb        = ref["lean4_n6_theorem_b"]
+    let axes_in   = stub["axes"]
+    let n_axes    = len(axes_in)
+
+    // Parallel-tracked witness row fields (discipline #4: build, never mutate-shared).
+    let mut row_axis: array        = []
+    let mut row_theorem: array     = []
+    let mut row_module: array      = []
+    let mut row_sorry: array       = []
+    let mut row_pass: array        = []
+    let mut ai = 0
+    while ai < n_axes {
+        let a = axes_in[ai]
+        row_axis.push(a["axis"])
+        row_theorem.push(a["theorem_name"])
+        row_module.push(a["module_path"])
+        row_sorry.push(a["sorry_count"])
+        row_pass.push(a["pass"])
+        ai = ai + 1
+    }
+
+    println("  canon source: " + ref["source"])
+    println("  --- WEAVE-mechanical 4-axis consumer-contract layer (" + stub["location"] + ") — " + stub["status"] + " ---")
+    println("  " + ljust("axis", 16) + " " + ljust("theorem", 28) + " " + ljust("module", 40) + " " + rjust("sorry", 6) + "  pass")
+
+    let mut n_pass = 0
+    let mut ri = 0
+    while ri < n_axes {
+        let pflag = row_pass[ri]
+        let ptext = if pflag { "PASS" } else { "no" }
+        if pflag { n_pass = n_pass + 1 }
+        println("  " + ljust(row_axis[ri], 16) + " " +
+                ljust(row_theorem[ri], 28) + " " +
+                ljust(row_module[ri], 40) + " " +
+                rjust(str(row_sorry[ri]), 6) + "  " + ptext)
+        ri = ri + 1
+    }
+    println("  total sorry-count = " + str(stub["total_sorry_count"]) +
+            "  ·  axes PASS (sorry_count==0) = " + str(n_pass) + "/" + str(n_axes) +
+            "  ·  PASS gate per axis = sorry_count==0 (proof bodies = cycle 30+)")
+    println("")
+
+    println("  --- n=6 invariant-lattice UNIQUENESS — Theorem B (" + tb["location"] + ") ---")
+    println("  " + tb["theorem"])
+    println("  STATUS: " + tb["status"])
+    println("  (" + str(tb["n_theoremb_files"]) + " files, ~" + str(tb["approx_total_lines"]) +
+            " lines, sorry-count ≈ " + str(tb["approx_sorry_count"]) + ")")
+    println("")
+
+    println("  --- GATE-26-2 ---")
+    let summary = ref["gate_26_2_status_summary"]
+    let wrapped = wrap_text(summary, 110)
+    let mut wi = 0
+    while wi < len(wrapped) {
+        println("  " + wrapped[wi])
+        wi = wi + 1
+    }
+
+    // Build witness rows JSON (compact text → json_parse → py_json2 indent=2).
+    // Insertion-order keys: schema · axis · theorem_name · module_path ·
+    // sorry_count · last_modified_cycle · canonical_repo_ref · pass · recorded_at.
+    let mut compact = "["
+    let mut ji = 0
+    while ji < n_axes {
+        if ji > 0 { compact = compact + ", " }
+        let pbool = if row_pass[ji] { "true" } else { "false" }
+        compact = compact + "{" +
+            "\"schema\": \"" + WITNESS_SCHEMA + "\"" +
+            ", \"axis\": \"" + row_axis[ji] + "\"" +
+            ", \"theorem_name\": \"" + row_theorem[ji] + "\"" +
+            ", \"module_path\": \"" + row_module[ji] + "\"" +
+            ", \"sorry_count\": " + str(row_sorry[ji]) +
+            ", \"last_modified_cycle\": " + str(LAST_MOD_CYCLE) +
+            ", \"canonical_repo_ref\": \"" + CANON_REPO_REF + "\"" +
+            ", \"pass\": " + pbool +
+            ", \"recorded_at\": \"" + RECORDED_AT + "\"" +
+            "}"
+        ji = ji + 1
+    }
+    compact = compact + "]"
+
+    let wv = json_parse(compact)
+
+    // PASS gate (mirrors .py `ok` semantics): 4 rows AND total_sorry_count==0
+    // AND every row pass:true.
+    let mut all_pass = true
+    let mut pi = 0
+    while pi < n_axes { if !row_pass[pi] { all_pass = false }; pi = pi + 1 }
+    let ok = n_axes == 4 && stub["total_sorry_count"] == 0 && all_pass
+
+    println("")
+    println("## witness rows JSON")
+    println(py_json2(wv, 0))
+    println("")
+    if ok {
+        println("__LEAN4_PROOF_WITNESS__ PASS")
+        return
+    }
+    println("__LEAN4_PROOF_WITNESS__ FAIL")
+    exit(1)
+}

@@ -1,0 +1,121 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "hexa-bio/_python_bridge/spec/ppi_molecular_glue_cross_v1.schema.json",
+  "title": "ppi_molecular_glue_cross_v1 — CROSS-AXIS G3 output rows",
+  "description": "Output schema for _python_bridge/module/ppi_molecular_glue_cross.py. CROSS-AXIS integration G3: PPI inhibitors DISRUPT a protein-protein interface, molecular glues CREATE one (a neo-interface). The two are inverse sides of the SAME energetic accounting — the Bogan-Thorn binding-hotspot ledger that quantifies a disruptable PPI is exactly what quantifies whether a glue-induced neo-interface is thermodynamically accessible. For each panel entry, this cross takes a PPI hotspot-cluster energy from ppi_sim.py (imported, not re-implemented — f3), converts it to an effective K_PPI for the equivalent neo-interface, and runs the cooperative-ternary mass-action equilibrium of molecular_glue_sim.py (imported, not re-implemented — f3) to find the cooperativity factor alpha_required that lifts the glue signature over the cooperative-ternary threshold. The cross shows the PPI hotspot real-limit is the FLOOR below which no glue can work: disrupting vs creating an interface uses the same energetic accounting. This is a MODEL-LEVEL UNIFICATION of two energetic accountings — NOT a claim that every PPI is glue-able or vice versa. In-silico simulator-consistency only (AGENTS.tape g8/f2). PPI is a SUB-AXIS :> QUANTUM core; MOLECULAR-GLUE is a SUB-AXIS :> BIFUNCTIONAL (expansion-main) — neither is a hexa-bio core-5 axis. Cross is NOT a new axis (AXIS/HIERARCHY.tape unchanged).",
+  "type": "object",
+  "required": [
+    "schema",
+    "interface",
+    "interface_class",
+    "ppi_hotspot_cluster_kcal_per_mol",
+    "ppi_hotspot_energy_fraction",
+    "k_ppi_effective_nM",
+    "alpha_required_for_glue_signature",
+    "glue_signature_achievable",
+    "ppi_floor_respected",
+    "illustrative_only"
+  ],
+  "properties": {
+    "schema": {
+      "type": "string",
+      "const": "ppi_molecular_glue_cross_v1"
+    },
+    "interface": {
+      "type": "string",
+      "description": "Interface identifier parsed/derived from the ppi_sim.py INTERFACE_PANEL."
+    },
+    "interface_class": {
+      "type": "string",
+      "description": "Protein-protein interface structural class (bh3_helix_groove, alpha_helix_peptide_cleft, flat_diffuse_interface, etc.)."
+    },
+    "ppi_drug_precedent": {
+      "type": "string",
+      "description": "PPI-disruptor drug precedent for the modality (g3/f1 — venetoclax/navitoclax, never lattice-derived)."
+    },
+    "glue_drug_precedent": {
+      "type": "string",
+      "description": "Molecular-glue drug precedent for the modality (g3/f1 — lenalidomide/thalidomide/indisulam, never lattice-derived)."
+    },
+    "n_hotspot_residues": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Number of Bogan-Thorn hotspot residues (ddG >= 2 kcal/mol) on the PPI interface."
+    },
+    "ppi_hotspot_cluster_kcal_per_mol": {
+      "type": "number",
+      "description": "Hotspot-cluster binding free energy from ppi_sim (kcal/mol, favourable so <= 0)."
+    },
+    "ppi_hotspot_energy_fraction": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1,
+      "description": "Fraction of total interface ddG carried by hotspot residues (Bogan-Thorn)."
+    },
+    "ppi_hotspot_driven": {
+      "type": "boolean",
+      "description": "True iff hotspot_fraction >= 0.5 and >= 2 hotspot residues (ppi_sim definition)."
+    },
+    "temperature_K": {
+      "type": "number",
+      "exclusiveMinimum": 0,
+      "description": "Temperature used for the Gibbs free-energy -> K_d conversion (K)."
+    },
+    "k_ppi_effective_nM": {
+      "type": "number",
+      "exclusiveMinimum": 0,
+      "description": "Effective dissociation constant for the equivalent neo-interface, derived from the PPI hotspot-cluster energy via K_d = exp(dG_hotspot_cluster / RT) and rescaled to nM. This is the K_PPI a glue would see if it perfectly created an interface mirroring the PPI's hotspot energetics — the floor."
+    },
+    "k_glue_nM": {
+      "type": "number",
+      "exclusiveMinimum": 0,
+      "description": "Fixed illustrative K_glue (nM) used for the glue->target binary leg of the cooperative-ternary equilibrium (modality-typical weak-binary value, consistent with molecular_glue_sim panel)."
+    },
+    "alpha_required_for_glue_signature": {
+      "type": "number",
+      "exclusiveMinimum": 1,
+      "description": "Minimum cooperativity factor alpha at which molecular_glue_sim.cooperative_ternary() returns glue_signature=True for the derived K_PPI_effective and the fixed K_glue. The smaller this is, the more accessible the glue is — directly determined by the PPI hotspot real-limit."
+    },
+    "alpha_search_max": {
+      "type": "number",
+      "exclusiveMinimum": 1,
+      "description": "Upper bound of the deterministic alpha search ladder."
+    },
+    "f_binary_target_at_required_alpha": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1,
+      "description": "Mass-action binary occupancy of the glue->target engagement at alpha_required (from molecular_glue_sim)."
+    },
+    "f_binary_ppi_at_required_alpha": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1,
+      "description": "Mass-action binary occupancy of the bare target<->E3 interface at alpha_required (from molecular_glue_sim)."
+    },
+    "f_ternary_at_required_alpha": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1,
+      "description": "Cooperative ternary occupancy at alpha_required (from molecular_glue_sim) — must exceed the ternary_sufficient_floor for the glue signature."
+    },
+    "glue_signature_achievable": {
+      "type": "boolean",
+      "description": "True iff some alpha in [1.0, alpha_search_max] yields glue_signature=True; False iff no alpha within the ladder ever clears the cooperative-ternary threshold (the PPI hotspot floor is below feasibility)."
+    },
+    "ppi_floor_respected": {
+      "type": "boolean",
+      "description": "True iff the effective K_PPI is computed within the alanine-scanning ledger bound — the glue cannot create a neo-interface stronger than the PPI hotspot energetics permit (the real-limit floor)."
+    },
+    "unification_note": {
+      "type": "string",
+      "description": "Statement of the model-level unification: PPI disruption and glue-induced neo-interface assembly use the SAME Bogan-Thorn hotspot ledger plus Guldberg-Waage mass action."
+    },
+    "illustrative_only": {
+      "type": "boolean",
+      "const": true,
+      "description": "Always true — the alpha_required and ternary occupancies are illustrative model outputs derived from literature-informed surrogate energetics, NOT predictions of real cooperativity, affinity or therapeutic accessibility. NOT a claim that every PPI is glue-able or vice versa."
+    }
+  },
+  "additionalProperties": true
+}

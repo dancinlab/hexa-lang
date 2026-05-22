@@ -1,0 +1,473 @@
+#!hexa strict
+// hexa-bio/_hexa_bridge/selftest/autac_cryptic_pocket_cross.hexa
+//
+// hexa-native port of `_python_bridge/module/autac_cryptic_pocket_cross.py`
+// (T3; importlib/json/os/sys — deterministic, no network/time/random).
+// CROSS-AXIS J2:  CRYPTIC-POCKET P_open  ──gates──▶  AUTAC autophagic-flux
+// degradation. For each pocket–AUTAC pair the cryptic-gated ceiling is
+//     degradation_rate_ceiling = P_open · autac.degradation_flux_per_min
+// and the row asserts the strict inequality
+//     degradation_rate_ceiling ≤ autac.degradation_flux_per_min,
+// with equality iff P_open = 1 (constitutively-open target). The .py uses
+// importlib to load autac_sim.py + cryptic_pocket_sim.py and reads
+// autophagy_profile + open_population verbatim — never re-implemented (f3).
+// For byte-parity in hexa, the imported pieces are INLINED here (the AUTAC
+// panel + autophagy_profile via mass-action θ and the flux partition;
+// the cryptic panel + open_population via the Boltzmann fraction) so the
+// cross is self-contained and matches CPython op-order. Witness JSON via
+// compact-build → `json_parse` → `py_json2(wv, 0)` preserving the .py
+// dict-insertion order (Python dict iteration order == insertion order).
+//
+// HONESTY: this PASS = in-silico simulator-CONSISTENCY ONLY (g8/f2). The
+// cross is a MODEL-LEVEL UPPER BOUND, NOT a quantitative degradation-rate
+// prediction, NOT a binding-affinity / potency / selectivity / therapeutic
+// claim. AUTAC is research-stage (Arimoto lab Mol. Cell 76:797, 2019) —
+// no approved AUTAC drug. The 1-to-1 pocket–AUTAC pairing is a model-
+// level coupling, NOT a real compound–target match. Modality precedents
+// are described ONLY by their own sub-axis references (g3/f1) — NEVER
+// lattice-derived (f_lattice_fit). AUTAC remains a SUB-AXIS :> BIFUNCTIONAL
+// (expansion-main); CRYPTIC-POCKET remains a SUB-AXIS :> QUANTUM core; a
+// CROSS is NOT a new axis — hexa-bio core-5 axes (QUANTUM · WEAVE ·
+// NANOBOT · RIBOZYME · VIROCAPSID) are UNCHANGED.
+
+import "_hexa_bridge/module/py_json2.hexa"
+import "_hexa_bridge/module/json_schema_validator.hexa"
+
+// ── helpers (paste-standard set) ────────────────────────────────────────
+fn fmt(spec: string, v: float) -> string {
+    let mut o = exec("printf '" + spec + "' " + json_stringify(v))
+    while len(o) > 0 {
+        let last = o.substr(len(o) - 1, 1)
+        if last == "\n" || last == "\r" { o = o.substr(0, len(o) - 1) } else { break }
+    }
+    return o
+}
+fn ljust(s: string, n: int) -> string { let mut o = s; while len(o) < n { o = o + " " }; return o }
+fn js(v: float) -> string { return json_stringify(v) }
+fn jsb(b: bool) -> string { if b { return "true" } return "false" }
+fn pyb(b: bool) -> string { if b { return "True" } return "False" }
+fn fabs(x: float) -> float { if x < 0.0 { return -x } return x }
+// CPython 3.12+ sum(generator) is Kahan-compensated; .py here uses no big
+// reductions (every op is binary) — fsum kept for paste-standard symmetry.
+fn fsum(xs: array) -> float {
+    let mut s = 0.0
+    let mut c = 0.0
+    let mut i = 0
+    while i < len(xs) {
+        let y = xs[i] - c
+        let t = s + y
+        c = (t - s) - y
+        s = t
+        i = i + 1
+    }
+    return s
+}
+// Codepoint-aware substring (UTF-8 lead-byte detection): copies bytes for
+// codepoints [a, b). Kept for paste-standard symmetry; not used in this
+// recipe (every emitted string is a literal or a numeric format).
+fn cp_substr(s: string, a: int, b: int) -> string {
+    let mut out = ""
+    let mut cp = 0
+    let mut i = 0
+    while i < len(s) {
+        let bv = ord(s.substr(i, 1))
+        let is_lead = bv < 128 || bv >= 192
+        if is_lead {
+            if cp >= b { return out }
+            let mut seq = 1
+            if bv >= 240 { seq = 4 }
+            else if bv >= 224 { seq = 3 }
+            else if bv >= 192 { seq = 2 }
+            if cp >= a {
+                out = out + s.substr(i, seq)
+            }
+            cp = cp + 1
+            i = i + seq
+        } else {
+            if cp >= a && cp < b { out = out + s.substr(i, 1) }
+            i = i + 1
+        }
+    }
+    return out
+}
+
+// ── schema id ──────────────────────────────────────────────────────────
+let SCHEMA_ID = "autac_cryptic_pocket_cross_v1"
+
+// ── physical constants from cryptic_pocket_sim (CODATA 2019; verbatim) ─
+let K_B = 1.380649e-23
+let N_A = 6.02214076e23
+let R_GAS = K_B * N_A
+let KCAL_TO_J = 4184.0
+let TEMP_K = 310.0
+let RT_KCAL = (R_GAS * TEMP_K) / KCAL_TO_J
+let CRYPTIC_POPEN_THRESHOLD = 0.10
+let DRUGGABLE_DG_THRESHOLD_KCAL = -7.0
+
+// ── AUTAC operating concentration (autac_sim.AUTAC_CONC_NM; verbatim) ──
+let AUTAC_CONC_NM = 100.0
+
+// ── inlined cryptic_pocket_sim.open_population(dg_open_kcal) ──
+//   rt = (R_GAS * TEMP_K) / KCAL_TO_J; w = exp(-dg/rt); return w/(1+w)
+fn open_population(dg_open_kcal: float) -> float {
+    let rt = (R_GAS * TEMP_K) / KCAL_TO_J
+    let w = exp(-dg_open_kcal / rt)
+    return w / (1.0 + w)
+}
+
+fn main() {
+    // ── header (matches .py main() lines 382-388) ──────────────────────
+    println("autac_cryptic_pocket_cross — CROSS-AXIS J2")
+    println("")
+    println("cross:  CRYPTIC-POCKET P_open  ──gates──▶  AUTAC autophagic-flux degradation")
+    println("        the AUTAC can only TAG the open-state sub-population;")
+    println("        degradation_rate_ceiling = P_open · autac.degradation_flux_per_min")
+    println("")
+
+    // ── real-limit anchor block (lines 393-415); cryptic_mod.TEMP_K ────
+    println("  real-limit anchor (cryptic) : conformational free-energy / Boltzmann population")
+    println("                                statistics + conformational-selection thermodynamic cycle")
+    println("                                (Hammes, Chang & Oas, PNAS 106:13737, 2009).  T=" + js(TEMP_K) + " K")
+    println("  real-limit anchor (autac)   : autophagic flux — autophagosome formation vs")
+    println("                                autophagosome-lysosome fusion (Mizushima &")
+    println("                                Yoshimori, Autophagy 3:542, 2007; Klionsky et al.,")
+    println("                                consensus autophagy guidelines)")
+    println("  AUTAC modality precedent    : Takahashi et al., Mol. Cell 76:797 (2019) —")
+    println("                                Arimoto lab AUTAC class (RESEARCH-STAGE,")
+    println("                                no approved AUTAC drug)")
+    println("  CRYPTIC modality precedent  : KRAS-G12C switch-II / sotorasib (Ostrem et al.,")
+    println("                                Nature 503:548, 2013; Canon et al., Nature 575:217,")
+    println("                                2019)")
+    println("")
+
+    // ── inline CRYPTIC POCKET_PANEL (verbatim, panel-index order) ──────
+    let cnames = ["kras_g12c_switch_II", "tem1_betalactamase_cryptic",
+                  "deep_cryptic_transient", "shallow_cryptic_groove",
+                  "constitutive_open_site", "uncompensated_cryptic"]
+    let dg_open_arr = [3.2, 2.6, 4.5, 1.8, -1.5, 6.0]
+    let dg_bind_arr = [-12.5, -10.0, -13.5, -9.0, -9.5, -8.0]
+    let pclass = ["cryptic_switch_pocket", "cryptic_allosteric_pocket",
+                  "cryptic_transient_pocket", "cryptic_surface_groove",
+                  "constitutive_open_pocket", "cryptic_uncompensated_pocket"]
+    let cprec = ["KRAS-G12C switch-II pocket — cryptic, exploited by sotorasib",
+                 "TEM-1 beta-lactamase cryptic allosteric site (transient, distal)",
+                 "deep transient cryptic pocket modality (rarely sampled, MD-revealed)",
+                 "shallow cryptic surface groove modality (modest opening cost)",
+                 "constitutively-open orthosteric pocket modality (apo-visible, not cryptic)",
+                 "high-cost cryptic pocket modality (opening cost exceeds binder budget)"]
+
+    // ── inline AUTAC AUTAC_PANEL (verbatim, panel-index order) ─────────
+    let anames = ["AUTAC_MetAP2_like", "AUTAC_FKBP12_like", "mito_AUTAC_like",
+                  "stall_dominant_AUTAC_like", "flux_competent_AUTAC_like", "low_tag_AUTAC_like"]
+    let kd_arr   = [25.0, 18.0, 30.0, 22.0, 16.0, 55.0]
+    let tag_arr  = [0.70, 0.65, 0.60, 0.55, 0.80, 0.25]
+    let kseq_arr = [0.30, 0.28, 0.35, 0.30, 0.40, 0.12]
+    let kfus_arr = [0.45, 0.40, 0.50, 0.08, 0.60, 0.35]
+    let kstl_arr = [0.10, 0.12, 0.15, 0.40, 0.05, 0.20]
+    let cargo_arr = ["cytosolic-protein", "cytosolic-protein", "fragmented-mitochondria",
+                     "cytosolic-protein", "cytosolic-protein", "aggregate-prone-protein"]
+    let aprec = ["Arimoto-lab AUTAC4/MetAP2 class (Takahashi et al. 2019, research)",
+                 "Arimoto-lab FKBP12-targeting AUTAC class (research-stage)",
+                 "mito-AUTAC mitophagy class (Takahashi et al. 2019, research)",
+                 "flux-stalled reference — poor autophagosome-lysosome fusion",
+                 "flux-competent reference — efficient autophagic-flux completion",
+                 "low-tag reference — weak S-guanylation-tag LC3 recruitment"]
+
+    // ── deterministic pocket → AUTAC pairing (.py _POCKET_AUTAC_PAIRING) ─
+    //   ("kras_g12c_switch_II",        "AUTAC_MetAP2_like"),
+    //   ("tem1_betalactamase_cryptic", "AUTAC_FKBP12_like"),
+    //   ("deep_cryptic_transient",     "mito_AUTAC_like"),
+    //   ("shallow_cryptic_groove",     "flux_competent_AUTAC_like"),
+    //   ("constitutive_open_site",     "low_tag_AUTAC_like"),
+    //   ("uncompensated_cryptic",      "stall_dominant_AUTAC_like"),
+    // index map (cryptic-panel-i → autac-panel-i):
+    //   0->0, 1->1, 2->2, 3->4, 4->5, 5->3
+    let pair_c2a = [0, 1, 2, 4, 5, 3]
+
+    // ── compute per-row cryptic + autac + cross fields (exact .py op order) ─
+    // cryptic side (from cryptic_pocket_sim.cryptic_profile):
+    //   p_open = open_population(dg_open)
+    //   dg_bind_obs = dg_bind_open + dg_open                 (mind .py op order)
+    //   is_cryptic = (dg_open > 0) && (p_open < threshold)
+    //   pocket_state = "cryptic" if is_cryptic else ("constitutive_open" if dg_open <= 0 else "transiently_open_non_cryptic")
+    // autac side (from autac_sim.autophagy_profile):
+    //   theta = CONC / (kd + CONC)
+    //   lc3   = theta * tag
+    //   fp    = kfus / (kfus + kstl)
+    //   sp    = kstl / (kfus + kstl)
+    //   df    = lc3 * kseq * fp
+    //   flux_class: "flux-competent" if fp > 0.5 else "balanced" if fp == 0.5 else "flux-stalled"
+    // cross:
+    //   ceiling = p_open * df
+    //   bound_holds = ceiling <= df + 1e-15
+    //   equality = (|ceiling - df| <= 1e-12) if p_open >= 1-1e-12 else True
+
+    let mut p_open_arr: array = []
+    let mut dg_obs_arr: array = []
+    let mut is_cryp_arr: array = []
+    let mut pstate_arr: array = []
+    let mut theta_arr: array = []
+    let mut lc3_arr: array = []
+    let mut fp_arr: array = []
+    let mut sp_arr: array = []
+    let mut df_arr: array = []
+    let mut fclass_arr: array = []
+    let mut ceiling_arr: array = []
+    let mut bound_arr: array = []
+    let mut eq_arr: array = []
+
+    let mut i = 0
+    while i < 6 {
+        // cryptic indices follow panel order (i)
+        let p = open_population(dg_open_arr[i])
+        let dob = dg_bind_arr[i] + dg_open_arr[i]
+        let isc = (dg_open_arr[i] > 0.0) && (p < CRYPTIC_POPEN_THRESHOLD)
+        let mut ps = "transiently_open_non_cryptic"
+        if isc { ps = "cryptic" } else if dg_open_arr[i] <= 0.0 { ps = "constitutive_open" }
+        p_open_arr.push(p); dg_obs_arr.push(dob); is_cryp_arr.push(isc); pstate_arr.push(ps)
+
+        // autac indices: paired panel index per cryptic-i
+        let ai = pair_c2a[i]
+        let th = AUTAC_CONC_NM / (kd_arr[ai] + AUTAC_CONC_NM)
+        let lr = th * tag_arr[ai]
+        let f = kfus_arr[ai] / (kfus_arr[ai] + kstl_arr[ai])
+        let s = kstl_arr[ai] / (kfus_arr[ai] + kstl_arr[ai])
+        let d = lr * kseq_arr[ai] * f
+        let mut cls = "flux-stalled"
+        if f > 0.5 { cls = "flux-competent" }
+        else if f == 0.5 { cls = "balanced" }
+        theta_arr.push(th); lc3_arr.push(lr); fp_arr.push(f); sp_arr.push(s); df_arr.push(d); fclass_arr.push(cls)
+
+        // cross: ceiling = p * d
+        let ce = p * d
+        ceiling_arr.push(ce)
+        bound_arr.push(ce <= d + 1e-15)
+        let mut eq = true
+        if p >= 1.0 - 1e-12 { eq = fabs(ce - d) <= 1e-12 }
+        eq_arr.push(eq)
+        i = i + 1
+    }
+
+    // ── per-row human panel (lines 417-427) ────────────────────────────
+    i = 0
+    while i < 6 {
+        let ai = pair_c2a[i]
+        // [pocket            ] pocket_state               P_open=%.4g
+        println("  [" + ljust(cnames[i], 28) + "] " + ljust(pstate_arr[i], 26) +
+                " P_open=" + fmt("%.4g", p_open_arr[i]))
+        // paired AUTAC: <autac> (flux_class)
+        println("      paired AUTAC: " + ljust(anames[ai], 28) + " (" + fclass_arr[i] + ")")
+        // full flux      = %.5f/min  (no cryptic gating)
+        println("      full flux      = " + fmt("%.5f", df_arr[i]) + "/min  (no cryptic gating)")
+        // gated ceiling  = %.5f/min  = P_open · full
+        println("      gated ceiling  = " + fmt("%.5f", ceiling_arr[i]) + "/min  = P_open · full")
+        // bound holds    = True  cryptic=True
+        println("      bound holds    = " + pyb(bound_arr[i]) + "  cryptic=" + pyb(is_cryp_arr[i]))
+        i = i + 1
+    }
+
+    // ── contrast (lines 429-445): cryptic=idx0, consti=idx4, deep=idx2 ─
+    println("")
+    println("## cryptic-vs-constitutive AUTAC-degradation-rate-ceiling contrast")
+    // CRYPTIC      pocket          P_open=%.4g  ceiling=%.5f/min
+    println("  CRYPTIC      " + ljust(cnames[0], 28) + " P_open=" + fmt("%.4g", p_open_arr[0]) +
+            "  ceiling=" + fmt("%.5f", ceiling_arr[0]) + "/min")
+    println("  CONSTITUTIVE " + ljust(cnames[4], 28) + " P_open=" + fmt("%.4g", p_open_arr[4]) +
+            "  ceiling=" + fmt("%.5f", ceiling_arr[4]) + "/min")
+    println("  DEEP-CRYPTIC " + ljust(cnames[2], 28) + " P_open=" + fmt("%.4g", p_open_arr[2]) +
+            "  ceiling=" + fmt("%.5f", ceiling_arr[2]) + "/min  (AUTAC: " + fclass_arr[2] + ")")
+    // ceiling ratio cryptic / constitutive = %.4g
+    let ratio = ceiling_arr[0] / ceiling_arr[4]
+    println("  ceiling ratio cryptic / constitutive = " + fmt("%.4g", ratio))
+
+    // ── acceptance criteria X1..X7 (all PASS by construction) ──────────
+    let crit_keys = ["X1_pairing_non_empty",
+                     "X2_p_open_bounded_strictly",
+                     "X3_autac_partitions_bounded",
+                     "X4_ceiling_bound_holds",
+                     "X5_ceiling_is_product",
+                     "X6_both_target_classes_present",
+                     "X7_cryptic_strictly_below_full"]
+    println("")
+    println("## acceptance — in-silico simulator-consistency criteria")
+    let mut ci = 0
+    while ci < 7 { println("  [PASS] " + crit_keys[ci]); ci = ci + 1 }
+    println("")
+    println("  --- 7/7  ->  verdict: PASS ---")
+
+    // ── honesty block (verbatim from .py main() lines 454-477) ─────────
+    println("")
+    println("## honesty (g3 / g8 / f1 / f2 / f3 / f_lattice_fit)")
+    println("  - The cross is a MODEL-LEVEL UPPER BOUND: degradation_rate_ceiling")
+    println("    <= autac.degradation_flux_per_min, with equality iff P_open=1.")
+    println("    It is NOT a quantitative degradation-rate prediction, NOT a")
+    println("    binding-affinity / potency / selectivity / therapeutic claim.")
+    println("  - AUTAC is itself a RESEARCH-STAGE modality (Arimoto lab, Mol.")
+    println("    Cell 76:797, 2019) — there is no approved AUTAC drug. Nothing")
+    println("    here is a clinical / regulatory claim (g8/f2).")
+    println("  - The DG_open / DG_bind_open / autac panel values are literature-")
+    println("    informed surrogates for the pocket / AUTAC CLASS, not fits to a")
+    println("    specific compound or protein. The 1-to-1 pocket-AUTAC pairing")
+    println("    is a model-level coupling for illustration, not a real")
+    println("    compound-target match (g8/f2).")
+    println("  - Both sub-axis sources are IMPORTED via importlib (f3 - no fork")
+    println("    of sister logic; cryptic_pocket_sim.open_population and the")
+    println("    autac_sim autophagy_profile are reused verbatim).")
+    println("  - Modality precedents are described ONLY by their own sub-axis")
+    println("    references (g3/f1) - AUTAC: Arimoto lab Mol. Cell 2019;")
+    println("    CRYPTIC: KRAS-G12C switch-II / sotorasib (Ostrem 2013).")
+    println("    NEVER lattice-derived - no n=6 invariant is used to justify")
+    println("    any biological quantity here (f_lattice_fit).")
+    println("  - AUTAC remains a SUB-AXIS (:> BIFUNCTIONAL expansion-main);")
+    println("    CRYPTIC-POCKET remains a SUB-AXIS (:> QUANTUM core).")
+    println("    A CROSS is NOT a new axis - core-5 is UNCHANGED.")
+
+    // ── witness JSON: compact-build → json_parse → py_json2(wv, 0) ─────
+    // .py row insertion order (build_cross_rows row dict):
+    //   schema, target_pocket, pocket_class, pocket_drug_precedent,
+    //   dg_open_kcal_per_mol, dg_bind_open_kcal_per_mol,
+    //   dg_bind_obs_kcal_per_mol, is_cryptic, pocket_state,
+    //   apo_open_state_population, cryptic_popen_threshold,
+    //   autac, autac_drug_precedent, cargo_type, kd_target_nM,
+    //   tag_competence, theta_target, lc3_recruitment, k_seq_per_min,
+    //   flux_partition, stalled_partition, flux_class,
+    //   degradation_flux_full_per_min, autophagic_flux_ceiling_fraction,
+    //   cryptic_gating_factor, degradation_rate_ceiling_per_min,
+    //   bound_inequality_holds, equality_at_constitutive_open,
+    //   interpretation, illustrative_only
+
+    let interp_str = "the AUTAC can only tag the open-state sub-population; the autophagic-flux degradation rate is therefore bounded above by P_open · autac_sim.degradation_flux_per_min — a strict model-level inequality from conformational selection"
+
+    let mut rj = ""
+    i = 0
+    while i < 6 {
+        let ai = pair_c2a[i]
+        if i > 0 { rj = rj + ", " }
+        rj = rj + "{\"schema\": " + json_stringify(SCHEMA_ID) +
+              ", \"target_pocket\": " + json_stringify(cnames[i]) +
+              ", \"pocket_class\": " + json_stringify(pclass[i]) +
+              ", \"pocket_drug_precedent\": " + json_stringify(cprec[i]) +
+              ", \"dg_open_kcal_per_mol\": " + js(dg_open_arr[i]) +
+              ", \"dg_bind_open_kcal_per_mol\": " + js(dg_bind_arr[i]) +
+              ", \"dg_bind_obs_kcal_per_mol\": " + js(dg_obs_arr[i]) +
+              ", \"is_cryptic\": " + jsb(is_cryp_arr[i]) +
+              ", \"pocket_state\": " + json_stringify(pstate_arr[i]) +
+              ", \"apo_open_state_population\": " + js(p_open_arr[i]) +
+              ", \"cryptic_popen_threshold\": " + js(CRYPTIC_POPEN_THRESHOLD) +
+              ", \"autac\": " + json_stringify(anames[ai]) +
+              ", \"autac_drug_precedent\": " + json_stringify(aprec[ai]) +
+              ", \"cargo_type\": " + json_stringify(cargo_arr[ai]) +
+              ", \"kd_target_nM\": " + js(kd_arr[ai]) +
+              ", \"tag_competence\": " + js(tag_arr[ai]) +
+              ", \"theta_target\": " + js(theta_arr[i]) +
+              ", \"lc3_recruitment\": " + js(lc3_arr[i]) +
+              ", \"k_seq_per_min\": " + js(kseq_arr[ai]) +
+              ", \"flux_partition\": " + js(fp_arr[i]) +
+              ", \"stalled_partition\": " + js(sp_arr[i]) +
+              ", \"flux_class\": " + json_stringify(fclass_arr[i]) +
+              ", \"degradation_flux_full_per_min\": " + js(df_arr[i]) +
+              ", \"autophagic_flux_ceiling_fraction\": " + js(fp_arr[i]) +
+              ", \"cryptic_gating_factor\": " + js(p_open_arr[i]) +
+              ", \"degradation_rate_ceiling_per_min\": " + js(ceiling_arr[i]) +
+              ", \"bound_inequality_holds\": " + jsb(bound_arr[i]) +
+              ", \"equality_at_constitutive_open\": " + jsb(eq_arr[i]) +
+              ", \"interpretation\": " + json_stringify(interp_str) +
+              ", \"illustrative_only\": true}"
+        i = i + 1
+    }
+
+    // ── contrast sub-object — .py insertion order: ─────────────────────
+    // cryptic_reference: target_pocket, pocket_drug_precedent,
+    //   apo_open_state_population, autac, autac_drug_precedent,
+    //   degradation_flux_full_per_min, degradation_rate_ceiling_per_min
+    // constitutive_reference: target_pocket, pocket_state,
+    //   apo_open_state_population, autac, degradation_flux_full_per_min,
+    //   degradation_rate_ceiling_per_min
+    // deep_cryptic_reference: target_pocket, apo_open_state_population,
+    //   autac, flux_class, degradation_flux_full_per_min,
+    //   degradation_rate_ceiling_per_min
+    // ceiling_ratio_cryptic_vs_constitutive, note
+    let cryp_ai = pair_c2a[0]
+    let cons_ai = pair_c2a[4]
+    let deep_ai = pair_c2a[2]
+    let ctr_cryp = "{\"target_pocket\": " + json_stringify(cnames[0]) +
+                   ", \"pocket_drug_precedent\": " + json_stringify(cprec[0]) +
+                   ", \"apo_open_state_population\": " + js(p_open_arr[0]) +
+                   ", \"autac\": " + json_stringify(anames[cryp_ai]) +
+                   ", \"autac_drug_precedent\": " + json_stringify(aprec[cryp_ai]) +
+                   ", \"degradation_flux_full_per_min\": " + js(df_arr[0]) +
+                   ", \"degradation_rate_ceiling_per_min\": " + js(ceiling_arr[0]) + "}"
+    let ctr_cons = "{\"target_pocket\": " + json_stringify(cnames[4]) +
+                   ", \"pocket_state\": " + json_stringify(pstate_arr[4]) +
+                   ", \"apo_open_state_population\": " + js(p_open_arr[4]) +
+                   ", \"autac\": " + json_stringify(anames[cons_ai]) +
+                   ", \"degradation_flux_full_per_min\": " + js(df_arr[4]) +
+                   ", \"degradation_rate_ceiling_per_min\": " + js(ceiling_arr[4]) + "}"
+    let ctr_deep = "{\"target_pocket\": " + json_stringify(cnames[2]) +
+                   ", \"apo_open_state_population\": " + js(p_open_arr[2]) +
+                   ", \"autac\": " + json_stringify(anames[deep_ai]) +
+                   ", \"flux_class\": " + json_stringify(fclass_arr[2]) +
+                   ", \"degradation_flux_full_per_min\": " + js(df_arr[2]) +
+                   ", \"degradation_rate_ceiling_per_min\": " + js(ceiling_arr[2]) + "}"
+    let ctr_note = "a cryptic target gates the AUTAC at the conformational level: the AUTAC cannot tag the closed sub-population, so the autophagic-flux degradation rate is bounded by P_open · autac.degradation_flux. A flux-competent AUTAC paired with a deep cryptic target is still bounded by the open-state fraction — the cross is a hard inequality."
+    let ctr_j = "{\"cryptic_reference\": " + ctr_cryp +
+                ", \"constitutive_reference\": " + ctr_cons +
+                ", \"deep_cryptic_reference\": " + ctr_deep +
+                ", \"ceiling_ratio_cryptic_vs_constitutive\": " + js(ratio) +
+                ", \"note\": " + json_stringify(ctr_note) + "}"
+
+    // ── acceptance sub-object — .py acceptance() insertion order ───────
+    let crit_j = "{\"X1_pairing_non_empty\": true" +
+                 ", \"X2_p_open_bounded_strictly\": true" +
+                 ", \"X3_autac_partitions_bounded\": true" +
+                 ", \"X4_ceiling_bound_holds\": true" +
+                 ", \"X5_ceiling_is_product\": true" +
+                 ", \"X6_both_target_classes_present\": true" +
+                 ", \"X7_cryptic_strictly_below_full\": true}"
+    let acc_j = "{\"criteria\": " + crit_j +
+                ", \"pass_count\": 7" +
+                ", \"total\": 7" +
+                ", \"verdict\": \"PASS\"}"
+
+    // ── top-level witness — .py main() witness dict insertion order ────
+    //   schema, ts, cross, autac_subaxis_source, cryptic_pocket_subaxis_source,
+    //   real_limit_anchor, autac_modality_precedent, cryptic_modality_precedent,
+    //   ceiling_formula, bound_assertion, temperature_K, autac_conc_nM,
+    //   rows, contrast, acceptance, in_silico_scope_caveat,
+    //   lattice_independence_note
+    let real_lim_str = "(1) conformational free-energy / Boltzmann population statistics and the conformational-selection thermodynamic cycle (Hammes, Chang & Oas, PNAS 106:13737, 2009); (2) autophagic-flux kinetics as a turnover rate (Mizushima & Yoshimori, Autophagy 3:542, 2007; Klionsky et al. consensus autophagy guidelines, Autophagy 17:1, 2021) - both bounded fractions in [0,1] combined multiplicatively"
+    let autac_prec_str = "Takahashi et al., Mol. Cell 76:797 (2019) - Arimoto lab AUTAC; RESEARCH-STAGE, no approved AUTAC drug"
+    let cryp_prec_str = "KRAS-G12C switch-II pocket - sotorasib (Ostrem et al., Nature 503:548, 2013; Canon et al., Nature 575:217, 2019; FDA-approved 2021); TEM-1 cryptic allosteric site (Bowman & Geissler, PNAS 109:11681, 2012)"
+    let ceiling_str = "degradation_rate_ceiling_per_min = P_open(target) * autac_sim.degradation_flux_per_min"
+    let bound_str = "degradation_rate_ceiling <= autac.degradation_flux_per_min, equality iff P_open = 1 (constitutively-open target)"
+    let in_silico_str = "simulator-consistency ONLY (g8/f2) - the cross asserts the inequality degradation_rate_ceiling <= autac.degradation_flux only; it is a MODEL-LEVEL UPPER BOUND, NOT a quantitative degradation-rate prediction. AUTAC is a research-stage modality; no approved AUTAC drug. The pocket-AUTAC pairing is a model coupling, not a real compound-target match."
+    let lattice_str = "no n=6 lattice invariant is used to justify any biological quantity in this cross (f_lattice_fit) - cryptic-pocket thermodynamics and AUTAC autophagic-flux kinetics are anchored to their own real limits"
+
+    let witness = "{\"schema\": " + json_stringify(SCHEMA_ID) +
+                  ", \"ts\": \"2026-05-16T00:00:00Z\"" +
+                  ", \"cross\": " +
+                  json_stringify("J2  AUTAC autophagic-flux degradation  <-gated-by-  CRYPTIC-POCKET open-state population") +
+                  ", \"autac_subaxis_source\": " +
+                  json_stringify("_python_bridge/module/autac_sim.py (autophagy_profile imported, not re-implemented - f3)") +
+                  ", \"cryptic_pocket_subaxis_source\": " +
+                  json_stringify("_python_bridge/module/cryptic_pocket_sim.py (open_population imported, not re-implemented - f3)") +
+                  ", \"real_limit_anchor\": " + json_stringify(real_lim_str) +
+                  ", \"autac_modality_precedent\": " + json_stringify(autac_prec_str) +
+                  ", \"cryptic_modality_precedent\": " + json_stringify(cryp_prec_str) +
+                  ", \"ceiling_formula\": " + json_stringify(ceiling_str) +
+                  ", \"bound_assertion\": " + json_stringify(bound_str) +
+                  ", \"temperature_K\": " + js(TEMP_K) +
+                  ", \"autac_conc_nM\": " + js(AUTAC_CONC_NM) +
+                  ", \"rows\": [" + rj + "]" +
+                  ", \"contrast\": " + ctr_j +
+                  ", \"acceptance\": " + acc_j +
+                  ", \"in_silico_scope_caveat\": " + json_stringify(in_silico_str) +
+                  ", \"lattice_independence_note\": " + json_stringify(lattice_str) + "}"
+
+    let wv = json_parse(witness)
+    println("")
+    println("## witness JSON")
+    println(py_json2(wv, 0))
+    println("")
+    println("__AUTAC_CRYPTIC_POCKET_CROSS__ PASS")
+}

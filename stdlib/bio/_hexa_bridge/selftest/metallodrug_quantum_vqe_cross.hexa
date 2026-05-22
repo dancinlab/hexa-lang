@@ -1,0 +1,446 @@
+#!hexa strict
+// hexa-bio/_hexa_bridge/selftest/metallodrug_quantum_vqe_cross.hexa
+//
+// hexa-native port of `_python_bridge/module/metallodrug_quantum_vqe_cross.py`
+// (T3; importlib/json/math/os/sys — deterministic, no network/time/random).
+// CROSS-AXIS A1: METALLODRUG (ligand-field d-orbital splitting) -> QUANTUM
+// (VQE active-space pipeline). The .py importlib-loads
+// metallodrug_coordination_sim.py and reads GRIFFITH_ORGEL_1957 +
+// cfse_square_planar + cfse_octahedral verbatim — never re-implemented (f3).
+// There is NO separate VQE simulator imported; the QUANTUM-axis VQE step is
+// an honest DEFER described in metadata only (g7 skip-is-honest). For byte-
+// parity in hexa the consumed METALLODRUG pieces are INLINED here
+// (cfse_octahedral · cfse_square_planar · the analytic 2x2 (2e,2o) CI) so the
+// cross is self-contained and matches CPython op-order. Witness JSON via
+// compact-build → `json_parse` → `py_json2(wv, 0)` (json.dumps indent=2,
+// ensure_ascii=False) preserving the .py insertion order.
+//
+// HONESTY: PASS here = in-silico simulator-CONSISTENCY ONLY (g8/f2) — a model
+// (2e,2o) CI exhibits nonzero correlation energy and multireference character,
+// correctly identifying the active space the QUANTUM-axis VQE pipeline
+// consumes. NOT a binding/therapeutic/cytotoxic/antitumor/regulatory claim.
+// VQE was NOT run (honest DEFER). The METALLODRUG axis is UNPROVEN at the
+// wet-lab boundary.
+
+import "_hexa_bridge/module/py_json2.hexa"
+
+// ── helpers (paste-standard set) ───────────────────────────────────────
+fn fmt(spec: string, v: float) -> string {
+    let mut o = exec("printf '" + spec + "' " + json_stringify(v))
+    while len(o) > 0 {
+        let last = o.substr(len(o) - 1, 1)
+        if last == "\n" || last == "\r" { o = o.substr(0, len(o) - 1) } else { break }
+    }
+    return o
+}
+fn js(v: float) -> string { return json_stringify(v) }
+fn jsb(b: bool) -> string { if b { return "true" } return "false" }
+fn pyb(b: bool) -> string { if b { return "True" } return "False" }
+fn fabs(x: float) -> float { if x < 0.0 { return -x } return x }
+
+// ── module identity (parallel .py module-level) ────────────────────────
+let VERSION = "1.0.0"
+let CROSS = "METALLODRUG->QUANTUM"
+let AXIS_FROM = "METALLODRUG (expansion-main, NOT core-5)"
+let AXIS_TO = "QUANTUM (core-5)"
+
+// ── literature anchors ─────────────────────────────────────────────────
+let GRIFFITH_ORGEL_1957 = "Griffith & Orgel, Q Rev Chem Soc 1957;11:381-393"
+let ROOS_CASSCF_1980 = "Roos, Taylor & Siegbahn, Chem Phys 1980;48:157-173 (CASSCF)"
+let REIHER_PNAS_2017 = "Reiher, Wiebe, Svore, Wecker & Troyer, PNAS 2017;114:7555-7560 (quantum-computer reaction mechanisms)"
+
+// ── tolerances ─────────────────────────────────────────────────────────
+let TOL = 1.0e-12
+let TOL_DEGEN = 1.0e-9
+
+// ── inlined metallodrug.cfse_octahedral / cfse_square_planar ───────────
+//    octahedral occupancy: high-spin only needed here (low_spin=False).
+fn cfse_octahedral_hs(d_count: int) -> float {
+    // singles = min(d,5); pairs = max(0, d-5)
+    let singles = if d_count < 5 { d_count } else { 5 }
+    let pairs = if d_count - 5 > 0 { d_count - 5 } else { 0 }
+    let n_t2g = (if singles < 3 { singles } else { 3 }) + (if pairs < 3 { pairs } else { 3 })
+    let n_eg = (if singles - 3 > 0 { singles - 3 } else { 0 }) + (if pairs - 3 > 0 { pairs - 3 } else { 0 })
+    // CFSE_T2G_PER_ELECTRON=-0.4, CFSE_EG_PER_ELECTRON=0.6
+    return -0.4 * float(n_t2g) + 0.6 * float(n_eg)
+}
+fn cfse_square_planar(d_count: int) -> float {
+    // levels ascending: dxz/dyz(-0.514 x2), dz2(-0.428), dxy(0.228), dx2-y2(1.228)
+    let levels = [-0.514, -0.514, -0.428, 0.228, 1.228]
+    let mut energy = 0.0
+    let mut remaining = d_count
+    let mut i = 0
+    while i < len(levels) {
+        let take = if remaining < 2 { remaining } else { 2 }
+        energy = energy + float(take) * levels[i]
+        remaining = remaining - take
+        if remaining == 0 { break }
+        i = i + 1
+    }
+    return energy
+}
+
+// ── inlined two_by_two_ground_state — exact lower eigenpair of 2x2 ─────
+//    returns [e_ground, e_excited, gap, hf_weight, double_weight, c0, c1]
+fn two_by_two_ground_state(e_a: float, e_b: float, k: float) -> array {
+    let mean = 0.5 * (e_a + e_b)
+    let half = 0.5 * (e_b - e_a)
+    let rad = sqrt(half * half + k * k)
+    let e_minus = mean - rad
+    let e_plus = mean + rad
+    let mut c0 = 0.0
+    let mut c1 = 0.0
+    if fabs(k) > 0.0 {
+        c0 = 1.0
+        c1 = -(e_a - e_minus) / k
+    } else {
+        if e_a <= e_b {
+            c0 = 1.0
+            c1 = 0.0
+        } else {
+            c0 = 0.0
+            c1 = 1.0
+        }
+    }
+    // math.hypot(c0, c1) — for every value here equals sqrt(c0^2+c1^2)
+    let norm = sqrt(c0 * c0 + c1 * c1)
+    let c0n = c0 / norm
+    let c1n = c1 / norm
+    return [e_minus, e_plus, e_plus - e_minus, c0n * c0n, c1n * c1n, c0n, c1n]
+}
+
+// ── inlined metal_2e2o_ci — build + solve the (2e,2o) singlet CI ───────
+//    returns [orbital_gap, pairing_shift, coupling_k, e_a, e_b, e_hf,
+//             e_fci, e_corr, hf_weight, double_weight, ci_gap,
+//             is_multireference(1.0/0.0)]
+fn metal_2e2o_ci(orbital_gap_delta_oct: float, pairing_shift: float, coupling_k: float) -> array {
+    let e_a = 0.0
+    let e_b = 2.0 * orbital_gap_delta_oct + 2.0 * pairing_shift
+    let k = coupling_k
+    let sol = two_by_two_ground_state(e_a, e_b, k)
+    let e_hf = e_a
+    let e_fci = sol[0]
+    let e_corr = e_fci - e_hf
+    let mr = if sol[3] < 0.95 { 1.0 } else { 0.0 }
+    return [orbital_gap_delta_oct, pairing_shift, k, e_a, e_b, e_hf,
+            e_fci, e_corr, sol[3], sol[4], sol[2], mr]
+}
+
+fn main() {
+    // ── header (matches .py main lines 594-597) ────────────────────────
+    println("metallodrug_quantum_vqe_cross — CROSS-AXIS A1: " + CROSS + " v" + VERSION)
+    println("")
+    println("  from: " + AXIS_FROM)
+    println("  to  : " + AXIS_TO)
+    println("")
+
+    // ── metal_d_manifold_cases — 3 cross-axis cases ────────────────────
+    let k_model = 0.30
+    let cfse_d2_hs = cfse_octahedral_hs(2)        // METALLODRUG axis call
+    let sp_levels = [-0.514, -0.514, -0.428, 0.228, 1.228]
+    let sp_frontier_gap = sp_levels[4] - sp_levels[3]   // dx2-y2 - dxy = 1.000
+    let cfse_d8_sp = cfse_square_planar(8)        // METALLODRUG axis call
+
+    // case labels / contexts / gaps / expected-MR (parallel .py cases list)
+    let case_labels = ["octahedral_t2g_near_degenerate",
+                       "octahedral_t2g_weakly_split",
+                       "square_planar_d8_Pt_frontier"]
+    let case_contexts = ["octahedral d2 high-spin t2g pair (dxy~dxz)",
+                         "octahedral t2g pair under a small tetragonal distortion",
+                         "square-planar d8 Pt(II) dxy -> dx2-y2 (cisplatin-class)"]
+    let case_gaps = [0.0, 0.10, sp_frontier_gap]
+    let case_expect_mr = [true, true, false]
+    // ligand_field_source strings (with embedded :+.3f / :.3f formats)
+    let lfs0 = "octahedral t2g set is 3-fold degenerate by symmetry — Griffith&Orgel ligand-field theory; cfse_octahedral(2,HS)=" +
+               fmt("%+.3f", cfse_d2_hs) + " Delta_oct confirms a 2-electron t2g manifold"
+    let lfs1 = "a small Jahn-Teller/tetragonal lift of the t2g degeneracy — still near-degenerate"
+    let lfs2 = "METALLODRUG square-planar level set dx2-y2(" + fmt("%+.3f", sp_levels[4]) +
+               ") - dxy(" + fmt("%+.3f", sp_levels[3]) + ") = " + fmt("%.3f", sp_frontier_gap) +
+               " Delta_oct; cfse_square_planar(8)=" + fmt("%+.3f", cfse_d8_sp)
+    let case_lfs = [lfs0, lfs1, lfs2]
+
+    // per-case CI solve
+    let ci0 = metal_2e2o_ci(case_gaps[0], 0.0, k_model)
+    let ci1 = metal_2e2o_ci(case_gaps[1], 0.0, k_model)
+    let ci2 = metal_2e2o_ci(case_gaps[2], 0.0, k_model)
+    let cis = [ci0, ci1, ci2]
+
+    // ── degeneracy-limit exact check ───────────────────────────────────
+    let degen_near = metal_2e2o_ci(0.0, 0.0, 0.30)
+    let degen_e_corr = degen_near[7]
+    let degen_hf_weight = degen_near[8]
+    let expected_e_corr = -fabs(0.30)
+    let expected_hf_weight = 0.5
+    let degen_e_corr_dev = fabs(degen_e_corr - expected_e_corr)
+    let degen_hf_dev = fabs(degen_hf_weight - expected_hf_weight)
+    let degen_pass = degen_e_corr_dev < TOL_DEGEN && degen_hf_dev < TOL_DEGEN
+
+    // ── per-case verification (parallel .py run() case loop) ───────────
+    let mut closed_ok = [false, false, false]
+    let mut weights_ok = [false, false, false]
+    let mut ecorr_neg = [false, false, false]
+    let mut mr_match = [false, false, false]
+    let mut ci = 0
+    while ci < 3 {
+        let c = cis[ci]
+        let e_a = c[3]
+        let e_b = c[4]
+        let k = c[2]
+        let mean = 0.5 * (e_a + e_b)
+        let half = 0.5 * (e_b - e_a)
+        let e_fci_closed = mean - sqrt(half * half + k * k)
+        closed_ok[ci] = fabs(c[6] - e_fci_closed) < TOL
+        weights_ok[ci] = fabs(c[8] + c[9] - 1.0) < TOL
+        ecorr_neg[ci] = c[7] < -TOL
+        let is_mr = c[11] > 0.5
+        mr_match[ci] = is_mr == case_expect_mr[ci]
+        ci = ci + 1
+    }
+
+    // ── K=0 control ────────────────────────────────────────────────────
+    let k0 = metal_2e2o_ci(0.5, 0.0, 0.0)
+    let k0_e_corr_zero = fabs(k0[7]) < TOL
+
+    // ── cross conclusions ──────────────────────────────────────────────
+    let all_cases_correlated = cis[0][7] < -TOL && cis[1][7] < -TOL && cis[2][7] < -TOL
+    let degenerate_is_mr = cis[0][11] > 0.5
+
+    // ── F-CROSS falsifier set ──────────────────────────────────────────
+    let falsifier_keys = ["F-CROSS-1_e_corr_nonzero_for_metal_manifold",
+                          "F-CROSS-2_e_corr_exactly_zero_when_coupling_zero",
+                          "F-CROSS-3_degeneracy_limit_e_corr_equals_minus_abs_K",
+                          "F-CROSS-4_near_degenerate_case_is_multireference",
+                          "F-CROSS-5_every_case_ci_matches_closed_form"]
+    let all_closed = closed_ok[0] && closed_ok[1] && closed_ok[2]
+    let falsifier_vals = [all_cases_correlated, k0_e_corr_zero, degen_pass,
+                          degenerate_is_mr, all_closed]
+
+    // ── acceptance criteria C1..C8 ─────────────────────────────────────
+    let all_weights = weights_ok[0] && weights_ok[1] && weights_ok[2]
+    let all_mr = mr_match[0] && mr_match[1] && mr_match[2]
+    let crit_keys = ["C1_all_cases_ci_match_analytic_closed_form",
+                     "C2_all_cases_ci_weights_normalised",
+                     "C3_metal_manifold_has_nonzero_correlation_energy",
+                     "C4_correlation_vanishes_iff_coupling_zero",
+                     "C5_degeneracy_limit_matches_minus_abs_K",
+                     "C6_near_degenerate_manifold_is_multireference",
+                     "C7_multireference_flag_matches_expectation_all_cases",
+                     "C8_all_falsifiers_hold"]
+    let mut all_falsifiers = true
+    let mut fi = 0
+    while fi < 5 { if !falsifier_vals[fi] { all_falsifiers = false }; fi = fi + 1 }
+    let crit_vals = [all_closed, all_weights, all_cases_correlated, k0_e_corr_zero,
+                     degen_pass, degenerate_is_mr, all_mr, all_falsifiers]
+    let mut n_pass = 0
+    let mut pi = 0
+    while pi < 8 { if crit_vals[pi] { n_pass = n_pass + 1 }; pi = pi + 1 }
+    let verdict = if n_pass == 8 { "PASS" } else { "FAIL" }
+
+    let cross_claim = "A near-degenerate transition-metal d-orbital pair has E_corr = E_FCI - E_HF < 0 (exact 2x2 CI); a single-reference method cannot recover E_corr; therefore this (2e,2o) active space is exactly what the QUANTUM-axis VQE pipeline is built to treat."
+
+    // ── human panel (matches .py main lines 601-657) ───────────────────
+    println("  CROSS CLAIM:")
+    println("    " + cross_claim)
+    println("")
+
+    println("  (1) exact (2e,2o) singlet CI per metal d-orbital manifold")
+    println("      (energies in units of Delta_oct, ligand-field splitting quantum)")
+    println("      case                              | gap   |  E_HF  |  E_FCI  | E_corr  | HF wt | MR?")
+    let mut ri = 0
+    while ri < 3 {
+        let c = cis[ri]
+        let label = case_labels[ri]
+        // f"{label:<33s}"
+        let mut lpad = label
+        while len(lpad) < 33 { lpad = lpad + " " }
+        let mrtag = if c[11] > 0.5 { "YES" } else { "no" }
+        println("      " + lpad + " | " + fmt("%5.3f", case_gaps[ri]) + " | " +
+                fmt("%+6.3f", c[5]) + " | " + fmt("%+7.4f", c[6]) + " | " +
+                fmt("%+7.4f", c[7]) + " | " + fmt("%5.3f", c[8]) + " | " + mrtag)
+        ri = ri + 1
+    }
+    println("")
+    let mut si = 0
+    while si < 3 {
+        println("      [" + case_labels[si] + "]")
+        println("        ligand-field source: " + case_lfs[si])
+        si = si + 1
+    }
+    println("")
+
+    println("  (2) degeneracy limit (d-orbital gap -> 0):")
+    println("      E_corr -> " + fmt("%+.6f", degen_e_corr) + "  (exact -|K| = " +
+            fmt("%+.6f", expected_e_corr) + ", dev " + fmt("%.2e", degen_e_corr_dev) + ")")
+    println("      HF weight -> " + fmt("%.6f", degen_hf_weight) + "  (exact 1/2 = " +
+            fmt("%.6f", expected_hf_weight) + ", dev " + fmt("%.2e", degen_hf_dev) + ")")
+    println("      => maximally multireference: 50/50 two-determinant superposition")
+    println("")
+
+    println("  (3) K=0 control (no determinant coupling):")
+    println("      E_corr = " + fmt("%+.2e", k0[7]) + "  -> exactly zero: " +
+            pyb(k0_e_corr_zero) + "  (HF is exact when K=0)")
+    println("")
+
+    let vqe_tier = "hexa verify 🟠 DEFERRED — external substrate"
+    let vqe_reason = "the live qmirror / VQE-ladder dispatch on these active spaces is an external compute substrate; per AGENTS.tape g7 skip-is-honest it is an honest DEFER. The deterministic exact 2x2 CI core is the PASS. No VQE was executed and no quantum-advantage claim is made."
+    let vqe_handoff_obj = "the (2e,2o) singlet CI Hamiltonian {E_a,E_b,K} per case — see cases[].vqe_handoff"
+    println("  (4) QUANTUM-axis VQE dispatch:")
+    println("      status: DEFERRED   tier: " + vqe_tier)
+    println("      " + vqe_reason)
+    println("      hand-off object: " + vqe_handoff_obj)
+    println("")
+
+    println("  falsifiers:")
+    let mut xi = 0
+    while xi < 5 {
+        let tag = if falsifier_vals[xi] { "HOLD" } else { "FALSIFIED" }
+        println("    [" + tag + "] " + falsifier_keys[xi])
+        xi = xi + 1
+    }
+    println("")
+
+    println("  acceptance criteria:")
+    let mut yi = 0
+    while yi < 8 {
+        let tag = if crit_vals[yi] { "PASS" } else { "FAIL" }
+        println("    [" + tag + "] " + crit_keys[yi])
+        yi = yi + 1
+    }
+    println("")
+    println("  --- METALLODRUG->QUANTUM cross: " + str(n_pass) + "/8  ->  verdict: " + verdict + " ---")
+    println("")
+
+    let lattice_stance = "No n=6 lattice arithmetic is performed. The (2e,2o) active space is the minimal space that can host a double excitation; the metal modality is anchored to its OWN precedent (cisplatin-class square-planar d8 Pt(II), octahedral t2g/eg, Griffith&Orgel 1957 ligand-field theory). Any numerical coincidence with n=6 (sigma=12, tau=4, phi=2, J2=24) is OBSERVATION ONLY (HEXA-METALLODRUG.tape f_lattice_fit / n6_honest_stance, AGENTS.tape g2/g3/f1)."
+    let in_silico_scope = "PASS verifies IN-SILICO simulator+metadata consistency ONLY — that a model (2e,2o) CI exhibits nonzero correlation energy and multireference character, correctly identifying the active space the QUANTUM-axis VQE pipeline consumes. NOT a binding/therapeutic/cytotoxic/antitumor/regulatory claim. VQE was NOT run (honest DEFER). The METALLODRUG axis is UNPROVEN at the wet-lab boundary (AGENTS.tape g8_in_silico_only / f2; CLOSURE_RESIDUAL_BACKLOG.md section 0)."
+    println("  n=6 lattice stance: " + lattice_stance)
+    println("")
+    println("  IN-SILICO SCOPE (g8/f2): " + in_silico_scope)
+
+    // ── witness JSON: compact-build → json_parse → py_json2(wv, 0) ─────
+    // pipeline array (constant — same for all cases)
+    let pipeline_j = "[" +
+        json_stringify("pocket_active_space.build_active_space_hamiltonian (num_active_electrons=2, num_active_spatial_orbitals=2)") + ", " +
+        json_stringify("ParityMapper -> ~2-qubit Hamiltonian") + ", " +
+        json_stringify("quantum_vqe_h2-style hardware-efficient ansatz + Nelder-Mead") + ", " +
+        json_stringify("gate: |E_VQE - E_CASCI| < chemical accuracy on the SAME space") + "]"
+    let defer_reason = "live qmirror / VQE-ladder dispatch is an external compute substrate; per AGENTS.tape g7 skip-is-honest it is an honest DEFER, not a failure. The exact 2x2 CI is the in-repo verified deliverable."
+    let not_claimed = "VQE was NOT executed; no quantum-advantage claim is made."
+    let handoff_tier = "hexa verify 🟠 DEFERRED — external substrate (qmirror/VQE ladder)"
+
+    // build cases[] JSON
+    let mut cases_j = "["
+    let mut ji = 0
+    while ji < 3 {
+        let c = cis[ji]
+        if ji > 0 { cases_j = cases_j + ", " }
+        // vqe_handoff sub-object
+        let handoff_j = "{\"case\": " + json_stringify(case_labels[ji]) +
+            ", \"active_space\": " + json_stringify("(2e,2o) — 2 electrons, 2 spatial d-orbitals") +
+            ", \"ci_hamiltonian_2csf\": {\"E_a_phi0_hf\": " + js(c[3]) +
+            ", \"E_b_phi1_double\": " + js(c[4]) +
+            ", \"K_coupling\": " + js(c[2]) + "}" +
+            ", \"classical_reference_for_vqe\": {\"e_casci_fci_analytic\": " + js(c[6]) +
+            ", \"e_hf\": " + js(c[5]) + "}" +
+            ", \"quantum_axis_pipeline\": " + pipeline_j +
+            ", \"dispatch_status\": \"DEFERRED\"" +
+            ", \"dispatch_tier\": " + json_stringify(handoff_tier) +
+            ", \"defer_reason\": " + json_stringify(defer_reason) +
+            ", \"not_claimed\": " + json_stringify(not_claimed) + "}"
+        let is_mr = c[11] > 0.5
+        let row_j = "{\"label\": " + json_stringify(case_labels[ji]) +
+            ", \"metal_context\": " + json_stringify(case_contexts[ji]) +
+            ", \"ligand_field_source\": " + json_stringify(case_lfs[ji]) +
+            ", \"orbital_gap_delta_oct\": " + js(case_gaps[ji]) +
+            ", \"coupling_k\": " + js(k_model) +
+            ", \"e_hf\": " + js(c[5]) +
+            ", \"e_fci\": " + js(c[6]) +
+            ", \"e_corr\": " + js(c[7]) +
+            ", \"hf_weight_in_fci\": " + js(c[8]) +
+            ", \"double_weight_in_fci\": " + js(c[9]) +
+            ", \"is_multireference\": " + jsb(is_mr) +
+            ", \"expected_strongly_multireference\": " + jsb(case_expect_mr[ji]) +
+            ", \"checks\": {\"ci_matches_closed_form\": " + jsb(closed_ok[ji]) +
+            ", \"ci_weights_sum_to_one\": " + jsb(weights_ok[ji]) +
+            ", \"e_corr_strictly_negative\": " + jsb(ecorr_neg[ji]) +
+            ", \"mr_flag_matches_expectation\": " + jsb(mr_match[ji]) + "}" +
+            ", \"vqe_handoff\": " + handoff_j + "}"
+        cases_j = cases_j + row_j
+        ji = ji + 1
+    }
+    cases_j = cases_j + "]"
+
+    let real_lim_anchors_j = "{\"exact_2x2_ci_eigenvalue\": " +
+        json_stringify("E_FCI is the analytic lower eigenvalue of the (2e,2o) singlet 2x2 CI block — exact closed-form linear algebra") +
+        ", \"ligand_field_splitting_citation\": " + json_stringify(GRIFFITH_ORGEL_1957) +
+        ", \"multireference_casscf_citation\": " + json_stringify(ROOS_CASSCF_1980) +
+        ", \"quantum_vqe_metal_motivation_citation\": " + json_stringify(REIHER_PNAS_2017) + "}"
+
+    let degen_j = "{\"coupling_k\": " + js(0.30) +
+        ", \"e_corr_at_degeneracy\": " + js(degen_e_corr) +
+        ", \"expected_e_corr\": " + js(expected_e_corr) +
+        ", \"e_corr_deviation\": " + js(degen_e_corr_dev) +
+        ", \"hf_weight_at_degeneracy\": " + js(degen_hf_weight) +
+        ", \"expected_hf_weight\": " + js(expected_hf_weight) +
+        ", \"hf_weight_deviation\": " + js(degen_hf_dev) +
+        ", \"pass\": " + jsb(degen_pass) + "}"
+
+    let k0_ctrl_j = "{\"orbital_gap_delta_oct\": " + js(0.5) +
+        ", \"coupling_k\": " + js(0.0) +
+        ", \"e_corr\": " + js(k0[7]) +
+        ", \"e_corr_is_exactly_zero\": " + jsb(k0_e_corr_zero) +
+        ", \"interpretation\": " +
+        json_stringify("with K=0 the two determinants do not mix, HF IS exact, E_corr=0 — this control proves the nonzero E_corr in the metal cases is a real determinant-mixing effect, not an artefact") + "}"
+
+    let vqe_dispatch_j = "{\"status\": \"DEFERRED\"" +
+        ", \"tier\": " + json_stringify(vqe_tier) +
+        ", \"reason\": " + json_stringify(vqe_reason) +
+        ", \"handoff_object\": " + json_stringify(vqe_handoff_obj) + "}"
+
+    let falsifiers_j = "{\"F-CROSS-1_e_corr_nonzero_for_metal_manifold\": " + jsb(falsifier_vals[0]) +
+        ", \"F-CROSS-2_e_corr_exactly_zero_when_coupling_zero\": " + jsb(falsifier_vals[1]) +
+        ", \"F-CROSS-3_degeneracy_limit_e_corr_equals_minus_abs_K\": " + jsb(falsifier_vals[2]) +
+        ", \"F-CROSS-4_near_degenerate_case_is_multireference\": " + jsb(falsifier_vals[3]) +
+        ", \"F-CROSS-5_every_case_ci_matches_closed_form\": " + jsb(falsifier_vals[4]) + "}"
+
+    let crit_j = "{\"C1_all_cases_ci_match_analytic_closed_form\": " + jsb(crit_vals[0]) +
+        ", \"C2_all_cases_ci_weights_normalised\": " + jsb(crit_vals[1]) +
+        ", \"C3_metal_manifold_has_nonzero_correlation_energy\": " + jsb(crit_vals[2]) +
+        ", \"C4_correlation_vanishes_iff_coupling_zero\": " + jsb(crit_vals[3]) +
+        ", \"C5_degeneracy_limit_matches_minus_abs_K\": " + jsb(crit_vals[4]) +
+        ", \"C6_near_degenerate_manifold_is_multireference\": " + jsb(crit_vals[5]) +
+        ", \"C7_multireference_flag_matches_expectation_all_cases\": " + jsb(crit_vals[6]) +
+        ", \"C8_all_falsifiers_hold\": " + jsb(crit_vals[7]) + "}"
+
+    let witness = "{\"schema\": \"metallodrug_quantum_vqe_cross_v1\"" +
+        ", \"ts\": \"2026-05-16T00:00:00Z\"" +
+        ", \"cross\": " + json_stringify(CROSS) +
+        ", \"axis_from\": " + json_stringify(AXIS_FROM) +
+        ", \"axis_to\": " + json_stringify(AXIS_TO) +
+        ", \"version\": " + json_stringify(VERSION) +
+        ", \"real_limit_anchors\": " + real_lim_anchors_j +
+        ", \"cross_claim\": " + json_stringify(cross_claim) +
+        ", \"cases\": " + cases_j +
+        ", \"degeneracy_limit_check\": " + degen_j +
+        ", \"coupling_zero_control\": " + k0_ctrl_j +
+        ", \"vqe_dispatch\": " + vqe_dispatch_j +
+        ", \"falsifiers\": " + falsifiers_j +
+        ", \"acceptance_criteria\": " + crit_j +
+        ", \"pass_count\": " + str(n_pass) +
+        ", \"total_criteria\": 8" +
+        ", \"verdict\": " + json_stringify(verdict) +
+        ", \"lattice_stance\": " + json_stringify(lattice_stance) +
+        ", \"in_silico_scope\": " + json_stringify(in_silico_scope) + "}"
+
+    let wv = json_parse(witness)
+    println("")
+    println("## witness JSON")
+    println(py_json2(wv, 0))
+
+    println("")
+    if verdict == "PASS" {
+        println("__METALLODRUG_QUANTUM_VQE_CROSS__ PASS")
+    } else {
+        println("__METALLODRUG_QUANTUM_VQE_CROSS__ FAIL")
+        exit(1)
+    }
+}
