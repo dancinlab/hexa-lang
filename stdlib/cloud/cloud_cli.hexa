@@ -2,30 +2,67 @@
 //
 // Run directly:  hexa run stdlib/cloud/cloud_cli.hexa <subcommand> ...
 //
-// Cycle A ships this as a standalone CLI only; wiring a `hexa cloud`
-// subcommand into self/main.hexa (which needs a compiled bin/hexa-cloud)
-// is a later deploy-adjacent step — see design.md Decision 5.
+// Cycle A ships this as a standalone CLI; cycle C adds `preflight` for
+// fire-time $0 refusal (F-PREFLIGHT-MEM). Wiring a `hexa cloud`
+// subcommand into self/main.hexa is a later deploy-adjacent step —
+// see design.md Decision 5.
 
 use "stdlib/cloud/cloud"
+use "stdlib/cloud/cloud_budget"
+use "stdlib/cloud/cloud_job"
 
 fn _cloud_help() {
-    println("hexa cloud — structured-argv remote dispatch (cycle A)")
+    println("hexa cloud — structured-argv remote dispatch + cycle C preflight")
     println("")
-    println("usage:")
+    println("usage (cycle A — transport):")
     println("  cloud run       <host> [conn] -- <argv...>             run argv, wait, exit with its code")
     println("  cloud nohup     <host> <logfile> [conn] -- <argv...>   background argv, print remote pid")
     println("  cloud poll      <host> <pid> [conn]                    exit 0 if remote pid alive, else 1")
+    println("")
+    println("usage (cycle B-1 — file transfer):")
     println("  cloud copy-to   <host> <local> <remote> [conn]         upload local file to host:remote (scp)")
     println("  cloud copy-from <host> <remote> <local> [conn]         download host:remote file to local (scp)")
-    println("  cloud help | version")
+    println("")
+    println("usage (cycle C — preflight $0 gates):")
+    println("  cloud preflight [spec-flags]                           run mem-budget + capability + cli-quirk + secret gates")
+    println("                                                         exit 0 = green, exit 2 = refused (BudgetExceededError, etc.)")
+    println("")
+    println("  cloud help | --help | -h")
+    println("  cloud version | --version | -v")
     println("")
     println("connection flags [conn] (before `--`):")
-    println("  --port <n>   ssh to a non-22 port (RunPod / vast.ai)")
-    println("  --insecure   accept a changing/unknown host key (ephemeral pods)")
+    println("  --port <n>     ssh to a non-22 port (RunPod / vast.ai)")
+    println("  --strict       enforce host-key checking (default OFF — cloud pods")
+    println("                 are ephemeral; insecure host-key policy is the default)")
+    println("  --insecure     (deprecated no-op — insecure is now the default)")
+    println("")
+    println("preflight spec flags:")
+    println("  --n-params-m <int>          parameter count in millions (8.92B → 8920)")
+    println("  --param-bytes <int>         bytes/param  · 2=bf16/fp16  4=fp32")
+    println("  --grad-bytes <int>          bytes/grad   · usually == param-bytes")
+    println("  --optimizer <kind>          SGD · SGDMomentum · AdamW · AdamW-AMP-fp16")
+    println("                              AdamW8bit · PagedAdamW8bit · Lion")
+    println("                              ZeRO-2-AdamW · ZeRO-3-AdamW")
+    println("  --n-gpu <int>               for ZeRO sharding (default 1)")
+    println("  --bsz <int>                 batch size")
+    println("  --seq-len <int>             sequence length")
+    println("  --n-layer <int>             transformer layers")
+    println("  --d-model <int>             hidden dim")
+    println("  --n-head <int>              attention heads")
+    println("  --n-kv-head <int>           KV heads (GQA; equal to n-head = MHA)")
+    println("  --grad-checkpoint <0|1>     activation recompute")
+    println("  --gpu <kind>                human label, e.g. H100-80GB-HBM3")
+    println("  --gpu-mem-mb <int>          total GPU memory in MB (80 GB → 81920)")
+    println("  --reserved-mb <int>         CUDA ctx + driver overhead (default 4096)")
+    println("  --backend <RunPod|Vast|SSH|RunPod_CPU>   provider")
+    println("  --min-vcpu <int>            capability gate (RunPod CPU max=8)")
+    println("  --secret-key <name>         secret-store key to validate (optional)")
     println("")
     println("every argv element after `--` is POSIX-quoted before ssh — no remote")
     println("shell parsing, no glob expansion, no /* */ comment mis-parse.")
     println("`host` is an ssh destination or ~/.ssh/config alias.")
+    println("")
+    println("see CLOUD.md (repo root) for the cycle ledger + F-gate roadmap.")
 }
 
 // _cli_atoi — parse a non-negative decimal string; non-digits ignored.
@@ -44,19 +81,27 @@ fn _cli_atoi(s: str) -> int {
 }
 
 // _ssh_opts_cli — scan av[start..] (up to a "--" separator) for the
-// connection flags --port <n> and --insecure, and build the ssh_opts list.
+// connection flags --port <n> and --strict, and build the ssh_opts list.
+//
+// host-key policy (2026-05-23): `hexa cloud` targets ephemeral cloud pods
+// (RunPod / vast.ai) whose host keys are fresh per pod. StrictHostKeyChecking
+// would block EVERY first connection — the normal case for a cloud-dispatch
+// tool. So insecure (StrictHostKeyChecking=no) is the DEFAULT; `--strict`
+// is opt-in for the rare persistent-host case. `--insecure` accepted as a
+// no-op alias for backward compatibility.
 fn _ssh_opts_cli(av: [str], start: int) -> [str] {
     let mut opts = []
+    let mut strict = false
     let mut i = start
     while i < len(av) {
         let t = av[i]
         if t == "--" {
             i = len(av)
+        } else if t == "--strict" {
+            strict = true
+            i = i + 1
         } else if t == "--insecure" {
-            opts.push("-o")
-            opts.push("StrictHostKeyChecking=no")
-            opts.push("-o")
-            opts.push("UserKnownHostsFile=/dev/null")
+            // backward-compat no-op: insecure is already the default
             i = i + 1
         } else if t == "--port" {
             if i + 1 < len(av) {
@@ -69,6 +114,13 @@ fn _ssh_opts_cli(av: [str], start: int) -> [str] {
         } else {
             i = i + 1
         }
+    }
+    // default = insecure (ephemeral cloud pod); --strict opts back into checking
+    if !strict {
+        opts.push("-o")
+        opts.push("StrictHostKeyChecking=no")
+        opts.push("-o")
+        opts.push("UserKnownHostsFile=/dev/null")
     }
     return opts
 }
@@ -99,6 +151,79 @@ fn _collect_after(av: [str], start: int) -> [str] {
     return out
 }
 
+// ── preflight verb helpers ───────────────────────────────────────────
+
+// _flag_str — pull `--name <v>` from av; returns "" if absent.
+fn _flag_str(av: [str], name: str) -> str {
+    let mut i = 0
+    while i + 1 < len(av) {
+        if av[i] == name { return av[i + 1] }
+        i = i + 1
+    }
+    return ""
+}
+
+// _flag_int — _flag_str + atoi; returns `dflt` if absent.
+fn _flag_int(av: [str], name: str, dflt: int) -> int {
+    let s = _flag_str(av, name)
+    if len(s) == 0 { return dflt }
+    return _cli_atoi(s)
+}
+
+fn _cmd_preflight(av: [str]) -> int {
+    let model = ModelSpec {
+        n_params_m:  _flag_int(av, "--n-params-m", 1000),
+        param_bytes: _flag_int(av, "--param-bytes", 2),
+        grad_bytes:  _flag_int(av, "--grad-bytes", 2)
+    }
+    let mut opt_kind = _flag_str(av, "--optimizer")
+    if len(opt_kind) == 0 { opt_kind = "AdamW" }
+    let opt = OptimizerSpec {
+        kind:  opt_kind,
+        n_gpu: _flag_int(av, "--n-gpu", 1)
+    }
+    let batch = BatchSpec {
+        bsz:             _flag_int(av, "--bsz", 1),
+        seq_len:         _flag_int(av, "--seq-len", 128),
+        n_layer:         _flag_int(av, "--n-layer", 12),
+        d_model:         _flag_int(av, "--d-model", 768),
+        n_head:          _flag_int(av, "--n-head", 12),
+        n_kv_head:       _flag_int(av, "--n-kv-head", 12),
+        grad_checkpoint: _flag_int(av, "--grad-checkpoint", 0)
+    }
+    let mut gpu_kind = _flag_str(av, "--gpu")
+    if len(gpu_kind) == 0 { gpu_kind = "H100-80GB" }
+    let gpu = GpuSpec {
+        kind:              gpu_kind,
+        mem_mb:            _flag_int(av, "--gpu-mem-mb", 81920),
+        reserved_overhead: _flag_int(av, "--reserved-mb", 4096)
+    }
+    let mut backend = _flag_str(av, "--backend")
+    if len(backend) == 0 { backend = "RunPod" }
+    let secret_key = _flag_str(av, "--secret-key")
+    let job = CloudJob {
+        model:        model,
+        optimizer:    opt,
+        batch:        batch,
+        gpu:          gpu,
+        env_keys:     [],
+        env_vals:     [],
+        argv:         [],
+        backend:      backend,
+        min_vcpu:     _flag_int(av, "--min-vcpu", 1),
+        secret_key:   secret_key,
+        deadline_sec: _flag_int(av, "--deadline-sec", 7200),
+        budget_usd:   _flag_int(av, "--budget-cents", 500)
+    }
+    println("[cloud] preflight — model=" + to_string(model.n_params_m) + "M·"
+            + to_string(model.param_bytes) + "B  opt=" + opt_kind
+            + "  gpu=" + gpu_kind + "(" + to_string(gpu.mem_mb / 1024) + "GB)")
+    let v = dispatch_validate(job)
+    print_validation(v)
+    if v.ok == 1 { return 0 }
+    return 2
+}
+
 fn main() {
     let av = args()
     let mut si = -1
@@ -107,7 +232,11 @@ fn main() {
     while i < len(av) {
         let t = av[i]
         if si < 0 {
-            if t == "run" || t == "nohup" || t == "poll" || t == "copy-to" || t == "copy-from" || t == "help" || t == "--help" || t == "-h" || t == "version" || t == "--version" || t == "-v" {
+            if t == "run" || t == "nohup" || t == "poll"
+                || t == "copy-to" || t == "copy-from"
+                || t == "preflight"
+                || t == "help" || t == "--help" || t == "-h"
+                || t == "version" || t == "--version" || t == "-v" {
                 si = i
                 sub = t
             }
@@ -123,8 +252,11 @@ fn main() {
         return
     }
     if sub == "version" || sub == "--version" || sub == "-v" {
-        println("hexa cloud 0.1.0 — cycle A (structured-argv remote dispatch)")
+        println("hexa cloud 0.2.0 — cycle A + B-1 + B-2 + C(preflight)")
         return
+    }
+    if sub == "preflight" {
+        exit(_cmd_preflight(av))
     }
     if sub == "run" {
         if si + 1 >= len(av) {
