@@ -5470,6 +5470,14 @@ static HexaVal _hexa_to_string_rec(HexaVal v, int depth) {
         case TAG_ARRAY: {
             if (depth >= 8) return hexa_str("[...]");
             if (!v.arr_ptr) return hexa_str("[<null>]");
+#ifdef HEXA_HAS_HEXA_RT_STDLIB
+            // Step 5 #3 cycle C2-retry — array container render ports to
+            // hexa source. NULL-ptr + depth guards stay C; rt_to_string_array
+            // owns the element loop / cap / overflow-trailer; nested
+            // arrays/maps recurse in hexa, scalars dispatch to hexa_to_string.
+            extern HexaVal rt_to_string_array(HexaVal arr, HexaVal depth);
+            return rt_to_string_array(v, hexa_int(depth));
+#else
             int n = HX_ARR_LEN(v);
             int cap = 64;  // element-dump cap
             HexaVal out = hexa_str("[");
@@ -5485,11 +5493,19 @@ static HexaVal _hexa_to_string_rec(HexaVal v, int depth) {
             }
             out = hexa_str_concat(out, hexa_str("]"));
             return out;
+#endif
         }
         case TAG_MAP: {
             if (depth >= 8) return hexa_str("{...}");
             HexaMapTable* t = HX_MAP_TBL(v);
             if (!t) return hexa_str("{}");
+#ifdef HEXA_HAS_HEXA_RT_STDLIB
+            // Step 5 #3 cycle C2-retry — map container render ports to hexa
+            // source. NULL-tbl + depth guards stay C; rt_to_string_map owns
+            // the key/value loop.
+            extern HexaVal rt_to_string_map(HexaVal m, HexaVal depth);
+            return rt_to_string_map(v, hexa_int(depth));
+#else
             int n = t->len;
             int cap = 64;
             HexaVal out = hexa_str("{");
@@ -5509,6 +5525,7 @@ static HexaVal _hexa_to_string_rec(HexaVal v, int depth) {
             }
             out = hexa_str_concat(out, hexa_str("}"));
             return out;
+#endif
         }
         default: return _cached_str_value;
     }
