@@ -46,7 +46,7 @@ B3="build/artifacts/${STEM}_b3.c"
 
 mkdir -p build/artifacts
 
-INTERP=$(find /Users/ghost/.hx/packages/hexa/build -name "hexa_interp.real" 2>/dev/null | head -1)
+INTERP=$(tool/find_local_hexa.sh 2>/dev/null || true)
 # Select the EXACT canonical transpiler — never a `hexa_v2*` glob.
 # `find -name "hexa_v2*" | head -1` returns directory order and can pick
 # self/native/hexa_v2_baseline (an Apr-15 stale binary that strips
@@ -58,7 +58,7 @@ else
 fi
 
 if [ -z "$INTERP" ] || [ -z "$V2" ]; then
-    echo "FATAL: cannot locate interp or hexa_v2"
+    echo "FATAL: cannot locate a hexa driver or hexa_v2"
     exit 2
 fi
 
@@ -68,7 +68,7 @@ echo "  out    : $OUT"
 echo ""
 
 echo "[1/4] module_loader flatten → $EXP"
-"$INTERP" self/module_loader.hexa "$SRC" "$EXP" 2>&1 | tail -1
+"$INTERP" run self/module_loader.hexa "$SRC" "$EXP" 2>&1 | tail -1
 
 echo "[2/4] IPCP rewrite → $IPCP"
 ./hexa run tool/flame_phase4b_ipcp.hexa "$EXP" "$IPCP" 2>&1 | grep -E "PASS|FAIL|substitutions|total" | head -10

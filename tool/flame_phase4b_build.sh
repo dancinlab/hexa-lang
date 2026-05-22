@@ -45,9 +45,9 @@ CFILE="build/artifacts/${STEM}_ipcp.c"
 
 mkdir -p build/artifacts
 
-INTERP=$(find /Users/ghost/.hx/packages/hexa/build -name "hexa_interp.real" 2>/dev/null | head -1)
+INTERP=$(tool/find_local_hexa.sh 2>/dev/null || true)
 if [ -z "$INTERP" ]; then
-    echo "FATAL: cannot locate hexa_interp.real"
+    echo "FATAL: cannot locate a local hexa driver (tool/find_local_hexa.sh)"
     exit 2
 fi
 
@@ -74,7 +74,7 @@ echo "  out    : $OUT"
 echo ""
 
 echo "[1/4] module_loader flatten → $EXP"
-"$INTERP" self/module_loader.hexa "$SRC" "$EXP" 2>&1 | tail -1
+"$INTERP" run self/module_loader.hexa "$SRC" "$EXP" 2>&1 | tail -1
 
 echo "[2/4] IPCP rewrite → $IPCP"
 ./hexa run tool/flame_phase4b_ipcp.hexa "$EXP" "$IPCP" 2>&1 | grep -E "PASS|FAIL|substitutions|total" | head -10

@@ -138,12 +138,10 @@ let BUILD_ORCH_PREFIXES: [string] = [
 let BUILD_ORCH_EXACT: [string] = [
     "install.sh",
     "tool/extract_runtime_hi.sh",
-    "tool/parser_ssot_lint.sh",
     "tool/find_local_hexa.sh",
     "tool/s4_flatc_post.py",
     "tool/hexa_daemon_serve.c",
     "test/hexa_annot_smoke.sh",
-    "test/t_parser_ssot_lint.sh",
 ]
 
 fn _has_prefix(s: string, p: string) -> bool {
