@@ -39,8 +39,14 @@ if [ -f "$msg_file" ]; then
   body=$(grep -v '^#' "$msg_file" || true)
 fi
 
-# Allow if subject mentions any expected scope keyword
-if echo "$subject" | grep -qiE 'runtime|stdlib|codegen|rt_|RUNTIME|restore|re-land|recover'; then
+# Allow if the conventional-commit PREFIX (text before the first ':')
+# declares a runtime/codegen scope. Anchoring to the prefix closes the
+# e8c2dc1c blind spot: `wip: ...compiler/stdlib follow-on` mentions
+# "stdlib" only in free-text (after the colon), NOT a scope declaration.
+# Real cycles use `feat(stdlib/runtime):` / `fix(runtime/codegen):` /
+# `restore(...):` / `docs(RUNTIME):` where the keyword is in the prefix.
+prefix="${subject%%:*}"
+if echo "$prefix" | grep -qiE 'runtime|stdlib|codegen|rt_|restore|re-land|recover'; then
   exit 0
 fi
 
