@@ -1,0 +1,38 @@
+host.c: In function ‘main’:
+host.c:134:5: warning: ignoring return value of ‘fread’ declared with attribute ‘warn_unused_result’ [-Wunused-result]
+  134 |     fread(ptx, 1, (size_t)sz, f);
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~~~
+[build] host OK
+=== STAGES=2 PTX=sgemm_tma_multistage_s2.ptx ===
+ptxas info    : 0 bytes gmem
+ptxas info    : Compiling entry function 'sgemm_tma_multistage' for 'sm_120a'
+ptxas info    : Function properties for sgemm_tma_multistage
+    8 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 32 registers, used 1 barriers, 8 bytes cumulative stack size, 8208 bytes smem
+ptxas info    : Compile time = 22.547 ms
+Device: NVIDIA GeForce RTX 5070 sm_120  stages=2
+{
+  "sm": "sm_120",
+  "stages": 2,
+  "final_slot": 1,
+  "mismatch": 0,
+  "total_cells": 256,
+  "verdict": "TMA_MULTISTAGE_SMOKE_PASS"
+}
+=== STAGES=3 PTX=sgemm_tma_multistage_s3.ptx ===
+ptxas info    : 0 bytes gmem
+ptxas info    : Compiling entry function 'sgemm_tma_multistage' for 'sm_120a'
+ptxas info    : Function properties for sgemm_tma_multistage
+    8 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 33 registers, used 1 barriers, 8 bytes cumulative stack size, 12312 bytes smem
+ptxas info    : Compile time = 22.815 ms
+Device: NVIDIA GeForce RTX 5070 sm_120  stages=3
+{
+  "sm": "sm_120",
+  "stages": 3,
+  "final_slot": 0,
+  "mismatch": 0,
+  "total_cells": 256,
+  "verdict": "TMA_MULTISTAGE_SMOKE_PASS"
+}
+[measure] done
