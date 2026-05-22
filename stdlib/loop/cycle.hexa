@@ -27,6 +27,7 @@ use "compiler/atlas/by_kind/l.gen"
 use "compiler/atlas/parser"
 use "compiler/atlas/hxc_loader"
 use "stdlib/loop/state"
+use "stdlib/loop/dfs"
 use "stdlib/io"
 
 let VERSION = "0.1.0"
@@ -117,12 +118,15 @@ fn cycle_scan() {
     println("  [1/8 SCAN]    corpus snapshot (B-2.1: hash atlas + recent commits)")
 }
 
-fn cycle_lens() -> array {
-    // B-3.3 + RFC 066 B-3 (partial): AtlasView populated with P + L kinds.
-    // RFC 067 inline atlas_enrich wire: run each P node through enrich_node
-    // (compiler/atlas/parser) so its EdgeInfo (depends_on/derives/etc.) is
-    // filled from raw — unblocks unfold.cite_chain tier-3 + falsify_self
-    // .cite_unreachable tier-3 (was stuck at tier-2 with default-empty rodata).
+// B-3.3 + RFC 066 B-3 (partial): AtlasView populated with P + L kinds.
+// RFC 067 inline atlas_enrich wire: run each P node through enrich_node
+// (compiler/atlas/parser) so its EdgeInfo (depends_on/derives/etc.) is
+// filled from raw — unblocks unfold.cite_chain tier-3 + falsify_self
+// .cite_unreachable tier-3 (was stuck at tier-2 with default-empty rodata).
+//
+// Extracted (RFC 080) so the DFS+LLM stage can reuse the same view that
+// drives the lens stage — built once per cycle, passed to both.
+fn build_atlas_view() -> AtlasView {
     let n_p = len(ATLAS_P_NODES)
     let mut enriched_p: array = []
     let mut ep_i = 0
@@ -143,7 +147,7 @@ fn cycle_lens() -> array {
             ai = ai + 1
         }
     }
-    let view = AtlasView {
+    return AtlasView {
         p_nodes: enriched_p,
         c_nodes: c_nodes_loaded,
         l_nodes: ATLAS_L_NODES,
@@ -151,6 +155,9 @@ fn cycle_lens() -> array {
         r_nodes: [], s_nodes: [], x_nodes: [], q_nodes: [],
         atlas_hash: "", atlas_generated_at: ""
     }
+}
+
+fn cycle_lens(view: AtlasView) -> array {
     let n = len(LENS_NODES)
     let mut all_cands: array = []
     let mut i = 0
@@ -300,17 +307,54 @@ fn cycle_exhaust(cands: array, cycle_no: int) -> bool {
     return exhausted
 }
 
-fn run_one_cycle(no_fire: bool, dry_run: bool) {
+// RFC 080 — parsed DFS+LLM configuration, threaded from main into the cycle.
+struct DfsConfig {
+    enabled: bool,
+    cmd: string,
+    depth: int,
+    beam: int,
+    max_calls: int,
+    max_usd: float,
+    max_secs: int,
+    allow_llm: bool,
+    families: string,
+    no_cache: bool
+}
+
+// RFC 080 DFS+LLM stage — runs between DRAFT and AUDIT when --dfs is set.
+// Treats the surviving lens candidates as DFS seeds and asks the pluggable
+// LLM to descend one or more levels deeper (TECS-L dfs_engine port). Emits
+// verified children to inbox/atlas_candidates/dfs_<parent>/ (PR-only).
+fn cycle_dfs(seeds: array, view: AtlasView, cycle_no: int, cfg: DfsConfig) {
+    if cfg.enabled == false { return }
+    if len(cfg.cmd) == 0 {
+        println("  [dfs]  --dfs set but no --llm-cmd / $HEXA_LLM_CMD — skipping (set a command to expand)")
+        return
+    }
+    println("  [dfs]  seeds=" + to_string(len(seeds))
+          + " depth=" + to_string(cfg.depth)
+          + " beam=" + to_string(cfg.beam)
+          + " allow_llm=" + _bool_str(cfg.allow_llm))
+    let emitted = dfs_run(seeds, view, cycle_no,
+                          cfg.cmd, cfg.depth, cfg.beam,
+                          cfg.max_calls, cfg.max_usd, cfg.max_secs,
+                          cfg.allow_llm, cfg.families, cfg.no_cache)
+    println("  [dfs]  children emitted=" + to_string(emitted))
+}
+
+fn run_one_cycle(no_fire: bool, dry_run: bool, dfs: DfsConfig) {
     loop_state_init()
     let cycle_no = loop_state_cycle_read() + 1
     loop_state_cycle_write(cycle_no)
-    println("[loop] cycle " + to_string(cycle_no) + " (Phase C-2 + C-4 — atlas view + state I/O wired)")
+    println("[loop] cycle " + to_string(cycle_no) + " (Phase C-4 + RFC 080 DFS)")
     cycle_scan()
-    let cands = cycle_lens()
+    let view = build_atlas_view()
+    let cands = cycle_lens(view)
     let survive = cycle_dedup(cands, cycle_no)
     cycle_gate(survive)
     cycle_fire(survive, no_fire == false)
     cycle_draft(survive, dry_run)
+    cycle_dfs(survive, view, cycle_no, dfs)
     cycle_audit(survive, cycle_no)
     let _ = cycle_exhaust(survive, cycle_no)
 }
@@ -444,8 +488,23 @@ fn main() {
         println("  [dfs]  budget=" + budget_shown
               + " calls=" + calls_shown
               + " time=" + time_shown)
-        println("  [dfs]  Phase A scaffold — flag parse only; no LLM call yet.")
+    }
+
+    // RFC 080 — assemble the DFS config (string flags -> typed) and thread it
+    // into the cycle. Empty numeric flags parse to 0 = "no cap" (budget guard
+    // treats 0 as disabled). Real LLM exec stays gated behind --allow-llm.
+    let dfs_cfg = DfsConfig {
+        enabled: dfs_enabled,
+        cmd: llm_cmd,
+        depth: to_int(depth_str),
+        beam: to_int(beam_str),
+        max_calls: to_int(llm_calls),
+        max_usd: to_float(llm_budget),
+        max_secs: to_int(llm_time),
+        allow_llm: allow_llm,
+        families: llm_families,
+        no_cache: no_cache
     }
     println("")
-    run_one_cycle(no_fire, dry_run)
+    run_one_cycle(no_fire, dry_run, dfs_cfg)
 }
