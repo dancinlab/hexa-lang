@@ -1,0 +1,486 @@
+// RFC 067 PPSH hexa-emit -- Persistent CTA (P=48) + Split-K (G=4) + Hilbert visitation. M=N=K=6144.
+//
+//   Grid    = (192,1,1)  -- P*G CTAs, 1 per (k_group, cta_in_g).
+//   k_group  = ctaid.x / P  in [0, G); cta_in_g = ctaid.x % P in [0, P).
+//   Each CTA walks a contiguous Hilbert range of 342 tiles
+//   (skipping padding sw_x>=96 || sw_y>=96). Inner K-loop = 96 steps.
+//   Output: atom.global.add.f32 (split-K reduction).
+//
+// Layout (per shape M=N=K=6144):
+//   p = 128  (= next_pow2(side 96))  -- Hilbert log2p = 7 rounds
+//   total real tiles = 9216; tiles_per_cta = 342 (last CTA may run fewer)
+//   k_per_group = 1536 K-elements; K_TILES_PER_GROUP = 96 mma steps
+
+.version 8.0
+.target sm_90
+.address_size 64
+
+.shared .align 16 .b8 _tg_a[4096];
+.shared .align 16 .b8 _tg_b[4096];
+
+.visible .entry sgemm_ppsh_6144x6144_grid (
+    .param .u64 a,
+    .param .u64 b,
+    .param .u64 c,
+    .param .u64 k_tiles_per_group
+)
+{
+    .reg .u64 %rd<32>;
+    .reg .u32 %r<200>;
+    .reg .pred %p1;
+    .reg .pred %pmore;
+    .reg .pred %ptile_done;
+    .reg .pred %prx0;
+    .reg .pred %prx1;
+    .reg .pred %prxr;
+    .reg .pred %phlbx;
+    .reg .pred %phlby;
+    .reg .pred %phlb_oob;
+    .reg .b32 %ra<8>;
+    .reg .b32 %rbl<4>;
+    .reg .b32 %rbh<4>;
+    .reg .f32 %fc<32>;
+    .reg .f32 %ftmp;
+
+    ld.param.u64 %rd0, [a];
+    ld.param.u64 %rd1, [b];
+    ld.param.u64 %rd2, [c];
+    ld.param.u64 %rd3, [k_tiles_per_group];
+
+    // ---- Persistent slot decode ----
+    mov.u32 %r150, %ctaid.x;                         // raw CTA id
+    // k_group = ctaid.x / P; cta_in_g = ctaid.x mod P.
+    div.u32 %r151, %r150, 48;                       // %r151 = k_group
+    rem.u32 %r152, %r150, 48;                       // %r152 = cta_in_g
+
+    // ---- K-base offsets per group ----
+    //   A_g_base = a + k_group * 3072
+    //   B_g_base = b + k_group * 3072
+    mul.lo.u32 %r153, %r151, 3072;
+    cvt.u64.u32 %rd16, %r153;
+    add.u64 %rd17, %rd0, %rd16;                      // %rd17 = A_g base
+    add.u64 %rd18, %rd1, %rd16;                      // %rd18 = B_g base
+
+    // ---- Persistent CTA's Hilbert range [d_start, d_end) ----
+    //   d_start = cta_in_g * 342; d_end = min(d_start + tile_per_cta, 16384).
+    mul.lo.u32 %r154, %r152, 342;     // d_start
+    add.u32 %r155, %r154, 342;        // d_start + per_cta
+    min.u32 %r156, %r155, 16384;                     // d_end
+
+    // ---- Thread-local indices (invariant over the tile loop) ----
+    mov.u32 %r1, %tid.x;
+    shr.u32 %r2, %r1, 5;        // warp id [0,4)
+    shr.u32 %r3, %r2, 1;        // m_tile = warp >> 1 [0,2)
+    and.b32 %r4, %r2, 1;        // n_tile = warp & 1 [0,2)
+    and.b32 %r50, %r1, 31;      // lane id
+
+    // Cooperative load indexing (vec16 per thread, 128 threads -> 64 rows * 2 col_q).
+    shr.u32 %r13, %r1, 1;       // row
+    and.b32 %r14, %r1, 1;       // col_q
+    shl.b32 %r15, %r14, 4;      // col_q * 16
+
+    shl.b32 %r17, %r13, 5;
+    add.u32 %r17, %r17, %r15;   // intra-slab shared store offset
+
+    mov.u32 %r18, _tg_a;
+    mov.u32 %r20, _tg_b;
+
+    // Per-warp shared-mem READ base offsets:
+    mul.lo.u32 %r22, %r3, 1024;
+    mul.lo.u32 %r24, %r4, 1024;
+
+    // ldmatrix per-lane intra-subtile address:
+    shr.u32 %r51, %r50, 3;
+    and.b32 %r52, %r50, 7;
+    shr.u32 %r53, %r51, 1;
+    shl.b32 %r54, %r53, 3;
+    add.u32 %r55, %r54, %r52;
+    and.b32 %r56, %r51, 1;
+    shl.b32 %r57, %r56, 4;
+    shl.b32 %r58, %r55, 5;
+    add.u32 %r59, %r58, %r57;
+
+    // Per-thread invariant global-load offset (excluding k-step advance):
+    mul.lo.u32 %r16, %r13, 12288;
+    add.u32 %r16, %r16, %r15;                        // row*12288 + col_q*16
+
+    // Save the cta_in_g K-step counter (k_tiles_per_group as int32).
+    cvt.s32.s64 %r170, %rd3;
+
+    // Persistent Hilbert d-counter starts at d_start.
+    mov.u32 %r120, %r154;       // current d
+
+$tileloop:
+    setp.ge.u32 %ptile_done, %r120, %r156;
+    @%ptile_done bra $tile_exit;
+
+    // ---- Hilbert d2xy on current %r120 (also: we will increment %r120 at tile end).
+    // The unrolled rounds DESTRUCTIVELY shift %r120; preserve a copy.
+    mov.u32 %r160, %r120;                            // save d for later inc
+    mov.u32 %r121, 0;                 // x
+    mov.u32 %r122, 0;                 // y
+    // -- Hilbert round 0: s = 1 --
+    shr.u32 %r126, %r120, 1;
+    and.b32 %r123, %r126, 1;          // rx
+    xor.b32 %r127, %r120, %r123;
+    and.b32 %r124, %r127, 1;          // ry
+    setp.eq.u32 %prx0, %r124, 0;      // ry==0
+    setp.eq.u32 %prx1, %r123, 1;      // rx==1
+    and.pred %prxr, %prx0, %prx1;     // need_reflect
+    sub.u32 %r128, 0, %r121;
+    sub.u32 %r129, 0, %r122;
+    selp.b32 %r121, %r128, %r121, %prxr;
+    selp.b32 %r122, %r129, %r122, %prxr;
+    selp.b32 %r128, %r122, %r121, %prx0;
+    selp.b32 %r122, %r121, %r122, %prx0;
+    mov.u32 %r121, %r128;
+    mul.lo.u32 %r128, %r123, 1;
+    add.u32 %r121, %r121, %r128;
+    mul.lo.u32 %r129, %r124, 1;
+    add.u32 %r122, %r122, %r129;
+    shr.u32 %r120, %r120, 2;     // t >>= 2
+    // -- Hilbert round 1: s = 2 --
+    shr.u32 %r126, %r120, 1;
+    and.b32 %r123, %r126, 1;          // rx
+    xor.b32 %r127, %r120, %r123;
+    and.b32 %r124, %r127, 1;          // ry
+    setp.eq.u32 %prx0, %r124, 0;      // ry==0
+    setp.eq.u32 %prx1, %r123, 1;      // rx==1
+    and.pred %prxr, %prx0, %prx1;     // need_reflect
+    sub.u32 %r128, 1, %r121;
+    sub.u32 %r129, 1, %r122;
+    selp.b32 %r121, %r128, %r121, %prxr;
+    selp.b32 %r122, %r129, %r122, %prxr;
+    selp.b32 %r128, %r122, %r121, %prx0;
+    selp.b32 %r122, %r121, %r122, %prx0;
+    mov.u32 %r121, %r128;
+    mul.lo.u32 %r128, %r123, 2;
+    add.u32 %r121, %r121, %r128;
+    mul.lo.u32 %r129, %r124, 2;
+    add.u32 %r122, %r122, %r129;
+    shr.u32 %r120, %r120, 2;     // t >>= 2
+    // -- Hilbert round 2: s = 4 --
+    shr.u32 %r126, %r120, 1;
+    and.b32 %r123, %r126, 1;          // rx
+    xor.b32 %r127, %r120, %r123;
+    and.b32 %r124, %r127, 1;          // ry
+    setp.eq.u32 %prx0, %r124, 0;      // ry==0
+    setp.eq.u32 %prx1, %r123, 1;      // rx==1
+    and.pred %prxr, %prx0, %prx1;     // need_reflect
+    sub.u32 %r128, 3, %r121;
+    sub.u32 %r129, 3, %r122;
+    selp.b32 %r121, %r128, %r121, %prxr;
+    selp.b32 %r122, %r129, %r122, %prxr;
+    selp.b32 %r128, %r122, %r121, %prx0;
+    selp.b32 %r122, %r121, %r122, %prx0;
+    mov.u32 %r121, %r128;
+    mul.lo.u32 %r128, %r123, 4;
+    add.u32 %r121, %r121, %r128;
+    mul.lo.u32 %r129, %r124, 4;
+    add.u32 %r122, %r122, %r129;
+    shr.u32 %r120, %r120, 2;     // t >>= 2
+    // -- Hilbert round 3: s = 8 --
+    shr.u32 %r126, %r120, 1;
+    and.b32 %r123, %r126, 1;          // rx
+    xor.b32 %r127, %r120, %r123;
+    and.b32 %r124, %r127, 1;          // ry
+    setp.eq.u32 %prx0, %r124, 0;      // ry==0
+    setp.eq.u32 %prx1, %r123, 1;      // rx==1
+    and.pred %prxr, %prx0, %prx1;     // need_reflect
+    sub.u32 %r128, 7, %r121;
+    sub.u32 %r129, 7, %r122;
+    selp.b32 %r121, %r128, %r121, %prxr;
+    selp.b32 %r122, %r129, %r122, %prxr;
+    selp.b32 %r128, %r122, %r121, %prx0;
+    selp.b32 %r122, %r121, %r122, %prx0;
+    mov.u32 %r121, %r128;
+    mul.lo.u32 %r128, %r123, 8;
+    add.u32 %r121, %r121, %r128;
+    mul.lo.u32 %r129, %r124, 8;
+    add.u32 %r122, %r122, %r129;
+    shr.u32 %r120, %r120, 2;     // t >>= 2
+    // -- Hilbert round 4: s = 16 --
+    shr.u32 %r126, %r120, 1;
+    and.b32 %r123, %r126, 1;          // rx
+    xor.b32 %r127, %r120, %r123;
+    and.b32 %r124, %r127, 1;          // ry
+    setp.eq.u32 %prx0, %r124, 0;      // ry==0
+    setp.eq.u32 %prx1, %r123, 1;      // rx==1
+    and.pred %prxr, %prx0, %prx1;     // need_reflect
+    sub.u32 %r128, 15, %r121;
+    sub.u32 %r129, 15, %r122;
+    selp.b32 %r121, %r128, %r121, %prxr;
+    selp.b32 %r122, %r129, %r122, %prxr;
+    selp.b32 %r128, %r122, %r121, %prx0;
+    selp.b32 %r122, %r121, %r122, %prx0;
+    mov.u32 %r121, %r128;
+    mul.lo.u32 %r128, %r123, 16;
+    add.u32 %r121, %r121, %r128;
+    mul.lo.u32 %r129, %r124, 16;
+    add.u32 %r122, %r122, %r129;
+    shr.u32 %r120, %r120, 2;     // t >>= 2
+    // -- Hilbert round 5: s = 32 --
+    shr.u32 %r126, %r120, 1;
+    and.b32 %r123, %r126, 1;          // rx
+    xor.b32 %r127, %r120, %r123;
+    and.b32 %r124, %r127, 1;          // ry
+    setp.eq.u32 %prx0, %r124, 0;      // ry==0
+    setp.eq.u32 %prx1, %r123, 1;      // rx==1
+    and.pred %prxr, %prx0, %prx1;     // need_reflect
+    sub.u32 %r128, 31, %r121;
+    sub.u32 %r129, 31, %r122;
+    selp.b32 %r121, %r128, %r121, %prxr;
+    selp.b32 %r122, %r129, %r122, %prxr;
+    selp.b32 %r128, %r122, %r121, %prx0;
+    selp.b32 %r122, %r121, %r122, %prx0;
+    mov.u32 %r121, %r128;
+    mul.lo.u32 %r128, %r123, 32;
+    add.u32 %r121, %r121, %r128;
+    mul.lo.u32 %r129, %r124, 32;
+    add.u32 %r122, %r122, %r129;
+    shr.u32 %r120, %r120, 2;     // t >>= 2
+    // -- Hilbert round 6: s = 64 --
+    shr.u32 %r126, %r120, 1;
+    and.b32 %r123, %r126, 1;          // rx
+    xor.b32 %r127, %r120, %r123;
+    and.b32 %r124, %r127, 1;          // ry
+    setp.eq.u32 %prx0, %r124, 0;      // ry==0
+    setp.eq.u32 %prx1, %r123, 1;      // rx==1
+    and.pred %prxr, %prx0, %prx1;     // need_reflect
+    sub.u32 %r128, 63, %r121;
+    sub.u32 %r129, 63, %r122;
+    selp.b32 %r121, %r128, %r121, %prxr;
+    selp.b32 %r122, %r129, %r122, %prxr;
+    selp.b32 %r128, %r122, %r121, %prx0;
+    selp.b32 %r122, %r121, %r122, %prx0;
+    mov.u32 %r121, %r128;
+    mul.lo.u32 %r128, %r123, 64;
+    add.u32 %r121, %r121, %r128;
+    mul.lo.u32 %r129, %r124, 64;
+    add.u32 %r122, %r122, %r129;
+    // %r121 = sw_x, %r122 = sw_y
+    mov.u32 %r11, %r121;
+    mov.u32 %r10, %r122;
+    mov.u32 %r120, %r160;                            // restore d
+
+    setp.ge.u32 %phlbx, %r11, 96;
+    setp.ge.u32 %phlby, %r10, 96;
+    or.pred %phlb_oob, %phlbx, %phlby;
+    @%phlb_oob bra $tile_advance;
+
+    // ---- Compute A/B/C base pointers for this (m_tile=sw_y, n_tile=sw_x) and k_group ----
+    // A_cta = A_g + sw_y * 64 * S * 2
+    mul.lo.u32 %r5, %r10, 786432;
+    cvt.u64.u32 %rd4, %r5;
+    add.u64 %rd10, %rd17, %rd4;
+
+    // B_cta = B_g + sw_x * 64 * S * 2
+    mul.lo.u32 %r5, %r11, 786432;
+    cvt.u64.u32 %rd5, %r5;
+    add.u64 %rd11, %rd18, %rd5;
+
+    cvt.u64.u32 %rd14, %r16;
+    add.u64 %rd14, %rd10, %rd14;
+    cvt.u64.u32 %rd15, %r16;
+    add.u64 %rd15, %rd11, %rd15;
+
+    // C base (full C, not group-split -- atomic-add target across all groups)
+    //   C = c_param + sw_y * (64*S*4) + m_tile_intra * (32*S*4) + sw_x * 256 + n_tile_intra * 128
+    mul.lo.u32 %r5, %r10, 1572864;
+    mul.lo.u32 %r6, %r3, 786432;
+    add.u32 %r7, %r5, %r6;
+    mul.lo.u32 %r8, %r11, 256;
+    add.u32 %r7, %r7, %r8;
+    mul.lo.u32 %r8, %r4, 128;
+    add.u32 %r7, %r7, %r8;
+    cvt.u64.u32 %rd6, %r7;
+    add.u64 %rd12, %rd2, %rd6;
+
+    // ---- Zero accumulator (32 regs) ----
+    mov.f32 %fc0,  0f00000000; mov.f32 %fc1,  0f00000000;
+    mov.f32 %fc2,  0f00000000; mov.f32 %fc3,  0f00000000;
+    mov.f32 %fc4,  0f00000000; mov.f32 %fc5,  0f00000000;
+    mov.f32 %fc6,  0f00000000; mov.f32 %fc7,  0f00000000;
+    mov.f32 %fc8,  0f00000000; mov.f32 %fc9,  0f00000000;
+    mov.f32 %fc10, 0f00000000; mov.f32 %fc11, 0f00000000;
+    mov.f32 %fc12, 0f00000000; mov.f32 %fc13, 0f00000000;
+    mov.f32 %fc14, 0f00000000; mov.f32 %fc15, 0f00000000;
+    mov.f32 %fc16, 0f00000000; mov.f32 %fc17, 0f00000000;
+    mov.f32 %fc18, 0f00000000; mov.f32 %fc19, 0f00000000;
+    mov.f32 %fc20, 0f00000000; mov.f32 %fc21, 0f00000000;
+    mov.f32 %fc22, 0f00000000; mov.f32 %fc23, 0f00000000;
+    mov.f32 %fc24, 0f00000000; mov.f32 %fc25, 0f00000000;
+    mov.f32 %fc26, 0f00000000; mov.f32 %fc27, 0f00000000;
+    mov.f32 %fc28, 0f00000000; mov.f32 %fc29, 0f00000000;
+    mov.f32 %fc30, 0f00000000; mov.f32 %fc31, 0f00000000;
+
+    // ---- K-loop counter (per group) ----
+    mov.u32 %r0, %r170;
+    mov.u32 %r30, 0;       // current shared slot
+
+    setp.le.s32 %p1, %r0, 0;
+    @%p1 bra $tile_epilogue;
+
+    // ---- PROLOGUE: prefetch K=0 into slot 0 ----
+    add.u32 %r40, %r18, %r17;
+    cp.async.cg.shared.global [%r40], [%rd14], 16;
+    add.u32 %r41, %r20, %r17;
+    cp.async.cg.shared.global [%r41], [%rd15], 16;
+    cp.async.commit_group;
+
+    add.u64 %rd14, %rd14, 32;
+    add.u64 %rd15, %rd15, 32;
+
+$kloop:
+    setp.le.s32 %p1, %r0, 0;
+    @%p1 bra $tile_epilogue;
+
+    setp.gt.s32 %pmore, %r0, 1;
+    @!%pmore bra $no_prefetch;
+
+    xor.b32 %r31, %r30, 1;
+    shl.b32 %r32, %r31, 11;
+
+    add.u32 %r40, %r18, %r32;
+    add.u32 %r40, %r40, %r17;
+    cp.async.cg.shared.global [%r40], [%rd14], 16;
+
+    add.u32 %r41, %r20, %r32;
+    add.u32 %r41, %r41, %r17;
+    cp.async.cg.shared.global [%r41], [%rd15], 16;
+
+    cp.async.commit_group;
+    cp.async.wait_group 1;
+    bra $consume;
+
+$no_prefetch:
+    cp.async.wait_all;
+
+$consume:
+    bar.sync 0;
+
+    shl.b32 %r34, %r30, 11;
+    add.u32 %r35, %r18, %r34;
+    add.u32 %r35, %r35, %r22;
+    add.u32 %r36, %r20, %r34;
+    add.u32 %r36, %r36, %r24;
+
+    add.u32 %r60, %r35, %r59;
+    add.u32 %r62, %r60, 512;
+    ldmatrix.sync.aligned.m8n8.x4.shared.b16
+        {%ra0, %ra1, %ra2, %ra3}, [%r60];
+    ldmatrix.sync.aligned.m8n8.x4.shared.b16
+        {%ra4, %ra5, %ra6, %ra7}, [%r62];
+
+    add.u32 %r61, %r36, %r59;
+    add.u32 %r63, %r61, 512;
+    ldmatrix.sync.aligned.m8n8.x4.trans.shared.b16
+        {%rbl0, %rbl1, %rbl2, %rbl3}, [%r61];
+    ldmatrix.sync.aligned.m8n8.x4.trans.shared.b16
+        {%rbh0, %rbh1, %rbh2, %rbh3}, [%r63];
+
+    mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32
+        {%fc0, %fc1, %fc2, %fc3},
+        {%ra0, %ra1, %ra2, %ra3},
+        {%rbl0, %rbl2},
+        {%fc0, %fc1, %fc2, %fc3};
+    mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32
+        {%fc4, %fc5, %fc6, %fc7},
+        {%ra0, %ra1, %ra2, %ra3},
+        {%rbl1, %rbl3},
+        {%fc4, %fc5, %fc6, %fc7};
+    mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32
+        {%fc8, %fc9, %fc10, %fc11},
+        {%ra0, %ra1, %ra2, %ra3},
+        {%rbh0, %rbh2},
+        {%fc8, %fc9, %fc10, %fc11};
+    mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32
+        {%fc12, %fc13, %fc14, %fc15},
+        {%ra0, %ra1, %ra2, %ra3},
+        {%rbh1, %rbh3},
+        {%fc12, %fc13, %fc14, %fc15};
+    mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32
+        {%fc16, %fc17, %fc18, %fc19},
+        {%ra4, %ra5, %ra6, %ra7},
+        {%rbl0, %rbl2},
+        {%fc16, %fc17, %fc18, %fc19};
+    mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32
+        {%fc20, %fc21, %fc22, %fc23},
+        {%ra4, %ra5, %ra6, %ra7},
+        {%rbl1, %rbl3},
+        {%fc20, %fc21, %fc22, %fc23};
+    mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32
+        {%fc24, %fc25, %fc26, %fc27},
+        {%ra4, %ra5, %ra6, %ra7},
+        {%rbh0, %rbh2},
+        {%fc24, %fc25, %fc26, %fc27};
+    mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32
+        {%fc28, %fc29, %fc30, %fc31},
+        {%ra4, %ra5, %ra6, %ra7},
+        {%rbh1, %rbh3},
+        {%fc28, %fc29, %fc30, %fc31};
+
+    bar.sync 0;
+
+    add.u64 %rd14, %rd14, 32;
+    add.u64 %rd15, %rd15, 32;
+
+    xor.b32 %r30, %r30, 1;
+    sub.s32 %r0, %r0, 1;
+    bra $kloop;
+
+$tile_epilogue:
+    shr.u32 %r70, %r50, 2;
+    and.b32 %r71, %r50, 3;
+    mul.lo.u32 %r72, %r70, 24576;
+    shl.b32 %r73, %r71, 3;
+    add.u32 %r74, %r72, %r73;
+    cvt.u64.u32 %rd20, %r74;
+    add.u64 %rd20, %rd12, %rd20;
+
+    add.u64 %rd21, %rd20, 196608;
+    add.u64 %rd22, %rd20, 393216;
+    add.u64 %rd23, %rd20, 589824;
+
+    // ---- Split-K reduction: atom.global.add.f32 for all 32 acc regs ----
+    atom.global.add.f32 %ftmp, [%rd20 +     0], %fc0;
+    atom.global.add.f32 %ftmp, [%rd20 +     4], %fc1;
+    atom.global.add.f32 %ftmp, [%rd21 +     0], %fc2;
+    atom.global.add.f32 %ftmp, [%rd21 +     4], %fc3;
+    atom.global.add.f32 %ftmp, [%rd20 +    32], %fc4;
+    atom.global.add.f32 %ftmp, [%rd20 +    36], %fc5;
+    atom.global.add.f32 %ftmp, [%rd21 +    32], %fc6;
+    atom.global.add.f32 %ftmp, [%rd21 +    36], %fc7;
+    atom.global.add.f32 %ftmp, [%rd20 +    64], %fc8;
+    atom.global.add.f32 %ftmp, [%rd20 +    68], %fc9;
+    atom.global.add.f32 %ftmp, [%rd21 +    64], %fc10;
+    atom.global.add.f32 %ftmp, [%rd21 +    68], %fc11;
+    atom.global.add.f32 %ftmp, [%rd20 +    96], %fc12;
+    atom.global.add.f32 %ftmp, [%rd20 +   100], %fc13;
+    atom.global.add.f32 %ftmp, [%rd21 +    96], %fc14;
+    atom.global.add.f32 %ftmp, [%rd21 +   100], %fc15;
+
+    atom.global.add.f32 %ftmp, [%rd22 +     0], %fc16;
+    atom.global.add.f32 %ftmp, [%rd22 +     4], %fc17;
+    atom.global.add.f32 %ftmp, [%rd23 +     0], %fc18;
+    atom.global.add.f32 %ftmp, [%rd23 +     4], %fc19;
+    atom.global.add.f32 %ftmp, [%rd22 +    32], %fc20;
+    atom.global.add.f32 %ftmp, [%rd22 +    36], %fc21;
+    atom.global.add.f32 %ftmp, [%rd23 +    32], %fc22;
+    atom.global.add.f32 %ftmp, [%rd23 +    36], %fc23;
+    atom.global.add.f32 %ftmp, [%rd22 +    64], %fc24;
+    atom.global.add.f32 %ftmp, [%rd22 +    68], %fc25;
+    atom.global.add.f32 %ftmp, [%rd23 +    64], %fc26;
+    atom.global.add.f32 %ftmp, [%rd23 +    68], %fc27;
+    atom.global.add.f32 %ftmp, [%rd22 +    96], %fc28;
+    atom.global.add.f32 %ftmp, [%rd22 +   100], %fc29;
+    atom.global.add.f32 %ftmp, [%rd23 +    96], %fc30;
+    atom.global.add.f32 %ftmp, [%rd23 +   100], %fc31;
+
+$tile_advance:
+    add.u32 %r120, %r120, 1;
+    bra $tileloop;
+
+$tile_exit:
+    ret;
+}

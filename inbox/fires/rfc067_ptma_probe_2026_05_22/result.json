@@ -1,0 +1,19 @@
+{
+  "rfc": "067-ptma-probe",
+  "date_utc": "2026-05-22",
+  "host": "ubu-1",
+  "device": "NVIDIA GeForce RTX 5070",
+  "sm": "sm_120",
+  "driver_version": 13000,
+  "ptx_target": "sm_120a",
+  "ptx_version": "8.7",
+  "jit_target_from_context": "sm_120",
+  "tile_h": 64, "tile_w": 64, "dtype": "float16",
+  "tmap_encoded": true,
+  "ptx_accepted": true,
+  "module_loaded": true,
+  "kernel_launched": true,
+  "byte_mismatch": 0,
+  "tile_elements": 4096,
+  "verdict": "TMA_AVAILABLE_BIT_EXACT"
+}
