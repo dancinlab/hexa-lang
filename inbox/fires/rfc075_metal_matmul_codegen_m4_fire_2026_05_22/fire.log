@@ -1,0 +1,50 @@
+=== RFC 075 P3++ codegen matmul fire — Apple M4 (mini) — DIM=256 ===
+--- step 1: compile VERBATIM codegen output (expect FAIL) ---
+matmul_codegen.metal:15:62: error: unexpected type name 'simdgroup_float8x8': expected expression
+    simdgroup_float8x8 c_frag = make_filled_simdgroup_matrix(simdgroup_float8x8, 0.0f);  // C tile accumulator
+                                                             ^
+1 error generated.
+verbatim_codegen_compile_exit=1
+--- step 2: compile 1-token-patched codegen output ---
+patched_codegen_compile_exit=0
+metallib_exit=0
+--- step 3: build + run Swift host ---
+swiftc_exit=0
+device_name=Apple M4
+registry_id=4294968657
+max_threads_per_threadgroup=1024x1024x1024
+VALID_PIPELINE matmul_kernel  tew=32  max=1024
+shape M=256 N=256 K=256
+--- RESULT ---
+covered_subblock_count=4096  (expected 4096)
+covered_max_abs_diff=4.7683716e-06
+covered_max_rel_err=2.576602e-07
+covered_zero_inside(missing)=0
+full_tile_max_rel_err=1.0
+nonzero_outside_covered=0
+median_ms=0.019500002963468432
+covered_gflops=107.54624006615963
+full_walltime_gflops=1720.739841058554
+TOL=0.001
+F-RFC075-METAL-MATMUL-CODEGEN-M4-NUMERIC-EQ: PASS (covered sub-blocks rel_err=2.576602e-07 < 0.001)
+wrote result.json
+host_exit=0
+--- DIM=512 appended ---
+device_name=Apple M4
+registry_id=4294968657
+max_threads_per_threadgroup=1024x1024x1024
+VALID_PIPELINE matmul_kernel  tew=32  max=1024
+shape M=512 N=512 K=512
+--- RESULT ---
+covered_subblock_count=16384  (expected 16384)
+covered_max_abs_diff=7.6293945e-06
+covered_max_rel_err=2.5528269e-07
+covered_zero_inside(missing)=0
+full_tile_max_rel_err=1.0
+nonzero_outside_covered=0
+median_ms=0.05179166328161955
+covered_gflops=323.9366132879942
+full_walltime_gflops=5182.985812607907
+TOL=0.001
+F-RFC075-METAL-MATMUL-CODEGEN-M4-NUMERIC-EQ: PASS (covered sub-blocks rel_err=2.5528269e-07 < 0.001)
+wrote result.json
