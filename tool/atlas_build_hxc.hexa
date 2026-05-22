@@ -24,6 +24,24 @@
 //   compiler/atlas/n6_axes.gen.hexa          (    5 nodes)
 // Total: 7,448 AtlasNode rows.
 //
+// WARNING (2026-05-22): these 4 .gen.hexa files are the LEAN subset
+// (P/C/L/E + limits). They do NOT contain the @F/@R/@X/@S/@Q relation/
+// crossing/formula layer. The canonical dist/atlas.hxc is the FULL n6
+// corpus (15,952 rows, absorbed in 89c608d1). A plain re-run of THIS tool
+// (lean .gen inputs only) therefore produces a SMALLER sidecar; the main()
+// guard below refuses to overwrite a richer sidecar.
+//
+// DEPRECATED (2026-05-22): hxc is being RETIRED. The single source of
+// truth AND the runtime path is now n6/atlas.n6 — static_atlas() parses it
+// directly via compiler/atlas/merger (no hxc, no embedded.gen struct
+// literals). See inbox/notes/2026-05-22-atlas-n6-ssot-recovery.md.
+//
+// This tool (which emits dist/atlas.hxc) is kept ONLY until the rebuilt
+// toolchain that reads atlas.n6 is deployed; then dist/atlas.hxc, this
+// tool, and compiler/atlas/hxc_loader.hexa are removed. The non-shrink
+// guard below stays meanwhile so the surviving dist/atlas.hxc (still read
+// by the currently-deployed binary) cannot be silently destroyed.
+//
 // Output:
 //   dist/atlas.hxc — HXC v2 stream (schema header + const headers + tree
 //   headers + N row records).
@@ -412,12 +430,38 @@ fn atlas_encode_hxc(rows: array) -> string {
     return _join_with(out_lines, "\n") + "\n"
 }
 
+// _existing_hxc_rows — read the `# atlas-rows N` header of an existing
+// HXC sidecar (cheap: the header sits in the first few lines, so we
+// index_of the landmark instead of splitting the whole 6 MB file).
+// Returns the row count, or -1 when the file is missing/empty/headerless
+// (nothing to protect — a fresh write is fine).
+fn _existing_hxc_rows(path: string) -> int {
+    let text = read_file_safe(path)
+    if len(text) == 0 { return -1 }
+    let lm = "# atlas-rows "
+    let i = text.index_of(lm)
+    if i < 0 { return -1 }
+    let tail = text.substring(i + len(lm), len(text))
+    let nl = tail.index_of("\n")
+    let numstr = if nl < 0 { tail } else { tail.substring(0, nl) }
+    return to_int(numstr.trim())
+}
+
 // ───────────────────────── main ─────────────────────────
 
 fn main() {
     let av = args()
     let mut out_path = "dist/atlas.hxc"
-    if len(av) >= 2 { out_path = to_string(av[1]) }
+    let mut allow_shrink = false
+    if len(av) >= 2 {
+        let a1 = to_string(av[1])
+        if a1 == "--allow-shrink" || a1 == "--force" { allow_shrink = true }
+        else { out_path = a1 }
+    }
+    if len(av) >= 3 {
+        let a2 = to_string(av[2])
+        if a2 == "--allow-shrink" || a2 == "--force" { allow_shrink = true }
+    }
 
     println("atlas_build_hxc: parsing rodata source files...")
     let rows_embedded = _parse_gen_file("compiler/atlas/embedded.gen.hexa")
@@ -443,6 +487,29 @@ fn main() {
     println("atlas_build_hxc: encoding HXC stream...")
     let hxc = atlas_encode_hxc(all)
     println("  encoded bytes: " + to_string(len(hxc)))
+
+    // ── non-destructive guard (2026-05-22) ──────────────────────────────
+    // This tool rebuilds from the LEAN embedded.gen text SSOT (P/C/L/E +
+    // limits ≈ 7,448 rows). The committed dist/atlas.hxc is the FULL n6
+    // corpus (15,952 rows incl. @F/@R/@X/@S/@Q, absorbed in 89c608d1)
+    // whose source is NOT in-repo. Re-running this against the canonical
+    // sidecar therefore SHRINKS it and silently destroys the relation/
+    // crossing/formula layer (observed 2026-05-22). Refuse to clobber a
+    // richer sidecar unless --allow-shrink is passed explicitly.
+    let existing_rows = _existing_hxc_rows(out_path)
+    let new_rows = len(all)
+    if existing_rows > new_rows && !allow_shrink {
+        println("atlas_build_hxc: REFUSING to shrink the canonical sidecar")
+        println("  target:           " + out_path)
+        println("  existing sidecar: " + to_string(existing_rows) + " rows (full n6 corpus)")
+        println("  this rebuild:     " + to_string(new_rows) + " rows (lean embedded.gen only)")
+        println("  rebuilding here would DESTROY the @F/@R/@X/@S/@Q layer whose")
+        println("  source is not in-repo. recover the canonical sidecar with:")
+        println("    git checkout HEAD -- " + out_path)
+        println("  to override (only after regenerating the full source):")
+        println("    hexa run tool/atlas_build_hxc.hexa --allow-shrink")
+        return
+    }
 
     // Ensure dist/ exists.
     let _ = mkdir_p("dist")
