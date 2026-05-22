@@ -1,6 +1,6 @@
 // HEXA Standard Library — material/sim
 //
-// @version 0.3.0
+// @version 0.2.0
 // @capabilities [pure, io]
 //
 // RTSC.md §8.7 Tier 1 — Computational synthesis (first-principles 시뮬레이션),
@@ -20,8 +20,6 @@
 //   pub fn sigma_from_spread(values: [float], sigma_default: float) -> float
 //   pub fn inverse_variance_consensus(values: [float], sigmas: [float])
 //                                     -> Consensus
-//   pub fn eliashberg_moments(a2f: [float], omega: [float])
-//                                     -> EliashbergMoments
 //
 // Source formulas (each a closed-form algebraic identity, NOT a solver):
 //   - BCS Tc         : Bardeen-Cooper-Schrieffer 1957, PR 108 1175
@@ -236,77 +234,6 @@ pub fn inverse_variance_consensus(values: [float],
     }
     return Consensus { mean: mean, combined_sigma: csigma,
                        n_sources: n, rel_err_max_pairwise: rel_err_max }
-}
-
-// ── 6. Eliashberg scalar moments from α²F(ω) ───────────────────────────
-//
-// Collapses a discretized Eliashberg spectral function α²F(ω) — sampled on
-// a (possibly non-uniform) frequency grid — to the three scalar moments
-// that McMillan / Allen-Dynes consume:
-//
-//   λ      = 2 ∫ α²F(ω)/ω dω
-//   ω_log  = exp[ (2/λ) ∫ α²F(ω) ln(ω)/ω dω ]
-//   ω₂     = sqrt[ (2/λ) ∫ α²F(ω) ω dω ]
-//
-// This is the bridge that caveat (s1) of this module describes: a raw
-// α²F(ω) — whether ML-predicted (ALIGNN `jv_supercon_a2F`) or first-principles
-// (QE `ph.x` / `matdyn la2F`) — becomes (λ, ω_log, ω₂) here, then feeds
-// `allen_dynes_tc` directly, closing the α²F → scalar-moments → Tc chain in
-// hexa-native form.
-//
-// Integration is the trapezoidal rule over the supplied `omega[]` grid (ω in
-// any consistent unit; ω_log / ω₂ return in the same unit). α²F is clamped to
-// ≥ 0 (negative bins are interpolation noise, not physical). Bins with ω ≤ 0
-// are skipped (the ω=0 acoustic origin is an integrable 1/ω endpoint that we
-// drop on the discrete grid).
-//
-// Ported from the path-3 a2F→Allen-Dynes route (RTSC.md §9.11.I, Phase 4
-// cohort #4). The Python reference (run_a2f_allendynes.py / eliashberg_ref.py)
-// uses the identical trapezoidal arithmetic for cross-validation.
-//
-// Honest scope (R4 invariant, same as the rest of this module): returns
-// NUMBERS only. absorbed / gate_type stay with the Python orchestrator.
-
-struct EliashbergMoments {
-    lam:        float,
-    omega_log:  float,
-    omega2:     float,
-}
-
-pub fn eliashberg_moments(a2f: [float], omega: [float]) -> EliashbergMoments {
-    let n = len(a2f)
-    if n < 2 {
-        return EliashbergMoments { lam: 0.0, omega_log: 0.0, omega2: 0.0 }
-    }
-    let mut int_lam: float = 0.0
-    let mut int_log: float = 0.0
-    let mut int_w2:  float = 0.0
-    let mut i = 0
-    while i < n - 1 {
-        let w0 = omega[i]
-        let w1 = omega[i + 1]
-        if w0 > 0.0 && w1 > 0.0 {
-            let dw = w1 - w0
-            let mut f0 = a2f[i]
-            let mut f1 = a2f[i + 1]
-            if f0 < 0.0 { f0 = 0.0 }
-            if f1 < 0.0 { f1 = 0.0 }
-            // λ integrand: α²F/ω
-            int_lam = int_lam + 0.5 * (f0 / w0 + f1 / w1) * dw
-            // ω_log integrand: α²F·ln(ω)/ω
-            int_log = int_log + 0.5 * (f0 * ln(w0) / w0 + f1 * ln(w1) / w1) * dw
-            // ω₂ integrand: α²F·ω
-            int_w2  = int_w2  + 0.5 * (f0 * w0 + f1 * w1) * dw
-        }
-        i = i + 1
-    }
-    let lam = 2.0 * int_lam
-    if lam <= 1.0e-12 {
-        return EliashbergMoments { lam: lam, omega_log: 0.0, omega2: 0.0 }
-    }
-    let omega_log = exp((2.0 / lam) * int_log)
-    let omega2    = sqrt(_fmax((2.0 / lam) * int_w2, 0.0))
-    return EliashbergMoments { lam: lam, omega_log: omega_log, omega2: omega2 }
 }
 
 // ── reference-panel runner ─────────────────────────────────────────────

@@ -4380,22 +4380,8 @@ fn gen2_expr(node) {
             if name == "__arr_set_cap" {
                 return "(HX_SET_ARR_CAP(" + gen2_expr(node.args[0]) + ", (int)HX_INT(" + gen2_expr(node.args[1]) + ")), hexa_void())"
             }
-            // RUNTIME.md step 3 cycle 105 — paired items-allocator builtins.
-            // Atomically build a complete TAG_ARRAY HexaVal with N zero slots
-            // (descriptor calloc + items malloc + zero-fill + len/cap set).
-            // Closes 잔여 #6: __arr_set_cap alone sets cap but leaves items
-            // NULL, so `[] + __arr_set_cap(out,n) + push` SIGSEGVs writing
-            // items[0]. These return the fully-formed array instead.
-            //   __arr_alloc_items_zero(n)     → [float] of n × 0.0
-            //   __arr_alloc_items_zero_int(n) → [int]   of n × 0
-            if name == "__arr_alloc_items_zero" {
-                return "({ HexaVal __aiz = {.tag=TAG_ARRAY}; HX_SET_ARR_PTR(__aiz, (HexaArr*)calloc(1, sizeof(HexaArr))); int64_t __aiz_n = HX_INT(" + gen2_expr(node.args[0]) + "); if (__aiz_n > 0) { HexaVal* __aiz_it = (HexaVal*)malloc(sizeof(HexaVal) * (size_t)__aiz_n); HexaVal __aiz_z = {.tag=TAG_FLOAT, .f=0.0}; for (int64_t __aiz_i = 0; __aiz_i < __aiz_n; __aiz_i++) __aiz_it[__aiz_i] = __aiz_z; HX_SET_ARR_ITEMS(__aiz, __aiz_it); HX_SET_ARR_LEN(__aiz, (int)__aiz_n); HX_SET_ARR_CAP(__aiz, (int)__aiz_n); } __aiz; })"
-            }
-            if name == "__arr_alloc_items_zero_int" {
-                return "({ HexaVal __aizi = {.tag=TAG_ARRAY}; HX_SET_ARR_PTR(__aizi, (HexaArr*)calloc(1, sizeof(HexaArr))); int64_t __aizi_n = HX_INT(" + gen2_expr(node.args[0]) + "); if (__aizi_n > 0) { HexaVal* __aizi_it = (HexaVal*)malloc(sizeof(HexaVal) * (size_t)__aizi_n); HexaVal __aizi_z = {.tag=TAG_INT, .i=0}; for (int64_t __aizi_i = 0; __aizi_i < __aizi_n; __aizi_i++) __aizi_it[__aizi_i] = __aizi_z; HX_SET_ARR_ITEMS(__aizi, __aizi_it); HX_SET_ARR_LEN(__aizi, (int)__aizi_n); HX_SET_ARR_CAP(__aizi, (int)__aizi_n); } __aizi; })"
-            }
             if name == "__fd_write_bytes" {
-                return "hexa_int((int64_t)hxlcl_write((int)HX_INT(" + gen2_expr(node.args[0]) + "), HX_STR(" + gen2_expr(node.args[1]) + "), (size_t)HX_STRLEN(" + gen2_expr(node.args[1]) + ")))"
+                return "hexa_int((int64_t)write((int)HX_INT(" + gen2_expr(node.args[0]) + "), HX_STR(" + gen2_expr(node.args[1]) + "), (size_t)HX_STRLEN(" + gen2_expr(node.args[1]) + ")))"
             }
             // Free-function form of `s.byte_at(i)` — raw byte (0..255) at a
             // byte offset, -1 OOB. The method form is already mapped; this
@@ -7478,8 +7464,6 @@ fn _is_builtin_name(name) {
     if name == "__arr_raw_len" { return true }
     if name == "__map_raw_len" { return true }
     if name == "__arr_set_cap" { return true }
-    if name == "__arr_alloc_items_zero" { return true }
-    if name == "__arr_alloc_items_zero_int" { return true }
     if name == "__fd_write_bytes" { return true }
     if name == "dict_keys" { return true }
     // FIX-A (Anima serving unblock, 2026-04-19)

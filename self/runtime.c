@@ -934,17 +934,7 @@ static int hxlcl_pthread_join(void *thread, void **retval);
 // Each call: x16 = syscall number, x0..x5 = args, svc 0x80 → x0 = ret.
 // Replaces libc syscall wrappers (_read, _write, _open, etc) with
 // direct kernel trap. Currently arm64 only (aprime_cc is Mach-O arm64).
-//
-// iter-2e (2026-05-22): guard narrowed from `__arm64__ || __aarch64__`
-// to `__APPLE__`. The old guard matched linux-arm64 TOO, but this entire
-// block is Darwin-ONLY: it traps via `svc #0x80` (Darwin trap; Linux arm64
-// uses `svc #0`), passes the syscall number in x16 (Linux arm64 uses x8),
-// and hardcodes Darwin SYS_* numbers (Linux arm64's table is entirely
-// different). On linux-arm64 the old guard compiled this Darwin ABI and
-// segfaulted at Stage 1 transpile. `__APPLE__` keeps macOS arm64 byte-
-// identical while letting linux-arm64 fall through to the libc branch
-// below (which iter-2e broadens from x86_64-only to all of Linux).
-#if defined(__APPLE__)
+#if defined(__arm64__) || defined(__aarch64__)
 #define HXLCL_SYS_EXIT      1
 #define HXLCL_SYS_FORK      2
 #define HXLCL_SYS_READ      3
@@ -1116,27 +1106,16 @@ static int __attribute__((noinline)) hxlcl_darwin_check_fd_set_overflow(int fd, 
     (void)fd; (void)p; (void)n;
     return 0;  // never overflowing
 }
-#elif defined(__linux__)
-// iter-2d (2026-05-22) — Option L: libc-fallback syscall layer for Linux.
-// The Darwin branch above (now `__APPLE__`-guarded) traps directly via
-// `svc #0x80` because aprime_cc targets Mach-O arm64 (macOS/iOS), where the
-// raw-trap path was chosen to avoid pulling libSystem wrappers. On Linux
-// there is a universal glibc, the Darwin SYS_* numbers do not apply (Linux
-// uses a different syscall table + a different trap convention per arch:
-// `syscall` on x86_64, `svc #0` with x8 on arm64), and the CI bootstrap
-// toolchain always links libc — so we route the hxlcl_* wrappers through
-// thin glibc calls. This is arch-neutral: glibc abstracts the per-arch
-// trap, so the same wrapper bodies serve both linux-x86_64 and linux-arm64.
-//
-// iter-2e (2026-05-22): guard broadened from `__x86_64__ && __linux__` to
-// just `__linux__`. iter-2d landed this for x86_64 (#297) and unblocked
-// linux-x86_64 Stage 0. But linux-arm64 still matched the Darwin block
-// above (old `__aarch64__` guard) and segfaulted at Stage 1. Now both Linux
-// arches route through these glibc wrappers; the Darwin block is `__APPLE__`
-// only. macOS (any arch) → raw Darwin syscalls; Linux (x86_64 OR arm64) →
-// glibc. This unblocks linux-arm64 Stage 1 without a per-arch raw-syscall
-// port. The macros that later rewrite libc symbols are not active here, so
-// the <sys/*.h> prototypes + direct libc calls below parse cleanly.
+#elif defined(__x86_64__) && defined(__linux__)
+// iter-2d (2026-05-22) — Option L: libc-fallback syscall layer for x86_64
+// Linux. The arm64 branch above traps directly via `svc #0x80` because
+// aprime_cc targets Mach-O arm64 (macOS/iOS), where the raw-trap path was
+// chosen to avoid pulling libSystem wrappers. On x86_64 Linux there is a
+// universal glibc, the Darwin SYS_* numbers do not apply (Linux uses a
+// different syscall table + the `syscall` instruction, not `svc`), and the
+// CI bootstrap toolchain always links libc — so we route the hxlcl_*
+// wrappers through thin glibc calls. This unblocks linux-x86_64 Stage 0
+// without a full x86_64 raw-syscall port. arm64 path is UNCHANGED.
 //
 // Note: cycle-66 already used this exact pattern for read/write/close/dup2/
 // pipe/fork/waitpid on arm64 (carry-flag + EINTR + pair-return bugs in the
@@ -1224,7 +1203,7 @@ static int __attribute__((noinline)) hxlcl_darwin_check_fd_set_overflow(int fd, 
     (void)fd; (void)p; (void)n;
     return 0;  // never overflowing
 }
-#endif  /* __APPLE__ (Darwin raw svc) / __linux__ (glibc wrappers) */
+#endif  /* arm64 / x86_64-linux */
 // cycle 6: time/term/mach forward decls — bodies after #include
 static int hxlcl_time(int *t);
 static int hxlcl_nanosleep(const void *req, void *rem);
@@ -3751,11 +3730,6 @@ HexaVal hexa_array_fill(HexaVal arr, HexaVal v) {
 //    are shared. Caller MUST guarantee no other live alias. Used at
 //    end-of-train_step to reclaim block_hs / fwd / bwd buffers known to
 //    be local. Returns hexa_void().
-// Step-3 cycle 105 port — single-shot zeroed-array fast-paths now have
-// hexa-source bodies (rt_array_zeros_float / rt_array_alloc) backed by the
-// __arr_alloc_items_zero{,_int} codegen-inline builtins. The C wrapper
-// normalizes the float/int `n` arg, then dispatches. 잔여 #6.
-#ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal hexa_array_zeros_float(HexaVal nv) {
     if (_hx_stats_on()) _hx_stats_array_new++;
     HexaVal out = {.tag=TAG_ARRAY};
@@ -3771,14 +3745,6 @@ HexaVal hexa_array_zeros_float(HexaVal nv) {
     HX_SET_ARR_CAP(out, (int)n);  // positive → heap
     return out;
 }
-#else
-extern HexaVal rt_array_zeros_float(HexaVal n);
-HexaVal hexa_array_zeros_float(HexaVal nv) {
-    if (_hx_stats_on()) _hx_stats_array_new++;
-    int64_t n = HX_IS_INT(nv) ? HX_INT(nv) : (int64_t)__hx_to_double(nv);
-    return rt_array_zeros_float(hexa_int(n));
-}
-#endif
 
 // ω-interp-3 (2026-04-26): array_alloc(n) — pre-allocate N-element int array,
 // all slots = 0. Counterpart to hexa_array_zeros_float for int buffers.
@@ -3787,7 +3753,6 @@ HexaVal hexa_array_zeros_float(HexaVal nv) {
 // Use case: ω-audio-3 vocal_hexa knows N=4800 bytes upfront; replacing N×
 // hexa_array_push with array_alloc(N) + indexed assign drops per-element
 // dispatch overhead 2-4× (single store vs method-call + env_set rebind).
-#ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal hexa_array_alloc(HexaVal nv) {
     if (_hx_stats_on()) _hx_stats_array_new++;
     HexaVal out = {.tag=TAG_ARRAY};
@@ -3803,14 +3768,6 @@ HexaVal hexa_array_alloc(HexaVal nv) {
     HX_SET_ARR_CAP(out, (int)n);  // positive → heap
     return out;
 }
-#else
-extern HexaVal rt_array_alloc(HexaVal n);
-HexaVal hexa_array_alloc(HexaVal nv) {
-    if (_hx_stats_on()) _hx_stats_array_new++;
-    int64_t n = HX_IS_INT(nv) ? HX_INT(nv) : (int64_t)__hx_to_double(nv);
-    return rt_array_alloc(hexa_int(n));
-}
-#endif
 
 HexaVal hexa_array_free(HexaVal arr) {
     if (!HX_IS_ARRAY(arr)) return hexa_void();
@@ -10159,11 +10116,7 @@ HexaVal hexa_dict_keys(HexaVal m) {
 // the cycle-101 (c25ef75e) port. See inbox/notes/2026-05-22-wipe-* for
 // the wipe-governance proposal.
 HexaVal __fd_write_bytes(HexaVal fd, HexaVal s) {
-    // Use hxlcl_write (step-1 libc-unhook shim) NOT raw write(2): raw write
-    // would surface `_write` as a 25th undefined symbol, breaking the
-    // 24-extern baseline gate. hxlcl_write resolves to the platform syscall
-    // path (arm64 svc / x86_64 syscall) already linked in.
-    return hexa_int((int64_t)hxlcl_write((int)HX_INT(fd), HX_STR(s), (size_t)HX_STRLEN(s)));
+    return hexa_int((int64_t)write((int)HX_INT(fd), HX_STR(s), (size_t)HX_STRLEN(s)));
 }
 
 // FIX-A (Anima stdlib unblock, 2026-04-19) ─────────────────────────

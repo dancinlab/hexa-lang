@@ -381,29 +381,9 @@ For each Tier-A sub-phase:
 
 ## Log
 
-### 2026-05-22 — cycle 105 array allocators + extern baseline 24→25 note
-
-- ✅ 잔여 #6 array allocators CLOSED: `rt_array_zeros_float` +
-  `rt_array_alloc` via paired `__arr_alloc_items_zero{,_int}(n)` codegen-
-  inline builtins (GCC statement-expr: calloc descriptor + malloc items +
-  N zero-fill + len/cap, atomic). Closes agent-B's SIGSEGV (cap-only
-  setter left items NULL). Activated via `_Generic` fn-ptr fallback
-  (cycle-100 pattern), no hexa_v2 regen. Commit `72c3f080`.
-- **Extern baseline 24 → 25**: the IO port (잔여 #7, cycle 101/102) routes
-  `__fd_write_bytes` → `hxlcl_write` → libc `write(2)`, surfacing `_write`
-  as a 25th undefined symbol. `_write` is a fundamental libc syscall —
-  the symmetric sibling of the already-baseline `_read`/`_close`/`_malloc`.
-  Legitimate cost of hexa-source IO; NOT a leak. `__fd_write_bytes` uses
-  `hxlcl_write` (the step-1 unhook shim) not raw write for consistency
-  (commit `6a21bf4f`). New gate = **25 externs**.
-- Linux x86_64 cross-parity (cycle L): all ported fns (hexa_eq 9/9,
-  to_string array+map, hexa_len, IO) byte-identical to Mac on ubu-2.
-- Regression sweep (cycle V): 103/103 assertions PASS across 10 fn
-  families — 5-wipe churn introduced zero silent corruption.
-
 ### 2026-05-22 — Step 3+4+5 COMPLETE (113 fns · 6/8 잔여 ported · 2 CORE-final · 5-wipe saga closed by hook)
 
-Cumulative across step 3 + step 4 + step 5: **~115 fns ported** to
+Cumulative across step 3 + step 4 + step 5: **~113 fns ported** to
 hexa source. With cycles 103 (`hexa_eq` 9/9 closure) and 104
 (`hexa_to_string` array+map) landed, the **8 잔여** items reach their
 FINAL status — **6 ported, 2 CORE-final**:
@@ -1952,45 +1932,3 @@ the 8 잔여 items have settled to:
   and is deferred to its own cycle
 - aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
   binary 1,162,760 B
-
-### 2026-05-22 — step 3 cycle 105: array allocators → rt_array_zeros_float / rt_array_alloc (잔여 #6 CLOSED)
-
-- ✅ `hexa_array_zeros_float` (self/runtime.c) + `hexa_array_alloc`
-  ported. Both gain two-mode `#ifndef HEXA_HAS_HEXA_RT_STDLIB` dispatch
-  to hexa-source bodies `rt_array_zeros_float(n: int) -> [float]` and
-  `rt_array_alloc(n: int) -> [int]` in stdlib/runtime/numeric.hexa. The
-  C wrapper only normalizes the float/int `n` arg then forwards as a
-  `hexa_int`
-- **Design (a)** — new paired codegen-inline builtins
-  `__arr_alloc_items_zero(n)` + `__arr_alloc_items_zero_int(n)`
-  (self/codegen_c2.hexa near `__arr_set_cap`) emit a full GCC
-  statement-expr that atomically builds a complete TAG_ARRAY HexaVal:
-  descriptor `calloc` + items `malloc` + N zero-fill (TAG_FLOAT 0.0 /
-  TAG_INT 0) + len/cap set. The hexa port body is then literally
-  `return __arr_alloc_items_zero(n)` — full fast-path semantics, no
-  per-element push/realloc churn
-- **Closes 잔여 #6 root cause (agent B finding)**: Step 5 #2's
-  `__arr_set_cap(out, n)` sets the cap field but leaves `items` NULL,
-  so `[] + __arr_set_cap + push` SIGSEGVs writing items[0]. The paired
-  items-allocator builtin allocates AND zero-fills the buffer in one
-  shot — no NULL-items window
-- **Activation = ACTIVE, no hexa_v2 regen needed.** The Mac hexa_v2 is
-  stale for the new builtins (hexa_cc.c lacks even the Step 5 #2
-  `__arr_*` handlers), so it transpiles the hexa body to
-  `hexa_call1(__arr_alloc_items_zero, n)`. That indirect-call path is
-  satisfied by static-inline fallbacks added to self/runtime_core.c
-  (aprime/single-TU build) + self/runtime.h (header includers), resolved
-  via the `hexa_call1` `_Generic` dispatch on `HexaVal (*)(HexaVal)` —
-  the exact mechanism cycle-100's `__vs_ptr_eq` uses. Result is
-  byte-identical whether the freshly-built aprime_cc inlines the
-  statement-expr or the stale path calls the fallback
-- Builtins registered in `_is_builtin_name` (codegen_c2.hexa) +
-  `compiler/check/bind.hexa` allowlist
-- Functional oracle (clang -O1, runtime.h direct):
-  `__arr_alloc_items_zero(3)` → len=3 cap=3 items≠NULL tag=FLOAT v=0.0;
-  `_int(4)` → len=4 cap=4 tag=INT v=0; `(0)` → len=0 cap=0 items=NULL
-  (empty contract). hexa_v2 transpile of numeric.hexa confirms both
-  ports lower to the `hexa_call1(__arr_alloc_items_zero{,_int}, n)`
-  fallback path
-- 잔여 #6 (last of the 4 CORE-final items requiring HX_SET_ARR_CAP
-  exposure) now CLOSED — the paired allocator was the missing piece
