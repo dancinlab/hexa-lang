@@ -933,12 +933,8 @@ static int hxlcl_pthread_join(void *thread, void **retval);
 // Cycle 63 — Darwin BSD ABI syscall wrappers via inline `svc 0x80`.
 // Each call: x16 = syscall number, x0..x5 = args, svc 0x80 → x0 = ret.
 // Replaces libc syscall wrappers (_read, _write, _open, etc) with
-// direct kernel trap. Darwin only (svc #0x80 + x16 + Darwin SYS_* numbers
-// are macOS ABI; Linux arm64 uses svc #0 + x8 + different numbers).
-// iter-2e (2026-05-22 re-apply · bf406f08 wipe reverted PR #300): narrowed
-// from (__arm64__||__aarch64__) to __APPLE__ so Linux arm64 routes to the
-// libc fallback below instead of trapping with Darwin syscall numbers.
-#if defined(__APPLE__)
+// direct kernel trap. Currently arm64 only (aprime_cc is Mach-O arm64).
+#if defined(__arm64__) || defined(__aarch64__)
 #define HXLCL_SYS_EXIT      1
 #define HXLCL_SYS_FORK      2
 #define HXLCL_SYS_READ      3
@@ -1110,7 +1106,7 @@ static int __attribute__((noinline)) hxlcl_darwin_check_fd_set_overflow(int fd, 
     (void)fd; (void)p; (void)n;
     return 0;  // never overflowing
 }
-#elif defined(__linux__)
+#elif defined(__x86_64__) && defined(__linux__)
 // iter-2d (2026-05-22) — Option L: libc-fallback syscall layer for x86_64
 // Linux. The arm64 branch above traps directly via `svc #0x80` because
 // aprime_cc targets Mach-O arm64 (macOS/iOS), where the raw-trap path was
@@ -3734,11 +3730,6 @@ HexaVal hexa_array_fill(HexaVal arr, HexaVal v) {
 //    are shared. Caller MUST guarantee no other live alias. Used at
 //    end-of-train_step to reclaim block_hs / fwd / bwd buffers known to
 //    be local. Returns hexa_void().
-// Step-3 cycle 105 port — single-shot zeroed-array fast-paths now have
-// hexa-source bodies (rt_array_zeros_float / rt_array_alloc) backed by the
-// __arr_alloc_items_zero{,_int} codegen-inline builtins. The C wrapper
-// normalizes the float/int `n` arg, then dispatches. 잔여 #6.
-#ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal hexa_array_zeros_float(HexaVal nv) {
     if (_hx_stats_on()) _hx_stats_array_new++;
     HexaVal out = {.tag=TAG_ARRAY};
@@ -3754,14 +3745,6 @@ HexaVal hexa_array_zeros_float(HexaVal nv) {
     HX_SET_ARR_CAP(out, (int)n);  // positive → heap
     return out;
 }
-#else
-extern HexaVal rt_array_zeros_float(HexaVal n);
-HexaVal hexa_array_zeros_float(HexaVal nv) {
-    if (_hx_stats_on()) _hx_stats_array_new++;
-    int64_t n = HX_IS_INT(nv) ? HX_INT(nv) : (int64_t)__hx_to_double(nv);
-    return rt_array_zeros_float(hexa_int(n));
-}
-#endif
 
 // ω-interp-3 (2026-04-26): array_alloc(n) — pre-allocate N-element int array,
 // all slots = 0. Counterpart to hexa_array_zeros_float for int buffers.
@@ -3770,7 +3753,6 @@ HexaVal hexa_array_zeros_float(HexaVal nv) {
 // Use case: ω-audio-3 vocal_hexa knows N=4800 bytes upfront; replacing N×
 // hexa_array_push with array_alloc(N) + indexed assign drops per-element
 // dispatch overhead 2-4× (single store vs method-call + env_set rebind).
-#ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal hexa_array_alloc(HexaVal nv) {
     if (_hx_stats_on()) _hx_stats_array_new++;
     HexaVal out = {.tag=TAG_ARRAY};
@@ -3786,14 +3768,6 @@ HexaVal hexa_array_alloc(HexaVal nv) {
     HX_SET_ARR_CAP(out, (int)n);  // positive → heap
     return out;
 }
-#else
-extern HexaVal rt_array_alloc(HexaVal n);
-HexaVal hexa_array_alloc(HexaVal nv) {
-    if (_hx_stats_on()) _hx_stats_array_new++;
-    int64_t n = HX_IS_INT(nv) ? HX_INT(nv) : (int64_t)__hx_to_double(nv);
-    return rt_array_alloc(hexa_int(n));
-}
-#endif
 
 HexaVal hexa_array_free(HexaVal arr) {
     if (!HX_IS_ARRAY(arr)) return hexa_void();

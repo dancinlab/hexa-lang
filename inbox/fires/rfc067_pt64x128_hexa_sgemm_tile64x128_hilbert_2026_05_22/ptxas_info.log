@@ -1,0 +1,20 @@
+=== shape 4096 (sgemm_tile64x128_hilbert_4096x4096_grid) ===
+
+
+shape 4096 cuFuncGetAttribute: regs/thd=42, shmem=12288 B, max_thd_per_block=1024, est_CTAs_per_SM=3 (min over thd 4, reg 3, shmem 8)
+
+=== shape 5120 (sgemm_tile64x128_hilbert_5120x5120_grid) ===
+
+
+shape 5120 cuFuncGetAttribute: regs/thd=42, shmem=12288 B, max_thd_per_block=1024, est_CTAs_per_SM=3 (min over thd 4, reg 3, shmem 8)
+
+=== shape 6144 (sgemm_tile64x128_hilbert_6144x6144_grid) ===
+
+
+shape 6144 cuFuncGetAttribute: regs/thd=42, shmem=12288 B, max_thd_per_block=1024, est_CTAs_per_SM=3 (min over thd 4, reg 3, shmem 8)
+
+=== shape 8192 (sgemm_tile64x128_hilbert_8192x8192_grid) ===
+
+
+shape 8192 cuFuncGetAttribute: regs/thd=42, shmem=12288 B, max_thd_per_block=1024, est_CTAs_per_SM=3 (min over thd 4, reg 3, shmem 8)
+

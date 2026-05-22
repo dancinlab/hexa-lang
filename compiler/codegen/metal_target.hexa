@@ -828,43 +828,78 @@ fn _metal_emit_matmul_kernel_signature(name: string) -> string {
 }
 
 // _metal_emit_matmul_body — emit the MSL kernel body for the canonical
-// matmul `c = a · b` using Apple `simdgroup_matrix` MMA. The threadgroup
-// tile is 32×32 (METAL_MM_TG_DIM); the K-loop steps by the 8×8 fragment
-// dim (METAL_MM_FRAG_DIM) accumulating into the C fragment via
-// `simdgroup_multiply_accumulate`. After the loop the fragment is stored
-// to the output tile via `simdgroup_store` (stride N, row-major C).
+// matmul `c = a · b` using Apple `simdgroup_matrix` MMA. Each threadgroup
+// computes a full 32×32 output tile (METAL_MM_TG_DIM) composed of a 4×4
+// grid of 8×8 simdgroup-matrix fragments (METAL_MM_FRAG_DIM = 8). The
+// emit declares 16 (= (TG_DIM/FRAG_DIM)²) C accumulators, zero-init via
+// `make_filled_simdgroup_matrix<float, 8, 8>(0.0f)` (Apple takes the
+// element type + dims as TEMPLATE PARAMS, not a runtime arg — N166 found
+// the prior `(simdgroup_float8x8, 0.0f)` form does not compile). The
+// K-loop steps by the 8×8 fragment dim; for each K-step it loads the four
+// 8×8 A sub-tiles (one per sub_m row band) and four 8×8 B sub-tiles (one
+// per sub_n col band) via scalar-origin `simdgroup_load`, then issues the
+// 4×4 = 16 `simdgroup_multiply_accumulate` MMAs. After the K-loop every
+// fragment is stored to its 8×8 output sub-tile via `simdgroup_store`.
 //
-// `a_lay` / `b_lay` flag column-major operands for the NT variants
-// (matmul_NT_a transposes A; matmul_NT_b transposes B). Apple
+// Sub-tile pointer arithmetic (canonical row-major, scalar-origin load —
+// the exact N166-verified-compiling form, no `ulong2` origin):
+//   A sub-tile (sub_m, kk): a + (row_tile + sub_m*8) * K + kk      stride K
+//   B sub-tile (sub_n, kk): b + kk * N + (col_tile + sub_n*8)      stride N
+//   C sub-tile (sub_m,sub_n): c + (row_tile + sub_m*8) * N
+//                               + (col_tile + sub_n*8)             stride N
+//
+// `a_transpose` / `b_transpose` flag column-major operands for the NT
+// variants (matmul_NT_a transposes A; matmul_NT_b transposes B). Apple
 // `simdgroup_load(frag, base, stride, origin, transpose)` carries the
 // transpose flag as the final bool argument.
 fn _metal_emit_matmul_body(a_transpose: bool, b_transpose: bool) -> string {
     let frag_dim = to_string(METAL_MM_FRAG_DIM)
     let tg_dim = to_string(METAL_MM_TG_DIM)
+    // sub-tiles per tile axis = TG_DIM / FRAG_DIM (= 32 / 8 = 4).
+    let sub_n_per_axis = METAL_MM_TG_DIM / METAL_MM_FRAG_DIM
+    let sub_axis = to_string(sub_n_per_axis)
+    // Template-typed accumulator: `make_filled_simdgroup_matrix<float, 8, 8>`.
+    let frag_tmpl = METAL_MM_MAKE_ZERO + "<" + METAL_TYPE_FLOAT + ", " + frag_dim + ", " + frag_dim + ">"
     let a_t = if a_transpose { "true" } else { "false" }
     let b_t = if b_transpose { "true" } else { "false" }
     let mut out = "{\n"
     // Tile origin from threadgroup position — 32×32 tile per threadgroup.
     out = out + "    uint row_tile = tg.y * " + tg_dim + ";  // block row origin\n"
     out = out + "    uint col_tile = tg.x * " + tg_dim + ";  // block col origin\n"
-    // C accumulator fragment, zero-initialised.
-    out = out + "    " + METAL_MM_FRAG_TYPE + " c_frag = "
-    out = out + METAL_MM_MAKE_ZERO + "(" + METAL_MM_FRAG_TYPE + ", 0.0f);  // C tile accumulator\n"
-    out = out + "    " + METAL_MM_FRAG_TYPE + " a_frag;\n"
-    out = out + "    " + METAL_MM_FRAG_TYPE + " b_frag;\n"
-    // K-loop: step by the 8×8 fragment dim.
-    out = out + "    for (uint kk = 0; kk < K; kk += " + frag_dim + ") {\n"
-    // A tile load — &a[row_tile*K + kk] stride K (row-major) for canonical;
-    // transpose flag flips for NT-a.
-    out = out + "        " + METAL_MM_LOAD + "(a_frag, a + row_tile * K + kk, K, 0, " + a_t + ");  // A tile\n"
-    // B tile load — &b[kk*N + col_tile] stride N (row-major) for canonical;
-    // transpose flag flips for NT-b.
-    out = out + "        " + METAL_MM_LOAD + "(b_frag, b + kk * N + col_tile, N, 0, " + b_t + ");  // B tile\n"
-    // Accumulate — c_frag = a_frag * b_frag + c_frag (warp-level MMA).
-    out = out + "        " + METAL_MM_MAD + "(c_frag, a_frag, b_frag, c_frag);  // c = a*b + c\n"
+    // 4×4 grid of 8×8 C accumulators (16 fragments covering the 32×32 tile),
+    // zero-initialised via the template-arg fill (Fix 1: element type + dims
+    // are TEMPLATE params, NOT a runtime first argument).
+    out = out + "    " + METAL_MM_FRAG_TYPE + " c_frag[" + sub_axis + "][" + sub_axis + "];\n"
+    out = out + "    for (uint sm = 0; sm < " + sub_axis + "; ++sm) {\n"
+    out = out + "        for (uint sn = 0; sn < " + sub_axis + "; ++sn) {\n"
+    out = out + "            c_frag[sm][sn] = " + frag_tmpl + "(0.0f);  // zero-init accumulator\n"
+    out = out + "        }\n"
     out = out + "    }\n"
-    // Store C accumulator to &c[row_tile*N + col_tile], stride N row-major.
-    out = out + "    " + METAL_MM_STORE + "(c_frag, c + row_tile * N + col_tile, N);  // C tile store\n"
+    // K-loop: step by the 8×8 fragment dim, accumulating all 16 sub-tiles.
+    out = out + "    for (uint kk = 0; kk < K; kk += " + frag_dim + ") {\n"
+    // Load the 4 A sub-tiles for this K-step (one per sub_m row band).
+    out = out + "        " + METAL_MM_FRAG_TYPE + " a_frag[" + sub_axis + "];\n"
+    out = out + "        for (uint sm = 0; sm < " + sub_axis + "; ++sm) {\n"
+    out = out + "            " + METAL_MM_LOAD + "(a_frag[sm], a + (row_tile + sm * " + frag_dim + ") * K + kk, K, 0, " + a_t + ");  // A sub-tile\n"
+    out = out + "        }\n"
+    // Load the 4 B sub-tiles for this K-step (one per sub_n col band).
+    out = out + "        " + METAL_MM_FRAG_TYPE + " b_frag[" + sub_axis + "];\n"
+    out = out + "        for (uint sn = 0; sn < " + sub_axis + "; ++sn) {\n"
+    out = out + "            " + METAL_MM_LOAD + "(b_frag[sn], b + kk * N + (col_tile + sn * " + frag_dim + "), N, 0, " + b_t + ");  // B sub-tile\n"
+    out = out + "        }\n"
+    // 4×4 = 16 warp-level MMAs: c[sm][sn] = a[sm] * b[sn] + c[sm][sn].
+    out = out + "        for (uint sm = 0; sm < " + sub_axis + "; ++sm) {\n"
+    out = out + "            for (uint sn = 0; sn < " + sub_axis + "; ++sn) {\n"
+    out = out + "                " + METAL_MM_MAD + "(c_frag[sm][sn], a_frag[sm], b_frag[sn], c_frag[sm][sn]);  // c = a*b + c\n"
+    out = out + "            }\n"
+    out = out + "        }\n"
+    out = out + "    }\n"
+    // Store each 8×8 C accumulator to its output sub-tile (stride N, row-major).
+    out = out + "    for (uint sm = 0; sm < " + sub_axis + "; ++sm) {\n"
+    out = out + "        for (uint sn = 0; sn < " + sub_axis + "; ++sn) {\n"
+    out = out + "            " + METAL_MM_STORE + "(c_frag[sm][sn], c + (row_tile + sm * " + frag_dim + ") * N + (col_tile + sn * " + frag_dim + "), N);  // C sub-tile store\n"
+    out = out + "        }\n"
+    out = out + "    }\n"
     out = out + "}\n"
     return out
 }

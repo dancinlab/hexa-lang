@@ -1006,3 +1006,340 @@ source edits). **v3 scope contract**: appended to existing SCOREBOARD.md; v1
 + v2 sections preserved verbatim. M=1536 retained as "session peak" reference
 for backward continuity with v2.B; new "absolute peak" headline = M=4096
 N124 reflects the post-Round-18 shape sweep.
+
+---
+
+# ────────────────────────────────────────────────────────────────────────
+# v4 APPENDIX — Round 20–22 cumulative (post-N133, refreshed 2026-05-22)
+# ────────────────────────────────────────────────────────────────────────
+
+**Trigger**: v3 captured through Round 19 (N105–N133 — NVPTX matmul E2E + first
+Apple M4 fire + the **N130 large-M cliff discovery**: ratio collapse to 0.234 @
+M=6144). Rounds 20–22 are the **cliff-recovery saga** plus a cross-arch Apple M4
+matmul compound + Metal matmul codegen.
+
+The headline of v4: the N130 cliff is **FULLY RECOVERED and then FLATTENED**.
+- **N134 (Round 20)** 4×4 super-block CTA-swizzle: M=6144 ratio 0.234 → **0.655**
+  (+180% TFLOPS), M=8192 0.304 → **0.624** (+218%).
+- **N149 (Round 21)** Hilbert-curve CTA-swizzle: M=8192 → **🛸 ratio 0.847** —
+  **the best large-M ratio of the entire campaign** and the new v4 headline.
+- Mechanism nailed by three Nsight cycles (N140 → N157 → N167): an **L2-hit
+  ladder 50% → 87% → 96.8%** at M=8192 with the kernel body byte-identical, CTA
+  visitation order the *sole* changed variable.
+
+**Substrate**: RTX 5070 sm_120 (ubu-1 + ubu-2), Apple M4 (mini), Apple M3 (Mac
+local). v1 + v2 + v3 tables retained verbatim — v4 appends only.
+
+**Honest scope** (`@D g3`):
+- cuBLAS-BEAT remains **small-shape launch-bound only**: M∈{256, 320, 448}
+  (N155). No compute-bound or large-saturated shape exceeds ratio 1.0.
+- **N149 Hilbert 0.847 @ M=8192 is the large-M headline** — a *catch-up* peak in
+  the large-saturated regime, NOT a cuBLAS-beat.
+- Round 22 produced **2 honest negatives** (N151 tile128+Hilbert −35%, N168
+  6-stage+Hilbert regime-orthogonal ~0%) + **1 BLOCKED** (N153 / N153-retry —
+  N143 auto-synth silent-wiped from origin/main). All three are part of the
+  honest picture below.
+
+---
+
+## v4.A — Round 20–22 cycle index
+
+| Round | Cycle | Variant / probe | Host | Headline result | Artifact | Commit |
+|------:|------:|-----------------|------|------------------|----------|--------|
+| 20 | **N134 (PSWZ)** | 4×4 super-block CTA-swizzle (cliff recovery) | ubu-2 | M=6144 ratio 0.655 (+180%), M=8192 0.624 (+218%) | `inbox/fires/rfc067_pswz_hexa_sgemm_cta_swizzle_2026_05_22/result.json` | `78970343` |
+| 20 | **N138 (4sg)** | Apple M4 4-simdgroup 64×64 cross-arch | mini (M4) | peak **2109.05 GFLOPS** @ 1536³ (1.14× M4 baseline, 1.39× M3) | `inbox/fires/rfc075_metal_m4_4sg_64x64_2026_05_22/result.json` | `459667fe` |
+| 20 | **N140 (Nsight)** | no-swizzle L2-thrash root-cause (ncu/nsys) | ubu-1 | L2 hit 98% → 56.7% → 50.4%; eligible warps 1.51 → 0.10 | `inbox/fires/rfc067_pnsight_hexa_sgemm_m8192_profile_2026_05_22/result.json` | `2599edbb` |
+| 20 | N141 v3 | scoreboard refresh | Mac local | (this file's v3 appendix) | (this file) | — |
+| 20 | N143 | HIR nested-loop matmul auto-synth | (compiler) | +382 lines hir_to_mir.hexa (later wiped — see N153) | (compiler source) | `4c93b550` |
+| 21 | **N149 (PHILB)** | Hilbert-curve d2xy CTA-swizzle | ubu-1 | **🛸 M=8192 ratio 0.847** (BEST large-M, cliff FLATTENED) | `inbox/fires/rfc067_philb_hexa_sgemm_hilbert_swizzle_2026_05_22/result.json` | `c67cceaa` |
+| 21 | **N155 (PBEAT)** | cuBLAS-BEAT envelope sweep (3-fire median) | ubu-2 | BEAT @ M∈{256, 320, 448}; boundary M=448 | `inbox/fires/rfc067_pbeat_hexa_sgemm_beat_envelope_2026_05_22/result.json` | `e5645499` |
+| 21 | **N157 (Nsight-swz)** | super-block L2 A/B controlled diff | ubu-2 | L2 hit 56.7% → 86.9% @ M=6144 (+30.2 pts) | `inbox/fires/rfc067_pnsight_swizzle_profile_2026_05_22/result.json` | `1f0ea7fe` |
+| 21 | **N161 (codegen)** | Metal matmul codegen emit (`_metal_emit_matmul_body`) | (compiler) | MSL matmul body emitter (consumed by N166 fire) | (compiler source) → `inbox/fires/rfc075_metal_matmul_codegen_m4_fire_2026_05_22/` | `6cd70476` |
+| 21 | N153 | NVPTX natural-loop matmul E2E (first attempt) | (compile) | **BLOCKED** — N143 auto-synth absent on origin/main | `inbox/fires/rfc071_p11_matmul_natural_silicon_2026_05_22/result.json` | `e1c99f2d` |
+| 22 | **N166 (codegen M4)** | Metal matmul codegen → M4 silicon-fire | mini (M4) | 1-token compile-bug + rel_err **2.55e-7** (M=512) PASS | `inbox/fires/rfc075_metal_matmul_codegen_m4_fire_2026_05_22/result.json` | `6cd70476` |
+| 22 | **N167 (Nsight-hilb)** | Hilbert L2 3-way ladder confirm | ubu-2 | L2 hit **96.8%** @ M=6144 (ladder 56→87→97%) | `inbox/fires/rfc067_pnsight_hilbert_profile_2026_05_22/result.json` | `e1c99f2d` |
+| 22 | **N151 (PT128H)** | 128×128 tile + Hilbert (NEGATIVE) | ubu-2 | −35% vs N149 64×64+Hilbert (every M) | `inbox/fires/rfc067_pt128h_hexa_sgemm_tile128_hilbert_2026_05_22/result.json` | `e1c99f2d` |
+| 22 | **N168 (P6H)** | 6-stage + Hilbert COMBINE (NEGATIVE) | ubu-1 | regime-orthogonal: ~0% at large-M, −6.7% small-M | `inbox/fires/rfc067_p6h_hexa_sgemm_6stage_hilbert_2026_05_22/result.json` | `c68f5c65` |
+| 22 | N153-retry | NVPTX natural-loop matmul E2E (retry) | (compile) | **BLOCKED** — N143 still wiped (commit `e8c2dc1c` ancestor of origin/main) | `inbox/fires/rfc071_p11_matmul_natural_silicon_2026_05_22/result.json` | `e1c99f2d` |
+
+> Note: N161 (codegen emit) and N166 (M4 fire of that emit) share artifact dir +
+> commit `6cd70476` — the dir holds both the codegen output (`*.metal`) and the
+> fire result. N153 + N153-retry share `rfc071_p11_...` (`e1c99f2d`) — one BLOCKED
+> diagnosis covers both attempts.
+
+---
+
+## v4.B — 🛸 LARGE-M CLIFF SAGA (the v4 centrepiece)
+
+The single most consequential v4 finding: the N130 large-M cliff (v3.C.3) is
+**discovered → recovered → flattened → mechanistically explained**, all with the
+kernel MMA body byte-identical (only CTA *visitation order* changes).
+
+### v4.B.1 — Ratio progression at the cliff shapes (M=N=K)
+
+| Shape | N130 no-swizzle | N134 super-block | N149 Hilbert | cuBLAS HGEMM TFLOPS |
+|------:|----------------:|-----------------:|-------------:|--------------------:|
+| 4096³ | 0.818 (57.33)   | 0.828 (58.03)    | 0.821 (56.99) | 70.0 |
+| 5120³ | (not in N130)   | 0.717 (50.45)    | **0.827 (57.69)** | 69.7 |
+| 6144³ | **🛸 0.234 (16.55)** | 0.655 (46.37) | **0.834 (58.49)** | 70.8 |
+| 8192³ | **🛸 0.304 (13.91)** | 0.624 (44.17) | **🛸 0.847 (59.48)** | 70.2 |
+
+(hexa TFLOPS in parentheses; ratios = hexa/cuBLAS HGEMM; all `max_abs=0` byte-eq.)
+
+- **Discovery (N130, v3.C.3)**: row-major CTA visitation thrashes L2 once the
+  working set exceeds ~4.5× the 32 MB L2. Ratio collapses 0.818 (M=4096) → 0.234
+  (M=6144). The "0.82 structural ceiling" idea (N124) was a **local plateau**.
+- **Recovery (N134, Round 20)**: a 4×4 super-block remap keeps the concurrent
+  super-block working set ~6 MB ≪ 32 MB L2. M=6144 0.234 → **0.655** (+180.2%),
+  M=8192 0.304 → **0.624** (+217.6%). The cliff is recovered but a **0.62–0.66
+  plateau** remains (super-block bounds concurrency to a 256×256 *row strip*).
+- **Flatten (N149, Round 21)**: Hilbert space-filling-curve d2xy maps adjacent
+  CTA IDs to Manhattan-adjacent output tiles — a tight 2D blob, not a row strip.
+  This pushes M=8192 to **🛸 0.847** — the BEST large-M ratio of the campaign and
+  *higher* than the small-M-saturated 0.78 region. M=5120/6144 also land 0.827 /
+  0.834. Padding CTAs (launch p×p, p=next_pow2(side)) early-return cheaply.
+
+### v4.B.2 — Mechanism: the L2-hit ladder (Nsight A/B, byte-identical kernels)
+
+Three controlled Nsight cycles isolate CTA visitation order as the SOLE cause
+(inst_executed within 0.5%, occupancy fixed ~66% register-limited throughout):
+
+| Metric @ M=6144 | N140 no-swizzle | N157 super-block | N167 Hilbert |
+|-----------------|----------------:|-----------------:|-------------:|
+| **L2 hit rate %** | **56.72** | **86.94** | **🛸 96.81** |
+| DRAM bytes/launch | 6470 MB | 1944 MB | 548 MiB |
+| DRAM bandwidth GB/s | 223.9 (saturated) | 198.9 | 59.3 (idle) |
+| eligible warps/sched | 0.10 | 0.33 | 0.35 |
+| warp cycles/issued inst | 121.94 | 42.83 | 40.33 |
+| compute SM throughput % | 14.0 | 39.8 | 42.3 |
+| real ratio vs cuBLAS | 0.234 | 0.655 | 0.834 |
+
+| Metric @ M=8192 | N140 no-swizzle | N157 super-block | N167 Hilbert |
+|-----------------|----------------:|-----------------:|-------------:|
+| **L2 hit rate %** | **50.44** | **87.07** | **🛸 96.48** |
+| DRAM bytes/launch | 17464 MB | 4483 MB | 1355 MiB |
+| warp cycles/issued inst | 141.53 | 45.67 | 39.95 |
+| real ratio vs cuBLAS | 0.304 | 0.624 | 0.847 |
+
+**Single causal chain** (N140's "L2-thrash vs DRAM-bandwidth" either/or resolved):
+swizzle → concurrent CTAs share a tight 2D blob → L2 hit 56→87→97% → DRAM bytes
+fall 3.3–12.9× → DRAM un-saturates → warp-stall latency 122→40 cyc/inst →
+eligible warps 0.10→0.35 → compute SM 14→42% → +180–218% throughput.
+Hilbert's 97% (vs super-block's 87% plateau) explains its +26–35% perf over
+super-block at the cliff. Artifacts: N140 `rfc067_pnsight_hexa_sgemm_m8192_profile`,
+N157 `rfc067_pnsight_swizzle_profile`, N167 `rfc067_pnsight_hilbert_profile`.
+
+**Honest caveat** (carried from the artifacts): Hilbert L2 hit plateaus ~96.8%,
+NOT M=4096's 98% — the full A+B working set (144–256 MB) still ≫ 32 MB L2; the
+swizzle bounds the *concurrent* blob, not the whole matrix. This is exactly why
+the large-M ratio caps at 0.847 and a residual gap to cuBLAS remains.
+
+---
+
+## v4.C — cuBLAS-BEAT envelope (N155, refresh of v3.E)
+
+N155 swept M∈{192…512} with 3 independent fires (200 reps + 20 warmup each,
+median of medians), bit-exact across all shapes/variants/runs. The BEAT envelope
+is **NON-MONOTONIC** — cuBLAS picks a slow launch-bound kernel at M=448
+(16.70 TFLOPS) vs M=384 (16.85), re-opening a BEAT window at 448.
+
+| M | num_CTAs | cuBLAS HGEMM TFLOPS | best hexa TFLOPS | best ratio | best variant | BEAT |
+|--:|---------:|--------------------:|-----------------:|-----------:|--------------|:----:|
+| 192 | 9  | 3.030 | 2.756 | 0.906 | N121-6stage | no |
+| **256** | 16 | 4.993 | 5.419 | **🛸 1.085** | N121-6stage | **YES** |
+| **320** | 25 | 9.776 | 10.164 | **🛸 1.042** | N121-6stage | **YES** |
+| 384 | 36 | 16.852 | 16.050 | 0.952 | N121-6stage | no |
+| **448** | 49 | 16.700 | 16.978 | **🛸 1.017** | N121-6stage | **YES** |
+| 512 | 64 | 24.818 | 22.611 | 0.911 | N121-6stage | no |
+
+**cuBLAS-BEAT shapes confirmed (v4)**: **M ∈ {256, 320, 448}** — all
+launch-overhead-bound (under-subscribed grid: ≤49 CTAs vs 48 SMs). The all-time
+peak ratio remains **1.1611 @ M=256 (N121, v3.E)**; N155's M=256 median
+re-confirms BEAT at 1.085 across 3 fires. **Still NO compute-bound or
+large-saturated shape ≥ 1.0** — best M≥512 = 0.911 (launch-bound boundary).
+
+---
+
+## v4.D — Apple M4 enabled (N133 baseline + N138 4-simdgroup cross-arch)
+
+N138 ports N107's NVPTX axis-1 (tile-shrink + few-warps for occupancy) to Apple:
+4 simdgroups/TG (128 threads) in a 2×2 grid on a 64×64 tile, vs N133's 32 sg/TG.
+The question: does the Nvidia occupancy lever transfer to the M4's 10-core GPU?
+
+| M (kernel) | N138 4sg GFLOPS | N138 4sg_db GFLOPS | N133 M4 db baseline | N138 vs N133 |
+|-----------:|----------------:|-------------------:|--------------------:|-------------:|
+| 256  | 337.65  | 335.40  | 695.43  | 0.48× (regress small) |
+| 512  | 924.44  | 770.26  | 884.71  | 1.04× / 0.87× |
+| 768  | 1893.02 | 1990.96 | 1839.07 | 1.10× / 1.08× |
+| 1024 | 1934.23 | 2052.80 | 1858.35 | 1.10× |
+| **1536** | 2027.51 | **🛸 2109.05** | 1852.58 | **1.14× (peak)** |
+
+**N138 verdict = COMPOUNDS** (peak 2109.05 ≥ N133 peak 1858.35).
+- **M4 peak: 🛸 2109.05 GFLOPS @ 1536³ tg_db** = **1.14× N133 M4 baseline**,
+  **1.39× M3 N37** (1519 GFLOPS). max_rel_err = 0.0 across all 10 rows.
+- **Cross-arch finding**: the occupancy lever transfers at *large* M (where the
+  M4's 10-core grid is saturated) but **regresses at M=256** (0.48× — 4 sg/TG
+  *under-fills* the small grid where N133's 32 sg/TG had more parallelism). Each
+  simdgroup carries 16 FP32 accumulators (vs N133's 2) — 8× more register-resident
+  state per SG; the win is conditional on enough tiles to amortise.
+- vs the NVPTX N107 peak (51651.6 GFLOPS @ 1536³ on RTX 5070), M4 = 0.041× —
+  the substrate gap, informational only.
+
+N133 (v3.C.6) baseline retained verbatim in v3; N138 is the compounding follow-on.
+
+---
+
+## v4.E — Codegen scoreboard (source-to-silicon E2E)
+
+| Domain | Cycle | Status | Substrate | Detail |
+|--------|------:|--------|-----------|--------|
+| NVPTX matmul (builtin `gpu_matmul()` path) | N128 | **CLOSED** (v3.F) | RTX 5070 (ubu-1) | full WMMA emit, re-confirmed intact this round (control emit: 4 wmma refs) |
+| **NVPTX matmul (natural nested-loop auto-synth)** | **N153 / N153-retry** | **🛸 BLOCKED** | (compile only) | N143 auto-synth (`4c93b550`) **silent-wiped** by `e8c2dc1c` (ancestor of origin/main). Natural-loop emit falls through to SCALAR PTX (0 wmma); builtin-path control proves everything downstream of HIR→MIR works. Recommend cherry-pick of `4c93b550`'s hir_to_mir.hexa + mir_test portions. |
+| **Metal matmul codegen emit** | **N161** | emitter LANDED | (compiler) | `_metal_emit_matmul_body` produces MSL matmul body |
+| **Metal matmul codegen → M4 fire** | **N166** | **🛸 CLOSED (numeric)** | Apple M4 (mini) | verbatim codegen output had a **1-token compile bug** (`make_filled_simdgroup_matrix(simdgroup_float8x8, 0.0f)` → must be `<float,8,8>`); 1-token-patched → covered-subblock rel_err **2.55e-7** (M=512) / **2.58e-7** (M=256), `F-RFC075-METAL-MATMUL-CODEGEN-M4-NUMERIC-EQ: PASS` |
+| ROCm vec-add | N132 (v3.C.5) | DEFERRED → 19 codegen substrings | none | no AMD GPU stock, $0; compile-time substrings advanced (v3) |
+
+**N166 honest caveat**: the codegen tiling is partial — the emitted body computes
+1 8×8 fragment per 32×32 tile (16/64 covered sub-blocks at full-tile scope; the
+*covered* sub-blocks are numerically exact at rel_err ~2.5e-7). `full_tile_max_rel_err
+= 1.0` is the uncovered region — the codegen tiling gap, not a numeric error. The
+PASS gate is scoped to covered sub-blocks per the falsifier contract.
+
+---
+
+## v4.F — Falsified hypotheses (post-N133, additive to §9.1 / v2.C / v3.H)
+
+v1+v2+v3 listed 14 falsifiers (1–14). v4 adds:
+
+15. **N151 — 128×128 tile + Hilbert NEGATIVE (−33 to −36% vs N149 64×64+Hilbert).**
+    Hypothesis: a bigger tile's larger L2-resident working set per CTA + Hilbert
+    visitation pushes the large-M ratio past 0.847. **Refuted at every M**: M=4096
+    0.526 (−35.4%), M=6144 0.550 (−33.4%), M=8192 0.538 (−36.3%). N89's
+    occupancy-collapse finding holds — the 128×128 / 1024-thd / 32-warp tile runs
+    1 CTA/SM (47 regs) and the L2-locality win cannot offset the occupancy loss.
+    Tile size is the WRONG knob on RTX 5070; the 64×64 chassis is correct.
+    Artifact: `rfc067_pt128h_hexa_sgemm_tile128_hilbert_2026_05_22/result.json`.
+
+16. **N168 — 6-stage + Hilbert COMBINE is REGIME-ORTHOGONAL (no compound win).**
+    Hypothesis: combine N121's small-M cuBLAS-BEAT (6-stage, M=256 1.161) with
+    N149's large-M cliff-flatten (Hilbert, M=8192 0.847) into one kernel that wins
+    BOTH regimes. **Refuted**: the two axes are orthogonal, not additive. At small
+    M the 24576 B shmem of the 6-stage pipeline collapses occupancy (M=256
+    1.083 = −6.7% vs N121's 1.161; M=384 0.642 = −31.7%); at large M it merely
+    matches N149 (M=4096 +0.68%, M=6144 +0.18%, M=8192 −0.69% — all within noise).
+    No kernel wins both regimes; per-shape HYBRID dispatch (N131) remains the
+    production answer. Artifact: `rfc067_p6h_hexa_sgemm_6stage_hilbert_2026_05_22/result.json`.
+
+17. **N153 / N153-retry — "N143 natural-loop auto-synth restored on origin/main"
+    premise FALSE (BLOCKED, not falsified-by-measurement).** The task premise that
+    N143 was restored is refuted by grep (count 0 on HEAD + origin/main). N143
+    (`4c93b550`, +382 lines) was silent-wiped by `e8c2dc1c` (a "wip" commit
+    authored on a stale base predating N143, re-flattening hir_to_mir.hexa). This
+    is the compiler-source variant of the deploy-regen / worktree silent-wipe
+    pattern. Natural-loop matmul emits SCALAR PTX (0 wmma); builtin-path control
+    emits full WMMA — isolating the gap to the missing HIR→MIR matcher. No
+    misleading silicon-fire run (firing scalar PTX would give a deceptive numeric
+    PASS, `@D g3`). Artifact: `rfc071_p11_matmul_natural_silicon_2026_05_22/result.json`.
+
+18. **N130 "structural ceiling 0.82" — REFUTED then RESOLVED (carried from v3.H
+    #14, mechanism now closed in v4).** v3 flagged the 0.82 plateau as local-not-
+    structural via the M≥6144 cliff. v4 closes the loop: the cliff is an L2-capacity
+    -miss → DRAM-saturation chain (N140), fully recoverable by CTA-swizzle (N134
+    +180%) and flattenable to 0.847 by Hilbert (N149), with the L2-hit ladder
+    56→87→97% measured (N157/N167). The "ceiling" was a *cache-locality* artifact
+    of row-major CTA order, not a compute ceiling.
+
+**Cumulative falsifier count**: 14 (v1+v2+v3) + 4 (v4: N151, N168, N153-BLOCKED,
+N130-resolution) = **18 falsified / blocked hypotheses** this multi-session campaign.
+
+---
+
+## v4.G — Single-session peak progression by round (HGEMM, updated through Round 22)
+
+The v2.B/v3.D table tracked the M=1536 saturated peak. v4 adds the large-M cliff
+shapes (M≥6144) where the swizzle saga lives. Peak-ratio column = best ratio at
+the *largest* shape each round measured.
+
+| Round | Best cycle | hexa TFLOPS (shape) | Ratio | Substrate | Mechanism / finding |
+|------:|-----------|--------------------:|------:|-----------|---------------------|
+| 1  | N38 (pD)        | 16.69 (1536³)  | 0.350 | RTX 5070 | naive WMMA m16n16k16 |
+| 13 | N76-retry (pO)  | 31.28 (1536³)  | 0.462 | RTX 5070 | + ldmatrix.x4 + 2× mma.m16n8k16 |
+| 16 | N93 (pU)        | 37.996 (1536³) | 0.5705| RTX 5070 | + vec-2 epilogue |
+| 17 | N107 (pY)       | 51.652 (1536³) | 0.777 | RTX 5070 | + 4-warp 64×64, 1→8 CTAs/SM |
+| 18 | N124 (pZbig)    | 57.330 (4096³) | 0.819 | RTX 5070 | + big-M sweep (M=4096) |
+| 19 | N130 (pmax)     | 16.552 (**6144³ CLIFF**) | **0.234** | RTX 5070 | **🛸 cliff discovery — L2-thrash @ M≥6144** |
+| **20** | **N134 (pswz)** | 46.37 (6144³) / 44.17 (8192³) | **0.655 / 0.624** | RTX 5070 | **+ 4×4 super-block CTA-swizzle (cliff +180/+218%)** |
+| **21** | **🛸 N149 (philb)** | **58.49 (6144³) / 🛸 59.48 (8192³)** | **0.834 / 🛸 0.847** | RTX 5070 | **+ Hilbert d2xy CTA-swizzle (cliff FLATTENED — BEST large-M)** |
+| 22 | (N151 / N168 negatives) | — | — | RTX 5070 | tile128+Hilbert −35%; 6-stage+Hilbert regime-orthogonal |
+
+**Large-M headline (v4)**: 🛸 **ratio 0.847 @ M=8192 (N149 Hilbert, 59.48 TFLOPS)**
+— the highest large-saturated ratio of the campaign, and *above* the M=1536–4096
+0.78–0.82 region. The cliff recovery saga (0.304 → 0.624 → 0.847 @ M=8192) is the
+defining arc of Rounds 20–22.
+
+---
+
+## v4.H — Per-substrate peak refresh (updates v3.I)
+
+| Substrate | Precision / probe | Peak hexa | Cycle | Vendor ceiling | Peak ratio | Δ vs v3.I |
+|-----------|-------------------|----------:|-------|---------------:|-----------:|-----------|
+| RTX 5070 sm_120 (ubu-1) | HGEMM **large-M** (Hilbert swizzle) | **🛸 59.48 TFLOPS** @ 8192³ | **N149 (philb)** | 70.20 @ 8192³ | **🛸 0.847** | **NEW — best large-M ratio campaign-wide** |
+| RTX 5070 sm_120 (ubu-2) | HGEMM absolute TFLOPS | 58.49 @ 6144³ | N149 (philb) | 70.13 @ 6144³ | 0.834 | (4096³ N124 57.33 superseded at large-M) |
+| RTX 5070 sm_120 | HGEMM small-M (best ratio, cuBLAS-BEAT) | 5.825 @ 256³ | N121 (pZ) / N155 re-confirm | 5.017 @ 256³ | 🛸 1.1611 | unchanged (peak ratio); N155 BEAT envelope M∈{256,320,448} |
+| RTX 5070 sm_120 | HGEMM mid-M cliff recovery | 46.37 @ 6144³ | N134 (pswz) | 70.83 @ 6144³ | 0.655 | NEW (super-block, superseded by N149) |
+| RTX 5070 sm_120 (ubu-2) | SGEMM (TF32) | 15.25 @ 1536³ | N74 (PM) | 32.83 @ 1536³ | 0.464 | unchanged |
+| RTX PRO 4500 Blackwell  | SGEMM (TF32) | 22.36 @ 1536³ | N60 (PJ) | 87.69 @ 1536³ | 0.255 | unchanged |
+| **Apple M4 (mini)** | **simdgroup_matmul 4sg tg_db** | **🛸 2.109 TFLOPS** @ 1536³ | **N138 (4sg)** | (n/a — hand-emit) | 1.14× N133 / 1.39× M3 | **NEW peak (was 1.858 @ 1024³ N133)** |
+| Apple M4 (mini) | vec-add bandwidth | 153.14 GB/s @ N=256K | N133 | LPDDR5X spec | (v3) | unchanged |
+| Apple M3 | simdgroup_matmul tg_db | 1.519 TFLOPS @ 1024³ | N37 | (n/a) | — | unchanged |
+| Apple M4 (mini) | **Metal matmul codegen fire** | rel_err 2.55e-7 (M=512) | **N166** | (numeric closure) | PASS | **NEW codegen-path closure** |
+| RTX 5070 vec-add bandwidth | FP64 | 1624.86 GB/s (L2) / 644 DRAM | N63 | spec ~672 GB/s | — | unchanged |
+
+---
+
+## v4.I — Cumulative session count cross-check (updates v3.J)
+
+v3.J reported 51 measurement-bearing artifacts. v4 additions in main `inbox/fires/`:
+
+- **Round 20**: 3 (`rfc067_pswz_...`, `rfc075_metal_m4_4sg_64x64_...`,
+  `rfc067_pnsight_hexa_sgemm_m8192_profile_...`).
+- **Round 21**: 3 (`rfc067_philb_...`, `rfc067_pbeat_...`,
+  `rfc067_pnsight_swizzle_profile_...`).
+- **Round 22**: 4 (`rfc067_pnsight_hilbert_profile_...`,
+  `rfc067_pt128h_...`, `rfc067_p6h_...`, `rfc075_metal_matmul_codegen_m4_fire_...`).
+- **BLOCKED diagnosis** (no perf row, documents N153/N153-retry):
+  `rfc071_p11_matmul_natural_silicon_...`.
+
+**v4 cumulative count** = 51 (v3) + 10 measured + 1 BLOCKED-diagnosis = **62
+measurement-bearing artifacts** in main `inbox/fires/` across Rounds 0–22.
+
+> Two empty Round-22-in-flight directories (`rfc067_pcond_...`,
+> `rfc067_pt64x128_...`) exist but contain no `result.json` — NOT tabulated, no
+> numbers fabricated (`@D g3`).
+
+---
+
+## v4.J — Provenance & honest scope notes
+
+All v4 rows traceable to the cited `result.json` field path; numbers copied
+verbatim. Commit SHAs obtained via `git log -1 --format=%h -- <artifact-dir>`.
+Cycle tags (`N#`) map per the task brief.
+
+- **N149 Hilbert 0.847 @ M=8192 is the v4 headline** — best large-M ratio, a
+  *catch-up* peak in the large-saturated regime, **NOT a cuBLAS-beat**.
+- **cuBLAS-BEAT (ratio > 1.0) remains small-shape launch-bound only**:
+  M∈{256,320,448} (N155). The all-time peak ratio 1.1611 (N121 @ M=256, v3.E) is
+  unchanged.
+- **N151 + N168 are honest negatives**; **N153/N153-retry is BLOCKED** (N143
+  silent-wipe) — not measurement-falsified. All three are tabulated as part of
+  the honest picture per `@D g3`.
+- **N166 codegen PASS is scoped to covered sub-blocks** (rel_err 2.55e-7); the
+  full-tile rel_err 1.0 is the documented codegen tiling gap, not a numeric error.
+- The L2-hit ladder (N140/N157/N167) is a controlled A/B: kernel body
+  byte-identical, occupancy fixed, ONLY CTA visitation order varies — isolating
+  L2 reuse as the sole cause of the cliff and its recovery.
+
+**v4 generated**: 2026-05-22 by read-only aggregator (no compiler / GPU.md /
+source edits). **v4 scope contract**: appended to existing SCOREBOARD.md; v1 +
+v2 + v3 sections preserved verbatim. Large-M (M=8192) headline = **N149 Hilbert
+ratio 0.847**; the Round 20–22 arc is the **L2-cliff recovery saga**.

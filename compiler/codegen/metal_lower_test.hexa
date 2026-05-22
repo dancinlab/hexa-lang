@@ -1289,6 +1289,19 @@ fn _test_matmul_emit() -> bool {
     ok = _check_contains(ok, msl, "simdgroup_store",                  "cooperative simdgroup tile store")
     ok = _check_contains(ok, msl, "for (uint kk = 0; kk < K",         "K-loop over fragment dim")
     ok = _check_contains(ok, msl, ";",                                "statement terminator")
+    // N166 Fix 1 — template-arg zero-init: `make_filled_simdgroup_matrix<float, 8, 8>(0.0f)`.
+    // The element type + dims are TEMPLATE params, NOT a runtime first arg
+    // (the prior `make_filled_simdgroup_matrix(simdgroup_float8x8, 0.0f)` form
+    // failed to compile under `xcrun metal` — N166 silicon fire).
+    ok = _check_contains(ok, msl, "make_filled_simdgroup_matrix<float, 8, 8>(0.0f)", "template-arg zero-init (Fix 1)")
+    ok = _check_not_contains(ok, msl, "make_filled_simdgroup_matrix(simdgroup_float8x8", "no type-as-runtime-arg fill (Fix 1)")
+    // N166 Fix 2 — full 32×32 tile = 4×4 grid of 8×8 fragments. The body must
+    // declare a [4][4] accumulator grid and loop over the M/N sub-tile axes
+    // (not a single 8×8 fragment that leaves 56/64 sub-tiles zero).
+    ok = _check_contains(ok, msl, "c_frag[4][4]",                     "4x4 accumulator grid (Fix 2: full 32x32 tile)")
+    ok = _check_contains(ok, msl, "for (uint sm = 0; sm < 4",         "sub_m row-band loop (Fix 2)")
+    ok = _check_contains(ok, msl, "for (uint sn = 0; sn < 4",         "sub_n col-band loop (Fix 2)")
+    ok = _check_contains(ok, msl, "c_frag[sm][sn]",                   "per-sub-tile accumulator indexing (Fix 2)")
     // Negative — matmul must NOT degrade to a vec-* element-wise kernel
     // (no scalar `c[i] = a[i] ... b[i]` body, no 2-buffer unary sig).
     ok = _check_not_contains(ok, msl, "c[i]",                         "matmul should not emit element-wise `c[i]`")

@@ -83,14 +83,15 @@ fn _check(ok: bool, label: str, detail: str) {
 
 let F1_ID            = "F-RTSC-1"
 let F1_RETRACT       = "Unreplicated RT-SC claim → next-candidate substrate spec update (canonical negative anchor: CSH, Snider 2020 Nature, retracted 2022)"
-// Tier-script filenames track the post-scrub CSH negative anchor (the
-// archival negative-result baseline; renamed lk99 → csh in the 2026-05-22
-// scrub so the declared scripts resolve against the files actually on
-// disk in verify/). See README.md for the CSH narrative anchor + scrub note.
-let F1_T1_SCRIPTS: [str] = ["calc_csh.hexa"]
-let F1_T2_SCRIPTS: [str] = ["numerics_csh.hexa", "numerics_csh_parity.hexa", "numerics_csh_solver.hexa"]
-let F1_T3_SCRIPTS: [str] = ["empirical_csh_arxiv.hexa"]
-let F1_T3_DESCRIPTION = "synthesis lab: independent RT-SC reproduction (live raw-data → Stage-1+ TBD; archival arXiv proxy via empirical_csh_arxiv.hexa — script filename tracks post-scrub CSH negative anchor)"
+// Tier-script filenames preserved as historical record of how F-RTSC-1
+// was implemented in v1.0.x → v1.1.0 (calc_lk99.hexa etc. encode the
+// archival negative-result baseline; renaming them would require a
+// separate refactor PR and CHANGELOG re-anchor). See README.md for the
+// CSH narrative anchor + scrub note 2026-05-22.
+let F1_T1_SCRIPTS: [str] = ["calc_lk99.hexa"]
+let F1_T2_SCRIPTS: [str] = ["numerics_lk99.hexa", "numerics_lk99_parity.hexa", "numerics_lk99_solver.hexa"]
+let F1_T3_SCRIPTS: [str] = ["empirical_lk99_arxiv.hexa"]
+let F1_T3_DESCRIPTION = "synthesis lab: independent RT-SC reproduction (live raw-data → Stage-1+ TBD; archival arXiv proxy via empirical_lk99_arxiv.hexa — script filename retained as historical record)"
 
 let F2_ID            = "F-RTSC-2"
 let F2_RETRACT       = "BCS λ McMillan ceiling (Tc ≤ 30 K) — beyond mechanism n=6 closed-form fit"
