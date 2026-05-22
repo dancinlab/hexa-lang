@@ -381,9 +381,29 @@ For each Tier-A sub-phase:
 
 ## Log
 
+### 2026-05-22 — cycle 105 array allocators + extern baseline 24→25 note
+
+- ✅ 잔여 #6 array allocators CLOSED: `rt_array_zeros_float` +
+  `rt_array_alloc` via paired `__arr_alloc_items_zero{,_int}(n)` codegen-
+  inline builtins (GCC statement-expr: calloc descriptor + malloc items +
+  N zero-fill + len/cap, atomic). Closes agent-B's SIGSEGV (cap-only
+  setter left items NULL). Activated via `_Generic` fn-ptr fallback
+  (cycle-100 pattern), no hexa_v2 regen. Commit `72c3f080`.
+- **Extern baseline 24 → 25**: the IO port (잔여 #7, cycle 101/102) routes
+  `__fd_write_bytes` → `hxlcl_write` → libc `write(2)`, surfacing `_write`
+  as a 25th undefined symbol. `_write` is a fundamental libc syscall —
+  the symmetric sibling of the already-baseline `_read`/`_close`/`_malloc`.
+  Legitimate cost of hexa-source IO; NOT a leak. `__fd_write_bytes` uses
+  `hxlcl_write` (the step-1 unhook shim) not raw write for consistency
+  (commit `6a21bf4f`). New gate = **25 externs**.
+- Linux x86_64 cross-parity (cycle L): all ported fns (hexa_eq 9/9,
+  to_string array+map, hexa_len, IO) byte-identical to Mac on ubu-2.
+- Regression sweep (cycle V): 103/103 assertions PASS across 10 fn
+  families — 5-wipe churn introduced zero silent corruption.
+
 ### 2026-05-22 — Step 3+4+5 COMPLETE (113 fns · 6/8 잔여 ported · 2 CORE-final · 5-wipe saga closed by hook)
 
-Cumulative across step 3 + step 4 + step 5: **~113 fns ported** to
+Cumulative across step 3 + step 4 + step 5: **~115 fns ported** to
 hexa source. With cycles 103 (`hexa_eq` 9/9 closure) and 104
 (`hexa_to_string` array+map) landed, the **8 잔여** items reach their
 FINAL status — **6 ported, 2 CORE-final**:
