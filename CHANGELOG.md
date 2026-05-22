@@ -6,6 +6,10 @@ For the full audit trail, see `git log`.
 
 ---
 
+## 2026-05-23
+
+- **drill honesty gate** — `_honesty_gate` read the BT-AI2 verdict through the wrong `Bt2Verdict` fields (`f_a`/`f_b` instead of `f_ai2_a`/`f_ai2_b`). Every `hexa drill` / `hexa kick` round emitted two spurious `map key 'f_a' not found` warnings, and the gate was dead — a missing key returns `void`, so `void > 0` was always false and F-AI2-A / F-AI2-B violations were never reported. Field names corrected to match the struct.
+
 ## 2026-05-22
 
 - **GPU / TMA SGEMM** — TMA SWIZZLE_128B kernel work shattered the 0.85 cuBLAS-ratio ceiling: M=8192 ratio 0.819 → 0.978 (peak 0.992), M=512 parity 1.0000. N200–N206 cycle: first TMA+GEMM kernel bit-exact on sm_120, multi-stage DMA fusion, producer/consumer warp-spec, source-to-silicon E2E on sm_120a.

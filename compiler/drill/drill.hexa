@@ -275,8 +275,8 @@ fn _verifier_audit_emit(v: VerifierVerdict) -> void {
 
 // Honesty gate — run BT-AI2 audit over the per-round yields encoded as
 // __BT_AI2__ sentinel lines. The audit is advisory: a non-zero
-// f_a/f_b count triggers stderr warning but does NOT halt drill (the
-// upstream pattern; saturation is the hard stop).
+// f_ai2_a/f_ai2_b count triggers stderr warning but does NOT halt drill
+// (the upstream pattern; saturation is the hard stop).
 fn _honesty_gate(round: i64, y: RoundYields) -> void {
     // We synthesize the audit line from the round's resonance stage
     // (the noisiest one). loss/expected here are heuristic — the gate
@@ -287,10 +287,10 @@ fn _honesty_gate(round: i64, y: RoundYields) -> void {
     line = line + " loss=" + to_string(y.res_n)
     line = line + " expected=" + to_string(y.res_n)
     let verdict = bt_ai2_audit(line)
-    if verdict.f_a > 0 || verdict.f_b > 0 {
+    if verdict.f_ai2_a > 0 || verdict.f_ai2_b > 0 {
         eprintln("DRILL_HONESTY {\"round\":" + to_string(round)
-            + ",\"f_a\":" + to_string(verdict.f_a)
-            + ",\"f_b\":" + to_string(verdict.f_b) + "}")
+            + ",\"f_ai2_a\":" + to_string(verdict.f_ai2_a)
+            + ",\"f_ai2_b\":" + to_string(verdict.f_ai2_b) + "}")
     }
 }
 
