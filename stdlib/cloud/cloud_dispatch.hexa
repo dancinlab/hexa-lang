@@ -1,0 +1,453 @@
+// stdlib/cloud/cloud_dispatch.hexa — full cycle (cycle C glue).
+//
+// One hexa-native cycle, zero LLM calls, terminate-guaranteed:
+//
+//   dispatch_validate(job)           ← cycle C, F-PREFLIGHT-MEM
+//   ├─ create pod (runpod_create_cascade)
+//   ├─ wait_ssh
+//   ├─ upload bundle (cloud_copy_to_opts × N)
+//   ├─ start train  (cloud_nohup_opts)
+//   ├─ poll until train exits OR deadline elapsed
+//   │    on deadline → remote kill -9 <pid>          (self-reaper proxy)
+//   ├─ fetch the WHOLE output directory (cloud_copy_dir_from_opts)
+//   │    then verify remote file-count == local file-count
+//   │    (CloudCycle.verify_sha=1 → also a sha256-manifest byte-compare)
+//   └─ terminate — UNLESS the fetch failed, in which case the pod is
+//      RETAINED so the only copy of the artifact is not destroyed.
+//
+// The directory fetch + retain-on-failure guard exist for one concrete
+// incident: a training run wrote a 5.7 GB checkpoint next to a small
+// result.json, the operator scp'd only the small files and terminated
+// the pod, and the checkpoint was lost. Two design rules close that:
+//
+//   1. fetch names the *directory*, not individual files — nothing the
+//      job produced can be forgotten at manifest-authoring time.
+//   2. terminate is conditional — if the artifact did not come down
+//      intact, the pod survives and the pod_id is surfaced loudly for
+//      recovery, instead of being unconditionally destroyed.
+//
+// Self-reaper proper (in-pod compiled binary, orchestrator-independent
+// autokill) lands separately under CLOUD.md §2b — this dispatch entry
+// already covers the orchestrator-side terminate guarantee.
+
+use "stdlib/cloud/cloud"
+use "stdlib/cloud/runpod"
+use "stdlib/cloud/cloud_job"
+use "stdlib/cloud/cloud_budget"
+
+// ── cycle spec ───────────────────────────────────────────────────────
+
+// CloudCycle wraps a validated CloudJob with the runtime knobs the full
+// dispatch needs (image, gpu cascade, bundle paths, output directory).
+// Kept separate from CloudJob so dispatch_validate stays pure.
+//
+// Outputs are a single directory, not a file list: the cycle fetches
+// `output_dir_remote` whole. scp -r places it inside `output_dir_local`,
+// so the tree lands at `output_dir_local/<basename(output_dir_remote)>`.
+struct CloudCycle {
+    job:               CloudJob,
+    api_key:           str,    // runpod.api_key value
+    image:             str,    // pod container image
+    gpu_cascade:       [str],  // GPU types to attempt in order
+    pod_label:         str,    // RunPod pod label (human tag)
+    bundle_locals:     [str],  // i := local path to scp
+    bundle_remotes:    [str],  // i := remote destination path
+    train_log:         str,    // remote stdout/stderr log
+    output_dir_remote: str,    // remote directory the job writes outputs into
+    output_dir_local:  str,    // local parent dir to receive the tree
+    verify_sha:        int,    // 1 = byte-level sha256-manifest verify (slower);
+                               // 0 = file-count only (fast, default)
+    poll_interval_s:   int     // seconds between cloud_poll calls
+}
+
+struct CycleResult {
+    ok:           int,    // 1 iff every phase succeeded AND train exit_code 0
+    phase:        str,    // "refused"·"create"·"ssh_wait"·"upload"·"start"·"poll"·"deadline"·"crashed"·"fetch_retained"·"complete"
+    pod_id:       str,
+    pod_retained: int,    // 1 iff the pod was deliberately NOT terminated (fetch failed)
+    train_pid:    int,
+    train_rc:     int,    // -1 if not recovered
+    elapsed_s:    int,
+    message:      str,
+    fetched_dir:  str,    // local path the output tree landed at ("" if none)
+    output_files: [str],  // successfully fetched local paths
+    refused:      DispatchValidation
+}
+
+fn _cycle_refused(v: DispatchValidation) -> CycleResult {
+    return CycleResult {
+        ok: 0, phase: "refused", pod_id: "", pod_retained: 0,
+        train_pid: 0, train_rc: -1, elapsed_s: 0, message: v.message,
+        fetched_dir: "", output_files: [], refused: v
+    }
+}
+
+fn _cycle_blank() -> DispatchValidation {
+    return DispatchValidation {
+        ok: 1, error_kind: "", gate_failed: "", message: "",
+        breakdown: "", suggestions: []
+    }
+}
+
+// ── helpers ──────────────────────────────────────────────────────────
+
+// _argv_with_env — prepend `env K=V ...` so the remote process sees the
+// declared env (the dispatch-typed env-var-passing note: nohup/bash hops
+// silently drop inline env-prefixes; `env K=V cmd` survives intact).
+fn _argv_with_env(env_keys: [str], env_vals: [str], argv: [str]) -> [str] {
+    if len(env_keys) == 0 { return argv }
+    let mut out = ["env"]
+    let mut i = 0
+    while i < len(env_keys) {
+        if i < len(env_vals) {
+            out.push(env_keys[i] + "=" + env_vals[i])
+        }
+        i = i + 1
+    }
+    let mut j = 0
+    while j < len(argv) {
+        out.push(argv[j])
+        j = j + 1
+    }
+    return out
+}
+
+fn _cycle_terminate(api_key: str, pod_id: str) {
+    if len(pod_id) == 0 { return }
+    let _ = runpod_terminate(api_key, pod_id)
+}
+
+// _shq2 — POSIX-quote one token for the local /bin/sh -c that exec /
+// exec_capture run. Mirrors cloud.hexa's private _shq; kept local so this
+// module does not depend on a private export.
+fn _shq2(s: str) -> str {
+    let mut out = "'"
+    let mut i = 0
+    let n = len(s)
+    while i < n {
+        let c = s.substring(i, i + 1)
+        if c == "'" {
+            out = out + "'\\''"
+        } else {
+            out = out + c
+        }
+        i = i + 1
+    }
+    return out + "'"
+}
+
+// _basename — last path component of `p`, with one trailing slash
+// tolerated. "/workspace/out" → "out"; "/workspace/out/" → "out".
+fn _basename(p: str) -> str {
+    let mut s = p
+    let n0 = len(s)
+    if n0 > 1 && s.substring(n0 - 1, n0) == "/" {
+        s = s.substring(0, n0 - 1)
+    }
+    let n = len(s)
+    let mut last = -1
+    let mut i = 0
+    while i < n {
+        if s.substring(i, i + 1) == "/" { last = i }
+        i = i + 1
+    }
+    if last < 0 { return s }
+    return s.substring(last + 1, n)
+}
+
+// _count_nonempty_lines — number of lines in `s` that carry at least one
+// non-whitespace character. `find ... -type f` prints one path per line,
+// so this is the file count of its output.
+fn _count_nonempty_lines(s: str) -> int {
+    let n = len(s)
+    let mut count = 0
+    let mut line_has = 0
+    let mut i = 0
+    while i < n {
+        let c = s.substring(i, i + 1)
+        if c == "\n" {
+            if line_has == 1 { count = count + 1 }
+            line_has = 0
+        } else if c != "\r" && c != " " && c != "\t" {
+            line_has = 1
+        }
+        i = i + 1
+    }
+    if line_has == 1 { count = count + 1 }
+    return count
+}
+
+// _sha_manifest_cmd — a shell pipeline that prints, for the directory
+// `dir`, one `<sha256>  ./<relpath>` line per file, sorted. `sha256sum`
+// (GNU/Linux) and `shasum -a 256` (macOS) emit byte-identical line format,
+// so a manifest taken on the pod and one taken locally compare directly;
+// the `||` falls through to whichever tool the host actually has.
+fn _sha_manifest_cmd(dir: str) -> str {
+    return "cd " + _shq2(dir)
+        + " && ( find . -type f -exec sha256sum {} + 2>/dev/null"
+        + " || find . -type f -exec shasum -a 256 {} + 2>/dev/null )"
+        + " | sort"
+}
+
+// _dir_sha_manifest_remote — sha256 manifest of a directory on the pod.
+fn _dir_sha_manifest_remote(host: str, opts: [str], dir: str) -> str {
+    let r = cloud_run_opts(host, opts, ["sh", "-c", _sha_manifest_cmd(dir)])
+    if r.ok != 1 { return "" }
+    return r.stdout_.trim()
+}
+
+// _dir_sha_manifest_local — sha256 manifest of a directory on this host.
+fn _dir_sha_manifest_local(dir: str) -> str {
+    let res = exec_capture(_sha_manifest_cmd(dir))
+    return res[0].trim()
+}
+
+// ── full cycle ───────────────────────────────────────────────────────
+
+fn cloud_dispatch_cycle(cyc: CloudCycle) -> CycleResult {
+    // ── gate ──────────────────────────────────────────────────────
+    let v = dispatch_validate(cyc.job)
+    if v.ok == 0 {
+        return _cycle_refused(v)
+    }
+
+    let t0 = timestamp()
+    let mut result = CycleResult {
+        ok: 0, phase: "create", pod_id: "", pod_retained: 0,
+        train_pid: 0, train_rc: -1, elapsed_s: 0, message: "",
+        fetched_dir: "", output_files: [], refused: _cycle_blank()
+    }
+
+    // ── spinup ────────────────────────────────────────────────────
+    let pubkey = read_file(env_var("HOME") + "/.ssh/id_ed25519.pub").trim()
+    let pod = runpod_create_cascade(cyc.api_key, cyc.gpu_cascade, cyc.image, pubkey, cyc.pod_label)
+    if pod.ok != 1 {
+        result.phase = "create"
+        result.message = "pod create failed — " + pod.message
+        return result
+    }
+    result.pod_id = pod.pod_id
+
+    // From here on EVERY exit path must call _cycle_terminate — EXCEPT
+    // the deliberate retain path at the end (fetch failed → keep pod).
+
+    let p = runpod_wait_ssh(cyc.api_key, pod.pod_id, 90, 10)
+    if p.ok != 1 {
+        result.phase = "ssh_wait"
+        result.message = "ssh never ready — " + p.message
+        _cycle_terminate(cyc.api_key, pod.pod_id)
+        return result
+    }
+    let host = "root@" + p.ip
+    let opts = runpod_pod_opts(p.port)
+
+    // ── bundle upload ─────────────────────────────────────────────
+    let mut bi = 0
+    while bi < len(cyc.bundle_locals) {
+        let r = cloud_copy_to_opts(host, opts, cyc.bundle_locals[bi], cyc.bundle_remotes[bi])
+        if r.ok != 1 {
+            result.phase = "upload"
+            result.message = "upload[" + to_string(bi) + "] failed — " + cyc.bundle_locals[bi] + " · " + r.message
+            _cycle_terminate(cyc.api_key, pod.pod_id)
+            return result
+        }
+        bi = bi + 1
+    }
+
+    // ── start train (nohup, env-prefixed argv) ────────────────────
+    let argv_full = _argv_with_env(cyc.job.env_keys, cyc.job.env_vals, cyc.job.argv)
+    let nh = cloud_nohup_opts(host, opts, argv_full, cyc.train_log)
+    if nh.ok != 1 {
+        result.phase = "start"
+        result.message = "nohup start failed — " + nh.message
+        _cycle_terminate(cyc.api_key, pod.pod_id)
+        return result
+    }
+    result.train_pid = nh.pid
+
+    // ── poll loop ─────────────────────────────────────────────────
+    let mut elapsed = 0
+    let mut killed_on_deadline = 0
+    let poll_iv = cyc.poll_interval_s
+    let mut iv = poll_iv
+    if iv <= 0 { iv = 60 }
+    let sleep_cmd = "sleep " + to_string(iv)
+    while elapsed < cyc.job.deadline_sec {
+        let alive = cloud_poll_opts(host, opts, nh.pid)
+        if alive == 0 { elapsed = cyc.job.deadline_sec + 1 }  // exit loop
+        else {
+            exec(sleep_cmd)
+            elapsed = timestamp() - t0
+        }
+    }
+    // Loop exit conditions: process dead OR deadline reached. If still
+    // alive at deadline, force-kill remote.
+    let still_alive = cloud_poll_opts(host, opts, nh.pid)
+    if still_alive == 1 {
+        let _ = cloud_run_opts(host, opts, ["kill", "-9", to_string(nh.pid)])
+        killed_on_deadline = 1
+    }
+
+    // ── recover train exit code (from log marker) ─────────────────
+    // The trainer is expected to write its rc to a known file before exit;
+    // a missing file is honest signal that the train crashed or was killed.
+    let rc_file = cyc.train_log + ".rc"
+    let rcr = cloud_run_opts(host, opts, ["cat", rc_file])
+    let mut train_rc = -1
+    if rcr.ok == 1 {
+        let s = rcr.stdout_.trim()
+        if len(s) > 0 {
+            train_rc = _atoi_simple(s)
+        }
+    }
+    result.train_rc = train_rc
+
+    // ── fetch outputs (WHOLE directory, verified) ─────────────────
+    // One recursive scp of the entire output directory — nothing the job
+    // wrote can be left behind by a forgotten file name. Then verify:
+    // count the files on the pod and the files that landed locally; the
+    // fetch is "ok" only when those agree (and scp itself exited 0).
+    let mut fetch_attempted = 0
+    let mut fetch_ok = 0
+    let mut remote_n = -1   // -1 = could not determine (ssh transport failure)
+    let mut local_n = -1
+    let mut fetched_dir = ""
+    let mut fetch_detail = ""
+    if len(cyc.output_dir_remote) > 0 {
+        fetch_attempted = 1
+        // probe: how many files does the pod hold under the output dir?
+        let probe = cloud_run_opts(host, opts, ["find", cyc.output_dir_remote, "-type", "f"])
+        if probe.exit_code == 0 {
+            remote_n = _count_nonempty_lines(probe.stdout_)
+        } else if probe.exit_code > 0 {
+            remote_n = 0   // `find` ran and failed → directory missing/empty
+        }
+        if remote_n == 0 {
+            // nothing on the pod to lose — fetch is trivially complete
+            fetch_ok = 1
+            fetch_detail = "no output on pod (dir empty/absent)"
+        } else {
+            exec("mkdir -p " + _shq2(cyc.output_dir_local))
+            fetched_dir = cyc.output_dir_local + "/" + _basename(cyc.output_dir_remote)
+            let fr = cloud_copy_dir_from_opts(host, opts, cyc.output_dir_remote, cyc.output_dir_local)
+            let loc = exec_capture("find " + _shq2(fetched_dir) + " -type f 2>/dev/null")
+            local_n = _count_nonempty_lines(loc[0])
+            // count gate: scp exited 0 AND the file counts agree (or the
+            // remote count was unrecoverable but scp pulled something).
+            let mut count_ok = 0
+            if fr.ok == 1 && remote_n > 0 && local_n == remote_n {
+                count_ok = 1
+            } else if fr.ok == 1 && remote_n < 0 && local_n > 0 {
+                count_ok = 1
+            }
+            if count_ok == 0 {
+                fetch_detail = "COUNT MISMATCH — remote " + to_string(remote_n)
+                    + " vs local " + to_string(local_n) + " files, scp ok=" + to_string(fr.ok)
+            } else if cyc.verify_sha == 1 {
+                // byte-level gate: sha256 manifest of the pod tree must
+                // equal the sha256 manifest of what landed locally.
+                let rem_m = _dir_sha_manifest_remote(host, opts, cyc.output_dir_remote)
+                let loc_m = _dir_sha_manifest_local(fetched_dir)
+                if len(rem_m) > 0 && rem_m == loc_m {
+                    fetch_ok = 1
+                    fetch_detail = "verified — " + to_string(local_n)
+                        + " files, sha256 manifest byte-identical"
+                } else {
+                    fetch_detail = "SHA MISMATCH — " + to_string(local_n)
+                        + " files transferred but sha256 manifests differ (or unreadable)"
+                }
+            } else {
+                fetch_ok = 1
+                fetch_detail = "verified — " + to_string(local_n) + "/"
+                    + to_string(remote_n) + " files (count only; verify_sha off)"
+            }
+        }
+    }
+    if fetch_ok == 1 && len(fetched_dir) > 0 {
+        result.output_files = [fetched_dir]
+    }
+    result.fetched_dir = fetched_dir
+    result.elapsed_s = timestamp() - t0
+
+    // ── retain-on-fetch-failure guard ─────────────────────────────
+    // The output directory did NOT come down intact and the pod still
+    // holds it. Terminating now would destroy the only copy — the exact
+    // way a 5.7 GB checkpoint was lost. Skip terminate, retain the pod,
+    // surface the pod_id loudly for recovery.
+    if fetch_attempted == 1 && fetch_ok == 0 {
+        result.phase = "fetch_retained"
+        result.pod_retained = 1
+        result.message = "OUTPUT FETCH FAILED (" + fetch_detail + ") — pod "
+            + pod.pod_id + " RETAINED (not terminated) so the artifact is not "
+            + "lost · recover: hexa cloud copy-dir-from <host> "
+            + cyc.output_dir_remote + " <local-dir>  then terminate the pod manually"
+        return result
+    }
+
+    // ── final phase (fetch ok / no outputs requested) ─────────────
+    let mut tail = " · fetch: " + fetch_detail
+    if fetch_attempted == 0 { tail = "" }
+    if killed_on_deadline == 1 {
+        result.phase = "deadline"
+        result.message = "deadline " + to_string(cyc.job.deadline_sec) + "s exceeded; remote killed" + tail
+    } else if train_rc == 0 {
+        result.phase = "complete"
+        result.ok = 1
+        result.message = "train exit 0" + tail
+    } else if train_rc != 0 && train_rc != -1 {
+        result.phase = "crashed"
+        result.message = "train exit " + to_string(train_rc) + tail
+    } else {
+        result.phase = "poll"
+        result.message = "train rc unrecoverable (no " + rc_file + ")" + tail
+    }
+
+    // ── terminate (fetch verified safe) ───────────────────────────
+    _cycle_terminate(cyc.api_key, pod.pod_id)
+    return result
+}
+
+// _atoi_simple — small local helper (cloud_cli.hexa has a sibling).
+fn _atoi_simple(s: str) -> int {
+    let mut i = 0
+    let mut v = 0
+    let n = len(s)
+    let mut got = 0
+    while i < n {
+        let cc = char_code(s.substring(i, i + 1))
+        if cc >= 48 && cc <= 57 {
+            v = v * 10 + (cc - 48)
+            got = 1
+            i = i + 1
+        } else {
+            i = n
+        }
+    }
+    if got == 0 { return -1 }
+    return v
+}
+
+// ── pretty-print ─────────────────────────────────────────────────────
+
+fn print_cycle_result(r: CycleResult) {
+    if r.phase == "refused" {
+        print_validation(r.refused)
+        return
+    }
+    println("[cloud] cycle phase=" + r.phase + " pod=" + r.pod_id
+            + " pid=" + to_string(r.train_pid) + " rc=" + to_string(r.train_rc)
+            + " elapsed=" + to_string(r.elapsed_s) + "s")
+    println("[cloud] " + r.message)
+    if r.pod_retained == 1 {
+        println("[cloud] !! POD RETAINED — pod " + r.pod_id + " is still RUNNING and billing.")
+        println("[cloud]   The output is still on it; pull it, then terminate the pod.")
+    }
+    if len(r.output_files) > 0 {
+        println("[cloud] fetched:")
+        let mut i = 0
+        while i < len(r.output_files) {
+            println("  · " + r.output_files[i])
+            i = i + 1
+        }
+    }
+}

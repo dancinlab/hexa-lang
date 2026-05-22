@@ -1,0 +1,173 @@
+// stdlib/cloud/cycle_smoke.hexa — F-DIR-FETCH-E2E falsifier (~$0.20).
+//
+// Exercises cloud_dispatch_cycle() end-to-end on a real RunPod pod and
+// proves the directory-fetch closure: a training run writes a multi-file
+// output directory — including a 64 MB ckpt stand-in — and the WHOLE
+// directory comes back down before the pod is terminated.
+//
+//   create pod → wait ssh → nohup fake-trainer → poll → fetch /workspace/out
+//   (recursive) → verify remote file-count == local file-count → terminate
+//
+// The fake trainer writes:
+//   /workspace/out/result.json     small  (the "성적표")
+//   /workspace/out/ckpt_best.pt    64 MB  (the "학생 본인" — the artifact
+//                                          that was lost in the V3 saga)
+//   /workspace/out/notes.txt       small
+//   /workspace/train.log.rc        the trainer exit code (cycle reads this)
+//
+// PASS contract:
+//   result.ok == 1, phase == "complete", pod_retained == 0,
+//   the fetched directory exists locally AND contains a 64 MB ckpt_best.pt.
+//
+// This is the paid sibling of the $0 ubu-2 directory round-trip smoke.
+
+use "stdlib/cloud/cloud"
+use "stdlib/cloud/runpod"
+use "stdlib/cloud/cloud_job"
+use "stdlib/cloud/cloud_budget"
+use "stdlib/cloud/cloud_dispatch"
+
+// 64 MiB ckpt stand-in.
+fn _ckpt_bytes() -> int { return 67108864 }
+
+fn main() {
+    println("=== cycle smoke — F-DIR-FETCH-E2E " + utc_iso_now() + " ===")
+
+    let rk = exec("secret get runpod.api_key 2>/dev/null").trim()
+    if len(rk) == 0 { println("FATAL no runpod.api_key secret"); exit(1) }
+    let pubkey = read_file(env_var("HOME") + "/.ssh/id_ed25519.pub").trim()
+    if len(pubkey) == 0 { println("FATAL no ~/.ssh/id_ed25519.pub"); exit(1) }
+
+    // ── tiny job — passes every $0 dispatch gate ──────────────────
+    let job = CloudJob {
+        model:     ModelSpec { n_params_m: 1, param_bytes: 2, grad_bytes: 2 },
+        optimizer: OptimizerSpec { kind: "AdamW", n_gpu: 1 },
+        batch:     BatchSpec {
+            bsz: 1, seq_len: 128, n_layer: 1, d_model: 128,
+            n_head: 1, n_kv_head: 1, grad_checkpoint: 0
+        },
+        gpu:       GpuSpec { kind: "any", mem_mb: 81920, reserved_overhead: 4096 },
+        env_keys:  [],
+        env_vals:  [],
+        // fake trainer: write a multi-file output dir, then record rc.
+        argv: ["sh", "-c",
+            "mkdir -p /workspace/out"
+            + " && printf '{\"ko\":\"19/20\"}' > /workspace/out/result.json"
+            + " && head -c " + to_string(_ckpt_bytes()) + " /dev/urandom > /workspace/out/ckpt_best.pt"
+            + " && printf 'cycle smoke trainer ok' > /workspace/out/notes.txt"
+            + " ; echo $? > /workspace/train.log.rc"],
+        backend:      "RunPod",
+        min_vcpu:     1,
+        secret_key:   "",
+        deadline_sec: 600,
+        budget_usd:   500
+    }
+
+    let local_out = "/tmp/cycle_smoke_out_" + to_string(timestamp())
+    let cyc = CloudCycle {
+        job:               job,
+        api_key:           rk,
+        image:             "runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04",
+        gpu_cascade:       ["NVIDIA A100-SXM4-80GB", "NVIDIA A100 80GB PCIe",
+                            "NVIDIA H100 80GB HBM3", "NVIDIA H100 PCIe",
+                            "NVIDIA RTX A6000", "NVIDIA RTX A5000"],
+        pod_label:         "hexa-cloud-cycle-smoke",
+        bundle_locals:     [],
+        bundle_remotes:    [],
+        train_log:         "/workspace/train.log",
+        output_dir_remote: "/workspace/out",
+        output_dir_local:  local_out,
+        verify_sha:        1,
+        poll_interval_s:   10
+    }
+
+    println("[smoke] dispatching full cycle — output dir /workspace/out -> " + local_out)
+    let r = cloud_dispatch_cycle(cyc)
+    print_cycle_result(r)
+
+    // ── verdict ───────────────────────────────────────────────────
+    let mut rc = 0
+
+    if r.phase == "refused" {
+        println("FAIL — dispatch refused before spinup (expected PASS-through gates)")
+        exit(1)
+    }
+
+    // defensive cleanup: a retained pod in a smoke means a FAIL, but we
+    // must still not leak a billing pod.
+    if r.pod_retained == 1 {
+        println("FAIL — pod RETAINED; cycle could not verify the fetch")
+        println("[smoke] cleaning up retained pod " + r.pod_id + " ...")
+        let t = runpod_terminate(rk, r.pod_id)
+        println("[smoke] terminate retained pod rc=" + to_string(t))
+        rc = 1
+    }
+
+    if r.ok != 1 || r.phase != "complete" {
+        println("FAIL — cycle phase=" + r.phase + " ok=" + to_string(r.ok))
+        rc = 1
+    } else {
+        println("    cycle ok — phase=complete")
+    }
+
+    // the fetched directory must exist and carry the 64 MB ckpt.
+    let ckpt = r.fetched_dir + "/ckpt_best.pt"
+    if !file_exists(ckpt) {
+        println("FAIL — ckpt did NOT come down: " + ckpt + " missing")
+        rc = 1
+    } else {
+        let sz = _atoi_trim(exec("wc -c < " + _q(ckpt) + " 2>/dev/null").trim())
+        if sz == _ckpt_bytes() {
+            println("    ckpt fetched intact — " + ckpt + " (" + to_string(sz) + " bytes)")
+        } else {
+            println("FAIL — ckpt size mismatch: got " + to_string(sz)
+                    + " want " + to_string(_ckpt_bytes()))
+            rc = 1
+        }
+    }
+
+    let res_json = r.fetched_dir + "/result.json"
+    if file_exists(res_json) {
+        println("    result.json fetched alongside — " + res_json)
+    } else {
+        println("FAIL — result.json missing from fetched dir")
+        rc = 1
+    }
+
+    if rc == 0 {
+        println("=== F-DIR-FETCH-E2E PASS — whole output dir came down, pod terminated ===")
+    } else {
+        println("=== F-DIR-FETCH-E2E FAIL ===")
+    }
+    exit(rc)
+}
+
+// _q — POSIX single-quote for the local shell.
+fn _q(s: str) -> str {
+    let mut out = "'"
+    let mut i = 0
+    let n = len(s)
+    while i < n {
+        let c = s.substring(i, i + 1)
+        if c == "'" { out = out + "'\\''" } else { out = out + c }
+        i = i + 1
+    }
+    return out + "'"
+}
+
+// _atoi_trim — parse leading decimal digits of `s`; 0 if none.
+fn _atoi_trim(s: str) -> int {
+    let mut i = 0
+    let mut v = 0
+    let n = len(s)
+    while i < n {
+        let cc = char_code(s.substring(i, i + 1))
+        if cc >= 48 && cc <= 57 {
+            v = v * 10 + (cc - 48)
+            i = i + 1
+        } else {
+            i = n
+        }
+    }
+    return v
+}

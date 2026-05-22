@@ -1,0 +1,194 @@
+// stdlib/cloud/cloud_job.hexa — typed dispatch entry for cycle C.
+//
+// CloudJob carries every input dispatch_validate() needs to refuse a
+// fire BEFORE pod spinup — model + optimizer + batch + gpu + env + argv.
+// dispatch_validate() runs 6 cheap ($0) gates in order; the first one
+// that rejects wins. mem-budget is the only gate fully wired in this
+// cycle (F-PREFLIGHT-MEM); the rest are stubbed with a clear honest
+// shape ready for cycle C follow-ons.
+
+use "stdlib/cloud/cloud"
+use "stdlib/cloud/cloud_budget"
+
+// ── job spec ─────────────────────────────────────────────────────────
+
+struct CloudJob {
+    model:      ModelSpec,
+    optimizer:  OptimizerSpec,
+    batch:      BatchSpec,
+    gpu:        GpuSpec,
+    // env keys/values run in lock-step — env_keys[i] := env_vals[i].
+    // Carried as parallel [str] until hexa-native typed dicts land.
+    env_keys:   [str],
+    env_vals:   [str],
+    argv:       [str],
+    backend:    str,    // "RunPod" · "Vast" · "SSH"
+    min_vcpu:   int,    // capability gate (RunPod CPU max=8)
+    secret_key: str,    // secret-store key for SSH private key
+    deadline_sec: int,  // self-reaper deadline (0 = none)
+    budget_usd:   int   // self-reaper $-cap × 100 (cents; 500 = $5.00)
+}
+
+// ── validation result ────────────────────────────────────────────────
+
+struct DispatchValidation {
+    ok:           int,    // 1 iff every gate passed
+    error_kind:   str,    // ""·"BudgetExceededError"·"AuthError"·"SecretMissingError"·"CapabilityError"·"CliQuirkError"·"ApiKeyShapeError"
+    gate_failed:  str,    // "mem"·"secret"·"auth"·"api_key"·"cli_quirk"·"capability"
+    message:      str,    // human one-line reason
+    breakdown:    str,    // multi-line detail (mem table, etc.)
+    suggestions:  [str]   // downgrade ladder or hints
+}
+
+fn _validation_ok() -> DispatchValidation {
+    return DispatchValidation {
+        ok: 1, error_kind: "", gate_failed: "", message: "",
+        breakdown: "", suggestions: []
+    }
+}
+
+fn _validation_fail(kind: str, gate: str, msg: str, detail: str, hints: [str]) -> DispatchValidation {
+    return DispatchValidation {
+        ok: 0, error_kind: kind, gate_failed: gate, message: msg,
+        breakdown: detail, suggestions: hints
+    }
+}
+
+// ── gates ────────────────────────────────────────────────────────────
+
+// gate_mem — mem_budget_check + downgrade ladder. Closed-form, $0.
+fn gate_mem(job: CloudJob) -> DispatchValidation {
+    let b = mem_budget_check(job.model, job.optimizer, job.batch, job.gpu)
+    if b.ok == 1 {
+        return _validation_ok()
+    }
+    let detail = format_budget(b)
+        + format_downgrade_ladder(job.model, job.optimizer, job.batch, job.gpu)
+    let msg = "mem budget exceeded · " + to_string(b.total_mb)
+              + " MB needed > " + to_string(b.cap_mb)
+              + " MB cap (over by " + to_string(b.overage_mb) + " MB)"
+    return _validation_fail("BudgetExceededError", "mem", msg, detail,
+                            optimizer_downgrade_path(job.optimizer))
+}
+
+// gate_capability — refuse impossible (vcpu, backend) combos. The known
+// hard ceilings come from the Vast/RunPod troubleshooting note:
+//   RunPod CPU pods cap at 8 vCPU (cpu3c / cpu5c / cpu3g, all = 8).
+fn gate_capability(job: CloudJob) -> DispatchValidation {
+    if job.backend == "RunPod_CPU" && job.min_vcpu > 8 {
+        return _validation_fail("CapabilityError", "capability",
+            "RunPod CPU pods max=8 vCPU; requested min_vcpu=" + to_string(job.min_vcpu),
+            "RunPod CPU SKUs: cpu3c (8/16) · cpu5c (8/16) · cpu3g (8/32). For >8 vCPU on CPU, use Vast GPU host + ignore GPU, or Hetzner.",
+            ["use Vast GPU host (24-64 vCPU available)", "use Hetzner CPX/CCX (16-48 vCPU)", "shard work to fit ≤8 vCPU/pod"])
+    }
+    return _validation_ok()
+}
+
+// gate_cli_quirk — reuses cycle-A's cloud_lint_argv against the argv;
+// rejects argv elements that look like C-style comments or contain a
+// newline. The cycle-A check is already library-callable; lift its
+// warnings into a validation error here.
+fn gate_cli_quirk(job: CloudJob) -> DispatchValidation {
+    let warns = cloud_lint_argv(job.argv)
+    if len(warns) == 0 {
+        return _validation_ok()
+    }
+    let mut detail = ""
+    let mut i = 0
+    while i < len(warns) {
+        detail = detail + "  · " + warns[i] + "\n"
+        i = i + 1
+    }
+    return _validation_fail("CliQuirkError", "cli_quirk",
+        warns[0], detail,
+        ["move comments outside argv", "use a wrapper script if multi-line is needed"])
+}
+
+// gate_api_key_shape — surface-level lint on RunPod / Vast key shape.
+// Cheap structural check; full auth is gate_auth below.
+fn gate_api_key_shape(job: CloudJob) -> DispatchValidation {
+    // Stub: skip when secret_key not set — gate_auth would have caught it.
+    if len(job.secret_key) == 0 { return _validation_ok() }
+    // Both RunPod and Vast keys begin with "rpa_" today (2026-05). Loud
+    // hint if the secret-key NAME looks like a private-key entry, not an
+    // api-key entry (`runpod.api_key` vs `vast.ssh_private`).
+    if job.secret_key.index_of("ssh_priv") >= 0 {
+        return _validation_fail("ApiKeyShapeError", "api_key",
+            "secret_key=" + job.secret_key + " looks like an SSH private-key entry, not an API key",
+            "  · API keys typically named like `runpod.api_key` or `vast.api_key`.\n  · SSH private keys belong in a separate `verify_secret` field.\n",
+            ["use runpod.api_key / vast.api_key for API auth", "set ssh-key path separately"])
+    }
+    return _validation_ok()
+}
+
+// gate_secret — verify `secret get <job.secret_key>` returns non-empty
+// bytes. This catches the vast `ssh_priv` typo trap that silently
+// returned empty bytes and produced `ssh -i invalid format`.
+fn gate_secret(job: CloudJob) -> DispatchValidation {
+    if len(job.secret_key) == 0 {
+        return _validation_ok()
+    }
+    // exec_capture returns [stdout, stderr, rc]. The marker check is a
+    // simple non-empty trim; the cost is one local subprocess.
+    let res = exec_capture("secret get " + _shq(job.secret_key) + " 2>/dev/null")
+    let body = res[0].trim()
+    if len(body) == 0 {
+        return _validation_fail("SecretMissingError", "secret",
+            "secret_key=" + job.secret_key + " returned empty bytes",
+            "  · did you mean `vast.ssh_private` instead of `vast.ssh_priv`?\n  · or `runpod.api_key` instead of `runpod.apikey`?\n",
+            ["secret list | grep " + job.secret_key, "double-check naming convention"])
+    }
+    return _validation_ok()
+}
+
+// gate_auth — cheap auth ping per backend. Stub for cycle C; full
+// implementation pulled into a later sub-ticket (provider-specific
+// GraphQL/REST + 401 detection). When unwired returns ok=1; the mem
+// gate is the closure target for THIS cycle.
+fn gate_auth(job: CloudJob) -> DispatchValidation {
+    return _validation_ok()
+}
+
+// ── dispatch_validate ────────────────────────────────────────────────
+
+// dispatch_validate — run all 6 gates in order. First failure wins.
+// Order chosen so the cheap, deterministic gates (mem, capability,
+// cli_quirk, api_key shape) precede any subprocess (secret) or network
+// (auth) — so an over-budget job rejects in microseconds, not seconds.
+fn dispatch_validate(job: CloudJob) -> DispatchValidation {
+    let v1 = gate_mem(job)
+    if v1.ok == 0 { return v1 }
+    let v2 = gate_capability(job)
+    if v2.ok == 0 { return v2 }
+    let v3 = gate_cli_quirk(job)
+    if v3.ok == 0 { return v3 }
+    let v4 = gate_api_key_shape(job)
+    if v4.ok == 0 { return v4 }
+    let v5 = gate_secret(job)
+    if v5.ok == 0 { return v5 }
+    let v6 = gate_auth(job)
+    if v6.ok == 0 { return v6 }
+    return _validation_ok()
+}
+
+// ── output ───────────────────────────────────────────────────────────
+
+fn print_validation(v: DispatchValidation) {
+    if v.ok == 1 {
+        println("[cloud] preflight PASS — all gates green, dispatch may proceed")
+        return
+    }
+    println("[cloud] preflight REFUSED — " + v.error_kind + " (gate=" + v.gate_failed + ")")
+    println("[cloud] " + v.message)
+    if len(v.breakdown) > 0 {
+        println(v.breakdown)
+    }
+    if len(v.suggestions) > 0 {
+        println("[cloud] suggestions:")
+        let mut i = 0
+        while i < len(v.suggestions) {
+            println("  · " + v.suggestions[i])
+            i = i + 1
+        }
+    }
+}

@@ -116,8 +116,16 @@ fn _scp_opts(ssh_opts: [str]) -> [str] {
 // local /bin/sh -c (exec_capture). scp's own exit code rides on the local
 // process exit, recovered from exec_capture's element 2 — no remote marker
 // needed (scp does not run a shell on the remote side for plain file copy).
-fn _scp_capture(scp_opts: [str], src: str, dst: str) -> CloudResult {
+//
+// `recursive == 1` adds scp's `-r` flag so `src` may be a directory: the
+// whole tree is copied. scp -r exits non-zero if ANY file in the tree
+// fails to transfer, so CloudResult.ok stays an honest all-or-nothing
+// signal even for a multi-file copy.
+fn _scp_capture(scp_opts: [str], recursive: int, src: str, dst: str) -> CloudResult {
     let mut cmd = "scp -o BatchMode=yes -o ConnectTimeout=8"
+    if recursive == 1 {
+        cmd = cmd + " -r"
+    }
     let mut i = 0
     while i < len(scp_opts) {
         cmd = cmd + " " + _shq(scp_opts[i])
@@ -319,7 +327,7 @@ fn cloud_poll(host: str, pid: int) -> int {
 // with extra ssh flags `ssh_opts` (translated to scp's `-P` for port).
 // Returns CloudResult.ok==1 iff scp exited 0.
 fn cloud_copy_to_opts(host: str, ssh_opts: [str], local_path: str, remote_path: str) -> CloudResult {
-    return _scp_capture(_scp_opts(ssh_opts), local_path, host + ":" + remote_path)
+    return _scp_capture(_scp_opts(ssh_opts), 0, local_path, host + ":" + remote_path)
 }
 
 // cloud_copy_to — cloud_copy_to_opts with no extra ssh flags.
@@ -329,10 +337,45 @@ fn cloud_copy_to(host: str, local_path: str, remote_path: str) -> CloudResult {
 
 // cloud_copy_from_opts — download `host:remote_path` to local `local_path`.
 fn cloud_copy_from_opts(host: str, ssh_opts: [str], remote_path: str, local_path: str) -> CloudResult {
-    return _scp_capture(_scp_opts(ssh_opts), host + ":" + remote_path, local_path)
+    return _scp_capture(_scp_opts(ssh_opts), 0, host + ":" + remote_path, local_path)
 }
 
 // cloud_copy_from — cloud_copy_from_opts with no extra ssh flags.
 fn cloud_copy_from(host: str, remote_path: str, local_path: str) -> CloudResult {
     return cloud_copy_from_opts(host, [], remote_path, local_path)
+}
+
+// ── directory transfer (recursive scp) ───────────────────────────────
+//
+// The single-file copy_to / copy_from above each move ONE enumerated
+// path. A training job that writes a result.json next to a 5.7 GB
+// ckpt_best.pt needs the *whole output directory* to come down as a
+// unit — enumerating files one-by-one is exactly how a checkpoint gets
+// silently left behind on a pod that is then terminated. The directory
+// copy below removes that failure mode: you name the directory, not its
+// contents, so nothing the job produced can be forgotten.
+
+// cloud_copy_dir_from_opts — download the whole remote directory tree
+// `host:remote_dir` into local `local_dir` over `scp -r`. scp -r places
+// the remote directory *inside* `local_dir`, i.e. the tree lands at
+// `local_dir/<basename(remote_dir)>`; create `local_dir` first.
+// CloudResult.ok==1 iff every file in the tree transferred.
+fn cloud_copy_dir_from_opts(host: str, ssh_opts: [str], remote_dir: str, local_dir: str) -> CloudResult {
+    return _scp_capture(_scp_opts(ssh_opts), 1, host + ":" + remote_dir, local_dir)
+}
+
+// cloud_copy_dir_from — cloud_copy_dir_from_opts with no extra ssh flags.
+fn cloud_copy_dir_from(host: str, remote_dir: str, local_dir: str) -> CloudResult {
+    return cloud_copy_dir_from_opts(host, [], remote_dir, local_dir)
+}
+
+// cloud_copy_dir_to_opts — upload the whole local directory tree
+// `local_dir` into `host:remote_dir` over `scp -r`.
+fn cloud_copy_dir_to_opts(host: str, ssh_opts: [str], local_dir: str, remote_dir: str) -> CloudResult {
+    return _scp_capture(_scp_opts(ssh_opts), 1, local_dir, host + ":" + remote_dir)
+}
+
+// cloud_copy_dir_to — cloud_copy_dir_to_opts with no extra ssh flags.
+fn cloud_copy_dir_to(host: str, local_dir: str, remote_dir: str) -> CloudResult {
+    return cloud_copy_dir_to_opts(host, [], local_dir, remote_dir)
 }

@@ -1,0 +1,137 @@
+// stdlib/cloud/preflight_smoke.hexa — F-PREFLIGHT-MEM falsifier ($0).
+//
+// Reconstructs the anima V3 / S187 attempt-9 OOM scenario as a typed
+// CloudJob and asserts that dispatch_validate() refuses it BEFORE any
+// pod spinup, with a BudgetExceededError carrying a downgrade ladder
+// that includes PagedAdamW8bit.
+//
+// Source incident (saga note: 2026-05-21-hexa-cloud-optimizer-mem-budget-preflight.md):
+//
+//   model:  d=3072 L=28 nh=24 nkv=8 GQA · n_params = 8,921,180,216 (8.92B)
+//   opt:    torch.optim.AdamW (f32 m + f32 v) → 71.4 GiB state alone
+//   batch:  bsz=2 seq=128
+//   gpu:    H100-80GB-HBM3
+//   actual: 8/8 pods OOM at `_foreach_sqrt`, 78.22 GiB observed
+//
+// Expected this gate result:
+//   ok == 0
+//   gate_failed == "mem"
+//   error_kind == "BudgetExceededError"
+//   suggestions contains "PagedAdamW8bit"
+//
+// Plus a positive control: same spec with PagedAdamW8bit should PASS.
+
+use "stdlib/cloud/cloud_budget"
+use "stdlib/cloud/cloud_job"
+
+fn _make_job(opt_kind: str) -> CloudJob {
+    return CloudJob {
+        model: ModelSpec {
+            n_params_m:  8920,   // 8.92B
+            param_bytes: 2,      // bf16
+            grad_bytes:  2
+        },
+        optimizer: OptimizerSpec { kind: opt_kind, n_gpu: 1 },
+        batch: BatchSpec {
+            bsz: 2, seq_len: 128, n_layer: 28, d_model: 3072,
+            n_head: 24, n_kv_head: 8, grad_checkpoint: 0
+        },
+        gpu: GpuSpec {
+            kind:              "H100-80GB-HBM3",
+            mem_mb:            81920,
+            reserved_overhead: 4096
+        },
+        env_keys: [], env_vals: [], argv: [],
+        backend: "RunPod", min_vcpu: 16, secret_key: "",
+        deadline_sec: 7200, budget_usd: 500
+    }
+}
+
+fn _contains(xs: [str], needle: str) -> int {
+    let mut i = 0
+    while i < len(xs) {
+        if xs[i] == needle { return 1 }
+        i = i + 1
+    }
+    return 0
+}
+
+fn _check(name: str, cond: int) -> int {
+    if cond == 1 {
+        println("  PASS  " + name)
+        return 0
+    }
+    println("  FAIL  " + name)
+    return 1
+}
+
+fn main() {
+    println("=== F-PREFLIGHT-MEM smoke (V3 attempt 9 reconstruction) ===")
+    let mut fails = 0
+
+    // Case A — V3 attempt 9 spec, AdamW f32: must refuse.
+    let job_adam = _make_job("AdamW")
+    let v_adam = dispatch_validate(job_adam)
+    println("[A] V3 attempt 9 — AdamW f32 on 8.92B / H100-80GB:")
+    print_validation(v_adam)
+    fails = fails + _check("A1 dispatch_validate.ok == 0", 1 - v_adam.ok)
+    let mut a2 = 0
+    if v_adam.gate_failed == "mem" { a2 = 1 }
+    fails = fails + _check("A2 gate_failed == 'mem'", a2)
+    let mut a3 = 0
+    if v_adam.error_kind == "BudgetExceededError" { a3 = 1 }
+    fails = fails + _check("A3 error_kind == 'BudgetExceededError'", a3)
+    fails = fails + _check("A4 suggestions includes PagedAdamW8bit",
+                            _contains(v_adam.suggestions, "PagedAdamW8bit"))
+
+    // Sanity — total_mb derivation matches the saga's 78 GiB ballpark.
+    let b_adam = mem_budget_check(job_adam.model, job_adam.optimizer,
+                                  job_adam.batch, job_adam.gpu)
+    println("[A] mem breakdown:")
+    println(format_budget(b_adam))
+    // params 17840 + grads 17840 + opt 71360 + act + temps + reserved.
+    let mut a5 = 0
+    if b_adam.params_mb == 17840 { a5 = 1 }
+    fails = fails + _check("A5 params_mb == 17840 (8920 * 2)", a5)
+    let mut a6 = 0
+    if b_adam.opt_state_mb == 71360 { a6 = 1 }
+    fails = fails + _check("A6 opt_state_mb == 71360 (8920 * 8)", a6)
+
+    // Case B — same spec, PagedAdamW8bit: must PASS the budget gate.
+    let job_paged = _make_job("PagedAdamW8bit")
+    let v_paged = dispatch_validate(job_paged)
+    println("[B] same spec — PagedAdamW8bit (i8 m+v):")
+    print_validation(v_paged)
+    let b_paged = mem_budget_check(job_paged.model, job_paged.optimizer,
+                                   job_paged.batch, job_paged.gpu)
+    println("[B] mem breakdown:")
+    println(format_budget(b_paged))
+    fails = fails + _check("B1 dispatch_validate.ok == 1", v_paged.ok)
+    let mut b2 = 0
+    if b_paged.opt_state_mb == 17840 { b2 = 1 }
+    fails = fails + _check("B2 opt_state_mb == 17840 (8920 * 2)", b2)
+    fails = fails + _check("B3 budget ok == 1", b_paged.ok)
+
+    // Case C — AdamW8bit on 8.92B / H100-80GB: also fits.
+    let job_8b = _make_job("AdamW8bit")
+    let v_8b = dispatch_validate(job_8b)
+    fails = fails + _check("C1 AdamW8bit dispatch_validate.ok == 1", v_8b.ok)
+
+    // Case D — capability gate: backend=RunPod_CPU min_vcpu=32 → refuse.
+    let mut job_cap = _make_job("AdamW8bit")
+    job_cap.backend = "RunPod_CPU"
+    job_cap.min_vcpu = 32
+    let v_cap = dispatch_validate(job_cap)
+    fails = fails + _check("D1 RunPod_CPU+32vCPU refused", 1 - v_cap.ok)
+    let mut d2 = 0
+    if v_cap.error_kind == "CapabilityError" { d2 = 1 }
+    fails = fails + _check("D2 error_kind == 'CapabilityError'", d2)
+
+    println("")
+    if fails == 0 {
+        println("=== F-PREFLIGHT-MEM PASS ===")
+        exit(0)
+    }
+    println("=== F-PREFLIGHT-MEM FAIL (" + to_string(fails) + " checks) ===")
+    exit(1)
+}

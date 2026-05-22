@@ -1,0 +1,304 @@
+// stdlib/cloud/cloud_budget.hexa — closed-form GPU memory budget check.
+//
+// Cycle C, gate F-PREFLIGHT-MEM: refuse dispatch BEFORE pod spinup when
+// `params + grads + opt_state + activations + temps + reserved` exceeds
+// `gpu.mem_bytes * 0.85`. Recovers the V3 attempt-9 saga ($7.39 burned on
+// 8/8 identical OOM at `_foreach_sqrt` because AdamW f32 state was 71.4
+// GiB on 8.92B params, eating 90% of an 80GB H100 before activations).
+//
+// All sizes carried in MB (1 MB = 1024 * 1024 bytes) to keep the math in
+// safe i32 territory: an 8.92B params * 32 bytes/param worst case = 285k
+// MB, well under 2.1e9. n_params expressed in millions (n_params_m).
+//
+// Honest carve-outs:
+//  - activation envelope is ±2× approximate (Flash-Attention vs eager,
+//    SDPA vs vanilla, KV-cache reuse all swing it). The check treats its
+//    estimate as a LOWER bound and bakes in 15% headroom on top of the
+//    activation line itself.
+//  - paged-8bit transient peaks during `optimizer.step` are dynamic-
+//    allocator concern, orthogonal to steady-state budget here.
+
+// ── typed specs ──────────────────────────────────────────────────────
+
+struct ModelSpec {
+    n_params_m:   int,    // parameter count in millions (8.92B → 8920)
+    param_bytes:  int,    // bytes/param  · 2=bf16/fp16, 4=fp32
+    grad_bytes:   int     // bytes/grad   · usually == param_bytes
+}
+
+// OptimizerSpec stays a plain string-tagged record — single-field enum
+// payloads work in hexa-lang, multi-field do not, and the only state
+// formula needs is the kind + (for ZeRO) the GPU count.
+struct OptimizerSpec {
+    kind:   str,    // "SGD" · "SGDMomentum" · "AdamW" · "AdamW-AMP-fp16"
+                    // "AdamW8bit" · "PagedAdamW8bit" · "Lion"
+                    // "ZeRO-2-AdamW" · "ZeRO-3-AdamW"
+    n_gpu:  int     // used by ZeRO sharding only (else 1)
+}
+
+struct BatchSpec {
+    bsz:              int,
+    seq_len:          int,
+    n_layer:          int,
+    d_model:          int,
+    n_head:           int,
+    n_kv_head:        int,    // GQA — n_kv_head < n_head cheapens KV-cache
+    grad_checkpoint:  int     // 1 = activations recompute ÷ n_layer
+}
+
+struct GpuSpec {
+    kind:               str,    // human label, e.g. "H100-80GB-HBM3"
+    mem_mb:             int,    // total GPU mem in MB (80 GB → 81920)
+    reserved_overhead:  int     // CUDA ctx + driver + temps, MB (e.g. 4096)
+}
+
+// ── output shape ─────────────────────────────────────────────────────
+
+struct MemBudget {
+    params_mb:        int,
+    grads_mb:         int,
+    opt_state_mb:     int,
+    activations_mb:   int,
+    temps_mb:         int,
+    reserved_mb:      int,
+    total_mb:         int,
+    cap_mb:           int,    // 0.85 * (gpu.mem_mb - reserved)
+    ok:               int,    // 1 iff total <= cap (with 15% headroom)
+    overage_mb:       int     // max(0, total - cap)
+}
+
+// ── optimizer state-size table ───────────────────────────────────────
+
+// optimizer_state_bytes_per_param — bytes of optimizer state per model
+// parameter. Closed-form, no measurement. The table reproduces the V3
+// preflight memo exactly:
+//
+//   SGD              0   — no buffers
+//   SGDMomentum      4   — f32 momentum
+//   AdamW            8   — f32 m + f32 v        ← V3 attempt 9 victim
+//   AdamW-AMP-fp16  12   — + f32 master copy
+//   AdamW8bit        2   — i8 m + i8 v + ~5% block-wise quant state
+//   PagedAdamW8bit   2   — + CPU paging buffer (transient peaks → host)
+//   Lion             4   — f32 momentum (no v)
+//   ZeRO-2-AdamW     8/n — sharded across n GPU
+//   ZeRO-3-AdamW     8/n — also shards params + grads (handled here too)
+//
+// Unknown kind → conservative 8 (AdamW-equivalent).
+fn optimizer_state_bytes_per_param(opt: OptimizerSpec) -> int {
+    if opt.kind == "SGD"             { return 0 }
+    if opt.kind == "SGDMomentum"     { return 4 }
+    if opt.kind == "AdamW"           { return 8 }
+    if opt.kind == "AdamW-AMP-fp16"  { return 12 }
+    if opt.kind == "AdamW8bit"       { return 2 }
+    if opt.kind == "PagedAdamW8bit"  { return 2 }
+    if opt.kind == "Lion"            { return 4 }
+    if opt.kind == "ZeRO-2-AdamW" {
+        if opt.n_gpu > 1 { return 8 / opt.n_gpu }
+        return 8
+    }
+    if opt.kind == "ZeRO-3-AdamW" {
+        if opt.n_gpu > 1 { return 8 / opt.n_gpu }
+        return 8
+    }
+    return 8
+}
+
+// ── activation envelope ──────────────────────────────────────────────
+
+// activation_mb — closed-form transformer-block activation envelope.
+//
+//   per_layer ≈ bsz * seq_len * d_model * (
+//       2 (residual stream)
+//     + 4 (attention Q, K, V, out)
+//     + 4 (FFN intermediate ≈ swiglu/gelu expand)
+//     + 1 (layernorm output)
+//   ) * param_bytes
+//   total ≈ n_layer * per_layer       (if no grad-checkpoint)
+//   total ≈ per_layer + sqrt(n_layer) * per_layer  (if grad-checkpoint)
+//
+// GQA cheapens K/V — multiply the K/V contribution by (n_kv_head/n_head):
+//   factor_kv = 2 + 2 * (n_kv_head / n_head)   instead of 4
+//
+// The whole envelope is ±2×; the budget caller treats it as a LOWER bound
+// and demands 15% headroom (cap = 0.85 × usable).
+fn activation_mb(model: ModelSpec, batch: BatchSpec) -> int {
+    let n_head = batch.n_head
+    let n_kv   = batch.n_kv_head
+    let mut attn_qkv_out = 4
+    if n_head > 0 && n_kv > 0 && n_kv < n_head {
+        // GQA: 2 from Q+out always, plus 2 * (kv/head) for K+V.
+        // Approximate to integer multiplier × 100.
+        let kv_ratio_pct = (200 * n_kv) / n_head
+        attn_qkv_out = 2 + (kv_ratio_pct / 100)
+    }
+    let per_token_units = 2 + attn_qkv_out + 4 + 1
+    // bsz · seq_len · d_model · per_token_units · param_bytes
+    // bsz=4, seq=128, d=3072, units=11, bytes=2 → 34,603,008 bytes ≈ 33 MB
+    let mut per_layer_kb = batch.bsz * batch.seq_len * batch.d_model
+    per_layer_kb = per_layer_kb * per_token_units
+    per_layer_kb = per_layer_kb * model.param_bytes
+    per_layer_kb = per_layer_kb / 1024
+    let per_layer_mb = per_layer_kb / 1024
+    if batch.grad_checkpoint == 1 {
+        // sqrt(n_layer) approx: n_layer=28 → sqrt ≈ 5; n_layer=64 → 8.
+        let mut sq = 1
+        let mut s2 = 1
+        while s2 < batch.n_layer {
+            sq = sq + 1
+            s2 = sq * sq
+        }
+        return per_layer_mb + sq * per_layer_mb
+    }
+    return batch.n_layer * per_layer_mb
+}
+
+// ── temps envelope ───────────────────────────────────────────────────
+
+// temps_mb — closed-form temporary scratch (autograd graph, allocator
+// fragmentation, fwd/bwd ping-pong). Conservative 8 GiB for >1B params,
+// 2 GiB for ≤1B params.
+fn temps_mb(model: ModelSpec) -> int {
+    if model.n_params_m >= 1000 { return 8192 }
+    return 2048
+}
+
+// ── total budget check ───────────────────────────────────────────────
+
+fn mem_budget_check(model: ModelSpec, opt: OptimizerSpec,
+                    batch: BatchSpec, gpu: GpuSpec) -> MemBudget {
+    let params_mb     = (model.n_params_m * model.param_bytes)
+    let grads_mb      = (model.n_params_m * model.grad_bytes)
+    let opt_per       = optimizer_state_bytes_per_param(opt)
+    let opt_state_mb  = model.n_params_m * opt_per
+    let act_mb        = activation_mb(model, batch)
+    let tmp_mb        = temps_mb(model)
+    let resv_mb       = gpu.reserved_overhead
+    let total_mb      = params_mb + grads_mb + opt_state_mb + act_mb + tmp_mb + resv_mb
+    // 15% headroom: cap is 85% of (mem_mb - reserved). Reserved is
+    // already in `total`, so the cap is referenced against full mem_mb
+    // with that 15% kept free above-and-beyond what we modeled.
+    let usable_mb = gpu.mem_mb
+    let cap_mb    = (usable_mb * 85) / 100
+    let mut ok = 1
+    let mut overage = 0
+    if total_mb > cap_mb {
+        ok = 0
+        overage = total_mb - cap_mb
+    }
+    return MemBudget {
+        params_mb:      params_mb,
+        grads_mb:       grads_mb,
+        opt_state_mb:   opt_state_mb,
+        activations_mb: act_mb,
+        temps_mb:       tmp_mb,
+        reserved_mb:    resv_mb,
+        total_mb:       total_mb,
+        cap_mb:         cap_mb,
+        ok:             ok,
+        overage_mb:     overage
+    }
+}
+
+// ── downgrade ladder ─────────────────────────────────────────────────
+
+// optimizer_downgrade_path — for an over-budget optimizer, return an
+// ordered ladder of cheaper alternatives. Each step is independently
+// verifiable and adds back observable training capability — matches the
+// saga policy "step-by-step-decision-gate" principle from the preflight
+// memo (`2026-05-21-hexa-cloud-optimizer-mem-budget-preflight.md`).
+fn optimizer_downgrade_path(opt: OptimizerSpec) -> [str] {
+    if opt.kind == "AdamW" {
+        return ["AdamW8bit", "PagedAdamW8bit", "Lion", "ZeRO-2-AdamW"]
+    }
+    if opt.kind == "AdamW-AMP-fp16" {
+        return ["AdamW", "AdamW8bit", "PagedAdamW8bit", "ZeRO-2-AdamW"]
+    }
+    if opt.kind == "AdamW8bit" {
+        return ["PagedAdamW8bit", "Lion", "ZeRO-2-AdamW", "ZeRO-3-AdamW"]
+    }
+    if opt.kind == "PagedAdamW8bit" {
+        return ["Lion", "ZeRO-2-AdamW", "ZeRO-3-AdamW",
+                "grad-checkpoint or smaller bsz"]
+    }
+    if opt.kind == "Lion" {
+        return ["ZeRO-2-AdamW", "ZeRO-3-AdamW",
+                "grad-checkpoint or smaller bsz"]
+    }
+    return ["AdamW8bit", "PagedAdamW8bit", "Lion", "ZeRO-2-AdamW"]
+}
+
+// budget_with_alternative — re-run the budget against a hypothetical
+// optimizer kind (preserving n_gpu). Used to compute "saves X MB" /
+// "new total Y MB" annotations on the downgrade ladder.
+fn budget_with_alternative(model: ModelSpec, batch: BatchSpec, gpu: GpuSpec,
+                           alt_kind: str, n_gpu: int) -> MemBudget {
+    let alt = OptimizerSpec { kind: alt_kind, n_gpu: n_gpu }
+    return mem_budget_check(model, alt, batch, gpu)
+}
+
+// ── pretty-print ─────────────────────────────────────────────────────
+
+fn _pad_int(v: int, width: int) -> str {
+    let s = to_string(v)
+    let mut out = ""
+    let mut k = len(s)
+    while k < width {
+        out = out + " "
+        k = k + 1
+    }
+    return out + s
+}
+
+fn format_budget(b: MemBudget) -> str {
+    let mut out = ""
+    out = out + "  params       " + _pad_int(b.params_mb,      8) + " MB\n"
+    out = out + "  grads        " + _pad_int(b.grads_mb,       8) + " MB\n"
+    out = out + "  opt_state    " + _pad_int(b.opt_state_mb,   8) + " MB\n"
+    out = out + "  activations  " + _pad_int(b.activations_mb, 8) + " MB\n"
+    out = out + "  temps        " + _pad_int(b.temps_mb,       8) + " MB\n"
+    out = out + "  reserved     " + _pad_int(b.reserved_mb,    8) + " MB\n"
+    out = out + "  -----------\n"
+    out = out + "  total        " + _pad_int(b.total_mb,       8) + " MB  /  cap " + to_string(b.cap_mb) + " MB"
+    if b.ok == 1 {
+        out = out + "  · OK (" + to_string(b.cap_mb - b.total_mb) + " MB headroom)\n"
+    } else {
+        out = out + "  · OVERAGE " + to_string(b.overage_mb) + " MB\n"
+    }
+    return out
+}
+
+fn format_downgrade_ladder(model: ModelSpec, opt: OptimizerSpec,
+                           batch: BatchSpec, gpu: GpuSpec) -> str {
+    let ladder = optimizer_downgrade_path(opt)
+    let current = mem_budget_check(model, opt, batch, gpu)
+    let mut out = "  downgrade ladder:\n"
+    let mut i = 0
+    while i < len(ladder) {
+        let alt_kind = ladder[i]
+        out = out + "    " + to_string(i + 1) + ". " + alt_kind
+        // Try the alternative under same n_gpu; only optimizer-kind
+        // alternatives are budgetable here. Hints like "grad-checkpoint
+        // or smaller bsz" carry no kind formula.
+        if alt_kind == "AdamW" || alt_kind == "AdamW-AMP-fp16"
+            || alt_kind == "AdamW8bit" || alt_kind == "PagedAdamW8bit"
+            || alt_kind == "Lion" || alt_kind == "SGDMomentum"
+            || alt_kind == "SGD"
+            || alt_kind == "ZeRO-2-AdamW" || alt_kind == "ZeRO-3-AdamW" {
+            let alt_b = budget_with_alternative(model, batch, gpu, alt_kind, opt.n_gpu)
+            let mut saves = 0
+            if current.total_mb > alt_b.total_mb {
+                saves = current.total_mb - alt_b.total_mb
+            }
+            out = out + "  (saves " + to_string(saves) + " MB, new total " + to_string(alt_b.total_mb) + " MB"
+            if alt_b.ok == 1 {
+                out = out + " · FITS"
+            } else {
+                out = out + " · still over by " + to_string(alt_b.overage_mb) + " MB"
+            }
+            out = out + ")"
+        }
+        out = out + "\n"
+        i = i + 1
+    }
+    return out
+}

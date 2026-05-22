@@ -23,6 +23,11 @@ fn _cloud_help() {
     println("  cloud copy-to   <host> <local> <remote> [conn]         upload local file to host:remote (scp)")
     println("  cloud copy-from <host> <remote> <local> [conn]         download host:remote file to local (scp)")
     println("")
+    println("usage (directory transfer — whole tree, one scp -r):")
+    println("  cloud copy-dir-to   <host> <local-dir> <remote-dir> [conn]   upload a whole directory tree")
+    println("  cloud copy-dir-from <host> <remote-dir> <local-dir> [conn]   download a whole directory tree")
+    println("                                                              the tree lands at <local-dir>/<basename(remote-dir)>")
+    println("")
     println("usage (cycle C — preflight $0 gates):")
     println("  cloud preflight [spec-flags]                           run mem-budget + capability + cli-quirk + secret gates")
     println("                                                         exit 0 = green, exit 2 = refused (BudgetExceededError, etc.)")
@@ -234,6 +239,7 @@ fn main() {
         if si < 0 {
             if t == "run" || t == "nohup" || t == "poll"
                 || t == "copy-to" || t == "copy-from"
+                || t == "copy-dir-to" || t == "copy-dir-from"
                 || t == "preflight"
                 || t == "help" || t == "--help" || t == "-h"
                 || t == "version" || t == "--version" || t == "-v" {
@@ -252,7 +258,7 @@ fn main() {
         return
     }
     if sub == "version" || sub == "--version" || sub == "-v" {
-        println("hexa cloud 0.2.0 — cycle A + B-1 + B-2 + C(preflight)")
+        println("hexa cloud 0.3.0 — cycle A + B-1 + B-2 + C(preflight) + dir-transfer")
         return
     }
     if sub == "preflight" {
@@ -340,6 +346,32 @@ fn main() {
         let ssh_opts = _ssh_opts_cli(av, si + 4)
         let r = cloud_copy_from_opts(host, ssh_opts, remote_path, local_path)
         println("[cloud] " + r.message + " · " + host + ":" + remote_path + " -> " + local_path)
+        exit(r.exit_code)
+    }
+    if sub == "copy-dir-to" {
+        if si + 3 >= len(av) {
+            println("[cloud] copy-dir-to: usage — cloud copy-dir-to <host> <local-dir> <remote-dir> [--port N]")
+            exit(2)
+        }
+        let host = av[si + 1]
+        let local_dir = av[si + 2]
+        let remote_dir = av[si + 3]
+        let ssh_opts = _ssh_opts_cli(av, si + 4)
+        let r = cloud_copy_dir_to_opts(host, ssh_opts, local_dir, remote_dir)
+        println("[cloud] " + r.message + " · " + local_dir + "/ -> " + host + ":" + remote_dir)
+        exit(r.exit_code)
+    }
+    if sub == "copy-dir-from" {
+        if si + 3 >= len(av) {
+            println("[cloud] copy-dir-from: usage — cloud copy-dir-from <host> <remote-dir> <local-dir> [--port N]")
+            exit(2)
+        }
+        let host = av[si + 1]
+        let remote_dir = av[si + 2]
+        let local_dir = av[si + 3]
+        let ssh_opts = _ssh_opts_cli(av, si + 4)
+        let r = cloud_copy_dir_from_opts(host, ssh_opts, remote_dir, local_dir)
+        println("[cloud] " + r.message + " · " + host + ":" + remote_dir + " -> " + local_dir + "/")
         exit(r.exit_code)
     }
 }
