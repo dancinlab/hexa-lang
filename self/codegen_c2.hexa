@@ -3918,6 +3918,16 @@ fn gen2_expr(node) {
             let _fnref = _gen2_fnref_thunk(node.name)
             if _fnref != "" { return _fnref }
         }
+        // b2-fnref: a bare name resolving to a user-defined top-level fn,
+        // used in value position — box it as a TAG_FN HexaVal so `let f =
+        // add` / passing a named fn by value type-checks, instead of emitting
+        // the bare C function symbol (`HexaVal f = add;` — a C type error).
+        // A direct call `add(…)` is unaffected: the Call handler consumes its
+        // Ident callee by name and never routes it through this value path.
+        // Mirrors the `.sort_by` arg-site autowrap.
+        if _gen2_should_autowrap_fnref(node.name) {
+            return "hexa_fn_new((void*)" + _hexa_mangle_ident(node.name) + ", 0)"
+        }
         return _hexa_mangle_ident(node.name)
     }
 
