@@ -1839,32 +1839,63 @@ fn target_supported_list() {
 //
 // Returns: 0 on PTX write success, 1 on file-IO error.
 // Side effect: writes `<src_path>.ptx` with the source-derived PTX.
+//
+// ─── PATH A GATE (iter-2b · 2026-05-22 · bootstrap macOS Stage 1 link) ───
+// REVERSIBLE STUB. The live MIR pipeline below (lex → parse → static_atlas
+// → lower → lower_hir → codegen_emit_ptx_for_sm) calls 6 `pub fn` symbols
+// imported via the `use "compiler/..."` directives at the top of this file.
+// The Stage 0 transpiler (self/native/hexa_cc.c::_resolve_use_emit) emits
+// ONLY `extern HexaVal foo(...);` forward-decls for `use`d symbols — never
+// their bodies — and bootstrap.yml links only build/stage1/main.c +
+// self/runtime.c (not the compiler/*.hexa modules). Result: 6 undefined
+// symbols at macOS Stage 1' link (lex/parse/lower/lower_hir/static_atlas/
+// codegen_emit_ptx_for_sm). Full root-cause audit:
+//   ~/core/demiurge/inbox/notes/2026-05-22-bootstrap-iter-2b-audit.md
+//
+// Gating removes the 6 CALL SITES (the only references in stage1/main.c);
+// the extern decls become harmless dead code (unused externs are NOT link
+// errors). Equivalent driver lives in compiler/cli/build_nvptx.hexa::
+// build_nvptx_emit_driver (audit §8: this in-main copy is near-duplicate).
+//
+// TO RESTORE (after Path C teaches the transpiler `use`-body inline, or
+// Path B links the compiler/*.hexa .o files): uncomment the LIVE PIPELINE
+// block below + delete this stub return. The pipeline is preserved verbatim.
 fn _build_nvptx_emit_driver(src_path, sm_arch) {
     if len(src_path) == 0 { return 1 }
     if len(sm_arch)  == 0 { return 1 }
     // Pre-check source exists (cmd_build already ran the same check
     // above; duplicate for direct-callers in future tests).
     if !file_exists(src_path) { return 1 }
-    // ── P3 source-derived MIR pipeline (mirror of compiler/cli/
-    //    build_nvptx.hexa::_build_nvptx_source_module body) ──
-    let source     = to_string(read_file(src_path))
-    let tokens     = lex(source, src_path)
-    let module_ast = parse(tokens, src_path)
-    let atlas      = static_atlas()
-    let hmodule    = lower(module_ast, atlas)
-    let mmodule    = lower_hir(hmodule)
-    // codegen_emit_ptx_for_sm filters MFuncs by gpu_kind != GPU_KIND_CPU
-    // internally (see compiler/codegen/nvptx_target.hexa:1399-1437);
-    // CPU-only files emit an empty kernel section but still produce a
-    // parse-clean PTX shell. Source-with-@gpu_kernel emits the
-    // .visible .entry <kernel_name> header that the F-RFC071-MODULE-
-    // LOADER-BRIDGE-RUNTIME falsifier substring-checks.
-    let ptx_text = codegen_emit_ptx_for_sm(mmodule, sm_arch)
-    let out_path = src_path + ".ptx"
-    write_file(out_path, ptx_text)
-    if !file_exists(out_path) { return 1 }
-    println("[nvptx] target=" + sm_arch + " src=" + src_path + " out=" + out_path + " phase=P3-PATH-B")
-    return 0
+    // ── PATH A STUB: driver not built into this hexa-cc ──
+    // The source-derived PTX pipeline is gated off so macOS Stage 1' links.
+    // Returns 1 (driver unavailable) so cmd_build's dispatch exits non-zero.
+    println("[nvptx] source-derived PTX driver not built into this hexa-cc")
+    println("[nvptx]   target=" + sm_arch + " src=" + src_path)
+    println("[nvptx]   use the standalone driver: compiler/cli/build_nvptx.hexa::build_nvptx_emit_driver")
+    println("[nvptx]   (gated iter-2b 2026-05-22 — see audit note for restore path)")
+    return 1
+    // ── LIVE PIPELINE (preserved · reversible · DO NOT call until the 6
+    //    `use`d symbols are linked — see gate header above) ──
+    // // ── P3 source-derived MIR pipeline (mirror of compiler/cli/
+    // //    build_nvptx.hexa::_build_nvptx_source_module body) ──
+    // let source     = to_string(read_file(src_path))
+    // let tokens     = lex(source, src_path)
+    // let module_ast = parse(tokens, src_path)
+    // let atlas      = static_atlas()
+    // let hmodule    = lower(module_ast, atlas)
+    // let mmodule    = lower_hir(hmodule)
+    // // codegen_emit_ptx_for_sm filters MFuncs by gpu_kind != GPU_KIND_CPU
+    // // internally (see compiler/codegen/nvptx_target.hexa:1399-1437);
+    // // CPU-only files emit an empty kernel section but still produce a
+    // // parse-clean PTX shell. Source-with-@gpu_kernel emits the
+    // // .visible .entry <kernel_name> header that the F-RFC071-MODULE-
+    // // LOADER-BRIDGE-RUNTIME falsifier substring-checks.
+    // let ptx_text = codegen_emit_ptx_for_sm(mmodule, sm_arch)
+    // let out_path = src_path + ".ptx"
+    // write_file(out_path, ptx_text)
+    // if !file_exists(out_path) { return 1 }
+    // println("[nvptx] target=" + sm_arch + " src=" + src_path + " out=" + out_path + " phase=P3-PATH-B")
+    // return 0
 }
 
 fn cmd_build(src, out, c_only, target, shared) {
