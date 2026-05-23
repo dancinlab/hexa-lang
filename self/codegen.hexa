@@ -4841,6 +4841,29 @@ fn gen2_expr(node) {
         return "hexa_map_get_ic(" + obj + ", \"" + field + "\", &" + slot + ")"
     }
 
+    // ── Optional chaining (PROBE r14-BB): obj?.field ──
+    // Short-circuits to hexa_void() when obj is void; otherwise behaves
+    // like a plain Field access (hexa_map_get_ic with a per-site IC slot).
+    // Canonical Swift/JS/TS semantics: `a?.b?.c` returns void as soon as
+    // any intermediate hop is void; otherwise the final field value.
+    // Scope (intentionally narrow): struct-field reads only. Optional
+    // method calls (`a?.f()`) are filed as follow-up; the Call arm does
+    // not yet recognise an OptField callee.
+    if k == "OptField" {
+        let obj = gen2_expr(node.left)
+        let field = node.name
+        let id = _ic_counter
+        _ic_counter = _ic_counter + 1
+        let slot = "__hexa" + "_ic_" + to_string(id)
+        // GCC/clang statement-expression evaluates `obj` once into __optrcv
+        // (avoid double-eval of side-effecting receivers) then branches on
+        // tag == TAG_VOID. Uses public HX_TAG macro from runtime.h (the
+        // sibling HX_IS_VOID convenience macro is private to runtime_core.c).
+        // Mirrors the existing statement-expr pattern used elsewhere in
+        // this file (e.g. method-dispatch + array-literal).
+        return "({ HexaVal __optrcv = " + obj + "; HX_TAG(__optrcv) == TAG_VOID ? hexa_void() : hexa_map_get_ic(__optrcv, \"" + field + "\", &" + slot + "); })"
+    }
+
     // ── Struct init: Name { f1: v1, f2: v2 } → constructor call ──
     // FIX-A (Anima stdlib unblock, 2026-04-19): empty-literal `Name {}` cannot
     // call Name() because structs with fields were declared as Name(HexaVal a, …).
