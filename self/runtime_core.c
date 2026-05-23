@@ -1993,10 +1993,11 @@ HexaVal hexa_array_get(HexaVal arr, int64_t idx) {
         hexa_throw(hexa_str(_buf));
         return hexa_void();
     }
+    int64_t _orig_idx_g = idx;
     if (idx < 0) idx += HX_ARR_LEN(arr);
     if (idx < 0 || idx >= HX_ARR_LEN(arr)) {
         char _buf[128];
-        snprintf(_buf, sizeof(_buf), "index %lld out of bounds (len %d)", (long long)idx, HX_ARR_LEN(arr));
+        snprintf(_buf, sizeof(_buf), "index %lld out of bounds (len %d)", (long long)_orig_idx_g, HX_ARR_LEN(arr));
         if (hxlcl_getenv("HEXA_OOB_TRACE")) {
             void* _bt[32]; int _n = backtrace(_bt, 32);
             fprintf(stderr, "[OOB] %s\n", _buf);
@@ -2014,14 +2015,22 @@ extern int __hexa_arena_slot_dirty;
 HexaVal hexa_array_set(HexaVal arr, int64_t idx, HexaVal val) {
     if (!HX_IS_ARRAY(arr)) {
         char _buf[128];
-        snprintf(_buf, sizeof(_buf), "array_set[%lld]: container is not an array (tag=%d)", (long long)idx, (int)HX_TAG(arr));
+        // Strings hit this branch when the user writes `s[i] = v`. Emit a
+        // string-specific diagnostic instead of the generic "container is
+        // not an array (tag=3)" — hexa strings are immutable.
+        if (HX_IS_STR(arr)) {
+            snprintf(_buf, sizeof(_buf), "s[%lld] = …: strings are immutable", (long long)idx);
+        } else {
+            snprintf(_buf, sizeof(_buf), "array_set[%lld]: container is not an array (tag=%d)", (long long)idx, (int)HX_TAG(arr));
+        }
         hexa_throw(hexa_str(_buf));
         return arr;
     }
+    int64_t _orig_idx_s = idx;
     if (idx < 0) idx += HX_ARR_LEN(arr);
     if (idx < 0 || idx >= HX_ARR_LEN(arr)) {
         char _buf[128];
-        snprintf(_buf, sizeof(_buf), "index %lld out of bounds (len %d)", (long long)idx, HX_ARR_LEN(arr));
+        snprintf(_buf, sizeof(_buf), "index %lld out of bounds (len %d)", (long long)_orig_idx_s, HX_ARR_LEN(arr));
         hexa_throw(hexa_str(_buf));
         return arr;
     }
