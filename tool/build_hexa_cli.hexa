@@ -38,6 +38,10 @@ fn _uname() -> string {
     return to_string(exec("uname")).trim()
 }
 
+fn _uname_m() -> string {
+    return to_string(exec("uname -m")).trim()
+}
+
 // shell single-quote escape: ' → '\''
 fn _shq(s: string) -> string {
     let mut out = "'"
@@ -67,6 +71,41 @@ fn _run(cmd: string, label: string) {
     }
 }
 
+fn _file_exists(p: string) -> bool {
+    let r = exec_with_status("test -f " + _shq(p))
+    return r[1] == 0
+}
+
+// _pick_hexa_v2: select the committed hexa_v2 binary that matches the
+// host (os, arch) triple. Returns absolute path under <repo>/self/native/.
+//
+// Layout (multiarch, 2026-05-24):
+//   self/native/hexa_v2                  — Mac arm64 (Mach-O), legacy name
+//   self/native/hexa_v2_linux_x86_64     — Linux x86_64 (ELF)
+//
+// The legacy name "hexa_v2" is preserved for Mac arm64 to avoid churning
+// the entire build chain (bootstrap.yml, build_hexa_cli_native.hexa, etc).
+// Other (os, arch) pairs use a suffixed name so a single git commit can
+// carry every host's binary.
+//
+// Background: PR #454 regen-ed hexa_v2 on Mac arm64 only, leaving Linux
+// hosts (ubu-1/ubu-2) running a Mac binary via shared self/native/hexa_v2
+// — which SIGSEGVs / exec-fails on Linux. This helper lets Linux pick
+// its own ELF without forcing every commit to rebuild every arch.
+fn _pick_hexa_v2(repo_root: string) -> string {
+    let os   = _uname()
+    let arch = _uname_m()
+    if os == "Linux" && (arch == "x86_64" || arch == "amd64") {
+        let p = repo_root + "/self/native/hexa_v2_linux_x86_64"
+        // graceful fallback: if the linux_x86_64 binary isn't checked in
+        // yet (older clones), fall back to the legacy name so existing
+        // workflows keep working — they'll surface the arch mismatch as
+        // an exec error, which is the pre-multiarch behaviour.
+        if _file_exists(p) { return p }
+    }
+    return repo_root + "/self/native/hexa_v2"
+}
+
 // REPO_ROOT — HEXA_LANG if set, else cwd.
 fn _repo_root() -> string {
     let hl = env_var("HEXA_LANG")
@@ -94,7 +133,10 @@ fn _print_refuse_hint(repo_root: string) {
 }
 
 fn _do_build(repo_root: string) {
-    let hexa_v2   = repo_root + "/self/native/hexa_v2"
+    // multiarch-aware: Linux x86_64 → hexa_v2_linux_x86_64; Mac arm64 → hexa_v2.
+    // Falls back to legacy "hexa_v2" path when the arch-specific binary
+    // hasn't been committed yet (pre-multiarch clones).
+    let hexa_v2   = _pick_hexa_v2(repo_root)
     let main_hexa = repo_root + "/self/main.hexa"
     let ml_hexa   = repo_root + "/self/module_loader.hexa"
     let stage1    = repo_root + "/build/stage1"
