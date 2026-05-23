@@ -101,6 +101,31 @@ compute, not when the command is already a remote-dispatch verb (`hexa cloud
 ## Status
 
 - [x] Discovered + workaround (cd /tmp + HEXA_LANG=) verified working
-- [ ] Fix A (hexa-cloud allowlist) implemented in pool-route hook
-- [ ] route-log entry shape clarified — current log only records (host, cmd-prefix), not (was-rewritten, original-cmd)
-- [ ] Document workaround envar in `hexa cloud --help` until fix lands
+- [x] Filed as hexa-lang inbox patch (PR #628, MERGED 2026-05-24)
+- [x] **Cross-repo handoff** — fix lives in sidecar plugin, not hexa-lang (see below)
+- [ ] Fix A (hexa-cloud allowlist) implemented in pool-route hook — **sidecar repo**
+- [ ] route-log entry shape clarified — current log only records (host, cmd-prefix), not (was-rewritten, original-cmd) — **sidecar repo**
+- [ ] Document workaround envar in `hexa cloud --help` until fix lands — *(hexa-lang side, follow-up if Fix B chosen)*
+
+## Cross-repo handoff (2026-05-24)
+
+**Status**: `cross-repo-sidecar` — archived from hexa-lang perspective; ownership transferred to sidecar plugin repo.
+
+**Reason**: The pool-route PreToolUse hook is implemented in the sidecar plugins cache at
+`~/.claude/plugins/cache/sidecar/pool-route/<version>/bin/_pool_route.py` (driver: `pool-route.sh`).
+Verified 2026-05-24: no `hexa cloud` allowlist exists in current sidecar `_pool_route.py`. The
+fix (regex allowlist for `^\s*(cd \S+ \&\& )?(env \S+= )?hexa cloud(\s|$)` before the GPU-keyword
+scan, per Fix A in this patch) must land in the sidecar repo. hexa-lang has no surface to
+intercept the hook — the rewrite happens at the Claude Code PreToolUse boundary, which sidecar
+owns.
+
+**Hexa-lang side ownership** (kept open, low priority):
+- Optional: if Fix B is chosen by sidecar maintainers (env-var workaround), `hexa cloud --help`
+  output could mention the bypass envar. Tracked here, deferred until sidecar decides on A vs B.
+- No code change needed in hexa-lang for Fix A or Fix C.
+
+**Recommended next action**: file the Fix A allowlist patch against the sidecar repo
+(`dancinlab/sidecar` or wherever `plugins/pool-route/` lives) referencing this patch + PR #628
+as the source-of-truth bug report. From hexa-lang's perspective, this inbox patch is now
+**archived** — leaving it filed (not deleted) so future cross-repo audits can trace the
+breadcrumb.
