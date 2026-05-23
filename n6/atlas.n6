@@ -61719,3 +61719,27 @@
   verified-by = "hexa verify --expr shadow_clifford_var_bound 4 48.0"
   cite = "RFC 045 qmirror — Huang-Kueng-Preskill 2020 Nat. Phys. 16 1050 (arXiv:2002.08953) Theorem 1; Clifford 2-design shadow worst-case ||O||²_shadow <= 3*Tr(O²) = 3*2^n for non-identity Pauli on n qubits"
   provenance = "tool/atlas_cli.hexa register --from-verify (direct node-gen, no .n6; 🟢 numerical)"
+
+# ── PR #609 retro n6 sync — RFC 047 (mc-integrate) + RFC 046 (sim-universe) atoms ──
+
+@F verified-welch_t_crit-num = welch_t_crit(1.0) = 12.706 :: formula [d=2026-05-23 active]
+  tier = "🟢 SUPPORTED-NUMERICAL"
+  verified-by = "hexa verify --expr welch_t_crit 1.0 12.706"
+  cite = "TECS-L n6-rep Tier2 — hexa-native libm-class numerical recompute (ε=1e-9)"
+  provenance = "tool/atlas_cli.hexa register --from-verify (direct node-gen, no .n6; 🟢 numerical)"
+
+@F verified-wilson_hilferty_p-num = wilson_hilferty_p(0.0,10.0) = 1.0 :: formula [d=2026-05-23 active]
+  tier = "🟢 SUPPORTED-NUMERICAL"
+  verified-by = "hexa verify --expr wilson_hilferty_p 0.0,10.0 1.0"
+  cite = "TECS-L n6-rep Tier2 — hexa-native libm-class numerical recompute (ε=1e-9)"
+  provenance = "tool/atlas_cli.hexa register --from-verify (direct node-gen, no .n6; 🟢 numerical)"
+
+@F verified-ssh_winding-1-2 = ssh_winding(1,2) = 1 :: formula [d=2026-05-23 active]
+  verified-by = "hexa verify --expr ssh_winding 1,2 1"
+  cite = "@D g_self_verify · TECS-L Tier1 — hexa-native NT closed-form"
+  provenance = "tool/atlas_cli.hexa register --from-verify (direct node-gen, no .n6)"
+
+@F verified-tknn_chern-2-5-1 = tknn_chern(2,5,1) = 3 :: formula [d=2026-05-23 active]
+  verified-by = "hexa verify --expr tknn_chern 2,5,1 3"
+  cite = "@D g_self_verify · TECS-L Tier1 — hexa-native NT closed-form"
+  provenance = "tool/atlas_cli.hexa register --from-verify (direct node-gen, no .n6)"
