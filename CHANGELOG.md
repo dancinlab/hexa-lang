@@ -6,6 +6,32 @@ For the full audit trail, see `git log`.
 
 ---
 
+## 2026-05-24
+
+phi_rs inbox closure + `/cycle` 1-6 라운드 머지 배치. 코드 변경(codegen/runtime)은 enum 스택 일부, 나머지는 RFC promote · inbox housekeeping.
+
+### codegen / runtime — enum-to-string 스택
+
+- **enum variant names 배열 emit** (PR #555, stack PR-1/3) — `to_string(enum)` 의 첫 단계로 variant 이름 배열을 codegen 에서 additive emit
+- **`TAG_ENUM` 슬롯 + defense 분기** (PR #566, stack PR-2.0/3) — runtime 에 `TAG_ENUM` 태그 슬롯과 방어 분기 추가
+- **fail-honest 분해 결과 기록** (PR #553) — enum `to_string` codegen-emit 은 단일 surgical fix 불가로 확정; 스택 분해 근거를 inbox notes 에 남김
+
+### RFC drafts — promote (architect 결정 후 등재)
+
+- **RFC 084 — phi_rs FFI shim** (PR #546) — option A cdylib path 로 shim draft 승격; 관련 selftest 등록 (PR #545, RFC 036 phi_rs byte-equal smoke 를 selftest 하네스에 register)
+- **RFC 085 — dispatcher hygiene** (PR #552) — env-var + `.hexarc` + `--local` (rfc_026 + rfc_028 통합 승격)
+- **RFC 086 — atlas memcap unblock** (PR #558) — rfc_066 승격
+- **RFC 087 — macro-expander pass design** (PR #556) — macro-expander-pass-design 승격
+- **RFC 088 — hexa-cloud preflight + typed env-var** (PR #563)
+- **RFC drafts INDEX** (PR #564) — 2026-05-24 RFC 초안 (084-088) 카탈로그 등재
+
+### inbox housekeeping
+
+- **27 patches archive** (PR #562) — 해결 완료 패치 27건 → `manifest_log` 이관 + `PATCHES.yaml` 동기화
+- **json_object 사이클 finding** (PR #551) — `json_object_delete` / `json_object_keys` no-op 사이클 발견 inbox 기록
+
+> 진행 중(미머지): atlas `hxc` dead-ref 정리 (PR #576, `hxc_loader` dead refs + obsolete hxc smoke tests retire — `n6/atlas.n6` 단일 SSOT) · enum 스택 PR-2.1 · RFC 047 atom.
+
 ## 2026-05-23
 
 ### naming_generic governance + closure
