@@ -1881,7 +1881,12 @@ fn parse_params() {
     if p_peek_kind() == "RParen" {
         return params
     }
-    // Optional `mut` modifier on parameter
+    // Optional `&` / `&mut` (Rust-style borrow receiver) — hexa has
+    // no borrow checker, so the prefix is absorbed and discarded; the
+    // canonical `fn area(&self)` / `fn scale(&mut self, k: int)` Rust
+    // shapes parse without rejecting at `BitAnd`.
+    if p_peek_kind() == "BitAnd" { p_advance() }
+    // Optional `mut` modifier on parameter (also covers `&mut`).
     if p_peek_kind() == "Mut" { p_advance() }
     // FIX-6 (BG-HX2): reject reserved keywords as param name BEFORE
     // p_expect_ident's lenient path silently swallows them.
@@ -1905,6 +1910,8 @@ fn parse_params() {
     })
     while p_peek_kind() == "Comma" {
         p_advance()
+        // Symmetric `&` / `&mut` accept (see first-param comment above).
+        if p_peek_kind() == "BitAnd" { p_advance() }
         if p_peek_kind() == "Mut" { p_advance() }
         let mut pname = ""
         if p_check_strict_reserved("parameter name") {
