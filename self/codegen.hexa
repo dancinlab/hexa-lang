@@ -1241,7 +1241,11 @@ fn codegen(ast) {
             }
             // ROI #43: @thread_local → _Thread_local C storage class
             let _tls_val = ast[i].value
-            let _is_tls = false
+            // `let mut` (not `let`): _is_tls is reassigned below. The plain-let
+            // comptime-fold (PROBE r11 B3) would otherwise register the
+            // immutable `false` and inline it on the assignment LHS, emitting
+            // the un-buildable `hexa_bool(0) = hexa_bool(1);`.
+            let mut _is_tls = false
             if type_of(_tls_val) == "string" {
                 if _tls_val == "thread_local" {
                     _is_tls = true
@@ -2508,6 +2512,9 @@ fn _gen2_arm_block_expr(body) {
     if type_of(body) == "string" { return "hexa_void()" }
     if len(body) == 0 { return "hexa_void()" }
     let n = len(body)
+    // Scope-isolate this block body's comptime-const folds: any `let x = <lit>`
+    // emitted here must not bleed into a sibling arm or the enclosing scope.
+    let _cc_mark = _comptime_const_scope_mark()
     let mut chunks = []
     chunks.push("({ ")
     let mut bi = 0
@@ -2527,6 +2534,7 @@ fn _gen2_arm_block_expr(body) {
         }
         chunks.push("hexa_void(); })")
     }
+    _comptime_const_scope_restore(_cc_mark)
     return chunks.join("")
 }
 
@@ -7075,12 +7083,18 @@ fn gen2_match_stmt(node, depth) {
             }
         }
 
-        // Arm body
+        // Arm body — scope-isolate the comptime-const fold table so a
+        // `let x = <lit>` in this arm does not leak its folded literal into a
+        // sibling arm or the enclosing scope (statement-position sibling to the
+        // _gen2_arm_block_expr fix; closes the integer-match block-body scope
+        // leak: arm-3 `a` was inlined to arm-1's stale value → 210 not 300).
+        let _cc_mark = _comptime_const_scope_mark()
         let mut bi = 0
         while bi < len(arm.body) {
             chunks.push(gen2_stmt(arm.body[bi], depth + 2))
             bi = bi + 1
         }
+        _comptime_const_scope_restore(_cc_mark)
         chunks.push(pad2 + "}")
         ai = ai + 1
     }
@@ -7768,6 +7782,38 @@ fn comptime_eval(node) {
 fn _register_comptime_const(name, value_node) {
     _comptime_const_names.push(name)
     _comptime_const_nodes.push(value_node)
+}
+
+// ── match/block-body scope isolation for the comptime-const fold table ──
+// The "PROBE r11 B3" plain-immutable-`let` comptime-fold registers folded
+// literals into the GLOBAL parallel arrays above with no scope handling, and
+// _lookup_comptime_const returns the FIRST match. Two match arms (or if/else
+// arms) that each bind the same name with a literal initializer therefore
+// collided: `match v { 1 -> { let a = 10; a + 1 }, 3 -> { let a = 100; let b
+// = 200; a + b } }` folded arm-3's `a` to arm-1's stale `10` (first-wins),
+// yielding `10 + 200 = 210` instead of `300`. Snapshot the table length
+// before walking an arm/block body and truncate back to it afterwards so each
+// arm's folded lets stay local — they cannot leak into a sibling arm or into
+// the enclosing scope. Returns the pre-body length; pass it to
+// _comptime_const_scope_restore once the body has been emitted.
+fn _comptime_const_scope_mark() {
+    return len(_comptime_const_names)
+}
+
+fn _comptime_const_scope_restore(mark) {
+    // Rebuild both parallel arrays to length `mark` using index+push only
+    // (the most portable in-place truncation across compiled-binary vintages —
+    // avoids relying on .slice / .truncate codegen branches).
+    let mut _names = []
+    let mut _nodes = []
+    let mut i = 0
+    while i < mark {
+        _names.push(_comptime_const_names[i])
+        _nodes.push(_comptime_const_nodes[i])
+        i = i + 1
+    }
+    _comptime_const_names = _names
+    _comptime_const_nodes = _nodes
 }
 
 // ── C3: Closure capture support ──────────────────────────
@@ -9007,7 +9053,9 @@ fn codegen_full(ast) {
             }
             // ROI #43: @thread_local → _Thread_local C storage class
             let _tls_val2 = ast[i].value
-            let _is_tls2 = false
+            // `let mut` (not `let`): see _is_tls note above — reassigned below,
+            // so the B3 plain-let comptime-fold must not capture it.
+            let mut _is_tls2 = false
             if type_of(_tls_val2) == "string" {
                 if _tls_val2 == "thread_local" {
                     _is_tls2 = true
