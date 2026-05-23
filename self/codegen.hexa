@@ -2452,8 +2452,28 @@ fn _gen2_collect_lets_stmt(node, names) {
     if sk == "LetStmt" || sk == "LetMutStmt" {
         names.push(node.name)
     }
-    // PROBE r7: destructure also binds N names to the function-scope flat
-    // var pool — collect each `params[i]` plus the optional rest_name.
+    // PROBE r14-UUUU: let-else binders escape to the enclosing scope (canonical
+    // Rust semantics).  Hoist the single-field EnumPath binder name and any
+    // multi-field payload Ident binders into the function-scope flat pool so
+    // the desugar (gen2_let_else) can assign without a fresh declaration.
+    if sk == "LetElseStmt" {
+        let _pat = node.left
+        if type_of(_pat) != "string" && _pat.kind == "EnumPath" {
+            if type_of(_pat.left) != "string" && _pat.left.kind == "Ident" && _pat.left.name != "_" {
+                names.push(_pat.left.name)
+            }
+            if type_of(_pat.items) != "string" {
+                let mut _lei = 0
+                while _lei < len(_pat.items) {
+                    let _it = _pat.items[_lei]
+                    if type_of(_it) != "string" && _it.kind == "Ident" && _it.name != "_" {
+                        names.push(_it.name)
+                    }
+                    _lei = _lei + 1
+                }
+            }
+        }
+    }
     if sk == "DestructLetStmt" || sk == "MapDestructLetStmt" {
         if type_of(node.params) != "string" {
             let mut _dpi = 0
@@ -2661,6 +2681,16 @@ fn gen2_stmt(node, depth) {
     // AtomicLet (`atomic let x = …`) shares LetMutStmt's shape (name +
     // left=init); single-threaded codegen treats `atomic` as an annotation
     // and emits a normal mutable binding (no atomics infra wired).
+    // PROBE r14-UUUU: let PAT = EXPR else { D } — canonical Rust let-else.
+    // Lowers to a runtime tag-test guarding the binder assignment, with the
+    // else-block (which MUST diverge) on the fail branch. Binders live in the
+    // outer scope (function-flat hoisted via _gen2_collect_lets_stmt), so the
+    // generated body is plain assignment — no fresh `HexaVal` declaration.
+    // Divergence enforcement (return/break/continue/panic) is deferred to a
+    // later strict pass — for v1 we trust the user.
+    if k == "LetElseStmt" {
+        return gen2_let_else(node, depth)
+    }
     if k == "LetStmt" || k == "LetMutStmt" || k == "AtomicLet" {
         let init = "hexa_void()"
         if type_of(node.left) != "string" {
@@ -7308,6 +7338,68 @@ fn _gen2_iflet_to_match(node) {
         "variants": "", "arms": [arm_then, arm_else], "iter_expr": "", "ret_type": "",
         "target": "", "trait_name": "", "methods": ""
     }
+}
+
+// PROBE r14-UUUU: let-else lowering.
+// `let PAT = SCRUT else { ELSE }`  ⇒
+//   HexaVal __let_else_<n> = SCRUT;
+//   if (!cond(__let_else_<n>, PAT)) {
+//       <ELSE>      // must diverge — caller's responsibility for v1
+//   }
+//   <binder = hexa_index_get(__let_else_<n>, hexa_int(k));>   per payload
+// The binder names were already hoisted to the function scope by
+// _gen2_collect_lets_stmt (LetElseStmt branch), so we emit plain assignment.
+// Sibling of _gen2_iflet_to_match — reuses gen2_match_cond for the tag test.
+let mut _gen2_letelse_uid = 0
+fn gen2_let_else(node, depth) {
+    let pad = gen2_indent(depth)
+    let pad2 = gen2_indent(depth + 1)
+    let scrutinee = gen2_expr(node.right)
+    let pat = node.left
+    let else_body = node.else_body
+    _gen2_letelse_uid = _gen2_letelse_uid + 1
+    let tmp = "__let_else_" + to_string(_gen2_letelse_uid)
+    let mut chunks = []
+    chunks.push(pad + "HexaVal " + tmp + " = " + scrutinee + ";\n")
+    let cond = gen2_match_cond(pat, tmp)
+    chunks.push(pad + "if (!(" + cond + ")) {\n")
+    if type_of(else_body) != "string" {
+        let mut ei = 0
+        while ei < len(else_body) {
+            chunks.push(gen2_stmt(else_body[ei], depth + 1))
+            ei = ei + 1
+        }
+    }
+    chunks.push(pad + "}\n")
+    // Bind payload(s) — outer-scope (post-test, so code after the let-else
+    // sees the binders). When the same name was hoisted (count >= 2 across
+    // the fn body) or shadows a fn-param, emit plain assignment; otherwise
+    // emit a fresh `HexaVal` declaration and register it so downstream
+    // re-emissions don't re-declare.
+    if type_of(pat) != "string" && pat.kind == "EnumPath" {
+        if type_of(pat.left) != "string" && pat.left.kind == "Ident" && pat.left.name != "_" {
+            let _bn = _hexa_mangle_ident(pat.left.name)
+            let _decl = "HexaVal "
+            if _gen2_has_decl(_bn) { _decl = "" }
+            chunks.push(pad + _decl + _bn + " = hexa_index_get(" + tmp + ", hexa_int(1));\n")
+            if !_gen2_has_decl(_bn) { _gen2_declared_names.push(_bn) }
+        }
+        if type_of(pat.items) != "string" {
+            let mut _pi = 0
+            while _pi < len(pat.items) {
+                let _it = pat.items[_pi]
+                if type_of(_it) != "string" && _it.kind == "Ident" && _it.name != "_" {
+                    let _bn2 = _hexa_mangle_ident(_it.name)
+                    let _decl2 = "HexaVal "
+                    if _gen2_has_decl(_bn2) { _decl2 = "" }
+                    chunks.push(pad + _decl2 + _bn2 + " = hexa_index_get(" + tmp + ", hexa_int(" + to_string(_pi + 1) + "));\n")
+                    if !_gen2_has_decl(_bn2) { _gen2_declared_names.push(_bn2) }
+                }
+                _pi = _pi + 1
+            }
+        }
+    }
+    return chunks.join("")
 }
 
 fn gen2_match_stmt(node, depth) {
