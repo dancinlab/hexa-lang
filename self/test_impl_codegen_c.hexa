@@ -1,7 +1,7 @@
 // ═══════════════════════════════════════════════════════════
 //  test_impl_codegen_c.hexa — P2-6/C2 Impl block → C code path
 //
-//  Verifies that codegen_c2_full now emits C functions for struct
+//  Verifies that codegen_full now emits C functions for struct
 //  methods (ImplBlock) and that method calls dispatch through the
 //  runtime hexa_is_type chain to Type__method(...) instead of being
 //  skipped. End-to-end: .hexa → pipeline → .c → clang → run.
@@ -45,7 +45,7 @@ fn run_c2(name, hexa_source) {
     let driver_file = TMP_DIR + "/" + name + "_driver.hexa"
     let src_file = TMP_DIR + "/" + name + ".hexa"
     safe_write_file(src_file, hexa_source)
-    let driver = pipeline_src + "\n" + "let __src = read_file(\"" + src_file + "\")\n" + "let __tokens = tokenize(__src)\n" + "let __ast = parse(__tokens)\n" + "let __c = codegen_c2_full(__ast)\n" + "write_file(\"" + c_file + "\", __c)\n" + "println(\"PIPELINE_OK\")\n"
+    let driver = pipeline_src + "\n" + "let __src = read_file(\"" + src_file + "\")\n" + "let __tokens = tokenize(__src)\n" + "let __ast = parse(__tokens)\n" + "let __c = codegen_full(__ast)\n" + "write_file(\"" + c_file + "\", __c)\n" + "println(\"PIPELINE_OK\")\n"
     safe_write_file(driver_file, driver)
     let pr = exec(HEXA + " " + driver_file + " 2>&1")
     if !pr.contains("PIPELINE_OK") {

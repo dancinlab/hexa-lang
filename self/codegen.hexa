@@ -905,7 +905,7 @@ fn _gen2_lift_nested_decls(ast) {
     return out_ast
 }
 
-fn codegen_c2(ast) {
+fn codegen(ast) {
     // Lift any FnDecl / StructDecl nested at the top of a fn body to
     // module scope — C has no nested fns / local types. Hexa arrays
     // are pass-by-value here (in-place push to the param wasn't
@@ -945,6 +945,7 @@ fn codegen_c2(ast) {
     _strlit_keys = []
     _strlit_ids = []
     _strlit_counter = 0
+    _destr_counter = 0
     // b2-fnref: reset by-value builtin/method thunk set per codegen call.
     _fnref_thunk_names = []
     _gen2_current_fn_lets = []
@@ -2423,6 +2424,20 @@ fn _gen2_collect_lets_stmt(node, names) {
     if sk == "LetStmt" || sk == "LetMutStmt" {
         names.push(node.name)
     }
+    // PROBE r7: destructure also binds N names to the function-scope flat
+    // var pool — collect each `params[i]` plus the optional rest_name.
+    if sk == "DestructLetStmt" || sk == "MapDestructLetStmt" {
+        if type_of(node.params) != "string" {
+            let mut _dpi = 0
+            while _dpi < len(node.params) {
+                names.push(node.params[_dpi])
+                _dpi = _dpi + 1
+            }
+        }
+        if sk == "DestructLetStmt" && type_of(node.name) == "string" && node.name != "" {
+            names.push(node.name)
+        }
+    }
     if type_of(node.then_body) != "string" { names = _gen2_collect_lets(node.then_body, names) }
     if type_of(node.else_body) != "string" { names = _gen2_collect_lets(node.else_body, names) }
     if type_of(node.body) != "string" { names = _gen2_collect_lets(node.body, names) }
@@ -3165,7 +3180,7 @@ fn gen2_stmt(node, depth) {
 
     // Nested FnDecl / PureFnDecl / StructDecl / ExternFnDecl in a fn body
     // — already hoisted to module scope by _gen2_lift_nested_decls at the
-    // codegen_c2_full entry. Skip inline emission (the module-scope
+    // codegen_full entry. Skip inline emission (the module-scope
     // emission is the only one needed; emitting an inline stub here
     // would either redefine the symbol or fire the unhandled-kind error
     // at runtime). Deeper-nested cases (decls inside if/while/for) are
@@ -3253,6 +3268,44 @@ fn gen2_stmt(node, depth) {
     if k == "GenerateFnStmt" { return "" }
     if k == "GenerateStmt"   { return "" }
     if k == "DeriveDecl"     { return "" }
+
+    // ── DestructLetStmt → array-positional destructure (PROBE r7) ──
+    //   let [a, b, ...rest] = expr
+    // AST: params = [a, b], name = rest_name ("" if none), left = rhs
+    // Names are flat-hoisted by `_gen2_collect_lets_stmt` (mirrors LetStmt).
+    // Emits a single tmp + per-name assignment so the rhs is evaluated once.
+    if k == "DestructLetStmt" {
+        let _dtmp = "__destr_" + to_string(_destr_counter)
+        _destr_counter = _destr_counter + 1
+        let _drhs = gen2_expr(node.left)
+        let mut _dout = pad + "{ HexaVal " + _dtmp + " = " + _drhs + ";"
+        let mut _di = 0
+        while _di < len(node.params) {
+            _dout = _dout + " " + node.params[_di] + " = hexa_array_get(" + _dtmp + ", " + to_string(_di) + ");"
+            _di = _di + 1
+        }
+        if type_of(node.name) == "string" && node.name != "" {
+            _dout = _dout + " " + node.name + " = hexa_array_drop(" + _dtmp + ", " + to_string(len(node.params)) + ");"
+        }
+        return _dout + " }\n"
+    }
+
+    // ── MapDestructLetStmt → map/dict-key destructure (PROBE r7) ──
+    //   let {x, y} = map
+    // AST: params = [x, y], left = rhs.  Each ident is looked up by the
+    // identifier's string name as the map key (mirrors JS/Rust shorthand).
+    if k == "MapDestructLetStmt" {
+        let _mtmp = "__destr_" + to_string(_destr_counter)
+        _destr_counter = _destr_counter + 1
+        let _mrhs = gen2_expr(node.left)
+        let mut _mout = pad + "{ HexaVal " + _mtmp + " = " + _mrhs + ";"
+        let mut _mi = 0
+        while _mi < len(node.params) {
+            _mout = _mout + " " + node.params[_mi] + " = hexa_map_get(" + _mtmp + ", \"" + node.params[_mi] + "\");"
+            _mi = _mi + 1
+        }
+        return _mout + " }\n"
+    }
 
     // Fail loud at TRANSPILE time — emitting an in-binary runtime trap
     // (`fprintf+exit(1)` C stub) buried the failure behind a clang compile
@@ -3992,19 +4045,28 @@ fn gen2_expr(node) {
         // STRUCTURAL-3 Phase A: FloatLit+FloatLit constant folding — bypass
         // HexaVal boxing when both operands are float literals.
         // Emits `hexa_float((L) OP (R))` which the C compiler constant-folds.
-        if _lk == "FloatLit" && _rk == "FloatLit" {
+        // PROBE r3+r7 extension: also recognize `UnaryOp(-, FloatLit)` so
+        // `-1.0 / 0.0` constant-folds to `-inf` (matches `1.0/0.0 = inf`
+        // IEEE 754) instead of falling to runtime hexa_div throw.
+        let mut _lflit = ""
+        if _lk == "FloatLit" { _lflit = node.left.value }
+        if _lk == "UnaryOp" && node.left.op == "-" && type_of(node.left.left) != "string" && node.left.left.kind == "FloatLit" {
+            _lflit = "-" + node.left.left.value
+        }
+        let mut _rflit = ""
+        if _rk == "FloatLit" { _rflit = node.right.value }
+        if _rk == "UnaryOp" && node.right.op == "-" && type_of(node.right.left) != "string" && node.right.left.kind == "FloatLit" {
+            _rflit = "-" + node.right.left.value
+        }
+        if _lflit != "" && _rflit != "" {
             if op == "+" || op == "-" || op == "*" || op == "/" {
-                let _lv = node.left.value
-                let _rv = node.right.value
-                return "hexa_float((" + _lv + ") " + op + " (" + _rv + "))"
+                return "hexa_float((" + _lflit + ") " + op + " (" + _rflit + "))"
             }
             // 2026-05-20 (blocker-2 float-%): clang rejects `(double) % (double)`.
             // Emit fmod() directly — preserves the constant-fold intent
             // (compiler folds the libm call at -O1+ for literal args).
             if op == "%" {
-                let _lv = node.left.value
-                let _rv = node.right.value
-                return "hexa_float(fmod((" + _lv + "), (" + _rv + ")))"
+                return "hexa_float(fmod((" + _lflit + "), (" + _rflit + ")))"
             }
         }
         // STRUCTURAL-2 Phase B: known-int propagation — when BOTH operands
@@ -4168,7 +4230,14 @@ fn gen2_expr(node) {
             // Unknown target type — pass through (no-op cast).
             return l
         }
-        eprintln("[codegen_c2] ERROR: unhandled binary operator: " + op)
+        // PROBE r7: `x in container` — Python/Swift membership op.
+        // hexa_contains_poly dispatches by container tag (array → element
+        // equality, string → substring).  Convention: `x in arr` reads as
+        // "needle in haystack" → container is the rhs.
+        if op == "in" {
+            return "hexa_contains_poly(" + r + ", " + l + ")"
+        }
+        eprintln("[codegen] ERROR: unhandled binary operator: " + op)
         return "(fprintf(stderr, \"CODEGEN ERROR: unhandled binop: " + op + "\\n\"), exit(1), hexa_void())"
     }
 
@@ -4544,8 +4613,15 @@ fn gen2_expr(node) {
             // json_stringify (×37), json_encode/json_decode/http_get (×4-6),
             // to_bool / sleep_s / now_monotonic_s / utc_iso_now / utc_compact_now.
             // C syms: self/runtime.c hexa_json_parse / hexa_read_stdin / etc.
-            if name == "read_stdin" {
+            // PROBE r8: `stdin` is the Go/Py-friendly short alias for the
+            // existing `read_stdin` builtin.
+            if name == "read_stdin" || name == "stdin" {
                 return "hexa_read_stdin()"
+            }
+            // PROBE r8: `cwd()` — Py/Rust/Go canonical name for current
+            // working directory.  Routes to `hexa_cwd` runtime helper.
+            if name == "cwd" {
+                return "hexa_cwd()"
             }
             // TUI-PRIM L1 (kick verdict T1.A 2026-04-27_hexa-native-tui-
             // implementation-plan): zero-arg term_* builtins for TTY control.
@@ -4687,8 +4763,11 @@ fn gen2_expr(node) {
             // with POSIX `bind`/`open`/etc-style POSIX surface (cf 9f9e9799
             // mangle allowlist). Returns hexa_void() so call sites in
             // statement position type-check.
+            // PROBE r8: mkdir return code was dropped (void) — flipped to
+            // `hexa_bool` (true on success, false on fail).  Matches Rust
+            // `fs::create_dir(p).is_ok()` / Go `os.Mkdir(p,…) == nil`.
             if name == "mkdir" {
-                return "((void)mkdir(HX_STR(" + gen2_expr(node.args[0]) + "), 0755), hexa_void())"
+                return "hexa_bool(mkdir(HX_STR(" + gen2_expr(node.args[0]) + "), 0755) == 0)"
             }
             if name == "exec_with_status" {
                 return "hexa_exec_with_status(" + gen2_expr(node.args[0]) + ")"
@@ -6731,7 +6810,7 @@ let mut _ic_counter = 0
 // ── ComptimeConst const-fold table ───────────────────────
 // `comptime const X = expr` is folded at codegen time to a literal AST node.
 // Both arrays MUST be reset at the start of every codegen invocation
-// (codegen_c2 / codegen_c2_full) — see T0 lesson on _ic_def_parts.
+// (codegen_c2 / codegen_full) — see T0 lesson on _ic_def_parts.
 //
 // _comptime_const_names: parallel array of folded const names (strings)
 // _comptime_const_nodes: parallel array of folded literal nodes
@@ -6754,6 +6833,10 @@ let mut _strlit_ids = []
 // rt#32-SL: _strlit_def_parts removed — decls regenerated by _strlit_counter
 // loop at emit time (mirror of fcf275f4 IC fix).
 let mut _strlit_counter = 0
+
+// Destructure tmp-name counter (PROBE r7).  Each DestructLetStmt /
+// MapDestructLetStmt allocates a fresh `__destr_<N>` to single-eval the rhs.
+let mut _destr_counter = 0
 
 // Look up a comptime-const folded literal by name.
 // Returns the literal node on hit, or "" (string) on miss.
@@ -8044,10 +8127,10 @@ fn gen2_lambda_expr(node) {
 }
 
 // Override codegen_c2 to include lambda definitions
-fn codegen_c2_full(ast) {
+fn codegen_full(ast) {
     // Nested-decl shallow hoist must run before any codegen state is set
     // up — this is the actual hexa_v2 transpile entry (main calls
-    // codegen_c2_full, NOT codegen_c2; the earlier lift call inside
+    // codegen_full, NOT codegen_c2; the earlier lift call inside
     // codegen_c2 was dead code). _gen2_flatten_mods runs first so
     // `mod` body decls are hoisted to module scope before nested-decl
     // lifting + the top-level emit loop see them.
@@ -8072,7 +8155,7 @@ fn codegen_c2_full(ast) {
     _resolve_caller_dir_inited = false
     _resolve_caller_dir = ""
     // ComptimeConst const-fold table — T0 lesson: must reset in BOTH
-    // codegen_c2 and codegen_c2_full to avoid stale fold from prior call.
+    // codegen_c2 and codegen_full to avoid stale fold from prior call.
     _comptime_const_names = []
     _comptime_const_nodes = []
     // enum-variant access fix: reset enum-name set in BOTH codegen entry
