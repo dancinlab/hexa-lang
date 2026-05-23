@@ -53,7 +53,7 @@
 | **D. system OpenSSL / SecureTransport 동적 링크 (no vendor)** | dlopen `libssl.dylib` / `libssl.so.3` · Mac은 SecureTransport.framework | 추가 의존성 0 (system 사용) · binary 작음 | ABI fragmentation (distro별) · macOS는 SecureTransport (별도 API) · runtime 검출 코드 필요 |
 | E. libsodium-only (TLS 직접 구현) | hexa/C 로 직접 TLS 1.3 handshake · libsodium primitive | 의존성 최소 · 통제권 | 작업량 막대 · TLS 보안 직접 책임 — 비권고 |
 
-**🔵 Decision needed.** 권고: **D (system 동적 링크) v1**.
+**🟢 Decided 2026-05-23: D — system OpenSSL/SecureTransport 동적 링크 v1.** 권고 채택. vendored 는 reproducible build / ALPN/PSK 필요 시점에 follow-up RFC로 전환. v1 작업 = runtime.c `_tls_*` shim ~200 LOC (dlopen + dlsym ladder, Mac은 SecureTransport.framework).
 
 이유:
 - hexa-lang은 self-host native compiler — vendored TLS는 build infra 복잡도 큼 (cmake/cargo on both host)

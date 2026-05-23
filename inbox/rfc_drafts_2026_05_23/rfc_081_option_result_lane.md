@@ -46,7 +46,7 @@ canonical-audit round-3에서 design-level gap 3가지가 surfaced:
 | B. Swift `Optional<T>` + `T?` sugar | type-level postfix `?` sugar 자연스러움 · `if let`/`guard` 친숙 | Result-equivalent (`Result<Success, Failure>`) 따로 — 2개 lane 시점 분리 |
 | C. 하이브리드 — Rust enum + `T?` postfix sugar 동시 | 두 ergonomics 모두 가져옴 | parser surface 2배 · 명세 분기 |
 
-**🔵 Decision needed.** 권고: **A** (Rust 단일). 기존 코드베이스가 Rust influence 강함 (`Vec`-스타일 array · trait 후보 별 RFC 082), 코드 일관성 · canonical ref 단순.
+**🟢 Decided 2026-05-23: A — Rust `Option<T>` + `Result<T, E>`.** 권고 채택. 코드베이스 Rust friendly · canonical ref 단순 · 두 lane 대칭. impl 사이클은 enum surface 확장 → typechecker → stdlib helpers 순서.
 
 ### D2. propagation operator — Rust `?` vs Swift `try?` vs 명시 match
 
