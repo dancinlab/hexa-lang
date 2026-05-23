@@ -4367,7 +4367,11 @@ fn gen2_expr(node) {
                 if op == "+" || op == "-" || op == "*" || op == "/" || op == "%" || op == "&" || op == "|" || op == "^" || op == "<<" || op == ">>" {
                     let _lv = node.left.value
                     let _rv = node.right.value
-                    return "hexa_int((" + _lv + ") " + op + " (" + _rv + "))"
+                    // PROBE r11 A2: append `LL` so shift / large-literal arith
+                    // operates in 64-bit C space.  `1 << 62` without suffix
+                    // is `(int)1 << 62` → -Wshift-count-overflow + UB.  With
+                    // LL it's `(long long)1 << 62` = 4611686018427387904 ✓.
+                    return "hexa_int((" + _lv + "LL) " + op + " (" + _rv + "LL))"
                 }
             }
         }
