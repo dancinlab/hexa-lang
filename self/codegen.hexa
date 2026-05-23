@@ -1682,6 +1682,12 @@ fn gen2_fn_decl(node) {
     // b2-fnref: expose the current fn's `let` names so the bare-Ident thunk
     // path never replaces a local var with a builtin/method thunk.
     _gen2_current_fn_lets = all_names
+    // closure mut-capture: pre-scan this fn body for `let mut` bindings that a
+    // closure captures AND assigns to — box them into shared 1-element array
+    // cells so mutation through the closure persists (canonical FnMut). Set
+    // for the whole body walk (incl. inline lambda-body emission) — reset at
+    // fn exit. See _gen2_boxed_cells doc block.
+    _gen2_boxed_cells = _gen2_compute_boxed_cells(node.body)
     let mut _hoisted = []
     let mut hoists = []
     let mut ii = 0
@@ -1956,6 +1962,9 @@ fn gen2_fn_decl(node) {
     }
     // B20: restore @strict_fp scope on fn exit.
     _gen2_current_fn_strict_fp = _was_strict_fp
+    // closure mut-capture: clear boxed-cell set on fn exit so a later fn's
+    // (or the script body's) same-named binding isn't spuriously boxed.
+    _gen2_boxed_cells = []
     return chunks.join("")
 }
 
@@ -2637,6 +2646,18 @@ fn gen2_stmt(node, depth) {
         if k == "LetMutStmt" && node.value == "__reg_promote__" {
             return pad + "register HexaVal " + _local_name + " = " + init + "; /* reg-promoted */\n"
         }
+        // closure mut-capture: this `let mut X` is captured-and-mutated by a
+        // closure — box the binding into a shared 1-element array cell. Reads
+        // / writes / captures of X all deref the cell (see _gen2_boxed_cells).
+        // Boxing applies only to function-LOCAL mut bindings reaching here;
+        // module-scope `let mut` uses the C-global path (already canonical).
+        if k == "LetMutStmt" && _gen2_is_boxed_cell(node.name) {
+            let _cell = "hexa_array_push(hexa_array_new(), " + init + ")"
+            if _gen2_has_decl(node.name) {
+                return pad + _local_name + " = " + _cell + ";\n"
+            }
+            return pad + "HexaVal " + _local_name + " = " + _cell + ";\n"
+        }
         // bt 72: if this name was hoisted (or matches a param), emit plain
         // assignment to avoid C "redefinition" errors from shadow semantics.
         if _gen2_has_decl(node.name) {
@@ -2682,6 +2703,15 @@ fn gen2_stmt(node, depth) {
             let val = gen2_expr(node.right)
             return pad + obj + " = hexa_map_set(" + obj + ", \"" + field + "\", " + val + ");\n"
         }
+        // closure mut-capture: assigning to a boxed `let mut` Ident writes
+        // through the shared cell via hexa_array_set (in-place mutate; returns
+        // the cell so the C local stays bound to the same array). The boxed
+        // Ident read on the LHS would otherwise emit an rvalue
+        // hexa_array_get(...) — invalid as an lvalue. See _gen2_boxed_cells.
+        if type_of(node.left) != "string" && node.left.kind == "Ident" && _gen2_is_boxed_cell(node.left.name) {
+            let _cn = _hexa_mangle_ident(node.left.name)
+            return pad + _cn + " = hexa_array_set(" + _cn + ", 0, " + gen2_expr(node.right) + ");\n"
+        }
         return pad + gen2_expr(node.left) + " = " + gen2_expr(node.right) + ";\n"
     }
 
@@ -2692,6 +2722,24 @@ fn gen2_stmt(node, depth) {
         // on AOT. Interp path routes through eval_binop(op, lv, rv) which
         // normalizes, masking the issue until regression hit it.
         let op = node.op
+        // closure mut-capture: a boxed `let mut` Ident on the LHS — read derefs
+        // the cell (gen2_expr already emits hexa_array_get(X,0), a valid
+        // rvalue) and the write goes back through hexa_array_set. Handle here
+        // before the generic `lhs = …` shape (which would assign to an
+        // rvalue). See _gen2_boxed_cells.
+        if type_of(node.left) != "string" && node.left.kind == "Ident" && _gen2_is_boxed_cell(node.left.name) {
+            let _cn = _hexa_mangle_ident(node.left.name)
+            let _rd = "hexa_array_get(" + _cn + ", 0)"
+            let _rhs = gen2_expr(node.right)
+            let mut _nv = ""
+            if op == "+" { _nv = "hexa_add(" + _rd + ", " + _rhs + ")" }
+            else if op == "-" { _nv = "hexa_sub(" + _rd + ", " + _rhs + ")" }
+            else if op == "*" { _nv = "hexa_mul(" + _rd + ", " + _rhs + ")" }
+            else if op == "/" { _nv = "hexa_div(" + _rd + ", " + _rhs + ")" }
+            else if op == "%" { _nv = "hexa_mod(" + _rd + ", " + _rhs + ")" }
+            else { return pad + "/* compound " + op + " (boxed) */\n" }
+            return pad + _cn + " = hexa_array_set(" + _cn + ", 0, " + _nv + ");\n"
+        }
         // FMA for compound assign: x += a * b  →  x = fma(a, b, x)
         // B20: suppressed inside @strict_fp fns (two roundings must be
         //      preserved for IEEE 754 bit-exactness).
@@ -2728,9 +2776,22 @@ fn gen2_stmt(node, depth) {
     // this branch AOT hit "unhandled stmt kind: LogicalAssign" — invisible
     // silent exit. Rare in current codebase but must not crash.
     if k == "LogicalAssign" {
+        let op = node.op
+        // closure mut-capture: boxed `let mut` Ident LHS — read derefs cell,
+        // write goes through hexa_array_set. See _gen2_boxed_cells.
+        if type_of(node.left) != "string" && node.left.kind == "Ident" && _gen2_is_boxed_cell(node.left.name) {
+            let _cn = _hexa_mangle_ident(node.left.name)
+            let _rd = "hexa_array_get(" + _cn + ", 0)"
+            let _rhs = gen2_expr(node.right)
+            let mut _nv = ""
+            if op == "??=" { _nv = "hexa_null_coal(" + _rd + ", " + _rhs + ")" }
+            else if op == "||=" { _nv = "(hexa_truthy(" + _rd + ") ? " + _rd + " : " + _rhs + ")" }
+            else if op == "&&=" { _nv = "(hexa_truthy(" + _rd + ") ? " + _rhs + " : " + _rd + ")" }
+            else { return pad + "/* logical " + op + " (boxed) */\n" }
+            return pad + _cn + " = hexa_array_set(" + _cn + ", 0, " + _nv + ");\n"
+        }
         let lhs = gen2_expr(node.left)
         let rhs = gen2_expr(node.right)
-        let op = node.op
         if op == "??=" {
             return pad + lhs + " = hexa_null_coal(" + lhs + ", " + rhs + ");\n"
         }
@@ -3787,6 +3848,252 @@ fn _gen2_fnref_method_arity(name) {
 // lets) which is the safe direction (more idents left un-thunked).
 let mut _gen2_current_fn_lets = []
 
+// ── Closure mutable-capture by reference (inbox:
+//    closure-mut-capture-by-value-snapshot) ──────────────────
+// Function-LOCAL `let mut X` bindings that are captured by a closure AND
+// assigned to inside the closure body are "boxed" into a 1-element array
+// cell. The cell array's `arr_ptr` (backing buffer) is shared by reference
+// when the HexaVal is copied (struct copy shares the pointer), and
+// `hexa_array_set(cell, 0, v)` mutates in place — so writes through the
+// closure are visible in the enclosing scope and persist across calls,
+// matching Rust FnMut / JS / Python `nonlocal` semantics.
+//
+// Codegen contract for a boxed name X (in this fn scope):
+//   LetMutStmt:  HexaVal X = hexa_array_push(hexa_array_new(), <init>);
+//   Ident read:  hexa_array_get(X, 0)
+//   AssignStmt:  X = hexa_array_set(X, 0, <rhs>);   (set returns the cell)
+//   Capture:     env push of X pushes the cell (shared arr_ptr) verbatim;
+//                inside the lambda `HexaVal X = hexa_array_get(__env, i)`
+//                rebinds X to the same cell, so the boxed read/write rules
+//                deref it identically. No extra capture logic needed — the
+//                boxed-set stays active while the lambda body is emitted.
+//
+// Scope boundary: ONLY function-local `let mut` reached this path. Module-
+// scope `let mut` already works canonically (the closure references the C
+// global directly — no env snapshot), so it is never boxed. Read-only
+// captures keep the existing by-value snapshot path (no perf/behavior
+// change). Set in gen2_fn_decl from a pre-scan; reset per fn.
+let mut _gen2_boxed_cells = []
+
+fn _gen2_is_boxed_cell(name) {
+    let mut i = 0
+    while i < len(_gen2_boxed_cells) {
+        if _gen2_boxed_cells[i] == name { return true }
+        i = i + 1
+    }
+    return false
+}
+
+// Collect names that appear as the LHS of a simple-Ident assignment
+// (AssignStmt / CompoundAssign / LogicalAssign with `node.left.kind ==
+// "Ident"`) anywhere in `node`. Index/field assignments are ignored — they
+// mutate a container the binding points at, not the binding cell, so they
+// already propagate without boxing. Walks the same structural fields as
+// gen2_collect_free so nested blocks / lambdas / arms are covered.
+fn _gen2_collect_assigned(node, out) {
+    if type_of(node) == "string" { return out }
+    if type_of(node) == "array" {
+        let mut result = out
+        let mut i = 0
+        while i < len(node) {
+            result = _gen2_collect_assigned(node[i], result)
+            i = i + 1
+        }
+        return result
+    }
+    let k = node.kind
+    if k == "AssignStmt" || k == "CompoundAssign" || k == "LogicalAssign" {
+        if type_of(node.left) != "string" && node.left.kind == "Ident" {
+            out = _add_unique(out, node.left.name)
+        }
+    }
+    // Generic structural recursion (mirror gen2_collect_free's coverage).
+    let mut result = out
+    if type_of(node.left) != "string" {
+        result = _gen2_collect_assigned(node.left, result)
+    }
+    if type_of(node.right) != "string" {
+        result = _gen2_collect_assigned(node.right, result)
+    }
+    if type_of(node.cond) != "string" {
+        result = _gen2_collect_assigned(node.cond, result)
+    }
+    if type_of(node.then_body) != "string" {
+        result = _gen2_collect_assigned(node.then_body, result)
+    }
+    if type_of(node.else_body) != "string" {
+        result = _gen2_collect_assigned(node.else_body, result)
+    }
+    if type_of(node.body) != "string" {
+        result = _gen2_collect_assigned(node.body, result)
+    }
+    if type_of(node.args) == "array" {
+        let mut ai = 0
+        while ai < len(node.args) {
+            result = _gen2_collect_assigned(node.args[ai], result)
+            ai = ai + 1
+        }
+    }
+    if type_of(node.items) == "array" {
+        let mut ii = 0
+        while ii < len(node.items) {
+            result = _gen2_collect_assigned(node.items[ii], result)
+            ii = ii + 1
+        }
+    }
+    if type_of(node.arms) == "array" {
+        let mut mi = 0
+        while mi < len(node.arms) {
+            let arm = node.arms[mi]
+            if type_of(arm.body) == "array" {
+                result = _gen2_collect_assigned(arm.body, result)
+            }
+            mi = mi + 1
+        }
+    }
+    return result
+}
+
+// Walk `stmts` (a fn/script body) and find every Lambda node; for each,
+// compute (free vars captured) ∩ (names assigned inside the lambda body),
+// and union the result into `out`. These are the outer bindings the closure
+// both captures and mutates — candidates for boxing. The caller filters to
+// those actually declared `let mut` in this scope.
+fn _gen2_collect_lambda_mutcaps(node, out) {
+    if type_of(node) == "string" { return out }
+    if type_of(node) == "array" {
+        let mut result = out
+        let mut i = 0
+        while i < len(node) {
+            result = _gen2_collect_lambda_mutcaps(node[i], result)
+            i = i + 1
+        }
+        return result
+    }
+    let mut result = out
+    if node.kind == "Lambda" {
+        // Bound names = the lambda's own params (normalize Param obj/string).
+        let mut bound = []
+        let mut pi = 0
+        while pi < len(node.params) {
+            bound.push(_lambda_param_name(node.params[pi]))
+            pi = pi + 1
+        }
+        let free = gen2_collect_free(node.left, bound, [])
+        let assigned = _gen2_collect_assigned(node.left, [])
+        // Intersection: captured AND assigned (and not a lambda param).
+        let mut fi = 0
+        while fi < len(free) {
+            let nm = free[fi]
+            let mut is_assigned = false
+            let mut aj = 0
+            while aj < len(assigned) {
+                if assigned[aj] == nm { is_assigned = true }
+                aj = aj + 1
+            }
+            if is_assigned {
+                result = _add_unique(result, nm)
+            }
+            fi = fi + 1
+        }
+    }
+    // Recurse into structural fields so nested lambdas / blocks are covered.
+    if type_of(node.left) != "string" {
+        result = _gen2_collect_lambda_mutcaps(node.left, result)
+    }
+    if type_of(node.right) != "string" {
+        result = _gen2_collect_lambda_mutcaps(node.right, result)
+    }
+    if type_of(node.cond) != "string" {
+        result = _gen2_collect_lambda_mutcaps(node.cond, result)
+    }
+    if type_of(node.then_body) != "string" {
+        result = _gen2_collect_lambda_mutcaps(node.then_body, result)
+    }
+    if type_of(node.else_body) != "string" {
+        result = _gen2_collect_lambda_mutcaps(node.else_body, result)
+    }
+    if type_of(node.body) != "string" {
+        result = _gen2_collect_lambda_mutcaps(node.body, result)
+    }
+    if type_of(node.args) == "array" {
+        let mut ai = 0
+        while ai < len(node.args) {
+            result = _gen2_collect_lambda_mutcaps(node.args[ai], result)
+            ai = ai + 1
+        }
+    }
+    if type_of(node.items) == "array" {
+        let mut ii = 0
+        while ii < len(node.items) {
+            result = _gen2_collect_lambda_mutcaps(node.items[ii], result)
+            ii = ii + 1
+        }
+    }
+    if type_of(node.arms) == "array" {
+        let mut mi = 0
+        while mi < len(node.arms) {
+            let arm = node.arms[mi]
+            if type_of(arm.body) == "array" {
+                result = _gen2_collect_lambda_mutcaps(arm.body, result)
+            }
+            mi = mi + 1
+        }
+    }
+    return result
+}
+
+// Collect names declared `let mut` (LetMutStmt) anywhere in a fn/script body.
+// Restricted to LetMutStmt (NOT LetStmt) — only mutable bindings need cells.
+fn _gen2_collect_letmut_names(stmts, names) {
+    if type_of(stmts) == "string" { return names }
+    if type_of(stmts) != "array" { return names }
+    let mut i = 0
+    while i < len(stmts) {
+        let s = stmts[i]
+        if type_of(s) != "string" {
+            if s.kind == "LetMutStmt" {
+                names = _add_unique(names, s.name)
+            }
+            if type_of(s.then_body) != "string" { names = _gen2_collect_letmut_names(s.then_body, names) }
+            if type_of(s.else_body) != "string" { names = _gen2_collect_letmut_names(s.else_body, names) }
+            if type_of(s.body) != "string" { names = _gen2_collect_letmut_names(s.body, names) }
+            if type_of(s.arms) == "array" {
+                let mut ai = 0
+                while ai < len(s.arms) {
+                    let arm = s.arms[ai]
+                    if type_of(arm) != "string" && type_of(arm.body) != "string" {
+                        names = _gen2_collect_letmut_names(arm.body, names)
+                    }
+                    ai = ai + 1
+                }
+            }
+        }
+        i = i + 1
+    }
+    return names
+}
+
+// Compute the boxed-cell set for a fn/script body: names that are declared
+// `let mut` AND captured-and-mutated by some closure in the body.
+fn _gen2_compute_boxed_cells(body) {
+    let mutcaps = _gen2_collect_lambda_mutcaps(body, [])
+    if len(mutcaps) == 0 { return [] }
+    let letmuts = _gen2_collect_letmut_names(body, [])
+    let mut out = []
+    let mut i = 0
+    while i < len(mutcaps) {
+        let nm = mutcaps[i]
+        let mut j = 0
+        while j < len(letmuts) {
+            if letmuts[j] == nm { out = _add_unique(out, nm) }
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return out
+}
+
 // Queue of nested FnDecl / StructDecl encountered during fn body
 // codegen. C has no nested fns / local-scoped structs, so gen2_stmt
 // pushes them here and emits nothing inline; gen2_program drains the
@@ -4016,6 +4323,13 @@ fn gen2_expr(node) {
         // Mirrors the `.sort_by` arg-site autowrap.
         if _gen2_should_autowrap_fnref(node.name) {
             return "hexa_fn_new((void*)" + _hexa_mangle_ident(node.name) + ", 0)"
+        }
+        // closure mut-capture: a boxed `let mut` binding is a 1-element array
+        // cell — every value-read derefs slot 0. Inside the lambda the same
+        // name is rebound to the (shared) cell via the env unpack, so this
+        // rule fires identically there. See _gen2_boxed_cells.
+        if _gen2_is_boxed_cell(node.name) {
+            return "hexa_array_get(" + _hexa_mangle_ident(node.name) + ", 0)"
         }
         return _hexa_mangle_ident(node.name)
     }
