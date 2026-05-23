@@ -496,7 +496,63 @@ fn _recompute2_register(fn_name: string, a: int, b: int) -> int {
     if fn_name == "jacobi"    { return jacobi_symbol(a, b) }
     if fn_name == "kronecker" { return kronecker_symbol(a, b) }
     if fn_name == "dim_cusp_forms" { return dim_cusp_forms(a, b) }
+    // RFC 046 ssh_winding(v, w) — verbatim port of verify_cli.hexa::_recompute2.
+    // Mirrors PR #592 verify-arm; ssh_winding atom registration requires this
+    // dispatch (PR #592 surface gap: atlas_cli register table not synced).
+    if fn_name == "ssh_winding" {
+        if b > a { return 1 }
+        return 0
+    }
     return _NOCALC_REGISTER
+}
+
+// 3-arg integer NUMERICAL recompute (RFC 046 tknn_chern p q r → Chern t).
+// Verbatim port of verify_cli.hexa::_tknn_chern / _recompute3.
+fn _recompute3_register(fn_name: string, a: int, b: int, c: int) -> int {
+    if fn_name == "tknn_chern" {
+        // TKNN/Diophantine closed-form. Mirror _tknn_chern from verify_cli.
+        return _tknn_chern_register(a, b, c)
+    }
+    return _NOCALC_REGISTER
+}
+
+// _ext_euclid_register — extended Euclid for tknn_chern register path.
+// Mirrors verify_cli::_ext_euclid. Returns [g, x, y] with a*x + b*y = g = gcd(a,b).
+fn _ext_euclid_register(a: int, b: int) -> array {
+    let mut old_r = a
+    let mut r = b
+    let mut old_s = 1
+    let mut s = 0
+    let mut old_t = 0
+    let mut t = 1
+    while r != 0 {
+        let qq = old_r / r
+        let tr = old_r - qq * r
+        old_r = r; r = tr
+        let ts = old_s - qq * s
+        old_s = s; s = ts
+        let tt = old_t - qq * t
+        old_t = t; t = tt
+    }
+    return [old_r, old_s, old_t]
+}
+
+fn _tknn_chern_register(p: int, q: int, rgap: int) -> int {
+    // Verbatim port of tool/verify_cli.hexa::_tknn_chern. Hofstadter/TKNN
+    // Wannier label via extended Euclid + Wannier window |t| ≤ q/2.
+    let ee = _ext_euclid_register(q, p)
+    let mut s = ee[1] * rgap
+    let mut t = ee[2] * rgap
+    let half = q / 2
+    while t > half {
+        t = t - q
+        s = s + p
+    }
+    while t <= (0 - half) {
+        t = t + q
+        s = s - p
+    }
+    return t
 }
 
 // ── float NUMERICAL recompute (🟢) ─────────────────────────────────────
@@ -1100,6 +1156,30 @@ fn _adapt_verify_2op(fn_name: string, a_arg: int, b_arg: int, expected: int, id_
         raw: raw_body, verdict: "🔵 SUPPORTED-FORMAL", source_verb: "verify", provenance: provenance }
 }
 
+// _adapt_verify_3op — 3-operand integer FORMAL adapter (RFC 046 tknn_chern).
+// Mirrors verify_cli::cmd_expr 6-arg path. Closed-form Diophantine search →
+// 🔵 SUPPORTED-FORMAL when calc == expected, 🔴 FALSIFIED on disagreement,
+// 🟠 INSUFFICIENT when _recompute3_register returns _NOCALC_REGISTER.
+fn _adapt_verify_3op(fn_name: string, a_arg: int, b_arg: int, c_arg: int, expected: int, id_override: string) -> DiscoveryEvent {
+    let got = _recompute3_register(fn_name, a_arg, b_arg, c_arg)
+    let arg_str = to_string(a_arg) + "," + to_string(b_arg) + "," + to_string(c_arg)
+    let provenance = "hexa atlas register --from-verify " + fn_name + " " + to_string(a_arg) + " " + to_string(b_arg) + " " + to_string(c_arg) + " " + to_string(expected)
+    if got == _NOCALC_REGISTER {
+        return DiscoveryEvent { kind: "F", id: "", name: fn_name + "(" + arg_str + ")=" + to_string(expected),
+            raw: "", verdict: "🟠 INSUFFICIENT", source_verb: "verify", provenance: provenance }
+    }
+    if got != expected {
+        return DiscoveryEvent { kind: "F", id: "", name: fn_name + "(" + arg_str + ")=" + to_string(expected),
+            raw: "", verdict: "🔴 FALSIFIED", source_verb: "verify", provenance: provenance }
+    }
+    let mut id = id_override
+    if len(id) == 0 { id = "verified-" + _slug_register(fn_name) + "-" + to_string(a_arg) + "-" + to_string(b_arg) + "-" + to_string(c_arg) }
+    let today = _today_compact()
+    let raw_body = _build_raw_F(id, fn_name, arg_str, expected, today)
+    return DiscoveryEvent { kind: "F", id: id, name: fn_name + "(" + arg_str + ")=" + to_string(expected),
+        raw: raw_body, verdict: "🔵 SUPPORTED-FORMAL", source_verb: "verify", provenance: provenance }
+}
+
 // _adapt_verify_float — the 🟢 NUMERICAL adapter (RFC 047 atoms). Mirrors
 // verify_cli::cmd_expr_float: float args + claimed value are compared with
 // tolerance ε (NOT exact-eq) — within ε → 🟢 SUPPORTED-NUMERICAL; out-of-ε
@@ -1329,7 +1409,16 @@ fn cmd_register(rest: array) {
         let mut arg_str = ""
         let mut expected: int = 0
         let mut got_display: int = 0
-        if len(positional) >= 4 {
+        if len(positional) >= 5 {
+            // 3-op (RFC 046 tknn_chern p q r → Chern t)
+            let a = to_int(to_string(positional[1]))
+            let b = to_int(to_string(positional[2]))
+            let c = to_int(to_string(positional[3]))
+            expected = to_int(to_string(positional[4]))
+            arg_str = to_string(a) + "," + to_string(b) + "," + to_string(c)
+            got_display = _recompute3_register(fn_name, a, b, c)
+            ev = _adapt_verify_3op(fn_name, a, b, c, expected, id_override)
+        } else if len(positional) >= 4 {
             // 2-op
             let a = to_int(to_string(positional[1]))
             let b = to_int(to_string(positional[2]))
