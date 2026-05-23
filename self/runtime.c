@@ -3509,6 +3509,10 @@ HexaVal hexa_array_all(HexaVal arr, HexaVal fn) {
 
 HexaVal hexa_array_count(HexaVal arr, HexaVal fn) {
     if (!HX_IS_ARRAY(arr)) return hexa_int(0);
+    // PROBE r14-JJJJ (2026-05-24): void fn = `.count()` no-args form, alias
+    // for `.len()` (matches hexa_map_count void guard at runtime_core.c:2901).
+    // Without this, hexa_call1(void,…) → "not callable: tag=4 (arity=1)".
+    if (HX_IS_VOID(fn)) return hexa_int(HX_ARR_LEN(arr));
     int64_t c = 0;
     for (int i = 0; i < HX_ARR_LEN(arr); i++) {
         if (hexa_truthy(hexa_call1(fn, HX_ARR_ITEMS(arr)[i]))) c++;
@@ -3531,6 +3535,10 @@ HexaVal hexa_array_all(HexaVal arr, HexaVal fn) {
 }
 HexaVal hexa_array_count(HexaVal arr, HexaVal fn) {
     if (!HX_IS_ARRAY(arr)) return hexa_int(0);
+    // PROBE r14-JJJJ (2026-05-24): void fn no-args alias for len() — mirror
+    // of the non-stdlib branch above. rt_array_count_pred(void,...) would
+    // hit "not callable: tag=4" otherwise.
+    if (HX_IS_VOID(fn)) return hexa_int(HX_ARR_LEN(arr));
     return rt_array_count_pred(arr, fn);
 }
 #endif
@@ -4045,6 +4053,24 @@ HexaVal hexa_array_zip(HexaVal a, HexaVal b) {
     return out;
 }
 #endif
+
+// chain(other): concatenate two arrays end-to-end. Matches Rust's
+// `Iterator::chain`; `.chain(b)` returns [a_0..a_n, b_0..b_m]. Eager
+// (hexa iterators are arrays). PROBE r14-JJJJ (2026-05-24).
+HexaVal hexa_array_concat(HexaVal a, HexaVal b) {
+    HexaVal out = hexa_array_new();
+    if (HX_IS_ARRAY(a)) {
+        for (int64_t i = 0; i < HX_ARR_LEN(a); i++) {
+            out = hexa_array_push(out, HX_ARR_ITEMS(a)[i]);
+        }
+    }
+    if (HX_IS_ARRAY(b)) {
+        for (int64_t i = 0; i < HX_ARR_LEN(b); i++) {
+            out = hexa_array_push(out, HX_ARR_ITEMS(b)[i]);
+        }
+    }
+    return out;
+}
 
 // chunk(n): split into non-overlapping chunks of size n (last may be shorter).
 // Matches interpreter at hexa_full.hexa:15363-15378. Step-3 cycle 26.

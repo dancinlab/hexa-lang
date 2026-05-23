@@ -3797,6 +3797,16 @@ fn gen2_method_builtin(obj_expr, method, args) {
     if method == "zip" {
         return "hexa_array_zip(" + obj_expr + ", " + gen2_expr(args[0]) + ")"
     }
+    // PROBE r14-JJJJ (2026-05-24) — Rust canonical iterator aliases:
+    // `.collect()` = identity on hexa's eager-array iterators (already an
+    // array, no lazy iterator to materialize). `.chain(b)` = concat two
+    // arrays via runtime hexa_array_concat. Matches RFC #533 EEEE-2/EEEE-3.
+    if method == "collect" {
+        return obj_expr
+    }
+    if method == "chain" {
+        return "hexa_array_concat(" + obj_expr + ", " + gen2_expr(args[0]) + ")"
+    }
     if method == "chunk" {
         return "hexa_array_chunk(" + obj_expr + ", " + gen2_expr(args[0]) + ")"
     }
