@@ -382,6 +382,40 @@ pub fn tokenize(source) {
                 }
                 tokens.push(Token { kind: "RParen", value: ")", line: line, col: start_col })
                 paren_depth = paren_depth - 1
+            } else if word == "r" && pos < len_chars && chars[pos] == '"' {
+                // PROBE r14-UUUU: Rust/Python-style raw string `r"..."`. Backslashes
+                // inside are LITERAL — no escape processing. Useful for regex
+                // patterns (`r"\d+\.\d+"`), Windows paths, etc. Single-line only;
+                // closing `"` ends the literal (no way to embed `"` in g0 form).
+                // Multi-line `r"""..."""` and hashed `r#"..."#` (which would let
+                // `"` appear inside) are DEFERRED to a follow-up RFC.
+                pos = pos + 1
+                col = col + 1
+                let mut r_parts = []
+                let mut r_done = false
+                while pos < len_chars && !r_done {
+                    let rc = chars[pos]
+                    if rc == '"' {
+                        r_done = true
+                        pos = pos + 1
+                        col = col + 1
+                    } else {
+                        r_parts.push(to_string(rc))
+                        pos = pos + 1
+                        if rc == '\n' {
+                            line = line + 1
+                            col = 1
+                        } else {
+                            col = col + 1
+                        }
+                    }
+                }
+                if !r_done {
+                    println("error: unterminated raw string `r\"...` at line " + to_string(line) + ":" + to_string(start_col) + " — missing closing `\"` (raw strings cannot contain `\"`; use a regular string with `\\\"` instead, or wait for `r#\"...\"#` follow-up)")
+                    exit(1)
+                }
+                let r_s = join(r_parts, "")
+                tokens.push(Token { kind: "StringLit", value: r_s, line: line, col: start_col })
             } else {
                 let kind = keyword_kind(word)
                 tokens.push(Token { kind: kind, value: word, line: line, col: start_col })
