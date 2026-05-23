@@ -1,0 +1,173 @@
+// stdlib/bio/seq_align/smith_waterman.hexa — local pairwise alignment (DP + traceback).
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Smith-Waterman local alignment with linear gap penalty. Used by
+// HERPES + TTR motif search and primer off-target detection where
+// the region of interest is a substring, not the full sequence.
+//
+// Public surface:
+//   pub fn smith_waterman(a, b, match_score, mismatch_score, gap_penalty) -> SWAlignment
+//
+// Algorithm — textbook O(m·n) DP with non-negative floor.
+//   - score[i][0] = score[0][j] = 0
+//   - score[i][j] = max( 0,
+//                        score[i-1][j-1] + (match or mismatch),
+//                        score[i-1][j]   + gap_penalty,
+//                        score[i][j-1]   + gap_penalty )
+//   - Track the (i*, j*) of the global maximum cell — that is the
+//     local optimum endpoint. Traceback from (i*, j*) until score 0.
+//
+// MSA is TODO — deferred to a follow-up milestone. See sibling
+// needleman_wunsch.hexa for global alignment.
+
+struct SWAlignment {
+    score: int,
+    aligned_a: string,
+    aligned_b: string,
+    a_start: int,
+    a_end: int,
+    b_start: int,
+    b_end: int,
+}
+
+// ── helpers ──────────────────────────────────────────────────────────
+
+fn _max4(a: int, b: int, c: int, d: int) -> int {
+    let mut m = a
+    if b > m { m = b }
+    if c > m { m = c }
+    if d > m { m = d }
+    return m
+}
+
+fn _ch(s: string, i: int) -> string {
+    return s.substring(i, i + 1)
+}
+
+fn _reverse(s: string) -> string {
+    let n = len(s)
+    let mut out = ""
+    let mut i = n - 1
+    while i >= 0 {
+        out = out + s.substring(i, i + 1)
+        i = i - 1
+    }
+    return out
+}
+
+// ── public surface ───────────────────────────────────────────────────
+
+pub fn smith_waterman(a: string, b: string,
+                      match_score: int, mismatch_score: int,
+                      gap_penalty: int) -> SWAlignment {
+    let m = len(a)
+    let n = len(b)
+
+    // Degenerate: empty input → empty local alignment, score 0.
+    if m == 0 || n == 0 {
+        return SWAlignment{
+            score: 0, aligned_a: "", aligned_b: "",
+            a_start: 0, a_end: 0, b_start: 0, b_end: 0,
+        }
+    }
+
+    // (m+1) × (n+1) score matrix, all zero (boundary is already 0 for SW).
+    let mut score = []
+    let mut i = 0
+    while i <= m {
+        let mut row = []
+        let mut j = 0
+        while j <= n {
+            row.push(0)
+            j = j + 1
+        }
+        score.push(row)
+        i = i + 1
+    }
+
+    // Fill + track running max cell.
+    let mut best = 0
+    let mut best_i = 0
+    let mut best_j = 0
+
+    let mut ii = 1
+    while ii <= m {
+        let mut jj = 1
+        while jj <= n {
+            let ca = _ch(a, ii - 1)
+            let cb = _ch(b, jj - 1)
+            let sub = if ca == cb { match_score } else { mismatch_score }
+            let diag = score[ii - 1][jj - 1] + sub
+            let up   = score[ii - 1][jj]     + gap_penalty
+            let left = score[ii][jj - 1]     + gap_penalty
+            let v    = _max4(0, diag, up, left)
+            score[ii][jj] = v
+            if v > best {
+                best = v
+                best_i = ii
+                best_j = jj
+            }
+            jj = jj + 1
+        }
+        ii = ii + 1
+    }
+
+    // No positive local alignment found → return zero-span placeholder.
+    if best == 0 {
+        return SWAlignment{
+            score: 0, aligned_a: "", aligned_b: "",
+            a_start: 0, a_end: 0, b_start: 0, b_end: 0,
+        }
+    }
+
+    // ── traceback from (best_i, best_j) until a 0 cell ───────────────
+    let mut aa_rev = ""
+    let mut bb_rev = ""
+    let mut ti = best_i
+    let mut tj = best_j
+
+    while ti > 0 && tj > 0 {
+        let here = score[ti][tj]
+        if here == 0 { break }
+        let ca = _ch(a, ti - 1)
+        let cb = _ch(b, tj - 1)
+        let sub = if ca == cb { match_score } else { mismatch_score }
+        let diag_src = score[ti - 1][tj - 1] + sub
+        if here == diag_src {
+            aa_rev = aa_rev + ca
+            bb_rev = bb_rev + cb
+            ti = ti - 1
+            tj = tj - 1
+            continue
+        }
+        let up_src = score[ti - 1][tj] + gap_penalty
+        if here == up_src {
+            aa_rev = aa_rev + ca
+            bb_rev = bb_rev + "-"
+            ti = ti - 1
+            continue
+        }
+        // must be left
+        aa_rev = aa_rev + "-"
+        bb_rev = bb_rev + cb
+        tj = tj - 1
+    }
+
+    // Spans are 0-indexed [start, end) over the original strings.
+    let a_start = ti
+    let b_start = tj
+    let a_end = best_i
+    let b_end = best_j
+
+    return SWAlignment{
+        score: best,
+        aligned_a: _reverse(aa_rev),
+        aligned_b: _reverse(bb_rev),
+        a_start: a_start,
+        a_end: a_end,
+        b_start: b_start,
+        b_end: b_end,
+    }
+}
