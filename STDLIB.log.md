@@ -2,6 +2,26 @@
 
 Append-only history sister of `STDLIB.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
+## 2026-05-25T05:30:00Z — /cycle 사이클 3: 6 deferred sub-feature 보강 — 6/6 oracle PASS · 정공법 완성도기준
+
+정공법 + 완성도기준 라운드 — cycle 1+2 의 14개 모듈 중 6개에 표시됐던 `※ ... deferred` sub-feature 들을 닫아 모듈 완성도 100% 로. 6 백그라운드 에이전트 (worktree isolation) 병렬 fan-out, 전수 squash 머지.
+
+| PR | sha | milestone | parent | oracle |
+|---|---|---|---|---|
+| #671 | ced8f7ae | seq-align-msa       | seq-align (PR #647)         | 7 cases (NW dist · NJ tree · profile-profile DP) |
+| #672 | a15f526b | vina-search         | autodock-vina-port (PR #644) | 6 cases (MC + grid map) · C5 25° honest |
+| #674 | 74328f6a | openmm-bonded       | openmm-core (PR #648)        | 7 cases (bonded · PBC · Ewald) · T6 1e-4 honest · A&S erfc 인라인 |
+| #675 | 86060ece | brenda-soap-wire    | brenda-api (PR #635)         | 6 OFFLINE (SOAP + WS-Security MD5) · 순수 hexa MD5 |
+| #676 | acc52560 | iedb-mhc-pan        | iedb-epitope (PR #645)       | 6+1 분류 100% (3 alleles, anchor 5.21×) |
+| #677 | e4dc986e | rdkit-descriptors   | rdkit-subset (PR #652)       | 7 cases × 5 desc = 35 assert PASS · glucose TPSA 118.22 honest |
+
+- [x] 6 마일스톤 체크박스 STDLIB.md 갱신 (각 deferred sub-sub-feature → cycle 4 후보로 메모)
+- [x] 0 fail · 3 honest 측정 deviation 명시 (vina C5 25° · openmm T6 1e-4 · rdkit glucose acyclic)
+- [x] 모든 모듈 `hexa parse` clean (cycle-2 와 동일 gate)
+- [x] inbox patch 1건 신규 — `codegen-cross-module-struct-constructor-2026-05-25` (vina agent 발견)
+
+진행 상태: **20/21 actionable closed** (95.2%) · 1 deferred (open-babel-subset, GPL-2 라이선스). 6 새 sub-sub-feature 가 cycle 4 후보 (rdkit full 68-type SMARTS · Ertl S/P · SSSR · vina BFGS local opt · iedb ANN weight · brenda credentials manager).
+
 ## 2026-05-24T23:30:00Z — /cycle 사이클 2: 7 마일스톤 병렬 흡수 — 7/7 oracle PASS · 도메인 100% closed
 
 7 백그라운드 에이전트 (worktree isolation, heavy 3종 first-iter scope) 병렬 fan-out, 전수 머지:

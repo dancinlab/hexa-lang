@@ -1,7 +1,7 @@
 ---
 rfc: 092
 title: stdlib nil-compare drift sweep — cycle 13 #618 carry-forward
-status: proposed
+status: in-flight (B1 LANDED → B1+B2 LANDED · B3-B5 pending)
 priority: medium
 filed: 2026-05-24
 filed_by: claude-code worktree agent-aa65e9c131586e0bf
@@ -95,15 +95,18 @@ PR #618 + inbox/notes/2026-05-24-stdlib-fs-nil-parser-reject-drift.md 에서
 
 ## §4 단계적 batch — sub-200-line PRs
 
-| batch | files | hits | 예상 LoC delta |
-|---|---|---:|---:|
-| B1 | `self/stdlib/fs.hexa` (남은 5건 잔존분) | 5 | ~10 |
-| B2 | `compiler/link/incr_cache.hexa` + `stdlib/net/{http_request,http_response,concurrent_serve}.hexa` | 8 | ~16 |
-| B3 | `self/runtime/arena_pure.hexa` + `self/test_arena_pure.hexa` | 6 | ~12 |
-| B4 | `self/ml/{lora_serve,eval_harness,distributed_train}.hexa` | 14 | ~28 |
-| B5 | `self/serve/{serve_alm,serve}.hexa` | 20 | ~40 |
+| batch | files | hits | 예상 LoC delta | status |
+|---|---|---:|---:|---|
+| B1 | `self/stdlib/fs.hexa` (남은 5건 잔존분) | 5 | ~10 | **LANDED 2026-05-24 — `fix/rfc-092-b1-fs-nil-drift-batch-2026-05-24` (#618 OPEN supersede)** |
+| B2 | `compiler/link/incr_cache.hexa` | 4 | ~8 | **LANDED 2026-05-24 — `fix/rfc-092-b2-incr-cache-drift-2026-05-24`** |
+| B2b | `stdlib/net/{http_request,http_response,concurrent_serve}.hexa` | 4 | ~8 | pending (B2 narrowed scope spillover) |
+| B3 | `self/runtime/arena_pure.hexa` + `self/test_arena_pure.hexa` | 6 | ~12 | pending |
+| B4 | `self/ml/{lora_serve,eval_harness,distributed_train}.hexa` | 14 | ~28 | pending |
+| B5 | `self/serve/{serve_alm,serve}.hexa` | 20 | ~40 | pending |
 
-**전제**: PR #618 이 먼저 머지된 후 B1 발사 — 충돌 회피.
+**전제 갱신 (2026-05-24)**: PR #618 은 OPEN 상태로 머지되지 않았다 (grace-consent
+CI 실패). B1 은 본 brnch (`fix/rfc-092-b1-fs-nil-drift-batch-2026-05-24`) 가
+동일 5곳 surgical edit 으로 supersede — PR #618 close 권고.
 **전제**: 각 batch 는 단일 PR · 단일 모듈군 · 200 line 미만 · 자동 pr-cycle
 머지 가능.
 
