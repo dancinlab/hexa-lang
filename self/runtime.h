@@ -533,6 +533,7 @@ HexaVal hexa_array_fill(HexaVal arr, HexaVal v);                                
 HexaVal hexa_array_swap(HexaVal arr, HexaVal iv, HexaVal jv);                      /* runtime.c:7834 */
 HexaVal hexa_array_sort_by(HexaVal arr, HexaVal key_fn);                           /* runtime.c:4270 */
 HexaVal hexa_array_get(HexaVal arr, int64_t idx);                                  /* runtime.c:1981 */
+HexaVal hexa_array_last(HexaVal arr);                                              /* runtime_core.c — .last() codegen, single-eval */
 HexaVal hexa_str_char_at(HexaVal s, HexaVal idx);                                  /* runtime.c:4156 */
 HexaVal hexa_str_char_count(HexaVal s);                                            /* runtime.c — UTF-8 codepoint count */
 HexaVal hexa_str_nth_char(HexaVal s, HexaVal n);                                   /* runtime.c — nth codepoint as 1-cp str */
