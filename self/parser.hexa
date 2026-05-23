@@ -2321,7 +2321,7 @@ fn parse_if_expr() {
     }
 }
 
-// ── match expr { pattern -> body, ... } ─────────────────────
+// ── match expr { pattern => body, ... } ─────────────────────
 
 fn parse_match_expr() {
     p_advance() // consume 'match'
@@ -2349,7 +2349,15 @@ fn parse_match_expr() {
             p_advance() // consume 'if'
             guard_expr = parse_expr()
         }
-        p_expect("Arrow")
+        // Match arm arrow — accept `=>` (canonical: Rust / Scala / C# /
+        // Swift) as well as the legacy `->`. `=>` is the standard
+        // pattern-arm separator; `->` stays valid for existing code.
+        let _arm_arrow = p_peek_kind()
+        if _arm_arrow == "Arrow" || _arm_arrow == "FatArrow" {
+            p_advance()
+        } else {
+            p_expect("FatArrow")
+        }
         let mut arm_body = []
         if p_peek_kind() == "LBrace" {
             arm_body = parse_block()
