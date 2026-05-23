@@ -2880,6 +2880,28 @@ fn gen2_stmt(node, depth) {
             return gen2_match_stmt(expr, depth)
         }
         if expr.kind == "IfExpr" {
+            // PROBE r11 B4: comptime-fold the condition.  `if false { … }` at
+            // statement position now drops the dead branch entirely instead of
+            // emitting `if (hexa_truthy(hexa_bool(0))) { … }` which clang would
+            // also remove but with -Wunused noise.  Mirrors the IfExpr fold
+            // at L7475 (expression context).
+            let _cond_fold = comptime_eval(expr.cond)
+            if type_of(_cond_fold) != "string" && _cond_fold.kind == "BoolLit" {
+                let mut _live = expr.then_body
+                if _cond_fold.value == "false" || _cond_fold.value == "0" {
+                    _live = expr.else_body
+                }
+                if type_of(_live) == "string" || len(_live) == 0 {
+                    return ""
+                }
+                let mut _dchunks = []
+                let mut _di = 0
+                while _di < len(_live) {
+                    _dchunks.push(gen2_stmt(_live[_di], depth))
+                    _di = _di + 1
+                }
+                return _dchunks.join("")
+            }
             let mut chunks = []
             chunks.push(pad + "if (hexa_truthy(" + gen2_expr(expr.cond) + ")) {\n")
             let mut ti = 0
