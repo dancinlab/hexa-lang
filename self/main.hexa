@@ -1904,26 +1904,12 @@ fn _build_nvptx_emit_driver(src_path, sm_arch) {
     // Pre-check source exists (cmd_build already ran the same check
     // above; duplicate for direct-callers in future tests).
     if !file_exists(src_path) { return 1 }
-    // ── P3 source-derived MIR pipeline (mirror of compiler/cli/
-    //    build_nvptx.hexa::_build_nvptx_source_module body) ──
-    let source     = to_string(read_file(src_path))
-    let tokens     = lex(source, src_path)
-    let module_ast = parse(tokens, src_path)
-    let atlas      = static_atlas()
-    let hmodule    = lower(module_ast, atlas)
-    let mmodule    = lower_hir(hmodule)
-    // codegen_emit_ptx_for_sm filters MFuncs by gpu_kind != GPU_KIND_CPU
-    // internally (see compiler/codegen/nvptx_target.hexa:1399-1437);
-    // CPU-only files emit an empty kernel section but still produce a
-    // parse-clean PTX shell. Source-with-@gpu_kernel emits the
-    // .visible .entry <kernel_name> header that the F-RFC071-MODULE-
-    // LOADER-BRIDGE-RUNTIME falsifier substring-checks.
-    let ptx_text = codegen_emit_ptx_for_sm(mmodule, sm_arch)
-    let out_path = src_path + ".ptx"
-    write_file(out_path, ptx_text)
-    if !file_exists(out_path) { return 1 }
-    println("[nvptx] target=" + sm_arch + " src=" + src_path + " out=" + out_path + " phase=P3-PATH-B")
-    return 0
+    // iter-2b/2e GATE: live pipeline calls lex/parse/static_atlas/lower/
+    // lower_hir/codegen_emit_ptx_for_sm; bodies live in compiler/ modules
+    // NOT linked by bootstrap Stage 1 -> 6 undefined symbols. Gated until
+    // Path C. Standalone driver at compiler/cli/build_nvptx.hexa.
+    println("[nvptx] GATED RFC071-P3-PathB src=" + src_path + " sm=" + sm_arch)
+    return 1
 }
 
 fn cmd_build(src, out, c_only, target, shared) {
@@ -2621,22 +2607,42 @@ fn cmd_run_user_direct(file, extra_args) {
     let mut _cache_dir = env_var("HOME") + "/.hexa-cache"
     if len(env_var("HOME")) == 0 { _cache_dir = "./.hexa-cache" }
     let _mk = exec("mkdir -p " + shq(_cache_dir) + " 2>/dev/null")
-    let tmpbin = _cache_dir + "/hexa_run." + to_string(mono_ns())
-    let bcmd = shq(hexa_bin) + " build " + shq(file) + " -o " + shq(tmpbin) + " 2>&1; echo \"__HEXA_BRC__=$?\""
-    let bout = exec(bcmd)
-    let bmark = "__HEXA_BRC__="
-    let bml = len(bmark)
-    let mut bmi = -1
-    let mut bsj = len(bout) - bml
-    while bsj >= 0 {
-        if bout.substring(bsj, bsj + bml) == bmark { bmi = bsj; bsj = -1 } else { bsj = bsj - 1 }
-    }
-    let mut brc = 1
-    if bmi >= 0 {
-        let mut rs = bout.substring(bmi + bml, len(bout))
-        let rsl = len(rs)
-        if rsl > 0 && rs.substring(rsl - 1, rsl) == "\n" { rs = rs.substring(0, rsl - 1) }
-        brc = parse_int_str(rs)
+    // Content-addressed cache key (inbox patch
+    // hexa-run-clang-fork-cache-miss-per-invocation): sha256(source)+version.
+    // Identical source → identical binary → cache hit skips clang fork.
+    // When hexa is rebuilt without bumping version_str() the cache must
+    // be wiped manually (`rm ~/.hexa-cache/hexa_run.*`); regeneratable.
+    let _src_hash = sha256_file(file)
+    let _key = _src_hash.substring(0, 16) + "_" + version_str()
+    let tmpbin = _cache_dir + "/hexa_run." + _key
+    let mut bout = ""
+    let mut brc = 0
+    if !file_exists(tmpbin) {
+        let _tmp_inflight = tmpbin + ".tmp." + to_string(mono_ns())
+        let bcmd = shq(hexa_bin) + " build " + shq(file) + " -o " + shq(_tmp_inflight) + " 2>&1; echo \"__HEXA_BRC__=$?\""
+        bout = exec(bcmd)
+        let bmark = "__HEXA_BRC__="
+        let bml = len(bmark)
+        let mut bmi = -1
+        let mut bsj = len(bout) - bml
+        while bsj >= 0 {
+            if bout.substring(bsj, bsj + bml) == bmark { bmi = bsj; bsj = -1 } else { bsj = bsj - 1 }
+        }
+        brc = 1
+        if bmi >= 0 {
+            let mut rs = bout.substring(bmi + bml, len(bout))
+            let rsl = len(rs)
+            if rsl > 0 && rs.substring(rsl - 1, rsl) == "\n" { rs = rs.substring(0, rsl - 1) }
+            brc = parse_int_str(rs)
+        }
+        if brc == 0 && file_exists(_tmp_inflight) {
+            // Atomic-rename into place. Concurrent rebuilds race but
+            // produce byte-identical binaries (same source), so the
+            // loser's overwrite is benign.
+            let _rn = exec("mv -f " + shq(_tmp_inflight) + " " + shq(tmpbin) + " 2>/dev/null")
+        } else {
+            let _cl = exec("rm -f " + shq(_tmp_inflight) + " 2>/dev/null")
+        }
     }
     if brc == 0 && file_exists(tmpbin) {
         let cli_q = shq(tmpbin)
@@ -2695,22 +2701,35 @@ fn cmd_run(file, extra_args) {
     let mut _cache_dir = env_var("HOME") + "/.hexa-cache"
     if len(env_var("HOME")) == 0 { _cache_dir = "./.hexa-cache" }
     let _mk = exec("mkdir -p " + shq(_cache_dir) + " 2>/dev/null")
-    let tmpbin = _cache_dir + "/hexa_run." + to_string(mono_ns())
-    let bcmd = shq(hexa_bin) + " build " + shq(file) + " -o " + shq(tmpbin) + " 2>&1; echo \"__HEXA_BRC__=$?\""
-    let bout = exec(bcmd)
-    let bmark = "__HEXA_BRC__="
-    let bml = len(bmark)
-    let mut bmi = -1
-    let mut bsj = len(bout) - bml
-    while bsj >= 0 {
-        if bout.substring(bsj, bsj + bml) == bmark { bmi = bsj; bsj = -1 } else { bsj = bsj - 1 }
-    }
-    let mut brc = 1
-    if bmi >= 0 {
-        let mut rs = bout.substring(bmi + bml, len(bout))
-        let rsl = len(rs)
-        if rsl > 0 && rs.substring(rsl - 1, rsl) == "\n" { rs = rs.substring(0, rsl - 1) }
-        brc = parse_int_str(rs)
+    // Content-addressed cache key — see cmd_run_user_direct above.
+    let _src_hash = sha256_file(file)
+    let _key = _src_hash.substring(0, 16) + "_" + version_str()
+    let tmpbin = _cache_dir + "/hexa_run." + _key
+    let mut bout = ""
+    let mut brc = 0
+    if !file_exists(tmpbin) {
+        let _tmp_inflight = tmpbin + ".tmp." + to_string(mono_ns())
+        let bcmd = shq(hexa_bin) + " build " + shq(file) + " -o " + shq(_tmp_inflight) + " 2>&1; echo \"__HEXA_BRC__=$?\""
+        bout = exec(bcmd)
+        let bmark = "__HEXA_BRC__="
+        let bml = len(bmark)
+        let mut bmi = -1
+        let mut bsj = len(bout) - bml
+        while bsj >= 0 {
+            if bout.substring(bsj, bsj + bml) == bmark { bmi = bsj; bsj = -1 } else { bsj = bsj - 1 }
+        }
+        brc = 1
+        if bmi >= 0 {
+            let mut rs = bout.substring(bmi + bml, len(bout))
+            let rsl = len(rs)
+            if rsl > 0 && rs.substring(rsl - 1, rsl) == "\n" { rs = rs.substring(0, rsl - 1) }
+            brc = parse_int_str(rs)
+        }
+        if brc == 0 && file_exists(_tmp_inflight) {
+            let _rn = exec("mv -f " + shq(_tmp_inflight) + " " + shq(tmpbin) + " 2>/dev/null")
+        } else {
+            let _cl = exec("rm -f " + shq(_tmp_inflight) + " 2>/dev/null")
+        }
     }
     let mut rc = 1
     if brc == 0 && file_exists(tmpbin) {
@@ -2791,22 +2810,37 @@ fn _batch_run_one(file) {
     let mut _cache_dir = env_var("HOME") + "/.hexa-cache"
     if len(env_var("HOME")) == 0 { _cache_dir = "./.hexa-cache" }
     let _mk = exec("mkdir -p " + shq(_cache_dir) + " 2>/dev/null")
-    let tmpbin = _cache_dir + "/hexa_batch." + to_string(mono_ns())
-    let bcmd = shq(hexa_bin) + " build " + shq(file) + " -o " + shq(tmpbin) + " 2>&1; echo \"__HEXA_BRC__=$?\""
-    let bout = exec(bcmd)
-    let bmark = "__HEXA_BRC__="
-    let bml = len(bmark)
-    let mut bmi = -1
-    let mut bsj = len(bout) - bml
-    while bsj >= 0 {
-        if bout.substring(bsj, bsj + bml) == bmark { bmi = bsj; bsj = -1 } else { bsj = bsj - 1 }
-    }
-    let mut brc = 1
-    if bmi >= 0 {
-        let mut rs = bout.substring(bmi + bml, len(bout))
-        let rsl = len(rs)
-        if rsl > 0 && rs.substring(rsl - 1, rsl) == "\n" { rs = rs.substring(0, rsl - 1) }
-        brc = parse_int_str(rs)
+    // Content-addressed cache (shares the hexa_run.* namespace with
+    // cmd_run / cmd_run_user_direct so a `hexa batch` invocation
+    // benefits from prior `hexa run` builds of the same source).
+    let _src_hash = sha256_file(file)
+    let _key = _src_hash.substring(0, 16) + "_" + version_str()
+    let tmpbin = _cache_dir + "/hexa_run." + _key
+    let mut bout = ""
+    let mut brc = 0
+    if !file_exists(tmpbin) {
+        let _tmp_inflight = tmpbin + ".tmp." + to_string(mono_ns())
+        let bcmd = shq(hexa_bin) + " build " + shq(file) + " -o " + shq(_tmp_inflight) + " 2>&1; echo \"__HEXA_BRC__=$?\""
+        bout = exec(bcmd)
+        let bmark = "__HEXA_BRC__="
+        let bml = len(bmark)
+        let mut bmi = -1
+        let mut bsj = len(bout) - bml
+        while bsj >= 0 {
+            if bout.substring(bsj, bsj + bml) == bmark { bmi = bsj; bsj = -1 } else { bsj = bsj - 1 }
+        }
+        brc = 1
+        if bmi >= 0 {
+            let mut rs = bout.substring(bmi + bml, len(bout))
+            let rsl = len(rs)
+            if rsl > 0 && rs.substring(rsl - 1, rsl) == "\n" { rs = rs.substring(0, rsl - 1) }
+            brc = parse_int_str(rs)
+        }
+        if brc == 0 && file_exists(_tmp_inflight) {
+            let _rn = exec("mv -f " + shq(_tmp_inflight) + " " + shq(tmpbin) + " 2>/dev/null")
+        } else {
+            let _cl = exec("rm -f " + shq(_tmp_inflight) + " 2>/dev/null")
+        }
     }
     if brc == 0 && file_exists(tmpbin) {
         let out = exec(shq(tmpbin) + " 2>&1; echo \"__HEXA_SHIM_RC__=$?\"")
