@@ -763,8 +763,8 @@ fn p_continue_bin_op(kinds) {
 fn is_comparison_op(k) {
     if k == "Lt" { return true }
     if k == "Gt" { return true }
-    if k == "Le" { return true }
-    if k == "Ge" { return true }
+    if k == "LtEq" { return true }
+    if k == "GtEq" { return true }
     if k == "EqEq" { return true }
     if k == "NotEq" { return true }
     return false
