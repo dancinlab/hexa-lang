@@ -5992,6 +5992,21 @@ fn gen2_expr(node) {
         let inner_c = gen2_expr(node.expr)
         return "hexa_await_unwrap(" + inner_c + ")"
     }
+    // Rust convention — `name!(args)` desugars to `name(args)`. The parser
+    // builds a MacroCall node (parse_postfix `!` arm) but historically had no
+    // codegen consumer, so even `format!("…", x)` hit the unhandled-kind
+    // fallthrough. Route MacroCall through the Call path; `format!` then
+    // resolves to the existing `format(…)` intrinsic with no special-casing.
+    if k == "MacroCall" {
+        let _call = #{
+            "kind": "Call", "name": "", "value": "", "op": "",
+            "left": node.left, "right": "", "cond": "", "then_body": "", "else_body": "",
+            "params": "", "body": "", "args": node.args, "fields": "", "items": "",
+            "variants": "", "arms": "", "iter_expr": "", "ret_type": "",
+            "target": "", "trait_name": "", "methods": ""
+        }
+        return gen2_expr(_call)
+    }
     if k == "" { return "hexa_map_new()" }
     eprintln("[codegen_c2] ERROR: unhandled expression kind: " + k)
     return "(fprintf(stderr, \"CODEGEN ERROR: unhandled expr kind: " + k + "\\n\"), exit(1), hexa_void())"
