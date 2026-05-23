@@ -222,7 +222,7 @@
 - [ ] slice negative wrap silently clamp 통일 (r3 INBOX)
 - [ ] non-exhaustive match strict (warn → error path, #453 follow-up)
 - [ ] enum `<`/`>` ordering spec 결정 (r3 INBOX)
-- [ ] Range repr `.start`/`.end` (materialize 손실, r3 INBOX)
+- [x] Range repr `.start`/`.end`/`.len` — FIX-SURGICAL (runtime.c `hexa_range_field` + `hexa_map_get_ic_slow` array-fallback, PROBE r14). 정준 exclusive `a..b` 정확; step/inclusive `.end`만 derive(`last+step`) — literal upper-bound 정확 복원은 range-as-struct로 deferred
 - [ ] Swift `0...5` inclusive 정책 (r3 INBOX)
 - [ ] hex-float `0x1.8p+1` literal lexer (r3 INBOX)
 - [ ] `inf`/`nan` 키워드 상수 stdlib (r3 INBOX)

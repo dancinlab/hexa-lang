@@ -2638,6 +2638,11 @@ static inline int hexa_ic_stats_on(void) {
 /* PHASE 1.2.B (2026-05-15): de-staticized. Slow-path fallback for the
  * hexa_map_get_ic hot-path macro emitted into runtime.h — user.c TUs link
  * against this. */
+/* PROBE r14: Range repr accessors. Defined later in runtime.c (after the
+ * textual #include of this file); forward-declared so the array-receiver
+ * fallback below resolves at compile time. */
+HexaVal hexa_range_field(HexaVal v, const char* key);
+
 HexaVal hexa_map_get_ic_slow(HexaVal m, const char* key, HexaIC* ic) {
     if (hexa_ic_stats_on()) { ic->misses++; g_hexa_ic_misses++; }
     if (HX_IS_MAP(m) && HX_MAP_TBL(m)) {
@@ -2652,6 +2657,16 @@ HexaVal hexa_map_get_ic_slow(HexaVal m, const char* key, HexaIC* ic) {
             ic->idx      = oi;
             return t->order_vals[oi];
         }
+    }
+    // PROBE r14: Range repr — `.start` / `.end` / `.len` field access on a
+    // materialized range value (an int array, see hexa_range_array). Map
+    // receivers never reach here for these keys (handled above), so this
+    // only fires for array receivers, recovering the range bounds that were
+    // previously lost ("map key 'start' not found" → void). Non-range arrays
+    // gain harmless `.len`/`.start`/`.end` field accessors as a side effect.
+    if (HX_IS_ARRAY(m) &&
+        (strcmp(key, "start") == 0 || strcmp(key, "end") == 0 || strcmp(key, "len") == 0)) {
+        return hexa_range_field(m, key);
     }
     return hexa_map_get(m, key);
 }

@@ -3613,6 +3613,43 @@ HexaVal hexa_range_array(HexaVal start, HexaVal end, HexaVal step, int inclusive
     return result;
 }
 
+// PROBE r14: Range repr accessors — `.start` / `.end` / `.len` on a range
+// value. A range like `2..7` materializes to the int array [2,3,4,5,6]
+// (hexa_range_array above), so the bounds were previously lost — `r.start`
+// resolved through generic hexa_map_get_ic and returned void ("map key
+// 'start' not found"). This helper recovers the bounds from the
+// materialized int array so the canonical Rust `Range { start, end }` /
+// `.len()` surface works on stored range values without changing the
+// array representation (so for-in / slice / .map / .contains stay
+// byte-identical — those read the Range AST node, not this value).
+//
+// Exact for the canonical exclusive form `a..b` (the dominant case):
+//   start = items[0], end = items[last]+1, len = count.
+// step / inclusive forms: `.len` and `.start` are exact; `.end` is derived
+// as `last + step` (step inferred from items[1]-items[0]), which equals the
+// next would-be element — NOT the user-written upper bound. Recovering the
+// literal upper bound for `a..b step n` / `a..=b` requires carrying range
+// metadata (range-as-struct, deferred). For empty ranges (a>=b) start/end
+// fall back to 0 and len to 0.
+HexaVal hexa_range_field(HexaVal v, const char* key) {
+    if (!HX_IS_ARRAY(v)) return hexa_void();
+    int64_t n = HX_ARR_LEN(v);
+    if (strcmp(key, "len") == 0) return hexa_int(n);
+    if (strcmp(key, "start") == 0) {
+        if (n == 0) return hexa_int(0);
+        return HX_ARR_ITEMS(v)[0];
+    }
+    if (strcmp(key, "end") == 0) {
+        if (n == 0) return hexa_int(0);
+        int64_t last = HX_INT(HX_ARR_ITEMS(v)[n - 1]);
+        int64_t step = 1;
+        if (n >= 2) step = HX_INT(HX_ARR_ITEMS(v)[1]) - HX_INT(HX_ARR_ITEMS(v)[0]);
+        if (step <= 0) step = 1;
+        return hexa_int(last + step);
+    }
+    return hexa_void();
+}
+
 // flat_map: map then flatten one level. Non-array callback results
 // are pushed as-is (matches interpreter fallback at hexa_full.hexa:15211).
 HexaVal hexa_array_flat_map(HexaVal arr, HexaVal fn) {
