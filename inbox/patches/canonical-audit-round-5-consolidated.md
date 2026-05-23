@@ -1,6 +1,8 @@
 # canonical-deviation audit round 5 — consolidated (6 axes)
 
-**Status:** 🟠 FILED / OPEN (2026-05-23)
+> **Status update (2026-05-23):** the 3 HIGH match-pattern silent-miscompiles are **FIXED + deployed** — guard incorporation (#379), OR/Range pattern lowering (#380), and bare-Ident binding-pattern + guard (#412), all activated by the hexa_v2 regen (#413). Verified e2e through the deployed toolchain: `n if n>100 -> "big"` → big/medium/small; `1|2|3 -> "x"` dispatches; `0..10` / `10..=20` range arms dispatch (inclusive boundary correct). Remaining items (operator-overload bypass, generic-bounds non-enforcement, Option/Result lane) are **design-level** language surfaces — tracked, not silent-miscompile bugs.
+
+**Status:** 🟠 design-level remainder (match miscompiles closed)
 **Reporter:** anima session — round 5 parallel probe fanout
 **Severity:** mixed — **3 silent miscompiles** in match patterns (HIGH),
 plus large design surfaces (operator overload bypass, generic bounds
