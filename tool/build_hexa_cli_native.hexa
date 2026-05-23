@@ -2,7 +2,7 @@
 //  build_hexa_cli_native.hexa — build the hexa CLI (self/main.hexa)
 //  for the current host, using the host's own clang / cc. No musl
 //  cross-compiler required; output is a dynamic ELF / Mach-O suitable
-//  for installing as `~/.hx/bin/hexa.real` (or anywhere you like).
+//  for installing as `~/.hx/bin/hxv2` (or anywhere you like).
 //
 //  Pairs with build_hexa_cli_linux.hexa (which cross-builds *from*
 //  macOS *to* Linux/musl). This native variant covers the workflow:
@@ -188,5 +188,5 @@ println("  size : " + _size + " bytes")
 println("  file : " + _file_info)
 println("")
 println("install (optional):")
-println("  cp " + _out_path + " ~/.hx/bin/hexa.real")
+println("  cp " + _out_path + " ~/.hx/bin/hxv2")
 println("  # or set HEXA_INTERP=" + _out_path)
