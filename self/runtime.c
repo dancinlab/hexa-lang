@@ -1112,13 +1112,23 @@ static int __attribute__((noinline)) hxlcl_waitpid(int pid, int *status, int opt
     return waitpid(pid, status, options);
 }
 /* Cycle 65: variadic to handle both 2-arg and 3-arg open() callers. */
+extern int open(const char *path, int flags, ...);
 static int __attribute__((noinline)) hxlcl_open_sys(const char *path, int flags, ...) {
     int mode = 0;
     __builtin_va_list ap;
     __builtin_va_start(ap, flags);
     mode = __builtin_va_arg(ap, int);
     __builtin_va_end(ap);
-    return (int)_hxlcl_syscall3(HXLCL_SYS_OPEN, (long)path, (long)flags, (long)mode);
+    /* Route through libc open() rather than a raw `svc #0x80`. The macOS
+     * arm64 syscall ABI signals failure via the carry flag and returns the
+     * positive errno in x0; the inline-asm `_hxlcl_syscall3` cannot read the
+     * carry flag, so a failed open (e.g. ENOENT → 2) came back as a small
+     * positive value that callers mistook for a valid fd — fopen()-style
+     * sites then wrote content to that low descriptor instead of returning
+     * failure. Same carry-flag fix already applied to read/write/close/dup2
+     * in cycle 66; open was missed. (inbox patch canonical-audit-round-8:
+     * write_file content-leak + false `true` return.) */
+    return open(path, flags, mode);
 }
 static int __attribute__((noinline)) hxlcl_fstat(int fd, void *buf) {
     return (int)_hxlcl_syscall2(HXLCL_SYS_FSTAT, (long)fd, (long)buf);
