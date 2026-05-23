@@ -7237,6 +7237,24 @@ fn gen2_match_stmt(node, depth) {
                 chunks.push(_pad3 + "HexaVal " + _hexa_mangle_ident(_bn) + " = hexa_index_get(__match_val, hexa_int(1));\n")
             }
         }
+        // PROBE r14-HH (CC follow-up to PR #366): multi-arg payload binders
+        // (`Shape::Square(w, h)`) live in `pat.items`. Emit one `HexaVal <n>`
+        // per Ident item, reading `__match_val[i+1]` (index 0 holds the tag).
+        // Wildcard items (`_`) and non-Ident sub-patterns are skipped (no bind).
+        if type_of(pat) != "string" && pat.kind == "EnumPath" && type_of(pat.items) != "string" {
+            let _pad3 = gen2_indent(depth + 2)
+            let mut _pi = 0
+            while _pi < len(pat.items) {
+                let _it = pat.items[_pi]
+                if type_of(_it) != "string" && _it.kind == "Ident" {
+                    let _in = _it.name
+                    if type_of(_in) == "string" && _in != "_" {
+                        chunks.push(_pad3 + "HexaVal " + _hexa_mangle_ident(_in) + " = hexa_index_get(__match_val, hexa_int(" + to_string(_pi + 1) + "));\n")
+                    }
+                }
+                _pi = _pi + 1
+            }
+        }
 
         // Arm body — scope-isolate the comptime-const fold table so a
         // `let x = <lit>` in this arm does not leak its folded literal into a
@@ -7311,7 +7329,13 @@ fn gen2_match_cond(pat, scrutinee_var) {
         // array form `[tag, payload]`; compare the *tag only* (index 0), gated
         // on HX_IS_ARRAY so a bare-tag unit value can't crash. Plain (no-binder)
         // variants keep the original whole-value equality test.
+        // PROBE r14-HH (CC follow-up to PR #366): multi-arg payload form
+        // (`Shape::Square(w, h)`) lives in `pat.items` (parse_match_pattern
+        // stores plist there when len > 1). Same array+tag test applies.
         if type_of(pat.left) != "string" {
+            return "(HX_IS_ARRAY(" + scrutinee_var + ") && hexa_truthy(hexa_eq(hexa_index_get(" + scrutinee_var + ", hexa_int(0)), " + enum_const + ")))"
+        }
+        if type_of(pat.items) != "string" && len(pat.items) > 0 {
             return "(HX_IS_ARRAY(" + scrutinee_var + ") && hexa_truthy(hexa_eq(hexa_index_get(" + scrutinee_var + ", hexa_int(0)), " + enum_const + ")))"
         }
         return "hexa_truthy(hexa_eq(" + scrutinee_var + ", " + enum_const + "))"
@@ -7371,6 +7395,26 @@ fn gen2_match_ternary(arms, scrutinee_c, idx) {
         if type_of(_bn) == "string" && _bn != "_" {
             _enum_bind_name = _bn
             val = "({ HexaVal " + _hexa_mangle_ident(_bn) + " = hexa_index_get(" + scrutinee_c + ", hexa_int(1)); (" + val + "); })"
+        }
+    }
+    // PROBE r14-HH (CC follow-up to PR #366): multi-arg payload binders in
+    // ternary-form match expressions. Compose all bindings into the GCC
+    // stmt-expr wrap; each item reads `scrutinee_c[i+1]` (i=0 is the tag).
+    if type_of(pat) != "string" && pat.kind == "EnumPath" && type_of(pat.items) != "string" && len(pat.items) > 0 {
+        let mut _binds = ""
+        let mut _pi = 0
+        while _pi < len(pat.items) {
+            let _it = pat.items[_pi]
+            if type_of(_it) != "string" && _it.kind == "Ident" {
+                let _in = _it.name
+                if type_of(_in) == "string" && _in != "_" {
+                    _binds = _binds + "HexaVal " + _hexa_mangle_ident(_in) + " = hexa_index_get(" + scrutinee_c + ", hexa_int(" + to_string(_pi + 1) + ")); "
+                }
+            }
+            _pi = _pi + 1
+        }
+        if len(_binds) > 0 {
+            val = "({ " + _binds + "(" + val + "); })"
         }
     }
     // Bare-Ident binder: bind the whole scrutinee into the arm value.
