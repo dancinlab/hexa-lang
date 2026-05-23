@@ -1,0 +1,258 @@
+// stdlib/research/arxiv.hexa — arXiv API client (Atom feed parser).
+//
+// Live endpoint: http://export.arxiv.org/api/query
+//   - `search`     : free-text query, returns ≤ max_results papers.
+//   - `fetch`      : single paper by arXiv id (e.g. "2401.12345" or "math/0603469v1").
+//   - `pdf_url`    : synthesize the canonical PDF URL for an id.
+//   - `parse_atom` : pure-parse helper, exposed so tests can run offline
+//                    against a frozen fixture (no network, deterministic).
+//
+// Per @D try-live-or-fallback: callers needing offline determinism feed
+// `parse_atom` a pre-captured Atom XML body; live `search`/`fetch` shell
+// out to `curl` with a 15 s timeout.
+//
+// XML strategy: lightweight `<tag>…</tag>` slicing — sufficient for the
+// arXiv Atom schema, no full XML parser dep. Entity decoding handles the
+// 5 standard predefined entities (`&amp; &lt; &gt; &quot; &apos;`).
+
+struct ArxivPaper {
+    id: string,           // canonical arXiv id incl. version, e.g. "math/0603469v1"
+    title: string,
+    authors: [string],
+    abstract: string,
+    published: string,    // ISO-8601
+    pdf_url: string,
+    categories: [string], // primary first
+}
+
+let ARXIV_API_BASE = "http://export.arxiv.org/api/query"
+let ARXIV_ABS_BASE = "https://arxiv.org/abs/"
+let ARXIV_PDF_BASE = "https://arxiv.org/pdf/"
+
+// ── string utilities ────────────────────────────────────────────────
+
+fn _idx(hay: string, needle: string, from: int) -> int {
+    let n = len(hay)
+    let m = len(needle)
+    if m == 0 { return from }
+    if m > n { return -1 }
+    let mut i = from
+    while i + m <= n {
+        if hay.substring(i, i + m) == needle { return i }
+        i = i + 1
+    }
+    return -1
+}
+
+fn _trim(s: string) -> string {
+    let n = len(s)
+    let mut a = 0
+    while a < n {
+        let c = s.substring(a, a + 1)
+        if c != " " && c != "\t" && c != "\n" && c != "\r" { break }
+        a = a + 1
+    }
+    let mut b = n
+    while b > a {
+        let c = s.substring(b - 1, b)
+        if c != " " && c != "\t" && c != "\n" && c != "\r" { break }
+        b = b - 1
+    }
+    return s.substring(a, b)
+}
+
+// Decode the 5 XML predefined entities. Numeric character refs are not
+// expected from the arXiv API (it emits Unicode directly) so we skip them.
+fn _xml_decode(s: string) -> string {
+    let mut out = s
+    out = out.replace("&amp;",  "&")
+    out = out.replace("&lt;",   "<")
+    out = out.replace("&gt;",   ">")
+    out = out.replace("&quot;", "\"")
+    out = out.replace("&apos;", "'")
+    return out
+}
+
+// Slice the inner text between the first `<tag>` and matching `</tag>`
+// in `xml`, starting at `from`. Returns "" when not found.
+fn _slice_tag(xml: string, tag: string, from: int) -> string {
+    let open  = "<"  + tag + ">"
+    let close = "</" + tag + ">"
+    let a = _idx(xml, open, from)
+    if a < 0 { return "" }
+    let body_from = a + len(open)
+    let b = _idx(xml, close, body_from)
+    if b < 0 { return "" }
+    return xml.substring(body_from, b)
+}
+
+// Find the next `<entry>…</entry>` block starting at `from`. Returns
+// (start, end_exclusive) as a two-element list; [-1, -1] when none left.
+fn _next_entry(xml: string, from: int) -> [int] {
+    let open  = "<entry>"
+    let close = "</entry>"
+    let a = _idx(xml, open, from)
+    if a < 0 { return [-1, -1] }
+    let body_from = a + len(open)
+    let b = _idx(xml, close, body_from)
+    if b < 0 { return [-1, -1] }
+    return [body_from, b + len(close)]
+}
+
+// Read the `href` attribute value off the first `<link …>` tag matching
+// the `type="<wanted_type>"` filter, scanning from `from`. arXiv emits
+// `type="application/pdf"` for the PDF link.
+fn _link_href_by_type(xml: string, wanted_type: string, from: int) -> string {
+    let mut i = from
+    let n = len(xml)
+    while i < n {
+        let a = _idx(xml, "<link ", i)
+        if a < 0 { return "" }
+        let end = _idx(xml, "/>", a)
+        if end < 0 { return "" }
+        let tag = xml.substring(a, end)
+        if _idx(tag, "type=\"" + wanted_type + "\"", 0) >= 0 {
+            let h = _idx(tag, "href=\"", 0)
+            if h >= 0 {
+                let h_from = h + len("href=\"")
+                let h_end = _idx(tag, "\"", h_from)
+                if h_end > h_from { return tag.substring(h_from, h_end) }
+            }
+            return ""
+        }
+        i = end + 2
+    }
+    return ""
+}
+
+// Pull the `term` attribute off every `<category …/>` in `block`.
+fn _categories(block: string) -> [string] {
+    let mut out = []
+    let mut i = 0
+    let n = len(block)
+    while i < n {
+        let a = _idx(block, "<category ", i)
+        if a < 0 { break }
+        let t = _idx(block, "term=\"", a)
+        if t < 0 { break }
+        let t_from = t + len("term=\"")
+        let t_end = _idx(block, "\"", t_from)
+        if t_end > t_from {
+            out.push(block.substring(t_from, t_end))
+        }
+        i = t_end + 1
+    }
+    return out
+}
+
+// Pull every `<name>…</name>` from the author blocks in `entry_body`.
+// We restrict the scan to inside `<author>…</author>` ranges so future
+// schema additions (e.g. `<arxiv:primary_author>`) don't leak in.
+fn _authors(entry_body: string) -> [string] {
+    let mut out = []
+    let mut i = 0
+    let n = len(entry_body)
+    while i < n {
+        let a = _idx(entry_body, "<author>", i)
+        if a < 0 { break }
+        let b = _idx(entry_body, "</author>", a)
+        if b < 0 { break }
+        let block = entry_body.substring(a + len("<author>"), b)
+        let nm = _slice_tag(block, "name", 0)
+        if len(nm) > 0 { out.push(_xml_decode(_trim(nm))) }
+        i = b + len("</author>")
+    }
+    return out
+}
+
+// Strip the `http://arxiv.org/abs/` prefix off a `<id>` value to get the
+// canonical arXiv id (with version suffix preserved).
+fn _id_canonical(id_url: string) -> string {
+    let needle = "arxiv.org/abs/"
+    let p = _idx(id_url, needle, 0)
+    if p < 0 { return id_url }
+    return id_url.substring(p + len(needle), len(id_url))
+}
+
+// ── public surface ──────────────────────────────────────────────────
+
+// Parse a full arXiv Atom feed body into ArxivPaper records. Safe to call
+// on offline fixtures; never touches the network.
+pub fn arxiv_parse_atom(xml: string) -> [ArxivPaper] {
+    let mut out = []
+    if len(xml) == 0 { return out }
+    let mut cursor = 0
+    while true {
+        let span = _next_entry(xml, cursor)
+        let s = span[0]
+        let e = span[1]
+        if s < 0 { break }
+        let body = xml.substring(s, e - len("</entry>"))
+        cursor = e
+
+        let title    = _xml_decode(_trim(_slice_tag(body, "title", 0)))
+        let abstract = _xml_decode(_trim(_slice_tag(body, "summary", 0)))
+        let pub_at   = _trim(_slice_tag(body, "published", 0))
+        let id_raw   = _trim(_slice_tag(body, "id", 0))
+        let id_can   = _id_canonical(id_raw)
+        let pdf      = _link_href_by_type(body, "application/pdf", 0)
+        let auths    = _authors(body)
+        let cats     = _categories(body)
+
+        let paper = ArxivPaper{
+            id: id_can,
+            title: title,
+            authors: auths,
+            abstract: abstract,
+            published: pub_at,
+            pdf_url: pdf,
+            categories: cats,
+        }
+        out.push(paper)
+    }
+    return out
+}
+
+// Canonical PDF URL synthesis. Accepts `2401.12345`, `2401.12345v1`,
+// or pre-2007 IDs like `math/0603469v1`. Caller is responsible for
+// id validity — we do not contact the network here.
+pub fn arxiv_pdf_url(id: string) -> string {
+    if len(id) == 0 { return "" }
+    return ARXIV_PDF_BASE + id
+}
+
+// URL-encode the bits of a query string that arXiv's parser is sensitive
+// to. arXiv accepts `+` for space and tolerates raw `:` `,` `(` `)`.
+fn _q_encode(q: string) -> string {
+    return q.replace(" ", "+")
+}
+
+// Live search via export.arxiv.org. Returns parsed papers, or [] on
+// network failure. `max_results` is clamped to [1, 100] per arXiv ToS.
+pub fn arxiv_search(query: string, max_results: int) -> [ArxivPaper] {
+    if len(query) == 0 { return [] }
+    let mut n = max_results
+    if n < 1 { n = 1 }
+    if n > 100 { n = 100 }
+    let url = ARXIV_API_BASE
+        + "?search_query=" + _q_encode(query)
+        + "&start=0&max_results=" + to_string(n)
+    let body = http_get(url)
+    return arxiv_parse_atom(body)
+}
+
+// Single-paper fetch via `id_list`. Returns an empty placeholder paper
+// when the id is unknown / network is down — callers should check
+// `len(p.id) > 0` to disambiguate.
+pub fn arxiv_fetch(id: string) -> ArxivPaper {
+    let empty = ArxivPaper{
+        id: "", title: "", authors: [], abstract: "",
+        published: "", pdf_url: "", categories: [],
+    }
+    if len(id) == 0 { return empty }
+    let url = ARXIV_API_BASE + "?id_list=" + id
+    let body = http_get(url)
+    let papers = arxiv_parse_atom(body)
+    if len(papers) == 0 { return empty }
+    return papers[0]
+}
