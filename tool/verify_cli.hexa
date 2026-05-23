@@ -138,6 +138,7 @@ fn cmd_rubric() {
     println("")
     println("usage:")
     println("  hexa verify <id> [--absorb]              atlas atom: lookup + calc recompute")
+    println("  hexa verify --expr <fn> <v> [--absorb]       0-operand (chsh_tsirelson)")
     println("  hexa verify --expr <fn> <n> <v> [--absorb]   recompute fn(n)==v hexa-native")
     println("  hexa verify --expr <fn> <a> <b> <v> [--absorb]   2-operand (sigma_k/jacobi/ssh_winding/...)")
     println("  hexa verify --expr <fn> <a> <b> <c> <v> [--absorb]   3-operand (tknn_chern p q r)")
@@ -154,6 +155,8 @@ fn cmd_rubric() {
     println("             3-op: tknn_chern (RFC 046 TKNN Chern/Hall integer · Diophantine gap label)")
     println("  float fns: welch_t_crit(df)  wilson_hilferty_p(t,df)   → 🟢 NUMERICAL (ε=1e-9")
     println("             tolerance; libm-class, NOT closed-form; extend _recompute_float on gap)")
+    println("             chsh_tsirelson()   → 2*sqrt(2)  (RFC 045 CHSH Tsirelson bound, 0-arg)")
+    println("             hardy_bound(N)     → p_N^max    (RFC 045 multipartite Hardy, Adhikary-Mandal Eq.5)")
 }
 
 let NOCALC: int = -999999
@@ -404,14 +407,91 @@ fn _wilson_hilferty_p(t_stat: float, df: float) -> float {
     return p_two
 }
 
-// float dispatch — fn_name → recompute. 1-arg fns take a0; 2-arg take
-// a0,a1. Returns _NOCALC_F when no float path exists (caller then tries
-// the int path / degrades). The 🟢 NUMERICAL companion to _recompute.
+// ── RFC 045 qmirror closed-form float anchors ──────────────────────────
+//
+// CHSH Tsirelson bound (Tsirelson 1980; Cirel'son Lett. Math. Phys. 4 93).
+//   S_max = 2 * sqrt(2)  ~ 2.8284271247461903
+// Closed-form anchor of the bipartite Bell inequality (CHSH 1969 PRL 23
+// 880) under QM; saturated by the singlet/|Phi+> + the canonical CHSH
+// angle set (a=0, a'=π/2, b=π/4, b'=-π/4). Verbatim port of the analytic
+// identity that stdlib/quantum/chsh/module/chsh.hexa quotes:
+//     E_ab = E_abp = E_apb = sqrt(2)/2, E_apbp = -sqrt(2)/2
+//     S = 4 * sqrt(2)/2 = 2*sqrt(2)
+// 0-arg closed-form constant (irrational; ε=1e-9 numerical tolerance).
+fn _chsh_tsirelson() -> float {
+    return 2.0 * sqrt(2.0)
+}
+
+// Hardy N-party multipartite nonlocality maximal probability (Hardy 1993
+// PRL 71 1665 / Adhikary-Mandal arXiv:2505.10170 Eq.5):
+//   p_N^max = t_r^N * (1 - t_r)^N / (1 - t_r^N)
+// where t_r is the positive root of x^{N+1} - 2x + 1 = 0 in (0, 1) other
+// than the trivial root x=1. For N=2: t_r = (sqrt(5)-1)/2 = 1/phi and
+// p_2^max = (5*sqrt(5) - 11) / 2 ~ 0.0901699437494742 (golden-ratio
+// identity). Verbatim port of stdlib/quantum/hardy-multipartite/module/
+// hardy_multipartite.hexa::_hm_solve_tr + _hm_pmax_closed (Newton-Raphson
+// root in (0, 1); naive integer power; closed-form combination).
+fn _hardy_powi(x: float, n: int) -> float {
+    let mut acc = 1.0
+    let mut k = 0
+    while k < n {
+        acc = acc * x
+        k = k + 1
+    }
+    return acc
+}
+
+fn _hardy_abs(x: float) -> float {
+    if x < 0.0 { return 0.0 - x }
+    return x
+}
+
+fn _hardy_solve_tr(big_n: int) -> float {
+    // f(x)  = x^{N+1} - 2x + 1 ;  f'(x) = (N+1) x^N - 2
+    let m = big_n + 1
+    let mut x = 0.5
+    let mut it = 0
+    while it < 100 {
+        let fx = _hardy_powi(x, m) - 2.0 * x + 1.0
+        let fp = to_float(m) * _hardy_powi(x, big_n) - 2.0
+        if _hardy_abs(fx) < 0.00000000000001 { return x }  // 1e-14
+        if _hardy_abs(fp) < 0.00000000000001 { return x }
+        let dx = fx / fp
+        x = x - dx
+        if x < 0.001 { x = 0.001 }
+        if x > 0.999 { x = 0.999 }
+        if _hardy_abs(dx) < 0.00000000000001 { return x }
+        it = it + 1
+    }
+    return x
+}
+
+fn _hardy_bound(big_n: int) -> float {
+    if big_n < 2 { return _NOCALC_F }
+    let tr = _hardy_solve_tr(big_n)
+    let trN = _hardy_powi(tr, big_n)
+    let omt = 1.0 - tr
+    let omtN = _hardy_powi(omt, big_n)
+    return trN * omtN / (1.0 - trN)
+}
+
+// float dispatch — fn_name → recompute. 0-arg fns ignore a0/a1 (constants);
+// 1-arg fns take a0; 2-arg take a0,a1. Returns _NOCALC_F when no float path
+// exists (caller then tries the int path / degrades). The 🟢 NUMERICAL
+// companion to _recompute.
 fn _recompute_float(fn_name: string, a0: float, a1: float, argc: int) -> float {
     if fn_name == "welch_t_crit" { return _welch_t_crit(a0) }
     if fn_name == "wilson_hilferty_p" {
         if argc < 2 { return _NOCALC_F }
         return _wilson_hilferty_p(a0, a1)
+    }
+    // RFC 045 qmirror anchors:
+    //   chsh_tsirelson()       0-arg closed-form: 2*sqrt(2)
+    //   hardy_bound(N)         1-arg closed-form: p_N^max  (Adhikary-Mandal Eq.5)
+    if fn_name == "chsh_tsirelson" { return _chsh_tsirelson() }
+    if fn_name == "hardy_bound" {
+        let big_n = to_int(a0)
+        return _hardy_bound(big_n)
     }
     return _NOCALC_F
 }
@@ -420,6 +500,12 @@ fn _recompute_float(fn_name: string, a0: float, a1: float, argc: int) -> float {
 // cmd_expr can route float args before to_int truncation).
 fn _is_float_fn(fn_name: string) -> bool {
     return fn_name == "welch_t_crit" || fn_name == "wilson_hilferty_p"
+        || fn_name == "chsh_tsirelson" || fn_name == "hardy_bound"
+}
+
+// is fn_name a 0-arg closed-form constant? (--expr <fn> <v>, no operands).
+fn _is_zero_arg_float_fn(fn_name: string) -> bool {
+    return fn_name == "chsh_tsirelson"
 }
 
 // trim trailing zeros of a float→string for tidy verdict echo.
@@ -537,20 +623,26 @@ fn cmd_verify_id(rest) {
 }
 
 // cmd_expr_float — the 🟢 NUMERICAL path. fn_name is a registered float
-// transform (welch_t_crit · wilson_hilferty_p). Args + claimed value are
-// parsed as floats; the recompute is compared with tolerance ε (NOT exact
-// -eq, the honest libm-class gate). Within ε → 🟢 SUPPORTED-NUMERICAL;
-// deterministic out-of-ε → 🔴 FALSIFIED.
+// transform (welch_t_crit · wilson_hilferty_p · chsh_tsirelson · hardy_bound).
+// Args + claimed value are parsed as floats; the recompute is compared with
+// tolerance ε (NOT exact-eq, the honest libm-class gate). Within ε →
+// 🟢 SUPPORTED-NUMERICAL; deterministic out-of-ε → 🔴 FALSIFIED.
+//   0-arg:  --expr <fn> <v>               (rest len 3; closed-form constant)
 //   1-arg:  --expr <fn> <a0> <v>          (rest len 4)
 //   2-arg:  --expr <fn> <a0> <a1> <v>     (rest len 5)
 fn cmd_expr_float(rest, fnm: string) {
+    let zero_arg = _is_zero_arg_float_fn(fnm)
     let has5 = len(rest) >= 5 && to_string(rest[4]) != "--absorb"
     let mut a0 = 0.0
     let mut a1 = 0.0
     let mut v = 0.0
     let mut argc = 1
     let mut label = ""
-    if has5 {
+    if zero_arg {
+        v = _parse_float(to_string(rest[2]))
+        argc = 0
+        label = fnm + "()=" + _fstr(v)
+    } else if has5 {
         a0 = _parse_float(to_string(rest[2]))
         a1 = _parse_float(to_string(rest[3]))
         v = _parse_float(to_string(rest[4]))
@@ -585,15 +677,24 @@ fn cmd_expr_float(rest, fnm: string) {
 }
 
 fn cmd_expr(rest) {
+    // 0-operand:  --expr <fn> <v>                (rest len 3; chsh_tsirelson)
     // 1-operand:  --expr <fn> <n> <v>            (rest len 4)
     // 2-operand:  --expr <fn> <a> <b> <v>        (rest len 5)
-    if len(rest) < 4 {
+    // 3-operand:  --expr <fn> <a> <b> <c> <v>    (rest len 6)
+    let fnm_pre = if len(rest) >= 2 { to_string(rest[1]) } else { "" }
+    let zero_arg_pre = _is_zero_arg_float_fn(fnm_pre)
+    if len(rest) < 4 && !zero_arg_pre {
         println("error: usage: hexa verify --expr <fn> <n> <v>  |  <fn> <a> <b> <v>  [--absorb]")
         exit(2)
     }
+    if zero_arg_pre && len(rest) < 3 {
+        println("error: usage: hexa verify --expr " + fnm_pre + " <v>  [--absorb]")
+        exit(2)
+    }
     let fnm = to_string(rest[1])
-    // float-NUMERICAL forms (welch_t_crit · wilson_hilferty_p) route to the
-    // 🟢 path BEFORE the int parser truncates real-valued args.
+    // float-NUMERICAL forms (welch_t_crit · wilson_hilferty_p · chsh_tsirelson
+    // · hardy_bound) route to the 🟢 path BEFORE the int parser truncates
+    // real-valued args.
     if _is_float_fn(fnm) {
         cmd_expr_float(rest, fnm)
         return
