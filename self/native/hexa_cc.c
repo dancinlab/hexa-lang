@@ -11902,7 +11902,7 @@ static void __hexa_codegen_c2_strlit_init_0(void) {
     __hexa_codegen_c2_sl_415 = hexa_str("/* HEXA_STRICT_FP_TU: 1 */\n");
     __hexa_codegen_c2_sl_416 = hexa_str("/* HEXA_STRICT_FP_TU: 0 */\n");
     __hexa_codegen_c2_sl_417 = hexa_str("int main(int argc, char** argv) {\n");
-    __hexa_codegen_c2_sl_418 = hexa_str("    hexa_set_args(argc, argv);\n");
+    __hexa_codegen_c2_sl_418 = hexa_str("    setvbuf(stdout, NULL, _IOLBF, 0);\n    setvbuf(stderr, NULL, _IOLBF, 0);\n    hexa_set_args(argc, argv);\n");
     __hexa_codegen_c2_sl_419 = hexa_str("    hexa_fp_init();\n");
     __hexa_codegen_c2_sl_420 = hexa_str("    __hexa_strlit_init__");
     __hexa_codegen_c2_sl_421 = hexa_str("    u_main();\n");

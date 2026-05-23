@@ -1386,6 +1386,14 @@ fn codegen_c2(ast) {
     // 이전 구현은 `int main()` 으로 argv 를 받지 않아 args() 가 항상 빈 배열을
     // 반환했다. main.hexa 의 dispatch (av[2] 등) 가 동작하려면 필수.
     parts.push("int main(int argc, char** argv) {\n")
+    // Line-buffer stdout/stderr so `eprintln` / `print` from a daemon
+    // (`while true`) hits the destination FD per line instead of sitting
+    // in the process-local FILE* buffer until exit. Without this, hexa_run
+    // daemons under `nohup > out 2> err &` show 0-byte log files until
+    // they exit. _IOLBF matches the de-facto Unix daemon convention.
+    // (inbox patch proc-spawn-supervised-daemon-silent-exit gap #2.)
+    parts.push("    setvbuf(stdout, NULL, _IOLBF, 0);\n")
+    parts.push("    setvbuf(stderr, NULL, _IOLBF, 0);\n")
     parts.push("    hexa_set_args(argc, argv);\n")
     // B20: per-thread FP control word init. Always safe to call — zero-op on
     // substrates without MXCSR/FPCR. Placing before any user init ensures
@@ -3478,6 +3486,20 @@ fn gen2_method_builtin(obj_expr, method, args) {
     }
     if method == "drop" {
         return "hexa_array_drop(" + obj_expr + ", " + gen2_expr(args[0]) + ")"
+    }
+    // Rust canonical iterator method aliases (round-5 iterator probe).
+    // `.skip(n)` is the Rust name for `.drop(n)`; `.first/.nth` wrap
+    // the existing `hexa_array_get` runtime fn (which already handles
+    // negative idx wrap + OOB throw, per #355).  `.last` needs a
+    // dedicated runtime helper to avoid double-eval — separate cycle.
+    if method == "skip" {
+        return "hexa_array_drop(" + obj_expr + ", " + gen2_expr(args[0]) + ")"
+    }
+    if method == "first" {
+        return "hexa_array_get(" + obj_expr + ", 0)"
+    }
+    if method == "nth" {
+        return "hexa_array_get(" + obj_expr + ", HX_INT(" + gen2_expr(args[0]) + "))"
     }
     if method == "zip" {
         return "hexa_array_zip(" + obj_expr + ", " + gen2_expr(args[0]) + ")"
@@ -6440,6 +6462,30 @@ fn gen2_match_cond(pat, scrutinee_var) {
     if k == "Wildcard" {
         return "1"
     }
+    // OR-pattern: pattern grammar reuses parse_expr which greedy-
+    // consumed `1 | 2 | 3` as a BinOp(|, …) tree.  Split into a real
+    // disjunction.  Without this `match v { 1|2|3 => … }` compiled to
+    // `hexa_eq(v, 1|2|3=3)` — only v==3 matched.  Round-5 pattern
+    // probe finding (Class-1 silent failure).
+    if k == "BinOp" && pat.op == "|" {
+        let _lc = gen2_match_cond(pat.left, scrutinee_var)
+        let _rc = gen2_match_cond(pat.right, scrutinee_var)
+        return "(" + _lc + " || " + _rc + ")"
+    }
+    // Range pattern: `0..10` (exclusive) / `0..=10` (inclusive).
+    // parse_expr emits a `Range` node in expression position; the
+    // generic codegen lowered it to `hexa_range_array` and then
+    // `hexa_eq` compared the scrutinee int to the array — never
+    // matched.  Pattern semantics need a membership test.
+    if k == "Range" {
+        let _lo = gen2_expr(pat.left)
+        let _hi = gen2_expr(pat.right)
+        let _ge = "hexa_truthy(hexa_cmp_ge(" + scrutinee_var + ", " + _lo + "))"
+        let mut _cmp_hi = "hexa_cmp_lt"
+        if pat.value == "inclusive" { _cmp_hi = "hexa_cmp_le" }
+        let _hi_test = "hexa_truthy(" + _cmp_hi + "(" + scrutinee_var + ", " + _hi + "))"
+        return "(" + _ge + " && " + _hi_test + ")"
+    }
     if k == "IntLit" {
         return "hexa_truthy(hexa_eq(" + scrutinee_var + ", hexa_int(" + pat.value + ")))"
     }
@@ -6507,15 +6553,33 @@ fn gen2_match_ternary(arms, scrutinee_c, idx) {
         }
     }
 
-    if is_wildcard || idx == len(arms) - 1 {
-        if is_wildcard {
-            return val
-        }
-        let cond = gen2_match_cond(pat, scrutinee_c)
-        return "(" + cond + " ? " + val + " : hexa_void())"
+    // Build pattern-match condition; wildcard pattern is unconditional.
+    let mut cond = ""
+    if is_wildcard {
+        cond = "1"
+    } else {
+        cond = gen2_match_cond(pat, scrutinee_c)
+    }
+    // Guard (`pat if cond_expr => …` / `_ if cond_expr => …`) — AND
+    // into the arm condition. Without this the parser-captured guard
+    // (`arm.cond`) was silently dropped at codegen and the arm fired
+    // regardless of the guard's value — round-5 pattern probe
+    // headline finding (Class-1 silent failure: wrong arm executes).
+    let _guard = arm.cond
+    let _has_guard = type_of(_guard) != "string"
+    if _has_guard {
+        cond = "(" + cond + " && hexa_truthy(" + gen2_expr(_guard) + "))"
     }
 
-    let cond = gen2_match_cond(pat, scrutinee_c)
+    // Pure wildcard with no guard short-circuits to the value (existing
+    // optimization — must check `!has_guard` so `_ if cond` still
+    // emits a real check).
+    if is_wildcard && !_has_guard {
+        return val
+    }
+    if idx == len(arms) - 1 {
+        return "(" + cond + " ? " + val + " : hexa_void())"
+    }
     let rest = gen2_match_ternary(arms, scrutinee_c, idx + 1)
     return "(" + cond + " ? " + val + " : " + rest + ")"
 }
@@ -8338,6 +8402,11 @@ fn codegen_c2_full(ast) {
     out_parts.push(fn_parts.join(""))
     // T3 fix: emit `int main(int argc, char** argv)` + hexa_set_args.
     out_parts.push("int main(int argc, char** argv) {\n")
+    // Line-buffer stdout/stderr per daemon convention — see sibling main()
+    // emit above for rationale. (inbox patch
+    // proc-spawn-supervised-daemon-silent-exit gap #2.)
+    out_parts.push("    setvbuf(stdout, NULL, _IOLBF, 0);\n")
+    out_parts.push("    setvbuf(stderr, NULL, _IOLBF, 0);\n")
     out_parts.push("    hexa_set_args(argc, argv);\n")
     if len(_strlit_keys) > 0 {
         out_parts.push("    __hexa_strlit_init__" + _hexa_cert_module_name() + "();\n")

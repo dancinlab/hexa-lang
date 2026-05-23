@@ -284,3 +284,109 @@ fn runpod_terminate(api_key: str, pod_id: str) -> int {
     }
     return _runpod_terminate_api(api_key, pod_id)
 }
+
+// ── pod list ─────────────────────────────────────────────────────────
+
+struct RunPodList {
+    ok:      int,     // 1 iff a runpodctl invocation returned (possibly empty) results
+    pod_ids: [str],   // discovered pod ids
+    message: str
+}
+
+fn _runpod_list_fail(msg: str) -> RunPodList {
+    return RunPodList { ok: 0, pod_ids: [], message: msg }
+}
+
+// _first_token — return the prefix of `s` up to the first whitespace
+// (space or tab), or the whole string if no whitespace is present.
+fn _first_token(s: str) -> str {
+    let mut i = 0
+    let n = len(s)
+    while i < n {
+        let c = s.substring(i, i + 1)
+        if c == " " || c == "\t" {
+            return s.substring(0, i)
+        }
+        i = i + 1
+    }
+    return s
+}
+
+// _runpod_list_new — `runpodctl pod list -o json` (2.x form). Returns
+// ok=0 when the new verb is rejected (runpodctl < 2.x), so the caller
+// can fall through to the deprecated form.
+fn _runpod_list_new(rpc: str) -> RunPodList {
+    let cmd = _shq_local(rpc) + " pod list -o json 2>&1"
+    let out = exec(cmd)
+    if out.index_of("unknown command") >= 0 {
+        return _runpod_list_fail("list (new): runpodctl too old")
+    }
+    if out.index_of("unrecognized") >= 0 {
+        return _runpod_list_fail("list (new): runpodctl too old")
+    }
+    let parsed = json_parse(out)
+    if type_of(parsed) != "array" {
+        return _runpod_list_fail("list (new): non-array JSON")
+    }
+    let mut ids = []
+    let mut i = 0
+    while i < len(parsed) {
+        let id_v = json_object_get(parsed[i], "id")
+        if type_of(id_v) == "string" {
+            let id_s = to_string(id_v)
+            if len(id_s) > 0 {
+                ids.push(id_s)
+            }
+        }
+        i = i + 1
+    }
+    return RunPodList { ok: 1, pod_ids: ids, message: "list (new) — " + to_string(len(ids)) + " pods" }
+}
+
+// _runpod_list_old — `runpodctl get pods` (1.x form, deprecated). Under
+// runpodctl 2.x the same verb still works but emits a `deprecated:`
+// banner on stdout that previously slipped past `grep RUNNING` filters
+// in downstream orphan-detection scripts (anima cycle 2026-05-23).
+// First whitespace-separated token of each non-header, non-banner,
+// non-empty line = pod id.
+fn _runpod_list_old(rpc: str) -> RunPodList {
+    let cmd = _shq_local(rpc) + " get pods 2>&1"
+    let out = exec(cmd)
+    let lines = out.split("\n")
+    let mut ids = []
+    let mut i = 0
+    while i < len(lines) {
+        let line = lines[i]
+        let n = len(line)
+        let is_banner = line.index_of("deprecated") >= 0
+        let is_id_hdr = n >= 2 && line.substring(0, 2) == "ID"
+        let is_pid_hdr = n >= 6 && line.substring(0, 6) == "POD ID"
+        if n > 0 && !is_banner && !is_id_hdr && !is_pid_hdr {
+            let tok = _first_token(line)
+            if len(tok) > 0 {
+                ids.push(tok)
+            }
+        }
+        i = i + 1
+    }
+    return RunPodList { ok: 1, pod_ids: ids, message: "list (old) — " + to_string(len(ids)) + " pods" }
+}
+
+// runpod_list_pods — return the active pod ids known to the local
+// runpodctl. Tries the canonical 2.x `pod list -o json` form first; on
+// `unknown command`/`unrecognized` falls back to the deprecated 1.x
+// `get pods` form and parses the text table. Stable interface for
+// downstream orphan-detection / lifecycle scripts independent of the
+// installed runpodctl version (inbox patch
+// cloud-runpod-session-findings-anima-2026-05-23 R1).
+fn runpod_list_pods() -> RunPodList {
+    let rpc = _runpodctl_path()
+    if len(rpc) == 0 {
+        return _runpod_list_fail("runpodctl not found")
+    }
+    let r = _runpod_list_new(rpc)
+    if r.ok == 1 {
+        return r
+    }
+    return _runpod_list_old(rpc)
+}
