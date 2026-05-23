@@ -262,6 +262,132 @@ fn p_record_error(line, col, message) {
     }
 }
 
+// ── PROBE r10-15b/c/d: attribute hygiene ───────────────────────────
+// Two diagnostics on the `[warn]` non-fatal channel (println — does
+// NOT push to p_errors so `hexa parse` still exits 0, matching the
+// existing @derive deprecation-hint pattern at parser.hexa:849):
+//
+//   1. Unknown attr  — token name not in the canonical allowlist
+//      (catches typos like `@verfy` and undocumented attrs that
+//      silently flow through to codegen and get dropped).
+//   2. Conflicting attrs in same decl stack — e.g. `@hot @cold fn x`
+//      mirrors gcc's `__attribute__((hot,cold))` warning class.
+//
+// Allowlist = union of attrs handled in parser dispatch (verify /
+// intent / generate / contract / select / plugin / cli / depth /
+// invariant / effect / ...), attrs queried by codegen_c2 gen2_has_attr
+// (hot / cold / noinline / flatten / restrict / strict_fp / target /
+// asm / mmio / interrupt / lazy / no_arena), and attrs queried by
+// ai_native_pass attr_has / fn_has_attr (pure / memoize / inline /
+// specialize / vectorize / unroll / simd / parallel / ...).
+//
+// Canonical reference: rustc warns on unknown attributes; gcc warns on
+// conflicting hot/cold + inline/noinline pairs.
+fn _p_is_known_attr(name) {
+    // Parser-dispatch / decl-level attrs.
+    if name == "verify" { return true }
+    if name == "intent" { return true }
+    if name == "generate" { return true }
+    if name == "derive" { return true }
+    if name == "derive_meta" { return true }
+    if name == "contract" { return true }
+    if name == "symbol" { return true }
+    if name == "link" { return true }
+    if name == "plugin" { return true }
+    if name == "select" { return true }
+    if name == "cli" { return true }
+    if name == "flag" { return true }
+    if name == "doc" { return true }
+    if name == "schema" { return true }
+    if name == "gate" { return true }
+    if name == "memo" { return true }
+    if name == "depth" { return true }
+    if name == "invariant" { return true }
+    if name == "effect" { return true }
+    if name == "manual_main" { return true }
+    if name == "macro" { return true }
+    if name == "async" { return true }
+    if name == "compile_trace" { return true }
+    if name == "self_check" { return true }
+    // Optimization hints (codegen_c2 gen2_has_attr + ai_native_pass attr_has).
+    if name == "hot" { return true }
+    if name == "cold" { return true }
+    if name == "hot_kernel" { return true }
+    if name == "noinline" { return true }
+    if name == "inline" { return true }
+    if name == "inline_always" { return true }
+    if name == "flatten" { return true }
+    if name == "specialize" { return true }
+    if name == "vectorize" { return true }
+    if name == "unroll" { return true }
+    if name == "simd" { return true }
+    if name == "parallel" { return true }
+    if name == "optimize" { return true }
+    if name == "memoize" { return true }
+    if name == "pure" { return true }
+    if name == "lazy" { return true }
+    if name == "restrict" { return true }
+    if name == "strict_fp" { return true }
+    if name == "target" { return true }
+    if name == "asm" { return true }
+    if name == "mmio" { return true }
+    if name == "interrupt" { return true }
+    if name == "no_arena" { return true }
+    if name == "stack_alloc" { return true }
+    if name == "thread_local" { return true }
+    if name == "deprecated" { return true }
+    if name == "bench" { return true }
+    if name == "test" { return true }
+    if name == "profile" { return true }
+    if name == "branch_predict" { return true }
+    if name == "prefetch" { return true }
+    if name == "cache" { return true }
+    if name == "cache_line" { return true }
+    if name == "compact" { return true }
+    if name == "bitfield" { return true }
+    if name == "payload" { return true }
+    if name == "nonnull" { return true }
+    if name == "sibling_call" { return true }
+    if name == "partial" { return true }
+    if name == "unsafe" { return true }
+    // Data-layout / domain hints (ai_native_pass attr_has set).
+    if name == "soa" { return true }
+    if name == "cow" { return true }
+    if name == "arena" { return true }
+    if name == "pool" { return true }
+    if name == "bounded" { return true }
+    if name == "sorted" { return true }
+    if name == "approximate" { return true }
+    if name == "algebraic" { return true }
+    if name == "autograd" { return true }
+    if name == "evolve" { return true }
+    if name == "fuse" { return true }
+    if name == "gpu" { return true }
+    if name == "learn" { return true }
+    if name == "quantize" { return true }
+    if name == "reduce" { return true }
+    // Meta / forward-compat (kept silent: spec-described but no codegen).
+    if name == "attr" { return true }
+    if name == "attribute" { return true }
+    if name == "attrs" { return true }
+    return false
+}
+
+// Conflict pairs (canonical gcc-class incompatibilities). Order-free:
+// caller checks both (a,b) and (b,a) at call site is unnecessary —
+// _p_attr_conflicts normalizes by checking both directions internally.
+fn _p_attr_conflicts(a, b) {
+    if a == "hot" && b == "cold" { return true }
+    if a == "cold" && b == "hot" { return true }
+    if a == "hot_kernel" && b == "cold" { return true }
+    if a == "cold" && b == "hot_kernel" { return true }
+    if a == "inline" && b == "noinline" { return true }
+    if a == "noinline" && b == "inline" { return true }
+    if a == "inline_always" && b == "noinline" { return true }
+    if a == "noinline" && b == "inline_always" { return true }
+    return false
+}
+
 fn p_emit_parse_error(tok, msg) {
     let key = to_string(tok.line) + ":" + to_string(tok.col) + ":" + msg
     if key == p_last_err_key { return 0 }
@@ -762,7 +888,12 @@ fn parse_stmt() {
         parse_visibility()
     }
     // M0: collect leading @attr markers (e.g. @optimize @memoize @pure @async)
+    // PROBE r10-15b/c/d: track per-decl attr stack for conflict detection.
+    // Scope is intentionally local to this parse_stmt invocation — no
+    // parser-state plumbing required (g33 simplicity).
+    let mut _attr_names_seen = []
     while p_peek_kind() == "At" {
+        let _at_tok = p_peek()
         p_advance() // consume @
         // Attribute name may be a keyword (e.g. @pure where `pure` is a keyword)
         let next_tok = p_peek()
@@ -774,6 +905,22 @@ fn parse_stmt() {
             attr_name = next_tok.value
             p_advance()
         }
+        // PROBE r10-15b: warn on unknown attr (non-fatal — println channel
+        // so cmd_parse still exits 0; mirrors @derive deprecation hint).
+        if !_p_is_known_attr(attr_name) {
+            println("[warn] unknown attribute @" + attr_name + " at " + to_string(_at_tok.line) + ":" + to_string(_at_tok.col) + " — typo or unimplemented? (silently absorbed by generic fall-through)")
+        }
+        // PROBE r10-15c/d: warn on conflicting attrs in same decl stack
+        // (mirrors gcc __attribute__((hot,cold)) warning class).
+        let mut _ci = 0
+        while _ci < len(_attr_names_seen) {
+            let _prior = _attr_names_seen[_ci]
+            if _p_attr_conflicts(_prior, attr_name) {
+                println("[warn] conflicting attributes: @" + _prior + " + @" + attr_name + " at " + to_string(_at_tok.line) + ":" + to_string(_at_tok.col) + " — gcc-class incompatibility")
+            }
+            _ci = _ci + 1
+        }
+        _attr_names_seen.push(attr_name)
         // ── @invariant { id, name, predicate, pattern, exempt } DSL ──
         // T3 Phase A: declarative invariant block — replaces shell-grep
         // hardcoded asserts in self/hexa_full.hexa header. AST 기반 정적
