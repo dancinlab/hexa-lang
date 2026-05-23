@@ -3971,6 +3971,12 @@ fn gen2_expr(node) {
         // Safe because IntLit guarantees TAG_INT, no float/string ambiguity.
         let _lk = node.left.kind
         let _rk = node.right.kind
+        // Inline helper for the FloatLit-or-NegFloatLit fold below.  Returns
+        // the C-literal form of a float operand ("1.0", "-1.0") or "" if the
+        // operand is not a literal.  PROBE r3+r7 finding: parser emits
+        // `-1.0` as `UnaryOp(-, FloatLit(1.0))`; without recognizing that
+        // shape, `-1.0 / 0.0` fell to runtime `hexa_div` (throws), while
+        // unnegated `1.0 / 0.0` constant-folds to `inf` per IEEE 754.
         if _lk == "IntLit" && _rk == "IntLit" {
             // `/` 또는 `%` 의 RHS 가 literal 0 이면 constant-fold 를 포기하고
             // runtime dispatch 로 떨어뜨려 hexa_div/hexa_mod 의 throw path
@@ -3988,19 +3994,27 @@ fn gen2_expr(node) {
         // STRUCTURAL-3 Phase A: FloatLit+FloatLit constant folding — bypass
         // HexaVal boxing when both operands are float literals.
         // Emits `hexa_float((L) OP (R))` which the C compiler constant-folds.
-        if _lk == "FloatLit" && _rk == "FloatLit" {
+        // Inline FloatLit / NegFloatLit literal extraction — returns the
+        // C-literal form ("1.0" or "-1.0") or "" on miss.
+        let mut _lflit = ""
+        if _lk == "FloatLit" { _lflit = node.left.value }
+        if _lk == "UnaryOp" && node.left.op == "-" && type_of(node.left.left) != "string" && node.left.left.kind == "FloatLit" {
+            _lflit = "-" + node.left.left.value
+        }
+        let mut _rflit = ""
+        if _rk == "FloatLit" { _rflit = node.right.value }
+        if _rk == "UnaryOp" && node.right.op == "-" && type_of(node.right.left) != "string" && node.right.left.kind == "FloatLit" {
+            _rflit = "-" + node.right.left.value
+        }
+        if _lflit != "" && _rflit != "" {
             if op == "+" || op == "-" || op == "*" || op == "/" {
-                let _lv = node.left.value
-                let _rv = node.right.value
-                return "hexa_float((" + _lv + ") " + op + " (" + _rv + "))"
+                return "hexa_float((" + _lflit + ") " + op + " (" + _rflit + "))"
             }
             // 2026-05-20 (blocker-2 float-%): clang rejects `(double) % (double)`.
             // Emit fmod() directly — preserves the constant-fold intent
             // (compiler folds the libm call at -O1+ for literal args).
             if op == "%" {
-                let _lv = node.left.value
-                let _rv = node.right.value
-                return "hexa_float(fmod((" + _lv + "), (" + _rv + ")))"
+                return "hexa_float(fmod((" + _lflit + "), (" + _rflit + ")))"
             }
         }
         // STRUCTURAL-2 Phase B: known-int propagation — when BOTH operands
