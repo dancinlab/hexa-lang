@@ -265,6 +265,38 @@ fn cloud_run(host: str, argv: [str]) -> CloudResult {
     return cloud_run_opts(host, [], argv)
 }
 
+// cloud_exec_opts — shell-mode dispatch (NOT structured-argv). `cmd_str`
+// is sent to the remote login shell AS-IS — pipes / globs / redirects /
+// shell variables all parse on the remote side. Use for ad-hoc 1-liners
+// (`cd /work && nvidia-smi | head -5`); use `cloud_run_opts` for program
+// dispatch where the L145-class shell-string corruption must be impossible.
+// Caller owns the quoting inside `cmd_str`; `cloud cloud-guard` policy
+// allows `exec` as the legal fast-path replacing raw ssh shell-outs.
+fn cloud_exec_opts(host: str, ssh_opts: [str], cmd_str: str) -> CloudResult {
+    if len(cmd_str) == 0 {
+        return _cloud_fail("cloud_exec: empty cmd_str")
+    }
+    let remote = cmd_str + " 2>&1; echo __CLOUD_RC__=$?"
+    let out = _ssh_capture(host, ssh_opts, remote)
+    let rc = _parse_uint_after(out, "__CLOUD_RC__=")
+    let body = _strip_marker(out, "__CLOUD_RC__=")
+    if rc < 0 {
+        return CloudResult { ok: 0, exit_code: -1, pid: 0, stdout_: body,
+            message: "cloud_exec: no exit-code marker — ssh transport failure or remote shell died" }
+    }
+    let mut ok = 0
+    if rc == 0 {
+        ok = 1
+    }
+    return CloudResult { ok: ok, exit_code: rc, pid: 0, stdout_: body,
+        message: "remote exit " + str(rc) }
+}
+
+// cloud_exec — cloud_exec_opts with no extra ssh flags.
+fn cloud_exec(host: str, cmd_str: str) -> CloudResult {
+    return cloud_exec_opts(host, [], cmd_str)
+}
+
 // cloud_nohup_opts — start `argv` on `host` detached (nohup, output to
 // `logfile`) over ssh with extra `ssh_opts`, and return immediately with
 // the remote PID. Poll liveness later with cloud_poll / cloud_poll_opts.

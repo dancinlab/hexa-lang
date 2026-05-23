@@ -13,6 +13,7 @@ fn _cloud_help() {
     println("")
     println("usage:")
     println("  cloud run       <host> [conn] -- <argv...>             run argv, wait, exit with its code")
+    println("  cloud exec      <host> [conn] -- <shell-cmd>           run shell command via ssh (DEFAULT SHELL PARSES IT)")
     println("  cloud nohup     <host> <logfile> [conn] -- <argv...>   background argv, print remote pid")
     println("  cloud poll      <host> <pid> [conn]                    exit 0 if remote pid alive, else 1")
     println("  cloud copy-to   <host> <local> <remote> [conn]         upload local file to host:remote (scp)")
@@ -23,8 +24,13 @@ fn _cloud_help() {
     println("  --port <n>   ssh to a non-22 port (RunPod / vast.ai)")
     println("  --insecure   accept a changing/unknown host key (ephemeral pods)")
     println("")
-    println("every argv element after `--` is POSIX-quoted before ssh — no remote")
-    println("shell parsing, no glob expansion, no /* */ comment mis-parse.")
+    println("`run` uses structured argv — every token POSIX-quoted before ssh, so")
+    println("no remote shell parsing / glob / /* */ comment mis-parse can corrupt")
+    println("the command. Use `run` for program dispatch.")
+    println("`exec` joins post-`--` tokens with single spaces and sends the result")
+    println("to the remote login shell AS-IS — pipes / globs / redirects / shell")
+    println("variables all parse on the remote side. Use `exec` for ad-hoc")
+    println("inspection (`cd /work && nvidia-smi | head -5`); caller owns quoting.")
     println("`host` is an ssh destination or ~/.ssh/config alias.")
 }
 
@@ -107,7 +113,7 @@ fn main() {
     while i < len(av) {
         let t = av[i]
         if si < 0 {
-            if t == "run" || t == "nohup" || t == "poll" || t == "copy-to" || t == "copy-from" || t == "help" || t == "--help" || t == "-h" || t == "version" || t == "--version" || t == "-v" {
+            if t == "run" || t == "exec" || t == "nohup" || t == "poll" || t == "copy-to" || t == "copy-from" || t == "help" || t == "--help" || t == "-h" || t == "version" || t == "--version" || t == "-v" {
                 si = i
                 sub = t
             }
@@ -139,6 +145,34 @@ fn main() {
             exit(2)
         }
         let r = cloud_run_opts(host, ssh_opts, argv)
+        if len(r.stdout_) > 0 {
+            println(r.stdout_)
+        }
+        println("[cloud] " + r.message)
+        exit(r.exit_code)
+    }
+    if sub == "exec" {
+        if si + 1 >= len(av) {
+            println("[cloud] exec: missing <host> — usage: cloud exec <host> [--port N] [--insecure] -- <shell-cmd>")
+            exit(2)
+        }
+        let host = av[si + 1]
+        let ssh_opts = _ssh_opts_cli(av, si + 2)
+        let tokens = _collect_after(av, si + 2)
+        if len(tokens) == 0 {
+            println("[cloud] exec: empty shell-cmd — usage: cloud exec <host> [--port N] [--insecure] -- <shell-cmd>")
+            exit(2)
+        }
+        let mut cmd_str = ""
+        let mut ei = 0
+        while ei < len(tokens) {
+            if ei > 0 {
+                cmd_str = cmd_str + " "
+            }
+            cmd_str = cmd_str + tokens[ei]
+            ei = ei + 1
+        }
+        let r = cloud_exec_opts(host, ssh_opts, cmd_str)
         if len(r.stdout_) > 0 {
             println(r.stdout_)
         }
