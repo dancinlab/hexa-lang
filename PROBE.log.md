@@ -203,29 +203,34 @@
 - [x] inbox stdlib-for-cpu-port umbrella — all 5 sub-patches landed — DOCS [#468]
 - [x] inbox exec() builtin silently swallows child stdout under hexa run — FILED [#398]
 
-## 2026-05-23 라운드 14 — 다음 사이클 (TBD)
+## 2026-05-23 라운드 14 — surgical lexer/parser cluster (in-flight)
+
+PR 군집 fan-out (2026-05-23):
+
+- [~] `${name}` JS 템플릿 silent literal 진단 (r3 INBOX) — INFLIGHT [#478] lexer.hexa +16
+- [~] `nil`/`null` alias 또는 reserved 진단 (r3 INBOX) — INFLIGHT [#479] codegen.hexa +17
+- [~] slice `[..b]` / `[a..]` open-range parser (r3 INBOX) — INFLIGHT [#480] parser.hexa +58
+- [~] hex-float `0x1.8p+1` literal lexer (r3 INBOX) — INFLIGHT [#477] lexer.hexa +56
+- [~] `.codepoints()` Rust alias (r3 INBOX) — INFLIGHT [#476] codegen.hexa +8
+- [~] `to_string` nan/inf casing 통일 (r3 INBOX) — INFLIGHT [#475] runtime +20
+
+## 2026-05-23 라운드 14 — 다음 사이클 (carry)
 
 - [ ] enum to_string proper repr (round 3 INBOX carry)
 - [ ] shadowing scope leak — `_gen2_collect_lets` flat-hoist 재설계 (r3 INBOX, #347 코델)
-- [ ] panic/try-catch 채널 의미론 결정 (r3 INBOX)
-- [ ] postfix `?` error-propagation + Result ABI (r3 INBOX)
+- [ ] panic/try-catch 채널 의미론 결정 (r3 INBOX, design-level → RFC)
+- [ ] postfix `?` error-propagation + Result ABI (r3 INBOX, design-level → RFC)
 - [ ] `?.` optional chaining parser/codegen 완성 (r3 INBOX)
-- [ ] built-in Some/None prelude 정책 (r3 INBOX)
-- [ ] `nil`/`null` alias 또는 reserved 진단 (r3 INBOX)
+- [ ] built-in Some/None prelude 정책 (r3 INBOX, design-level → RFC Option/Result lane)
 - [ ] try-as-expression · finally (r3 INBOX)
-- [ ] `${name}` JS 템플릿 silent literal 진단 (r3 INBOX)
 - [ ] `printf`/`sprintf` undeclared (r3 INBOX)
-- [ ] `.codepoints()` Rust alias (r3 INBOX)
 - [ ] `.graphemes()` UAX-29 stdlib gap (r3 INBOX)
-- [ ] slice `[..b]` / `[a..]` open-range parser (r3 INBOX)
-- [ ] `[].pop()` Option lane (r3 INBOX)
+- [ ] `[].pop()` Option lane (r3 INBOX, design-level → RFC Option/Result lane)
 - [ ] slice negative wrap silently clamp 통일 (r3 INBOX)
 - [ ] non-exhaustive match strict (warn → error path, #453 follow-up)
 - [ ] enum `<`/`>` ordering spec 결정 (r3 INBOX)
 - [ ] Range repr `.start`/`.end` (materialize 손실, r3 INBOX)
 - [ ] Swift `0...5` inclusive 정책 (r3 INBOX)
-- [ ] hex-float `0x1.8p+1` literal lexer (r3 INBOX)
 - [ ] `inf`/`nan` 키워드 상수 stdlib (r3 INBOX)
-- [ ] `to_string` nan/inf casing 통일 (r3 INBOX)
 - [ ] NaN-in-sort 동작 결정 (r3 INBOX)
 - [ ] macro expander Phase 2 (#462 follow-up)
