@@ -434,6 +434,7 @@ HexaVal hexa_cstring(HexaVal s);                                                
 HexaVal hexa_ptr_write(HexaVal ptr, HexaVal offset, HexaVal val);                  /* runtime.c:6556 */
 HexaVal hexa_ptr_read(HexaVal ptr, HexaVal offset);                                /* runtime.c:6575 */
 HexaVal hexa_range_array(HexaVal start, HexaVal end, HexaVal step, int inclusive); /* runtime.c:7388 */
+HexaVal hexa_range_field(HexaVal v, const char* key);                              /* runtime.c (PROBE r14) */
 int64_t hexa_str_index_of_from(HexaVal s, HexaVal sub, HexaVal start);             /* runtime.c:4112 */
 HexaVal hexa_array_reverse(HexaVal arr);                                           /* runtime.c:4197 */
 HexaVal hexa_array_sort(HexaVal arr);                                              /* runtime.c:4240 */
