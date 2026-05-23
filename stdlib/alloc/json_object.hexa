@@ -123,6 +123,27 @@ pub fn json_object_has_path(obj, path: string) -> bool {
     return type_of(v) != "void"
 }
 
+// Key present (non-map → false). Mirrors json_object_get but boolean.
+pub fn json_object_has(obj, key: string) -> bool {
+    if type_of(obj) != "map" { return false }
+    return has_key(obj, key)
+}
+
+// ── delete ───────────────────────────────────────────────────────────────────
+
+// Remove a key from a JSON object. Returns the SAME map reference (mutated in
+// place), mirroring json_object_set. No-op if the key is absent or obj is not a
+// map. Delegates to the runtime map_remove primitive (hexa_map_remove), which
+// returns the map unchanged when the key is missing — no rebuild needed.
+//
+// Sister-repo use (dancinlab/pool bin/pool.hexa): `pool clean on` / `pool desc`
+// drop an optional key to fall back to the reader's default, instead of
+// serializing a redundant default-equivalent value.
+pub fn json_object_delete(obj, key: string) {
+    if type_of(obj) != "map" { return obj }
+    return map_remove(obj, key)
+}
+
 // ── typed getters with defaults ─────────────────────────────────────────────
 // Sisters repeatedly wrap `has_key + to_string + fallback` inline. Provide
 // typed defaults so caller never produces (void | wrong-type) downstream.
