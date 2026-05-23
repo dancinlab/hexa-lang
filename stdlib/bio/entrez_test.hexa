@@ -1,0 +1,96 @@
+// stdlib/bio/entrez_test.hexa — measured-oracle gate for the NCBI
+// E-utilities stdlib client.
+//
+// Determinism strategy: parse the captured `compiler/bridges/_cache/
+// entrez.frozen.xml` fixture (2026-05-24 snapshot of
+// esummary.fcgi?db=taxonomy&id=9606 — 1 DocSum for Homo sapiens) and
+// assert byte-equal field extraction. No network. The fixture covers
+// both the cross-db DocSum shape and the `_item_by_name` lookup helper.
+
+use "stdlib/bio/entrez"
+
+let FIXTURE = "compiler/bridges/_cache/entrez.frozen.xml"
+
+fn _fail(label: string, want: string, got: string) {
+    println("FAIL: " + label)
+    println("  want: " + want)
+    println("  got : " + got)
+    exit(1)
+}
+
+fn _expect_eq(label: string, want: string, got: string) {
+    if want != got { _fail(label, want, got) }
+}
+
+fn _expect_eq_i(label: string, want: int, got: int) {
+    if want != got { _fail(label, to_string(want), to_string(got)) }
+}
+
+fn main() {
+    let xml = read_file(FIXTURE)
+    if len(xml) == 0 {
+        println("FAIL: fixture missing: " + FIXTURE)
+        exit(1)
+    }
+
+    // ── esummary parse ──────────────────────────────────────────────
+    let recs = entrez_parse_esummary(xml)
+    _expect_eq_i("docsum count", 1, len(recs))
+
+    let r0 = recs[0]
+    _expect_eq("r0.id",  "9606", r0.id)
+    // db is "" before entrez_summary fan-out; _items_flat carries the payload
+    _expect_eq("r0.db (parse pure)", "", r0.db)
+
+    // ── _item_by_name on the same DocSum ───────────────────────────
+    _expect_eq("ScientificName", "Homo sapiens", _item_by_name(xml, "ScientificName"))
+    _expect_eq("Rank",           "species",      _item_by_name(xml, "Rank"))
+    _expect_eq("Division",       "primates",     _item_by_name(xml, "Division"))
+    _expect_eq("CommonName",     "human",        _item_by_name(xml, "CommonName"))
+    _expect_eq("TaxId",          "9606",         _item_by_name(xml, "TaxId"))
+    _expect_eq("Status",         "active",       _item_by_name(xml, "Status"))
+    _expect_eq("missing → \"\"", "",             _item_by_name(xml, "NotARealField"))
+
+    // ── summary contains the canonical Name=Value pairs ─────────────
+    let s = r0.summary
+    if len(s) == 0 { _fail("r0.summary non-empty", "non-empty", "") }
+    // sanity: a few key pairs are present in the flattened summary
+    let probes = [
+        "Rank=species",
+        "ScientificName=Homo sapiens",
+        "TaxId=9606",
+        "Division=primates",
+    ]
+    let mut pi = 0
+    while pi < len(probes) {
+        let needle = probes[pi]
+        // crude contains: substring scan via inline loop (avoid extra helper export)
+        let nlen = len(needle)
+        let slen = len(s)
+        let mut found = false
+        let mut k = 0
+        while k + nlen <= slen {
+            if s.substring(k, k + nlen) == needle { found = true; break }
+            k = k + 1
+        }
+        if !found { _fail("summary contains " + needle, needle, s) }
+        pi = pi + 1
+    }
+
+    // ── esearch parse on a synthetic but schema-faithful body ───────
+    let esearch_xml =
+        "<?xml version=\"1.0\"?><eSearchResult><Count>3</Count><RetMax>3</RetMax>"
+        + "<IdList><Id>9606</Id><Id>10090</Id><Id>10116</Id></IdList>"
+        + "</eSearchResult>"
+    let ids = entrez_parse_esearch(esearch_xml)
+    _expect_eq_i("esearch id count", 3, len(ids))
+    _expect_eq("esearch ids[0]", "9606",  ids[0])
+    _expect_eq("esearch ids[1]", "10090", ids[1])
+    _expect_eq("esearch ids[2]", "10116", ids[2])
+
+    // ── empty / error paths ─────────────────────────────────────────
+    _expect_eq_i("empty esearch body → 0 ids", 0, len(entrez_parse_esearch("")))
+    _expect_eq_i("empty esummary body → 0 recs", 0, len(entrez_parse_esummary("")))
+
+    println("PASS: entrez esearch + esummary + _item_by_name oracles (7 fields/1 entry, 3 ids)")
+}
