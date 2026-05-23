@@ -2055,7 +2055,12 @@ fn cmd_build(src, out, c_only, target, shared) {
     let __src_probe = read_file(src)
     let __has_use_dir = __src_probe.contains("\nuse \"") || __src_probe.starts_with("use \"")
     let __has_imp_dir = __src_probe.contains("\nimport \"") || __src_probe.starts_with("import \"")
-    if __has_use_dir || __has_imp_dir {
+    // Python-style `from "X" import a, b` is the third loader-triggering
+    // directive. Without this third probe a file whose ONLY directives are
+    // `from "…"` bypassed the module_loader entirely — `from` then reached
+    // C codegen and clang-failed.
+    let __has_from_dir = __src_probe.contains("\nfrom \"") || __src_probe.starts_with("from \"")
+    if __has_use_dir || __has_imp_dir || __has_from_dir {
         // R7 gate #4 / Cycle C: the COMPILED module_loader binary does
         // interp-free flatten. The interpreter is retired (R7 closed) —
         // there is no interp + module_loader.hexa fallback; an absent
