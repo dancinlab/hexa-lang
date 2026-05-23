@@ -4684,6 +4684,52 @@ fn gen2_expr(node) {
         if name == "Self" && len(_cur_impl_target) > 0 {
             name = _cur_impl_target
         }
+        // PROBE r14-CCCC: if the struct is known (declared in this TU),
+        // walk declared field order and fill missing fields with their
+        // per-field default expressions; emit a clang-side compile error
+        // for any field that is both missing AND lacking a default. This
+        // closes the silent-corruption hole where `Point {}` previously
+        // returned an empty map and `p.x` failed at runtime.
+        let _sidx = _struct_decl_index(name)
+        if _sidx >= 0 {
+            let _decl_fnames = _struct_field_names[_sidx]
+            let _decl_fdefs = _struct_field_defaults[_sidx]
+            let mut arg_strs = []
+            let mut _di = 0
+            while _di < len(_decl_fnames) {
+                let _dfn = _decl_fnames[_di]
+                // Find matching FieldInit in the literal by field name.
+                let mut _matched = -1
+                let mut _fi = 0
+                while _fi < len(node.fields) {
+                    if node.fields[_fi].name == _dfn { _matched = _fi }
+                    _fi = _fi + 1
+                }
+                let mut _expr_node = ""
+                if _matched >= 0 {
+                    _expr_node = node.fields[_matched].left
+                } else if _decl_fdefs[_di] != "" {
+                    _expr_node = _decl_fdefs[_di]
+                } else {
+                    // Hard error: missing field, no default. Emit a sentinel
+                    // that clang will reject with a clear identifier name,
+                    // turning the previous silent runtime-corruption case
+                    // into a compile-time failure.
+                    arg_strs.push("hexa_codegen_error__missing_field__" + name + "__" + _dfn)
+                    _di = _di + 1
+                    continue
+                }
+                let mut _arg_str = gen2_expr(_expr_node)
+                if type_of(_expr_node) != "string" && _expr_node.kind == "Ident" && _gen2_should_autowrap_fnref(_expr_node.name) {
+                    _arg_str = "hexa_fn_new((void*)" + _hexa_mangle_ident(_expr_node.name) + ", 0)"
+                }
+                arg_strs.push(_arg_str)
+                _di = _di + 1
+            }
+            return name + "(" + arg_strs.join(", ") + ")"
+        }
+        // Unknown / extern struct — legacy positional path (preserves the
+        // pre-CCCC behavior so anima/stdlib `Name {}` patterns keep working).
         if len(node.fields) == 0 {
             return "hexa_struct_pack_map(\"" + name + "\", 0, (const char* const*)0, (const HexaVal*)0)"
         }
@@ -6750,6 +6796,10 @@ fn gen2_struct_forward(node) {
 fn gen2_struct_decl(node) {
     // Generate a constructor function: StructName(field1, field2, ...) -> HexaVal map
     let name = node.name
+    // PROBE r14-CCCC: record field-name + per-field default-expr lists so the
+    // `StructInit` arm can auto-fill missing fields (default present) or emit
+    // a hard compile error (default absent → silent-corruption fix).
+    _struct_decl_register(node)
 
     // rt 32-G Phase 0: `Val` is the interpreter's hot tagged-value carrier
     // (~3.37M constructions per d64 200-step run). Route its constructor to
@@ -7721,6 +7771,52 @@ fn _is_enum_name(name) {
         i = i + 1
     }
     return false
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  PROBE r14-CCCC (YYY-1): struct field default-value registry
+//
+//  Keyed by struct name; each entry mirrors `node.fields` so the
+//  `StructInit` emitter can look up declared field order +
+//  per-field default expressions (AST nodes or "" if no default).
+//  Populated at decl-emit time (gen2_struct_decl); consulted at
+//  literal-emit time (StructInit arm) to (a) auto-fill missing
+//  fields with their default AST nodes, (b) emit a codegen-level
+//  error when a field is missing AND has no default — closing the
+//  silent-corruption hole from the RFC table.
+// ═══════════════════════════════════════════════════════════════
+let mut _struct_field_names = []  // [[fname, ...]] parallel to _struct_decl_names
+let mut _struct_field_defaults = []  // [[default_expr_or_"", ...]] parallel
+let mut _struct_decl_names = []  // [name, ...]
+
+fn _struct_decl_register(node) {
+    let mut i = 0
+    while i < len(_struct_decl_names) {
+        if _struct_decl_names[i] == node.name { return }
+        i = i + 1
+    }
+    let mut fnames = []
+    let mut fdefs = []
+    let mut fi = 0
+    while fi < len(node.fields) {
+        let f = node.fields[fi]
+        fnames.push(f.name)
+        // `default_expr` is the new AST slot from parser; "" sentinel = none.
+        fdefs.push(f.default_expr)
+        fi = fi + 1
+    }
+    _struct_decl_names.push(node.name)
+    _struct_field_names.push(fnames)
+    _struct_field_defaults.push(fdefs)
+}
+
+fn _struct_decl_index(name) {
+    let mut i = 0
+    while i < len(_struct_decl_names) {
+        if _struct_decl_names[i] == name { return i }
+        i = i + 1
+    }
+    return -1
 }
 
 fn _known_hash(key) {
