@@ -211,7 +211,7 @@
 - [ ] postfix `?` error-propagation + Result ABI (r3 INBOX)
 - [ ] `?.` optional chaining parser/codegen 완성 (r3 INBOX)
 - [ ] built-in Some/None prelude 정책 (r3 INBOX)
-- [ ] `nil`/`null` alias 또는 reserved 진단 (r3 INBOX)
+- [x] `nil`/`null` alias 또는 reserved 진단 — codegen warn emit (r14 PR landed)
 - [ ] try-as-expression · finally (r3 INBOX)
 - [ ] `${name}` JS 템플릿 silent literal 진단 (r3 INBOX)
 - [ ] `printf`/`sprintf` undeclared (r3 INBOX)
