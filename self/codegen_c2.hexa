@@ -5855,6 +5855,21 @@ fn gen2_expr(node) {
     if k == "EnumPath" {
         let ename = node.name
         let vname = node.value
+        // _is_enum_name distinguishes `Enum::Variant` (single-underscore
+        // tag + optional payload array) from `Struct::method` (double-
+        // underscore direct fn call).  Without this guard `Point::id(7)`
+        // lowered to the enum-array shape and clang errored on the
+        // undeclared `Point_id` (impl-fn is mangled `Point__id`).
+        if !_is_enum_name(ename) {
+            // Non-enum receiver — treat as associated fn call.  Mangling
+            // matches the impl-fn definition (`Point__id`).
+            let mangled = ename + "__" + vname
+            let pe = node.payload_expr
+            if type_of(pe) != "string" {
+                return mangled + "(" + gen2_expr(pe) + ")"
+            }
+            return mangled
+        }
         let enum_const = ename + "_" + vname
         let pe = node.payload_expr
         if type_of(pe) != "string" {
