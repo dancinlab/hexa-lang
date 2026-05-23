@@ -1,6 +1,6 @@
 # `hexa cloud` / runpod — dispatcher → train script env-var wiring audit (G5)
 
-> **Status (open):** single G5 finding from anima 2026-05-24 cycle 15 (LORA / R8 saga 후속). Sibling to PR #627 (G1-G4) — 별도 patch 로 분리 (g54 review-only 준수).
+> **Status (impl-in-flight):** filing PR #662 MERGED 2026-05-24. Option A 구현 (`cloud_validate_env_passthrough` + 8/8 falsifier 케이스) `feat/runpod-env-passthrough-audit-2026-05-24` 에서 LANDING 중. Sibling to PR #627 (G1-G4) — 별도 patch 로 분리 (g54 review-only 준수).
 
 **Reporter**: anima (`dancinlab/anima` downstream consumer, LORA / R8 saga 도메인)
 **Severity**: high (~$10+ sunk cost — mis-attributed axis measurements; 자연실험이 trivial identity 였음이 사후 발각)
