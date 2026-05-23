@@ -1,5 +1,11 @@
 # CaH₆ DFT phonon Sternheimer NaN wall — Vast.ai + pool dual platform finding
 
+> **Status (2026-05-24):** root-cause = **(b) downstream QE ph.x 수치
+> 발산 + (c) hexa cloud preflight gap (RFC 088 부분 흡수, DFT axis 미흡수)**.
+> hexa-lang 내부 코드 버그 (a) 없음. 진단 finding =
+> `inbox/notes/2026-05-24-cah6-dft-phonon-nan-wall-diagnosis.md`.
+> 본 patch 는 filing-only 로 보존, 즉시 surgical fix 시도하지 않음.
+
 ## TL;DR
 7-atom sodalite clathrate CaH₆ (Ma 2022 NATURE 605:147, measured Tc 215 K @ 172 GPa)
 DFT phonon 6³q (16 irreducible q-points) 두 platform 에서 모두 numerical
