@@ -487,6 +487,15 @@ fn p_format_errors() {
 @no_arena
 fn p_peek() {
     if p_pos >= len(p_tokens) {
+        // PROBE r12 P1: when past end, anchor Eof at the LAST real token's
+        // location (not 0:0).  Without this, EOF-triggered errors like
+        // `fn foo(` cascade reporting `2:1` for every diagnostic, losing
+        // the actual "where the parser ran out of input" location.
+        let _last_idx = len(p_tokens) - 1
+        if _last_idx >= 0 {
+            let _last = p_tokens[_last_idx]
+            return Token { kind: "Eof", value: "", line: _last.line, col: _last.col }
+        }
         return Token { kind: "Eof", value: "", line: 0, col: 0 }
     }
     return p_tokens[p_pos]
@@ -501,6 +510,12 @@ fn p_peek_kind() {
 fn p_peek_ahead(offset) {
     let idx = p_pos + offset
     if idx >= len(p_tokens) {
+        // Mirror p_peek anchoring (PROBE r12 P1).
+        let _last_idx = len(p_tokens) - 1
+        if _last_idx >= 0 {
+            let _last = p_tokens[_last_idx]
+            return Token { kind: "Eof", value: "", line: _last.line, col: _last.col }
+        }
         return Token { kind: "Eof", value: "", line: 0, col: 0 }
     }
     return p_tokens[idx]
