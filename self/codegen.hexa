@@ -4988,6 +4988,21 @@ fn gen2_expr(node) {
             if name == "cwd" {
                 return "hexa_cwd()"
             }
+            // PROBE r13 stdlib-route-completion (cycle 20): runtime symbols
+            // exist (runtime.h:419/432/1363/1364) — only codegen alias was
+            // missing.  Canonical Py/Rust/Go names.
+            if name == "utc_now" {
+                return "hexa_utc_iso_now()"
+            }
+            if name == "iso8601_format" {
+                return "hexa_utc_iso_format(" + gen2_expr(node.args[0]) + ")"
+            }
+            if name == "iso8601_parse" {
+                return "hexa_utc_iso_parse(" + gen2_expr(node.args[0]) + ")"
+            }
+            if name == "set_env" {
+                return "hexa_setenv(" + gen2_expr(node.args[0]) + ", " + gen2_expr(node.args[1]) + ")"
+            }
             // PROBE r8 POSIX-fs cluster (canonical-audit r8 inbox closure):
             // tempfile() / tempdir() — POSIX mkstemp/mkdtemp wrappers, return
             // the new /tmp/hexa_*XXXXXX path ("" on failure).  Py tempfile /
