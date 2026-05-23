@@ -9,11 +9,11 @@
 
 ## Summary
 
-| RFC | 영역 | 결정 포인트 | 권고 default | 상태 |
+| RFC | 영역 | D1 결정 | 잔여 결정 | 상태 |
 |---|---|---|---|---|
-| **081** | Option / Result lane | 6 (D1-D6) | A/A/A/A·B follow-up/A/B | design-draft |
-| **082** | trait operator overload | 7 (D1-D7) | A/A/공식표 참조/A/C/A/deferred | design-draft |
-| **083** | TLS primitive | 7 (D1-D7) | D/C/A/A/A+B/A/B | design-draft |
+| **081** | Option / Result lane | 🟢 **A** (Rust `Option`/`Result`) | D2-D6 | D1 decided · D2+ open |
+| **082** | trait operator overload | 🟢 **A** (Static only v1, dyn follow-up) | D2-D7 | D1 decided · D2+ open |
+| **083** | TLS primitive | 🟢 **D** (system OpenSSL/SecureTransport dynamic link v1) | D2-D7 | D1 decided · D2+ open |
 
 ## design-draft — decision input 대기
 

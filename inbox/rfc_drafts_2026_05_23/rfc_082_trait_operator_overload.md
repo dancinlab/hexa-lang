@@ -51,7 +51,7 @@ trait system 도입은 단순 operator overload 를 넘어 **dispatch 모델 자
 | B. Dynamic only (vtable, like Java/Swift protocol) | 모든 trait 호출이 vtable indirection | binary 작음 · runtime 비용 (1 indirect call) · generics 불필요 |
 | C. Both (Rust pattern) — `impl Trait` static + `dyn Trait` dynamic | 사용자가 선택 | surface 2개 · 학습 비용↑ · 가장 표현력 |
 
-**🔵 Decision needed.** 권고: **A** (static only) v1, **C**로 follow-up. 이유:
+**🟢 Decided 2026-05-23: A — Static only (monomorphization) v1, C는 follow-up.** 권고 채택. v1은 generics + trait bound dispatch만 — `dyn Trait` (vtable) 은 RFC 082-follow 분기. 이유:
 - hexa-lang은 self-host native compiler — binary 크기는 ubu/Mac 두 host에서 이미 큰 편이지만, monomorphization 비용은 corpus 규모 (현재 ~70k LOC) 에서 감내 가능
 - vtable lowering은 `Option<T>` 구현의 dyn-error 박싱과 entangled → RFC 081 D4 의존 사이클 발생
 - static-first로 surface 안정화 후 `dyn Trait`은 RFC 082-follow에서 추가
