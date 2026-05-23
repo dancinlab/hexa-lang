@@ -197,6 +197,65 @@ pub let mut p_max_errors = 50
 // only the user-facing println path dedupes.
 pub let mut p_last_err_key = ""
 
+// PROBE r10-18d DX gap: source-snippet + caret pointer for parse errors.
+// p_src holds the original source string, set by p_set_source(src) before
+// parse(tokens). Empty p_src → snippet rendering is skipped, so existing
+// callers that have not been updated to thread the source through continue
+// to receive the previous one-line message (back-compat).
+pub let mut p_src = ""
+
+pub fn p_set_source(s) {
+    p_src = s
+}
+
+// p_extract_line — return the 1-indexed line `n` from p_src as a string,
+// with no trailing newline. Empty string if n is out of range, p_src empty,
+// or the line is itself empty.
+fn p_extract_line(n) {
+    if len(p_src) == 0 { return "" }
+    if n < 1 { return "" }
+    let mut cur_line = 1
+    let mut start = 0
+    let mut i = 0
+    let n_src = len(p_src)
+    while i < n_src && cur_line < n {
+        let ch = p_src.substring(i, i + 1)
+        if ch == "\n" {
+            cur_line = cur_line + 1
+            start = i + 1
+        }
+        i = i + 1
+    }
+    if cur_line != n { return "" }
+    let mut end = start
+    while end < n_src {
+        let ch = p_src.substring(end, end + 1)
+        if ch == "\n" { return p_src.substring(start, end) }
+        end = end + 1
+    }
+    return p_src.substring(start, n_src)
+}
+
+// p_make_caret_pad — build a string of (col - 1) padding characters that
+// mirrors the source line content. Tabs in the source line are preserved as
+// tabs in the pad so the caret aligns under proportional rendering.
+fn p_make_caret_pad(src_line, col) {
+    let mut pad = ""
+    let mut i = 0
+    let target = col - 1
+    let n_line = len(src_line)
+    while i < target {
+        if i < n_line {
+            let ch = src_line.substring(i, i + 1)
+            if ch == "\t" { pad = pad + "\t" } else { pad = pad + " " }
+        } else {
+            pad = pad + " "
+        }
+        i = i + 1
+    }
+    return pad
+}
+
 fn p_record_error(line, col, message) {
     if len(p_errors) < p_max_errors {
         p_errors.push(#{"line": line, "col": col, "message": message})
@@ -207,7 +266,30 @@ fn p_emit_parse_error(tok, msg) {
     let key = to_string(tok.line) + ":" + to_string(tok.col) + ":" + msg
     if key == p_last_err_key { return 0 }
     p_last_err_key = key
-    println("Parse error at " + to_string(tok.line) + ":" + to_string(tok.col) + ": " + msg)
+    let line_n = tok.line
+    let col_n = tok.col
+    println("Parse error at " + to_string(line_n) + ":" + to_string(col_n) + ": " + msg)
+    // PROBE r10-18d: emit rustc/clang-style source snippet + caret pointer
+    // when p_src is available. Format (gutter rail mirrors line-number width):
+    //     |
+    //   L | <source line>
+    //     | <pad>^
+    // Falls back silently to the one-line message when p_src is empty (or
+    // when the requested line cannot be located) — preserves prior behavior
+    // for callers that have not been updated to set the source.
+    if len(p_src) > 0 {
+        let src_line = p_extract_line(line_n)
+        if len(src_line) > 0 {
+            let ln_str = to_string(line_n)
+            let mut gutter = ""
+            let mut gi = 0
+            while gi < len(ln_str) { gutter = gutter + " "; gi = gi + 1 }
+            let pad = p_make_caret_pad(src_line, col_n)
+            println("  " + gutter + " |")
+            println("  " + ln_str + " | " + src_line)
+            println("  " + gutter + " | " + pad + "^")
+        }
+    }
     return 1
 }
 
