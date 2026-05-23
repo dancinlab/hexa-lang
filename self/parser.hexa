@@ -1949,6 +1949,12 @@ fn parse_struct_decl() {
     p_skip_newlines()
     let mut fields = []
     while p_peek_kind() != "RBrace" && p_peek_kind() != "Eof" {
+        // Optional `pub` (or `pub(scope)`) on the field — absorbed; the
+        // value is discarded until the AST gains a `vis` slot (see
+        // inbox/patches/canonical-audit-round-4-design-level.md
+        // § visibility).  Without this the canonical Rust `pub struct
+        // P { pub x: i64 }` failed at `parse_struct_fields`.
+        parse_visibility()
         let fname = p_expect_ident()
         // Type annotation is optional: `value` and `value: int` both parse.
         let mut ftype = ""
@@ -2041,6 +2047,10 @@ fn parse_trait_decl() {
         p_skip_newlines()
         if p_peek_kind() == "RBrace" { }
         else {
+            // Optional `pub` (or `pub(scope)`) on the method — sibling
+            // of the parse_struct_decl field-pub fix.  Absorbed; value
+            // discarded until the AST gains a `vis` slot.
+            parse_visibility()
             p_expect("Fn")
             let mname = p_expect_ident()
             p_expect("LParen")
@@ -2094,6 +2104,10 @@ fn parse_impl_block() {
         p_skip_newlines()
         if p_peek_kind() == "RBrace" { }
         else {
+            // Optional `pub` (or `pub(scope)`) on the method — sibling
+            // of the parse_struct_decl field-pub fix.  Absorbed; value
+            // discarded until the AST gains a `vis` slot.
+            parse_visibility()
             p_expect("Fn")
             let mname = p_expect_ident()
             p_expect("LParen")
@@ -4475,7 +4489,18 @@ fn parse_visibility() {
         p_advance()
         if p_peek_kind() == "LParen" {
             p_advance()
-            let vis_scope = p_expect_ident() // "crate" or "mod"
+            // Accept `crate` / `super` / `self` / `mod` (keyword tokens)
+            // alongside arbitrary identifiers — `p_expect_ident()` alone
+            // rejects keyword kinds and cascade-crashes Rust-style
+            // `pub(crate)` / `pub(super)` etc.  Read the token's value
+            // string directly when the kind is a known scope keyword.
+            let _vk = p_peek_kind()
+            let mut vis_scope = ""
+            if _vk == "Ident" || _vk == "Crate" || _vk == "Super" || _vk == "Self_" || _vk == "Mod" {
+                vis_scope = p_advance().value
+            } else {
+                vis_scope = p_expect_ident()
+            }
             p_expect("RParen")
             return vis_scope
         }
