@@ -4,7 +4,7 @@
 #
 # F-Q-6-E Ramp B-2 — ADAPT-VQE 4e/5o (8-qubit) gate across LiH + 5 CMT
 # scaffolds. Reads pre-emitted markers in $QMIRROR_ROOT/state/markers/
-# (or, if absent, runs the modules in-process via hexa_interp.real).
+# (or, if absent, runs the modules in-process).
 #
 # ADAPT-VQE = greedy operator selection from the 54-op UCCSD pool, one op
 # per outer step, FD-gradient screening, joint inner re-opt via pure-hexa

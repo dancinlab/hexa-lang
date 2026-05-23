@@ -145,10 +145,10 @@ fall into one of three buckets:
 |---|---:|---|
 | `tool/build_hexa_*.sh` + `tool/build_{absorbed_binaries,aprime}.sh` | 17 | port to `tool/build_*.hexa` (cheapest first) |
 | `tests/integration/*.sh` | 13 | port to `.hexa` integration harness |
-| `tool/{find_local_hexa,version_lint,_version_header_seed,extract_runtime_hi,ubu_bootstrap,parser_ssot_lint,install_darwin_marker}.sh` + `tool/wrappers/hexa_top_wrapper.sh` + `tool/hexa_annot/_ast_extract.sh` | 9 | port — `install_darwin_marker.sh` has twin in `install.hexa::install_darwin_marker()` already |
+| `tool/{find_local_hexa,version_lint,_version_header_seed,extract_runtime_hi,ubu_bootstrap,install_darwin_marker}.sh` + `tool/wrappers/hexa_top_wrapper.sh` + `tool/hexa_annot/_ast_extract.sh` | 8 | port — `install_darwin_marker.sh` has twin in `install.hexa::install_darwin_marker()` already |
 | `scripts/{hexa_cli,hexa_daemon,hexa_daemon_handler,safe_hexa_launchd}.sh` + `scripts/safety/{commit-msg,staged}-scan.sh` | 6 | port to `scripts/*.hexa` |
 | `tool/{docs_gen,hexa_to_py,s4_flatc_post,transient_py/atp_pytorch,transient_py/atp_transpile,transpile_test_gen}.py` + `tool/transpile_test.sh` | 7 | port via `exec_capture` or archive (`transient_py/` is explicitly transient) |
-| `test/{hexa_annot_smoke,t_parser_ssot_lint}.sh` + `test/regression/*/run_tests.sh` | 4 | port to `.hexa` test harness |
+| `test/hexa_annot_smoke.sh` | 1 | port to `.hexa` test harness |
 | `tool/hexa_daemon_serve.c` | 1 | bootstrap addition — extends HEXA-NATIVE-ONLY.md trk |
 | `bench/check_regress.sh` | 1 | port to `.hexa` bench |
 | `install.sh` | 1 | cold-install bootstrap (chicken-and-egg: users without hexa). Either keep as VENDORED-class shim or port to `.hexa` once `hx install` self-bootstrap is stable |

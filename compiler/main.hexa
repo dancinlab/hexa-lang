@@ -20,7 +20,7 @@
 //   citation(S8) → lower(AST→HIR) → lower_hir(HIR→MIR) →
 //   codegen(MIR→LIR target-specific) → emit(LIR→.s) → assemble → link
 //
-// Stage0 invocation (interpreted by hexa_interp until stage1 native settles):
+// Invocation:
 //   hexa run compiler/main.hexa [flags] SOURCE.hexa
 //
 // Targets (Decision 1, parallel dual):
@@ -80,10 +80,10 @@ import "./diag/render.hexa"
 let HEXA_VERSION = "hexa 0.0.1 (phase A1+B1+B2+B3+B3+B4+lower+codegen+emit+optimize)"
 
 // ── argv normalization ─────────────────────────────────────────
-// Hexa stage0 hands us argv shaped one of:
-//   [interp, script.hexa, user...]                (direct invocation)
-//   [interp, "run", script.hexa, user...]         (via `hexa run`)
-//   [interp, "run", "compiler/main.hexa", user...]
+// The hexa driver hands us argv shaped one of:
+//   [argv0, script.hexa, user...]                 (direct invocation)
+//   [argv0, "run", script.hexa, user...]          (via `hexa run`)
+//   [argv0, "run", "compiler/main.hexa", user...]
 // Strategy: scan the raw argv for the FIRST `*.hexa` token, treat that
 // as the script, and start user args at the very next slot. This mirrors
 // tool/roadmap_auto_dispatch.hexa main() (2026-04-19 fix).

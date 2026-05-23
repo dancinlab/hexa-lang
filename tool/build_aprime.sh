@@ -1,8 +1,8 @@
 #!/bin/bash
-# tool/build_aprime.sh — canonical aprime_cc build recipe (interp-retirement R3-R7).
+# tool/build_aprime.sh — canonical aprime_cc build recipe.
 #
 # aprime_cc = the native arm64-asm hexa-lang compiler — the direct-asm
-# codegen path that targets interpreter retirement (compiler/main.hexa
+# codegen path (compiler/main.hexa
 # transpiled by hexa_v2 → C → clang → a self-contained Mach-O that emits
 # arm64 .s directly, no further hexa_v2 dependency at compile time).
 #

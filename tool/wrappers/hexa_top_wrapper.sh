@@ -10,7 +10,7 @@
 # HEXA_TARGET_MACHO=1 environment variable. Today the gate is warn-only
 # (block 0) so that claude-bind hooks, probes, lints, and other non-AOT
 # call sites continue to work unmodified. Empirically only ~6% of macOS
-# hexa_interp.real.real invocations actually need native codegen.
+# hexa invocations actually need native codegen.
 #
 # Install (Phase B; user runs in a separate session):
 #   cp $HOME/.hx/bin/hexa $HOME/.hx/bin/hexa.bak.YYYY-MM-DD   # rollback snapshot
@@ -28,7 +28,7 @@ case "$1" in
        && ! printf '%s\n' "$@" | grep -q -- '--Mach-O'; then
       cat >&2 <<'EOF'
 ai-native: hexa invocation without --Mach-O on macOS.
-  This call uses the stage0 interpreter; no native Mach-O codegen
+  This call uses the default codegen path; no native Mach-O binary
   is produced. Use --Mach-O ONLY when you genuinely need a native
   arm64 binary (e.g. `hexa build --emit=exec` for a release).
   For hooks, probes, lints, and most dev work this warning is
