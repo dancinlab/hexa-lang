@@ -1385,7 +1385,7 @@ fn cmd_regen_cc() {
     let ok1 = regen_one_module(__hxroot + "/self/lexer.hexa", "/tmp/_lexer.c")
     let ok2 = regen_one_module(__hxroot + "/self/parser.hexa", "/tmp/_parser.c")
     let ok3 = regen_one_module(__hxroot + "/self/type_checker.hexa", "/tmp/_tc.c")
-    let ok4 = regen_one_module(__hxroot + "/self/codegen_c2.hexa", "/tmp/_cg.c")
+    let ok4 = regen_one_module(__hxroot + "/self/codegen.hexa", "/tmp/_cg.c")
     let s1 = if ok1 { "ok" } else { "FAIL" }
     let s2 = if ok2 { "ok" } else { "FAIL" }
     let s3 = if ok3 { "ok" } else { "FAIL" }
