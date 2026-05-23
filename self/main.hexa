@@ -4942,14 +4942,21 @@ if len(av) < 3 {
                                        cloud_args[0] == "-h" ||
                                        cloud_args[0] == "help"))
         if cloud_is_help {
-            println("hexa cloud — structured-argv remote dispatch (cycle A)")
+            println("hexa cloud — structured-argv remote dispatch + pod diagnostics")
             println("")
-            println("usage:")
+            println("dispatch verbs:")
             println("  cloud run       <host> [conn] -- <argv...>             run argv, wait, exit with its code")
             println("  cloud nohup     <host> <logfile> [conn] -- <argv...>   background argv, print remote pid")
             println("  cloud poll      <host> <pid> [conn]                    exit 0 if remote pid alive, else 1")
             println("  cloud copy-to   <host> <local> <remote> [conn]         upload local file to host:remote (scp)")
             println("  cloud copy-from <host> <remote> <local> [conn]         download host:remote file to local (scp)")
+            println("")
+            println("diagnostic verbs (RunPod, runpodctl-backed):")
+            println("  cloud list                                             every active pod — id/name/gpu/status/owner")
+            println("  cloud status <pod_id>                                  single pod snapshot")
+            println("  cloud orphans                                          pods with no `::owner=<tag>` marker")
+            println("  cloud owner-tag <pod_id>                               print the parsed owner tag for one pod")
+            println("  cloud diag <host> [conn] [--pid N] [--log path]        nvidia-smi + ps + tail logfile, one ssh trip per section")
             println("  cloud help | version")
             println("")
             println("connection flags [conn] (before `--`):")
@@ -4959,6 +4966,9 @@ if len(av) < 3 {
             println("every argv element after `--` is POSIX-quoted before ssh — no remote")
             println("shell parsing, no glob expansion, no /* */ comment mis-parse.")
             println("`host` is an ssh destination or ~/.ssh/config alias.")
+            println("")
+            println("owner-tag convention — diagnostic verbs read the owner from a pod")
+            println("name suffix `<base>::owner=<tag>`; an absent marker = orphan.")
             exit(0)
         }
         let mut cloud_bin = ""
