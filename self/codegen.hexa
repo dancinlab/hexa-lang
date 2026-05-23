@@ -4358,6 +4358,25 @@ fn gen2_expr(node) {
         if node.name == "void" { return "hexa_void()" }
         if node.name == "true" { return "hexa_bool(1)" }
         if node.name == "false" { return "hexa_bool(0)" }
+        // PROBE r14-H: `inf` / `nan` as canonical float-constant identifiers
+        // (Python math.inf / math.nan · Rust f64::INFINITY/NAN · C99 INFINITY/NAN
+        // macros). Treated as bare-name reserved values like `nil`/`true`/`false`
+        // ABOVE — but only when the name is NOT shadowed by a local `let`/`let mut`,
+        // a top-level decl, or a known global. This preserves today's behavior
+        // for code that already binds `let inf = 1.0` (the local wins). A sibling
+        // parser diagnostic to forbid `let inf = ...` shadowing (mirror of PR #474
+        // for `nil`/`null`) is recommended as a follow-up.
+        // C99 `INFINITY` / `NAN` come from <math.h>, already included by runtime.h L34.
+        if node.name == "inf" {
+            if !_gen2_has_decl(node.name) && !_gen2_name_in_cur_lets(node.name) && !_is_known_fn_global(node.name) && !_is_known_nonlocal(node.name) {
+                return "hexa_float(INFINITY)"
+            }
+        }
+        if node.name == "nan" {
+            if !_gen2_has_decl(node.name) && !_gen2_name_in_cur_lets(node.name) && !_is_known_fn_global(node.name) && !_is_known_nonlocal(node.name) {
+                return "hexa_float(NAN)"
+            }
+        }
         // b2-fnref: a bare name that resolves to a builtin/method (not a
         // user fn, global, or local) used in value position — emit a TAG_FN
         // wrapping a static thunk instead of a bare (undeclared) C identifier.
