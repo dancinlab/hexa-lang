@@ -1,5 +1,7 @@
 # string `+` in unbounded loop is O(n²) + accumulates arena RSS → 4 GB cap kill
 
+**Status**: resolved-already-in-source-2026-05-25 — Option A (`self/stdlib/strbuf.hexa` 5-fn surface) + Option C (`self/ai_native_pass.hexa` M981+M981b lint/rewrite) 둘 다 main 에 shipped; 4 known offender 사이트 모두 마이그레이션 완료. 사이클 16 inbox 청소 시 archive 후보. 자세한 commit SHA + 사이트 목록은 아래 VERIFIED-CLOSED 블록 참조.
+
 > **VERIFIED-CLOSED 2026-05-20** — every option in §"Upstream fix sketches" has
 > already shipped on `main`:
 > - **Option A (strbuf primitive)** — `self/stdlib/strbuf.hexa` (commit
