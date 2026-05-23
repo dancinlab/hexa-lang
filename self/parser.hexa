@@ -1539,11 +1539,24 @@ fn parse_let() {
     }
 
     // G9: map/struct destructuring — let {x, y} = expr
+    // PROBE r14-PPP: also accept rename form `let {x: px, y: py} = expr`.
+    //   patterns[i] = bound name (target — what becomes a local var)
+    //   keys[i]     = source key looked up on the rhs map
+    // No-rename form keeps keys[i] == patterns[i] (JS/Rust shorthand).
+    // Stored on AST node as params=patterns, fields=keys (parallel arrays).
     if p_peek_kind() == "LBrace" {
         p_advance() // consume {
         let mut patterns = []
+        let mut keys = []
         while p_peek_kind() != "RBrace" && p_peek_kind() != "Eof" {
-            patterns.push(p_expect_ident())
+            let src = p_expect_ident()
+            let mut tgt = src
+            if p_peek_kind() == "Colon" {
+                p_advance() // consume :
+                tgt = p_expect_ident()
+            }
+            keys.push(src)
+            patterns.push(tgt)
             if p_peek_kind() == "Comma" {
                 p_advance()
             }
@@ -1554,7 +1567,7 @@ fn parse_let() {
         return #{
             "kind": "MapDestructLetStmt", "name": "", "value": "", "op": "",
             "left": expr, "right": "", "cond": "", "then_body": "", "else_body": "",
-            "params": patterns, "body": "", "args": "", "fields": "", "items": "",
+            "params": patterns, "body": "", "args": "", "fields": keys, "items": "",
             "variants": "", "arms": "", "iter_expr": "", "ret_type": "",
             "target": "", "trait_name": "", "methods": ""
         }

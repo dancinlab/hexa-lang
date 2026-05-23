@@ -3464,17 +3464,26 @@ fn gen2_stmt(node, depth) {
     }
 
     // ── MapDestructLetStmt → map/dict-key destructure (PROBE r7) ──
-    //   let {x, y} = map
-    // AST: params = [x, y], left = rhs.  Each ident is looked up by the
-    // identifier's string name as the map key (mirrors JS/Rust shorthand).
+    //   let {x, y} = map           → key=x bound to var x, key=y bound to var y
+    //   let {x: px, y: py} = map   → key=x bound to var px, key=y bound to var py
+    // AST: params = [target names], fields = [source keys], left = rhs.
+    // No-rename form (shorthand) carries fields[i] == params[i]; rename form
+    // (PROBE r14-PPP, UU follow-up) carries the source key in fields[i].
+    // Back-compat: if `fields` is missing or length-mismatched (older AST),
+    // fall back to params[i] as the key (no rename).
     if k == "MapDestructLetStmt" {
         let _mtmp = "__destr_" + to_string(_destr_counter)
         _destr_counter = _destr_counter + 1
         let _mrhs = gen2_expr(node.left)
         let mut _mout = pad + "{ HexaVal " + _mtmp + " = " + _mrhs + ";"
+        let _has_fields = type_of(node.fields) != "string" && len(node.fields) == len(node.params)
         let mut _mi = 0
         while _mi < len(node.params) {
-            _mout = _mout + " " + node.params[_mi] + " = hexa_map_get(" + _mtmp + ", \"" + node.params[_mi] + "\");"
+            let mut _mkey = node.params[_mi]
+            if _has_fields {
+                _mkey = node.fields[_mi]
+            }
+            _mout = _mout + " " + node.params[_mi] + " = hexa_map_get(" + _mtmp + ", \"" + _mkey + "\");"
             _mi = _mi + 1
         }
         return _mout + " }\n"
