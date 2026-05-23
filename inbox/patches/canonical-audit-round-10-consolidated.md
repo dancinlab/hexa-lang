@@ -8,7 +8,7 @@ PROBE round 10 결과 (24 probes, 4 axes: lexer edges · whitespace/layout · er
 
 | axis | FIX-SURGICAL (cycle 7 in-flight) | design / DX gap (본 문서) | P0 / P1 |
 |---|---|---|---|
-| 1. lexer edges | **r10-P0** 200-char ident codegen truncation (long-ident fix PR) | r10-4 unicode ident (ASCII-only `is_ident_start`, lexer.hexa:101-105) | **P0 ×1** |
+| 1. lexer edges | **r10-P0** 200-char ident codegen truncation (long-ident fix PR) | ~~r10-4 unicode ident~~ ✅ **LANDED** (Go-style byte ≥ 0x80, lexer.hexa) | **P0 ×1** |
 | 2. whitespace / layout | — | r10-8 trailing comma in CALL rejected (vs array PASS) | — |
 | 3. error recovery / diagnostics | — | r10-18d no source snippet / no caret / no "did you mean" hints (error.hexa render) | — |
 | 4. attribute hygiene | **r10-P1** `@derive(D) @derive(D)` reject + `@derive` on `fn` semantic msg (attr cluster PR) | r10-15b/c/d unknown/conflicting attrs silent-absorb · r10-15g `@cold`/`@noinline` defn-vs-decl placement (`-Wgcc-compat` warnings) | **P1 ×2** |
@@ -48,11 +48,19 @@ A 200-char identifier (`a_…_a` × 200) **parses successfully** but the codegen
 | **200-char ident** | ✓ parse, **🔴 codegen TRUNCATES** | Rust / Go / Py (no limit) | **P0 CRITICAL** (fix in cycle 7) |
 | 30-level paren nesting | ✓ PASS | canonical | ✅ PASS |
 | unicode string literal (UTF-8 bytes) | ✓ PASS | canonical | ✅ PASS |
-| unicode identifier (e.g. `한글`, `αβ`) | ❌ NOT tokenized — `is_ident_start = is_alpha` ASCII-only (lexer.hexa:101-105) | Rust `XID_Start` / Py PEP 3131 / Go letters+digits | 🟠 r10-4 design (XID_Start gap) |
+| unicode identifier (e.g. `한글`, `αβ`) | ✅ tokenized — `is_ident_start`/`is_ident_char` accept any byte ≥ 0x80 (lexer.hexa) | Rust `XID_Start` / Py PEP 3131 / Go letters+digits | ✅ **r10-4 LANDED** (Go-style byte-oriented rule) |
 
 ### 핵심 design 결정
 
-Lexer 의 ident-start = ASCII alpha only — i18n identifier 가 로드맵에 들어올 경우 `XID_Start` / `XID_Continue` (Unicode UAX #31) 또는 최소 BMP letter-class 으로 확장 필요 (medium 규모, lexer + 호환성 매트릭스 영향).
+~~Lexer 의 ident-start = ASCII alpha only~~ → **r10-4 LANDED 2026-05-23.** Go-style
+규칙 채택 (`identifier = letter { letter | unicode_digit }`, `letter = unicode_letter | "_"`).
+lexer 가 byte-oriented (UTF-8 source, `chars()` = single-byte strings) 이므로 실용적
+규칙으로 **byte ≥ 0x80 (high-bit set = UTF-8 multibyte 의 일부) 을 ident byte 로 수용**
+(start + continue 양쪽). 전체 UAX #31 XID 테이블 없이 `café` · `λ` · `日本語` 식별자
+허용. ASCII 규칙 불변. 다운스트림: codegen `_hexa_mangle_ident` 는 mangle 불필요 —
+decl 과 use 가 동일 raw UTF-8 바이트로 일관 emit 되고 clang 이 UTF-8 C 식별자 수용
+(end-to-end 검증). 변경 = `self/lexer.hexa` 단일 파일 (lexer-only). 활성화는
+regen-gated (transpiler 재생성 후 발효) — 로컬 regen→transpile→compile→run 으로 검증.
 
 **P0 200-char ident 는 별도 클래스** — i18n 과 무관, **고정 버퍼 안전성** 이슈.
 
@@ -131,7 +139,7 @@ Error recovery **mechanics are strong** (synchronize + cap + dedup), but **diagn
 | **r10-15b/c/d attr whitelist + warn unknown + "did you mean"** | small-medium (whitelist table + warn emitter + Levenshtein lookup) | typo-friendly → typo-detect 으로 보강 |
 | **r10-18d error snippet + caret + "did you mean"** | medium (source text retention in `error.hexa` + caret column-math + similarity index) | DX 대폭 개선, Rust 수준 진단 |
 | **r10-15g `@cold`/`@noinline` defn → decl placement** | small (codegen attribute emit if-branch) | `-Wgcc-compat` 제거 |
-| **r10-4 unicode ident `XID_Start`** | medium (lexer.hexa:101-105 + UAX #31 lookup) | i18n 로드맵 진입 시 |
+| ~~**r10-4 unicode ident**~~ ✅ **LANDED** | small (lexer.hexa byte ≥ 0x80 = ident byte, Go-style) | i18n — `café`·`λ`·`日本語` 식별자 수용 |
 
 ## Structural notes (low-priority + 좋은 시그널)
 
@@ -146,7 +154,7 @@ Error recovery **mechanics are strong** (synchronize + cap + dedup), but **diagn
 
 - **Attribute model = generic fall-through (silent absorb)** — typo-friendly 이지만 silent-failure class (r9 와 동일 클래스, 이번 라운드에서 다시 확인). 하지만 r10-15e/f 는 **silent-absorb 가 아닌 reject** 임 — 따라서 P1 (사용자가 의도한 attr 사용을 막음).
 
-- **Lexer ASCII-only ident-start** — single-byte path 가 v1 의도. i18n 진입 시 lexer.hexa:101-105 의 `is_alpha` 를 UAX #31 으로 확장.
+- ~~**Lexer ASCII-only ident-start**~~ → **r10-4 LANDED 2026-05-23** (Go-style byte ≥ 0x80 = ident byte). lexer-only 변경 (`self/lexer.hexa`), codegen mangle 불필요 (raw UTF-8 pass-through, decl=use 일관, clang UTF-8 식별자 수용). 활성화 regen-gated. 향후 정밀화 시 UAX #31 XID 테이블로 교체 가능 (현 byte-rule 은 NUL/제어바이트가 아닌 모든 ≥0x80 수용 — 실용적 over-approximation).
 
 - **Diagnostic mechanics > render** — recovery 기계장치는 좋고, 표현 (render) 만 빈약. source-text retention 한 줄 추가하면 큰 DX upgrade.
 

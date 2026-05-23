@@ -96,19 +96,33 @@ fn keyword_kind(word) {
     return "Ident"
 }
 
-// Check if character is valid identifier start (alpha or _)
+// Unicode identifiers (Go/Rust canonical — round-10 r10-4). The lexer is
+// byte-oriented (source.chars() yields single-byte strings over UTF-8), so
+// any byte with the high bit set (>= 0x80) is part of a UTF-8 multibyte
+// sequence — i.e. a non-ASCII letter. We pragmatically treat every such byte
+// as an identifier byte (both start and continue), which accepts `café`,
+// `λ`, `日本語` etc. without a full Unicode XID table. ASCII rules unchanged.
+// Go: identifier = letter { letter | unicode_digit }, letter = unicode_letter | "_".
+@pure
+fn is_unicode_byte(ch) {
+    return char_code(ch, 0) >= 128
+}
+
+// Check if character is valid identifier start (alpha, _, or unicode byte)
 @pure
 fn is_ident_start(ch) {
     if is_alpha(ch) { return true }
     if ch == '_' { return true }
+    if is_unicode_byte(ch) { return true }
     return false
 }
 
-// Check if character is valid identifier continuation (alphanumeric or _)
+// Check if character is valid identifier continuation (alphanumeric, _, or unicode byte)
 @pure
 fn is_ident_char(ch) {
     if is_alphanumeric(ch) { return true }
     if ch == '_' { return true }
+    if is_unicode_byte(ch) { return true }
     return false
 }
 
