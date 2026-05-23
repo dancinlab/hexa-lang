@@ -5856,6 +5856,20 @@ fn gen2_expr(node) {
         let ename = node.name
         let vname = node.value
         let enum_const = ename + "_" + vname
+        // RFC-074 P2: multi-arg payload variants (`Shape::Square(3, 4)`)
+        // arrive as `payload_args = [expr, …]`; emit nested
+        // hexa_array_push per arg in order.  Single-arg keeps the
+        // back-compat `payload_expr` path below.
+        let pas = node.payload_args
+        if type_of(pas) != "string" && len(pas) > 0 {
+            let mut out = "hexa_array_push(hexa_array_new(), " + enum_const + ")"
+            let mut i = 0
+            while i < len(pas) {
+                out = "hexa_array_push(" + out + ", " + gen2_expr(pas[i]) + ")"
+                i = i + 1
+            }
+            return out
+        }
         let pe = node.payload_expr
         if type_of(pe) != "string" {
             return "hexa_array_push(hexa_array_push(hexa_array_new(), " + enum_const + "), " + gen2_expr(pe) + ")"
