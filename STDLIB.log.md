@@ -2,6 +2,27 @@
 
 Append-only history sister of `STDLIB.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
+## 2026-05-24T23:30:00Z — /cycle 사이클 2: 7 마일스톤 병렬 흡수 — 7/7 oracle PASS · 도메인 100% closed
+
+7 백그라운드 에이전트 (worktree isolation, heavy 3종 first-iter scope) 병렬 fan-out, 전수 머지:
+
+| PR | sha | milestone | oracle | defer note |
+|---|---|---|---|---|
+| #642 | 0dfd3572 | mirna-target            | 8 cases TargetScan seed-scan | — |
+| #644 | c45b6dc6 | autodock-vina-port      | 6 cases ±1e-4 (5-term scoring) | Monte Carlo search · grid map |
+| #645 | cd155a23 | iedb-epitope            | REST 5/7 + PSSM 6 peptides | NetMHCpan SVM/ANN core |
+| #647 | c0a83f5a | seq-align               | 7 cases (NW + SW) | MSA progressive |
+| #648 | f94ccb30 | openmm-core             | 4 cases energy drift <1% | PBC · Ewald · bonded forces |
+| #652 | 3b7258fc | rdkit-subset            | 7 cases ±0.05 MW (SMILES + MW) | logP · TPSA · HBA/HBD |
+| #654 | 7f9fc098 | crispr-off-target       | 5 cases synthetic genome | — |
+
+- [x] 7 마일스톤 체크박스 STDLIB.md 갱신 (heavy 3개는 first-iter scope 명시)
+- [x] 0 fail · 4 정직-deferred sub-feature (search/grid · NetMHCpan · MSA · PBC/Ewald 등)
+- [x] 모든 모듈 `hexa parse` + `hexa run` PASS gate 통과 후 머지
+- [x] 모든 모듈 `// stdlib/<path> — <purpose>` 헤더 규격
+
+진행 상태: **15/15 actionable closed** (100%) · 1 deferred (open-babel-subset, GPL-2 라이선스 검토 후). STDLIB 도메인 first-cycle 캠페인 종료. 후속 = 각 모듈의 deferred sub-feature 보강 라운드 (도메인 외 sub-cycle 으로 분리).
+
 ## 2026-05-24T22:30:00Z — /cycle 사이클 1: 8 마일스톤 병렬 흡수 — 8/8 oracle PASS
 
 8 백그라운드 에이전트 (worktree isolation) 병렬 fan-out, 전수 머지:
