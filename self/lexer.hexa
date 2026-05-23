@@ -1156,6 +1156,15 @@ pub fn tokenize(source) {
                         pos = pos + 2
                         col = col + 2
                     }
+                } else if pos + 1 < len_chars && chars[pos + 1] == '.' {
+                    // Optional chaining: `?.` — PROBE r14-BB.  Must lex
+                    // here (before the bare-`?` fallthrough) so the parser
+                    // sees `QuestionDot` instead of a `Question` followed
+                    // by `Dot`.  The later `else if ch == '?'` arm below
+                    // is dead code (this earlier arm wins).
+                    tokens.push(Token { kind: "QuestionDot", value: "?.", line: line, col: start_col })
+                    pos = pos + 2
+                    col = col + 2
                 } else {
                     tokens.push(Token { kind: "Question", value: "?", line: line, col: start_col })
                     pos = pos + 1
