@@ -2088,12 +2088,19 @@ fn cmd_build(src, out, c_only, target, shared) {
     let __src_probe = read_file(src)
     let __has_use_dir = __src_probe.contains("\nuse \"") || __src_probe.starts_with("use \"")
     let __has_imp_dir = __src_probe.contains("\nimport \"") || __src_probe.starts_with("import \"")
+    // round-4 (pub-use re-export loader-trigger gate): `pub use "…"` /
+    // `pub import "…"` are import directives, but the probe above only
+    // matches bare `use`/`import`. Without this third class the flatten step
+    // was bypassed and the re-exported inner module never loaded (clang then
+    // failed on the undefined re-exported symbol). Same shape as the
+    // from-directive trigger fix.
+    let __has_pubuse_dir = __src_probe.contains("\npub use \"") || __src_probe.starts_with("pub use \"") || __src_probe.contains("\npub import \"") || __src_probe.starts_with("pub import \"")
     // Python-style `from "X" import a, b` is the third loader-triggering
     // directive. Without this third probe a file whose ONLY directives are
     // `from "…"` bypassed the module_loader entirely — `from` then reached
     // C codegen and clang-failed.
     let __has_from_dir = __src_probe.contains("\nfrom \"") || __src_probe.starts_with("from \"")
-    if __has_use_dir || __has_imp_dir || __has_from_dir {
+    if __has_use_dir || __has_imp_dir || __has_from_dir || __has_pubuse_dir {
         // R7 gate #4 / Cycle C: the COMPILED module_loader binary does
         // interp-free flatten. The interpreter is retired (R7 closed) —
         // there is no interp + module_loader.hexa fallback; an absent
