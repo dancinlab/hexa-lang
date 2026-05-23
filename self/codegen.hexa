@@ -2401,20 +2401,54 @@ fn _gen2_count_defers(stmts) {
         // Nested fn decls carry their own defer scope — skip.
         if k == "FnDecl" || k == "PureFnDecl" || k == "ExternFnDecl" { continue }
         if k == "DeferStmt" { n = n + 1 }
-        // Recurse into every statement-array-shaped field. Not all
-        // nodes carry these; type_of guards the no-op case.
-        if type_of(s.body) == "array" { n = n + _gen2_count_defers(s.body) }
-        if type_of(s.then_body) == "array" { n = n + _gen2_count_defers(s.then_body) }
-        if type_of(s.else_body) == "array" { n = n + _gen2_count_defers(s.else_body) }
-        if type_of(s.arms) == "array" {
-            let mut j = 0
-            while j < len(s.arms) {
-                let arm = s.arms[j]
-                if type_of(arm) != "string" && type_of(arm.body) == "array" {
-                    n = n + _gen2_count_defers(arm.body)
-                }
-                j = j + 1
+        n = n + _gen2_count_defers_in_node(s)
+    }
+    return n
+}
+
+// PROBE r14-OOOO (FFFF-1): nested-scope defer hoist closure.
+//
+// _gen2_count_defers previously walked only s.body / s.then_body /
+// s.else_body / s.arms[].body — direct stmt-array fields. But the
+// regular parser wraps statement-position `if`/`match` in ExprStmt
+// (s.kind == "ExprStmt", inner expr at s.left.kind == "IfExpr" or
+// "MatchExpr"), so a `defer` inside an `if { … }` body was invisible
+// to the pre-scan. The fn-top hoist of `__defer_<i>_active` + `__ret_val`
+// then never emitted, but body codegen still emitted `__defer_<i>_active = 1;`
+// and the __fn_exit drain referenced `__ret_val` — yielding clang
+// `use of undeclared identifier` errors.
+//
+// Fix: factor the field-recursion into a helper that takes any node,
+// and also descend into s.left for ExprStmt-wrapped IfExpr/MatchExpr/
+// IfLetExpr. Same fields (.then_body / .else_body / .body / .arms[].body)
+// are checked on the inner expression node — type_of guards no-ops on
+// shapes that don't carry these fields.
+// decreases node — structural
+fn _gen2_count_defers_in_node(s) {
+    if type_of(s) == "string" { return 0 }
+    let mut n = 0
+    // Recurse into every statement-array-shaped field. Not all
+    // nodes carry these; type_of guards the no-op case.
+    if type_of(s.body) == "array" { n = n + _gen2_count_defers(s.body) }
+    if type_of(s.then_body) == "array" { n = n + _gen2_count_defers(s.then_body) }
+    if type_of(s.else_body) == "array" { n = n + _gen2_count_defers(s.else_body) }
+    if type_of(s.arms) == "array" {
+        let mut j = 0
+        while j < len(s.arms) {
+            let arm = s.arms[j]
+            if type_of(arm) != "string" && type_of(arm.body) == "array" {
+                n = n + _gen2_count_defers(arm.body)
             }
+            j = j + 1
+        }
+    }
+    // ExprStmt wrapper — IfExpr / MatchExpr / IfLetExpr at statement
+    // position carry their bodies on the inner expr node (s.left), not
+    // on the outer ExprStmt. Descend.
+    if type_of(s.left) != "string" {
+        let lk = s.left.kind
+        if lk == "IfExpr" || lk == "MatchExpr" || lk == "IfLetExpr" {
+            n = n + _gen2_count_defers_in_node(s.left)
         }
     }
     return n
