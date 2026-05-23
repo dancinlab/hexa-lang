@@ -689,19 +689,128 @@ fn _wilson_hilferty_p_register(t_stat: float, df: float) -> float {
     return p_two
 }
 
+// CHSH Tsirelson bound — verbatim port of verify_cli::_chsh_tsirelson.
+// 0-arg closed-form: S_max^Q = 2*sqrt(2) (Tsirelson 1980 LMP 4 93 / CHSH 1969).
+fn _chsh_tsirelson_register() -> float {
+    return 2.0 * sqrt(2.0)
+}
+
+// Hardy multipartite — verbatim port of verify_cli::_hardy_powi / _hardy_abs /
+// _hardy_solve_tr / _hardy_bound (Newton root of x^{N+1}-2x+1=0 on (0,1);
+// p_N^max = t_r^N * (1-t_r)^N / (1 - t_r^N); Adhikary-Mandal arXiv:2505.10170 Eq.5).
+fn _hardy_powi_register(x: float, n: int) -> float {
+    let mut acc = 1.0
+    let mut k = 0
+    while k < n {
+        acc = acc * x
+        k = k + 1
+    }
+    return acc
+}
+
+fn _hardy_abs_register(x: float) -> float {
+    if x < 0.0 { return 0.0 - x }
+    return x
+}
+
+fn _hardy_solve_tr_register(big_n: int) -> float {
+    let m = big_n + 1
+    let mut x = 0.5
+    let mut it = 0
+    while it < 100 {
+        let fx = _hardy_powi_register(x, m) - 2.0 * x + 1.0
+        let fp = to_float(m) * _hardy_powi_register(x, big_n) - 2.0
+        if _hardy_abs_register(fx) < 0.00000000000001 { return x }
+        if _hardy_abs_register(fp) < 0.00000000000001 { return x }
+        let dx = fx / fp
+        x = x - dx
+        if x < 0.001 { x = 0.001 }
+        if x > 0.999 { x = 0.999 }
+        if _hardy_abs_register(dx) < 0.00000000000001 { return x }
+        it = it + 1
+    }
+    return x
+}
+
+fn _hardy_bound_register(big_n: int) -> float {
+    if big_n < 2 { return _NOCALC_F_REGISTER }
+    let tr = _hardy_solve_tr_register(big_n)
+    let trN = _hardy_powi_register(tr, big_n)
+    let omt = 1.0 - tr
+    let omtN = _hardy_powi_register(omt, big_n)
+    return trN * omtN / (1.0 - trN)
+}
+
+// MABK-Ardehali quantum max — verbatim port of verify_cli::_mabk_quantum_max.
+// B_N^Q = 2^{(N-1)/2} via sqrt(2)-product loop (Mermin 1990 / Ardehali 1992
+// / Belinskii-Klyshko 1993). N ≥ 2.
+fn _mabk_quantum_max_register(big_n: int) -> float {
+    if big_n < 2 { return _NOCALC_F_REGISTER }
+    let s = sqrt(2.0)
+    let mut v = 1.0
+    let mut k = 0
+    let exp = big_n - 1
+    while k < exp {
+        v = v * s
+        k = k + 1
+    }
+    return v
+}
+
+// Pseudo-telepathy magic-square (doily) quantum win prob = 1.0 — verbatim
+// port of verify_cli::_ptd_quantum_win. 0-arg closed-form constant.
+// Brassard-Broadbent-Tapp 2005 Found. Phys. 35 1877 (arXiv:quant-ph/0407221).
+fn _ptd_quantum_win_register() -> float {
+    return 1.0
+}
+
+// Pseudo-telepathy magic-square LP-tight classical (LHV) bound = 8/9 —
+// verbatim port of verify_cli::_ptd_classical_bound_const. 0-arg closed-form.
+fn _ptd_classical_bound_register() -> float {
+    return 8.0 / 9.0
+}
+
 // float dispatch — fn_name → recompute. Mirrors verify_cli::_recompute_float.
+// RFC 045 qmirror PR-A atoms (chsh_tsirelson · hardy_bound · mabk_quantum_max
+// · pt_doily_quantum_win · pt_doily_classical_bound) are mirrored here as
+// the atlas_cli register-arm companion to the verify-arm dispatch added in
+// PR #626. 0-arg fns ignore a0/a1; 1-arg fns take a0; 2-arg take a0,a1.
 fn _recompute_float_register(fn_name: string, a0: float, a1: float, argc: int) -> float {
     if fn_name == "welch_t_crit" { return _welch_t_crit_register(a0) }
     if fn_name == "wilson_hilferty_p" {
         if argc < 2 { return _NOCALC_F_REGISTER }
         return _wilson_hilferty_p_register(a0, a1)
     }
+    // RFC 045 qmirror PR-A 2nd — register mirror of verify_cli dispatch (#626).
+    if fn_name == "chsh_tsirelson" { return _chsh_tsirelson_register() }
+    if fn_name == "hardy_bound" {
+        let big_n = to_int(a0)
+        return _hardy_bound_register(big_n)
+    }
+    if fn_name == "mabk_quantum_max" {
+        let big_n = to_int(a0)
+        return _mabk_quantum_max_register(big_n)
+    }
+    if fn_name == "pt_doily_quantum_win" { return _ptd_quantum_win_register() }
+    if fn_name == "pt_doily_classical_bound" { return _ptd_classical_bound_register() }
     return _NOCALC_F_REGISTER
 }
 
 // is fn_name a registered float-NUMERICAL form? Mirrors verify_cli::_is_float_fn.
 fn _is_float_fn_register(fn_name: string) -> bool {
     return fn_name == "welch_t_crit" || fn_name == "wilson_hilferty_p"
+        || fn_name == "chsh_tsirelson" || fn_name == "hardy_bound"
+        || fn_name == "mabk_quantum_max"
+        || fn_name == "pt_doily_quantum_win" || fn_name == "pt_doily_classical_bound"
+}
+
+// is fn_name a 0-arg closed-form constant? Mirrors verify_cli::_is_zero_arg_float_fn.
+// 0-arg float dispatch needs special handling in cmd_register (no operands
+// between fn_name and the expected value).
+fn _is_zero_arg_float_fn_register(fn_name: string) -> bool {
+    return fn_name == "chsh_tsirelson"
+        || fn_name == "pt_doily_quantum_win"
+        || fn_name == "pt_doily_classical_bound"
 }
 
 // _fstr_register — float → string for verdict echo / node text.
@@ -1189,10 +1298,14 @@ fn _adapt_verify_float(fn_name: string, a0_str: string, a1_str: string, v_str: s
     let mut a1 = 0.0
     if argc >= 2 { a1 = _parse_float_register(a1_str) }
     let v = _parse_float_register(v_str)
-    let mut arg_echo = _fstr_register(a0)
+    // 0-arg → empty operand echo (e.g. "chsh_tsirelson()"); 1-arg → "<a0>";
+    // 2-arg → "<a0>,<a1>". Mirrors verify_cli cmd_expr_float label.
+    let mut arg_echo = ""
+    if argc == 1 { arg_echo = _fstr_register(a0) }
     if argc >= 2 { arg_echo = _fstr_register(a0) + "," + _fstr_register(a1) }
     let v_echo = _fstr_register(v)
-    let mut prov = "hexa atlas register --from-verify " + fn_name + " " + a0_str
+    let mut prov = "hexa atlas register --from-verify " + fn_name
+    if argc >= 1 { prov = prov + " " + a0_str }
     if argc >= 2 { prov = prov + " " + a1_str }
     prov = prov + " " + v_str
     let got = _recompute_float_register(fn_name, a0, a1, argc)
@@ -1376,14 +1489,31 @@ fn cmd_register(rest: array) {
         // atoms) route to the 🟢 path BEFORE the int parser truncates the
         // real-valued args. Mirrors verify_cli::cmd_expr's _is_float_fn gate.
         if _is_float_fn_register(fn_name) {
-            let mut a0s = to_string(positional[1])
+            // 0-arg float dispatch (RFC 045 PR-A — chsh_tsirelson ·
+            // pt_doily_quantum_win · pt_doily_classical_bound): positional
+            // shape is <fn> <v> (len 2, no operands). Mirrors verify_cli
+            // cmd_expr_float's zero_arg branch.
+            let zero_arg = _is_zero_arg_float_fn_register(fn_name)
+            let mut a0s = ""
             let mut a1s = ""
-            let mut vs = to_string(positional[2])
+            let mut vs = ""
             let mut fargc = 1
-            if len(positional) >= 4 {
-                a1s = to_string(positional[2])
-                vs = to_string(positional[3])
-                fargc = 2
+            if zero_arg {
+                if len(positional) < 2 {
+                    println("error: --from-verify " + fn_name + " needs <v> (0-arg float closed-form)")
+                    exit(2)
+                }
+                a0s = "0"
+                vs = to_string(positional[1])
+                fargc = 0
+            } else {
+                a0s = to_string(positional[1])
+                vs = to_string(positional[2])
+                if len(positional) >= 4 {
+                    a1s = to_string(positional[2])
+                    vs = to_string(positional[3])
+                    fargc = 2
+                }
             }
             let fev = _adapt_verify_float(fn_name, a0s, a1s, vs, fargc, id_override)
             println("hexa atlas register --from-verify " + fev.name)

@@ -24,6 +24,7 @@ use "compiler/lenses/types"
 use "compiler/lenses/embedded.gen"
 use "compiler/atlas/by_kind/p.gen"
 use "compiler/atlas/by_kind/l.gen"
+use "compiler/atlas/by_kind/f.gen"
 use "compiler/atlas/parser"
 use "stdlib/loop/state"
 use "stdlib/loop/dfs"
@@ -167,7 +168,12 @@ fn build_atlas_view() -> AtlasView {
         p_nodes: enriched_p,
         c_nodes: c_nodes_loaded,
         l_nodes: ATLAS_L_NODES,
-        f_nodes: [],
+        // RFC 045 QMIRROR PR-A 2nd (cycle 13/cycle 14): wire F-kind atoms
+        // (verify-arm registered closed-form anchors — chsh_tsirelson,
+        // hardy_bound, mabk_quantum_max, pt_doily_quantum_win, …) into the
+        // lens/cycle view. Mirrors p/l_nodes wire; lookup uses a separate
+        // n6/atlas.n6 path so this binding only affects the cycle stage.
+        f_nodes: ATLAS_F_NODES,
         r_nodes: [], s_nodes: [], x_nodes: [], q_nodes: [],
         atlas_hash: "", atlas_generated_at: ""
     }
