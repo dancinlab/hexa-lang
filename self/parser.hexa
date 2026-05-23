@@ -2933,32 +2933,61 @@ fn parse_postfix() {
             // and from comparison `!=` (lexed as NotEq, distinct kind).
             // Postfix Not only valid when immediately followed by `(` or `[`.
             // See parse_macro_def (L4164) for the corresponding definition syntax.
-            // Shape-A (RFC-pending): build a MacroCall AST node. Expansion =
-            // future cycle — codegen does not yet consume MacroCall.
+            //
+            // PROBE r9-6 (2026-05-23): fail loud at PARSE-time. The macro
+            // expander pass is not yet implemented; previously this site
+            // built a MacroCall AST node that either (a) crashed codegen
+            // with "unhandled expression kind: MacroCall" or (b) was
+            // routed through Call (which silently linked `format!` to
+            // the `format` intrinsic but emitted undefined-symbol errors
+            // for every other `name!(...)` at link time). Per g11/g21,
+            // reject at the call site with a clear, locationed diagnostic
+            // so the user is not chasing clang + link errors downstream.
+            // See `inbox/patches/macro-expander-pass-design.md` for the
+            // expander design proposal (token-tree splicing + hygiene).
             let next_k = p_peek_ahead(1).kind
-            if next_k == "LParen" {
-                p_advance() // consume `!`
-                p_advance() // consume `(`
-                let mac_args = parse_args()
-                p_expect("RParen")
-                expr = #{
-                    "kind": "MacroCall", "name": "", "value": "", "op": "(",
-                    "left": expr, "right": "", "cond": "", "then_body": "", "else_body": "",
-                    "params": "", "body": "", "args": mac_args, "fields": "", "items": "",
-                    "variants": "", "arms": "", "iter_expr": "", "ret_type": "",
-                    "target": "", "trait_name": "", "methods": ""
+            if next_k == "LParen" || next_k == "LBracket" {
+                // Extract macro name for the diagnostic. Most macro
+                // invocations are bare `Ident!(...)`; for compound left-
+                // hand sides (Field/Path/...) fall back to "<expr>".
+                let mac_name = "<expr>"
+                if to_string(expr.kind) == "Ident" {
+                    mac_name = to_string(expr.name)
                 }
-            } else if next_k == "LBracket" {
-                p_advance() // consume `!`
-                p_advance() // consume `[`
-                let mac_args = parse_args()
-                p_expect("RBracket")
-                expr = #{
-                    "kind": "MacroCall", "name": "", "value": "", "op": "[",
-                    "left": expr, "right": "", "cond": "", "then_body": "", "else_body": "",
-                    "params": "", "body": "", "args": mac_args, "fields": "", "items": "",
-                    "variants": "", "arms": "", "iter_expr": "", "ret_type": "",
-                    "target": "", "trait_name": "", "methods": ""
+                let bang_tok = p_peek()
+                let err_msg = "macro invocation '" + mac_name + "!(...)' is not yet implemented — file an inbox patch for the expander pass (see inbox/patches/macro-expander-pass-design.md)"
+                p_record_error(bang_tok.line, bang_tok.col, err_msg)
+                p_emit_parse_error(bang_tok, err_msg)
+                // Consume the macro-call tokens so the parser can continue
+                // (collect additional diagnostics in the same file rather
+                // than cascading on the dangling `!`). The synthesized
+                // MacroCall node carries the args sub-tree purely for
+                // error-recovery; codegen treats it as dead code (parser
+                // rejects upstream — see self/codegen.hexa MacroCall arm).
+                if next_k == "LParen" {
+                    p_advance() // consume `!`
+                    p_advance() // consume `(`
+                    let mac_args = parse_args()
+                    p_expect("RParen")
+                    expr = #{
+                        "kind": "MacroCall", "name": mac_name, "value": "", "op": "(",
+                        "left": expr, "right": "", "cond": "", "then_body": "", "else_body": "",
+                        "params": "", "body": "", "args": mac_args, "fields": "", "items": "",
+                        "variants": "", "arms": "", "iter_expr": "", "ret_type": "",
+                        "target": "", "trait_name": "", "methods": ""
+                    }
+                } else {
+                    p_advance() // consume `!`
+                    p_advance() // consume `[`
+                    let mac_args = parse_args()
+                    p_expect("RBracket")
+                    expr = #{
+                        "kind": "MacroCall", "name": mac_name, "value": "", "op": "[",
+                        "left": expr, "right": "", "cond": "", "then_body": "", "else_body": "",
+                        "params": "", "body": "", "args": mac_args, "fields": "", "items": "",
+                        "variants": "", "arms": "", "iter_expr": "", "ret_type": "",
+                        "target": "", "trait_name": "", "methods": ""
+                    }
                 }
             } else {
                 // Bare `!` after expr — not a macro call; let caller decide.

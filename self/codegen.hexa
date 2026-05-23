@@ -6183,20 +6183,18 @@ fn gen2_expr(node) {
         let inner_c = gen2_expr(node.expr)
         return "hexa_await_unwrap(" + inner_c + ")"
     }
-    // Rust convention — `name!(args)` desugars to `name(args)`. The parser
-    // builds a MacroCall node (parse_postfix `!` arm) but historically had no
-    // codegen consumer, so even `format!("…", x)` hit the unhandled-kind
-    // fallthrough. Route MacroCall through the Call path; `format!` then
-    // resolves to the existing `format(…)` intrinsic with no special-casing.
+    // dead: parser rejects upstream (PROBE r9-6, 2026-05-23).
+    // Macro invocations now fail loud at PARSE-time with a clear
+    // "macros not yet implemented" diagnostic (see self/parser.hexa
+    // parse_postfix `Not` arm). Reaching this branch means the parser
+    // synthesized a MacroCall node for error-recovery but somehow the
+    // file was transpiled despite the recorded parse error — that is a
+    // compiler-internal contract bug. Exit before clang runs so the gap
+    // surfaces to the developer, not the user. Future: replace with the
+    // expander pass per inbox/patches/macro-expander-pass-design.md.
     if k == "MacroCall" {
-        let _call = #{
-            "kind": "Call", "name": "", "value": "", "op": "",
-            "left": node.left, "right": "", "cond": "", "then_body": "", "else_body": "",
-            "params": "", "body": "", "args": node.args, "fields": "", "items": "",
-            "variants": "", "arms": "", "iter_expr": "", "ret_type": "",
-            "target": "", "trait_name": "", "methods": ""
-        }
-        return gen2_expr(_call)
+        eprintln("[codegen] ERROR: MacroCall reached codegen — parser should have rejected upstream (PROBE r9-6). This is a compiler bug; see inbox/patches/macro-expander-pass-design.md")
+        exit(1)
     }
     if k == "" { return "hexa_map_new()" }
     // Fail loud at TRANSPILE time — sibling of the stmt-kind branch.
