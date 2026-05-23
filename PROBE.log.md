@@ -278,10 +278,37 @@
 - [ ] codegen iterator `.collect`/`.chain`/`.count` no-args alias (r14-JJJJ, EEEE bundle) — OPEN [#550]
 - [⛔] KKKK / LLLL / MMMM / OOOO / PPPP — disk-full + 셸 routing → cycle 12 재진행 큐
 
-## 2026-05-24 라운드 14 cycle 12 — 진행중 (current)
+## 2026-05-24 라운드 14 cycle 12 — closed
 
-- [x] CHANGELOG + PROBE.log r14 cycle 7-11 batch sync (r14-PPPP) — 본 PR
+- [x] CHANGELOG + PROBE.log r14 cycle 7-11 batch sync (r14-PPPP) — LANDED [#597]
 - [ ] RFC 087 macro-expander pass design promote (inbox/rfc_drafts) — OPEN [#556]
+
+## 2026-05-24 라운드 14 cycle 13 — surgical RFC closure + stdlib MVP
+
+### Cycle 13 surgical fixes (LANDED)
+
+- [x] lexer raw string `r"..."` literal (r14-UUUU, RR-1 실 구현, cycle 11 RFC [#511] follow-up) — LANDED [#598]
+- [x] drill `--rounds N` multi-round resume state (r14-carry, hexa loop infra) — LANDED [#599]
+- [x] codegen match as tail-expression returns arm value (r14-VVVV) — LANDED [#600]
+- [x] parser+codegen let-else divergent binding (r14-UUUU let-else) — LANDED [#601]
+- [x] lexer 6 compound assign tokens `+=` `-=` `*=` `/=` `%=` `**=` 통합 (r14-MMMM, WWW-1) — LANDED [#603]
+- [x] codegen iterator `.collect`/`.chain`/`.count` no-args alias (r14-JJJJ, EEEE bundle, cycle 11 [#550] follow-up) — LANDED [#604]
+- [x] codegen optional chaining `?.` for struct fields (r14-BB, cycle 7-9 [#504] follow-up, round 3 INBOX closure) — LANDED [#607]
+- [x] codegen comptime-const mixed-type fold — min/max int+float promotion (r14 const-fold extension) — LANDED [#613]
+- [x] stdlib HashSet[T] MVP — insert/contains/remove/len/iter (collection gap) — LANDED [#616]
+- [x] runtime enum `<`/`>` ordering by declaration order (r14-TTTT, round 3 INBOX `enum < > ordering` closure) — LANDED [#617]
+
+### Cycle 13 sister landings (atlas / verify / inbox)
+
+- [x] verify CHSH Tsirelson + Hardy bound dispatch (RFC 045 atom enabler) — LANDED [#602]
+- [x] HEXA-LANG.log cycle 6-10 sync — unblocker chain + atom payoff — LANDED [#605]
+- [x] inbox RFC 090 `@target(firmware)` + `@target(rtl)` codegen lanes (promote rfc_063+064) — LANDED [#608]
+- [x] atlas RFC 047+046 — welch_t · wilson · ssh_winding · tknn_chern register (unblocker chain payoff) — LANDED [#609]
+- [x] CHANGELOG cycle 6-9 batch — enum stack closure · verify unblocker chain · auto-merge live — LANDED [#610]
+
+## 2026-05-24 라운드 14 cycle 14 — 진행중 (current)
+
+- [x] PROBE r14 cycle 13 batch sync (r14-PPPP-2) — 본 PR
 
 ## 2026-05-23 라운드 14 — 초기 carry-over (cycle 7 이전 INBOX, 일부는 위에서 닫힘)
 
