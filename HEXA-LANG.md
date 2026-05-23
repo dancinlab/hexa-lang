@@ -2,6 +2,22 @@
 
 > 현재 상태 (current-state, g15). 이력은 [HEXA-LANG.log.md](HEXA-LANG.log.md) · `CHANGELOG.md` · `git log`.
 
+@goal: Native compiler with atlas-bound theorems — 8 strict-lint stages, citation-enforced, no LLVM, no C-transpile, self-host.
+
+## 진행 milestone
+
+- [x] inbox/patches origin/main 0 truly-open — 모든 mechanical/agent-tractable 항목 해소
+- [x] transpiler regen #454 기반 cycle-3 batch 활성화
+- [x] RFC 081/082/083 design draft + D1-D7 결정 (Option/Result · trait · TLS)
+- [x] atlas n6/atlas.n6 단일 SSOT — hxc 완전 퇴역 (PR #312/#314/#315/#316/#576)
+- [x] enum stack — PR-1 (variant names) · PR-2.0 (TAG_ENUM 슬롯) · PR-2.1 (single variant) · PR-2.2 (all-unit) 닫음
+- [x] verify lane — float (welch_t / wilson_hilferty) + integer (ssh_winding / tknn_chern) 두 path 활성화
+- [x] atlas register 게이트 — `register_from_event` 🟢 NUMERICAL 허용 (RFC 047/046 atom land)
+- [ ] RFC 082 impl phase a — trait bound parser surface scaffold (INFLIGHT)
+- [ ] RFC 081 impl — typechecker enum surface + `?` propagation
+- [ ] RFC 083 impl — TLS primitive (system OpenSSL/SecureTransport 동적 링크)
+- [ ] type_checker `type_check` pass `hexa build` 통합 wiring (PR #503 follow-up)
+
 ## 정체성
 
 native compiler with atlas-bound theorems · 8 strict-lint stages · no LLVM · no C-transpile · self-host. SSOT = `github.com/dancinlab/hexa-lang` (`hx install hexa-lang`).

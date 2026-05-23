@@ -54,5 +54,42 @@
 - [x] RFC drafts INDEX — 2026-05-24 초안 084-088 카탈로그 등재 (PR #564)
 - [x] 27 patches archive — 해결 패치 manifest_log 이관 + PATCHES.yaml 동기화 (PR #562)
 - [x] json_object no-op 사이클 finding inbox 기록 (PR #551)
-- [~] atlas `hxc` dead-ref 정리 — `hxc_loader` dead refs + obsolete hxc smoke tests retire, `n6/atlas.n6` 단일 SSOT (PR #576, 진행 중)
-- [~] enum 스택 PR-2.1 + RFC 047 atom (진행 중)
+- [x] atlas `hxc` dead-ref 정리 — `hxc_loader` dead refs + obsolete hxc smoke tests retire, `n6/atlas.n6` 단일 SSOT (PR #576)
+- [x] enum 스택 PR-2.1 — 단일 enum 변종 `TAG_ENUM` emit + `to_string` synth (PR #582)
+- [x] RFC 047 atom — verify float-path 부재 finding inbox 기록 (PR #577)
+- [x] canonical-audit r10 — RFC 045 audit pass · long-ident truncation NOT reproducible (PR #591 archive)
+
+## 2026-05-24 — cycle 7 batch (CHANGELOG + RFC 089 + RFC 046 audit)
+
+- [x] CHANGELOG batch sync — 2026-05-24 session batch 기록 (phi_rs + enum stack + RFC 084-088 + atlas hxc cleanup, PR #578)
+- [x] RFC 089 promote — `hexa_ld --shared` + `dlopen` 동적 링크 surface (rfc_070 승격, PR #580)
+- [x] naming convention sweep — round-7 PROBE NO-OP 확정 (snake_case 통일 검증, finding only)
+- [x] RFC 046 audit pass — ssh_topology Zak + Hofstadter Chern integer-only finding (verify int-path 미지원, PR #586)
+
+## 2026-05-24 — cycle 8 batch (verify lane + enum PR-2.2 + 43 archive)
+
+- [x] verify float recompute path — `welch_t_crit` + `wilson_hilferty` 닫음 (RFC 047/046 float-atom unblock, PR #587)
+- [x] enum 스택 PR-2.2 — all-unit-variant enum `TAG_ENUM` emit (last 14 corpus failure → 0, PR #589)
+- [x] RFC 046 finding land — verify int-path 미지원 정황 inbox notes (PR #586)
+- [x] 43 patches archive — 해결 패치 manifest_log 이관 (cycle re-triage 중단, PR #588)
+
+## 2026-05-24 — cycle 9 batch (atom register gate + dispatch + scope leak + r10)
+
+- [x] atlas register 게이트 확장 — `register_from_event` 에서 🟢 NUMERICAL tier 허용 (RFC 047 atom 풀린, PR #593)
+- [x] verify ssh_winding + tknn_chern integer recompute — RFC 046 atom enabler (PR #592)
+- [x] integer match arm block-body scope leak — codegen 스코프 누수 surgical fix (PR #595)
+- [x] canonical-audit r10 closure — P0 long-ident truncation NOT reproducible archive (PR #591)
+- [x] runtime RSS poll SIGSEGV — `_hx_self_rss_bytes` unhook-safe Linux fix (F-LIVE-DISPATCH, PR #594)
+
+## 2026-05-24 — cycle 10/11 in-flight (atom payoff + drill + CHSH)
+
+- [x] domain init — `/domain init hexa lang` 으로 `HEXA_LANG.md` + `HEXA_LANG.log.md` (underscore) scaffold + `@goal:` 선언 (PR #596)
+- [x] CHANGELOG + PROBE r14 cycle 7-11 batch sync — ~40 PR 묶음 (PR #597, rebased land)
+- [x] raw string `r"..."` literal — lexer surface (PROBE r14-UUUU, PR #598)
+- [x] drill `--rounds N` multi-round resume state — `hexa drill` 재진입 버그 fix (PR #599)
+- [x] match as tail-expression — arm value 반환 codegen (PROBE r14-VVVV, PR #600 in-flight)
+- [x] H3X DFT 6q records — h3o/h3po/h3cl/h3f/h3si Tier 2 SUPPORTED atom 등록 (PR #557)
+
+## 2026-05-24 — domain log cycle 6-10 sync (g52 auto-log + g39 domain)
+
+- [x] HEXA-LANG.log cycle 6-10 진행 step 동기화 — unblocker chain + atom payoff 기록 (이 PR)
