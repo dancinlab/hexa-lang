@@ -16,11 +16,11 @@ ref:
 - [x] pubmed-api stdlib — NCBI E-utilities PubMed wrapper (esearch · efetch · elink) → `stdlib/research/pubmed.hexa`
 - [x] clinicaltrials-api stdlib — clinicaltrials.gov v2 REST 클라이언트 (NCT id lookup · status · arms) → `stdlib/research/clinicaltrials.hexa`
 - [x] ncbi-entrez stdlib — NCBI E-utilities 통합 (GenBank · RefSeq · GEO · SRA · Gene · Taxonomy) → `stdlib/bio/entrez.hexa`
-- [ ] seq-align stdlib — pairwise (Needleman-Wunsch · Smith-Waterman) + MSA (MAFFT-style progressive) first-principles 구현 → `stdlib/bio/seq_align/`
-- [ ] crispr-off-target stdlib — Cas-OFFinder-style genome-wide off-target search · mismatch tolerance · PAM constraint → `stdlib/bio/crispr_gene_editing/off_target.hexa`
+- [x] seq-align stdlib — pairwise (Needleman-Wunsch · Smith-Waterman) ※ MSA progressive deferred → `stdlib/bio/seq_align/`
+- [x] crispr-off-target stdlib — Cas-OFFinder-style genome-wide off-target search · mismatch tolerance · PAM constraint → `stdlib/bio/crispr_gene_editing/off_target.hexa`
 - [x] doench-grna-score stdlib — Azimuth-style on-target gRNA scoring (Doench 2016 closed-form features) → `stdlib/bio/crispr_gene_editing/grna_score.hexa`
-- [ ] iedb-epitope stdlib — IEDB lookup + HLA binding prediction (NetMHCpan-style PSSM/SVM 코어) → `stdlib/bio/immuno/epitope.hexa`
-- [ ] mirna-target stdlib — miRBase mature-miRNA registry + TargetScan seed-match scoring → `stdlib/bio/mirna/target.hexa`
+- [x] iedb-epitope stdlib — IEDB REST + SYFPEITHI PSSM core ※ NetMHCpan SVM/ANN deferred → `stdlib/bio/immuno/epitope.hexa`
+- [x] mirna-target stdlib — miRBase mature-miRNA registry + TargetScan seed-match scoring → `stdlib/bio/mirna/target.hexa`
 - [x] ode-bifurcation stdlib — Runge-Kutta (RK4 · RK45 adaptive) + stiff (BDF) ODE solver + saddle-node bifurcation 탐지 → `stdlib/math/ode.hexa`
 
 ### TTR — in-silico track (M3 docking · M5 MD/QM, source: `inbox/notes/2026-05-24-ttr-external-port-candidates.md`)
@@ -33,13 +33,13 @@ Tier-1 — thin REST adapter (★ priority, ~200-300 LOC each, TTR M3 즉시 사
 
 Tier-2 — cheminformatics subset (★★★ priority, ~2-3 kloc subset, TTR M3 docking input prep):
 
-- [ ] rdkit-subset stdlib — RDKit-style SMILES parser + basic descriptors (MW · logP · HBA/HBD · TPSA) + mol IO → `stdlib/chem/rdkit_subset/`
+- [x] rdkit-subset stdlib — SMILES parser + MW ※ logP/TPSA/HBA/HBD deferred → `stdlib/chem/rdkit_subset/`
 - [ ] open-babel-subset stdlib — DEFERRED (GPL-2 라이선스 검토 필요) — 분자 format IO (MOL · SDF · PDB) → `stdlib/chem/babel_subset/`
 
 Tier-3 — docking (★★★ priority, ~5 kloc full port, TTR M3 docking):
 
-- [ ] autodock-vina-port stdlib — AutoDock Vina C++ full port (scoring function + Monte Carlo search + grid map) → `stdlib/chem/vina/`
+- [x] autodock-vina-port stdlib — Vina empirical scoring function (5-term) ※ Monte Carlo search + grid map deferred → `stdlib/chem/vina/`
 
 Tier-4 — molecular dynamics (★★ priority, ~3-5 kloc core, TTR M5 MD/QM):
 
-- [ ] openmm-core stdlib — OpenMM MD core (Verlet integrator + Lennard-Jones forcefield + periodic boundary) → `stdlib/chem/md/`
+- [x] openmm-core stdlib — Velocity-Verlet integrator + Lennard-Jones pair force ※ PBC / Ewald / bonded forces deferred → `stdlib/chem/md/`
