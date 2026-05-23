@@ -5641,12 +5641,14 @@ HexaVal hexa_to_string(HexaVal v) {
         if (!_cached_small_ints_ready) _hexa_init_small_int_cache();
         return _cached_small_ints[HX_INT(v) - SMALL_INT_CACHE_MIN];
     }
-    /* Non-integer-valued float: %g (more precision than %.1f). */
+    /* Non-integer-valued float: route through env-honoring fmt so
+     * HEXA_FLOAT_REPR=g17 affects to_string output (PROBE r11 B6).
+     * Default fmt is "%g" (back-compat preserved when env unset). */
     if (HX_IS_FLOAT(v)) {
         double f = HX_FLOAT(v);
         if (!(isfinite(f) && f == floor(f) && f >= -1e15 && f <= 1e15)) {
             char buf[64];
-            snprintf(buf, 64, "%g", f);
+            snprintf(buf, 64, __hexa_print_float_fmt(), f);
             return hexa_str(buf);
         }
     }
@@ -5682,7 +5684,9 @@ static HexaVal _hexa_to_string_rec(HexaVal v, int depth) {
             if (isfinite(f) && f == floor(f) && f >= -1e15 && f <= 1e15) {
                 snprintf(buf, 64, "%.1f", f);
             } else {
-                snprintf(buf, 64, "%g", f);
+                /* Route non-integer floats through env-honoring fmt so
+                 * HEXA_FLOAT_REPR=g17 affects to_string (PROBE r11 B6). */
+                snprintf(buf, 64, __hexa_print_float_fmt(), f);
             }
             return hexa_str(buf);
         }
