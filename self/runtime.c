@@ -10144,6 +10144,19 @@ HexaVal hexa_exec_capture(HexaVal cmd) {
     return arr;
 }
 
+// exec_with_status3(cmd): canonical 3-tuple [stdout, stderr, exit_code]
+// shape (PROBE r8, inbox/patches/exec-with-status-3tuple-migration.md, PR B
+// "Option B1"). New, non-breaking surface alongside the legacy 2-tuple
+// `hexa_exec_with_status` so the ~150-file / ~530-binding caller migration
+// stays a separate stacked PR. Body delegates to hexa_exec_capture, which
+// already drains stdout+stderr via separate pipes through a select()-
+// multiplexed reader (no channel merge, no deadlock — PR #423). New callers
+// that want exit-code AND separate stderr use this name; the 2-tuple
+// `exec_with_status` keeps r[1]==exit_code for every existing caller.
+HexaVal hexa_exec_with_status3(HexaVal cmd) {
+    return hexa_exec_capture(cmd);
+}
+
 HexaVal rt_delete_file(HexaVal path) {
     if (!HX_IS_STR(path) || !HX_STR(path)) return hexa_void();
     (void)unlink(HX_STR(path));
@@ -11503,6 +11516,12 @@ static HexaVal _bt73_sha1_bytes_w(HexaVal s) { return hexa_sha1_bytes(s); }
 // hexa_call1. Shim these as TAG_FN globals so the linker finds them.
 static HexaVal _w_setenv(HexaVal n, HexaVal v) { return hexa_setenv(n, v); }
 static HexaVal _w_exec_capture(HexaVal c) { return hexa_exec_capture(c); }
+// PROBE r8 3-tuple bridge: codegen.hexa emits hexa_exec_with_status3(...)
+// AFTER a hexa_v2 regen; until then the baked transpiler resolves bare
+// `exec_with_status3(...)` through hexa_call1, so this TAG_FN global lets
+// the linker resolve the symbol meanwhile (same pattern as sha1 / exec_capture).
+HexaVal hexa_exec_with_status3(HexaVal cmd);
+static HexaVal _w_exec_with_status3(HexaVal c) { return hexa_exec_with_status3(c); }
 static HexaVal _w_push(HexaVal a, HexaVal v) { return hexa_array_push(a, v); }
 
 HexaVal timestamp;
@@ -11514,6 +11533,7 @@ HexaVal sha1_bytes;
 // prototype from <stdlib.h>, and `exec_capture` is new surface.
 HexaVal hx_setenv;
 HexaVal hx_exec_capture;
+HexaVal exec_with_status3;
 HexaVal hx_push;
 // Cycle 55 recovery — stdlib/fs builtins as bt73 TAG_FN HexaVal globals.
 HexaVal rt_fs_append_atomic(HexaVal path, HexaVal data);
@@ -11685,6 +11705,8 @@ static void _hexa_init_fn_shims(void) {
     // interp exec/env primitives — bootstrap-gap bridge
     hx_setenv       = hexa_fn_new((void*)_w_setenv,       2);
     hx_exec_capture = hexa_fn_new((void*)_w_exec_capture, 1);
+    // PROBE r8 3-tuple bridge (regen-gated codegen fallback).
+    exec_with_status3 = hexa_fn_new((void*)_w_exec_with_status3, 1);
     // hxa-004 ext: bare `push(arr, v)` emitted by legacy hexa_v2 as hexa_call2
     hx_push         = hexa_fn_new((void*)_w_push,         2);
     // Cycle 55 recovery — stdlib/fs builtins. codegen.hexa maps the

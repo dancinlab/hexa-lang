@@ -425,6 +425,7 @@ int64_t hexa_str_index_of_from(HexaVal s, HexaVal sub, HexaVal start);          
 HexaVal hexa_array_reverse(HexaVal arr);                                           /* runtime.c:4197 */
 HexaVal hexa_array_sort(HexaVal arr);                                              /* runtime.c:4240 */
 HexaVal hexa_exec_capture(HexaVal cmd);                                            /* runtime.c:10789 */
+HexaVal hexa_exec_with_status3(HexaVal cmd);                                       /* runtime.c — canonical 3-tuple [stdout, stderr, exit_code]; delegates to hexa_exec_capture. New non-breaking surface for exec_with_status (PROBE r8). */
 HexaVal hexa_from_cstring(HexaVal ptr);                                            /* runtime.c:6347 */
 HexaVal hexa_to_float(HexaVal v);                                                  /* runtime.c:5507 */
 HexaVal hexa_utc_compact_now(void);                                                /* runtime.c:11391 */
@@ -550,6 +551,7 @@ HexaVal hexa_sum(HexaVal a);                                                    
  * fn-pointer references across the runtime.o TU boundary. */
 extern HexaVal hx_setenv;                                                          /* runtime.c:12099 */
 extern HexaVal hx_exec_capture;                                                    /* runtime.c:12100 */
+extern HexaVal exec_with_status3;                                                  /* runtime.c - PROBE r8 3-tuple bare-ident bridge (regen-gated; pre-regen hexa_v2 emits hexa_call1(exec_with_status3,...)) */
 extern HexaVal hx_pipe_spawn;                                                      /* native/persistent_pipe.c:415 */
 extern HexaVal hx_pipe_send_line;                                                  /* native/persistent_pipe.c:416 */
 extern HexaVal hx_pipe_recv_line;                                                  /* native/persistent_pipe.c:417 */

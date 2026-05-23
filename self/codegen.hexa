@@ -5111,6 +5111,15 @@ fn gen2_expr(node) {
             if name == "exec_with_status" {
                 return "hexa_exec_with_status(" + gen2_expr(node.args[0]) + ")"
             }
+            // exec_with_status3(cmd) — canonical 3-tuple [stdout, stderr,
+            // exit_code] (PROBE r8). Non-breaking sibling of the 2-tuple
+            // exec_with_status; body delegates to hexa_exec_capture (separate
+            // stdout/stderr pipes, select-multiplexed drain). Pre-regen, the
+            // baked hexa_v2 routes bare `exec_with_status3(...)` through the
+            // TAG_FN bridge in runtime.c.
+            if name == "exec_with_status3" {
+                return "hexa_exec_with_status3(" + gen2_expr(node.args[0]) + ")"
+            }
             // exec_stream(cmd, on_line) — streams stdout lines through the
             // callback as they arrive, returns int exit code. Added 2026-04-25
             // to break the silent-stall pattern from hexa_exec()'s buffering.
@@ -8088,6 +8097,7 @@ fn _is_builtin_name(name) {
     if name == "script_path" { return true }
     if name == "exec" { return true }
     if name == "exec_with_status" { return true }
+    if name == "exec_with_status3" { return true }
     if name == "exec_stream_kill" { return true }
     if name == "read_file" { return true }
     if name == "write_file" { return true }
