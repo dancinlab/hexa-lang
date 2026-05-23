@@ -323,6 +323,131 @@ HexaVal hexa_sha256_file(HexaVal path_val) {
     return hexa_str_own(hex);
 }
 
+/* ══════════════════════════════════════════════════════════════════
+ * sha1 — FIPS 180-4 reference implementation
+ *
+ * Added for the RFC 6455 WebSocket Sec-WebSocket-Key handshake
+ * (Sec-WebSocket-Accept == base64(sha1(key + magic-GUID))). SHA-1 is
+ * cryptographically broken for collision resistance but RFC 6455 uses
+ * it purely as a fixed challenge-response transform, not for security —
+ * the spec mandates this exact construction. Pure-C, dependency-free,
+ * mirrors the sha256 reference above.
+ *
+ *   hexa_sha1(s)        : HexaVal str → HexaVal str (40-char lowercase hex)
+ *   hexa_sha1_bytes(s)  : HexaVal str → HexaVal str (raw 20-byte digest,
+ *                         binary-safe via hexa_str_own_with_len so the
+ *                         result can be fed straight into base64_encode)
+ * ══════════════════════════════════════════════════════════════════ */
+
+/* Binary-safe string constructor (defined in runtime_core.c); forward
+ * decl so this translation unit can return raw digest bytes that carry
+ * an explicit length (NUL-safe) for base64_encode to consume. */
+HexaVal hexa_str_own_with_len(char* s, size_t len);
+
+typedef struct {
+    uint32_t h[5];
+    uint64_t bitlen;
+    uint8_t  buf[64];
+    uint32_t buflen;
+} _hxa_sha1_ctx;
+
+#define _HXA_ROTL(x,n) (((x) << (n)) | ((x) >> (32 - (n))))
+
+static void _hxa_sha1_init(_hxa_sha1_ctx* c) {
+    c->h[0]=0x67452301; c->h[1]=0xEFCDAB89; c->h[2]=0x98BADCFE;
+    c->h[3]=0x10325476; c->h[4]=0xC3D2E1F0;
+    c->bitlen = 0;
+    c->buflen = 0;
+}
+
+static void _hxa_sha1_transform(_hxa_sha1_ctx* c, const uint8_t* blk) {
+    uint32_t w[80];
+    for (int i = 0; i < 16; i++) {
+        w[i] = ((uint32_t)blk[i*4] << 24) | ((uint32_t)blk[i*4+1] << 16)
+             | ((uint32_t)blk[i*4+2] << 8) | (uint32_t)blk[i*4+3];
+    }
+    for (int i = 16; i < 80; i++) {
+        w[i] = _HXA_ROTL(w[i-3] ^ w[i-8] ^ w[i-14] ^ w[i-16], 1);
+    }
+    uint32_t a=c->h[0], b=c->h[1], d=c->h[2], e=c->h[3], f=c->h[4];
+    for (int i = 0; i < 80; i++) {
+        uint32_t k, t;
+        if (i < 20)      { t = (b & d) | (~b & e);            k = 0x5A827999; }
+        else if (i < 40) { t = b ^ d ^ e;                     k = 0x6ED9EBA1; }
+        else if (i < 60) { t = (b & d) | (b & e) | (d & e);   k = 0x8F1BBCDC; }
+        else             { t = b ^ d ^ e;                     k = 0xCA62C1D6; }
+        uint32_t tmp = _HXA_ROTL(a, 5) + t + f + k + w[i];
+        f = e; e = d; d = _HXA_ROTL(b, 30); b = a; a = tmp;
+    }
+    c->h[0]+=a; c->h[1]+=b; c->h[2]+=d; c->h[3]+=e; c->h[4]+=f;
+}
+
+static void _hxa_sha1_update(_hxa_sha1_ctx* c, const uint8_t* data, size_t len) {
+    c->bitlen += (uint64_t)len * 8;
+    while (len > 0) {
+        size_t want = 64 - c->buflen;
+        size_t take = len < want ? len : want;
+        memcpy(c->buf + c->buflen, data, take);
+        c->buflen += (uint32_t)take;
+        data += take;
+        len  -= take;
+        if (c->buflen == 64) {
+            _hxa_sha1_transform(c, c->buf);
+            c->buflen = 0;
+        }
+    }
+}
+
+static void _hxa_sha1_final(_hxa_sha1_ctx* c, uint8_t out[20]) {
+    uint64_t bitlen = c->bitlen;
+    c->buf[c->buflen++] = 0x80;
+    if (c->buflen > 56) {
+        while (c->buflen < 64) c->buf[c->buflen++] = 0;
+        _hxa_sha1_transform(c, c->buf);
+        c->buflen = 0;
+    }
+    while (c->buflen < 56) c->buf[c->buflen++] = 0;
+    for (int i = 7; i >= 0; i--) c->buf[c->buflen++] = (uint8_t)((bitlen >> (i*8)) & 0xff);
+    _hxa_sha1_transform(c, c->buf);
+    for (int i = 0; i < 5; i++) {
+        out[i*4]   = (uint8_t)((c->h[i] >> 24) & 0xff);
+        out[i*4+1] = (uint8_t)((c->h[i] >> 16) & 0xff);
+        out[i*4+2] = (uint8_t)((c->h[i] >>  8) & 0xff);
+        out[i*4+3] = (uint8_t)( c->h[i]        & 0xff);
+    }
+}
+
+/* sha1(s) — accepts the string's full byte length (HX_STRLEN), so a
+ * binary-safe input (e.g. a digest) hashes correctly even with NULs. */
+HexaVal hexa_sha1(HexaVal s_val) {
+    if (!HX_IS_STR(s_val)) return hexa_str("");
+    const char* s = HX_STR(s_val) ? HX_STR(s_val) : "";
+    size_t n = HX_STR(s_val) ? (size_t)HX_STRLEN(s_val) : 0;
+    _hxa_sha1_ctx ctx;
+    _hxa_sha1_init(&ctx);
+    _hxa_sha1_update(&ctx, (const uint8_t*)s, n);
+    uint8_t digest[20];
+    _hxa_sha1_final(&ctx, digest);
+    char* hex = _hxa_hex_encode(digest, 20);
+    if (!hex) return hexa_str("");
+    return hexa_str_own(hex);
+}
+
+/* sha1_bytes(s) — raw 20-byte digest as a binary-safe hexa string.
+ * Intended for base64_encode(sha1_bytes(key + magic)) in the RFC 6455
+ * Sec-WebSocket-Accept computation. */
+HexaVal hexa_sha1_bytes(HexaVal s_val) {
+    if (!HX_IS_STR(s_val)) return hexa_str("");
+    const char* s = HX_STR(s_val) ? HX_STR(s_val) : "";
+    size_t n = HX_STR(s_val) ? (size_t)HX_STRLEN(s_val) : 0;
+    _hxa_sha1_ctx ctx;
+    _hxa_sha1_init(&ctx);
+    _hxa_sha1_update(&ctx, (const uint8_t*)s, n);
+    uint8_t digest[20];
+    _hxa_sha1_final(&ctx, digest);
+    return hexa_str_own_with_len((char*)digest, 20);
+}
+
 /* ── TAG_FN shim globals (bootstrap bridge) ──────────────────────
  * Same pattern as net.c / signal_flock.c. Interpreter path resolves
  * `exec_argv(...)` / `sha256(...)` through these shims until the
@@ -332,10 +457,14 @@ HexaVal hx_exec_argv;
 HexaVal hx_exec_argv_with_status;
 HexaVal hx_sha256;
 HexaVal hx_sha256_file;
+HexaVal hx_sha1;
+HexaVal hx_sha1_bytes;
 
 static void _hexa_init_exec_sha_fn_shims(void) {
     hx_exec_argv             = hexa_fn_new((void*)hexa_exec_argv,             1);
     hx_exec_argv_with_status = hexa_fn_new((void*)hexa_exec_argv_with_status, 1);
     hx_sha256                = hexa_fn_new((void*)hexa_sha256,                1);
     hx_sha256_file           = hexa_fn_new((void*)hexa_sha256_file,           1);
+    hx_sha1                  = hexa_fn_new((void*)hexa_sha1,                  1);
+    hx_sha1_bytes            = hexa_fn_new((void*)hexa_sha1_bytes,            1);
 }

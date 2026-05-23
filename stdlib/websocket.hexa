@@ -78,6 +78,11 @@
 // (proc_run_with_stdin's tempfile is /tmp + auto-unlinked).
 
 use "stdlib/proc"
+// Native ws:// streaming client (RFC 6455 over raw TCP, no websocat).
+// Closes the bulk of inbox/patches/websocket-streaming-client-websocat-
+// dependency.md: ws_connect/ws_recv now hold a stream open natively for
+// ws:// even when websocat is absent. wss:// still routes to websocat.
+use "stdlib/net/websocket_native"
 
 // ws_available — probe backends.
 //
@@ -346,7 +351,16 @@ pub fn ws_request_response(url: string, message: string, timeout_sec: int) {
 // to a FIFO the caller writes to (each write becomes a websocat stdin
 // line → text frame); `out` is the FIFO the caller reads from (each
 // websocat stdout line is one received text frame).
+//
+// ws:// is served NATIVELY (stdlib/net/websocket_native) — no websocat
+// needed; the returned handle carries backend="native" + "fd", and
+// ws_send / ws_recv / ws_close dispatch on backend. wss:// falls through
+// to the supervised-websocat path below (TLS is out of native scope).
 pub fn ws_connect(url: string, timeout_sec: int) {
+    // Native ws:// fast path — holds the stream open with no external binary.
+    if ws_supports_native(url) {
+        return ws_connect_native(url)
+    }
     let h = #{}
     h["ok"] = false
     h["pid"] = 0
@@ -393,6 +407,9 @@ pub fn ws_connect(url: string, timeout_sec: int) {
 // Appends `\n` to delimit the frame for websocat's line mode.
 pub fn ws_send(h, message: string) -> bool {
     if type_of(h) != "map" { return false }
+    if to_string(h["backend"]) == "native" {
+        return ws_send_native(h, message)
+    }
     let in_path = to_string(h["in"])
     if len(in_path) == 0 { return false }
     // Append-write to the FIFO. We do this via shell `printf` rather
@@ -412,6 +429,9 @@ pub fn ws_send(h, message: string) -> bool {
 // dead connection doesn't hang forever.
 pub fn ws_recv(h, timeout_sec: int) -> string {
     if type_of(h) != "map" { return "" }
+    if to_string(h["backend"]) == "native" {
+        return ws_recv_native(h, timeout_sec)
+    }
     let out_path = to_string(h["out"])
     if len(out_path) == 0 { return "" }
     let t = if timeout_sec > 0 { timeout_sec } else { 30 }
@@ -439,6 +459,9 @@ pub fn ws_shell_escape_for_test(s: string) -> string {
 // ws_close — terminate the supervised websocat + clean up FIFOs.
 pub fn ws_close(h) -> bool {
     if type_of(h) != "map" { return false }
+    if to_string(h["backend"]) == "native" {
+        return ws_close_native(h)
+    }
     let pid = to_int(h["pid"])
     let in_path = to_string(h["in"])
     let out_path = to_string(h["out"])

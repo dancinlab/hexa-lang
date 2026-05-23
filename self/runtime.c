@@ -11484,6 +11484,19 @@ HexaVal hexa_base64_decode(HexaVal s) {
 static HexaVal _bt73_timestamp_w(void) { return hexa_timestamp(); }
 static HexaVal _bt73_base64_encode_w(HexaVal s) { return hexa_base64_encode(s); }
 static HexaVal _bt73_base64_decode_w(HexaVal s) { return hexa_base64_decode(s); }
+// RFC 6455 WebSocket handshake (2026-05-23): bare-ident bootstrap bridge
+// for `sha1` / `sha1_bytes`. The codegen.hexa sha1 arm emits hexa_sha1(...)
+// directly AFTER a hexa_v2 regen; until then the baked transpiler emits
+// hexa_call1(sha1, ...) (generic bare-ident fallback), so these TAG_FN
+// globals let the linker resolve the symbol meanwhile — exactly the
+// pattern base64_encode uses. hexa_sha1 / hexa_sha1_bytes live in
+// native/exec_argv_sha256.c, #include'd near the bottom of this file —
+// forward-declare here so the wrappers type-check (runtime.c is compiled
+// without runtime.h preceding it).
+HexaVal hexa_sha1(HexaVal s_val);
+HexaVal hexa_sha1_bytes(HexaVal s_val);
+static HexaVal _bt73_sha1_w(HexaVal s) { return hexa_sha1(s); }
+static HexaVal _bt73_sha1_bytes_w(HexaVal s) { return hexa_sha1_bytes(s); }
 // interp bootstrap gap: hexa_v2 (already-baked transpiler) doesn't know
 // about setenv / exec_capture, so the interpreter dispatch in hexa_full.hexa
 // resolves bare `setenv(...)` through hexa_call2 / `exec_capture(...)` via
@@ -11495,6 +11508,8 @@ static HexaVal _w_push(HexaVal a, HexaVal v) { return hexa_array_push(a, v); }
 HexaVal timestamp;
 HexaVal base64_encode;
 HexaVal base64_decode;
+HexaVal sha1;
+HexaVal sha1_bytes;
 // Names intentionally prefixed — plain `setenv` would clobber the libc
 // prototype from <stdlib.h>, and `exec_capture` is new surface.
 HexaVal hx_setenv;
@@ -11664,6 +11679,9 @@ static void _hexa_init_fn_shims(void) {
     timestamp     = hexa_fn_new((void*)_bt73_timestamp_w,     0);
     base64_encode = hexa_fn_new((void*)_bt73_base64_encode_w, 1);
     base64_decode = hexa_fn_new((void*)_bt73_base64_decode_w, 1);
+    // RFC 6455 WS handshake bare-ident bridge (regen-gated codegen fallback).
+    sha1          = hexa_fn_new((void*)_bt73_sha1_w,          1);
+    sha1_bytes    = hexa_fn_new((void*)_bt73_sha1_bytes_w,    1);
     // interp exec/env primitives — bootstrap-gap bridge
     hx_setenv       = hexa_fn_new((void*)_w_setenv,       2);
     hx_exec_capture = hexa_fn_new((void*)_w_exec_capture, 1);
