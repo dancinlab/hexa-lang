@@ -1,0 +1,240 @@
+// stdlib/bio/brenda.hexa — BRENDA enzyme DB client (parse-surface, cached-fixture build).
+//
+// HONESTY HEADER ────────────────────────────────────────────────────
+// BRENDA's official wire is a SOAP API gated on academic registration
+// (https://www.brenda-enzymes.org/soap.php) — email/password required,
+// not free-curl. The HTML page at
+//   https://www.brenda-enzymes.org/enzyme.php?ecno=<EC>
+// is human-readable, not a stable JSON endpoint.
+//
+// This module ships the *parse surface* + a cached synthetic fixture
+// (compiler/bridges/_cache/brenda.frozen.json). It does NOT plumb the
+// live SOAP wire — that is a follow-up milestone gated on credential
+// management. Per @D try-live-or-fallback and the `hexa verify` rubric:
+//   - parse-correctness oracle  →  🔵 SUPPORTED-FORMAL (deterministic)
+//   - live SOAP integration     →  🟠 INSUFFICIENT / DEFERRED
+//
+// TODO(brenda-soap-wire): wire SOAP2 client once secret-manager carries
+// `brenda.user` / `brenda.password`. Reference:
+//   - SOAP WSDL: https://www.brenda-enzymes.org/soap/brenda_zeep.py
+//   - REST-ish HTML: https://www.brenda-enzymes.org/enzyme.php?ecno=<EC>
+//   - Citation DOI: 10.1093/nar/gkaa1025  (Chang et al., NAR 2021)
+//
+// CACHED JSON SHAPE ─────────────────────────────────────────────────
+// Single flat object — one enzyme record per file. Keys mirror the
+// BRENDA SOAP2 field tags (`ecNumber`, `recommendedName`, `kmValue`,
+// `turnoverNumber`, `organism`, `substrate`, `phOptimum`,
+// `temperatureOptimum`) snake-cased and unit-suffixed where the SOAP
+// payload is unit-agnostic:
+//
+//   {
+//     "ec_number":             "3.1.1.7",
+//     "recommended_name":      "Acetylcholinesterase",
+//     "organism":              "Homo sapiens",
+//     "km_uM":                 92.5,        // KM in micromolar
+//     "kcat_per_s":            14000.0,     // turnover number, /s
+//     "substrate":             "acetylcholine",
+//     "ph_optimum":            8.0,
+//     "temperature_optimum_C": 37.0
+//   }
+//
+// Parser strategy: lightweight substring slicing (no full JSON parser
+// dep — same approach as stdlib/research/arxiv.hexa). Sufficient for
+// the flat single-record shape we control.
+
+struct BrendaEnzyme {
+    ec_number: string,
+    recommended_name: string,
+    organism: string,
+    km_uM: float,
+    kcat_per_s: float,
+    substrate: string,
+    ph_optimum: float,
+    temperature_optimum_C: float,
+}
+
+let BRENDA_FIXTURE = "compiler/bridges/_cache/brenda.frozen.json"
+let BRENDA_HTML_BASE = "https://www.brenda-enzymes.org/enzyme.php?ecno="
+
+// ── string utilities ────────────────────────────────────────────────
+
+fn _idx(hay: string, needle: string, from: int) -> int {
+    let n = len(hay)
+    let m = len(needle)
+    if m == 0 { return from }
+    if m > n { return -1 }
+    let mut i = from
+    while i + m <= n {
+        if hay.substring(i, i + m) == needle { return i }
+        i = i + 1
+    }
+    return -1
+}
+
+fn _is_ws(c: string) -> bool {
+    return c == " " || c == "\t" || c == "\n" || c == "\r"
+}
+
+// Locate the value start for `"key"` — returns the index just past the
+// `:` and any whitespace. Returns -1 when the key is absent.
+fn _value_start(body: string, key: string) -> int {
+    let probe = "\"" + key + "\""
+    let k = _idx(body, probe, 0)
+    if k < 0 { return -1 }
+    let mut i = k + len(probe)
+    let n = len(body)
+    while i < n && _is_ws(body.substring(i, i + 1)) { i = i + 1 }
+    if i >= n || body.substring(i, i + 1) != ":" { return -1 }
+    i = i + 1
+    while i < n && _is_ws(body.substring(i, i + 1)) { i = i + 1 }
+    return i
+}
+
+// Read a JSON string value for `key`. Handles `\"` and `\\` escape
+// pairs (sufficient for our controlled fixture; we never embed
+// unicode escapes here).
+fn _str_field(body: string, key: string) -> string {
+    let s = _value_start(body, key)
+    if s < 0 { return "" }
+    if body.substring(s, s + 1) != "\"" { return "" }
+    let n = len(body)
+    let mut i = s + 1
+    let mut out = ""
+    while i < n {
+        let c = body.substring(i, i + 1)
+        if c == "\\" && i + 1 < n {
+            let nxt = body.substring(i + 1, i + 2)
+            if nxt == "\"" { out = out + "\"" }
+            else if nxt == "\\" { out = out + "\\" }
+            else if nxt == "n" { out = out + "\n" }
+            else if nxt == "t" { out = out + "\t" }
+            else { out = out + nxt }
+            i = i + 2
+        } else if c == "\"" {
+            return out
+        } else {
+            out = out + c
+            i = i + 1
+        }
+    }
+    return out
+}
+
+// Char-wise positive/negative float parser. Accepts optional sign,
+// integer part, fractional part, and `e[+/-]?digits` exponent.
+// Returns 0.0 on no-digit input — caller is responsible for the
+// "field missing" sentinel via `_value_start`.
+fn _parse_float_at(body: string, start: int) -> float {
+    let n = len(body)
+    let mut i = start
+    while i < n && _is_ws(body.substring(i, i + 1)) { i = i + 1 }
+    if i >= n { return 0.0 }
+    let mut sign = 1.0
+    let ch0 = body.substring(i, i + 1)
+    if ch0 == "+" { i = i + 1 }
+    else if ch0 == "-" { sign = 0.0 - 1.0; i = i + 1 }
+    let ord0 = ord("0")
+    let ord9 = ord("9")
+    let mut val = 0.0
+    let mut consumed = false
+    while i < n {
+        let c = ord(body.substring(i, i + 1))
+        if c < ord0 || c > ord9 { break }
+        val = val * 10.0 + to_float(c - ord0)
+        consumed = true
+        i = i + 1
+    }
+    if i < n && body.substring(i, i + 1) == "." {
+        i = i + 1
+        let mut pw = 0.1
+        while i < n {
+            let cf = ord(body.substring(i, i + 1))
+            if cf < ord0 || cf > ord9 { break }
+            val = val + to_float(cf - ord0) * pw
+            pw = pw / 10.0
+            consumed = true
+            i = i + 1
+        }
+    }
+    if consumed == false { return 0.0 }
+    if i < n {
+        let ce = body.substring(i, i + 1)
+        if ce == "e" || ce == "E" {
+            let mut j = i + 1
+            let mut exp_sign = 1
+            if j < n {
+                let cs = body.substring(j, j + 1)
+                if cs == "+" { j = j + 1 }
+                else if cs == "-" { exp_sign = 0 - 1; j = j + 1 }
+            }
+            let mut exp_val = 0
+            let mut exp_seen = false
+            while j < n {
+                let ce2 = ord(body.substring(j, j + 1))
+                if ce2 < ord0 || ce2 > ord9 { break }
+                exp_val = exp_val * 10 + (ce2 - ord0)
+                exp_seen = true
+                j = j + 1
+            }
+            if exp_seen {
+                let mut k = 0
+                let mut mult = 1.0
+                while k < exp_val {
+                    mult = mult * 10.0
+                    k = k + 1
+                }
+                if exp_sign < 0 { val = val / mult } else { val = val * mult }
+            }
+        }
+    }
+    return sign * val
+}
+
+fn _float_field(body: string, key: string) -> float {
+    let s = _value_start(body, key)
+    if s < 0 { return 0.0 }
+    return _parse_float_at(body, s)
+}
+
+// ── public surface ──────────────────────────────────────────────────
+
+// Pure parser. Accepts the flat JSON shape documented in the header.
+// Missing fields default to "" / 0.0 — callers needing strict presence
+// should re-validate against the header schema.
+pub fn brenda_parse(json_body: string) -> BrendaEnzyme {
+    let empty = BrendaEnzyme{
+        ec_number: "", recommended_name: "", organism: "",
+        km_uM: 0.0, kcat_per_s: 0.0, substrate: "",
+        ph_optimum: 0.0, temperature_optimum_C: 0.0,
+    }
+    if len(json_body) == 0 { return empty }
+    return BrendaEnzyme{
+        ec_number:             _str_field(json_body, "ec_number"),
+        recommended_name:      _str_field(json_body, "recommended_name"),
+        organism:              _str_field(json_body, "organism"),
+        km_uM:                 _float_field(json_body, "km_uM"),
+        kcat_per_s:            _float_field(json_body, "kcat_per_s"),
+        substrate:             _str_field(json_body, "substrate"),
+        ph_optimum:            _float_field(json_body, "ph_optimum"),
+        temperature_optimum_C: _float_field(json_body, "temperature_optimum_C"),
+    }
+}
+
+// Lookup by EC number. CURRENT BUILD: reads the cached frozen fixture
+// — there is exactly one record (EC 3.1.1.7 acetylcholinesterase).
+// Returns an empty record for any other EC until the SOAP wire lands.
+//
+// TODO(brenda-soap-wire): replace with SOAP2 round-trip — see header.
+pub fn brenda_lookup_by_ec(ec: string) -> BrendaEnzyme {
+    let empty = BrendaEnzyme{
+        ec_number: "", recommended_name: "", organism: "",
+        km_uM: 0.0, kcat_per_s: 0.0, substrate: "",
+        ph_optimum: 0.0, temperature_optimum_C: 0.0,
+    }
+    if len(ec) == 0 { return empty }
+    let body = read_file(BRENDA_FIXTURE)
+    if len(body) == 0 { return empty }
+    let rec = brenda_parse(body)
+    if rec.ec_number != ec { return empty }
+    return rec
+}
