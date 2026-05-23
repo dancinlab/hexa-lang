@@ -168,3 +168,18 @@ bash /Users/ghost/core/hexa-lang/inbox/fires/rfc067_ptma_swizzle128_2026_05_22/m
 ```
 
 Requires `ssh ubu-1` access + `/usr/local/cuda-12.9` on ubu-1.
+
+## 추가 shape (2026-05-23 ship)
+
+기존 6 shape (`512..8192`) 외 `256/384/448` shape 산출물도 동봉(generator `SHAPES`
+확장 fire). 모두 동일 RFC 067 N201 kernel template (TMA SWIZZLE_128B + mma.sync
+m16n8k16 + Hilbert d2xy, 64x64 per-CTA tile, 4-warp 2x2, `.target sm_120a`); shape
+parameter (M=N=K · K-tiles=K/64 · Hilbert p=next_pow2(M/64) · smem stride) 만 차이.
+
+- 256: K-tiles=4, Hilbert p=4 (정확한 거듭제곱이라 round-2 블록 생략됨)
+- 384: K-tiles=6, Hilbert p=8 (next_pow2(6))
+- 448: K-tiles=7, Hilbert p=8 (next_pow2(7))
+
+`measure.sh` 는 이 3 shape 에 대해 아직 미실행. cuBLAS 비교 측정은 추후 N20x
+follow-up cycle 에서 필요. owner 미확인이라 별도 fire cycle 진행 시 측정값 업데이트
+가능.
