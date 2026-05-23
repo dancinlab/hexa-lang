@@ -61647,3 +61647,29 @@
   J2: sigma*tau = H2 falsifier evaluation surface area (24)
   master_identity: sigma*phi = n*tau = 24
   real_limit_anchor: real_limits.margolus_levitin
+
+# ── RFC 045 QMIRROR PR-A — Bells/Nonlocality atoms (atlas_cli register-arm sync) ──
+
+@F verified-chsh_tsirelson-num = chsh_tsirelson() = 2.8284271247461903 :: formula [d=2026-05-24 active]
+  tier = "🟢 SUPPORTED-NUMERICAL"
+  verified-by = "hexa verify --expr chsh_tsirelson 2.8284271247461903"
+  cite = "RFC 045 qmirror — Tsirelson 1980 Lett. Math. Phys. 4 93 / CHSH 1969 PRL 23 880; TECS-L n6-rep Tier2 hexa-native 2*sqrt(2)"
+  provenance = "tool/atlas_cli.hexa register --from-verify (direct node-gen, no .n6; 🟢 numerical)"
+
+@F verified-hardy_bound-2-num = hardy_bound(2) = 0.09016994374947425 :: formula [d=2026-05-24 active]
+  tier = "🟢 SUPPORTED-NUMERICAL"
+  verified-by = "hexa verify --expr hardy_bound 2 0.09016994374947425"
+  cite = "RFC 045 qmirror — Hardy 1993 PRL 71 1665 / Adhikary-Mandal arXiv:2505.10170 Eq.5; (5*sqrt(5)-11)/2 closed-form via Newton on x^{N+1}-2x+1=0"
+  provenance = "tool/atlas_cli.hexa register --from-verify (direct node-gen, no .n6; 🟢 numerical)"
+
+@F verified-mabk_quantum_max-3-num = mabk_quantum_max(3) = 2.0 :: formula [d=2026-05-24 active]
+  tier = "🟢 SUPPORTED-NUMERICAL"
+  verified-by = "hexa verify --expr mabk_quantum_max 3 2.0"
+  cite = "RFC 045 qmirror — Mermin 1990 PRL 65 1838 / Ardehali 1992 PRA 46 5375 / Belinskii-Klyshko 1993; quantum bound B_N^Q = 2^((N-1)/2)"
+  provenance = "tool/atlas_cli.hexa register --from-verify (direct node-gen, no .n6; 🟢 numerical)"
+
+@F verified-pt_doily_quantum_win-num = pt_doily_quantum_win() = 1.0 :: formula [d=2026-05-24 active]
+  tier = "🟢 SUPPORTED-NUMERICAL"
+  verified-by = "hexa verify --expr pt_doily_quantum_win 1.0"
+  cite = "RFC 045 qmirror — Brassard-Broadbent-Tapp 2005 Found. Phys. 35 1877 (arXiv:quant-ph/0407221); Mermin-Peres magic-square pseudo-telepathy quantum win = 1 exactly"
+  provenance = "tool/atlas_cli.hexa register --from-verify (direct node-gen, no .n6; 🟢 numerical)"

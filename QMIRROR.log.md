@@ -2,6 +2,16 @@
 
 Append-only history sister of `QMIRROR.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
+## 2026-05-24 — cycle 14 — PR-A 2차 closure (register mirror + n6 sync + lookup wire)
+
+- [x] PR-A Bells/Nonlocality 2차 — atlas_cli register mirror 4 atom + 0-arg float dispatch + `_is_zero_arg_float_fn_register` + `_adapt_verify_float` argc=0 echo
+- [x] n6/atlas.n6 sync — 4 PR-A atom append (`@F verified-{chsh_tsirelson,hardy_bound-2,mabk_quantum_max-3,pt_doily_quantum_win}-num`)
+- [x] compiler/atlas/by_kind/f.gen.hexa ATLAS_F_NODES sync — 8 atom (cycle 10 #609 4 + cycle 13 #626 4), 빈 array → 8 entries
+- [x] stdlib/loop/cycle.hexa::build_atlas_view `f_nodes: ATLAS_F_NODES` wire (cycle 10 #609 와 동일 패턴 closure)
+- [x] inbox finding-note RESOLVED + archive 이동
+- [x] `hexa atlas lookup F verified-{chsh_tsirelson,hardy_bound-2,mabk_quantum_max-3,pt_doily_quantum_win}-num` 4/4 PASS — milestone 1/5 (PR-A) close
+- [x] QMIRROR.md PR-A milestone `- [x]` flip
+
 ## 2026-05-24 — cycle 13 — PR-A retry + PR-B verify dispatch + cah6 retry
 
 - [ ] PR-A Bells/Nonlocality — 4-atom batch (CHSH/Hardy/MABK/Pseudo-tel) lane 1 재시도 — cycle 12 truncation 회수, 단일 PR 단위 land 시도
