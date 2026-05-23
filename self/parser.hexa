@@ -3035,6 +3035,20 @@ fn parse_range() {
     let k = p_peek_kind()
     if k == "DotDot" {
         p_advance()
+        // PROBE r14 #C: open-end slice — `arr[a..]` (suffix). When the
+        // next token closes the subscript, synthesize Range with empty
+        // `right`; the Index codegen in self/codegen.hexa already lowers
+        // an empty Range.right to `hexa_len(arr)` (canonical Rust/Python
+        // `arr[a..]` / `arr[a:]` semantics).
+        if p_peek_kind() == "RBracket" {
+            return #{
+                "kind": "Range", "name": "", "value": "exclusive", "op": "",
+                "left": left, "right": "", "cond": "", "then_body": "", "else_body": "",
+                "params": "", "body": "", "args": "", "fields": "", "items": "",
+                "variants": "", "arms": "", "iter_expr": "", "ret_type": "",
+                "target": "", "trait_name": "", "methods": ""
+            }
+        }
         let end = parse_addition()
         // G21: step range — 0..10 step 2
         let mut step_expr = ""
@@ -3051,6 +3065,18 @@ fn parse_range() {
         }
     } else if k == "DotDotEq" {
         p_advance()
+        // PROBE r14 #C: `arr[a..=]` — extremely rare but symmetric with
+        // `arr[a..]`. Same lowering (empty right ⇒ hexa_len). Inclusive
+        // tag is irrelevant when right is absent.
+        if p_peek_kind() == "RBracket" {
+            return #{
+                "kind": "Range", "name": "", "value": "exclusive", "op": "",
+                "left": left, "right": "", "cond": "", "then_body": "", "else_body": "",
+                "params": "", "body": "", "args": "", "fields": "", "items": "",
+                "variants": "", "arms": "", "iter_expr": "", "ret_type": "",
+                "target": "", "trait_name": "", "methods": ""
+            }
+        }
         let end = parse_addition()
         // G21: step range — 0..=10 step 2
         let mut step_expr2 = ""
@@ -3342,6 +3368,38 @@ fn parse_postfix() {
         } else if k == "LBracket" {
             // Index access or slice syntax: arr[i], arr[1:3], arr[:3], arr[2:], arr[:]
             p_advance()
+            // PROBE r14 #C: Rust-canonical open-range slice with `..` —
+            // prefix forms `arr[..]`, `arr[..b]`, `arr[..=b]`. Synthesize
+            // a Range node with empty `left` so it flows through the
+            // existing Index+Range codegen path (self/codegen.hexa, the
+            // `if k == "Index"` branch lowers empty Range.left to
+            // `hexa_int(0)` and missing right to `hexa_len(arr)`).
+            // Suffix `arr[a..]` is handled inside parse_range itself.
+            let pk_lb = p_peek_kind()
+            if pk_lb == "DotDot" || pk_lb == "DotDotEq" {
+                let incl_v = if pk_lb == "DotDotEq" { "inclusive" } else { "exclusive" }
+                p_advance() // consume '..' / '..='
+                let mut rng_right = ""
+                if p_peek_kind() != "RBracket" {
+                    rng_right = parse_addition()
+                }
+                p_expect("RBracket")
+                let rng = #{
+                    "kind": "Range", "name": "", "value": incl_v, "op": "",
+                    "left": "", "right": rng_right, "cond": "", "then_body": "", "else_body": "",
+                    "params": "", "body": "", "args": "", "fields": "", "items": "",
+                    "variants": "", "arms": "", "iter_expr": "", "ret_type": "",
+                    "target": "", "trait_name": "", "methods": ""
+                }
+                expr = #{
+                    "kind": "Index", "name": "", "value": "", "op": "",
+                    "left": expr, "right": rng, "cond": "", "then_body": "", "else_body": "",
+                    "params": "", "body": "", "args": "", "fields": "", "items": "",
+                    "variants": "", "arms": "", "iter_expr": "", "ret_type": "",
+                    "target": "", "trait_name": "", "methods": ""
+                }
+                continue
+            }
             // G20: Check for slice syntax — [:...] (colon immediately)
             if p_peek_kind() == "Colon" {
                 // arr[:end] or arr[:]
