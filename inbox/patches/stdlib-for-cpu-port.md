@@ -1,5 +1,8 @@
 # `stdlib` surface needed to port `u-root/cpu` to hexa — meta note
 
+> **Status:** ✅ FIXED — all 5 sub-patches landed: stdlib-os-mount-linux (applied 2026-05-13), stdlib-os-namespace-linux (applied 2026-05-13), stdlib-os-pty (applied 2026-05-13), stdlib-9p-codec MVP (applied 2026-05-14), stdlib-ssh-client full-stack (landed 2026-05-14). This umbrella meta-note tracked them as an index; with every component shipped, the cpu-port surface is complete and downstream wilson `pool` plugin Stage-B/C is unblocked.
+
+
 **From:** wilson (downstream) — 2026-05-13. Filed alongside 5 atomic
 companion notes (linked below). Together they're the hexa-lang
 surface that lets a downstream `pool` plugin run `cpu`-pattern (Plan 9
