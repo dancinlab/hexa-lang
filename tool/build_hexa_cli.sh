@@ -40,7 +40,7 @@
 # Usage:
 #   tool/build_hexa_cli.sh
 #   # install (optional):
-#   #   cp build/hexa_cli_driver    ~/.hx/bin/hexa.real
+#   #   cp build/hexa_cli_driver    ~/.hx/bin/hxv2
 #   #   cp build/hexa_module_loader ~/core/hexa-lang/build/hexa_module_loader
 
 set -eu
@@ -169,5 +169,5 @@ echo "  driver        : $DRIVER_OUT ($(wc -c < "$DRIVER_OUT" | tr -d ' ') bytes)
 echo "  module_loader : $ML_OUT ($(wc -c < "$ML_OUT" | tr -d ' ') bytes)"
 echo ""
 echo "install (optional):"
-echo "  cp $DRIVER_OUT ~/.hx/bin/hexa.real"
+echo "  cp $DRIVER_OUT ~/.hx/bin/hxv2"
 echo "  # build/hexa_module_loader is auto-discovered by resolve_module_loader_compiled()"
