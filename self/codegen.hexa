@@ -6622,6 +6622,22 @@ fn gen2_match_ternary(arms, scrutinee_c, idx) {
     let pat = arm.left
     let is_wildcard = (type_of(pat) != "string" && pat.kind == "Wildcard")
 
+    // A bare lowercase Ident pattern (`n -> …` / `n if g -> …`) is an
+    // IRREFUTABLE BINDING (Rust-canonical): it binds the scrutinee to `n`
+    // and always matches. Previously gen2_match_cond fell through to the
+    // equality fallback `hexa_eq(scrutinee, n)` with `n` undeclared — a
+    // clang hard-error — AND the guard referencing `n` was emitted with
+    // `n` out of scope. Detect it here so both the guard and the value
+    // get `n` bound via a stmt-expr (round-5 binding-arm + guard fix;
+    // sibling to the EnumPath payload-binder handling below).
+    let mut _bind_name = ""
+    if type_of(pat) != "string" && pat.kind == "Ident" {
+        let _pn = pat.name
+        if type_of(_pn) == "string" && _pn != "_" {
+            _bind_name = _pn
+        }
+    }
+
     // Get the value from the arm body (last expr)
     let mut val = gen2_arm_value(arm.body)
 
@@ -6635,10 +6651,15 @@ fn gen2_match_ternary(arms, scrutinee_c, idx) {
             val = "({ HexaVal " + _hexa_mangle_ident(_bn) + " = hexa_index_get(" + scrutinee_c + ", hexa_int(1)); (" + val + "); })"
         }
     }
+    // Bare-Ident binder: bind the whole scrutinee into the arm value.
+    if len(_bind_name) > 0 {
+        val = "({ HexaVal " + _hexa_mangle_ident(_bind_name) + " = " + scrutinee_c + "; (" + val + "); })"
+    }
 
-    // Build pattern-match condition; wildcard pattern is unconditional.
+    // Build pattern-match condition; wildcard + bare-Ident binder are
+    // unconditional (both always match the value, refutation is the guard).
     let mut cond = ""
-    if is_wildcard {
+    if is_wildcard || len(_bind_name) > 0 {
         cond = "1"
     } else {
         cond = gen2_match_cond(pat, scrutinee_c)
@@ -6651,7 +6672,13 @@ fn gen2_match_ternary(arms, scrutinee_c, idx) {
     let _guard = arm.cond
     let _has_guard = type_of(_guard) != "string"
     if _has_guard {
-        cond = "(" + cond + " && hexa_truthy(" + gen2_expr(_guard) + "))"
+        let mut _guard_c = gen2_expr(_guard)
+        // For a bare-Ident binder the guard references `n` — bind it in a
+        // stmt-expr so the guard sees the scrutinee.
+        if len(_bind_name) > 0 {
+            _guard_c = "({ HexaVal " + _hexa_mangle_ident(_bind_name) + " = " + scrutinee_c + "; (" + _guard_c + "); })"
+        }
+        cond = "(" + cond + " && hexa_truthy(" + _guard_c + "))"
     }
 
     // Pure wildcard with no guard short-circuits to the value (existing
