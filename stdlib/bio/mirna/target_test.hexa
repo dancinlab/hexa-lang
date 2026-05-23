@@ -1,0 +1,139 @@
+// stdlib/bio/mirna/target_test.hexa — measured oracle for mirna seed-scan + mirbase subset.
+//
+// Each case is hand-counted from the TargetScan canonical definitions
+// (Lewis et al. 2005; Agarwal et al. 2015) on short synthetic 3' UTRs
+// engineered to contain the expected seed-match site type. No I/O.
+//
+//   T1 let-7a-5p   → LIN28B-like UTR · expect 7mer-m8 at pos 4
+//   T2 miR-21-5p   → PDCD4-like UTR  · expect 8mer    at pos 4
+//   T3 miR-122-5p  → HCV-like UTR    · expect 7mer-A1 at pos 3
+//   T4 mirbase_lookup("hsa-let-7a-5p") sequence == canonical mature
+//   T5 mirna_seed_score("8mer") == -0.30  (TargetScan 7.2 intercept)
+//   T6 mirna_seed_score("7mer-m8") == -0.16
+//   T7 mirbase_all() returns 20 entries (the hardcoded subset cardinality)
+
+import "mirbase_subset.hexa"
+import "target.hexa"
+
+let mut pass_count = 0
+let mut total = 0
+let mut first_fail = ""
+
+fn abs_f(x: float) -> float {
+    if x < 0.0 { return 0.0 - x }
+    return x
+}
+
+fn check(name: string, cond: bool, detail: string) {
+    total = total + 1
+    if cond {
+        pass_count = pass_count + 1
+        println("  ok : " + name + " " + detail)
+    } else {
+        if first_fail == "" { first_fail = name }
+        println("  FAIL " + name + " " + detail)
+    }
+}
+
+// Pull out a match by 0-indexed UTR start position; returns sentinel
+// MirnaSeedMatch with utr_position=-1 if not found.
+fn find_at(hits: array, pos: int) -> MirnaSeedMatch {
+    let n = len(hits)
+    let mut i = 0
+    while i < n {
+        let h = hits[i]
+        if h.utr_position == pos { return h }
+        i = i + 1
+    }
+    return MirnaSeedMatch {
+        mirna_name: "", mirna_sequence: "", utr_position: 0 - 1,
+        match_type: "", score: 0.0,
+    }
+}
+
+// ── T1 — let-7a-5p · 7mer-m8 ─────────────────────────────────────────
+// miRNA UGAGGUAGUAGGUUGUAUAGUU → seed GAGGUA → revcomp UACCUC
+// miRNA pos 8 = G → m8 base on UTR = C
+// UTR engineered: GGGCUACCUCGG (indices 0..11)
+//   i=4 window=UACCUC ✓ · i-1=C ✓ m8 · i+6=G (not A) → 7mer-m8
+let mirna1 = "UGAGGUAGUAGGUUGUAUAGUU"
+let utr1   = "GGGCUACCUCGG"
+let hits1  = mirna_seed_scan(mirna1, utr1)
+let m1     = find_at(hits1, 4)
+check("T1 let-7a-5p · LIN28B-like · 7mer-m8 @ pos 4",
+      m1.utr_position == 4 && m1.match_type == "7mer-m8"
+      && abs_f(m1.score - (0.0 - 0.16)) < 1.0e-9,
+      "pos=" + to_string(m1.utr_position) + " type=" + m1.match_type
+      + " score=" + to_string(m1.score) + " n_hits=" + to_string(len(hits1)))
+
+// ── T2 — miR-21-5p · 8mer ────────────────────────────────────────────
+// miRNA UAGCUUAUCAGACUGAUGUUGA → seed AGCUUA → revcomp UAAGCU
+// miRNA pos 8 = U → m8 base on UTR = A
+// UTR engineered: GGGAUAAGCUAGG
+//   i=4 window=UAAGCU ✓ · i-1=A ✓ m8 · i+6=A ✓ A1 → 8mer
+let mirna2 = "UAGCUUAUCAGACUGAUGUUGA"
+let utr2   = "GGGAUAAGCUAGG"
+let hits2  = mirna_seed_scan(mirna2, utr2)
+let m2     = find_at(hits2, 4)
+check("T2 miR-21-5p · PDCD4-like · 8mer @ pos 4",
+      m2.utr_position == 4 && m2.match_type == "8mer"
+      && abs_f(m2.score - (0.0 - 0.30)) < 1.0e-9,
+      "pos=" + to_string(m2.utr_position) + " type=" + m2.match_type
+      + " score=" + to_string(m2.score) + " n_hits=" + to_string(len(hits2)))
+
+// ── T3 — miR-122-5p · 7mer-A1 ────────────────────────────────────────
+// miRNA UGGAGUGUGACAAUGGUGUUUG → seed GGAGUG → revcomp CACUCC
+// miRNA pos 8 = U → m8 base on UTR = A
+// UTR engineered: GGGCACUCCAGG
+//   i=3 window=CACUCC ✓ · i-1=G (not A → no m8) · i+6=A ✓ A1 → 7mer-A1
+let mirna3 = "UGGAGUGUGACAAUGGUGUUUG"
+let utr3   = "GGGCACUCCAGG"
+let hits3  = mirna_seed_scan(mirna3, utr3)
+let m3     = find_at(hits3, 3)
+check("T3 miR-122-5p · HCV-like · 7mer-A1 @ pos 3",
+      m3.utr_position == 3 && m3.match_type == "7mer-A1"
+      && abs_f(m3.score - (0.0 - 0.13)) < 1.0e-9,
+      "pos=" + to_string(m3.utr_position) + " type=" + m3.match_type
+      + " score=" + to_string(m3.score) + " n_hits=" + to_string(len(hits3)))
+
+// ── T4 — mirbase_lookup canonical sequence ───────────────────────────
+let e4 = mirbase_lookup("hsa-let-7a-5p")
+let expected4 = "UGAGGUAGUAGGUUGUAUAGUU"
+check("T4 mirbase_lookup(hsa-let-7a-5p) canonical sequence",
+      e4.sequence == expected4 && e4.mirbase_id == "MIMAT0000062",
+      "seq=" + e4.sequence + " id=" + e4.mirbase_id)
+
+// ── T5 — context score 8mer ──────────────────────────────────────────
+let s5 = mirna_seed_score("8mer")
+check("T5 mirna_seed_score(8mer) == -0.30",
+      abs_f(s5 - (0.0 - 0.30)) < 1.0e-9,
+      "score=" + to_string(s5))
+
+// ── T6 — context score 7mer-m8 ───────────────────────────────────────
+let s6 = mirna_seed_score("7mer-m8")
+check("T6 mirna_seed_score(7mer-m8) == -0.16",
+      abs_f(s6 - (0.0 - 0.16)) < 1.0e-9,
+      "score=" + to_string(s6))
+
+// ── T7 — registry cardinality ────────────────────────────────────────
+let all7 = mirbase_all()
+check("T7 mirbase_all() returns 20 entries",
+      len(all7) == 20,
+      "n=" + to_string(len(all7)))
+
+// ── T8 — sentinel-empty on miss ──────────────────────────────────────
+let e8 = mirbase_lookup("hsa-miR-DOES-NOT-EXIST")
+check("T8 mirbase_lookup unknown returns sentinel-empty",
+      e8.name == "" && e8.sequence == "" && e8.mirbase_id == "",
+      "name='" + e8.name + "' seq='" + e8.sequence + "'")
+
+// ── Verdict ──────────────────────────────────────────────────────────
+println("")
+if pass_count == total {
+    println("PASS: mirna " + to_string(pass_count) + "/" + to_string(total))
+    exit(0)
+} else {
+    println("FAIL: mirna first=" + first_fail
+            + " (" + to_string(pass_count) + "/" + to_string(total) + ")")
+    exit(1)
+}
