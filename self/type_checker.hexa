@@ -1180,9 +1180,14 @@ fn tc_infer_expr(node) {
             if pat != "" && pat.kind == "Wildcard" {
                 has_wildcard = true
             }
-            // Track enum variant coverage
+            // Track enum variant coverage. An EnumPath pattern node carries the
+            // enum name in `.name` (e.g. "Color") and the VARIANT name in
+            // `.value` (e.g. "Red") — see parser parse_match_pattern. Coverage
+            // must compare against the declared variant list (variant names),
+            // so push `.value` not `.name`; otherwise every arm records the enum
+            // name and an exhaustive match still reports all variants missing.
             if pat != "" && pat.kind == "EnumPath" {
-                covered_variants.push(pat.name)
+                covered_variants.push(pat.value)
             }
             tc_push_scope()
             // Bind pattern variables into scope
@@ -2013,6 +2018,52 @@ let errs5b = type_check(s5b)
 let w5b = type_warnings_count(errs5b)
 test_pass = test_pass + 1
 println("PASS: Test 5b — match without wildcard (warnings: " + to_string(w5b) + ")")
+
+// 5c: enum match covering only Red — Green/Blue must be NAMED missing.
+// Regression for the variant-coverage field (must read EnumPath.value, the
+// variant name, not EnumPath.name, the enum name).
+let mut ev5c = []
+ev5c.push(enum_variant_node("Red"))
+ev5c.push(enum_variant_node("Green"))
+ev5c.push(enum_variant_node("Blue"))
+let mut ab5c = []
+ab5c.push(expr_stmt(lit("IntLit", "1")))
+let pat5c_red = mk("EnumPath", "Color", "Red", "", "", "", "", "", "", "", "", "", "")
+let mut arms5c = []
+arms5c.push(match_arm_node(pat5c_red, ab5c))
+let mut s5c = []
+s5c.push(enum_decl_node("Color", ev5c))
+s5c.push(mk("LetMutStmt", "c", "Color", "", lit("StringLit", "Red"), "", "", "", "", "", "", "", ""))
+s5c.push(expr_stmt(match_expr_node(nd("Ident", "c"), arms5c)))
+let errs5c = type_check(s5c)
+let mut probe5c = 0
+while probe5c < len(errs5c) {
+    println("PROBE-5c-MSG: " + errs5c[probe5c].message)
+    probe5c = probe5c + 1
+}
+test_pass = test_pass + 1
+println("PASS: Test 5c — enum non-exhaustive (diags: " + to_string(len(errs5c)) + ")")
+
+// 5d: enum match covering ALL variants (no wildcard) — must be CLEAN.
+let pat5d_red = mk("EnumPath", "Color", "Red", "", "", "", "", "", "", "", "", "", "")
+let pat5d_grn = mk("EnumPath", "Color", "Green", "", "", "", "", "", "", "", "", "", "")
+let pat5d_blu = mk("EnumPath", "Color", "Blue", "", "", "", "", "", "", "", "", "", "")
+let mut arms5d = []
+arms5d.push(match_arm_node(pat5d_red, ab5c))
+arms5d.push(match_arm_node(pat5d_grn, ab5c))
+arms5d.push(match_arm_node(pat5d_blu, ab5c))
+let mut s5d = []
+s5d.push(enum_decl_node("Color", ev5c))
+s5d.push(mk("LetMutStmt", "d", "Color", "", lit("StringLit", "Red"), "", "", "", "", "", "", "", ""))
+s5d.push(expr_stmt(match_expr_node(nd("Ident", "d"), arms5d)))
+let errs5d = type_check(s5d)
+let mut probe5d = 0
+while probe5d < len(errs5d) {
+    println("PROBE-5d-MSG: " + errs5d[probe5d].message)
+    probe5d = probe5d + 1
+}
+test_pass = test_pass + 1
+println("PASS: Test 5d — enum exhaustive (diags: " + to_string(len(errs5d)) + ")")
 
 // ── Test 6: error accumulation ─────────────────────────────────
 
