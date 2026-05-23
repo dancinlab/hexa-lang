@@ -1,8 +1,17 @@
 # regex literal `/pattern/` design RFC
 
-**Status**: design-level (r14 cycle 8, 2026-05-23)
+**Status**: IMPLEMENTED (r14-MMM, 2026-05-24) — 옵션 A (`/pat/flags` JS-style) MVP 랜딩. lexer 컨텍스트-센서티브 `/` disambig + parser desugar (StringLit) + 컴파일타임 검증. probe 6/6 PASS.
 **Priority**: P3 (편의 — `stdlib/regex` 이미 있으나 literal 신택스 부재)
 **SSOT**: 본 RFC · `stdlib/regex/mod.hexa` (POSIX ERE wrapper, G3-REGEX 2026-05-06) · 캐노니컬 비교
+
+## 구현 노트 (r14-MMM, 2026-05-24)
+
+RFC는 옵션 B(`re"..."`)를 권장했으나, raw-string(`r"..."`) 인프라 미선행 + 캐노니컬 친숙도를 고려해 **옵션 A(`/pat/flags`)** 를 직접 랜딩.
+
+- **lexer** (`self/lexer.hexa`): `/` 가 expression-START 위치(직전 토큰이 value-ender 아님 — `regex_value_ender()`)일 때만 regex 모드 진입, 그 외엔 division. `//`/`/*` 주석은 상위에서 선소비. flag `i` → `(?i)` 프리픽스 baking (POSIX ERE 지원), `m` 은 no-op 수용, 그 외 flag 거절. 컴파일타임 검증: 빈 패턴 + `()`/`[]` 불균형 거절. escape(`\.`)는 verbatim 보존.
+- **parser** (`self/parser.hexa`): `RegexLit` 토큰 → `node_string_lit(pattern)` desugar. 즉 `/pat/` 는 검증된 POSIX-ERE **패턴 문자열** 로 lower → 기존 `regex_match`/`regex_search`/`regex_test` 빌트인에 직접 전달. **codegen 무변경**.
+- **검증**: probe 6/6 PASS — let-position `/[a-z]+/`, call-arg `/h.llo/`, match-fail `/^[0-9]+$/`, case-insensitive `/hello/i`, division disambig `a / b`, `/[0-9]+/` 위치 검색.
+- **deferred**: `g`(global)/`s`(dotall) flags · standalone Regex object · 메서드 신택스 `.match()`. 현 MVP는 패턴-문자열 sugar.
 
 ## 현재 동작 (probe 검증)
 

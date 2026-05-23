@@ -134,6 +134,26 @@ fn is_hex_digit(ch) {
     return false
 }
 
+// Regex-literal disambiguation (PROBE r14-MMM, `/pat/flags` JS-style).
+// A `/` begins a regex literal only in expression-START position — i.e. when
+// the previous significant token does NOT end a value. After a value (Ident,
+// number/string/bool literal, closing `)`/`]`/`}`) the `/` is division. This
+// mirrors JS/Perl/Ruby. Newline is treated as expression-start (statement
+// boundary), so it is never a value-ender.
+@pure
+fn regex_value_ender(kind) {
+    if kind == "Ident" { return true }
+    if kind == "IntLit" { return true }
+    if kind == "FloatLit" { return true }
+    if kind == "StringLit" { return true }
+    if kind == "BoolLit" { return true }
+    if kind == "CharLit" { return true }
+    if kind == "RParen" { return true }
+    if kind == "RBracket" { return true }
+    if kind == "RBrace" { return true }
+    return false
+}
+
 // Main tokenizer function
 @compile_trace
 pub fn tokenize(source) {
@@ -615,7 +635,111 @@ pub fn tokenize(source) {
                     col = col + 1
                 }
             } else if ch == '/' {
-                if pos + 1 < len_chars && chars[pos + 1] == '=' {
+                // PROBE r14-MMM: regex literal `/pattern/flags` (JS/Perl-style).
+                // Only in expression-START position (prev token not a value-
+                // ender) — otherwise `/` is division. `/=` after a value stays
+                // SlashEq. An empty `//` is already consumed as a line comment
+                // upstream, so a regex never starts with `/`.
+                let prev_is_value = len(tokens) > 0 && regex_value_ender(tokens[len(tokens) - 1].kind)
+                if !prev_is_value && pos + 1 < len_chars && chars[pos + 1] != '=' {
+                    // Scan the pattern body until an unescaped closing `/`.
+                    let mut rx_parts = []
+                    let mut rx_pos = pos + 1
+                    let mut rx_col = col + 1
+                    let mut rx_done = false
+                    let mut rx_terminated = false
+                    while rx_pos < len_chars && !rx_done {
+                        let rc = chars[rx_pos]
+                        if rc == '\\' {
+                            // Keep escape verbatim so the pattern string passed
+                            // to the runtime (POSIX ERE) is faithful.
+                            rx_parts.push("\\")
+                            rx_pos = rx_pos + 1
+                            rx_col = rx_col + 1
+                            if rx_pos < len_chars {
+                                rx_parts.push(to_string(chars[rx_pos]))
+                                rx_pos = rx_pos + 1
+                                rx_col = rx_col + 1
+                            }
+                        } else if rc == '/' {
+                            rx_done = true
+                            rx_terminated = true
+                            rx_pos = rx_pos + 1
+                            rx_col = rx_col + 1
+                        } else if rc == '\n' {
+                            // Unterminated regex — bail out of regex mode.
+                            rx_done = true
+                        } else {
+                            rx_parts.push(to_string(rc))
+                            rx_pos = rx_pos + 1
+                            rx_col = rx_col + 1
+                        }
+                    }
+                    if rx_terminated {
+                        let mut rx_pat = join(rx_parts, "")
+                        // Collect a postfix flag run (alphanumeric).
+                        let mut flag_parts = []
+                        while rx_pos < len_chars && is_alphanumeric(chars[rx_pos]) {
+                            flag_parts.push(to_string(chars[rx_pos]))
+                            rx_pos = rx_pos + 1
+                            rx_col = rx_col + 1
+                        }
+                        let flags = join(flag_parts, "")
+                        // Compile-time validation: reject an empty pattern and
+                        // unbalanced ()/[].
+                        if len(rx_pat.chars()) == 0 {
+                            println("error: empty regex literal `//` at line " + to_string(line) + ":" + to_string(start_col))
+                            exit(1)
+                        }
+                        let pchars = rx_pat.chars()
+                        let mut paren_bal = 0
+                        let mut brack_bal = 0
+                        let mut vi = 0
+                        let plen = len(pchars)
+                        while vi < plen {
+                            let pc = pchars[vi]
+                            if pc == '\\' { vi = vi + 2 } else {
+                                if pc == '(' { paren_bal = paren_bal + 1 }
+                                else if pc == ')' { paren_bal = paren_bal - 1 }
+                                else if pc == '[' { brack_bal = brack_bal + 1 }
+                                else if pc == ']' { brack_bal = brack_bal - 1 }
+                                vi = vi + 1
+                            }
+                        }
+                        if paren_bal != 0 || brack_bal != 0 {
+                            println("error: unbalanced regex literal /" + rx_pat + "/ at line " + to_string(line) + ":" + to_string(start_col) + " — unmatched () or []")
+                            exit(1)
+                        }
+                        // Flag handling (POSIX ERE): `i` → inline `(?i)` prefix
+                        // (already supported by stdlib/regex). `m` is accepted
+                        // as a no-op (POSIX ^/$ are line-anchored by default).
+                        // Any other flag is rejected loudly.
+                        let fchars = flags.chars()
+                        let mut fi = 0
+                        let mut want_i = false
+                        while fi < len(fchars) {
+                            let fc = fchars[fi]
+                            if fc == 'i' { want_i = true }
+                            else if fc == 'm' { fi = fi }
+                            else {
+                                println("error: unsupported regex flag `" + to_string(fc) + "` in /" + rx_pat + "/" + flags + " at line " + to_string(line) + ":" + to_string(start_col) + " — POSIX ERE supports i (and m as no-op)")
+                                exit(1)
+                            }
+                            fi = fi + 1
+                        }
+                        if want_i {
+                            rx_pat = "(?i)" + rx_pat
+                        }
+                        tokens.push(Token { kind: "RegexLit", value: rx_pat, line: line, col: start_col })
+                        pos = rx_pos
+                        col = rx_col
+                    } else {
+                        // Not a valid regex — fall back to a division token.
+                        tokens.push(Token { kind: "Slash", value: "/", line: line, col: start_col })
+                        pos = pos + 1
+                        col = col + 1
+                    }
+                } else if pos + 1 < len_chars && chars[pos + 1] == '=' {
                     tokens.push(Token { kind: "SlashEq", value: "/=", line: line, col: start_col })
                     pos = pos + 2
                     col = col + 2

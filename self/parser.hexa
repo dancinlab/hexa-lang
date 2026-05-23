@@ -3616,6 +3616,14 @@ fn parse_primary() {
         p_advance()
         return node_string_lit(tok.value)
     }
+    if k == "RegexLit" {
+        // PROBE r14-MMM: a `/pat/flags` regex literal desugars to its
+        // (validated, flag-baked) POSIX-ERE pattern STRING. It is sugar — pass
+        // it straight into the existing regex_* builtins, e.g.
+        // `regex_test(/h.llo/i, s)`. Zero codegen change (lowers as StringLit).
+        p_advance()
+        return node_string_lit(tok.value)
+    }
     if k == "CharLit" {
         p_advance()
         return node_char_lit(tok.value)
