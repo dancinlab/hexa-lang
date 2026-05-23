@@ -3546,6 +3546,16 @@ fn parse_primary() {
     if k == "Ident" || p_is_contextual_kw_kind(k) {
         p_advance()
         let name = tok.value
+        // PROBE r14-A: 'nil' / 'null' are not value-literals in hexa — only
+        // `None` (Option<T>) or omitting the binding. Currently `nil`
+        // silently became `hexa_void()` at codegen (codegen.hexa Ident
+        // branch) and `null` slipped through as an undeclared C identifier.
+        // Emit a specific parse-time diagnostic when used as a bare value
+        // (i.e. not the LHS of `::`, where a hypothetical `Foo::nil`
+        // variant remains lexically allowed).
+        if (name == "nil" || name == "null") && p_peek_kind() != "ColonColon" {
+            p_emit_parse_error(tok, "'" + name + "' is not a value in hexa — use 'None' (Option<T>) or omit the binding")
+        }
         // Check for enum path: Name::Variant
         if p_peek_kind() == "ColonColon" {
             p_advance() // consume ::
