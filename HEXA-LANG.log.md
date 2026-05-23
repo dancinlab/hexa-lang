@@ -40,3 +40,19 @@
 - [ ] trait — coherence / orphan rule 결정 + 검증
 - [x] TLS — vendored vs system 결정 (D, system 동적 링크)
 - [ ] TLS — CA bundle 배포 결정 (D2+)
+
+## 2026-05-24 — phi_rs closure + /cycle 1-6 머지 배치
+
+- [x] phi_rs inbox closure — PR #530 검토 + RFC 084 promote (option A cdylib path) · RFC 036 phi_rs byte-equal smoke selftest 등록 (PR #545)
+- [x] enum-to-string 스택 PR-1 — enum variant names 배열 codegen emit (additive, PR #555)
+- [x] enum-to-string 스택 PR-2.0 — runtime `TAG_ENUM` 슬롯 + defense 분기 (PR #566)
+- [x] enum `to_string` codegen-emit fail-honest 분해 — 단일 surgical fix 불가 확정, 스택 분해 근거 inbox notes 기록 (PR #553)
+- [x] RFC 085 promote — dispatcher hygiene (env-var + `.hexarc` + `--local`, rfc_026+028 통합, PR #552)
+- [x] RFC 086 promote — atlas memcap unblock (rfc_066, PR #558)
+- [x] RFC 087 promote — macro-expander pass design (PR #556)
+- [x] RFC 088 promote — hexa-cloud preflight + typed env-var (PR #563)
+- [x] RFC drafts INDEX — 2026-05-24 초안 084-088 카탈로그 등재 (PR #564)
+- [x] 27 patches archive — 해결 패치 manifest_log 이관 + PATCHES.yaml 동기화 (PR #562)
+- [x] json_object no-op 사이클 finding inbox 기록 (PR #551)
+- [~] atlas `hxc` dead-ref 정리 — `hxc_loader` dead refs + obsolete hxc smoke tests retire, `n6/atlas.n6` 단일 SSOT (PR #576, 진행 중)
+- [~] enum 스택 PR-2.1 + RFC 047 atom (진행 중)
