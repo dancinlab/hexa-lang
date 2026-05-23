@@ -2,6 +2,7 @@
 
 **Reporter**: demiurge (`dancinlab/demiurge` RTSC DFT campaign, 2026-05-23)
 **Severity**: medium (caller-side workaround exists — pass explicit filters; but the default is misleading and prior recipe advice was outright wrong).
+**Status**: SHIPPED (suggested-fix (1)+(2)) — `stdlib/cloud/vast.hexa::vast_search_offers(query, verified_only)` prepends the campaign-proven defaults `rentable=true verified=true reliability2>=0.95` when `verified_only==1` (the `hexa cloud rent` default) and always passes `-n` to raise the result cap; `verified_only==0` is the `--broaden` escape hatch that searches the general/unverified pool. Defaults come first so a caller token can override (vastai last-wins). Query-build logic unit-tested (verified-only prepends defaults + keeps the user token; broaden drops them — PASS). Doc-side correction (3) of `hexa-cloud-vast-usage-recipe-2026-05-22.md` is deferred to that recipe's owner. Live offer-pool measurement is downstream (needs creds).
 **Affected**: `stdlib/cloud/cloud_cli.hexa` (vast-backend offer-search defaults), and the sibling recipe `inbox/patches/hexa-cloud-vast-usage-recipe-2026-05-22.md`.
 
 ## Problem statement

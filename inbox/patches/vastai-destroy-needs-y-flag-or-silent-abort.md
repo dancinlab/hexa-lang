@@ -2,6 +2,7 @@
 
 **Reporter**: demiurge (`dancinlab/demiurge` RTSC DFT campaign, 2026-05-23)
 **Severity**: high — silent leak class. Caller scripts see exit code 0 and assume the instance is gone; instance keeps billing.
+**Status**: SHIPPED (recommended combo (1)+(3), plus (2) belt-and-braces) — `stdlib/cloud/vast.hexa::vast_destroy` forces `-y` AND pipes `printf 'y\n'` on stdin (defends even a version that ignores the flag), then `vast_destroy_verdict` post-checks stdout: an `Aborted` marker → ok=0 (the core leak), no success/destroying/not-found marker → ok=0 (rc never trusted alone), and a follow-up `vastai show instance <iid>` reporting a still-live status → ok=0. First 200 chars of stdout surfaced on failure (suggested-fix (3)). Pure verdict logic unit-tested (aborted→ok=0, confirmed→ok=1, no-marker→ok=0, not-found→ok=1; 11/11 PASS, compiled). Live vast.ai end-to-end is downstream (needs creds + a real instance); the actual `vastai destroy instance --help` yes-flag spelling is unconfirmed locally (vastai not installed) — `-y` is the recent-version convention and the stdin pipe is the version-agnostic backstop.
 **Affected**: `stdlib/cloud/cloud_cli.hexa` (vast-backend dispatch path) — the wrapper that shells out to `vastai destroy instance <iid>`.
 
 ## Problem statement
