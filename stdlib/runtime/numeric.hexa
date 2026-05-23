@@ -145,13 +145,18 @@ pub fn rt_range_int_incl(start: int, end: int) -> [int] {
 }
 
 // Step 3 cycle 35 — array slice (array branch only; the polymorphic str
-// branch stays in the C body). Clamps a/b to [0, len] and a ≤ b matches
-// the C body contract.
+// branch stays in the C body). PROBE r14-D — Python-canonical negative
+// wrap (arr[-2..] ≡ arr[len-2..]), then clamp a/b to [0, len] and a ≤ b
+// matches the C body contract. Note that hexa_array_slice in runtime.c
+// already wraps before delegating here; the local wrap is defense-in-depth
+// for direct callers.
 pub fn rt_array_slice_float(arr: [float], start: int, end: int) -> [float] {
     let mut out: [float] = []
     let n = len(arr)
     let mut a = start
     let mut b = end
+    if a < 0 { a = a + n }
+    if b < 0 { b = b + n }
     if a < 0 { a = 0 }
     if b > n { b = n }
     if a > b { a = b }

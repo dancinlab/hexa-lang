@@ -1156,6 +1156,11 @@ static inline HexaVal hexa_closure_env(HexaVal c) {
 // return void → hides type errors like `42()` or `let x = nil; x()`.
 // Throw with the actual tag so the user sees "you called an int" not
 // a mystery void result.  hexa_throw routes through try/catch.
+// PROBE r14-D unblock: forward-decl hexa_throw / hexa_str — both are
+// defined later in this TU (lines ~1374 / ~2003) and would otherwise hit
+// `-Werror=implicit-function-declaration` under modern clang.
+extern HexaVal hexa_str(const char* s);
+extern void hexa_throw(HexaVal err);
 static void __hexa_call_non_fn_throw(int tag, int arity) {
     char _buf[128];
     snprintf(_buf, sizeof(_buf), "not callable: tag=%d (arity=%d)", tag, arity);
