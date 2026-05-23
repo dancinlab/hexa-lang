@@ -6959,6 +6959,27 @@ fn gen2_enum_decl(node) {
         parts.push("#define " + name + "_" + v.name + " hexa_int(" + to_string(i) + ")\n")
         i = i + 1
     }
+    // (b) variant names emit — additive metadata (RFC enum-to-string-codegen-emit P2,
+    // PR-1 of 3-PR stack). Dead-code OK: no runtime consumer until PR-2 (TAG_ENUM) +
+    // PR-3 (`_hexa_to_string_rec` branch) land. Emits per-enum:
+    //   static const char* __enum_<Name>_names[<vc>] = { "Var1", "Var2", ... };
+    //   static const int   __enum_<Name>_count       = <vc>;
+    // Guarded behind `#ifdef HEXA_ENUM_NAMES_TABLE` so additive-only is enforced —
+    // C compiler skips entire region unless future PR-2/3 enables the macro. This
+    // keeps PR-1 a true no-op at runtime (binary byte-equality preserved) while
+    // landing the codegen scaffolding the stack depends on.
+    parts.push("#ifdef HEXA_ENUM_NAMES_TABLE\n")
+    parts.push("static const char* __enum_" + name + "_names[" + to_string(vc) + "] = {")
+    let mut ni = 0
+    while ni < vc {
+        let nv = node.variants[ni]
+        if ni > 0 { parts.push(", ") }
+        parts.push("\"" + nv.name + "\"")
+        ni = ni + 1
+    }
+    parts.push("};\n")
+    parts.push("static const int __enum_" + name + "_count = " + to_string(vc) + ";\n")
+    parts.push("#endif\n")
     return parts.join("")
 }
 
