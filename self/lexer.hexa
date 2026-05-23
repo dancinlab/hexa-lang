@@ -96,35 +96,33 @@ fn keyword_kind(word) {
     return "Ident"
 }
 
-// Check if character is valid identifier start (alpha, _, or any non-ASCII
-// UTF-8 codepoint).
-//
-// PROBE r10-4: Go-style pragmatic Unicode identifier support — accept any
-// character whose first UTF-8 byte has the high bit set (>= 128) as ident
-// start. This covers CJK (Korean / Japanese / Chinese), Greek (π), Cyrillic,
-// emoji, and mathematical symbols without inlining the full Unicode
-// XID_Start table (~500 ranges). `source.chars()` yields per-codepoint
-// strings (not per-byte), so the high-bit check fires on the entire
-// non-ASCII codepoint, not on stray continuation bytes. Trade-off: also
-// accepts UTF-8 punctuation / formatters as ident chars — rarely an issue
-// in practice; can be tightened to full XID_Start in a follow-up cycle.
+// Unicode identifiers (Go/Rust canonical — round-10 r10-4). The lexer is
+// byte-oriented (source.chars() yields single-byte strings over UTF-8), so
+// any byte with the high bit set (>= 0x80) is part of a UTF-8 multibyte
+// sequence — i.e. a non-ASCII letter. We pragmatically treat every such byte
+// as an identifier byte (both start and continue), which accepts `café`,
+// `λ`, `日本語` etc. without a full Unicode XID table. ASCII rules unchanged.
+// Go: identifier = letter { letter | unicode_digit }, letter = unicode_letter | "_".
+@pure
+fn is_unicode_byte(ch) {
+    return char_code(ch, 0) >= 128
+}
+
+// Check if character is valid identifier start (alpha, _, or unicode byte)
 @pure
 fn is_ident_start(ch) {
     if is_alpha(ch) { return true }
     if ch == '_' { return true }
-    if char_code(to_string(ch), 0) >= 128 { return true }
+    if is_unicode_byte(ch) { return true }
     return false
 }
 
-// Check if character is valid identifier continuation (alphanumeric, _, or
-// any non-ASCII UTF-8 codepoint). Symmetric with is_ident_start so that a
-// multi-codepoint Unicode identifier such as `변수` or `café` tokenizes as
-// a single Ident.
+// Check if character is valid identifier continuation (alphanumeric, _, or unicode byte)
 @pure
 fn is_ident_char(ch) {
     if is_alphanumeric(ch) { return true }
     if ch == '_' { return true }
-    if char_code(to_string(ch), 0) >= 128 { return true }
+    if is_unicode_byte(ch) { return true }
     return false
 }
 
