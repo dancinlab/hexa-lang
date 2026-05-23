@@ -30,7 +30,49 @@ phi_rs inbox closure + `/cycle` 1-6 라운드 머지 배치. 코드 변경(codeg
 - **27 patches archive** (PR #562) — 해결 완료 패치 27건 → `manifest_log` 이관 + `PATCHES.yaml` 동기화
 - **json_object 사이클 finding** (PR #551) — `json_object_delete` / `json_object_keys` no-op 사이클 발견 inbox 기록
 
-> 진행 중(미머지): atlas `hxc` dead-ref 정리 (PR #576, `hxc_loader` dead refs + obsolete hxc smoke tests retire — `n6/atlas.n6` 단일 SSOT) · enum 스택 PR-2.1 · RFC 047 atom.
+> 진행 중(미머지) — cycle 6-9 batch 에서 closure (아래 섹션 참조).
+
+### `/cycle` 6-9 batch — enum 스택 closure · verify unblocker chain · auto-merge live (~11 PRs)
+
+cycle 6-9 라운드 머지 — enum-to-string codegen 스택의 마지막 단계, verify int/float recompute 보강으로 RFC 046/047 atom 등록 길이 열림, 그리고 `allow_auto_merge` + `require_last_push_approval=off` 조합으로 pr-cycle 훅 자동 머지가 라이브 가동.
+
+#### enum-to-string 스택 closure (#553 → #582 → #589)
+
+`to_string(enum)` codegen-emit 스택 분해 + 단계별 land. 종합 효과 = enum to_string 14 FAIL → 0 FAIL (이전 batch 의 #555 + #566 위에 #582/#589 가 얹힘).
+
+- **stack PR-2.1 — single-enum `TAG_ENUM` emit + to_string synth** (PR #582) — 첫 페이로드-있는 enum variant 의 `TAG_ENUM` 슬롯 + `to_string` synth 경로
+- **stack PR-2.2 — all-unit-variant-enum `TAG_ENUM` emit** (PR #589) — payload 없는 unit-variant-only enum 의 `TAG_ENUM` 케이스 닫음 → 14 FAIL = 0
+- 후속 fix — **integer match arm block-body scope leak** (PR #595) — match 스코프 안의 let-binding 이 outer 로 leak 하던 codegen 버그
+
+#### atlas SSOT 정리 — `n6/atlas.n6` 단일 SSOT
+
+이전 batch 의 "진행 중" 으로 표기됐던 atlas hxc dead-ref 정리가 land.
+
+- **`hxc_loader` dead refs + obsolete hxc smoke tests retire** (PR #576, B-4) — `cycle.hexa` 의 `hxc_loader` 잔재 + `dist/atlas.hxc` 의존 스모크 폐기. `n6/atlas.n6` (15,952 노드, 3.43MB) 단일 SSOT 확정
+- **RFC 047 mc-integrate finding** (PR #577) — atom 등록 시도 → `verify` float-path 부재로 BLOCKED, inbox 기록
+- **RFC 046 ssh/hofstadter finding** (PR #586) — 정수-atom 등록 시도 → `verify` int-path 미지원으로 BLOCKED, inbox 기록 (#577/#586 이 #587/#592/#593 chain 의 트리거)
+
+#### verify unblocker chain — RFC 047/046 atom 등록 길이 열림 (#587 → #592 → #593)
+
+#577/#586 의 BLOCKED finding 두 건을 순차 unblock. 결과 = `register_from_event` 가 🟢 NUMERICAL tier 를 수용하고, `verify` float/int 양쪽 recompute 가능.
+
+- **float recompute path — `welch_t_crit` + `wilson_hilferty`** (PR #587) — RFC 047 mc-integrate atom 의 float-path block 해제
+- **`ssh_winding` + `tknn_chern` integer recompute** (PR #592) — RFC 046 ssh_topology / hofstadter 의 integer-path block 해제
+- **register_from_event 🟢 NUMERICAL tier 허용** (PR #593) — 그동안 🔵 SUPPORTED-FORMAL 만 등록 가능했던 게이트가 NUMERICAL 까지 확장, RFC 047 atoms 등록 가능
+
+#### inbox housekeeping — re-triage 차단
+
+cycle 마다 resolved 패치가 다시 triage 큐로 올라오던 누수 닫음.
+
+- **43-patch archive** (PR #588) — resolved 43 건 → `inbox/patches/archive/` 이관, manifest 동기화. cycle re-triage 멈춤
+- **canonical-audit r10 archive** (PR #591) — P0 long-ident truncation 재현 불가 → audit 완료 마크 + archive
+
+#### 자동 머지 흐름 라이브 가동
+
+cycle 6 에서 `allow_auto_merge=true` + `require_last_push_approval=false` (branch protection) 조합으로 pr-cycle 훅이 PR 생성 → `gh pr merge --squash --auto --delete-branch` 까지 단일 호출에서 완주. cycle 6-9 의 11 PR 모두 같은 흐름으로 land. self-merge 사건(cycle 10, #538/#543)에서 발각된 `gh-api-guard` sidecar 0.1.0 + commons `@D g55` 정착이 이 자동-머지 흐름의 author≠merger 게이트로 보강.
+
+---
+
 ### PROBE r14 cycle 7-11 batch (~40 PRs)
 
 `canonical-deviation` PROBE r14 멀티-사이클 작업. 14개 surgical fix LANDED, 30+ design RFC inbox에 filed, self-merge 사건으로 sidecar `gh-api-guard` 0.1.0 + commons `@D g55` 정착.
