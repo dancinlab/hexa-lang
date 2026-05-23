@@ -9922,6 +9922,54 @@ HexaVal hexa_cwd(void) {
     return hexa_str(buf);
 }
 
+/* PROBE r8 POSIX-fs cluster (canonical-audit r8 inbox closure) — 4 fns
+ * wrapping glob(3) / opendir+readdir / mkstemp / mkdtemp directly (no
+ * shell exec).  Each returns "" / empty-array on failure to match the
+ * existing "" empty-string idiom (env_var / cwd).  <dirent.h> is also
+ * included later (line ~10051, for hexa_list_dir); duplicate include is
+ * idempotent via standard header guards. */
+#include <glob.h>
+#include <dirent.h>
+
+HexaVal hexa_glob(HexaVal pattern) {
+    if (!HX_IS_STR(pattern) || !HX_STR(pattern)) return hexa_array_new();
+    glob_t g; HexaVal arr = hexa_array_new();
+    if (glob(HX_STR(pattern), 0, NULL, &g) == 0) {
+        for (size_t i = 0; i < g.gl_pathc; i++) arr = hexa_array_push(arr, hexa_str(g.gl_pathv[i]));
+    }
+    globfree(&g);
+    return arr;
+}
+
+HexaVal hexa_listdir(HexaVal path) {
+    if (!HX_IS_STR(path) || !HX_STR(path) || !HX_STR(path)[0]) return hexa_array_new();
+    DIR* d = opendir(HX_STR(path));
+    if (!d) return hexa_array_new();
+    HexaVal arr = hexa_array_new();
+    struct dirent* ent;
+    while ((ent = readdir(d)) != NULL) {
+        const char* n = ent->d_name;
+        if (n[0] == '.' && (n[1] == '\0' || (n[1] == '.' && n[2] == '\0'))) continue;
+        arr = hexa_array_push(arr, hexa_str(n));
+    }
+    closedir(d);
+    return arr;
+}
+
+HexaVal hexa_tempfile(void) {
+    char tmpl[] = "/tmp/hexa_XXXXXX";
+    int fd = mkstemp(tmpl);
+    if (fd < 0) return hexa_str("");
+    close(fd);
+    return hexa_str(tmpl);
+}
+
+HexaVal hexa_tempdir(void) {
+    char tmpl[] = "/tmp/hexa_dir_XXXXXX";
+    if (mkdtemp(tmpl) == NULL) return hexa_str("");
+    return hexa_str(tmpl);
+}
+
 // setenv(name, value): POSIX setenv wrapper with overwrite=1. Empty / non-STR
 // name is a no-op. Returns the stored value on success, "" on failure — so
 // callers can treat it like env() in a set-then-read idiom without a second
