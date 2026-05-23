@@ -1285,6 +1285,7 @@ HexaVal hexa_array_unique(HexaVal arr); /* runtime.c:4034 */
 HexaVal hexa_array_window(HexaVal arr, HexaVal nv); /* runtime.c:3996 */
 HexaVal hexa_array_zeros_float(HexaVal nv); /* runtime.c:3789 */
 HexaVal hexa_array_zip(HexaVal a, HexaVal b); /* runtime.c:3918 */
+HexaVal hexa_array_concat(HexaVal a, HexaVal b); /* runtime.c — PROBE r14-JJJJ (.chain) */
 HexaVal hexa_await_unwrap(HexaVal v); /* runtime_core.c:3046 */
 HexaVal hexa_callback_create(HexaVal fn_val); /* runtime.c:2628 */
 HexaVal hexa_callback_free(HexaVal ptr); /* runtime.c:2647 */
