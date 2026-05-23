@@ -1907,6 +1907,44 @@ fn _build_nvptx_emit_driver(src_path, sm_arch) {
     return 1
 }
 
+// Source-block fork-storm — cross-process clang concurrency cap.
+// `hexa run <probe>` spawns clang per unique input; when N parallel
+// agents each probe at once, N clang's storm.  Token-ring of mkdir
+// permits (mkdir is atomic on POSIX fs) caps concurrent clang to
+// `cap_n`; excess invocations spin on the lock with 50ms backoff.
+// Per inbox/patches/fork-storm-source-block-design.md (PR #375) +
+// commons g30 (no opt-out env override — guards ship without an
+// off switch).
+fn _hexa_clang_capped(cmd) {
+    let cap_n = 2
+    let lock_root = "/tmp/.hexa_clang_caps"
+    exec("mkdir -p " + lock_root + " 2>/dev/null")
+    let mut tok = 0
+    let mut waited_ms = 0
+    let mut token_dir = ""
+    let mut acquired = false
+    while !acquired {
+        token_dir = lock_root + "/" + to_string(tok)
+        let _r = exec_with_status("mkdir " + token_dir + " 2>/dev/null && printf OK")
+        if _r[1] == 0 {
+            acquired = true
+        } else {
+            tok = (tok + 1) % cap_n
+            sleep_ms(50)
+            waited_ms = waited_ms + 50
+            // Stale-token GC — normal clang is 3-4s; if we've waited 30s
+            // a holder crashed without rmdir.  Force-release slot 0.
+            if waited_ms > 30000 {
+                exec("rmdir " + lock_root + "/0 2>/dev/null")
+                waited_ms = 0
+            }
+        }
+    }
+    let out = exec(cmd)
+    exec("rmdir " + token_dir + " 2>/dev/null")
+    return out
+}
+
 fn cmd_build(src, out, c_only, target, shared) {
     // RFC 070 §3.B / G7-A (Shape A flag-wiring sub-cycle, 2026-05-20)
     //   `shared` = "1" → emit a position-independent shared library
@@ -2381,7 +2419,7 @@ fn cmd_build(src, out, c_only, target, shared) {
         compile = "zig cc -O2 -target " + zt + static_f + " " + cf_target + _strict + "-Wno-trigraphs -fbracket-depth=4096 -I '" + __self_dir + "' " + c_file + " '" + __runtime_c + "' -o '" + tmp + "'" + ldf_target + " 2>&1"
     }
     println("  [2/2] " + compile)
-    let r2 = exec(compile)
+    let r2 = _hexa_clang_capped(compile)
     if len(r2) > 0 { println("    " + r2) }
     // buglist#6 phase [2/2]: 컴파일 산출물(tmp) 존재 확인. 실패 시 조기 exit(1)
     // — mv 단계에서 '파일 없음'이 묻혀 false-positive 로 이어지지 않도록.
