@@ -1646,6 +1646,15 @@ fn parse_fn_decl() {
         p_advance()
         ret = parse_type_annotation()
     }
+    // PROBE r9-14: wire parse_where_clauses into parse_fn_decl.
+    // Pre-fix: `fn f<T>(x) -> T where T: Display { ... }` failed at parse-time
+    // because `where` was rejected after ret_type. The parse_where_clauses
+    // helper (line 4552) existed but was never called. Bounds themselves are
+    // erased at codegen per PROBE r9-13 (generics are surface-only); this fix
+    // only unblocks PARSE — codegen-level enforcement = separate cycle.
+    if p_peek_kind() == "Where" {
+        let _wc = parse_where_clauses()  // consume tokens; bounds erased downstream
+    }
     // FIX (parser-bug-2026-05-15): capture pending @attrs BEFORE parse_block.
     // parse_let inside the body resets p_pending_attrs to "" (line 1274) and
     // parse_stmt does the same at every stmt entry (lines 596, 694). Any fn
