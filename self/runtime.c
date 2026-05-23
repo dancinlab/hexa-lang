@@ -652,9 +652,25 @@ static int __attribute__((noinline)) hxlcl_sprintf(char *buf, const char *fmt, .
 }
 static int __attribute__((noinline)) hxlcl_vfprintf_fd(int fd, const char *fmt, va_list ap) {
     char buf[4096];
+    va_list ap2;
+    va_copy(ap2, ap);
     int n = hxlcl_vsnprintf(buf, sizeof(buf), fmt, ap);
-    if (n > (int)sizeof(buf) - 1) n = sizeof(buf) - 1;
-    return (int)hxlcl_write(fd, buf, (size_t)n);
+    if (n < 0) { va_end(ap2); return -1; }
+    if (n < (int)sizeof(buf)) {
+        va_end(ap2);
+        return (int)hxlcl_write(fd, buf, (size_t)n);
+    }
+    /* formatted output exceeds the 4096-byte stack buffer — reformat on
+       the heap so large output (e.g. println of a multi-KB string) is
+       written in full instead of being truncated at 4095 bytes. */
+    char *big = (char *)malloc((size_t)n + 1);
+    if (!big) { va_end(ap2); return (int)hxlcl_write(fd, buf, sizeof(buf) - 1); }
+    int n2 = hxlcl_vsnprintf(big, (size_t)n + 1, fmt, ap2);
+    va_end(ap2);
+    if (n2 < 0) n2 = 0;
+    int w = (int)hxlcl_write(fd, big, (size_t)n2);
+    free(big);
+    return w;
 }
 static int __attribute__((noinline)) hxlcl_printf(const char *fmt, ...) {
     va_list ap; va_start(ap, fmt);
