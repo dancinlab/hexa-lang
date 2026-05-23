@@ -808,6 +808,17 @@ static void *__attribute__((noinline)) hxlcl_fopen(const char *path, const char 
     }
     int fd = hxlcl_open_sys(path, flags, 0644);
     if (fd < 0) return (void *)0;
+    /* Defense-in-depth (PR #414 inbox patch write-file-content-leak-root-cause):
+     * a freshly-opened user file cannot legitimately be 0/1/2 unless the
+     * runtime first closed stdin/stdout/stderr — which it never does (audit:
+     * no `hxlcl_close(0|1|2)` or `close(0|1|2)` in self/runtime.c). Anything
+     * in this range from open(2) here is almost certainly a future
+     * syscall-wrapper regression returning errno-as-fd (the carry-flag class
+     * of bug that cycle-66 fixed for read/write/close/dup2/pipe/fork/waitpid
+     * and that the recent hxlcl_open_sys libc-wrapper fixed for open). Fail
+     * closed rather than alias a small errno onto stdin/stdout/stderr and
+     * leak user content via fwrite. */
+    if (fd <= 2) return (void *)0;
     return (void *)(uintptr_t)(fd + 1);
 }
 static int __attribute__((noinline)) hxlcl_fclose(void *fp) {
