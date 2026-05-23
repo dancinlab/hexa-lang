@@ -1,0 +1,346 @@
+// stdlib/math/ode.hexa — RK4 + Dormand-Prince RK4(5) adaptive + saddle-node scan.
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Deterministic numerical ODE integration for HERPES M3/M4 (Markov +
+// ODE + Bliss synergy). PURE algorithmic; no I/O, no network.
+//
+// Public surface:
+//   pub fn ode_rk4(f_name, y0, t0, t1, h, params)            -> [[t, y]]
+//   pub fn ode_rk45_adaptive(f_name, y0, t0, t1, atol, rtol, params)
+//                                                            -> [[t, y, h_used]]
+//   pub fn ode_saddle_node_scan(f_name, y_eq_guess, p_lo, p_hi, p_steps,
+//                               params_const)                -> [p_bif*]
+//   pub fn ode_register_rhs(name)                            // doc-only stub
+//
+// RHS dispatch — closures in hexa are spotty under AOT; we route through
+// a named switch in `_rhs_call(name, t, y, params)` and ship 3 canonical
+// RHS for the test oracle:
+//   "exp_decay" : y' = -k y           with params = [k]
+//   "logistic"  : y' = r y (1 - y/K)  with params = [r, K]
+//   "saddle"    : y' = p - y^2        with params = [p]
+//
+// Closures, where they work, can layer on top — leave them as caller
+// concern; the by-name path is the SSOT here.
+
+// ── RHS dispatch ──────────────────────────────────────────────────────
+
+// Returns y' = f(t, y, params) for the registered `name`. New RHS go
+// here (and bump the doc table above).
+fn _rhs_call(name: string, t: float, y: float, params: array) -> float {
+    if name == "exp_decay" {
+        let k = params[0]
+        return 0.0 - k * y
+    }
+    if name == "logistic" {
+        let r = params[0]
+        let K = params[1]
+        return r * y * (1.0 - y / K)
+    }
+    if name == "saddle" {
+        let p = params[0]
+        return p - y * y
+    }
+    // Unknown RHS — emit 0 so integrator visibly stalls instead of
+    // throwing mid-loop. Caller should have called ode_register_rhs.
+    return 0.0
+}
+
+// Doc-only registry. RHS are coded directly in _rhs_call; this stub
+// keeps the surface stable for future closure-based extension.
+pub fn ode_register_rhs(name: string) {
+    // intentionally empty
+}
+
+// ── helpers ───────────────────────────────────────────────────────────
+
+fn _abs_f(x: float) -> float {
+    if x < 0.0 { return 0.0 - x }
+    return x
+}
+
+fn _max_f(a: float, b: float) -> float {
+    if a > b { return a }
+    return b
+}
+
+fn _min_f(a: float, b: float) -> float {
+    if a < b { return a }
+    return b
+}
+
+// ── RK4 fixed-step ────────────────────────────────────────────────────
+
+pub fn ode_rk4(f_name: string, y0: float, t0: float, t1: float, h: float, params: array) -> array {
+    let mut out = []
+    let mut t = t0
+    let mut y = y0
+    out.push([t, y])
+
+    // Guard against h <= 0 or t1 <= t0 — return single sample.
+    if h <= 0.0 { return out }
+    if t1 <= t0 { return out }
+
+    while t < t1 {
+        // Clamp final step so we land near t1 without overshoot.
+        let mut step = h
+        if t + step > t1 { step = t1 - t }
+
+        let k1 = _rhs_call(f_name, t, y, params)
+        let k2 = _rhs_call(f_name, t + 0.5 * step, y + 0.5 * step * k1, params)
+        let k3 = _rhs_call(f_name, t + 0.5 * step, y + 0.5 * step * k2, params)
+        let k4 = _rhs_call(f_name, t + step, y + step * k3, params)
+
+        let dy = step * (k1 + 2.0 * k2 + 2.0 * k3 + k4) / 6.0
+        y = y + dy
+        t = t + step
+        out.push([t, y])
+    }
+    return out
+}
+
+// ── Dormand-Prince RK4(5) adaptive ────────────────────────────────────
+//
+// Standard DP45 coefficients (Hairer & Wanner, "Solving ODEs I", II.5).
+// Embedded 4th- and 5th-order estimates share six stages; the difference
+// drives step adaptation.
+
+fn _dp45_step(f_name: string, t: float, y: float, h: float, params: array) -> array {
+    // Stage nodes c_i.
+    let k1 = _rhs_call(f_name, t, y, params)
+    let k2 = _rhs_call(f_name, t + h * (1.0 / 5.0),
+                       y + h * (1.0 / 5.0) * k1, params)
+    let k3 = _rhs_call(f_name, t + h * (3.0 / 10.0),
+                       y + h * (3.0 / 40.0 * k1 + 9.0 / 40.0 * k2), params)
+    let k4 = _rhs_call(f_name, t + h * (4.0 / 5.0),
+                       y + h * (44.0 / 45.0 * k1
+                              - 56.0 / 15.0 * k2
+                              + 32.0 / 9.0  * k3), params)
+    let k5 = _rhs_call(f_name, t + h * (8.0 / 9.0),
+                       y + h * (19372.0 / 6561.0  * k1
+                              - 25360.0 / 2187.0  * k2
+                              + 64448.0 / 6561.0  * k3
+                              - 212.0   / 729.0   * k4), params)
+    let k6 = _rhs_call(f_name, t + h,
+                       y + h * (9017.0 / 3168.0  * k1
+                              - 355.0  / 33.0    * k2
+                              + 46732.0 / 5247.0 * k3
+                              + 49.0   / 176.0   * k4
+                              - 5103.0 / 18656.0 * k5), params)
+
+    // 5th-order estimate b_i.
+    let y5 = y + h * (35.0    / 384.0    * k1
+                    + 500.0   / 1113.0   * k3
+                    + 125.0   / 192.0    * k4
+                    - 2187.0  / 6784.0   * k5
+                    + 11.0    / 84.0     * k6)
+
+    // 4th-order estimate b*_i (FSAL k7 omitted — we recompute k7 only
+    // when accepting the step, so the embedded difference uses the
+    // standard non-FSAL coefficients).
+    let k7 = _rhs_call(f_name, t + h, y5, params)
+    let y4 = y + h * (5179.0  / 57600.0   * k1
+                    + 7571.0  / 16695.0   * k3
+                    + 393.0   / 640.0     * k4
+                    - 92097.0 / 339200.0  * k5
+                    + 187.0   / 2100.0    * k6
+                    + 1.0     / 40.0      * k7)
+
+    let err = _abs_f(y5 - y4)
+    return [y5, err]
+}
+
+pub fn ode_rk45_adaptive(f_name: string, y0: float, t0: float, t1: float,
+                        atol: float, rtol: float, params: array) -> array {
+    let mut out = []
+    let mut t = t0
+    let mut y = y0
+    out.push([t, y, 0.0])
+
+    if t1 <= t0 { return out }
+
+    // Initial step heuristic — coarse but safe.
+    let span = t1 - t0
+    let mut h = span / 100.0
+    if h <= 0.0 { h = 1.0e-3 }
+
+    let h_min = span * 1.0e-12
+    let h_max = span
+    let max_steps = 100000
+    let mut step_count = 0
+
+    while t < t1 && step_count < max_steps {
+        if t + h > t1 { h = t1 - t }
+
+        let r = _dp45_step(f_name, t, y, h, params)
+        let y_new = r[0]
+        let err = r[1]
+
+        // Tolerance: atol + rtol * max(|y|, |y_new|).
+        let sc = atol + rtol * _max_f(_abs_f(y), _abs_f(y_new))
+        // Avoid div-by-zero when sc collapses (e.g. y → 0 with rtol=atol=0).
+        let denom = if sc > 1.0e-300 { sc } else { 1.0e-300 }
+        let ratio = err / denom
+
+        if ratio <= 1.0 {
+            // Accept step.
+            t = t + h
+            y = y_new
+            out.push([t, y, h])
+
+            // Step-size update — PI-controller-lite. Cap growth at 5×.
+            let mut factor = 0.9
+            if ratio > 1.0e-12 {
+                // exponent = 1/5 for embedded RK4(5).
+                let exponent = 0.2
+                // pow not strictly needed — use exp/log.
+                factor = 0.9 * exp(0.0 - exponent * log(ratio))
+            } else {
+                factor = 5.0
+            }
+            if factor > 5.0 { factor = 5.0 }
+            if factor < 0.2 { factor = 0.2 }
+            h = h * factor
+            if h > h_max { h = h_max }
+        } else {
+            // Reject — shrink and retry.
+            let exponent = 0.2
+            let mut factor = 0.9 * exp(0.0 - exponent * log(ratio))
+            if factor < 0.1 { factor = 0.1 }
+            h = h * factor
+            if h < h_min {
+                // Forced acceptance to avoid hang; mark with h sentinel.
+                t = t + h_min
+                y = y_new
+                out.push([t, y, h_min])
+                h = h_min
+            }
+        }
+        step_count = step_count + 1
+    }
+
+    return out
+}
+
+// ── Saddle-node bifurcation scan ──────────────────────────────────────
+//
+// Continuation: at each p in [p_lo, p_hi] we Newton-solve f(y, p) = 0
+// for the equilibrium y*, then evaluate the Jacobian J = ∂f/∂y at (y*, p).
+// A saddle-node bifurcation manifests as J → 0 (zero eigenvalue) plus
+// disappearance of the equilibrium for p on one side. We detect by
+// scanning J along p and recording sign changes; if Newton fails to
+// converge at p we flag that p as a candidate too (equilibrium ceased
+// to exist — the classic saddle-node fingerprint).
+//
+// `params_const` is appended after the scanned `p` in the RHS params:
+// _rhs_call(name, t=0, y, [p] ++ params_const). For "saddle" the RHS
+// only consumes params[0] = p so params_const is ignored.
+
+fn _params_with_p(p: float, params_const: array) -> array {
+    let mut a = []
+    a.push(p)
+    let mut i = 0
+    while i < len(params_const) {
+        a.push(params_const[i])
+        i = i + 1
+    }
+    return a
+}
+
+fn _df_dy(f_name: string, y: float, p: float, params_const: array) -> float {
+    // Finite-difference Jacobian — symmetric central difference.
+    let h = 1.0e-6
+    let params = _params_with_p(p, params_const)
+    let f_plus  = _rhs_call(f_name, 0.0, y + h, params)
+    let f_minus = _rhs_call(f_name, 0.0, y - h, params)
+    return (f_plus - f_minus) / (2.0 * h)
+}
+
+// Newton iterate for f(y, p) = 0 starting from `y_guess`. Returns
+// [y_eq, converged_flag] where flag is 1.0 / 0.0.
+fn _newton_solve(f_name: string, y_guess: float, p: float, params_const: array) -> array {
+    let mut y = y_guess
+    let max_iter = 50
+    let tol = 1.0e-10
+    let mut i = 0
+    while i < max_iter {
+        let params = _params_with_p(p, params_const)
+        let fy = _rhs_call(f_name, 0.0, y, params)
+        if _abs_f(fy) < tol {
+            return [y, 1.0]
+        }
+        let j = _df_dy(f_name, y, p, params_const)
+        if _abs_f(j) < 1.0e-14 {
+            // Singular Jacobian — bail (this *is* the bifurcation
+            // signal for the caller).
+            return [y, 0.0]
+        }
+        y = y - fy / j
+        i = i + 1
+    }
+    // Failed to converge — likely no equilibrium near guess.
+    return [y, 0.0]
+}
+
+pub fn ode_saddle_node_scan(f_name: string, y_eq_guess: float,
+                            p_lo: float, p_hi: float, p_steps: int,
+                            params_const: array) -> array {
+    let mut bifs = []
+    if p_steps < 2 { return bifs }
+    if p_hi <= p_lo { return bifs }
+
+    let dp = (p_hi - p_lo) / to_float(p_steps - 1)
+
+    // Walk p, Newton-continue from previous y_eq. Track Jacobian sign
+    // and convergence flag — flip in either marks a candidate.
+    let mut prev_p = p_lo
+    let mut prev_j_sign = 0     // -1, 0, +1
+    let mut prev_conv = false
+    let mut prev_y = y_eq_guess
+
+    let mut step = 0
+    while step < p_steps {
+        let p = p_lo + dp * to_float(step)
+        // Use previous y as the warm-start for continuation; on first
+        // step fall back to user guess.
+        let guess = if step == 0 { y_eq_guess } else { prev_y }
+        let r = _newton_solve(f_name, guess, p, params_const)
+        let y_eq = r[0]
+        let conv = r[1] > 0.5
+
+        let mut j_sign = 0
+        if conv {
+            let j = _df_dy(f_name, y_eq, p, params_const)
+            if j > 1.0e-9 { j_sign = 1 }
+            else if j < 0.0 - 1.0e-9 { j_sign = 0 - 1 }
+            else { j_sign = 0 }
+        }
+
+        if step > 0 {
+            let convergence_flip = (prev_conv != conv)
+            let mut jacobian_flip = false
+            if conv && prev_conv {
+                if prev_j_sign != 0 && j_sign != 0 && prev_j_sign != j_sign {
+                    jacobian_flip = true
+                }
+                if (prev_j_sign != 0 && j_sign == 0) || (prev_j_sign == 0 && j_sign != 0) {
+                    jacobian_flip = true
+                }
+            }
+            if convergence_flip || jacobian_flip {
+                // Bisect [prev_p, p] for a tighter bracket. Use the
+                // midpoint where convergence/J transitions.
+                let p_bif = 0.5 * (prev_p + p)
+                bifs.push(p_bif)
+            }
+        }
+
+        prev_p = p
+        prev_j_sign = j_sign
+        prev_conv = conv
+        if conv { prev_y = y_eq }
+        step = step + 1
+    }
+    return bifs
+}
