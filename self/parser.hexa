@@ -1419,6 +1419,30 @@ fn parse_stmt() {
         return parse_attribute_prefix()
     }
 
+    // PROBE r14-S (round 3 #6 carry-over): bare-block `{ stmt; stmt; }` as a
+    // statement (Rust block-stmt · C `{ }` · Swift do-block analog). At
+    // STATEMENT position LBrace is unambiguous — expression-position struct
+    // and map literals are reached via `let x = { … }` / `= { … }` / args,
+    // never as the leading token of a stmt. The codegen path emits a plain
+    // C `{ … }` brace-group so downstream stmts execute in sequence.
+    //
+    // NOTE on scope: hexa codegen flat-hoists every `let` per function
+    // (`_gen2_collect_lets` — see PROBE.log r3 #6). So `let` inside the
+    // bare-block does NOT introduce a fresh lexical scope today; the
+    // outer-leak behavior is unchanged. This PR ships only the PARSE
+    // acceptance — lexical-scope correctness is a separate codegen RFC
+    // (the same RFC that fixes match-arm `let` leak).
+    if kind == "LBrace" {
+        let body = parse_block()
+        return #{
+            "kind": "BlockStmt", "name": "", "value": "", "op": "",
+            "left": "", "right": "", "cond": "", "then_body": "", "else_body": "",
+            "params": "", "body": body, "args": "", "fields": "", "items": "",
+            "variants": "", "arms": "", "iter_expr": "", "ret_type": "",
+            "target": "", "trait_name": "", "methods": ""
+        }
+    }
+
     // Expression statement or assignment (incl. compound: +=, -=, *=, /=, %=)
     //
     // T2 FIX-A Patch #5 — empty-LHS ident edge resume point.
