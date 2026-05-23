@@ -64,6 +64,12 @@ fn cmd_loop_help() {
     println("            [--llm-families <a,b,c>] [--no-cache] [--allow-llm]")
     println("  hexa loop --option       (alias = --dfs --depth 3 --beam 2")
     println("                            --llm-cmd \$HEXA_LLM_CMD)")
+    println("  hexa loop --claude       (alias = --dfs --llm-cmd 'claude -p')")
+    println("  hexa loop --codex        (alias = --dfs --llm-cmd 'codex exec -')")
+    println("  hexa loop --gemini       (alias = --dfs --llm-cmd 'gemini -p')")
+    println("  hexa loop --claude-api   (alias = --dfs · jq|curl|jq to api.anthropic.com)")
+    println("  hexa loop --codex-api    (alias = --dfs · jq|curl|jq to api.openai.com)")
+    println("  hexa loop --gemini-api   (alias = --dfs · jq|curl|jq to generativelanguage.googleapis.com)")
     println("")
     println("STAGES (8 per cycle)")
     println("  1.SCAN    2.LENS    3.DEDUP   4.GATE")
@@ -90,6 +96,21 @@ fn cmd_loop_help() {
     println("  --no-cache      disable dist/llm_cache.hxc sidecar")
     println("  --allow-llm     gate real LLM calls (else stub-only)")
     println("  --option        alias for default DFS+LLM config")
+    println("  --claude        alias for --dfs --llm-cmd 'claude -p'")
+    println("                  (Anthropic Claude Code CLI, print mode)")
+    println("  --codex         alias for --dfs --llm-cmd 'codex exec -'")
+    println("                  (OpenAI Codex CLI, non-interactive stdin)")
+    println("  --gemini        alias for --dfs --llm-cmd 'gemini -p'")
+    println("                  (Google Gemini CLI, print mode)")
+    println("  --claude-api    alias — REST POST api.anthropic.com/v1/messages")
+    println("                  REQUIRES: ANTHROPIC_API_KEY (else exit 2)")
+    println("                  optional: ANTHROPIC_MODEL (default claude-opus-4-7)")
+    println("  --codex-api     alias — REST POST api.openai.com/v1/chat/completions")
+    println("                  REQUIRES: OPENAI_API_KEY (else exit 2)")
+    println("                  optional: OPENAI_MODEL (default gpt-5)")
+    println("  --gemini-api    alias — REST POST generativelanguage.googleapis.com")
+    println("                  REQUIRES: GEMINI_API_KEY (else exit 2)")
+    println("                  optional: GEMINI_MODEL (default gemini-2.5-pro)")
     println("  --target-absorb N (alias --target N) — batch absorption: loop")
     println("                    cycles until N verified children accumulate,")
     println("                    then open ONE PR. Hard cycle ceiling 50.")
@@ -346,12 +367,12 @@ fn cycle_dfs(seeds: array, view: AtlasView, cycle_no: int, cfg: DfsConfig) {
           + " allow_llm=" + _bool_str(cfg.allow_llm))
     // Phase M — in --target-absorb mode, defer the per-cycle PR; main() loops
     // run_one_cycle and ships ONE batched PR at the end of the session.
-    let defer = cfg.target_absorb > 0
+    let do_defer = cfg.target_absorb > 0
     let emitted = dfs_run(active_seeds, view, cycle_no,
                           cfg.cmd, cfg.depth, cfg.beam,
                           cfg.max_calls, cfg.max_usd, cfg.max_secs,
                           cfg.allow_llm, cfg.families, cfg.no_cache,
-                          defer)
+                          do_defer)
     println("  [dfs]  children emitted=" + to_string(emitted))
 }
 
@@ -433,6 +454,73 @@ fn main() {
             option_alias = true
             dfs_enabled = true
             if len(llm_cmd) == 0 { llm_cmd = env("HEXA_LLM_CMD") }
+            k = k + 1
+            continue
+        }
+        // RFC 080 — 3 vendor aliases × 2 transports (CLI + REST API).
+        // CLI form presets --llm-cmd to the vendor's canonical
+        // print/non-interactive shell (stdin=prompt, stdout=markdown).
+        // API form is a jq|curl|jq pipeline against the vendor's
+        // chat endpoint (no SDK, no extra binary beyond curl+jq).
+        // Both enable --dfs implicitly. An explicit --llm-cmd later
+        // on the line still wins (last-write semantics).
+        //
+        // Model + key env vars:
+        //   Anthropic: ANTHROPIC_API_KEY · ANTHROPIC_MODEL (default claude-opus-4-7)
+        //   OpenAI   : OPENAI_API_KEY    · OPENAI_MODEL    (default gpt-5)
+        //   Gemini   : GEMINI_API_KEY    · GEMINI_MODEL    (default gemini-2.5-pro)
+        if a == "--claude" {
+            dfs_enabled = true
+            llm_cmd = "claude -p"
+            k = k + 1
+            continue
+        }
+        if a == "--codex" {
+            dfs_enabled = true
+            llm_cmd = "codex exec -"
+            k = k + 1
+            continue
+        }
+        if a == "--gemini" {
+            dfs_enabled = true
+            llm_cmd = "gemini -p"
+            k = k + 1
+            continue
+        }
+        // *-api aliases gate on the matching env var BEFORE wiring the
+        // alias. Empty key -> refuse early with a one-line hint rather
+        // than failing later inside curl with an opaque 401. Exit code 2
+        // matches the refuse-gate convention used elsewhere in self/.
+        if a == "--claude-api" {
+            if len(env("ANTHROPIC_API_KEY")) == 0 {
+                println("error: --claude-api requires ANTHROPIC_API_KEY (env var unset or empty)")
+                println("  hint: export ANTHROPIC_API_KEY=$(secret get anthropic.api_key)")
+                exit(2)
+            }
+            dfs_enabled = true
+            llm_cmd = "jq -Rs '{model:(env.ANTHROPIC_MODEL // \"claude-opus-4-7\"),max_tokens:8192,messages:[{role:\"user\",content:.}]}' | curl -sS https://api.anthropic.com/v1/messages -H \"x-api-key: $ANTHROPIC_API_KEY\" -H \"anthropic-version: 2023-06-01\" -H \"content-type: application/json\" --data-binary @- | jq -r '.content[0].text'"
+            k = k + 1
+            continue
+        }
+        if a == "--codex-api" {
+            if len(env("OPENAI_API_KEY")) == 0 {
+                println("error: --codex-api requires OPENAI_API_KEY (env var unset or empty)")
+                println("  hint: export OPENAI_API_KEY=$(secret get openai.api_key)")
+                exit(2)
+            }
+            dfs_enabled = true
+            llm_cmd = "jq -Rs '{model:(env.OPENAI_MODEL // \"gpt-5\"),messages:[{role:\"user\",content:.}]}' | curl -sS https://api.openai.com/v1/chat/completions -H \"Authorization: Bearer $OPENAI_API_KEY\" -H \"Content-Type: application/json\" --data-binary @- | jq -r '.choices[0].message.content'"
+            k = k + 1
+            continue
+        }
+        if a == "--gemini-api" {
+            if len(env("GEMINI_API_KEY")) == 0 {
+                println("error: --gemini-api requires GEMINI_API_KEY (env var unset or empty)")
+                println("  hint: export GEMINI_API_KEY=$(secret get gemini.api_key)")
+                exit(2)
+            }
+            dfs_enabled = true
+            llm_cmd = "jq -Rs '{contents:[{parts:[{text:.}]}]}' | curl -sS \"https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL:-gemini-2.5-pro}:generateContent?key=$GEMINI_API_KEY\" -H \"Content-Type: application/json\" --data-binary @- | jq -r '.candidates[0].content.parts[0].text'"
             k = k + 1
             continue
         }
