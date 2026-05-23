@@ -3246,8 +3246,12 @@ fn gen2_stmt(node, depth) {
     if k == "GenerateStmt"   { return "" }
     if k == "DeriveDecl"     { return "" }
 
+    // Fail loud at TRANSPILE time — emitting an in-binary runtime trap
+    // (`fprintf+exit(1)` C stub) buried the failure behind a clang compile
+    // + a successful link.  An unhandled kind is a compiler-side gap; the
+    // user should see it at `hexa run` / `hexa build` before clang runs.
     eprintln("[codegen_c2] ERROR: unhandled statement kind: " + k)
-    return pad + "fprintf(stderr, \"CODEGEN ERROR: unhandled stmt kind: " + k + "\\n\"); exit(1);\n"
+    exit(1)
 }
 
 fn c_escape(s) {
@@ -5993,8 +5997,11 @@ fn gen2_expr(node) {
         return "hexa_await_unwrap(" + inner_c + ")"
     }
     if k == "" { return "hexa_map_new()" }
+    // Fail loud at TRANSPILE time — sibling of the stmt-kind branch.
+    // Returning an in-binary trap stub hid the failure behind clang +
+    // link; an unhandled kind is a compiler gap, exit before clang runs.
     eprintln("[codegen_c2] ERROR: unhandled expression kind: " + k)
-    return "(fprintf(stderr, \"CODEGEN ERROR: unhandled expr kind: " + k + "\\n\"), exit(1), hexa_void())"
+    exit(1)
 }
 
 // ═══════════════════════════════════════════════════════════
