@@ -1,6 +1,6 @@
 # hx install — reinstall blocked by runtime artifacts in package dir
 
-> **Status:** open — filed 2026-05-22 by airgenome (downstream consumer) during a `hx install airgenome` reinstall.
+> **Status:** resolved (2026-05-23) — the recommended Option 1 (recursive pre-clean) is already the current behavior: `tool/pkg/hx:288` does `rm -rf "$dest"` at the head of `cmd_install` (and `rm -rf "$HX_PKG/$pkg"` in `cmd_remove`). `rm -rf` removes hidden runtime artifacts (`.hook-watch.*.log`) without choking; the reported `rm: Directory not empty` was against a pre-`-rf` hx revision. Option 2 (LaunchAgent bootout before clear) is intentionally NOT adopted — it would couple the generic package manager to per-package agent labels, violating commons g20 (no per-instance branches); stopping a package's own running agent before reinstall is the consumer's responsibility. The only residual is the macOS-specific race where a live agent recreates a file mid-recurse — vanishingly rare, and not generically solvable without that coupling.
 
 **From:** airgenome (downstream)
 **Component:** hx package manager (`hexa-lang/tool/pkg/hx`)
