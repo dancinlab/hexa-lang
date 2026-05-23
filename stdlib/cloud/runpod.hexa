@@ -390,3 +390,160 @@ fn runpod_list_pods() -> RunPodList {
     }
     return _runpod_list_old(rpc)
 }
+
+// ── per-pod info + detailed list ────────────────────────────────────
+
+// RunPodPodInfo — per-pod snapshot used by `cloud list` / `cloud status`
+// / `cloud orphans`. `owner_tag` is parsed from the name suffix per the
+// `::owner=<tag>` convention; an empty string means the pod is an
+// orphan from the diagnostic-verb perspective (no saga claim).
+struct RunPodPodInfo {
+    ok:        int,
+    pod_id:    str,
+    name:      str,
+    gpu_type:  str,
+    status:    str,
+    owner_tag: str,
+    message:   str
+}
+
+fn _runpod_info_fail(msg: str) -> RunPodPodInfo {
+    return RunPodPodInfo { ok: 0, pod_id: "", name: "", gpu_type: "", status: "", owner_tag: "", message: msg }
+}
+
+// runpod_parse_owner_tag — extract the owner tag from a pod name that
+// follows the `<base>::owner=<tag>` convention. Returns "" when the
+// marker is absent (the orphan signal).
+fn runpod_parse_owner_tag(name: str) -> str {
+    let at = name.index_of("::owner=")
+    if at < 0 {
+        return ""
+    }
+    return name.substring(at + 8, len(name))
+}
+
+// _runpod_str_field — try each candidate JSON path on `obj`; return the
+// first string value found, else "". Tolerates runpodctl schema drift
+// between minor versions (e.g. `gpuTypeId` vs `machine.gpuTypeId`).
+fn _runpod_str_field(obj: any, paths: [str]) -> str {
+    let mut i = 0
+    while i < len(paths) {
+        let v = json_object_get_path(obj, paths[i])
+        if type_of(v) == "string" {
+            let s = to_string(v)
+            if len(s) > 0 {
+                return s
+            }
+        }
+        i = i + 1
+    }
+    return ""
+}
+
+// _runpod_info_from_obj — build a RunPodPodInfo from a parsed JSON
+// object (one entry of `pod list -o json` or the root of `pod get -o
+// json`). Defensive: any missing field defaults to "?" so the diagnostic
+// verbs stay informative even when runpodctl changes its schema.
+fn _runpod_info_from_obj(obj: any) -> RunPodPodInfo {
+    let id_paths = ["id"]
+    let name_paths = ["name"]
+    let gpu_paths = ["machine.gpuDisplayName", "machine.gpuTypeId", "gpuTypeId", "gpu.gpuTypeId"]
+    let status_paths = ["desiredStatus", "currentStatus", "status"]
+    let pid = _runpod_str_field(obj, id_paths)
+    let nm  = _runpod_str_field(obj, name_paths)
+    let gpu = _runpod_str_field(obj, gpu_paths)
+    let st  = _runpod_str_field(obj, status_paths)
+    let mut gpu_disp = gpu
+    if len(gpu_disp) == 0 {
+        gpu_disp = "?"
+    }
+    let mut st_disp = st
+    if len(st_disp) == 0 {
+        st_disp = "?"
+    }
+    let owner = runpod_parse_owner_tag(nm)
+    if len(pid) == 0 {
+        return _runpod_info_fail("pod_info: no id in JSON object")
+    }
+    return RunPodPodInfo { ok: 1, pod_id: pid, name: nm, gpu_type: gpu_disp, status: st_disp, owner_tag: owner, message: "ok" }
+}
+
+// runpod_pod_info — single-pod snapshot via `runpodctl pod get <id> -o
+// json`. Returns ok=0 when runpodctl is missing or the pod is not
+// known. CLI-only (no API fallback) — diagnostic verbs run on the
+// dispatcher host where runpodctl auth lives, so an API fallback is
+// not load-bearing here.
+fn runpod_pod_info(pod_id: str) -> RunPodPodInfo {
+    if len(pod_id) == 0 {
+        return _runpod_info_fail("pod_info: empty pod_id")
+    }
+    let rpc = _runpodctl_path()
+    if len(rpc) == 0 {
+        return _runpod_info_fail("pod_info: runpodctl not found")
+    }
+    let cmd = _shq_local(rpc) + " pod get " + _shq_local(pod_id) + " -o json 2>&1"
+    let out = exec(cmd)
+    if out.index_of("not found") >= 0 {
+        return _runpod_info_fail("pod_info: pod not found")
+    }
+    let parsed = json_parse(out)
+    if type_of(parsed) != "object" {
+        return _runpod_info_fail("pod_info: non-object JSON · " + out.substring(0, 120))
+    }
+    return _runpod_info_from_obj(parsed)
+}
+
+struct RunPodListDetailed {
+    ok:      int,
+    pods:    [RunPodPodInfo],
+    message: str
+}
+
+fn _runpod_list_detailed_fail(msg: str) -> RunPodListDetailed {
+    return RunPodListDetailed { ok: 0, pods: [], message: msg }
+}
+
+// runpod_list_detailed — every active pod with id/name/gpu/status +
+// owner_tag (parsed). Falls back to thin `runpod_list_pods` then
+// per-id `pod get` on the 1.x text-table path so the diagnostic
+// verbs work against either runpodctl generation.
+fn runpod_list_detailed() -> RunPodListDetailed {
+    let rpc = _runpodctl_path()
+    if len(rpc) == 0 {
+        return _runpod_list_detailed_fail("runpodctl not found")
+    }
+    let cmd = _shq_local(rpc) + " pod list -o json 2>&1"
+    let out = exec(cmd)
+    let stale = out.index_of("unknown command") >= 0 || out.index_of("unrecognized") >= 0
+    if !stale {
+        let parsed = json_parse(out)
+        if type_of(parsed) == "array" {
+            let mut pods = []
+            let mut i = 0
+            while i < len(parsed) {
+                let info = _runpod_info_from_obj(parsed[i])
+                if info.ok == 1 {
+                    pods.push(info)
+                }
+                i = i + 1
+            }
+            return RunPodListDetailed { ok: 1, pods: pods, message: "list_detailed — " + to_string(len(pods)) + " pods" }
+        }
+    }
+    let thin = runpod_list_pods()
+    if thin.ok == 0 {
+        return _runpod_list_detailed_fail(thin.message)
+    }
+    let mut pods = []
+    let mut i = 0
+    while i < len(thin.pod_ids) {
+        let info = runpod_pod_info(thin.pod_ids[i])
+        if info.ok == 1 {
+            pods.push(info)
+        } else {
+            pods.push(RunPodPodInfo { ok: 1, pod_id: thin.pod_ids[i], name: "?", gpu_type: "?", status: "?", owner_tag: "", message: "pod_get failed" })
+        }
+        i = i + 1
+    }
+    return RunPodListDetailed { ok: 1, pods: pods, message: "list_detailed (fallback) — " + to_string(len(pods)) + " pods" }
+}

@@ -7,16 +7,21 @@
 // is a later deploy-adjacent step — see design.md Decision 5.
 
 use "stdlib/cloud/cloud"
+use "stdlib/cloud/runpod"
 
 fn _cloud_help() {
-    println("hexa cloud — structured-argv remote dispatch (cycle A)")
+    println("hexa cloud — structured-argv remote dispatch + pod diagnostics")
     println("")
-    println("usage:")
+    println("dispatch verbs:")
     println("  cloud run       <host> [conn] -- <argv...>             run argv, wait, exit with its code")
     println("  cloud nohup     <host> <logfile> [conn] -- <argv...>   background argv, print remote pid")
     println("  cloud poll      <host> <pid> [conn]                    exit 0 if remote pid alive, else 1")
     println("  cloud copy-to   <host> <local> <remote> [conn]         upload local file to host:remote (scp)")
     println("  cloud copy-from <host> <remote> <local> [conn]         download host:remote file to local (scp)")
+    println("")
+    println("diagnostic verbs (RunPod, runpodctl-backed):")
+    println("  cloud list                                             every active pod — id/name/gpu/status/owner")
+    println("  cloud status <pod_id>                                  single pod snapshot")
     println("  cloud help | version")
     println("")
     println("connection flags [conn] (before `--`):")
@@ -26,6 +31,42 @@ fn _cloud_help() {
     println("every argv element after `--` is POSIX-quoted before ssh — no remote")
     println("shell parsing, no glob expansion, no /* */ comment mis-parse.")
     println("`host` is an ssh destination or ~/.ssh/config alias.")
+    println("")
+    println("owner-tag convention — diagnostic verbs read the owner from a pod")
+    println("name suffix `<base>::owner=<tag>`; an absent marker = orphan.")
+}
+
+// _pad_right — return `s` padded with spaces on the right to width `w`.
+// Truncates a longer string to keep table rows aligned.
+fn _pad_right(s: str, w: int) -> str {
+    let n = len(s)
+    if n >= w {
+        return s.substring(0, w)
+    }
+    let mut out = s
+    let mut i = n
+    while i < w {
+        out = out + " "
+        i = i + 1
+    }
+    return out
+}
+
+fn _print_pod_row(p: RunPodPodInfo) {
+    let owner = if len(p.owner_tag) > 0 { p.owner_tag } else { "-" }
+    println(_pad_right(p.pod_id, 16) + " "
+        + _pad_right(p.status, 10) + " "
+        + _pad_right(p.gpu_type, 22) + " "
+        + _pad_right(owner, 24) + " "
+        + p.name)
+}
+
+fn _print_pod_header() {
+    println(_pad_right("POD_ID", 16) + " "
+        + _pad_right("STATUS", 10) + " "
+        + _pad_right("GPU", 22) + " "
+        + _pad_right("OWNER", 24) + " "
+        + "NAME")
 }
 
 // _cli_atoi — parse a non-negative decimal string; non-digits ignored.
@@ -107,7 +148,7 @@ fn main() {
     while i < len(av) {
         let t = av[i]
         if si < 0 {
-            if t == "run" || t == "nohup" || t == "poll" || t == "copy-to" || t == "copy-from" || t == "help" || t == "--help" || t == "-h" || t == "version" || t == "--version" || t == "-v" {
+            if t == "run" || t == "nohup" || t == "poll" || t == "copy-to" || t == "copy-from" || t == "list" || t == "status" || t == "help" || t == "--help" || t == "-h" || t == "version" || t == "--version" || t == "-v" {
                 si = i
                 sub = t
             }
@@ -196,6 +237,40 @@ fn main() {
         let r = cloud_copy_to_opts(host, ssh_opts, local_path, remote_path)
         println("[cloud] " + r.message + " · " + local_path + " -> " + host + ":" + remote_path)
         exit(r.exit_code)
+    }
+    if sub == "list" {
+        let r = runpod_list_detailed()
+        if r.ok == 0 {
+            println("[cloud] list: " + r.message)
+            exit(1)
+        }
+        _print_pod_header()
+        let mut k = 0
+        while k < len(r.pods) {
+            _print_pod_row(r.pods[k])
+            k = k + 1
+        }
+        println("[cloud] " + r.message)
+        return
+    }
+    if sub == "status" {
+        if si + 1 >= len(av) {
+            println("[cloud] status: usage — cloud status <pod_id>")
+            exit(2)
+        }
+        let pod_id = av[si + 1]
+        let r = runpod_pod_info(pod_id)
+        if r.ok == 0 {
+            println("[cloud] status: " + r.message)
+            exit(1)
+        }
+        let owner = if len(r.owner_tag) > 0 { r.owner_tag } else { "-" }
+        println("pod_id   " + r.pod_id)
+        println("name     " + r.name)
+        println("gpu      " + r.gpu_type)
+        println("status   " + r.status)
+        println("owner    " + owner)
+        return
     }
     if sub == "copy-from" {
         if si + 3 >= len(av) {
