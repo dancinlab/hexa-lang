@@ -1,10 +1,24 @@
 # `exec_with_status` → 3-tuple `[stdout, stderr, exit_code]` migration
 
-> **Status**: DOCS-ONLY this cycle (PROBE r8). Runtime impl is the
-> ~115 LoC popen→fork rewrite mirroring `hexa_exec_capture` (runtime.c:9991);
-> caller migration is the >500-site / 150-file blast radius that gates this
-> from being a single PR. Decl + docs land NOW; impl + caller sweep land
-> as a stacked PR series.
+> **Status**: PR B (Option B1) LANDED — runtime impl available via the new,
+> non-breaking builtin `exec_with_status3(cmd)` → 3-tuple
+> `[stdout, stderr, exit_code]` (separate channels, no merge, no deadlock).
+> Body delegates to `hexa_exec_capture` (select-multiplexed two-pipe drain).
+> Surfaced through `self/codegen.hexa` (`exec_with_status3` →
+> `hexa_exec_with_status3`), purity classification in `self/ai_native_pass.hexa`
+> (3 sites), `self/runtime.h` decl, and a regen-gated bare-ident TAG_FN bridge
+> in `self/runtime.c` (mirrors the `sha1` / `exec_capture` pattern) so the
+> baked `hexa_v2` resolves `exec_with_status3(...)` pre-regen. The legacy
+> 2-tuple `exec_with_status` is UNCHANGED — zero existing callers break
+> (`r[1] == exit_code` still holds). Verified: a hexa program calling
+> `exec_with_status3("sh -c 'echo OUT; echo ERR >&2; exit 7'")` prints
+> stdout="OUT", stderr="ERR", exit_code=7; legacy `exec_with_status` test
+> still returns `r[1]==3`. The codegen arm itself is regen-gated (active
+> after the next `hexa_v2` regen); pre-regen the bridge carries it.
+> CALLER SWEEP (PR C / opt-in migration of the >500-site / 150-file surface
+> to the 3-tuple) is STILL PENDING. Original DOCS-ONLY (PROBE r8) note:
+> decl + docs landed first; impl now landed non-breaking; caller sweep
+> remains a separate stacked PR series.
 
 **Severity**: medium (correctness — silent stderr loss across all build /
 test / dispatch shellouts; not a crash, but agents can't surface the

@@ -6547,6 +6547,7 @@ fn m987_is_impure_builtin_name(nm) {
     if nm == "exec" { return true }
     if nm == "exec_capture" { return true }
     if nm == "exec_with_status" { return true }
+    if nm == "exec_with_status3" { return true }
     if nm == "spawn" { return true }
     if nm == "exit" { return true }
     if nm == "abort" { return true }
@@ -6853,6 +6854,7 @@ fn mr_name_is_impure_builtin(nm) {
     if nm == "exec" { return true }
     if nm == "exec_capture" { return true }
     if nm == "exec_with_status" { return true }
+    if nm == "exec_with_status3" { return true }
     if nm == "system" { return true }
     if nm == "env" { return true }
     if nm == "getenv" { return true }
@@ -20099,6 +20101,7 @@ fn ff_is_impure_builtin_name(nm) {
     if nm == "exec" { return true }
     if nm == "exec_capture" { return true }
     if nm == "exec_with_status" { return true }
+    if nm == "exec_with_status3" { return true }
     if nm == "system" { return true }
     if nm == "env" { return true }
     if nm == "getenv" { return true }
