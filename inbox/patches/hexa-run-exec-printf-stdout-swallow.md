@@ -1,5 +1,7 @@
 # `exec()` builtin silently swallows child stdout under `hexa run`
 
+> **Status:** resolved — working-as-designed (2026-05-23). `exec(cmd)` is a **capturing** call: `hexa_exec` (runtime_core.c:5061) runs the child via `popen(cmd, "r")` / posix_spawn and returns the child's **stdout as a string**. It is the canonical capture primitive (≈ Python `subprocess.check_output` / shell backticks), NOT `system()`. The "swallow" is simply the captured stdout being discarded when the return value is unused. stderr is not piped → inherits the parent fd → that's why `printf … >&2` still shows (explains the asymmetry in the TL;DR). Canonical usage: `print(exec("printf hello"))` to surface captured output, or `exec_stream(cmd, on_line)` for live line-by-line passthrough (e.g. long-running / daemon output). No code change — forcing `exec()` to passthrough would break every caller that relies on capture (the dominant use). Cross-link: streaming path is `hexa_exec_stream` (runtime_core.c, just below `hexa_exec`).
+
 **Reporter**: anima (`dancinlab/anima` downstream consumer · cycle 2/I `telemetry_status.hexa` dev)
 **Severity**: medium (workaround = `println` exists, but the pattern is a footgun for any
 module mixing shell-out output with native `println`)
