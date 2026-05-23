@@ -4570,6 +4570,24 @@ fn gen2_expr(node) {
         if _rk == "UnaryOp" && node.right.op == "-" && type_of(node.right.left) != "string" && node.right.left.kind == "FloatLit" {
             _rflit = "-" + node.right.left.value
         }
+        // PROBE r14-T: mixed int/float div-zero canonical IEEE 754.
+        // If ONE side is a float literal and the OTHER is an int literal
+        // (or UnaryMinus(IntLit)), promote the int to (double) and route
+        // through the same float fold:  `1/0.0`→inf · `-1/0.0`→-inf ·
+        // `1.0/0`→inf · `0/0.0`→NaN.  Pure int/int divide is untouched
+        // (still throws on zero — Python/Go canonical for pure integers).
+        if _lflit != "" && _rflit == "" {
+            if _rk == "IntLit" { _rflit = "(double)(" + node.right.value + ")" }
+            if _rk == "UnaryOp" && node.right.op == "-" && type_of(node.right.left) != "string" && node.right.left.kind == "IntLit" {
+                _rflit = "(double)(-" + node.right.left.value + ")"
+            }
+        }
+        if _rflit != "" && _lflit == "" {
+            if _lk == "IntLit" { _lflit = "(double)(" + node.left.value + ")" }
+            if _lk == "UnaryOp" && node.left.op == "-" && type_of(node.left.left) != "string" && node.left.left.kind == "IntLit" {
+                _lflit = "(double)(-" + node.left.left.value + ")"
+            }
+        }
         if _lflit != "" && _rflit != "" {
             if op == "+" || op == "-" || op == "*" || op == "/" {
                 return "hexa_float((" + _lflit + ") " + op + " (" + _rflit + "))"
