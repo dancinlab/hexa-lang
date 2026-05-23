@@ -1,6 +1,10 @@
 # self/tui/input.hexa — `_decode_in_paste` byte-by-byte string concat is O(n²)
 
+**Status**: resolved-67771578 (commit `67771578` · 2026-05-12 · "fix(tui/input): bracketed-paste — accumulate raw bytes, not per-byte chr()")
+
 > **VERIFIED-CLOSED 2026-05-20** — `self/tui/input.hexa` L64-73 carries the `_paste_bytes: [int]` array (O(1) push) with the comment explicitly crediting this patch and noting `bytes_to_str_raw` 1-shot at close. Close-only marker.
+
+> **Triage 2026-05-25** — 재확인. `self/tui/input.hexa:73` `let mut _paste_bytes: [int] = []` + `_decode_in_paste` (L567+) 가 매 byte `_paste_bytes.push(b)` (O(1) amortized) + close 시점 1-shot `bytes_to_str_raw(_paste_bytes)` (L597) — Fix sketch (A) byte-array accumulator 가 그대로 적용됨. O(n²) → O(n) closure 확정. 추가 작업 불필요.
 
 ## Symptom
 
