@@ -167,6 +167,10 @@ fn cmd_rubric() {
     println("             mabk_quantum_max(N) → 2^((N-1)/2)  (RFC 045 MABK-Ardehali quantum bound, N≥2)")
     println("             pt_doily_quantum_win()      → 1.0  (RFC 045 magic-square pseudo-tel quantum win, 0-arg)")
     println("             pt_doily_classical_bound()  → 8/9  (RFC 045 LP-tight LHV magic-square bound, 0-arg)")
+    println("             sym_shadow_var_bound(num_paulis,pauli_locality) → 5*m*4^k  (RFC 045 sym-adj shadow F2, 2-arg)")
+    println("             overlap_vqe_h2_shift_ha() → 0.7151043390810812  (RFC 045 overlap-ADAPT H2 STO-3G shift, 0-arg)")
+    println("             rpe_heisenberg_sigma(k_gens,m_per_k) → 1/(2^(K-1)*sqrt(M))  (RFC 045 RPE Heisenberg bound, 2-arg)")
+    println("             mirror_bench_hog_asymptote() → (1+ln2)/2  (RFC 045 mirror-bench Porter-Thomas HOG, 0-arg)")
 }
 
 let NOCALC: int = -999999
@@ -617,6 +621,84 @@ fn _shadow_clifford_var_bound(n_qubits: int) -> float {
     return 3.0 * dim_f
 }
 
+// ── RFC 045 qmirror PR-E atoms (Support · Sym-shadow/Overlap-VQE/RPE/Mirror) ─
+//
+// Symmetry-adjusted classical-shadow per-shot variance F2 bound (Zhao-Rubin-
+// Babbush 2024 npj QI symmetry adjustment on top of HKP 2020 Pauli shadow).
+// For an observable O = Sum_{j=1..m} c_j P_j of m single-Pauli terms each of
+// locality ≤ k, the per-shot variance is bounded above by
+//   var_bound  =  5 * m * 4^k
+// (loose upper bound; 5x slack — paper Eq. 3-4 / Fig. 2 anchor). Verbatim
+// port of stdlib/quantum/symmetry-adjusted-shadows/module/
+// symmetry_adjusted_shadows.hexa:1201-1204 (let shadow_norm_sq = 4.0 (k=1)
+// — generalised here to 4^k; var_bound = 5.0 * m_obs * shadow_norm_sq).
+// 2-arg closed-form: takes (num_paulis m ≥ 1, pauli_locality k ≥ 0) →
+// 5 * m * 4^k as float.
+fn _sym_shadow_var_bound(num_paulis: int, pauli_locality: int) -> float {
+    if num_paulis < 1 { return _NOCALC_F }
+    if pauli_locality < 0 { return _NOCALC_F }
+    let mut four_pow_k = 1.0
+    let mut idx_loc = 0
+    while idx_loc < pauli_locality {
+        four_pow_k = four_pow_k * 4.0
+        idx_loc = idx_loc + 1
+    }
+    return 5.0 * to_float(num_paulis) * four_pow_k
+}
+
+// Overlap-guided ADAPT-VQE H2 STO-3G constant shift (Oh et al. 2023, arXiv
+// 2301.10196; F-QM-CHEM-N5 H2/STO-3G/2q frozen-core reduced-Hamiltonian).
+// The 2-qubit reduced Hamiltonian's energy needs the frozen-core + nuclear
+// repulsion shift to recover the absolute FCI ground-state energy:
+//   E_FCI_full(Ha)  =  E_2q_reduced  +  constant_shift_ha
+// with constant_shift_ha = 0.7151043390810812 Ha (verbatim PySCF 2.13.0 RHF
+// reduction at R=0.74 Å bond length; nuclear repulsion + frozen-core
+// contribution combined). Verbatim port of
+// stdlib/quantum/overlap-adapt-vqe/module/overlap_adapt_vqe.hexa::
+// oavqe_constant_shift_ha (line 133). 0-arg closed-form constant.
+fn _overlap_vqe_h2_shift_ha() -> float {
+    return 0.7151043390810812
+}
+
+// Robust Phase Estimation (RPE) Heisenberg-limit standard deviation bound
+// (Kimmel-Low-Yoder PRA 92, 062315 (2015), arXiv:1502.02677; paper Eqs.
+// (10)-(13) / Fig. 2). For K Heisenberg generations (k = 0..K-1, the longest
+// circuit applies U^(2^(K-1))) and M shots per circuit (cosine + sine
+// readouts each), the achievable phase-estimation standard deviation is
+//   sigma_HB(K, M)  =  1 / ( 2^(K-1) * sqrt(M) )
+// — the Heisenberg-limited 1/V scaling vs the SQL 1/sqrt(V). Verbatim port
+// of stdlib/quantum/rpe-gate-calib/module/rpe_gate_calib.hexa:868-870
+// (let two_kmax = pow2(n_gen - 1); sigma_HB = 1.0 / (two_kmax * sqrt(M))).
+// 2-arg closed-form: takes (k_gens K ≥ 1, m_per_k M ≥ 1) → sigma_HB as float.
+fn _rpe_heisenberg_sigma(k_gens: int, m_per_k: int) -> float {
+    if k_gens < 1 { return _NOCALC_F }
+    if m_per_k < 1 { return _NOCALC_F }
+    let mut two_kmax = 1.0
+    let mut idx_gen = 0
+    let exp_gen = k_gens - 1
+    while idx_gen < exp_gen {
+        two_kmax = two_kmax * 2.0
+        idx_gen = idx_gen + 1
+    }
+    return 1.0 / (two_kmax * sqrt(to_float(m_per_k)))
+}
+
+// Mirror-circuit volumetric benchmarking heavy-output-generation (HOG)
+// Porter-Thomas asymptote (Cross-Bishop-Sheldon-Nation-Gambetta PRA 100,
+// 032328 (2019), arXiv:1811.12926; quantum-volume heavy-output test). For
+// a Haar-random w-qubit circuit at approximate-2-design depth, the heavy-
+// output probability mass converges to
+//   HOG_asymptote  =  (1 + ln 2) / 2  ~=  0.8466
+// — the Porter-Thomas anticoncentration anchor of the quantum-volume test.
+// Verbatim port of stdlib/quantum/mirror-fidelity-bench/module/
+// mirror_fidelity_bench.hexa::mfb_hog_asymptote (line 148; uses
+// mfb_ln2() = 0.6931471805599453 as the literal ln 2 constant).
+// 0-arg closed-form constant.
+fn _mirror_bench_hog_asymptote() -> float {
+    let ln_two = 0.6931471805599453
+    return (1.0 + ln_two) / 2.0
+}
+
 // MABK-Ardehali quantum maximum (Mermin 1990 PRL 65 1838 / Ardehali 1992
 // PRA 46 5375 / Belinskii-Klyshko 1993): the multipartite Bell-correlation
 // inequality M_N has quantum bound
@@ -718,6 +800,25 @@ fn _recompute_float(fn_name: string, a0: float, a1: float, argc: int) -> float {
         let n_qubits = to_int(a0)
         return _shadow_clifford_var_bound(n_qubits)
     }
+    // RFC 045 qmirror PR-E atoms (Support · Sym-shadow/Overlap-VQE/RPE/Mirror):
+    //   sym_shadow_var_bound(m, k)          2-arg closed-form: 5 * m * 4^k
+    //   overlap_vqe_h2_shift_ha()           0-arg constant: 0.7151043390810812 Ha
+    //   rpe_heisenberg_sigma(K, M)          2-arg closed-form: 1 / (2^(K-1) * sqrt(M))
+    //   mirror_bench_hog_asymptote()        0-arg constant: (1 + ln 2)/2
+    if fn_name == "sym_shadow_var_bound" {
+        if argc < 2 { return _NOCALC_F }
+        let num_paulis = to_int(a0)
+        let pauli_locality = to_int(a1)
+        return _sym_shadow_var_bound(num_paulis, pauli_locality)
+    }
+    if fn_name == "overlap_vqe_h2_shift_ha" { return _overlap_vqe_h2_shift_ha() }
+    if fn_name == "rpe_heisenberg_sigma" {
+        if argc < 2 { return _NOCALC_F }
+        let k_gens = to_int(a0)
+        let m_per_k = to_int(a1)
+        return _rpe_heisenberg_sigma(k_gens, m_per_k)
+    }
+    if fn_name == "mirror_bench_hog_asymptote" { return _mirror_bench_hog_asymptote() }
     return _NOCALC_F
 }
 
@@ -732,6 +833,10 @@ fn _is_float_fn(fn_name: string) -> bool {
         || fn_name == "vqe_h2_fci_sto3g"
         || fn_name == "qfi_sql" || fn_name == "qfi_ghz"
         || fn_name == "shadow_pauli_var_bound" || fn_name == "shadow_clifford_var_bound"
+        || fn_name == "sym_shadow_var_bound"
+        || fn_name == "overlap_vqe_h2_shift_ha"
+        || fn_name == "rpe_heisenberg_sigma"
+        || fn_name == "mirror_bench_hog_asymptote"
 }
 
 // is fn_name a 0-arg closed-form constant? (--expr <fn> <v>, no operands).
@@ -740,6 +845,8 @@ fn _is_zero_arg_float_fn(fn_name: string) -> bool {
         || fn_name == "pt_doily_quantum_win"
         || fn_name == "pt_doily_classical_bound"
         || fn_name == "vqe_h2_fci_sto3g"
+        || fn_name == "overlap_vqe_h2_shift_ha"
+        || fn_name == "mirror_bench_hog_asymptote"
 }
 
 // trim trailing zeros of a float→string for tidy verdict echo.
