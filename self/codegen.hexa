@@ -2621,6 +2621,24 @@ fn gen2_stmt(node, depth) {
     let pad = gen2_indent(depth)
     let k = node.kind
 
+    // PROBE r14-S (round 3 #6 carry-over): bare-block `{ stmt; stmt; }` as a
+    // statement (parser.hexa BlockStmt branch). Emits a plain C brace-group
+    // so the contained stmts execute in sequence. NOTE: hexa flat-hoists
+    // `let` per function (`_gen2_collect_lets`), so this brace-group does
+    // NOT introduce a fresh lexical scope today — the separate scope-leak
+    // RFC owns that fix. WhileStmt's body-loop is the structural template.
+    if k == "BlockStmt" {
+        let mut chunks = []
+        chunks.push(pad + "{\n")
+        let mut bi = 0
+        while bi < len(node.body) {
+            chunks.push(gen2_stmt(node.body[bi], depth + 1))
+            bi = bi + 1
+        }
+        chunks.push(pad + "}\n")
+        return chunks.join("")
+    }
+
     // AtomicLet (`atomic let x = …`) shares LetMutStmt's shape (name +
     // left=init); single-threaded codegen treats `atomic` as an annotation
     // and emits a normal mutable binding (no atomics infra wired).
