@@ -1,9 +1,41 @@
 # `pool.hexa` transpile fail — `ks`/`i` undeclared in generated C (line 707) — pool CLI 전체 사용 불가
 
+**Status**: resolved-already (no codegen fix needed)
+**Resolved**: 2026-05-24 via PR #687 (`6567f8f2 fix(self/main): hexa run cold-cache race`)
+**Cross-ref**: sibling PR #688 (`pool-cli-compile-errors-2026-05-25.md`)
+
 **Reporter**: demiurge (RTSC N5 funnel cycle 12 · 2026-05-24)
 **Severity**: high (pool CLI completely broken — all `pool on <host> …` invocations fail with hexa build error before any remote dispatch attempt)
 **Affected**: `~/.hx/packages/pool/bin/pool.hexa` (rebuilt 2026-05-24 06:56) → hexa-lang transpiler regression
 **Trigger**: any `pool on <host> <cmd>` invocation (sees the build retry per call via hexa run dispatch)
+
+## Resolution (2026-05-24)
+
+진단을 다시 한 결과 — `ks` / `i` undeclared 는 transpiler codegen 회귀가 **아니라** `hexa run` cold-cache race 의 loser 가 자기 build 의 부분 산출물 (incomplete `.tmp.c`) 을 보고하던 증상이었음. PR #687 (`6567f8f2`) 가 `cmd_run` / `cmd_run_user_direct` / `_batch_run_one` 3 site 의 atomic-rename loser benign 가드를 고치면서 자연 해소.
+
+검증 (2026-05-24 main `92d4b93c` 기준):
+
+```
+$ hexa parse ~/.hx/packages/pool/bin/pool.hexa
+OK: parses cleanly
+
+$ pool list
+mini       [ded]  mini                   macos  2.97   2/16G  -    12Gi/460Gi  sudo
+ubu-1      [ded]  ubu-1                  linux  6.02   2/30G  0%   751G/915G   sudo
+ubu-2      [ded]  ubu-2                  linux  17.41  2/30G  0%   810G/915G   sudo
+pi5-akida  [ded]  ubuntu@192.168.50.155  linux  0.01   0/7G   -    56G/59G     sudo
+
+$ pool on ubu-2 "uptime"
+ 08:45:26 up 2 days, 12:17,  3 users,  load average: 17.38, 17.07, 16.39
+```
+
+3 errors (lines 707/710/720) → 0. 직접 호출 (`pool list`) + 원격 dispatch (`pool on <host>`) 둘 다 통과.
+
+코드젠 변경 불필요 — 본 inbox 의 "transpiler regression" 가설은 false positive. 원인은 cold-cache race 의 부분 산물 노출이었다.
+
+---
+
+## Original report (preserved for provenance)
 
 ## TL;DR
 
@@ -67,7 +99,7 @@ If neither fix lands fast, document the `ssh <host> …` fallback explicitly in 
 ## Status
 
 - [x] Bug surfaced + reproduced in current state
-- [ ] Bisect `b18bbf57` ↔ working version (whoever has the previous-build `pool` binary cached)
-- [ ] Codegen fix in self/ transpiler
-- [ ] `pool.hexa` rebuild + smoke test
-- [ ] Document `ssh` workaround in g9 until fix lands
+- [x] ~~Bisect `b18bbf57` ↔ working version~~ — root cause was cold-cache race, not codegen (sibling PR #687)
+- [x] ~~Codegen fix in self/ transpiler~~ — no codegen change needed; PR #687 (self/main race-loser guard) resolved
+- [x] `pool.hexa` rebuild + smoke test — `pool list` + `pool on ubu-2 "uptime"` 통과
+- [N/A] ~~Document `ssh` workaround in g9~~ — pool route restored, workaround obsolete
