@@ -253,6 +253,62 @@ pub fn tokenize(source) {
                         // else: trailing _ or __ — stop; _ left for next token
                     }
                 }
+                // C99 hex-float literal: 0x<mantissa>[.<frac-hex>]p[+-]?<dec-exp>
+                // Detect either `.<hex-digit>` fractional part or `p`/`P` binary
+                // exponent.  Either triggers hex-float mode; binary exponent is
+                // mandatory in C99 (otherwise `0x1.8` would be ambiguous).
+                let mut hf_dot = false
+                let mut hf_p = false
+                if pos < len_chars && chars[pos] == '.' && pos + 1 < len_chars && is_hex_digit(chars[pos + 1]) {
+                    hf_dot = true
+                }
+                if pos < len_chars && (chars[pos] == 'p' || chars[pos] == 'P') {
+                    let mut _hp = pos + 1
+                    if _hp < len_chars && (chars[_hp] == '+' || chars[_hp] == '-') { _hp = _hp + 1 }
+                    if _hp < len_chars && is_digit(chars[_hp]) { hf_p = true }
+                }
+                if hf_dot || hf_p {
+                    is_float = true
+                    if hf_dot {
+                        num_parts.push(".")
+                        pos = pos + 1
+                        col = col + 1
+                        while pos < len_chars && is_hex_digit(chars[pos]) {
+                            num_parts.push(to_string(chars[pos]))
+                            pos = pos + 1
+                            col = col + 1
+                            if pos < len_chars && chars[pos] == '_' {
+                                if pos + 1 < len_chars && is_hex_digit(chars[pos + 1]) {
+                                    pos = pos + 1
+                                    col = col + 1
+                                }
+                            }
+                        }
+                        // After fractional part, p/P binary exponent is REQUIRED
+                        if !(pos < len_chars && (chars[pos] == 'p' || chars[pos] == 'P')) {
+                            println("error: hex-float literal missing binary exponent `p` at line " + to_string(line) + ":" + to_string(start_col) + " — use `0x1.8p+1` form")
+                            exit(1)
+                        }
+                    }
+                    // Consume p/P [+-]? <decimal digits>
+                    num_parts.push(to_string(chars[pos]))
+                    pos = pos + 1
+                    col = col + 1
+                    if pos < len_chars && (chars[pos] == '+' || chars[pos] == '-') {
+                        num_parts.push(to_string(chars[pos]))
+                        pos = pos + 1
+                        col = col + 1
+                    }
+                    if !(pos < len_chars && is_digit(chars[pos])) {
+                        println("error: hex-float binary exponent missing digits at line " + to_string(line) + ":" + to_string(start_col))
+                        exit(1)
+                    }
+                    while pos < len_chars && is_digit(chars[pos]) {
+                        num_parts.push(to_string(chars[pos]))
+                        pos = pos + 1
+                        col = col + 1
+                    }
+                }
             } else {
                 // Decimal integer part: collect digits; accept _ only between digits
                 while pos < len_chars && is_digit(chars[pos]) {
