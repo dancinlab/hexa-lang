@@ -2,7 +2,7 @@
 // ═══════════════════════════════════════════════════════════
 //  test_codegen_c2_extended.hexa — Phase 4 C codegen 갭 검증 + 확장
 //
-//  codegen_c2_full 의 미검증 경로를 E2E (.hexa -> C -> clang -> native)
+//  codegen_full 의 미검증 경로를 E2E (.hexa -> C -> clang -> native)
 //  로 테스트. 기존 49 assertions(test_codegen_output) + 3 impl tests 보강.
 // ═══════════════════════════════════════════════════════════
 
@@ -64,7 +64,7 @@ fn run_c2(name, hexa_source) {
     let driver_file = TMP_DIR + "/" + name + "_driver.hexa"
     let src_file = TMP_DIR + "/" + name + ".hexa"
     safe_write_file(src_file, hexa_source)
-    let driver = pipeline_src + "\n" + "let __src = read_file(\"" + src_file + "\")\n" + "let __tokens = tokenize(__src)\n" + "let __ast = parse(__tokens)\n" + "let __c = codegen_c2_full(__ast)\n" + "write_file(\"" + c_file + "\", __c)\n" + "println(\"PIPELINE_OK\")\n"
+    let driver = pipeline_src + "\n" + "let __src = read_file(\"" + src_file + "\")\n" + "let __tokens = tokenize(__src)\n" + "let __ast = parse(__tokens)\n" + "let __c = codegen_full(__ast)\n" + "write_file(\"" + c_file + "\", __c)\n" + "println(\"PIPELINE_OK\")\n"
     safe_write_file(driver_file, driver)
     let pr = exec(HEXA + " " + driver_file + " 2>&1")
     if type_of(pr) != "string" || !pr.contains("PIPELINE_OK") {
@@ -89,7 +89,7 @@ fn gen_c(name, hexa_source) {
     let driver_file = TMP_DIR + "/" + name + "_driver.hexa"
     let src_file = TMP_DIR + "/" + name + ".hexa"
     safe_write_file(src_file, hexa_source)
-    let driver = pipeline_src + "\n" + "let __src = read_file(\"" + src_file + "\")\n" + "let __tokens = tokenize(__src)\n" + "let __ast = parse(__tokens)\n" + "let __c = codegen_c2_full(__ast)\n" + "write_file(\"" + c_file + "\", __c)\n" + "println(\"C_GEN_OK\")\n"
+    let driver = pipeline_src + "\n" + "let __src = read_file(\"" + src_file + "\")\n" + "let __tokens = tokenize(__src)\n" + "let __ast = parse(__tokens)\n" + "let __c = codegen_full(__ast)\n" + "write_file(\"" + c_file + "\", __c)\n" + "println(\"C_GEN_OK\")\n"
     safe_write_file(driver_file, driver)
     let pr = exec(HEXA + " " + driver_file + " 2>&1")
     if type_of(pr) != "string" || !pr.contains("C_GEN_OK") {

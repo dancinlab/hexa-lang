@@ -1,7 +1,7 @@
 // ═══════════════════════════════════════════════════════════
 //  test_codegen_output.hexa — codegen_c2 출력 C 코드 정확성 검증
 //
-//  .hexa 소스를 파싱 → codegen_c2_full → 생성된 C 문자열에
+//  .hexa 소스를 파싱 → codegen_full → 생성된 C 문자열에
 //  특정 패턴이 포함되는지 확인. 49 assertions.
 // ═══════════════════════════════════════════════════════════
 
@@ -59,7 +59,7 @@ let driver = "
 fn gen_c(src) {
     let tokens = tokenize(src)
     let ast = parse(tokens)
-    return codegen_c2_full(ast)
+    return codegen_full(ast)
 }
 
 fn ck(name, haystack, needle) {

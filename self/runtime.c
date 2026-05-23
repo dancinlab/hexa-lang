@@ -9902,6 +9902,16 @@ HexaVal hexa_env_var(HexaVal name) {
     return hexa_str(v ? v : "");
 }
 
+// PROBE r8: `cwd()` — current working directory.  Wraps POSIX getcwd()
+// with a 4KB stack buffer (matches PATH_MAX on macOS/Linux).  Returns
+// "" on failure (e.g. cwd was unlinked) so call sites match the existing
+// env_var "" empty-string idiom.  Canonical name across Py/Rust/Go.
+HexaVal hexa_cwd(void) {
+    char buf[4096];
+    if (getcwd(buf, sizeof(buf)) == NULL) return hexa_str("");
+    return hexa_str(buf);
+}
+
 // setenv(name, value): POSIX setenv wrapper with overwrite=1. Empty / non-STR
 // name is a no-op. Returns the stored value on success, "" on failure — so
 // callers can treat it like env() in a set-then-read idiom without a second
