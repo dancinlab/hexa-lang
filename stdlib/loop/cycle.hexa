@@ -25,7 +25,6 @@ use "compiler/lenses/embedded.gen"
 use "compiler/atlas/by_kind/p.gen"
 use "compiler/atlas/by_kind/l.gen"
 use "compiler/atlas/parser"
-use "compiler/atlas/hxc_loader"
 use "stdlib/loop/state"
 use "stdlib/loop/dfs"
 use "stdlib/io"
@@ -137,19 +136,12 @@ fn build_atlas_view() -> AtlasView {
         enriched_p.push(enrich_node(ATLAS_P_NODES[ep_i]))
         ep_i = ep_i + 1
     }
-    // RFC 066 B-1b: C kind via HXC sidecar runtime fetch (skip if file absent).
-    let mut c_nodes_loaded: array = []
-    let hxc_path = "dist/atlas.hxc"
-    let exists = exec("test -e " + hxc_path + " && echo Y || echo N").trim()
-    if exists == "Y" {
-        let all_atlas = load_atlas_hxc(hxc_path)
-        let an = len(all_atlas)
-        let mut ai = 0
-        while ai < an {
-            if all_atlas[ai].kind == "C" { c_nodes_loaded.push(all_atlas[ai]) }
-            ai = ai + 1
-        }
-    }
+    // RFC 066 B-1b retired (hxc → n6, 2026-05-22 #312/#316): the C-kind
+    // sidecar (dist/atlas.hxc + hxc_loader::load_atlas_hxc) is gone — both
+    // the artifact and the loader were deleted, n6/atlas.n6 is the sole SSOT.
+    // C nodes are not loaded into the cycle view here; the lens stage runs on
+    // the baked P + L kinds. (Wiring C from the n6 merger view is follow-up.)
+    let c_nodes_loaded: array = []
     return AtlasView {
         p_nodes: enriched_p,
         c_nodes: c_nodes_loaded,
