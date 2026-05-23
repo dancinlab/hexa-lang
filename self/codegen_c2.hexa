@@ -6440,6 +6440,30 @@ fn gen2_match_cond(pat, scrutinee_var) {
     if k == "Wildcard" {
         return "1"
     }
+    // OR-pattern: pattern grammar reuses parse_expr which greedy-
+    // consumed `1 | 2 | 3` as a BinOp(|, …) tree.  Split into a real
+    // disjunction.  Without this `match v { 1|2|3 => … }` compiled to
+    // `hexa_eq(v, 1|2|3=3)` — only v==3 matched.  Round-5 pattern
+    // probe finding (Class-1 silent failure).
+    if k == "BinOp" && pat.op == "|" {
+        let _lc = gen2_match_cond(pat.left, scrutinee_var)
+        let _rc = gen2_match_cond(pat.right, scrutinee_var)
+        return "(" + _lc + " || " + _rc + ")"
+    }
+    // Range pattern: `0..10` (exclusive) / `0..=10` (inclusive).
+    // parse_expr emits a `Range` node in expression position; the
+    // generic codegen lowered it to `hexa_range_array` and then
+    // `hexa_eq` compared the scrutinee int to the array — never
+    // matched.  Pattern semantics need a membership test.
+    if k == "Range" {
+        let _lo = gen2_expr(pat.left)
+        let _hi = gen2_expr(pat.right)
+        let _ge = "hexa_truthy(hexa_cmp_ge(" + scrutinee_var + ", " + _lo + "))"
+        let mut _cmp_hi = "hexa_cmp_lt"
+        if pat.value == "inclusive" { _cmp_hi = "hexa_cmp_le" }
+        let _hi_test = "hexa_truthy(" + _cmp_hi + "(" + scrutinee_var + ", " + _hi + "))"
+        return "(" + _ge + " && " + _hi_test + ")"
+    }
     if k == "IntLit" {
         return "hexa_truthy(hexa_eq(" + scrutinee_var + ", hexa_int(" + pat.value + ")))"
     }
