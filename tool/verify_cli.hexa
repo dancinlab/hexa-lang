@@ -159,6 +159,9 @@ fn cmd_rubric() {
     println("             hardy_bound(N)     → p_N^max    (RFC 045 multipartite Hardy, Adhikary-Mandal Eq.5)")
     println("             cdr_perfect_mitigation(p) → 1/(1-p)  (RFC 045 CDR Claim 2, Czarnik 2021)")
     println("             wigner_stabilizer_sn(d)   → 0        (RFC 045 Wigner stab. sn, Veitch 2014)")
+    println("             mabk_quantum_max(N) → 2^((N-1)/2)  (RFC 045 MABK-Ardehali quantum bound, N≥2)")
+    println("             pt_doily_quantum_win()      → 1.0  (RFC 045 magic-square pseudo-tel quantum win, 0-arg)")
+    println("             pt_doily_classical_bound()  → 8/9  (RFC 045 LP-tight LHV magic-square bound, 0-arg)")
 }
 
 let NOCALC: int = -999999
@@ -525,6 +528,49 @@ fn _wigner_stabilizer_sn(d: int) -> float {
     return 0.0
 }
 
+// MABK-Ardehali quantum maximum (Mermin 1990 PRL 65 1838 / Ardehali 1992
+// PRA 46 5375 / Belinskii-Klyshko 1993): the multipartite Bell-correlation
+// inequality M_N has quantum bound
+//   B_N^Q = 2^{(N-1)/2}
+// vs LHV bound 1 (N even) or sqrt(2) (N odd). Closed-form integer power
+// of sqrt(2). Verbatim port of
+// stdlib/quantum/mabk-ardehali/module/mabk_ardehali.hexa::_mabk_quantum_max
+// (N ≥ 2; naive sqrt(2)-product loop, identical to the source impl).
+fn _mabk_quantum_max(big_n: int) -> float {
+    if big_n < 2 { return _NOCALC_F }
+    let s = sqrt(2.0)
+    let mut v = 1.0
+    let mut k = 0
+    let exp = big_n - 1
+    while k < exp {
+        v = v * s
+        k = k + 1
+    }
+    return v
+}
+
+// Pseudo-telepathy magic-square (Mermin-Peres doily) quantum win
+// probability — pseudo-telepathy theorem (Brassard-Broadbent-Tapp 2005
+// Found. Phys. 35 1877, arXiv:quant-ph/0407221; Mermin 1990 PRL 65 3373;
+// Homa-Bodor-Bernad 2026 JPA 59 065305, arXiv:2509.18033). The 3x3 magic
+// square game on TWO shared EPR pairs |Phi+>_(0,2) x |Phi+>_(1,3) is won
+// with probability EXACTLY 1 by the quantum strategy — the canonical
+// pseudo-telepathy separation against the LP-tight classical bound 8/9.
+// 0-arg closed-form constant.
+fn _ptd_quantum_win() -> float {
+    return 1.0
+}
+
+// Pseudo-telepathy magic-square LP-tight classical (LHV) bound = 8/9.
+// Optimal classical strategy answers 8 of 9 referee questions
+// consistently; the 9th forces a violation by the algebraic
+// state-INDEPENDENT contextuality (Mermin 1990 / Peres-Mermin square has
+// no consistent +-1 cell assignment satisfying all 6 row+col products).
+// 0-arg closed-form constant.
+fn _ptd_classical_bound_const() -> float {
+    return 8.0 / 9.0
+}
+
 // float dispatch — fn_name → recompute. 0-arg fns ignore a0/a1 (constants);
 // 1-arg fns take a0; 2-arg take a0,a1. Returns _NOCALC_F when no float path
 // exists (caller then tries the int path / degrades). The 🟢 NUMERICAL
@@ -538,6 +584,9 @@ fn _recompute_float(fn_name: string, a0: float, a1: float, argc: int) -> float {
     // RFC 045 qmirror anchors:
     //   chsh_tsirelson()       0-arg closed-form: 2*sqrt(2)
     //   hardy_bound(N)         1-arg closed-form: p_N^max  (Adhikary-Mandal Eq.5)
+    //   mabk_quantum_max(N)    1-arg closed-form: 2^((N-1)/2)  (Mermin-Ardehali)
+    //   pt_doily_quantum_win()      0-arg constant 1.0     (magic-square pseudo-tel)
+    //   pt_doily_classical_bound()  0-arg constant 8/9     (LP-tight LHV)
     if fn_name == "chsh_tsirelson" { return _chsh_tsirelson() }
     if fn_name == "hardy_bound" {
         let big_n = to_int(a0)
@@ -551,6 +600,12 @@ fn _recompute_float(fn_name: string, a0: float, a1: float, argc: int) -> float {
         let d_int = to_int(a0)
         return _wigner_stabilizer_sn(d_int)
     }
+    if fn_name == "mabk_quantum_max" {
+        let big_n = to_int(a0)
+        return _mabk_quantum_max(big_n)
+    }
+    if fn_name == "pt_doily_quantum_win" { return _ptd_quantum_win() }
+    if fn_name == "pt_doily_classical_bound" { return _ptd_classical_bound_const() }
     return _NOCALC_F
 }
 
@@ -560,11 +615,15 @@ fn _is_float_fn(fn_name: string) -> bool {
     return fn_name == "welch_t_crit" || fn_name == "wilson_hilferty_p"
         || fn_name == "chsh_tsirelson" || fn_name == "hardy_bound"
         || fn_name == "cdr_perfect_mitigation" || fn_name == "wigner_stabilizer_sn"
+        || fn_name == "mabk_quantum_max"
+        || fn_name == "pt_doily_quantum_win" || fn_name == "pt_doily_classical_bound"
 }
 
 // is fn_name a 0-arg closed-form constant? (--expr <fn> <v>, no operands).
 fn _is_zero_arg_float_fn(fn_name: string) -> bool {
     return fn_name == "chsh_tsirelson"
+        || fn_name == "pt_doily_quantum_win"
+        || fn_name == "pt_doily_classical_bound"
 }
 
 // trim trailing zeros of a float→string for tidy verdict echo.
