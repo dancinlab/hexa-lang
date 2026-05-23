@@ -22,3 +22,24 @@ ref:
 - [ ] iedb-epitope stdlib — IEDB lookup + HLA binding prediction (NetMHCpan-style PSSM/SVM 코어) → `stdlib/bio/immuno/epitope.hexa`
 - [ ] mirna-target stdlib — miRBase mature-miRNA registry + TargetScan seed-match scoring → `stdlib/bio/mirna/target.hexa`
 - [ ] ode-bifurcation stdlib — Runge-Kutta (RK4 · RK45 adaptive) + stiff (BDF) ODE solver + saddle-node bifurcation 탐지 → `stdlib/math/ode.hexa`
+
+### TTR — in-silico track (M3 docking · M5 MD/QM, source: `inbox/notes/2026-05-24-ttr-external-port-candidates.md`)
+
+Tier-1 — thin REST adapter (★ priority, ~200-300 LOC each, TTR M3 즉시 사용):
+
+- [ ] pubchem-api stdlib — PubChem PUG-REST 클라이언트 (compound CID lookup · SMILES · properties · batch fetch) → `stdlib/chem/pubchem.hexa`
+- [ ] brenda-api stdlib — BRENDA enzyme DB REST 클라이언트 (EC number · KM · kcat · substrate) → `stdlib/bio/brenda.hexa`
+- [ ] uniprot-alphafold-api stdlib — UniProt + AlphaFold DB REST 클라이언트 (protein metadata · structure PDB fetch) → `stdlib/bio/uniprot.hexa` ※ AlphaFold DB API sunset 2026-06-25 → 새 endpoint 모니터
+
+Tier-2 — cheminformatics subset (★★★ priority, ~2-3 kloc subset, TTR M3 docking input prep):
+
+- [ ] rdkit-subset stdlib — RDKit-style SMILES parser + basic descriptors (MW · logP · HBA/HBD · TPSA) + mol IO → `stdlib/chem/rdkit_subset/`
+- [ ] open-babel-subset stdlib — DEFERRED (GPL-2 라이선스 검토 필요) — 분자 format IO (MOL · SDF · PDB) → `stdlib/chem/babel_subset/`
+
+Tier-3 — docking (★★★ priority, ~5 kloc full port, TTR M3 docking):
+
+- [ ] autodock-vina-port stdlib — AutoDock Vina C++ full port (scoring function + Monte Carlo search + grid map) → `stdlib/chem/vina/`
+
+Tier-4 — molecular dynamics (★★ priority, ~3-5 kloc core, TTR M5 MD/QM):
+
+- [ ] openmm-core stdlib — OpenMM MD core (Verlet integrator + Lennard-Jones forcefield + periodic boundary) → `stdlib/chem/md/`
