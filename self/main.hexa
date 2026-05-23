@@ -911,7 +911,7 @@ fn os_clang_ldflags() {
 }
 
 // ── B20 / roadmap 55 Phase 1 — strict-FP clang flags ─────────
-// codegen_c2 emits `/* HEXA_STRICT_FP_TU: 1 */` at the top of generated
+// codegen emits `/* HEXA_STRICT_FP_TU: 1 */` at the top of generated
 // C when the translation unit contains any @strict_fp fn. Detect the
 // marker in the emitted .c and append IEEE-strict flags so clang does
 // not re-enable the relaxations the codegen-side gate just removed.
@@ -1260,10 +1260,10 @@ fn regen_one_module(src, out_c) {
     // The bootstrap hexa_v2 binaries are built with the arena reclaim path
     // wired but never opted-in; new binaries (e.g. one freshly built from
     // self/native/hexa_cc.c) default arena=ON (S7-B) and SIGSEGV when
-    // transpiling the larger SSOT modules (lexer, codegen_c2). Pinning the
+    // transpiling the larger SSOT modules (lexer, codegen). Pinning the
     // env OFF makes the transpile deterministic across binary vintages and
     // matches the hexa_v2 force-OFF default. Measured on ubu-2: without the
-    // pin, /tmp/hexa_v2.committed segfaults on lexer.hexa + codegen_c2.hexa;
+    // pin, /tmp/hexa_v2.committed segfaults on lexer.hexa + codegen.hexa;
     // with it, all 4 modules transpile cleanly and the merge links + reaches
     // bootstrap fixpoint (gen-N codegen == gen-N+1 codegen byte-identical).
     let cmd = "HEXA_VAL_ARENA=0 " + v2 + " " + src + " " + out_c + " 2>&1"
@@ -1305,11 +1305,11 @@ fn merge_modules_awk(out_path) {
     // Rename awk: string-literal-aware `__hexa_{ic_,sl_,strlit_init}` prefix
     // pass. Supersedes the earlier sed pipeline — sed was global over
     // everything including the `hexa_str("...")` emit templates baked into
-    // codegen_c2, so it corrupted the prefix that future transpiles should
+    // codegen, so it corrupted the prefix that future transpiles should
     // produce. The awk state-machine tracks double-quote nesting and skips
     // any substitution inside string literals. Without this fix the second
     // bootstrap round loses fixpoint (v2 transpile ≠ v1 transpile because
-    // the binary now emits `__hexa_codegen_c2_sl_N` for every module).
+    // the binary now emits `__hexa_codegen_sl_N` for every module).
     let rename_path = "/tmp/_hexa_cc_rename.awk"
     let rename_write_cmd = "cat > " + rename_path + " <<'__REN_EOF__'\n{\n    line = $0\n    n = length(line)\n    out = \"\"\n    i = 1\n    in_str = 0\n    start = 1\n    while (i <= n) {\n        ch = substr(line, i, 1)\n        if (in_str) {\n            if (ch == \"\\\\\") { i += 2; continue }\n            if (ch == \"\\\"\") {\n                out = out substr(line, start, i - start + 1)\n                in_str = 0\n                start = i + 1\n                i++\n                continue\n            }\n            i++\n        } else {\n            if (ch == \"\\\"\") {\n                chunk = substr(line, start, i - start)\n                gsub(\"__hexa_ic_\", \"__hexa_\" MOD \"_ic_\", chunk)\n                gsub(\"__hexa_sl_\", \"__hexa_\" MOD \"_sl_\", chunk)\n                gsub(\"__hexa_strlit_init\", \"__hexa_\" MOD \"_strlit_init\", chunk)\n                out = out chunk\n                start = i\n                in_str = 1\n                i++\n                continue\n            }\n            i++\n        }\n    }\n    if (in_str) {\n        out = out substr(line, start)\n    } else {\n        chunk = substr(line, start)\n        gsub(\"__hexa_ic_\", \"__hexa_\" MOD \"_ic_\", chunk)\n        gsub(\"__hexa_sl_\", \"__hexa_\" MOD \"_sl_\", chunk)\n        gsub(\"__hexa_strlit_init\", \"__hexa_\" MOD \"_strlit_init\", chunk)\n        out = out chunk\n    }\n    print out\n}\n__REN_EOF__"
     let rename_write = exec(rename_write_cmd)
@@ -1336,13 +1336,13 @@ fn merge_modules_awk(out_path) {
         // emits its own counter starting at 0 and its own __hexa_strlit_init
         // function; without renaming, clang rejects the concatenation with
         // "redefinition" errors. Three collision families observed across
-        // lexer/parser/type_checker/codegen_c2 transpile outputs:
+        // lexer/parser/type_checker/codegen transpile outputs:
         //   __hexa_ic_N         — inline cache slots (per-call-site)
         //   __hexa_sl_N         — static string-literal interning slots
         //   __hexa_strlit_init  — the init fn that populates __hexa_sl_*
         // Filter chain: dedup (drop redundant fwd decls, 2-pass) → merge
         // awk (strip #include, rename main→_MOD_init) → per-module rename
-        // awk (string-literal-aware — skips the codegen_c2 emit templates).
+        // awk (string-literal-aware — skips the codegen emit templates).
         let filter = "awk -f " + dedup_path + " " + path + " " + path + " | awk -v MOD=" + name + " -f " + script_path + " | awk -v MOD=" + name + " -f " + rename_path + " >> " + out_path
         let r = exec(filter + " 2>&1")
         if len(r) > 0 { println("    awk[" + name + "]: " + r) }
@@ -1368,7 +1368,7 @@ fn merge_modules_awk(out_path) {
 
 fn cmd_regen_cc() {
     println("=== hexa cc --regen : hexa_cc.c 자동 재생성 ===")
-    println("  SSOT: self/{lexer,parser,type_checker,codegen_c2}.hexa")
+    println("  SSOT: self/{lexer,parser,type_checker,codegen}.hexa")
     // #12 leftover (3): resolve SSOT modules / hexa_cc.c / -I via
     // $HEXA_LANG > install_dir_from_argv0() > ./self — not cwd. `.` when
     // run from the repo root, so behavior there is unchanged.
@@ -1421,7 +1421,7 @@ fn cmd_regen_cc() {
     //   runner in training/train_alm_14b.hexa has 500+ segments). clang's
     //   default bracket nesting limit (256) blows up on such files. Bumping
     //   to 4096 unblocks the ALM hexa-first launcher; real fix is to emit
-    //   a loop or single large literal in codegen_c2, tracked separately.
+    //   a loop or single large literal in codegen, tracked separately.
     // PHASE 1.6 (2026-05-15): step-3 smoke compile now links self/runtime.o
     // (built by cmd_cc rebuild step ahead) so the failure-tolerated smoke
     // actually exercises the same link arrangement as the real rebuild.

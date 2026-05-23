@@ -142,7 +142,7 @@ typedef struct HexaIC {
 /* Step 3 cycle 100 — pointer-eq inline builtins for hexa_eq TAG_VALSTRUCT
  * + TAG_MAP branches (RUNTIME.md 잔여 #4, 4 of 9 branches ported). The
  * aprime_cc codegen inlines these to `hexa_bool(HX_VS(a)==HX_VS(b))` etc
- * directly at the call site (self/codegen_c2.hexa near pow). The hexa_v2
+ * directly at the call site (self/codegen.hexa near pow). The hexa_v2
  * bootstrap transpiler is unaware of the inline lowering and emits
  * `hexa_call2(__vs_ptr_eq, a, b)`; the static-inline defs below satisfy
  * that indirect-call path (resolved via the `hexa_call2` _Generic
@@ -242,7 +242,7 @@ void    hexa_arena_reset(void);                       /* runtime.c:3076 */
 HexaVal hexa_array_free(HexaVal arr);                 /* runtime.c:7182 */
 
 /* ── slice family (codegen-emitted, impl in runtime.c) ─────────────
- * codegen_c2.hexa lowers array `.slice`/`.slice_fast` (lines 2909-2913,
+ * codegen.hexa lowers array `.slice`/`.slice_fast` (lines 2909-2913,
  * 4738-4742, 4937), `str.slice` (cg_string_sym "str_slice", line 327),
  * and `tensor_slice` (lines 3542-3543, 4352) to direct `hexa_*` calls.
  * The C impls exist (runtime.c:6964/1931/6954/11456) and were
@@ -871,7 +871,7 @@ HexaVal hexa_farr_copy(HexaVal src_v);                                 /* runtim
 HexaVal hexa_farr_add_gaussian_noise(HexaVal target_v, HexaVal sigma_v); /* runtime.c — RFC 033 */
 
 /* ── RFC 041 Phase B forge RoPE — 6-arg direct wrappers ─────────────
- * codegen_c2.hexa lowers the `farr_rope_gpu`/`farr_rope_bwd_gpu`
+ * codegen.hexa lowers the `farr_rope_gpu`/`farr_rope_bwd_gpu`
  * builtins to direct `hexa_farr_rope_*_gpu` calls (6-arg, past the
  * hexa_callN ceiling). The generated user.c TU only #include
  * "runtime.h", so the prototype must be visible — without it the
@@ -889,7 +889,7 @@ HexaVal farr_rope_bwd_gpu(HexaVal t, HexaVal cos, HexaVal sin,
                           HexaVal T, HexaVal nh, HexaVal hd);           /* runtime.c — RFC 041 seam */
 
 /* ── RFC 050 L1 slice 1: forge dispatcher callable from hexa ────────
- * codegen_c2.hexa lowers the 5-arg `forge_dispatch_matmul` builtin to a
+ * codegen.hexa lowers the 5-arg `forge_dispatch_matmul` builtin to a
  * direct `hexa_forge_dispatch_matmul` call. It packs a ForgeShapeInfo +
  * ForgeArgs and routes through forge_tier_dispatch_v1 (RFC 050 §6.1),
  * then yields the output farr handle (or hexa_int(-1) on a dispatch
@@ -904,7 +904,7 @@ HexaVal hexa_forge_dispatch_matmul(HexaVal a_v, HexaVal m_v, HexaVal k_v,
  * a literal `forge_dispatch_matmul(...)` call (≥5-arg direct-C path),
  * the generated user.c TU only sees runtime.h — declare the bare form
  * too so it links to runtime.c's extern wrapper without a bootstrap
- * rebuild. SSOT codegen (codegen_c2.hexa) lowers to hexa_* directly. */
+ * rebuild. SSOT codegen (codegen.hexa) lowers to hexa_* directly. */
 HexaVal forge_dispatch_matmul(HexaVal a_v, HexaVal m_v, HexaVal k_v,
                               HexaVal b_v, HexaVal n_v);               /* runtime.c — RFC 050 seam */
 
@@ -956,7 +956,7 @@ HexaVal forge_dispatch_stdp_pair(HexaVal W_v, HexaVal tr_pre_v,
                                  HexaVal A_minus_v, HexaVal w_max_v);      /* runtime.c — flame STDP GPU seam */
 
 /* ── safetensors mmap-backed zero-copy load (RFC 025) ──────────────
- * codegen_c2.hexa lowers safetensors_mmap_* builtins to direct
+ * codegen.hexa lowers safetensors_mmap_* builtins to direct
  * `hexa_safetensors_mmap_*` calls (1-arg: open/header/data_offset/
  * size/close; 3-arg: read_f32_farr/read_bf16_to_f32_farr/read_bytes).
  * Same runtime.h-split contract as the farr ABI above: the generated
@@ -1241,7 +1241,7 @@ HexaVal farr_adamw_step_gpu(HexaVal w, HexaVal m, HexaVal v, HexaVal g,
  *
  * 102 codegen-called runtime functions whose definitions exist in
  * runtime.c / runtime_core.c but lacked forward declarations here.
- * Each is emitted by self/codegen_c2.hexa as it lowers a user
+ * Each is emitted by self/codegen.hexa as it lowers a user
  * feature (array iterator method, format, math intrinsic, regex,
  * callbacks, exec_stream, terminal, JSON, struct, arena, …).
  * Without these decls modern clang treats every such call as a

@@ -1476,7 +1476,7 @@ static int64_t _hx_stats_str_concat     = 0;
 static int64_t _hx_stats_array_reserve  = 0;
 static int64_t _hx_stats_map_new        = 0;
 static int64_t _hx_stats_map_set        = 0;
-// STRUCTURAL-7 Phase A: codegen_c2 emits __hexa_fn_arena_enter/return for
+// STRUCTURAL-7 Phase A: codegen emits __hexa_fn_arena_enter/return for
 // per-function arena scoping. Forward declarations here; real implementations
 // below after all arena dependencies (hexa_val_arena_on, hexa_val_heapify,
 // hexa_val_arena_scope_push/pop) are defined.
@@ -2215,7 +2215,7 @@ int hmap_find(HexaMapTable* t, const char* key, uint32_t h) {
  *
  * Placed in runtime_core.c (not runtime.h) so user-transpiled TUs which
  * sed-include runtime.c (build_aprime stage 3) see the symbols. The
- * codegen-inline emit in self/codegen_c2.hexa fully expands the call
+ * codegen-inline emit in self/codegen.hexa fully expands the call
  * site to a direct invocation of these helpers; stale hexa_v2 binaries
  * emit hexa_call2(__map_has_cstr_v, m, k) which resolves via the
  * _Generic fn-ptr lane (HexaVal (*)(HexaVal, HexaVal)). */
@@ -3039,7 +3039,7 @@ HexaVal hexa_index_set(HexaVal container, HexaVal key, HexaVal val) {
     return hexa_array_set(container, idx, val);
 }
 
-// Silent type check for struct method dispatch (codegen_c2 ImplBlock support).
+// Silent type check for struct method dispatch (codegen ImplBlock support).
 // Returns 1 if v is a TAG_MAP carrying a "__type__" field equal to type_name,
 // or TAG_VALSTRUCT (always type "Val" — rt 32-G flat struct).
 // Uses hash lookup instead of linear scan.
@@ -3075,7 +3075,7 @@ int hexa_is_type(HexaVal v, const char* type_name) {
 //
 // For non-Future or non-struct values, await is identity — every `await x`
 // in user code that lowers through native codegen wraps the inner expr in
-// a hexa_await_unwrap() call (see self/codegen_c2.hexa gen2_expr Await
+// a hexa_await_unwrap() call (see self/codegen.hexa gen2_expr Await
 // branch). This keeps the interp ↔ native parity contract from RFC-022 §3.1.
 HexaVal hexa_await_unwrap(HexaVal v) {
     if (hexa_is_type(v, "Future")) {
@@ -3453,7 +3453,7 @@ void hexa_arena_reset(void) {
 // `__HEXA_ARENA_*` keys — no transpiler edit needed.
 //
 // Gate: HEXA_VAL_ARENA env var. Default ON as of S7-B (2026-04-16) —
-// Phase A wired codegen_c2 __hexa_fn_arena_enter/return on all fn
+// Phase A wired codegen __hexa_fn_arena_enter/return on all fn
 // boundaries; T33 corruption fixed; full regression suite verified.
 // Opt-out: HEXA_VAL_ARENA=0.
 //
@@ -3466,7 +3466,7 @@ void hexa_arena_reset(void) {
 // consistent with a missed env_pop_scope decref path that operates on a
 // stale-tag HexaValStruct after arena rewind. Canary test: T33b-on in
 // tests/regression.hexa. Fix is blocked on the interp rebuild
-// regression (codegen_c2 FnDecl + forward-decl issue; see task tracker).
+// regression (codegen FnDecl + forward-decl issue; see task tracker).
 // Keep default OFF until both the canary flips PASS and the module_loader
 // use-path smoke (see ml_resolve heapify discussion above) goes green.
 
@@ -3496,7 +3496,7 @@ static int __hexa_val_region_returns_enabled = 0;
 static int hexa_val_arena_on(void) {
     if (__hexa_val_arena_enabled < 0) {
         const char* e = hxlcl_getenv("HEXA_VAL_ARENA");
-        // S7-B: default ON (2026-04-16). Phase A wired codegen_c2
+        // S7-B: default ON (2026-04-16). Phase A wired codegen
         // __hexa_fn_arena_enter/return; T33 corruption fixed; full 236-example
         // + 16-case dispatch regression suite passed 0-regression under ARENA=1.
         // Opt-out: HEXA_VAL_ARENA=0.
@@ -4291,7 +4291,7 @@ HexaVal __hexa_fn_arena_return(HexaVal ret) {
     // hexa_val_heapify call + its switch dispatch is pure overhead.
     // Pratt-descent parser fns return int/bool dozens of times per token,
     // and sample showed __hexa_fn_arena_return + hexa_val_heapify ≈ 23% of
-    // hexa_v2 user-time on codegen_c2.hexa. Short-circuit primitives here.
+    // hexa_v2 user-time on codegen.hexa. Short-circuit primitives here.
     int tag = HX_TAG(ret);
     if (tag == TAG_INT || tag == TAG_FLOAT || tag == TAG_BOOL || tag == TAG_VOID) {
         hexa_val_arena_scope_pop();
@@ -5148,7 +5148,7 @@ HexaVal hexa_exec_stream_impl(HexaVal cmd, HexaVal on_line) {
 // (e.g. `on_line`) rather than a HexaVal. To bridge that without rebuilding
 // hexa_v2, we redirect the user-visible call through a wrapping macro that
 // invokes hexa_exec_stream_impl with a freshly-constructed TAG_FN HexaVal.
-// After a dispatch self-rebuild activates the codegen_c2 lowering with proper
+// After a dispatch self-rebuild activates the codegen lowering with proper
 // gen2_expr wrapping, this macro becomes a no-op (the second arg will
 // already be a HexaVal — _Generic could choose impl directly, but the
 // double-wrap path remains safe for HexaVal too via a passthrough).
@@ -5846,7 +5846,7 @@ HexaVal hexa_add_slow(HexaVal a, HexaVal b) {
            : hexa_add_slow(__ha, __hb); })
 
 // ── Variadic concat (N-way) — clang bracket-depth relief ─────
-// codegen_c2 flattens long `+` chains (≥16 operands) into a single call:
+// codegen flattens long `+` chains (≥16 operands) into a single call:
 //   hexa_concat_many(N, (HexaVal[]){e1, e2, ..., eN})
 // instead of hexa_add(hexa_add(hexa_add(...))) which blows past clang's
 // default 256-level bracket nesting limit on anima launcher files
@@ -6833,7 +6833,7 @@ HexaVal hexa_str_join(HexaVal arr, HexaVal sep) {
 #include "runtime_hi_gen.c"
 // Step 5 (hxa-20260423-003): hexa_str_lines/repeat/pad_left/pad_right/center
 // shims removed — codegen now dispatches directly to rt_str_* from
-// runtime_hi_gen.c (SSOT: self/runtime_hi.hexa). See self/codegen_c2.hexa
+// runtime_hi_gen.c (SSOT: self/runtime_hi.hexa). See self/codegen.hexa
 // cg_string_sym "c" branch (lines 250-272).
 
 static int utf8_cpcount(const char* s) {
@@ -6868,7 +6868,7 @@ HexaVal hexa_pad_left(HexaVal s, HexaVal width) {
 
 // Bootstrap shim: hexa-level `join(arr, sep)` free-fn idiom in SSOT modules
 // emits `hexa_call2(join, arr, sep)` via TAG_FN lookup. Once hexa_v2 is rebuilt
-// from codegen_c2.hexa's join-builtin dispatch, this becomes unused.
+// from codegen.hexa's join-builtin dispatch, this becomes unused.
 // (`split` was retired 2026-04-21 — codegen now emits hexa_str_split directly.)
 static HexaVal join;
 
