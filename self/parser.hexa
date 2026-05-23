@@ -1574,11 +1574,23 @@ fn parse_let() {
     }
 
     // FIX-6 (BG-HX2): reject reserved keywords as let-binding name.
+    let name_tok = p_peek()
     let mut name = ""
     if p_check_strict_reserved("let-binding name") {
         name = ""
     } else {
         name = p_expect_ident()
+    }
+    // PROBE r14-II (H follow-up): block `let inf = ...` / `let nan = ...`
+    // shadowing of the reserved float constants emitted by codegen (PR #488).
+    // Mirror of PR #474 (`nil`/`null` parse_primary intercept) — same
+    // diagnostic machinery, applied at the let-binding site only. Function
+    // arguments and enum variants are NOT touched (they don't route through
+    // parse_let). The codegen `inf`/`nan` Ident interception (PR #488) is
+    // gentler than `nil` (it preserves locals); the parser-side gate raises
+    // a clear footgun warning at the source.
+    if name == "inf" || name == "nan" {
+        p_emit_parse_error(name_tok, "cannot shadow reserved value '" + name + "' — pick a different name (e.g. 'my_" + name + "')")
     }
     // optional type annotation — supports T?, (T,U), T|U via parse_type_annotation
     let mut typ = ""
