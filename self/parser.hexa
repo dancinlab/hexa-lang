@@ -4983,6 +4983,20 @@ fn parse_visibility() {
 
 // ── <T, U: Trait> — type parameters ─────────────────────────
 // G38: Generic constraint annotation — fn sort<T: Ord>(arr: [T]) -> [T]
+// RFC 082 impl phase a (2026-05-23): multi-bound `T: Add + Sub + Eq` inline
+// per D5=C (both inline + where). Bound stored as " + "-joined string;
+// typechecker phase b will split on " + " into a registry list for trait
+// lookup. where-clause multi-bound is a follow-up phase (same `_parse_bound_list`
+// helper can be lifted into parse_where_clauses when added).
+fn _parse_bound_list() {
+    let mut bound = parse_type_annotation()
+    while p_peek_kind() == "Plus" {
+        p_advance()
+        bound = bound + " + " + parse_type_annotation()
+    }
+    return bound
+}
+
 fn parse_type_params() {
     if p_peek_kind() != "Lt" { return [] }
     p_advance() // consume <
@@ -4991,7 +5005,7 @@ fn parse_type_params() {
     let mut bound = ""
     if p_peek_kind() == "Colon" {
         p_advance()
-        bound = parse_type_annotation()
+        bound = _parse_bound_list()
     }
     tparams.push(#{
         "kind": "TypeParam", "name": name, "value": bound, "op": "",
@@ -5006,7 +5020,7 @@ fn parse_type_params() {
         let mut pbound = ""
         if p_peek_kind() == "Colon" {
             p_advance()
-            pbound = parse_type_annotation()
+            pbound = _parse_bound_list()
         }
         tparams.push(#{
             "kind": "TypeParam", "name": pname, "value": pbound, "op": "",
