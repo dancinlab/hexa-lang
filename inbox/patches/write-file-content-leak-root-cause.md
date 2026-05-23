@@ -1,6 +1,6 @@
 # write_file content-leak root cause (PROBE r8 CRITICAL)
 
-**Status:** root cause confirmed · fix sketch provided · NOT shipped
+**Status:** ✅ FIXED + deployed (#407 + regen #413). The fix matches this doc's sketch exactly — `hxlcl_open_sys` routed through libc `open()` so the carry-flag error path returns -1 instead of errno-as-fd (cycle 66's read/write/close/dup2 carry-flag fix, extended to `open`). e2e-verified through the deployed toolchain: `write_file("/tmp/<missing>/x","miss")` → returns `false`, no content leak to stdout/stderr.
 **Filed:** 2026-05-23 from anima sibling investigation (PROBE round-8)
 **Severity:** CRITICAL — silently writes user data to stderr (visible on `2>&1`); silently returns success on every failed write; affects ALL `write_file` / `read_file` / `file_exists` callers on Darwin arm64 when the underlying `open(2)` fails.
 
