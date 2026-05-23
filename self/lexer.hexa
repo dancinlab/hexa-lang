@@ -871,9 +871,15 @@ pub fn tokenize(source) {
                 }
             } else if ch == '*' {
                 if pos + 1 < len_chars && chars[pos + 1] == '*' {
-                    tokens.push(Token { kind: "Power", value: "**", line: line, col: start_col })
-                    pos = pos + 2
-                    col = col + 2
+                    if pos + 2 < len_chars && chars[pos + 2] == '=' {
+                        tokens.push(Token { kind: "PowerEq", value: "**=", line: line, col: start_col })
+                        pos = pos + 3
+                        col = col + 3
+                    } else {
+                        tokens.push(Token { kind: "Power", value: "**", line: line, col: start_col })
+                        pos = pos + 2
+                        col = col + 2
+                    }
                 } else if pos + 1 < len_chars && chars[pos + 1] == '=' {
                     tokens.push(Token { kind: "StarEq", value: "*=", line: line, col: start_col })
                     pos = pos + 2
@@ -1037,9 +1043,15 @@ pub fn tokenize(source) {
                     pos = pos + 2
                     col = col + 2
                 } else if pos + 1 < len_chars && chars[pos + 1] == '<' {
-                    tokens.push(Token { kind: "Shl", value: "<<", line: line, col: start_col })
-                    pos = pos + 2
-                    col = col + 2
+                    if pos + 2 < len_chars && chars[pos + 2] == '=' {
+                        tokens.push(Token { kind: "ShlEq", value: "<<=", line: line, col: start_col })
+                        pos = pos + 3
+                        col = col + 3
+                    } else {
+                        tokens.push(Token { kind: "Shl", value: "<<", line: line, col: start_col })
+                        pos = pos + 2
+                        col = col + 2
+                    }
                 } else {
                     tokens.push(Token { kind: "Lt", value: "<", line: line, col: start_col })
                     pos = pos + 1
@@ -1051,9 +1063,15 @@ pub fn tokenize(source) {
                     pos = pos + 2
                     col = col + 2
                 } else if pos + 1 < len_chars && chars[pos + 1] == '>' {
-                    tokens.push(Token { kind: "Shr", value: ">>", line: line, col: start_col })
-                    pos = pos + 2
-                    col = col + 2
+                    if pos + 2 < len_chars && chars[pos + 2] == '=' {
+                        tokens.push(Token { kind: "ShrEq", value: ">>=", line: line, col: start_col })
+                        pos = pos + 3
+                        col = col + 3
+                    } else {
+                        tokens.push(Token { kind: "Shr", value: ">>", line: line, col: start_col })
+                        pos = pos + 2
+                        col = col + 2
+                    }
                 } else {
                     tokens.push(Token { kind: "Gt", value: ">", line: line, col: start_col })
                     pos = pos + 1
@@ -1070,6 +1088,10 @@ pub fn tokenize(source) {
                         pos = pos + 2
                         col = col + 2
                     }
+                } else if pos + 1 < len_chars && chars[pos + 1] == '=' {
+                    tokens.push(Token { kind: "BitAndEq", value: "&=", line: line, col: start_col })
+                    pos = pos + 2
+                    col = col + 2
                 } else {
                     tokens.push(Token { kind: "BitAnd", value: "&", line: line, col: start_col })
                     pos = pos + 1
@@ -1094,6 +1116,11 @@ pub fn tokenize(source) {
                     tokens.push(Token { kind: "Pipe", value: "|>", line: line, col: start_col })
                     pos = pos + 2
                     col = col + 2
+                } else if pos + 1 < len_chars && chars[pos + 1] == '=' {
+                    // PROBE r14-MMMM (WWW-1): compound bitwise-or assign `|=`.
+                    tokens.push(Token { kind: "BitOrEq", value: "|=", line: line, col: start_col })
+                    pos = pos + 2
+                    col = col + 2
                 } else {
                     tokens.push(Token { kind: "BitOr", value: "|", line: line, col: start_col })
                     pos = pos + 1
@@ -1102,6 +1129,10 @@ pub fn tokenize(source) {
             } else if ch == '^' {
                 if pos + 1 < len_chars && chars[pos + 1] == '^' {
                     tokens.push(Token { kind: "Xor", value: "^^", line: line, col: start_col })
+                    pos = pos + 2
+                    col = col + 2
+                } else if pos + 1 < len_chars && chars[pos + 1] == '=' {
+                    tokens.push(Token { kind: "BitXorEq", value: "^=", line: line, col: start_col })
                     pos = pos + 2
                     col = col + 2
                 } else {
