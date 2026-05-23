@@ -6486,19 +6486,14 @@ HexaVal hexa_to_int(HexaVal v) {
 // C-side; the hexa fn receives both args as string.
 #ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal hexa_format(HexaVal fmt, HexaVal arg) {
-    // Single arg: replace first {} with arg
+    // Delegate to multi-arg path so brace-escape (`{{` → `{`,
+    // `}}` → `}`) works uniformly in both single- and multi-arg
+    // formats.  The prior strstr-based path silently emitted
+    // `{{}}` literally instead of `{}`.
     if (!HX_IS_STR(fmt)) return fmt;
-    char* pos = hxlcl_strstr(HX_STR(fmt), "{}");
-    if (!pos) return fmt;
-    HexaVal sarg = hexa_to_string(arg);
-    int before = pos - HX_STR(fmt);
-    int after_len = hxlcl_strlen(pos + 2);
-    char* result = malloc(before + (int)HX_STRLEN(sarg) + after_len + 1);
-    hxlcl_strncpy(result, HX_STR(fmt), before);
-    result[before] = 0;
-    hxlcl_strcat(result, HX_STR(sarg));
-    hxlcl_strcat(result, pos + 2);
-    return hexa_str_own(result);
+    HexaVal args = hexa_array_new();
+    args = hexa_array_push(args, arg);
+    return hexa_format_n(fmt, args);
 }
 #else
 extern HexaVal rt_format(HexaVal fmt, HexaVal sarg);
@@ -6519,6 +6514,23 @@ HexaVal hexa_format_n(HexaVal fmt, HexaVal args) {
     char* src = HX_STR(fmt);
     int ai = 0;
     while (*src) {
+        // Brace escape — `{{` emits `{`, `}}` emits `}`.  Without this
+        // a Rust-style format string `"{{}}"` produced `{{}}` literal
+        // instead of `{}`.  Round-5 string-format probe finding.
+        if (src[0] == '{' && src[1] == '{') {
+            while (total + 2 > cap) { cap *= 2; result = realloc(result, cap); }
+            result[total++] = '{';
+            result[total] = 0;
+            src += 2;
+            continue;
+        }
+        if (src[0] == '}' && src[1] == '}') {
+            while (total + 2 > cap) { cap *= 2; result = realloc(result, cap); }
+            result[total++] = '}';
+            result[total] = 0;
+            src += 2;
+            continue;
+        }
         if (src[0] == '{' && ai < HX_ARR_LEN(args)) {
             // Find closing }
             char* close = hxlcl_strchr(src, '}');
