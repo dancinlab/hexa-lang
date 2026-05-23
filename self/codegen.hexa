@@ -2640,6 +2640,16 @@ fn gen2_stmt(node, depth) {
             if _is_float_init_expr(node.left) {
                 _known_float_add(node.name)
             }
+            // PROBE r11 B3: also try comptime-fold for plain immutable `let`.
+            // `let x = 2+3` now folds to literal 5 and registers in the
+            // comptime-const table — downstream references inline the literal
+            // (matches the ComptimeConst path at gen2_stmt L3188).
+            // LetMutStmt + AtomicLet excluded — reassignment / atomic semantics
+            // would invalidate the inlined-literal contract.
+            let _let_folded = comptime_eval(node.left)
+            if type_of(_let_folded) != "string" {
+                _register_comptime_const(node.name, _let_folded)
+            }
         }
         // 2026-04-19: local let decls must match Ident-reference mangling so
         // names in the reserved set (fmax, j1, argv, printf, …) don't land
