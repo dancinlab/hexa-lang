@@ -3063,7 +3063,15 @@ fn parse_range() {
             "variants": "", "arms": "", "iter_expr": "", "ret_type": "",
             "target": "", "trait_name": "", "methods": ""
         }
-    } else if k == "DotDotEq" {
+    } else if k == "DotDotEq" || k == "DotDotDot" {
+        // PROBE r14-M: Swift-style `0...5` inclusive range form parses as
+        // an alias for canonical `0..=5`. Identical AST/codegen, value
+        // tagged "inclusive". `...` continues to mean spread in
+        // list-element positions (call args, array literals, destructure
+        // patterns) — those callers peek for `DotDotDot` BEFORE parsing
+        // an expression, so they never reach this branch (no `left` was
+        // produced). Here, `left ...` unambiguously means inclusive
+        // range. Canonical form remains `..=`; this is sugar.
         p_advance()
         // PROBE r14 #C: `arr[a..=]` — extremely rare but symmetric with
         // `arr[a..]`. Same lowering (empty right ⇒ hexa_len). Inclusive
