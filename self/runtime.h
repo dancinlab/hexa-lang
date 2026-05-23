@@ -296,7 +296,7 @@ HexaVal hexa_json_parse(HexaVal s);                   /* runtime.c:10538 — JSO
 HexaVal hexa_str_substr(HexaVal s, HexaVal start, HexaVal len); /* runtime.c:7495 — (start, length) overload distinct from hexa_str_substring(start, end) */
 HexaVal hexa_input(HexaVal prompt);                   /* runtime.c:7616 — line-input prompt */
 HexaVal hexa_read_stdin(void);                        /* runtime.c:9962 — full-stdin slurp */
-HexaVal hexa_exec_with_status(HexaVal cmd);           /* runtime.c:4281 — exec returning {rc, stdout, stderr} */
+HexaVal hexa_exec_with_status(HexaVal cmd);           /* runtime.c:4281 — exec returning [stdout, exit_code] (2-tuple, stderr LOST → merged via 2>&1 only). DEPRECATED for new code: prefer hexa_exec_capture() which returns the canonical 3-tuple [stdout, stderr, exit_code] via pipe/fork/select. See inbox/patches/exec-with-status-3tuple-migration.md (PROBE r8). */
 HexaVal hexa_exec_replace(HexaVal cmd);               /* runtime.c:4639 — execvp("/bin/sh","-c",cmd); no return on success (R7 lsp) */
 HexaVal hexa_http_get(HexaVal url);                   /* runtime.c:11463 — HTTP GET (R7 Phase 4 bridges: oeis/arxiv/gw/…) */
 HexaVal rt_delete_file(HexaVal path);                 /* runtime.c:10940 — unlink path (R7 Phase 3: compiler/molt) */
