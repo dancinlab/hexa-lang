@@ -1745,6 +1745,34 @@ fn print_type_errors(errors) {
     }
 }
 
+// PROBE r14 wiring (#453 follow-up): activate immutable-let + non-exhaustive-match
+// warnings + any future hard errors as a user-visible pass. Splits warn/err
+// counts and emits to stderr so `hexa build` (env-gated) and `hexa typecheck`
+// share the same emit shape. Returns [err_count, warn_count].
+fn type_check_and_emit(stmts) {
+    let errors = type_check(stmts)
+    let mut i = 0
+    let mut warn_n = 0
+    let mut err_n = 0
+    while i < len(errors) {
+        let e = errors[i]
+        let is_warn = e.message.starts_with("[warn]")
+        if is_warn {
+            warn_n = warn_n + 1
+        } else {
+            err_n = err_n + 1
+        }
+        let kind = if is_warn { "warn" } else { "error" }
+        if e.name != "" {
+            eprintln(kind + " [" + e.name + "]: " + e.message)
+        } else {
+            eprintln(kind + ": " + e.message)
+        }
+        i = i + 1
+    }
+    return [err_n, warn_n]
+}
+
 fn type_errors_count(errors) {
     return len(errors)
 }
