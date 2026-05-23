@@ -14,7 +14,7 @@
 # fleet load-balancer wrapper that auto-routes `hexa run|batch` to
 # remote ubu-N hosts), keeping integration tests mac-local and
 # deterministic. Override HEXA_BIN only if you need a different
-# interpreter; never point it at ~/.hx/bin/hexa.
+# hexa binary; never point it at ~/.hx/bin/hexa.
 
 set -u
 

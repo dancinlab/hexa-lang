@@ -26,8 +26,7 @@ run() {
   if [[ -f "$hx" ]] && command -v hexa >/dev/null 2>&1; then
     # Compiler backend: `hexa build` links the fixed runtime.c (json
     # float-repr shortest + json_parse loop non-lossy), so the compiled
-    # binary is byte-parity with CPython where `hexa run` (interpreter)
-    # is not. Interpreter is kept only as a build-failure fallback.
+    # binary is byte-parity with CPython.
     local hxbin; hxbin="$(mktemp -u "/tmp/hxg_${label}.XXXXXX")"
     if ( cd "$REPO_ROOT" && hexa build "$hx" -o "$hxbin" >/dev/null 2>&1 ) && [[ -x "$hxbin" ]]; then
       if ( cd "$REPO_ROOT" && "$hxbin" ); then

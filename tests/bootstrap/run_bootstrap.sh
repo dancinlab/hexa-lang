@@ -28,7 +28,7 @@ if [ ! -x "$FIND_LOCAL" ]; then
 fi
 
 HEXA_BIN=$("$FIND_LOCAL") || {
-    printf 'run_bootstrap: tool/find_local_hexa.sh found no local interpreter\n' >&2
+    printf 'run_bootstrap: tool/find_local_hexa.sh found no local hexa binary\n' >&2
     printf 'run_bootstrap: marking DEFERRED (no host)\n' >&2
     echo "DEFERRED"
     exit 0

@@ -80,19 +80,19 @@ echo "  out    : $OUT"
 echo "  cuda   : ${CUDA_FLAG:-<no-CUDA>}"
 echo ""
 
-INTERP=$(find /Users/ghost/.hx/packages/hexa/build -name "hexa_interp.real" 2>/dev/null | head -1)
+INTERP=$(tool/find_local_hexa.sh 2>/dev/null || true)
 if [ -x self/native/hexa_v2 ]; then
     V2="self/native/hexa_v2"
 else
     V2=$(find self/native -name "hexa_v2" 2>/dev/null | head -1)
 fi
 if [ -z "$INTERP" ] || [ -z "$V2" ]; then
-    echo "FATAL: cannot locate interp or hexa_v2"
+    echo "FATAL: cannot locate a hexa driver or hexa_v2"
     exit 2
 fi
 
 echo "[1/6] module_loader flatten → $EXP"
-"$INTERP" self/module_loader.hexa "$SRC" "$EXP" 2>&1 | tail -1
+"$INTERP" run self/module_loader.hexa "$SRC" "$EXP" 2>&1 | tail -1
 
 echo "[2/6] IPCP rewrite → $IPCP"
 ./hexa run tool/flame_phase4b_ipcp.hexa "$EXP" "$IPCP" 2>&1 | grep -E "PASS|FAIL|substitutions|total" | head -10

@@ -3,7 +3,7 @@
 # verbatim (no shell interpolation), so '$HOME' stays literal.
 #
 # DEPENDS: agent A hxa-20260424-005 #1/#3 — not yet landed.
-# Expected to FAIL until exec_argv is wired into the stage0 interpreter.
+# Expected to FAIL until exec_argv is wired into the compiler codegen path.
 
 set -u
 PROBE="$(mktemp -t hxa_exec_argv_XXXXXX).hexa"
