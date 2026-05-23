@@ -4851,10 +4851,29 @@ HexaVal hexa_array_reverse(HexaVal arr) {
 // (silent identity-sort). Filed at incoming/patches/stdlib-sort.md.
 // Returns 0 for incomparable / cross-type pairs (caller treats as "tie" —
 // stable sorts preserve insertion order on ties).
+//
+// PROBE r14-J (2026-05-23): canonical NaN-last total ordering. IEEE 754
+// NaN compares return false for <, >, ==, so plain `da < db ? -1 : ...`
+// returns 0 for every (NaN, x) pair → qsort sees an indeterminate
+// ordering → undefined behavior (NaN scattered through output, sometimes
+// dropping non-NaN values past it). Canonical fixes:
+//   - Rust f64::total_cmp: NaN goes after +inf (NaN-last for +NaN)
+//   - Python numpy.sort: NaN-last by default
+//   - Python builtin list.sort: would TypeError, but we don't have that
+//     channel cheaply available here.
+// We pick NaN-last (Rust / numpy default). Both NaN → tie (stable sorts
+// preserve insertion order).
 static int hexa_sort_cmp(const void* a, const void* b) {
     HexaVal va = *(const HexaVal*)a, vb = *(const HexaVal*)b;
     if (HX_IS_INT(va) && HX_IS_INT(vb)) return HX_INT(va) < HX_INT(vb) ? -1 : HX_INT(va) > HX_INT(vb) ? 1 : 0;
-    if (HX_IS_FLOAT(va) && HX_IS_FLOAT(vb)) return HX_FLOAT(va) < HX_FLOAT(vb) ? -1 : HX_FLOAT(va) > HX_FLOAT(vb) ? 1 : 0;
+    if (HX_IS_FLOAT(va) && HX_IS_FLOAT(vb)) {
+        double da = HX_FLOAT(va), db = HX_FLOAT(vb);
+        int na = isnan(da), nb = isnan(db);
+        if (na && nb) return 0;
+        if (na) return 1;       // NaN sorts AFTER everything (NaN-last)
+        if (nb) return -1;
+        return da < db ? -1 : da > db ? 1 : 0;
+    }
     if (HX_IS_STR(va) && HX_IS_STR(vb)) {
         int r = hxlcl_strcmp(HX_STR(va), HX_STR(vb));
         return r < 0 ? -1 : r > 0 ? 1 : 0;
@@ -4863,6 +4882,10 @@ static int hexa_sort_cmp(const void* a, const void* b) {
     if ((HX_IS_INT(va) || HX_IS_FLOAT(va)) && (HX_IS_INT(vb) || HX_IS_FLOAT(vb))) {
         double da = HX_IS_INT(va) ? (double)HX_INT(va) : HX_FLOAT(va);
         double db = HX_IS_INT(vb) ? (double)HX_INT(vb) : HX_FLOAT(vb);
+        int na = isnan(da), nb = isnan(db);
+        if (na && nb) return 0;
+        if (na) return 1;       // NaN-last (consistent with float/float path)
+        if (nb) return -1;
         return da < db ? -1 : da > db ? 1 : 0;
     }
     return 0;
