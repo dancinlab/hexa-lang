@@ -4480,6 +4480,34 @@ fn gen2_expr(node) {
 
     if k == "BinOp" {
         let op = node.op
+        // PROBE r14-NNN: pipe operator `|>` (F#/Elixir/OCaml) — desugar
+        // `x |> f(a, b)` → `f(x, a, b)` (Elixir-style first-arg prepend).
+        // Parser emits BinOp{op:"|>", left:x, right:Call(f, [a,b])}; here we
+        // synthesize the prepended Call AST and recurse. See r14-KKK RFC
+        // (PR #520) for the full design table.
+        if op == "|>" {
+            let _pr = node.right
+            if type_of(_pr) == "string" || _pr.kind != "Call" {
+                eprintln("[codegen] ERROR: |> RHS must be a call expression")
+                return "(fprintf(stderr, \"CODEGEN ERROR: |> RHS not a Call\\n\"), exit(1), hexa_void())"
+            }
+            let mut _new_args = []
+            _new_args.push(node.left)
+            let mut _pi = 0
+            let _orig_args = _pr.args
+            while _pi < len(_orig_args) {
+                _new_args.push(_orig_args[_pi])
+                _pi = _pi + 1
+            }
+            let _synth_call = #{
+                "kind": "Call", "name": "", "value": "", "op": "",
+                "left": _pr.left, "right": "", "cond": "", "then_body": "", "else_body": "",
+                "params": "", "body": "", "args": _new_args, "fields": "", "items": "",
+                "variants": "", "arms": "", "iter_expr": "", "ret_type": "",
+                "target": "", "trait_name": "", "methods": ""
+            }
+            return gen2_expr(_synth_call)
+        }
         // STRUCTURAL-2 Phase A: IntLit+IntLit unboxing — bypass HexaVal
         // boxing entirely when both operands are integer literals.
         // Emits `hexa_int((L) OP (R))` which the C compiler constant-folds.

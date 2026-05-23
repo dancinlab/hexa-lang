@@ -899,6 +899,14 @@ pub fn tokenize(source) {
                         pos = pos + 2
                         col = col + 2
                     }
+                } else if pos + 1 < len_chars && chars[pos + 1] == '>' {
+                    // PROBE r14-NNN: pipe operator `|>` (F#/Elixir/OCaml).
+                    // Emits Pipe token; parser `parse_pipe` (L2830) builds
+                    // BinOp { op: "|>" }; codegen dispatches in BinOp branch
+                    // by desugaring `x |> f(a, b)` → `f(x, a, b)`.
+                    tokens.push(Token { kind: "Pipe", value: "|>", line: line, col: start_col })
+                    pos = pos + 2
+                    col = col + 2
                 } else {
                     tokens.push(Token { kind: "BitOr", value: "|", line: line, col: start_col })
                     pos = pos + 1
