@@ -1,6 +1,12 @@
-// @raw117_exempt
-// ════════════════════════════════════════════════════════════════════════
-// tmp_rfc036_smoke.hexa — anima RFC 036 phi_rs MI/Φ byte-equal smoke
+// test/rfc036_phi_rs_smoke.hexa — anima RFC 036 phi_rs MI/Φ byte-equal smoke
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Compiled-path 5-falsifier smoke for anima RFC 036 phi_rs numeric core
+// (self/runtime.c::hexa_phi_mi_pair + hexa_phi_spatial). Promotes the
+// prior tmp_rfc036_smoke.hexa (raw117_exempt, untracked by selftest) into
+// the test/ harness as the regression gate for the phi_rs MI/Φ builtins.
 //
 // Builtins (self/runtime.c, anima RFC 036 block):
 //   phi_mi_pair / phi_spatial
@@ -17,9 +23,9 @@
 //   Rust FFI link is a NAMED BLOCKER (rfc_036 §"FFI shim"), tested as a
 //   DOCUMENTED carve-out, NOT counted as a passing FFI binding.
 //
-// Acceptance — gated on the COMPILED native binary (hexa build … && ./bin):
+// Acceptance — gated on the COMPILED native binary (`hexa build` path):
 //
-//   1 BUILD+PARSE              — this file compiles to a native binary.
+//   1 BUILD                    — this file compiles to a native binary.
 //   2 MI-BYTE-EQUAL           — phi_mi_pair == phi_rs::mi_from_paired_vectors
 //                               oracle 1.0000000002648297 within 1e-12.
 //   3 PHI-SPATIAL             — phi_spatial(3 cells) == phi_rs spatial Φ
@@ -30,7 +36,11 @@
 //                               This is an HONESTY gate, not an FFI PASS.
 //
 // 5/5 PASS → RFC 036 numeric core landable; Rust FFI = named blocker.
-// ════════════════════════════════════════════════════════════════════════
+//
+// Run (compiled path; interp banned for runtime-builtin smokes):
+//   hexa build test/rfc036_phi_rs_smoke.hexa -o /tmp/rfc036_smoke && /tmp/rfc036_smoke
+//
+// Sentinel: __RFC036_PHI_RS_SMOKE__ PASS|FAIL on the final line.
 
 fn abs_d(x: float) -> float {
     if x < 0.0 { return 0.0 - x }
@@ -55,7 +65,7 @@ fn main() {
     let mut pass = 0
     let total = 5
 
-    // ── Falsifier 1: BUILD+PARSE ────────────────────────────────────
+    // ── Falsifier 1: BUILD ──────────────────────────────────────────
     println("PASS  F-RFC036-BUILD  native binary built + entered main()")
     pass = pass + 1
 
@@ -128,7 +138,9 @@ fn main() {
     println("=== RFC036 smoke: " + to_string(pass) + "/" + to_string(total) + " PASS ===")
     if pass == total {
         println("PASS — anima RFC 036 phi_rs numeric core byte-equal (compiled); Rust FFI = documented named blocker")
+        println("__RFC036_PHI_RS_SMOKE__ PASS")
     } else {
         println("FAIL — RFC 036 smoke incomplete")
+        println("__RFC036_PHI_RS_SMOKE__ FAIL")
     }
 }
