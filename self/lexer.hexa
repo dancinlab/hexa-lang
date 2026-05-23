@@ -96,19 +96,35 @@ fn keyword_kind(word) {
     return "Ident"
 }
 
-// Check if character is valid identifier start (alpha or _)
+// Check if character is valid identifier start (alpha, _, or any non-ASCII
+// UTF-8 codepoint).
+//
+// PROBE r10-4: Go-style pragmatic Unicode identifier support — accept any
+// character whose first UTF-8 byte has the high bit set (>= 128) as ident
+// start. This covers CJK (Korean / Japanese / Chinese), Greek (π), Cyrillic,
+// emoji, and mathematical symbols without inlining the full Unicode
+// XID_Start table (~500 ranges). `source.chars()` yields per-codepoint
+// strings (not per-byte), so the high-bit check fires on the entire
+// non-ASCII codepoint, not on stray continuation bytes. Trade-off: also
+// accepts UTF-8 punctuation / formatters as ident chars — rarely an issue
+// in practice; can be tightened to full XID_Start in a follow-up cycle.
 @pure
 fn is_ident_start(ch) {
     if is_alpha(ch) { return true }
     if ch == '_' { return true }
+    if char_code(to_string(ch), 0) >= 128 { return true }
     return false
 }
 
-// Check if character is valid identifier continuation (alphanumeric or _)
+// Check if character is valid identifier continuation (alphanumeric, _, or
+// any non-ASCII UTF-8 codepoint). Symmetric with is_ident_start so that a
+// multi-codepoint Unicode identifier such as `변수` or `café` tokenizes as
+// a single Ident.
 @pure
 fn is_ident_char(ch) {
     if is_alphanumeric(ch) { return true }
     if ch == '_' { return true }
+    if char_code(to_string(ch), 0) >= 128 { return true }
     return false
 }
 
