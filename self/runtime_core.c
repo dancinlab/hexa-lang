@@ -5177,6 +5177,18 @@ static inline HexaVal __hexa_exec_stream_wrap_hv(HexaVal cmd, HexaVal cb) {
 // failed clang/cargo invocations. Codegen + dispatch wiring TBD — this
 // function is the C-runtime backstop ready when the interpreter learns to
 // call it via codegen lowering of `exec_with_status(cmd)`.
+//
+// 2026-05-23 (PROBE r8): the 2-tuple shape is canonically-deviant. Rust
+// `Output{stdout, stderr, status}`, Go `Cmd.Output()` separate `.Stderr`,
+// Python `CompletedProcess.{stdout, stderr, returncode}` — every comparable
+// runtime exposes stderr as its own field. popen("r") here merges stderr
+// into stdout only when the caller appends `2>&1`, which loses the channel
+// distinction. The CANONICAL 3-tuple path already exists in this repo as
+// `hexa_exec_capture(cmd)` (runtime.c:9991, returns [stdout, stderr, exit_code]
+// via pipe/fork/select — same multiplexed drain pattern as PR #423). New
+// code should call `exec_capture()` directly; `exec_with_status()` is kept
+// for backward compatibility with ~150 existing callers (caller migration =
+// separate stacked PR, see inbox/patches/exec-with-status-3tuple-migration.md).
 HexaVal hexa_exec_with_status(HexaVal cmd) {
     HexaVal arr = hexa_array_new();
     if (!HX_IS_STR(cmd)) {
