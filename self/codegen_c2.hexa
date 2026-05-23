@@ -4108,7 +4108,15 @@ fn gen2_expr(node) {
         // branch for `as`. Maps to runtime hexa_to_* helpers (already exist:
         // hexa_to_int / hexa_to_float / hexa_to_string / hexa_truthy).
         if op == "as" {
-            let type_name = node.right.name
+            let mut type_name = node.right.name
+            // Width-suffixed numeric type names (f64/f32, i64/i32/i8/u8/…)
+            // are cast-equivalent to float / int. Normalize so they reach
+            // the float/int dispatch below — an unnormalized `x as f64`
+            // fell through to the no-op pass-through (`return l` below),
+            // leaving an int operand and silently miscompiling
+            // `(a as f64) / (b as f64)` to C integer division.
+            if type_name == "f64" || type_name == "f32" || type_name == "f16" { type_name = "float" }
+            if type_name == "i8" || type_name == "i16" || type_name == "i32" || type_name == "i64" || type_name == "u8" || type_name == "u16" || type_name == "u32" || type_name == "u64" || type_name == "isize" || type_name == "usize" { type_name = "int" }
             // Step-3 cycle 76 — typed-source direct cast: when source is
             // provably typed (FloatLit/typed-float-param/known-float-let
             // or IntLit/typed-int-param/known-int-let), emit a direct C
