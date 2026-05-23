@@ -59,6 +59,15 @@ fn tc_error_at(name, msg) {
     tc_errors.push(TypeError { message: msg, name: name })
 }
 
+// PROBE r14-N: HEXA_STRICT_LET env gate. Default unset → reassignment of an
+// immutable `let` binding emits [warn] (PR #453 behavior, backward
+// compatible). When set to "1", upgrades the immutable-let-reassignment
+// diagnostic to a hard error so CI/strict builds can enforce immutability.
+// Read once per type_check() run from env() (same pattern as sister gate
+// HEXA_STRICT_MATCH and compiler/main.hexa HEXA_STRICT_CITATIONS). Default
+// false preserves existing behavior — zero regression for current builds.
+let mut tc_strict_let = false
+
 // ══════════════════════════════════════════════════════════════
 // Scope — variable/function symbol tables
 // ══════════════════════════════════════════════════════════════
@@ -1493,7 +1502,12 @@ fn tc_check_stmt(node) {
             if typ == "" {
                 tc_error("Assignment to undeclared variable '" + node.left.name + "'")
             } else if !tc_lookup_mut(node.left.name) {
-                tc_warn_at(node.left.name, "assignment to immutable binding '" + node.left.name + "' (declare 'let mut " + node.left.name + "' to allow mutation)")
+                let _msg = "assignment to immutable binding '" + node.left.name + "' (declare 'let mut " + node.left.name + "' to allow mutation)"
+                if tc_strict_let {
+                    tc_error_at(node.left.name, _msg)
+                } else {
+                    tc_warn_at(node.left.name, _msg)
+                }
             }
         }
         tc_infer_expr(node.left)
@@ -1508,7 +1522,12 @@ fn tc_check_stmt(node) {
             if typ == "" {
                 tc_error("Assignment to undeclared variable '" + node.left.name + "'")
             } else if !tc_lookup_mut(node.left.name) {
-                tc_warn_at(node.left.name, "assignment to immutable binding '" + node.left.name + "' (declare 'let mut " + node.left.name + "' to allow mutation)")
+                let _msg = "assignment to immutable binding '" + node.left.name + "' (declare 'let mut " + node.left.name + "' to allow mutation)"
+                if tc_strict_let {
+                    tc_error_at(node.left.name, _msg)
+                } else {
+                    tc_warn_at(node.left.name, _msg)
+                }
             }
         }
         tc_infer_expr(node.left)
@@ -1663,6 +1682,14 @@ fn type_check(stmts) {
     generic_fn_all_param_bounds = []
     tparam_names = []
     tparam_bound = []
+
+    // PROBE r14-N: read HEXA_STRICT_LET env once per run. "1" → upgrade
+    // immutable-let-reassignment warn to a hard error. Default
+    // (unset/empty/other) preserves PR #453 warn behavior — zero regression
+    // for existing builds. Sibling to HEXA_STRICT_MATCH (PROBE r14-I).
+    tc_strict_let = false
+    let _sl_env = env("HEXA_STRICT_LET")
+    if _sl_env == "1" { tc_strict_let = true }
 
     // Register builtins
     tc_register_builtins()
