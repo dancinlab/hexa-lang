@@ -5335,6 +5335,24 @@ static const char* __hexa_float_special_repr(double f) {
     return NULL;
 }
 
+// PROBE r14-L (2026-05-23): unify print_val / eprint_val / eprintln / eprint
+// float-rendering with hexa_to_string so `println(0.0)` matches
+// `to_string(0.0)` ("0.0", not "0") and NaN/inf carry the canonical Rust
+// casing.  Policy mirrors _hexa_to_string_rec TAG_FLOAT (line ~5731):
+//   1. NaN/inf            → __hexa_float_special_repr ("NaN"/"inf"/"-inf")
+//   2. integer-valued finite float in [-1e15, 1e15] → "%.1f"  (0.0 → "0.0")
+//   3. otherwise          → __hexa_print_float_fmt() (env-honoring %g)
+// Writes a NUL-terminated repr into `buf` (caller owns at least 32 bytes).
+static void __hexa_format_float_for_print(double f, char* buf, size_t cap) {
+    const char* sp = __hexa_float_special_repr(f);
+    if (sp) { snprintf(buf, cap, "%s", sp); return; }
+    if (isfinite(f) && f == floor(f) && f >= -1e15 && f <= 1e15) {
+        snprintf(buf, cap, "%.1f", f);
+    } else {
+        snprintf(buf, cap, __hexa_print_float_fmt(), f);
+    }
+}
+
 // ── Stderr ──────────────────────────────────────────
 void hexa_eprint_val(HexaVal v) {
     // 2026-04-20 silent-fallback fix: prior body dropped TAG_VOID /
@@ -5342,12 +5360,16 @@ void hexa_eprint_val(HexaVal v) {
     // "<value>"). User-visible path is eprintln(arr) / eprintln(map) —
     // emitting nothing is strictly worse than the hexa_to_string repr.
     // One-hop TAG_VALSTRUCT unwrap mirrors hexa_print_val.
-    const char* __ff = __hexa_print_float_fmt();
+    // PROBE r14-L: float branches route through __hexa_format_float_for_print
+    // for to_string parity (NaN/inf canonical casing + 0.0 → "0.0").
+    char __fbuf[64];
     if (HX_IS_VALSTRUCT(v) && HX_VS(v)) {
         HexaValStruct* vs = HX_VS(v);
         switch (vs->tag_i) {
             case TAG_INT:   fprintf(stderr, "%lld", (long long)vs->int_val); return;
-            case TAG_FLOAT: fprintf(stderr, __ff, vs->float_val); return;
+            case TAG_FLOAT:
+                __hexa_format_float_for_print(vs->float_val, __fbuf, sizeof(__fbuf));
+                fprintf(stderr, "%s", __fbuf); return;
             case TAG_BOOL:  fprintf(stderr, "%s", vs->bool_val ? "true" : "false"); return;
             case TAG_STR: {
                 const char* cs = HX_STR(vs->str_val);
@@ -5363,7 +5385,10 @@ void hexa_eprint_val(HexaVal v) {
         else fprintf(stderr, "<str null>");
     }
     else if (HX_IS_INT(v)) fprintf(stderr, "%lld", (long long)HX_INT(v));
-    else if (HX_IS_FLOAT(v)) fprintf(stderr, __ff, HX_FLOAT(v));
+    else if (HX_IS_FLOAT(v)) {
+        __hexa_format_float_for_print(HX_FLOAT(v), __fbuf, sizeof(__fbuf));
+        fprintf(stderr, "%s", __fbuf);
+    }
     else if (HX_IS_BOOL(v)) fprintf(stderr, HX_BOOL(v) ? "true" : "false");
     else if (HX_IS_VOID(v)) fprintf(stderr, "void");
     else if (HX_IS_ARRAY(v) || HX_IS_MAP(v)) {
@@ -5439,12 +5464,16 @@ void hexa_print_val(HexaVal v) {
 void hexa_print_val(HexaVal v) {
     // One-hop TAG_VALSTRUCT unwrap. Not recursive — a VS wrapping a VS is
     // already a corruption signal we surface via the fallback tail.
-    const char* __ff = __hexa_print_float_fmt();
+    // PROBE r14-L: float branches route through __hexa_format_float_for_print
+    // for to_string parity (NaN/inf canonical casing + 0.0 → "0.0").
+    char __fbuf[64];
     if (HX_IS_VALSTRUCT(v) && HX_VS(v)) {
         HexaValStruct* vs = HX_VS(v);
         switch (vs->tag_i) {
             case TAG_INT:   printf("%lld", (long long)vs->int_val); return;
-            case TAG_FLOAT: printf(__ff, vs->float_val); return;
+            case TAG_FLOAT:
+                __hexa_format_float_for_print(vs->float_val, __fbuf, sizeof(__fbuf));
+                printf("%s", __fbuf); return;
             case TAG_BOOL:  printf("%s", vs->bool_val ? "true" : "false"); return;
             case TAG_STR: {
                 const char* cs = HX_STR(vs->str_val);
@@ -5460,7 +5489,9 @@ void hexa_print_val(HexaVal v) {
     }
     switch (HX_TAG(v)) {
         case TAG_INT: printf("%lld", (long long)HX_INT(v)); break;
-        case TAG_FLOAT: printf(__ff, HX_FLOAT(v)); break;
+        case TAG_FLOAT:
+            __hexa_format_float_for_print(HX_FLOAT(v), __fbuf, sizeof(__fbuf));
+            printf("%s", __fbuf); break;
         case TAG_BOOL: printf("%s", HX_BOOL(v) ? "true" : "false"); break;
         case TAG_STR:
             // Null-pointer guard: a corrupted TAG_STR (str_val=NULL) would
@@ -5568,13 +5599,16 @@ HexaVal hexa_eprintln(HexaVal v) {
     // Route through the same hexa_print_val logic but redirect the
     // writes to stderr. We cannot reuse hexa_print_val directly because
     // it hard-codes printf() — mirror the body with fprintf(stderr).
-    const char* __ff = __hexa_print_float_fmt();
-    char __ffln[16]; snprintf(__ffln, sizeof(__ffln), "%s\n", __ff);
+    // PROBE r14-L: float branches route through __hexa_format_float_for_print
+    // for to_string parity (NaN/inf canonical casing + 0.0 → "0.0").
+    char __fbuf[64];
     if (HX_IS_VALSTRUCT(v) && HX_VS(v)) {
         HexaValStruct* vs = HX_VS(v);
         switch (vs->tag_i) {
             case TAG_INT:   fprintf(stderr, "%lld\n", (long long)vs->int_val); return hexa_void();
-            case TAG_FLOAT: fprintf(stderr, __ffln, vs->float_val); return hexa_void();
+            case TAG_FLOAT:
+                __hexa_format_float_for_print(vs->float_val, __fbuf, sizeof(__fbuf));
+                fprintf(stderr, "%s\n", __fbuf); return hexa_void();
             case TAG_BOOL:  fprintf(stderr, "%s\n", vs->bool_val ? "true" : "false"); return hexa_void();
             case TAG_STR: {
                 const char* cs = HX_STR(vs->str_val);
@@ -5587,7 +5621,9 @@ HexaVal hexa_eprintln(HexaVal v) {
     }
     switch (HX_TAG(v)) {
         case TAG_INT: fprintf(stderr, "%lld\n", (long long)HX_INT(v)); break;
-        case TAG_FLOAT: fprintf(stderr, __ffln, HX_FLOAT(v)); break;
+        case TAG_FLOAT:
+            __hexa_format_float_for_print(HX_FLOAT(v), __fbuf, sizeof(__fbuf));
+            fprintf(stderr, "%s\n", __fbuf); break;
         case TAG_BOOL: fprintf(stderr, "%s\n", HX_BOOL(v) ? "true" : "false"); break;
         case TAG_STR:
             if (HX_STR(v)) fprintf(stderr, "%s\n", HX_STR(v));
@@ -5626,12 +5662,16 @@ HexaVal hexa_eprint(HexaVal v) {
 }
 #else
 HexaVal hexa_eprint(HexaVal v) {
-    const char* __ff = __hexa_print_float_fmt();
+    // PROBE r14-L: float branches route through __hexa_format_float_for_print
+    // for to_string parity (NaN/inf canonical casing + 0.0 → "0.0").
+    char __fbuf[64];
     if (HX_IS_VALSTRUCT(v) && HX_VS(v)) {
         HexaValStruct* vs = HX_VS(v);
         switch (vs->tag_i) {
             case TAG_INT:   fprintf(stderr, "%lld", (long long)vs->int_val); return hexa_void();
-            case TAG_FLOAT: fprintf(stderr, __ff, vs->float_val); return hexa_void();
+            case TAG_FLOAT:
+                __hexa_format_float_for_print(vs->float_val, __fbuf, sizeof(__fbuf));
+                fprintf(stderr, "%s", __fbuf); return hexa_void();
             case TAG_BOOL:  fprintf(stderr, "%s", vs->bool_val ? "true" : "false"); return hexa_void();
             case TAG_STR: {
                 const char* cs = HX_STR(vs->str_val);
@@ -5643,7 +5683,9 @@ HexaVal hexa_eprint(HexaVal v) {
     }
     switch (HX_TAG(v)) {
         case TAG_INT: fprintf(stderr, "%lld", (long long)HX_INT(v)); break;
-        case TAG_FLOAT: fprintf(stderr, __ff, HX_FLOAT(v)); break;
+        case TAG_FLOAT:
+            __hexa_format_float_for_print(HX_FLOAT(v), __fbuf, sizeof(__fbuf));
+            fprintf(stderr, "%s", __fbuf); break;
         case TAG_BOOL: fprintf(stderr, "%s", HX_BOOL(v) ? "true" : "false"); break;
         case TAG_STR:
             if (HX_STR(v)) fprintf(stderr, "%s", HX_STR(v));
