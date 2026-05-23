@@ -1342,8 +1342,8 @@ HexaVal hexa_term_fd_close(HexaVal fd); /* runtime.c:11884 */
 HexaVal hexa_term_fd_poll(HexaVal fd, HexaVal timeout_ms); /* runtime.c:11889 */
 HexaVal hexa_term_fd_read(HexaVal fd, HexaVal max_bytes); /* runtime.c:11860 */
 HexaVal hexa_term_fd_write(HexaVal fd, HexaVal data); /* runtime.c:11875 */
-HexaVal hexa_term_isatty_stdin(void) { return hexa_int((int64_t)term_isatty_stdin()); } ; /* runtime.c:11826 */
-HexaVal hexa_term_isatty_stdout(void) { return hexa_int((int64_t)term_isatty_stdout()); } ; /* runtime.c:11827 */
+HexaVal hexa_term_isatty_stdin(void);  /* runtime.c:11826 */
+HexaVal hexa_term_isatty_stdout(void); /* runtime.c:11827 */
 HexaVal hexa_term_pty_reap(HexaVal pid); /* runtime.c:11896 */
 HexaVal hexa_term_pty_spawn_sh(HexaVal cmd, HexaVal rows, HexaVal cols); /* runtime.c:11840 */
 HexaVal hexa_to_bool(HexaVal v); /* runtime.c:10585 */
