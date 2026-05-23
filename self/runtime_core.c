@@ -5641,12 +5641,13 @@ HexaVal hexa_to_string(HexaVal v) {
         if (!_cached_small_ints_ready) _hexa_init_small_int_cache();
         return _cached_small_ints[HX_INT(v) - SMALL_INT_CACHE_MIN];
     }
-    /* Non-integer-valued float: %g (more precision than %.1f). */
+    /* Non-integer-valued float: env-honoring fmt (default %g, opt-in g15/g17
+     * via HEXA_FLOAT_REPR — matches print_val path).  PROBE r11 B6. */
     if (HX_IS_FLOAT(v)) {
         double f = HX_FLOAT(v);
         if (!(isfinite(f) && f == floor(f) && f >= -1e15 && f <= 1e15)) {
             char buf[64];
-            snprintf(buf, 64, "%g", f);
+            snprintf(buf, 64, __hexa_print_float_fmt(), f);
             return hexa_str(buf);
         }
     }
@@ -5677,12 +5678,14 @@ static HexaVal _hexa_to_string_rec(HexaVal v, int depth) {
             // and existing test assertions (test_lang_core.hexa:141 +
             // test_type_coercion.hexa:35 — to_string(3.0) == "3.0"). Plain %g
             // strips trailing zeros — use %.1f when float is integer-valued +
-            // finite + within int-representable range; %g otherwise.
+            // finite + within int-representable range; env-honoring fmt
+            // (default %g, opt-in g15/g17 via HEXA_FLOAT_REPR) otherwise.
+            // PROBE r11 B6.
             double f = HX_FLOAT(v);
             if (isfinite(f) && f == floor(f) && f >= -1e15 && f <= 1e15) {
                 snprintf(buf, 64, "%.1f", f);
             } else {
-                snprintf(buf, 64, "%g", f);
+                snprintf(buf, 64, __hexa_print_float_fmt(), f);
             }
             return hexa_str(buf);
         }
