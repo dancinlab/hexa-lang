@@ -2101,6 +2101,19 @@ fn parse_type_annotation() {
             let _ret = parse_type_annotation()
         }
         base = "any"
+    } else if p_peek_kind() == "BitAnd" {
+        // PROBE r14-LLLL (HHHH-1): Rust reference type `&T` / `&'a T` /
+        // `&mut T`. hexa has no borrow checker — absorb the `&` (and any
+        // `mut`), then reject lifetime annotation with a specific
+        // diagnostic, and recurse to parse the inner type. This mirrors
+        // the parse_params `&self` absorption pattern but works in
+        // type-annotation position (return types, struct field types,
+        // generic args). Without this branch, `-> &'a str` cascaded
+        // ~6 errors per occurrence.
+        p_advance() // consume '&'
+        if p_peek_kind() == "Mut" { p_advance() }
+        p_skip_lifetime_label()
+        base = parse_type_annotation()
     } else if p_peek_kind() == "Star" {
         p_advance() // consume '*'
         base = "*" + p_expect_ident()
@@ -5012,6 +5025,11 @@ fn parse_type_params() {
     if p_peek_kind() != "Lt" { return [] }
     p_advance() // consume <
     let mut tparams = []
+    // PROBE r14-LLLL (HHHH-1): reject Rust lifetime `'a` in generic-param
+    // position. hexa is GC-based — lifetimes have no memory-safety role.
+    // Emit one specific diagnostic per occurrence, then skip the Label
+    // token so the rest of the generic-param list parses cleanly.
+    p_skip_lifetime_label()
     let name = p_expect_ident()
     let mut bound = ""
     if p_peek_kind() == "Colon" {
@@ -5027,6 +5045,7 @@ fn parse_type_params() {
     })
     while p_peek_kind() == "Comma" {
         p_advance()
+        p_skip_lifetime_label()
         let pname = p_expect_ident()
         let mut pbound = ""
         if p_peek_kind() == "Colon" {
@@ -5043,6 +5062,21 @@ fn parse_type_params() {
     }
     p_expect("Gt")
     return tparams
+}
+
+// PROBE r14-LLLL (HHHH-1): shared helper — when the current token is a
+// Label (Rust lifetime such as `'a`, `'static`) in a type position,
+// emit a specific diagnostic with `help:` + `hint:` and consume the
+// token to suppress cascade errors. No-op if the current token is not
+// a Label. Loop-label sites (`'outer:`, `break 'outer`) never enter
+// here — they live in parse_break_stmt / parse_for_stmt / etc.
+fn p_skip_lifetime_label() {
+    if p_peek_kind() != "Label" { return 0 }
+    let tok = p_peek()
+    let name = tok.value
+    p_emit_parse_error(tok, "lifetime annotation '" + name + " is not allowed in hexa\n   = help: hexa is GC-based; remove the lifetime annotation\n   = hint: `fn longest(x: &str, y: &str) -> &str`")
+    p_advance() // consume the Label
+    return 1
 }
 
 // ── where T: Trait, U: Clone ────────────────────────────────
