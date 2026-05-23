@@ -97,6 +97,7 @@ HexaVal hexa_eq(HexaVal a, HexaVal b);                /* runtime.c:4785 */
 HexaVal hexa_struct_pack_map(const char* type_name, int n,
                              const char* const* keys,
                              const HexaVal* vals);    /* runtime.c:2155 */
+HexaVal hexa_await_unwrap(HexaVal v);                 /* runtime_core.c:3046 — codegen Await emits this */
 
 /* Inline-cache slot — user.c declares `static HexaIC` arrays for fast field
  * lookup. Layout mirrors runtime.c:897. */
