@@ -68,6 +68,13 @@ fn tc_error_at(name, msg) {
 let mut scope_names = []
 let mut scope_types = []
 let mut scope_depths = []
+// let-immutability (canonical-gap: inbox/patches/let-immutability-and-match-
+// exhaustiveness-unenforced.md). Parallel to scope_names: true = binding may be
+// reassigned (`let mut`, params, loop vars, builtins, etc.), false = immutable
+// (plain `let`). Assignment to a `false` binding emits a WARNING (Rust models
+// this as a hard error, but warn keeps the self-host build green — see patch).
+// Default in tc_define is `true` so only plain `let` bindings can ever warn.
+let mut scope_muts = []
 let mut tc_depth = 0
 
 // Function registry: fn_names[], fn_arities[], fn_ret_types[]
@@ -193,18 +200,21 @@ fn tc_pop_scope() {
     let mut new_names = []
     let mut new_types = []
     let mut new_depths = []
+    let mut new_muts = []
     let mut i = 0
     while i < len(scope_names) {
         if scope_depths[i] < tc_depth {
             new_names.push(scope_names[i])
             new_types.push(scope_types[i])
             new_depths.push(scope_depths[i])
+            new_muts.push(scope_muts[i])
         }
         i = i + 1
     }
     scope_names = new_names
     scope_types = new_types
     scope_depths = new_depths
+    scope_muts = new_muts
     tc_depth = tc_depth - 1
     // Prune scope_cache: drop entries whose idx is now out of range
     let cutoff = len(scope_names)
@@ -227,13 +237,49 @@ fn tc_pop_scope() {
 }
 
 fn tc_define(name, typ) {
+    // Default to mutable so non-`let` bindings (params, loop vars, builtins,
+    // const/static, struct/enum/type names) never trigger the immutability
+    // warning. Only the LetStmt handler passes is_mut=false (plain `let`).
+    tc_define_mut(name, typ, true)
+}
+
+fn tc_define_mut(name, typ, is_mut) {
     let idx = len(scope_names)
     scope_names.push(name)
     scope_types.push(typ)
     scope_depths.push(tc_depth)
+    scope_muts.push(is_mut)
     if len(scope_cache) != 64 { tc_scope_cache_init() }
     let b = tc_scope_hash(name)
     scope_cache[b] = scope_cache[b].push([name, idx])
+}
+
+// Look up the mutability of the most-recently-bound `name` in scope.
+// Returns true if mutable (or unknown — fail open so we never warn on a
+// name we can't resolve). Newest-wins, mirroring tc_lookup so shadowing
+// (`let x = ..; let mut x = ..`) reports the latest binding's mutability.
+fn tc_lookup_mut(name) {
+    if len(scope_cache) == 64 {
+        let bucket = scope_cache[tc_scope_hash(name)]
+        let mut best = -1
+        let mut bi = 0
+        let bn = len(bucket)
+        while bi < bn {
+            let e = bucket[bi]
+            if e[0] == name { if e[1] > best { best = e[1] } }
+            bi = bi + 1
+        }
+        if best >= 0 { return scope_muts[best] }
+        return true
+    }
+    let mut i = len(scope_names) - 1
+    while i >= 0 {
+        if scope_names[i] == name {
+            return scope_muts[i]
+        }
+        i = i - 1
+    }
+    return true
 }
 
 fn tc_lookup(name) {
@@ -1167,10 +1213,10 @@ fn tc_infer_expr(node) {
                         miss_str = miss_str + missing[mi]
                         mi = mi + 1
                     }
-                    tc_warn("Match may not be exhaustive — missing variants: " + miss_str)
+                    tc_warn("non-exhaustive match — missing variants: " + miss_str + " (add a '_ ->' arm)")
                 }
             } else if arm_count > 0 {
-                tc_warn("Match has no wildcard '_' arm — may not be exhaustive")
+                tc_warn("non-exhaustive match (add a '_ ->' arm)")
             }
         }
         return "unknown"
@@ -1248,10 +1294,14 @@ fn tc_check_stmt(node) {
         if ann != "unknown" && !types_compatible(ann, typ) {
             tc_error_at(node.name, "Type mismatch: declared '" + ann + "' but assigned '" + typ + "'")
         }
+        // let-immutability: `let mut` is reassignable, plain `let` is not.
+        // A later `let`/`let mut` of the same name re-binds (shadowing) and
+        // overwrites the recorded mutability — newest-wins via tc_lookup_mut.
+        let binding_mut = k == "LetMutStmt"
         if ann != "unknown" {
-            tc_define(node.name, ann)
+            tc_define_mut(node.name, ann, binding_mut)
         } else {
-            tc_define(node.name, typ)
+            tc_define_mut(node.name, typ, binding_mut)
         }
         return
     }
@@ -1441,6 +1491,23 @@ fn tc_check_stmt(node) {
             let typ = tc_lookup(node.left.name)
             if typ == "" {
                 tc_error("Assignment to undeclared variable '" + node.left.name + "'")
+            } else if !tc_lookup_mut(node.left.name) {
+                tc_warn_at(node.left.name, "assignment to immutable binding '" + node.left.name + "' (declare 'let mut " + node.left.name + "' to allow mutation)")
+            }
+        }
+        tc_infer_expr(node.left)
+        tc_infer_expr(node.right)
+        return
+    }
+
+    if k == "CompoundAssign" || k == "LogicalAssign" {
+        // `+=`, `-=`, `*=`, `/=`, `%=`, `??=`, `||=`, `&&=` all mutate the LHS.
+        if node.left != "" && node.left.kind == "Ident" {
+            let typ = tc_lookup(node.left.name)
+            if typ == "" {
+                tc_error("Assignment to undeclared variable '" + node.left.name + "'")
+            } else if !tc_lookup_mut(node.left.name) {
+                tc_warn_at(node.left.name, "assignment to immutable binding '" + node.left.name + "' (declare 'let mut " + node.left.name + "' to allow mutation)")
             }
         }
         tc_infer_expr(node.left)
@@ -1557,6 +1624,7 @@ fn type_check(stmts) {
     scope_names = []
     scope_types = []
     scope_depths = []
+    scope_muts = []
     tc_depth = 0
     fn_names = []
     fn_arities = []
