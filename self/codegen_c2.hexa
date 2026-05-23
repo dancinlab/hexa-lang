@@ -4540,8 +4540,17 @@ fn gen2_expr(node) {
             // json_stringify (×37), json_encode/json_decode/http_get (×4-6),
             // to_bool / sleep_s / now_monotonic_s / utc_iso_now / utc_compact_now.
             // C syms: self/runtime.c hexa_json_parse / hexa_read_stdin / etc.
-            if name == "read_stdin" {
+            // PROBE r8: `stdin` is the Go/Py-friendly short alias for the
+            // existing `read_stdin` builtin.  Aliasing here (vs adding a
+            // separate runtime fn) keeps the canonical body in one place.
+            if name == "read_stdin" || name == "stdin" {
                 return "hexa_read_stdin()"
+            }
+            // PROBE r8: `cwd()` — Py/Rust/Go canonical name for current
+            // working directory.  Routes to new `hexa_cwd` runtime helper
+            // (POSIX getcwd wrapper, runtime_core.c).
+            if name == "cwd" {
+                return "hexa_cwd()"
             }
             // TUI-PRIM L1 (kick verdict T1.A 2026-04-27_hexa-native-tui-
             // implementation-plan): zero-arg term_* builtins for TTY control.
@@ -4683,8 +4692,13 @@ fn gen2_expr(node) {
             // with POSIX `bind`/`open`/etc-style POSIX surface (cf 9f9e9799
             // mangle allowlist). Returns hexa_void() so call sites in
             // statement position type-check.
+            // PROBE r8: mkdir return code was dropped (void) — flipped
+            // to `hexa_bool` (true on success, false on fail).  Matches
+            // Rust `fs::create_dir(p).is_ok()` / Go `os.Mkdir(p,…) == nil`.
+            // Stmt-position callers still type-check (bool returned, void
+            // and bool both wrap as HexaVal).
             if name == "mkdir" {
-                return "((void)mkdir(HX_STR(" + gen2_expr(node.args[0]) + "), 0755), hexa_void())"
+                return "hexa_bool(mkdir(HX_STR(" + gen2_expr(node.args[0]) + "), 0755) == 0)"
             }
             if name == "exec_with_status" {
                 return "hexa_exec_with_status(" + gen2_expr(node.args[0]) + ")"

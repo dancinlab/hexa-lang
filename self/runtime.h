@@ -686,6 +686,7 @@ HexaVal         hexa_map_get_ic_slow(HexaVal m, const char* key, HexaIC* ic);
 HexaVal hexa_exit(HexaVal code);                        /* runtime.c:7518 */
 void    hexa_throw(HexaVal err);                        /* runtime.c:4398 */
 HexaVal hexa_env_var(HexaVal name);                     /* runtime.c:9608 */
+HexaVal hexa_cwd(void);                                 /* runtime.c — PROBE r8 cwd() builtin */
 HexaVal hexa_clock(void);                               /* runtime.c:6514 */
 HexaVal hexa_mono_ns(void);                             /* runtime.c:10044 */
 int64_t hexa_as_num(HexaVal v);                         /* runtime.c:1262 */
