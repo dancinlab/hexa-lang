@@ -1,5 +1,7 @@
 # `cloud_cli.hexa run` mode EOF-recognition hang on long remote processes
 
+> **Status:** FIXED (2026-05-23) — root cause was NOT in `cloud_cli.hexa` but one layer down in `hexa_exec_capture` (`self/runtime.c`), which `_ssh_capture` uses. Its drain loop read stdout then stderr with BLOCKING reads in strict alternation; any child writing >64 KB to one stream while the parent blocks on the other deadlocked (busy stream's pipe buffer fills → child blocks on write → never feeds the awaited stream). Replaced with a `select()`-multiplexed drain that reads whichever fd is ready — option 2 from §"Suggested fix", implemented at the transport layer so ALL `exec_capture` callers benefit. Verified e2e: `exec("seq 1 100000")` (588 KB stdout, no stderr) completes in <1 s (was: infinite hang). The `--max-wall` ergonomic (options 1/3) remains a future add.
+
 **Severity**: high (blocks all anima cost-bearing fire dispatch via
 `hexa cloud run`-and-wait pattern)
 
