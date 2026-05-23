@@ -1152,6 +1152,16 @@ static inline HexaVal hexa_closure_env(HexaVal c) {
     return *HX_CLO_ENV(c);
 }
 
+// PROBE r12 #17: calling a non-fn / non-closure value used to silently
+// return void → hides type errors like `42()` or `let x = nil; x()`.
+// Throw with the actual tag so the user sees "you called an int" not
+// a mystery void result.  hexa_throw routes through try/catch.
+static void __hexa_call_non_fn_throw(int tag, int arity) {
+    char _buf[128];
+    snprintf(_buf, sizeof(_buf), "not callable: tag=%d (arity=%d)", tag, arity);
+    hexa_throw(hexa_str(_buf));
+}
+
 // Dispatched call helpers — one per arity we support (0..4).
 static inline HexaVal hexa_call0(HexaVal f) {
     if (HX_IS_CLOSURE(f)) {
@@ -1162,6 +1172,7 @@ static inline HexaVal hexa_call0(HexaVal f) {
         HexaVal (*fp)(void) = (HexaVal(*)(void))HX_FN_PTR(f);
         return fp();
     }
+    __hexa_call_non_fn_throw((int)HX_TAG(f), 0);
     return hexa_void();
 }
 static inline HexaVal hexa_call1_hv(HexaVal f, HexaVal a1) {
@@ -1173,6 +1184,7 @@ static inline HexaVal hexa_call1_hv(HexaVal f, HexaVal a1) {
         HexaVal (*fp)(HexaVal) = (HexaVal(*)(HexaVal))HX_FN_PTR(f);
         return fp(a1);
     }
+    __hexa_call_non_fn_throw((int)HX_TAG(f), 1);
     return hexa_void();
 }
 // Raw C function-pointer overload (KI-4 fix 2026-05-01): codegen emits
@@ -1194,6 +1206,7 @@ static inline HexaVal hexa_call2_hv(HexaVal f, HexaVal a1, HexaVal a2) {
         HexaVal (*fp)(HexaVal, HexaVal) = (HexaVal(*)(HexaVal, HexaVal))HX_FN_PTR(f);
         return fp(a1, a2);
     }
+    __hexa_call_non_fn_throw((int)HX_TAG(f), 2);
     return hexa_void();
 }
 // Raw C function-pointer overload (FIX-2 unblock 2026-05-04): mirrors the
@@ -1217,6 +1230,7 @@ static inline HexaVal hexa_call3(HexaVal f, HexaVal a1, HexaVal a2, HexaVal a3) 
         HexaVal (*fp)(HexaVal, HexaVal, HexaVal) = (HexaVal(*)(HexaVal, HexaVal, HexaVal))HX_FN_PTR(f);
         return fp(a1, a2, a3);
     }
+    __hexa_call_non_fn_throw((int)HX_TAG(f), 3);
     return hexa_void();
 }
 static inline HexaVal hexa_call4(HexaVal f, HexaVal a1, HexaVal a2, HexaVal a3, HexaVal a4) {
@@ -1228,6 +1242,7 @@ static inline HexaVal hexa_call4(HexaVal f, HexaVal a1, HexaVal a2, HexaVal a3, 
         HexaVal (*fp)(HexaVal, HexaVal, HexaVal, HexaVal) = (HexaVal(*)(HexaVal, HexaVal, HexaVal, HexaVal))HX_FN_PTR(f);
         return fp(a1, a2, a3, a4);
     }
+    __hexa_call_non_fn_throw((int)HX_TAG(f), 4);
     return hexa_void();
 }
 
