@@ -3453,6 +3453,10 @@ fn gen2_method_builtin(obj_expr, method, args) {
     if method == "chars" {
         return cg_string_sym("str_chars") + "(" + obj_expr + ")"
     }
+    // PROBE r14 (2026-05-23) — Rust canonical alias `.codepoints()` for `.chars()`.
+    if method == "codepoints" {
+        return cg_string_sym("str_chars") + "(" + obj_expr + ")"
+    }
     // 2026-05-19 parity-gate t45b — UTF-8 char-aware string methods.
     // hexa strings are byte-sequenced UTF-8; these are codepoint-indexed
     // (vs char_at/byte_at which are byte-indexed). interp does the
@@ -6117,6 +6121,10 @@ fn gen2_expr(node) {
                 return "hexa_int(hexa_len(" + obj + "))"
             }
             if method == "chars" {
+                return cg_string_sym("str_chars") + "(" + obj + ")"
+            }
+            // PROBE r14 (2026-05-23) — Rust canonical alias `.codepoints()` for `.chars()`.
+            if method == "codepoints" {
                 return cg_string_sym("str_chars") + "(" + obj + ")"
             }
             if method == "contains" {
