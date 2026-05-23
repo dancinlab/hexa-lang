@@ -1737,11 +1737,15 @@ fn gen2_fn_decl(node) {
     let _fn_name = if _is_lazy { _fn_name_real + "_body" } else { _fn_name_real }
     let mut prefix = ""
     if gen2_has_inline_always(node) { prefix = "static inline " }
-    // S1-D3b: @hot/@cold/@noinline → __attribute__ on definition
-    let mut fn_attr = ""
-    if gen2_has_attr(node, "hot") { fn_attr = " __attribute__((hot))" }
-    if gen2_has_attr(node, "cold") { fn_attr = " __attribute__((cold))" }
-    if gen2_has_attr(node, "noinline") { fn_attr = " __attribute__((noinline))" }
+    // S1-D3b / PROBE r10-15g: @hot/@cold/@noinline emit __attribute__ on the
+    // forward DECLARATION only (see gen2_fn_forward). Placing these attrs on
+    // the function DEFINITION trips clang's -Wgcc-compat warning ("GCC does
+    // not allow '<attr>' attribute in this position on a function
+    // definition"). The fwd-decl site already advertises the attribute to the
+    // compiler before any caller is emitted, which is exactly what cold/hot/
+    // noinline need to influence call-site code-gen. Keep fn_attr empty here
+    // so the defn line is suffix-clean; do NOT re-introduce the attr here.
+    let fn_attr = ""
     // FIRMWARE.md G-F* / G-R1 placeholder — RFC 063 (firmware) / RFC 064 (rtl)
     // recognize @target / @mmio / @interrupt / @asm annotations but defer
     // actual lowering to dedicated codegen cycles. For now: parse OK
