@@ -13,23 +13,23 @@ ref:
 ## milestones
 
 - [x] arxiv-api stdlib — arXiv API 클라이언트 (search · fetch by id · abstract · pdf-link) → `stdlib/research/arxiv.hexa`
-- [ ] pubmed-api stdlib — NCBI E-utilities PubMed wrapper (esearch · efetch · elink) → `stdlib/research/pubmed.hexa`
-- [ ] clinicaltrials-api stdlib — clinicaltrials.gov v2 REST 클라이언트 (NCT id lookup · status · arms) → `stdlib/research/clinicaltrials.hexa`
-- [ ] ncbi-entrez stdlib — NCBI E-utilities 통합 (GenBank · RefSeq · GEO · SRA · Gene · Taxonomy) → `stdlib/bio/entrez.hexa`
+- [x] pubmed-api stdlib — NCBI E-utilities PubMed wrapper (esearch · efetch · elink) → `stdlib/research/pubmed.hexa`
+- [x] clinicaltrials-api stdlib — clinicaltrials.gov v2 REST 클라이언트 (NCT id lookup · status · arms) → `stdlib/research/clinicaltrials.hexa`
+- [x] ncbi-entrez stdlib — NCBI E-utilities 통합 (GenBank · RefSeq · GEO · SRA · Gene · Taxonomy) → `stdlib/bio/entrez.hexa`
 - [ ] seq-align stdlib — pairwise (Needleman-Wunsch · Smith-Waterman) + MSA (MAFFT-style progressive) first-principles 구현 → `stdlib/bio/seq_align/`
 - [ ] crispr-off-target stdlib — Cas-OFFinder-style genome-wide off-target search · mismatch tolerance · PAM constraint → `stdlib/bio/crispr_gene_editing/off_target.hexa`
-- [ ] doench-grna-score stdlib — Azimuth-style on-target gRNA scoring (Doench 2016 closed-form features) → `stdlib/bio/crispr_gene_editing/grna_score.hexa`
+- [x] doench-grna-score stdlib — Azimuth-style on-target gRNA scoring (Doench 2016 closed-form features) → `stdlib/bio/crispr_gene_editing/grna_score.hexa`
 - [ ] iedb-epitope stdlib — IEDB lookup + HLA binding prediction (NetMHCpan-style PSSM/SVM 코어) → `stdlib/bio/immuno/epitope.hexa`
 - [ ] mirna-target stdlib — miRBase mature-miRNA registry + TargetScan seed-match scoring → `stdlib/bio/mirna/target.hexa`
-- [ ] ode-bifurcation stdlib — Runge-Kutta (RK4 · RK45 adaptive) + stiff (BDF) ODE solver + saddle-node bifurcation 탐지 → `stdlib/math/ode.hexa`
+- [x] ode-bifurcation stdlib — Runge-Kutta (RK4 · RK45 adaptive) + stiff (BDF) ODE solver + saddle-node bifurcation 탐지 → `stdlib/math/ode.hexa`
 
 ### TTR — in-silico track (M3 docking · M5 MD/QM, source: `inbox/notes/2026-05-24-ttr-external-port-candidates.md`)
 
 Tier-1 — thin REST adapter (★ priority, ~200-300 LOC each, TTR M3 즉시 사용):
 
-- [ ] pubchem-api stdlib — PubChem PUG-REST 클라이언트 (compound CID lookup · SMILES · properties · batch fetch) → `stdlib/chem/pubchem.hexa`
-- [ ] brenda-api stdlib — BRENDA enzyme DB REST 클라이언트 (EC number · KM · kcat · substrate) → `stdlib/bio/brenda.hexa`
-- [ ] uniprot-alphafold-api stdlib — UniProt + AlphaFold DB REST 클라이언트 (protein metadata · structure PDB fetch) → `stdlib/bio/uniprot.hexa` ※ AlphaFold DB API sunset 2026-06-25 → 새 endpoint 모니터
+- [x] pubchem-api stdlib — PubChem PUG-REST 클라이언트 (compound CID lookup · SMILES · properties · batch fetch) → `stdlib/chem/pubchem.hexa`
+- [x] brenda-api stdlib — BRENDA enzyme DB REST 클라이언트 (EC number · KM · kcat · substrate) → `stdlib/bio/brenda.hexa` ※ parse-surface 완료, SOAP wire deferred
+- [x] uniprot-alphafold-api stdlib — UniProt + AlphaFold DB REST 클라이언트 (protein metadata · structure PDB fetch) → `stdlib/bio/uniprot.hexa` ※ AlphaFold DB API sunset 2026-06-25 → 새 endpoint 모니터
 
 Tier-2 — cheminformatics subset (★★★ priority, ~2-3 kloc subset, TTR M3 docking input prep):
 
