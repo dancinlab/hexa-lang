@@ -1,0 +1,261 @@
+// stdlib/chem/vina/grid.hexa — Vina 그리드 친화도 맵 사전계산 (pre-computed
+// receptor grid affinity map).
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Citation: Trott, O. & Olson, A. J. (2010). "AutoDock Vina: Improving the
+// speed and accuracy of docking with a new scoring function, efficient
+// optimization, and multithreading." J. Comput. Chem. 31(2): 455-461.
+// DOI: 10.1002/jcc.21334. §2.4 "Pre-computation on a grid" — 각 리간드
+// 아톰 타입에 대해 receptor pair-sum 을 균일 간격의 3-D 그리드에 미리
+// 계산해 두면, 검색 중 매 step 의 점수 평가가 O(N_lig · 8) trilinear
+// interpolation 으로 떨어진다 (N_lig × N_rec → N_lig × 8). 본 모듈은
+// 그 사전계산 + lookup 만 제공한다.
+//
+// SCOPE — Vina paper §2.4 "grid map" 의 최소 충실 포팅:
+//   1. `vina_grid_build` : receptor 아톰 + probe atype + 박스(min/max) +
+//      spacing 으로부터 3-D 에너지 그리드를 만든다. probe 는 unit-mass
+//      single-atom (atype = probe_atype, coord = grid node) 으로 가정하고
+//      receptor 의 모든 헤비 아톰과의 vina_pair_energy 합을 노드 값으로
+//      쓴다.
+//   2. `vina_grid_eval` : trilinear interpolation 으로 임의 좌표 (x,y,z)
+//      에서의 energy 를 반환. 박스 밖이면 단순 fallback (clamp 후
+//      interpolate — Vina 본가는 boundary repulsion 을 별도로 처리하지만,
+//      MC 검색의 의미 있는 영역은 항상 박스 내부이므로 외부는 clamp 면
+//      충분).
+//
+// 점수 함수 SSOT 는 scoring.hexa 의 `vina_pair_energy` 이다. 본 모듈은
+// 그것을 grid node 마다 호출해 memo 화할 뿐이다.
+//
+// Storage layout — Hexa-lang stdlib 의 numeric grid 관례를 따라 flat
+// row-major float array + (nx, ny, nz, ox, oy, oz, spacing) 메타로 저장:
+//
+//   pub struct VinaGrid {
+//       nx: int, ny: int, nz: int,         // 노드 갯수 (cell 갯수 + 1)
+//       ox: float, oy: float, oz: float,   // 원점 (박스 min corner)
+//       spacing: float,                    // Å
+//       atype: string,                     // probe atom type (= 리간드측)
+//       data: [float],                     // row-major nx*ny*nz
+//   }
+//
+// 인덱싱: idx(ix, iy, iz) = (ix * ny + iy) * nz + iz   (Vina C++ upstream
+// 과 동일 row-major; Hexa-lang Tensor layout 도 동일).
+//
+// Trilinear interpolation: en.wikipedia.org/wiki/Trilinear_interpolation
+// (Vina paper §2.4 와 동일 식). 외부 경계 cell 에서는 clamp.
+
+use "stdlib/chem/vina/scoring"
+
+// ── Types ──────────────────────────────────────────────────────────────
+
+pub struct VinaGrid {
+    nx: int,
+    ny: int,
+    nz: int,
+    ox: float,
+    oy: float,
+    oz: float,
+    spacing: float,
+    atype: string,
+    data: [float],
+}
+
+// ── Helpers ────────────────────────────────────────────────────────────
+
+fn _idx_g(g: VinaGrid, ix: int, iy: int, iz: int) -> int {
+    return (ix * g.ny + iy) * g.nz + iz
+}
+
+fn _clamp_i(v: int, lo: int, hi: int) -> int {
+    if v < lo { return lo }
+    if v > hi { return hi }
+    return v
+}
+
+fn _floor_f(x: float) -> int {
+    // to_int truncates toward zero; we need floor toward -inf.
+    let t = to_int(x)
+    if x < 0.0 {
+        let tf = to_float(t)
+        if tf > x { return t - 1 }
+    }
+    return t
+}
+
+// ── Build ──────────────────────────────────────────────────────────────
+
+// Build a 3-D grid of probe-atom energy on receptor.
+//
+//   receptor   : 단백질(or 일반 receptor) 헤비 아톰 집합
+//   probe_atype: 그리드가 대표하는 리간드 측 아톰 타입 (e.g. "C", "N",
+//                "O", "S", "H", "HD"). VinaAtom 으로 wrap 되어 receptor
+//                와 vina_pair_energy 가 호출된다.
+//   xmin/ymin/zmin, xmax/ymax/zmax : 박스 경계 (Å, inclusive). max ≥ min
+//                                    가정.
+//   spacing    : 노드 간 간격 (Å). Vina 기본 0.375.
+//
+// 노드 갯수 nx = floor((xmax - xmin) / spacing) + 1, 등.
+//
+// 시간 복잡도 O(nx * ny * nz * |receptor|). cutoff (8 Å) 는
+// vina_pair_energy 자체에는 없지만 vina_score_complex 와 동일하게
+// per-pair distance > VINA_CUTOFF 면 0 으로 처리한다 (검색 중 빠른 컷오프).
+pub fn vina_grid_build(receptor: [VinaAtom], probe_atype: string, xmin: float, ymin: float, zmin: float, xmax: float, ymax: float, zmax: float, spacing: float) -> VinaGrid {
+    let nx = _floor_f((xmax - xmin) / spacing) + 1
+    let ny = _floor_f((ymax - ymin) / spacing) + 1
+    let nz = _floor_f((zmax - zmin) / spacing) + 1
+    let n_rec = len(receptor)
+    let cutoff = 8.0
+
+    let mut data: [float] = []
+    let total = nx * ny * nz
+    let mut k = 0
+    while k < total {
+        data.push(0.0)
+        k = k + 1
+    }
+
+    let mut ix = 0
+    while ix < nx {
+        let gx = xmin + to_float(ix) * spacing
+        let mut iy = 0
+        while iy < ny {
+            let gy = ymin + to_float(iy) * spacing
+            let mut iz = 0
+            while iz < nz {
+                let gz = zmin + to_float(iz) * spacing
+                let probe = VinaAtom { x: gx, y: gy, z: gz, atype: probe_atype }
+                let mut e = 0.0
+                let mut ri = 0
+                while ri < n_rec {
+                    let ra = receptor[ri]
+                    let dx = ra.x - gx
+                    let dy = ra.y - gy
+                    let dz = ra.z - gz
+                    let d2 = dx * dx + dy * dy + dz * dz
+                    if d2 <= cutoff * cutoff {
+                        e = e + vina_pair_energy(probe, ra)
+                    }
+                    ri = ri + 1
+                }
+                let flat = (ix * ny + iy) * nz + iz
+                data[flat] = e
+                iz = iz + 1
+            }
+            iy = iy + 1
+        }
+        ix = ix + 1
+    }
+
+    return VinaGrid {
+        nx: nx, ny: ny, nz: nz,
+        ox: xmin, oy: ymin, oz: zmin,
+        spacing: spacing,
+        atype: probe_atype,
+        data: data,
+    }
+}
+
+// ── Lookup (trilinear) ─────────────────────────────────────────────────
+
+// Trilinear interpolation at (x, y, z). 외부는 가장 가까운 모서리로
+// clamp 후 보간 — 박스 밖에서는 정확한 값을 약속하지 않지만 monotone
+// 한 fallback 이 보장된다 (MC 검색이 박스 안으로 다시 끌려오는 핸들).
+pub fn vina_grid_eval(g: VinaGrid, x: float, y: float, z: float) -> float {
+    let fx = (x - g.ox) / g.spacing
+    let fy = (y - g.oy) / g.spacing
+    let fz = (z - g.oz) / g.spacing
+
+    let mut ix0 = _floor_f(fx)
+    let mut iy0 = _floor_f(fy)
+    let mut iz0 = _floor_f(fz)
+    let mut ix1 = ix0 + 1
+    let mut iy1 = iy0 + 1
+    let mut iz1 = iz0 + 1
+
+    // Clamp to valid node range [0, n-1].
+    ix0 = _clamp_i(ix0, 0, g.nx - 1)
+    iy0 = _clamp_i(iy0, 0, g.ny - 1)
+    iz0 = _clamp_i(iz0, 0, g.nz - 1)
+    ix1 = _clamp_i(ix1, 0, g.nx - 1)
+    iy1 = _clamp_i(iy1, 0, g.ny - 1)
+    iz1 = _clamp_i(iz1, 0, g.nz - 1)
+
+    // Fractional weights (clamp to [0, 1] for outside-box safety).
+    let mut tx = fx - to_float(_floor_f(fx))
+    let mut ty = fy - to_float(_floor_f(fy))
+    let mut tz = fz - to_float(_floor_f(fz))
+    if tx < 0.0 { tx = 0.0 }
+    if tx > 1.0 { tx = 1.0 }
+    if ty < 0.0 { ty = 0.0 }
+    if ty > 1.0 { ty = 1.0 }
+    if tz < 0.0 { tz = 0.0 }
+    if tz > 1.0 { tz = 1.0 }
+
+    let c000 = g.data[_idx_g(g, ix0, iy0, iz0)]
+    let c100 = g.data[_idx_g(g, ix1, iy0, iz0)]
+    let c010 = g.data[_idx_g(g, ix0, iy1, iz0)]
+    let c110 = g.data[_idx_g(g, ix1, iy1, iz0)]
+    let c001 = g.data[_idx_g(g, ix0, iy0, iz1)]
+    let c101 = g.data[_idx_g(g, ix1, iy0, iz1)]
+    let c011 = g.data[_idx_g(g, ix0, iy1, iz1)]
+    let c111 = g.data[_idx_g(g, ix1, iy1, iz1)]
+
+    let c00 = c000 * (1.0 - tx) + c100 * tx
+    let c10 = c010 * (1.0 - tx) + c110 * tx
+    let c01 = c001 * (1.0 - tx) + c101 * tx
+    let c11 = c011 * (1.0 - tx) + c111 * tx
+
+    let c0 = c00 * (1.0 - ty) + c10 * ty
+    let c1 = c01 * (1.0 - ty) + c11 * ty
+
+    return c0 * (1.0 - tz) + c1 * tz
+}
+
+// ── Multi-atom ligand evaluation ───────────────────────────────────────
+
+// 리간드 전체에 대한 grid energy. 각 아톰의 atype 가 grid 의 probe atype
+// 와 일치할 때만 해당 grid 를 쓴다. mismatch 인 아톰은 pair-sum fallback
+// 으로 직접 receptor 와 vina_pair_energy 를 호출 (정확성 우선).
+//
+// 사용 패턴: 검색 전 리간드의 distinct atype 마다 grid 를 빌드해두고,
+// 이 함수에 [VinaGrid] 리스트로 넘기면 atype 별 lookup 으로 분배된다.
+pub fn vina_grid_eval_ligand(grids: [VinaGrid], receptor: [VinaAtom], ligand: [VinaAtom]) -> float {
+    let mut total = 0.0
+    let n_lig = len(ligand)
+    let n_grid = len(grids)
+    let mut i = 0
+    while i < n_lig {
+        let la = ligand[i]
+        let mut hit = false
+        let mut gi = 0
+        while gi < n_grid {
+            let g = grids[gi]
+            if g.atype == la.atype {
+                total = total + vina_grid_eval(g, la.x, la.y, la.z)
+                hit = true
+                gi = n_grid    // break
+            } else {
+                gi = gi + 1
+            }
+        }
+        if !hit {
+            // Fallback — direct pair-sum vs receptor for this atom.
+            let nr = len(receptor)
+            let mut ri = 0
+            while ri < nr {
+                let ra = receptor[ri]
+                let dx = ra.x - la.x
+                let dy = ra.y - la.y
+                let dz = ra.z - la.z
+                let d2 = dx * dx + dy * dy + dz * dz
+                if d2 <= 64.0 {    // 8.0² cutoff
+                    total = total + vina_pair_energy(la, ra)
+                }
+                ri = ri + 1
+            }
+        }
+        i = i + 1
+    }
+    return total
+}
