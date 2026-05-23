@@ -4387,12 +4387,28 @@ fn parse_macro_def() {
     }
 }
 
-// Body of `@derive(Trait1, Trait2) for TypeName` — M0 has consumed `@derive`,
-// peek is LParen. Parses `(Trait, …) for TypeName` and produces DeriveDecl.
-// (Phase 4.6 restore: Phase 2 removed parse_derive_decl on the assumption the
-// generic unknown-attribute path would handle @derive; in practice that path
-// silently dropped the `for Type` clause and left `for Type` as a malformed
-// for-loop for parse_stmt to choke on.)
+// Body of `@derive(Trait1, Trait2) for TypeName` (legacy) or
+// `@derive(Trait1, Trait2) struct|enum Name { … }` (prefix-attr form) —
+// M0 has consumed `@derive`, peek is LParen. Parses `(Trait, …)` then
+// either the legacy `for TypeName` connector OR leaves the upcoming
+// struct/enum (or chained `@derive(...)`) for the outer parse_stmt loop
+// to consume on the next iteration. Produces DeriveDecl.
+//
+// (Phase 4.6 restore: Phase 2 removed parse_derive_decl on the assumption
+// the generic unknown-attribute path would handle @derive; in practice
+// that path silently dropped the `for Type` clause and left `for Type` as
+// a malformed for-loop for parse_stmt to choke on.)
+//
+// PROBE r10 P1 (2026-05-23): prefix-attr form `@derive(Display) struct P`
+// previously failed with "expected identifier, got Struct" because the
+// post-`)` block unconditionally consumed `for Type`. Chained
+// `@derive(A) @derive(B) struct P` failed at the second `@`. `@derive` on
+// fn target emitted a generic "expected identifier, got Fn" instead of a
+// semantic "expects struct or enum" diagnostic. Fix peeks the post-`)`
+// token and dispatches: (a) `for` → consume legacy `for Type` form, (b)
+// `struct`/`enum`/`@` → leave for outer parse_stmt (chained-attr + prefix
+// form both flow through here), (c) anything else (fn/trait/impl/…) →
+// record a semantic diagnostic with the actual following token kind.
 fn parse_derive_decl() {
     p_expect("LParen")
     let mut traits = []
@@ -4402,14 +4418,39 @@ fn parse_derive_decl() {
         traits.push(p_expect_ident())
     }
     p_expect("RParen")
-    // Expect 'for' — it's the Hexa for-keyword token here, used as a
-    // syntactic connector (not a for-loop). Accept either token kind.
-    if p_peek_kind() == "For" {
+    // Decide the post-trait-list form by peeking the next token.
+    let mut type_name = ""
+    let _post_kind = p_peek_kind()
+    if _post_kind == "For" {
+        // Legacy `@derive(...) for Type` form — consume `for` keyword
+        // then the type-name identifier.
         p_advance()
+        type_name = p_expect_ident()
     } else {
-        p_expect_ident() // accept "for" as ident if lexer ever demotes it
+        if _post_kind == "Struct" || _post_kind == "Enum" || _post_kind == "At" {
+            // Prefix-attr form (`@derive(...) struct P { … }`) or chained
+            // `@derive(A) @derive(B) …`. Leave the struct/enum/@ token in
+            // place; the outer parse_stmt loop consumes it on the next
+            // iteration as a separate decl (the codegen DeriveDecl handler
+            // currently emits no code, so name = "" is safe).
+            type_name = ""
+        } else {
+            if _post_kind == "Ident" && p_peek().value == "for" {
+                // Tolerate `for` demoted to an identifier by lookahead
+                // (preserves the legacy fallback the old code reached via
+                // p_expect_ident()).
+                p_advance()
+                type_name = p_expect_ident()
+            } else {
+                // Anything else (Fn, Trait, Impl, Type, Let, …) — emit a
+                // semantic diagnostic naming the actual offending token
+                // kind. Do not consume the token; let parse_stmt continue.
+                let _bad_tok = p_peek()
+                p_record_error(_bad_tok.line, _bad_tok.col, "@derive expects struct or enum, got " + _post_kind)
+                type_name = ""
+            }
+        }
     }
-    let type_name = p_expect_ident()
     return #{
         "kind": "DeriveDecl", "name": type_name, "value": "", "op": "",
         "left": "", "right": "", "cond": "", "then_body": "", "else_body": "",
