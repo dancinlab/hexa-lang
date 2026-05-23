@@ -71,7 +71,7 @@
 | B. async (epoll/kqueue + future) | `tls_read(c, buf) -> Future<Result<...>>` | streaming 자연스러움 · futures stdlib 필요 (없음) |
 | C. sync + non-blocking flag (`tls_set_nonblocking`) + `tls_poll_readable` | 둘 다 | hexa 사용자가 선택 · 구현 비용 중간 |
 
-**🔵 Decision needed.** 권고: **C** (sync + non-blocking). 이유:
+**🟢 Decided 2026-05-23: **C** (sync + non-blocking). 이유:
 - hexa-lang stdlib 에 future/async runtime 없음 — B 는 별도 대형 RFC 필요
 - WebSocket streaming 은 `tls_poll_readable` + thread-per-connection 으로 충분
 - 비동기 future RFC 가 나오면 C 의 non-blocking layer 위에 wrap 가능
@@ -85,7 +85,7 @@
 | C. BYO — 사용자가 `HEXA_TLS_CA_BUNDLE=/path` 강제 | 통제 · ergonomics 0 |
 | D. A + 환경변수 override + B fallback | 모든 케이스 | 구현 복잡 |
 
-**🔵 Decision needed.** 권고: **A** v1 + `HEXA_TLS_CA_BUNDLE` env override (C). vendored bundle 은 reproducibility 요구 시 follow-up.
+**🟢 Decided 2026-05-23: **A** v1 + `HEXA_TLS_CA_BUNDLE` env override (C). vendored bundle 은 reproducibility 요구 시 follow-up.
 
 ### D4. 빌트인 API 형태
 
@@ -95,7 +95,7 @@
 | B. method-bearing builtin struct — `let c = TlsConn::connect(host, port)?; c.write(bytes)?; let n = c.read(buf)?` | RFC 082 trait/method 의존 — 본 RFC 이전 도착 필요 |
 | C. `connect(scheme://host:port)` 통합 — `wss://` 자동 dispatch | URL parsing + scheme routing |
 
-**🔵 Decision needed.** 권고: **A** v1, **C** 는 `stdlib/websocket.hexa` · `stdlib/http.hexa` 측에서 wrap. RFC 082 trait 도착 후 **B** 형태로 ergonomics 향상.
+**🟢 Decided 2026-05-23: **A** v1, **C** 는 `stdlib/websocket.hexa` · `stdlib/http.hexa` 측에서 wrap. RFC 082 trait 도착 후 **B** 형태로 ergonomics 향상.
 
 ### D5. 인증서 검증 정책
 
@@ -105,7 +105,7 @@
 | B. allow-self-signed (env `HEXA_TLS_INSECURE=1`) | 개발/테스트 편의 · default OFF |
 | C. cert pinning (host → cert fingerprint 매핑) | high-security · API 노출 비용 |
 
-**🔵 Decision needed.** 권고: **A + B opt-in** (C 는 follow-up). `HEXA_TLS_INSECURE=1` 시 진단 메시지 출력.
+**🟢 Decided 2026-05-23: **A + B opt-in** (C 는 follow-up). `HEXA_TLS_INSECURE=1` 시 진단 메시지 출력.
 
 ### D6. post-quantum readiness
 
@@ -116,7 +116,7 @@ NIST PQC 표준 ML-KEM (CRYSTALS-Kyber) — Chrome/Cloudflare 2025 이미 X25519
 | **A. v1 미포함 — system library 가 PQ 지원 시 자동 활용** | system OpenSSL 3.5+ 가 ML-KEM 지원 시 hexa 코드 변경 없이 적용 |
 | B. v1 에 ML-KEM 명시 요구 — 구현 시 system lib 가 지원하는지 검증 | 미래대비 · system OpenSSL 버전 매트릭스 검증 비용 |
 
-**🔵 Decision needed.** 권고: **A** — system library 책임 위임, hexa 측 PQ 작업 follow-up.
+**🟢 Decided 2026-05-23: **A** — system library 책임 위임, hexa 측 PQ 작업 follow-up.
 
 ### D7. 모듈 위치
 
@@ -126,7 +126,7 @@ NIST PQC 표준 ML-KEM (CRYSTALS-Kyber) — Chrome/Cloudflare 2025 이미 X25519
 | B. `stdlib/net/tls.hexa` (`net/` 하위) | http/websocket 과 동일 그룹 — `stdlib/net/http_client.hexa` 존재 |
 | C. `compiler/runtime/tls/` 하위 디렉토리 | 큰 모듈 (여러 파일) 가정 |
 
-**🔵 Decision needed.** 권고: **B** — net 그룹 통일. 동시에 기존 `stdlib/websocket.hexa` · `stdlib/http.hexa` 를 `stdlib/net/` 로 이동하는 mini-refactor 동반.
+**🟢 Decided 2026-05-23: **B** — net 그룹 통일. 동시에 기존 `stdlib/websocket.hexa` · `stdlib/http.hexa` 를 `stdlib/net/` 로 이동하는 mini-refactor 동반.
 
 ## 4. Falsifier
 

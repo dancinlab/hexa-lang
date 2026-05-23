@@ -56,7 +56,7 @@ canonical-audit round-3에서 design-level gap 3가지가 surfaced:
 | B. Swift `try?` prefix | `let x = try? parse_int(s)` | `Err`/`None` 시 expr가 `Option<T>` → `nil`로 evaluate (return 안 함) |
 | C. 둘 다 (Rust `?` + Swift `try`) | both | parser 복잡 · 두 semantic 공존 |
 
-**🔵 Decision needed.** 권고: **A**. trait dispatch (RFC 082)와 결합 시 `Try` trait 일반화 경로가 가장 짧음. Swift `try?`는 follow-up.
+**🟢 Decided 2026-05-23: **A**. trait dispatch (RFC 082)와 결합 시 `Try` trait 일반화 경로가 가장 짧음. Swift `try?`는 follow-up.
 
 ### D3. `nil` keyword 운명
 
@@ -68,7 +68,7 @@ canonical-audit round-3에서 design-level gap 3가지가 surfaced:
 | B. `None`의 alias로 hard-pin | `nil: Option<T>` 만 허용 · 다른 type으로 coerce 시 type error |
 | C. raw nullable pointer로 분리 | `nil`은 C-FFI raw pointer 전용 · hexa-side는 `None` |
 
-**🔵 Decision needed.** 권고: **A**. memory [[feedback_raw_own_no_mention]] 패턴 — silent-erase가 hexa-lang convention. `nil` 잔재 (예: `nil`-check 패턴) corpus-wide grep + 일괄 변환.
+**🟢 Decided 2026-05-23: **A**. memory [[feedback_raw_own_no_mention]] 패턴 — silent-erase가 hexa-lang convention. `nil` 잔재 (예: `nil`-check 패턴) corpus-wide grep + 일괄 변환.
 
 ### D4. error type generic vs boxed
 
@@ -78,7 +78,7 @@ canonical-audit round-3에서 design-level gap 3가지가 surfaced:
 | B. `Result<T>` + `anyhow::Error` 류 boxed default | `Result<T> = Result<T, BoxError>` alias | sugar로 간편 · 성능 박싱 비용 · RFC 082 trait 의존 |
 | C. A + B 둘 다 (alias로 B 제공) | both | 두 surface 학습 비용 |
 
-**🔵 Decision needed.** 권고: **A** v1 · **B**는 RFC 082 (trait) 랜딩 후 alias로 추가. 박싱은 dyn trait 필요 → trait 선행.
+**🟢 Decided 2026-05-23: **A** v1 · **B**는 RFC 082 (trait) 랜딩 후 alias로 추가. 박싱은 dyn trait 필요 → trait 선행.
 
 ### D5. `Option<T>` runtime representation
 
@@ -88,7 +88,7 @@ canonical-audit round-3에서 design-level gap 3가지가 surfaced:
 | B. null-pointer optimization (NPO) — pointer-sized `T`는 `0`을 `None`으로 | Rust 패턴 | codegen 분기 · `T = i64` 같이 `0`이 valid value인 경우 제외 |
 | C. opaque builtin (compiler intrinsic) | 컴파일러가 모든 거 결정 | 사용자 정의 enum과 inconsistent |
 
-**🔵 Decision needed.** 권고: **A** v1, NPO는 perf RFC follow-up. RFC 074 enum-multi-field-payload 와의 lowering 호환 우선.
+**🟢 Decided 2026-05-23: **A** v1, NPO는 perf RFC follow-up. RFC 074 enum-multi-field-payload 와의 lowering 호환 우선.
 
 ## 4. Migration scope (corpus impact)
 
@@ -110,7 +110,7 @@ canonical-audit round-3에서 design-level gap 3가지가 surfaced:
 | B. dual-API tier — `pop_or(default)` / `pop_opt()` 병존, 점진 deprecate | g4 호환 · 두 surface 일시 공존 |
 | C. opt-in by file pragma `@option_lane(strict)` | 점진 · 명시적 · pragma surface 비용 |
 
-**🔵 Decision needed.** 권고: **B** — `_opt` suffix variant 우선 도입, 기존 API는 stage-2에서 deprecate → stage-3에서 제거. g4 stacked PR <200줄 호환.
+**🟢 Decided 2026-05-23: **B** — `_opt` suffix variant 우선 도입, 기존 API는 stage-2에서 deprecate → stage-3에서 제거. g4 stacked PR <200줄 호환.
 
 ## 5. Falsifier
 

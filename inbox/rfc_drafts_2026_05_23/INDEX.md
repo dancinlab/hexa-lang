@@ -7,13 +7,21 @@
 > 표 형태로 enumerate 되어 있고 권고가 명시되어 있음. 사용자 결정 후 별도
 > `rfc_<n>_impl_*` 시리즈로 implementation 분기.
 
-## Summary
+## Summary — D1-D7 ALL DECIDED 2026-05-23
 
-| RFC | 영역 | D1 결정 | 잔여 결정 | 상태 |
-|---|---|---|---|---|
-| **081** | Option / Result lane | 🟢 **A** (Rust `Option`/`Result`) | D2-D6 | D1 decided · D2+ open |
-| **082** | trait operator overload | 🟢 **A** (Static only v1, dyn follow-up) | D2-D7 | D1 decided · D2+ open |
-| **083** | TLS primitive | 🟢 **D** (system OpenSSL/SecureTransport dynamic link v1) | D2-D7 | D1 decided · D2+ open |
+| RFC | 영역 | 결정 (D1-Dn) | 상태 |
+|---|---|---|---|
+| **081** | Option / Result lane | A · A · A · A v1 · A · B | 🟢 design complete · impl 진입 가능 |
+| **082** | trait operator overload | A v1 · A · D3a=NO/D3b=YES · A · C · A · deferred | 🟢 design complete · impl phase a scaffold 진입 가능 |
+| **083** | TLS primitive | D · C · A+C · A v1/B follow-up · A+B opt-in · A · B | 🟢 design complete · impl 진입 가능 (RFC 081 D4 의존 해소 후) |
+
+## Cross-RFC dependency 해소 상태
+
+```
+RFC 082 D1 (static only) ────── 🟢 결정 → impl phase a 직접 진입 가능
+RFC 081 D4 (Result<T,E> generic) ────── 🟢 결정 → RFC 081 impl 가능 (RFC 082 후 alias 추가)
+RFC 083 D4 (opaque handle API) ────── 🟢 결정 → RFC 081 Result lane 사용
+```
 
 ## design-draft — decision input 대기
 
