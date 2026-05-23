@@ -2009,6 +2009,26 @@ HexaVal hexa_array_get(HexaVal arr, int64_t idx) {
     return HX_ARR_ITEMS(arr)[idx];
 }
 
+// .last() codegen helper — single-eval the obj expression (HX_ARR_LEN is a
+// runtime-internal macro unavailable in user.c).  Throws on non-array or
+// empty array, matching Rust semantics where `.last()` on an empty slice
+// returns None but hexa has no Option in prelude — explicit OOB is the
+// closest canonical signal.
+HexaVal hexa_array_last(HexaVal arr) {
+    if (!HX_IS_ARRAY(arr)) {
+        char _buf[128];
+        snprintf(_buf, sizeof(_buf), "array.last(): container is not an array (tag=%d)", (int)HX_TAG(arr));
+        hexa_throw(hexa_str(_buf));
+        return hexa_void();
+    }
+    int n = HX_ARR_LEN(arr);
+    if (n == 0) {
+        hexa_throw(hexa_str("array.last(): empty array"));
+        return hexa_void();
+    }
+    return HX_ARR_ITEMS(arr)[n - 1];
+}
+
 // ω-interp-2 forward decl: defined later but needed here as a setter side-effect.
 extern int __hexa_arena_slot_dirty;
 
