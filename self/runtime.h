@@ -1294,8 +1294,8 @@ HexaVal hexa_host_ffi_call(HexaVal fn_ptr, HexaVal args_arr, HexaVal float_mask,
 HexaVal hexa_host_ffi_open(HexaVal lib_name); /* runtime.c:2230 */
 HexaVal hexa_host_ffi_sym(HexaVal handle, HexaVal symbol); /* runtime.c:2239 */
 HexaVal hexa_is_error(HexaVal v); /* runtime.c:4661 */
-HexaVal hexa_json_decode(HexaVal s) { return hexa_json_parse(s); } ; /* runtime.c:10803 */
-HexaVal hexa_json_encode(HexaVal v) { return hexa_json_stringify(v); } ; /* runtime.c:10914 */
+HexaVal hexa_json_decode(HexaVal s);  /* runtime.c:10832 */
+HexaVal hexa_json_encode(HexaVal v);  /* runtime.c:10943 */
 HexaVal hexa_map_entries(HexaVal m); /* runtime_core.c:2668 */
 HexaVal hexa_map_filter_keys(HexaVal m, HexaVal fn); /* runtime_core.c:2733 */
 HexaVal hexa_map_from_array(HexaVal self_map, HexaVal arr); /* runtime_core.c:2796 */
@@ -1313,7 +1313,7 @@ HexaVal hexa_one_hot(HexaVal idxv, HexaVal nv); /* runtime.c:11142 */
 HexaVal hexa_pad_left(HexaVal s, HexaVal width); /* runtime_core.c:6797 */
 HexaVal hexa_pad_right(HexaVal s, HexaVal width); /* runtime_core.c:6826 */
 HexaVal hexa_ptr_addr(HexaVal v); /* runtime.c:2213 */
-HexaVal hexa_ptr_null() { return hexa_int(0); } ; /* runtime.c:2211 */
+HexaVal hexa_ptr_null(void);  /* runtime.c:2224 */
 HexaVal hexa_ptr_offset(HexaVal ptr, HexaVal offset); /* runtime.c:2442 */
 HexaVal hexa_real_args(); /* runtime_core.c:6308 */
 HexaVal hexa_regex_findall(HexaVal pat_v, HexaVal s_v); /* runtime.c:10446 */
