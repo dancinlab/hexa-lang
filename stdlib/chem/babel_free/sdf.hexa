@@ -1,0 +1,231 @@
+// stdlib/chem/babel_free/sdf.hexa — Structure-Data File (SDF) multi-record IO.
+//
+// 사용자 결정 B-2 — open-babel (GPL-2) 회피 + scratch 구현.
+// open-babel 소스/알고리즘/자료구조 참조 일절 없음.
+// 공개 format 사양만 참조 :
+//   - SDF spec — MOL V2000 의 multi-record extension
+//     https://en.wikipedia.org/wiki/Chemical_table_file#SDF
+//   - BIOVIA CTfile Formats (공개 PDF)
+//
+// 파일 구조 :
+//   record_1 (MOL V2000 block, `M  END\n` 으로 끝남)
+//   > <TAG_1>
+//   value_1
+//   <빈줄>
+//   > <TAG_2>
+//   value_2
+//   <빈줄>
+//   $$$$
+//   record_2 (MOL ...)
+//   ...
+//   $$$$
+//
+// 공개 surface :
+//   struct SdfDataField { tag · value }
+//   struct SdfRecord    { mol · data }
+//   pub fn parse_sdf(text: string)        -> [SdfRecord]
+//   pub fn write_sdf(records: [SdfRecord]) -> string
+//   pub fn sdf_get_field(rec: SdfRecord, tag: string) -> string
+
+use "stdlib/chem/babel_free/mol"
+
+struct SdfDataField {
+    tag: string,
+    value: string,
+}
+
+struct SdfRecord {
+    mol: Molfile,
+    data: [SdfDataField],
+}
+
+// ── 로컬 헬퍼 ────────────────────────────────────────────────────────
+
+fn _is_ws_sdf(c: string) -> bool {
+    return c == " " || c == "\t" || c == "\r" || c == "\n"
+}
+
+fn _trim_sdf(s: string) -> string {
+    let n = len(s)
+    let mut a = 0
+    let mut b = n
+    while a < b && _is_ws_sdf(s.substring(a, a + 1)) { a = a + 1 }
+    while b > a && _is_ws_sdf(s.substring(b - 1, b)) { b = b - 1 }
+    return s.substring(a, b)
+}
+
+fn _split_lines_sdf(text: string) -> [string] {
+    let mut out: [string] = []
+    let n = len(text)
+    let mut i = 0
+    let mut start = 0
+    while i < n {
+        let c = text.substring(i, i + 1)
+        if c == "\n" {
+            let mut e = i
+            if e > start && text.substring(e - 1, e) == "\r" {
+                e = e - 1
+            }
+            out.push(text.substring(start, e))
+            start = i + 1
+        }
+        i = i + 1
+    }
+    if start < n {
+        out.push(text.substring(start, n))
+    }
+    return out
+}
+
+// `> <TAG>` 헤더에서 tag 만 추출. 예) `> <NAME>` -> `NAME`.
+// CTfile/SDF spec — `> <tag>` (with optional registry suffix) form.
+// 본 subset 은 `<…>` 안 의 내용만 취함, 외부 문법은 silent skip.
+fn _extract_tag(line: string) -> string {
+    let n = len(line)
+    let mut lt = -1
+    let mut gt = -1
+    let mut i = 0
+    while i < n {
+        let c = line.substring(i, i + 1)
+        if c == "<" && lt < 0 { lt = i }
+        if c == ">" && lt >= 0 && i > lt { gt = i; i = n }
+        i = i + 1
+    }
+    if lt < 0 || gt < 0 || gt <= lt + 1 { return "" }
+    return line.substring(lt + 1, gt)
+}
+
+// ── parse ────────────────────────────────────────────────────────────
+//
+// 알고리즘 :
+//   1. 전체를 line 으로 split.
+//   2. `$$$$` 라인을 record separator 로 사용.
+//   3. record 내부에서 `M  END` 까지를 MOL block, 그 뒤부터를 data block 으로 슬라이스.
+//   4. data block : `> <TAG>` 헤더 + 다음 빈줄 까지를 한 field, 빈 줄 후 다음 헤더.
+
+pub fn parse_sdf(text: string) -> [SdfRecord] {
+    let lines = _split_lines_sdf(text)
+    let n = len(lines)
+    let mut records: [SdfRecord] = []
+    let mut start = 0
+
+    while start < n {
+        // record 의 끝 ($$$$) 찾기.
+        let mut end = n
+        let mut k = start
+        while k < n {
+            if _trim_sdf(lines[k]) == "$$$$" {
+                end = k
+                k = n
+            } else {
+                k = k + 1
+            }
+        }
+
+        // MOL block 의 끝 (M  END) 찾기 — record 범위 내.
+        let mut mol_end = end
+        let mut mi = start
+        while mi < end {
+            let t = _trim_sdf(lines[mi])
+            if t == "M  END" {
+                mol_end = mi + 1
+                mi = end
+            } else {
+                mi = mi + 1
+            }
+        }
+
+        // MOL block 재조립.
+        let mut mol_text = ""
+        let mut a = start
+        while a < mol_end {
+            mol_text = mol_text + lines[a] + "\n"
+            a = a + 1
+        }
+        let mol = parse_mol_v2000(mol_text)
+
+        // data block 파싱 — mol_end 부터 end 까지.
+        let mut data: [SdfDataField] = []
+        let mut p = mol_end
+        while p < end {
+            let line = lines[p]
+            let trimmed = _trim_sdf(line)
+            if len(trimmed) > 0 && trimmed.substring(0, 1) == ">" {
+                let tag = _extract_tag(trimmed)
+                // value lines — 다음 빈 줄 까지.
+                let mut value = ""
+                let mut q = p + 1
+                while q < end {
+                    let v = lines[q]
+                    if _trim_sdf(v) == "" {
+                        q = end
+                    } else {
+                        if len(value) > 0 {
+                            value = value + "\n"
+                        }
+                        value = value + v
+                        q = q + 1
+                    }
+                }
+                data.push(SdfDataField {
+                    tag: tag, value: value,
+                })
+                // p 를 빈 줄 이후로 진행. value 가 차지한 라인 수 = q - (p+1).
+                // 빈 줄 자체도 skip 하기 위해 p = (마지막 데이터줄 + 빈줄 1) = q + 1.
+                // 단 q == end 의 경우는 record 끝.
+                p = q + 1
+            } else {
+                p = p + 1
+            }
+        }
+
+        // record_n 가 atom 없는 빈 leading block 이라면 skip (양 끝 잘림 방어).
+        // record 가 의미가 있으려면 MOL header 3 + counts >= 4 line 또는 atom 1개 이상.
+        if len(mol.atoms) > 0 || len(mol.title) > 0 || len(data) > 0 {
+            records.push(SdfRecord {
+                mol: mol, data: data,
+            })
+        }
+
+        start = end + 1
+    }
+
+    return records
+}
+
+// ── write ────────────────────────────────────────────────────────────
+
+pub fn write_sdf(records: [SdfRecord]) -> string {
+    let mut out = ""
+    let n = len(records)
+    let mut i = 0
+    while i < n {
+        let r = records[i]
+        out = out + write_mol_v2000(r.mol)
+        let nd = len(r.data)
+        let mut j = 0
+        while j < nd {
+            let f = r.data[j]
+            out = out + "> <" + f.tag + ">\n"
+            out = out + f.value + "\n"
+            out = out + "\n"
+            j = j + 1
+        }
+        out = out + "$$$$\n"
+        i = i + 1
+    }
+    return out
+}
+
+// ── lookup helper ───────────────────────────────────────────────────
+
+pub fn sdf_get_field(rec: SdfRecord, tag: string) -> string {
+    let n = len(rec.data)
+    let mut i = 0
+    while i < n {
+        let f = rec.data[i]
+        if f.tag == tag { return f.value }
+        i = i + 1
+    }
+    return ""
+}

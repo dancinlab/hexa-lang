@@ -390,3 +390,190 @@ fn runpod_list_pods() -> RunPodList {
     }
     return _runpod_list_old(rpc)
 }
+
+// ── env-var passthrough audit (G5 — anima 2026-05-24 cycle 15) ───────
+//
+// Closed-form, LLM-free check that bridges a dispatcher script (bash, the
+// thing that runs `runpodctl pod create … --env AXIS_LR=… --env AXIS_BSZ=…`)
+// to the train script it kicks off on the pod (typically Python). The G5
+// failure mode the audit defends against:
+//
+//   - dispatcher defines `AXIS_FOO=...` and (correctly) propagates it to
+//     the pod via `--env AXIS_FOO=$AXIS_FOO`,
+//   - but the train script never reads `AXIS_FOO` from `os.environ` AND
+//     never accepts a `--axis-foo` argparse flag wired to it,
+//   - so the env-var rides into the pod and is silently dropped.
+//
+// In anima's R8 saga (2026-05-24 cycle 15) this turned a 7-config fan-out
+// into a trivial-identity 2-config run, sinking ~$10 of GPU spend before
+// the post-hoc audit caught it. This helper is the preflight surface for
+// that class of bug: source-level grep of two text files, regex-shape
+// only, no LLM, no remote execution.
+//
+// Scope: pattern detection is intentionally conservative (regex / substring
+// only). Edge cases the patch's falsifier list calls out:
+//   F-G5-4  multi-line `$CMD` (line-continuation backslash) — handled by
+//           reading the whole file as one string before scanning.
+//   F-G5-5  bash `${AXIS_FOO:-default}` form — handled by also matching
+//           `${VAR` (no closing `}` required at this layer, so `${VAR:-x}`,
+//           `${VAR}`, and bare `$VAR` all count as passthrough).
+//
+// Consumption detection in Python recognizes three idioms (any one passes):
+//   1. argparse:     add_argument("--axis-foo"  | "--axis_foo")
+//   2. environ.get:  os.environ.get("AXIS_FOO" | 'AXIS_FOO')
+//   3. environ[]:    os.environ["AXIS_FOO"]  / os.getenv("AXIS_FOO")
+//
+// The result struct is verdict-shaped so callers can either gate launch
+// (refuse() on non-empty missing_*) or warn-and-proceed (override flag).
+
+struct EnvPassthroughResult {
+    ok:                   int,      // 1 iff every env-var is both passed and consumed
+    missing_passthrough:  [str],    // env-vars defined in dispatcher but NOT forwarded to train
+    missing_consumption:  [str],    // env-vars forwarded to train but NOT read by train script
+    message:              str
+}
+
+fn _env_pt_fail(msg: str) -> EnvPassthroughResult {
+    return EnvPassthroughResult { ok: 0, missing_passthrough: [], missing_consumption: [], message: msg }
+}
+
+// _flag_form — convert "AXIS_HEAD_LR" into "--axis-head-lr" (lowercase,
+// underscore → hyphen). argparse convention used by every Python script
+// we ship; the underscore form ("--axis_head_lr") is also recognised as
+// a fallback in the consumer scan.
+fn _flag_form(name: str) -> str {
+    let mut out = "--"
+    let mut i = 0
+    let n = len(name)
+    while i < n {
+        let c = name.substring(i, i + 1)
+        let cc = char_code(c)
+        if cc >= 65 && cc <= 90 {
+            // uppercase A-Z → lowercase a-z
+            out = out + chr(cc + 32)
+        } else if c == "_" {
+            out = out + "-"
+        } else {
+            out = out + c
+        }
+        i = i + 1
+    }
+    return out
+}
+
+// _flag_form_underscore — "AXIS_HEAD_LR" → "--axis_head_lr". The argparse
+// underscore variant some scripts use directly.
+fn _flag_form_underscore(name: str) -> str {
+    let mut out = "--"
+    let mut i = 0
+    let n = len(name)
+    while i < n {
+        let c = name.substring(i, i + 1)
+        let cc = char_code(c)
+        if cc >= 65 && cc <= 90 {
+            out = out + chr(cc + 32)
+        } else {
+            out = out + c
+        }
+        i = i + 1
+    }
+    return out
+}
+
+// _dispatcher_forwards — scan the dispatcher source for ANY syntactic
+// reference to the env-var that suggests it is forwarded to the pod or
+// the train command. Conservative match — accepts:
+//   "$VAR"        bare expansion
+//   "${VAR"       brace expansion (`${VAR}`, `${VAR:-default}`, etc.)
+//   "--env VAR=", "--env=VAR=", "--env=VAR ", "-e VAR="    runpodctl --env flag
+//   "VAR=$VAR" inside the train command line (passthrough idiom)
+// Returns 1 iff at least one such reference exists.
+fn _dispatcher_forwards(src: str, name: str) -> int {
+    if src.index_of("$" + name) >= 0 { return 1 }
+    if src.index_of("${" + name) >= 0 { return 1 }
+    if src.index_of("--env " + name + "=") >= 0 { return 1 }
+    if src.index_of("--env=" + name + "=") >= 0 { return 1 }
+    if src.index_of("--env " + name + " ") >= 0 { return 1 }
+    if src.index_of("-e " + name + "=") >= 0 { return 1 }
+    if src.index_of("-e " + name + " ") >= 0 { return 1 }
+    return 0
+}
+
+// _python_consumes — scan a Python train script for any of the three
+// supported consumption idioms keyed on `name`. argparse flag check uses
+// both the hyphenated and underscored forms to match either convention.
+fn _python_consumes(src: str, name: str) -> int {
+    // argparse — both styles
+    let flag_h = _flag_form(name)              // --axis-head-lr
+    let flag_u = _flag_form_underscore(name)   // --axis_head_lr
+    if src.index_of("\"" + flag_h + "\"") >= 0 { return 1 }
+    if src.index_of("'" + flag_h + "'") >= 0 { return 1 }
+    if src.index_of("\"" + flag_u + "\"") >= 0 { return 1 }
+    if src.index_of("'" + flag_u + "'") >= 0 { return 1 }
+    // os.environ / os.getenv
+    if src.index_of("os.environ.get(\"" + name + "\"") >= 0 { return 1 }
+    if src.index_of("os.environ.get('" + name + "'") >= 0 { return 1 }
+    if src.index_of("os.environ[\"" + name + "\"]") >= 0 { return 1 }
+    if src.index_of("os.environ['" + name + "']") >= 0 { return 1 }
+    if src.index_of("os.getenv(\"" + name + "\"") >= 0 { return 1 }
+    if src.index_of("os.getenv('" + name + "'") >= 0 { return 1 }
+    // bare `environ.get("VAR"` — some scripts `from os import environ`
+    if src.index_of("environ.get(\"" + name + "\"") >= 0 { return 1 }
+    if src.index_of("environ.get('" + name + "'") >= 0 { return 1 }
+    if src.index_of("environ[\"" + name + "\"]") >= 0 { return 1 }
+    if src.index_of("environ['" + name + "']") >= 0 { return 1 }
+    if src.index_of("getenv(\"" + name + "\"") >= 0 { return 1 }
+    if src.index_of("getenv('" + name + "'") >= 0 { return 1 }
+    return 0
+}
+
+// cloud_validate_env_passthrough — closed-form audit that every env-var
+// in `env_vars` is forwarded by `dispatcher_script` (bash) AND consumed
+// by `train_script` (Python). Returns an EnvPassthroughResult whose
+// `missing_passthrough` and `missing_consumption` arrays are empty iff
+// the wiring is intact end-to-end. `ok == 1` <=> both arrays empty.
+//
+// Either path may be empty; an empty file reads as "no references", so
+// every env-var lands in the corresponding `missing_*` list — exactly
+// the failure mode the audit is built to flag.
+//
+// Caller policy: REFUSE (exit non-zero) on `ok == 0` unless an
+// `--allow-unwired-env` style override is set; the helper itself does
+// not exit, it only reports.
+fn cloud_validate_env_passthrough(
+    dispatcher_script: str,
+    train_script:      str,
+    env_vars:          [str]
+) -> EnvPassthroughResult {
+    if len(env_vars) == 0 {
+        return EnvPassthroughResult { ok: 1, missing_passthrough: [], missing_consumption: [], message: "no env-vars to audit" }
+    }
+    if !file_exists(dispatcher_script) {
+        return _env_pt_fail("dispatcher script not found: " + dispatcher_script)
+    }
+    if !file_exists(train_script) {
+        return _env_pt_fail("train script not found: " + train_script)
+    }
+    let disp_src = read_file(dispatcher_script)
+    let train_src = read_file(train_script)
+    let mut missing_pt = []
+    let mut missing_co = []
+    let mut i = 0
+    while i < len(env_vars) {
+        let name = env_vars[i]
+        if _dispatcher_forwards(disp_src, name) == 0 {
+            missing_pt.push(name)
+        }
+        if _python_consumes(train_src, name) == 0 {
+            missing_co.push(name)
+        }
+        i = i + 1
+    }
+    let ok_flag = if len(missing_pt) == 0 && len(missing_co) == 0 { 1 } else { 0 }
+    let msg = if ok_flag == 1 {
+        "env-var passthrough audit PASS — " + to_string(len(env_vars)) + " vars wired"
+    } else {
+        "env-var passthrough audit FAIL — " + to_string(len(missing_pt)) + " missing passthrough, " + to_string(len(missing_co)) + " missing consumption"
+    }
+    return EnvPassthroughResult { ok: ok_flag, missing_passthrough: missing_pt, missing_consumption: missing_co, message: msg }
+}

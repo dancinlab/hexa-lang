@@ -770,11 +770,192 @@ fn _ptd_classical_bound_register() -> float {
     return 8.0 / 9.0
 }
 
+// ── RFC 045 qmirror PR-B atoms (Mitigation/Clifford) ───────────────────
+//
+// CDR perfect-mitigation slope — verbatim port of verify_cli::_cdr_perfect_mitigation
+// (Czarnik-Arrasmith-Coles-Cincio 2021 Claim 2, arXiv:2005.10189). Under
+// the global depolarising channel, the CDR OLS slope is b = 1/(1-p_noise).
+// 1-arg closed-form: p_noise in [0, 1).
+fn _cdr_perfect_mitigation_register(p_noise: float) -> float {
+    if p_noise < 0.0 { return _NOCALC_F_REGISTER }
+    if p_noise > 0.999999999 { return _NOCALC_F_REGISTER }
+    return 1.0 / (1.0 - p_noise)
+}
+
+// Wigner stabilizer sum-negativity at odd prime d — verbatim port of
+// verify_cli::_wigner_stabilizer_sn (Veitch 2014 NJP 16 013009 + Gross-Hudson).
+// At odd prime d in {3, 5, 7, 11, 13, ...} every stabilizer state has
+// W >= 0, so sn = 0 exactly. 1-arg closed-form: d (odd prime, >= 3).
+fn _wigner_stabilizer_sn_register(d: int) -> float {
+    if d < 3 { return _NOCALC_F_REGISTER }
+    if d == 3 { return 0.0 }
+    if d == 5 { return 0.0 }
+    if d == 7 { return 0.0 }
+    if d == 11 { return 0.0 }
+    if d == 13 { return 0.0 }
+    return _NOCALC_F_REGISTER
+}
+
+// ── RFC 045 qmirror PR-C atoms (Variational/Fisher/Shadow) ─────────────
+//
+// VQE H2 STO-3G/0.74Å FCI ground-state energy — verbatim port of
+// verify_cli::_vqe_h2_fci_sto3g. PySCF 2.13.0 RHF+FCI canonical constant
+// E_FCI = -1.137283834488502 Ha. 0-arg closed-form anchor.
+fn _vqe_h2_fci_sto3g_register() -> float {
+    return 0.0 - 1.137283834488502
+}
+
+// QFI SQL closed form — verbatim port of verify_cli::_qfi_sql. Spin-coherent
+// product state |+>^N: F_phi = N (alpha=1 standard quantum limit).
+// 1-arg closed-form: n_atoms (>= 1).
+fn _qfi_sql_register(n_atoms: int) -> float {
+    if n_atoms < 1 { return _NOCALC_F_REGISTER }
+    return to_float(n_atoms)
+}
+
+// QFI GHZ closed form — verbatim port of verify_cli::_qfi_ghz. GHZ state
+// (|0>^N + |1>^N)/sqrt(2): F_phi = N^2 (alpha=2 Heisenberg limit).
+// 1-arg closed-form: n_atoms (>= 1).
+fn _qfi_ghz_register(n_atoms: int) -> float {
+    if n_atoms < 1 { return _NOCALC_F_REGISTER }
+    let n_f = to_float(n_atoms)
+    return n_f * n_f
+}
+
+// Pauli classical-shadow per-snapshot variance bound — verbatim port of
+// verify_cli::_shadow_pauli_var_bound (Huang-Kueng-Preskill 2020, HKP
+// Lemma S2). Weight-k Pauli observable: ||O||²_shadow_Pauli = 4^k.
+// 1-arg closed-form: pauli_weight (k >= 0).
+fn _shadow_pauli_var_bound_register(pauli_weight: int) -> float {
+    if pauli_weight < 0 { return _NOCALC_F_REGISTER }
+    let mut acc_pauli = 1.0
+    let mut idx_pauli = 0
+    while idx_pauli < pauli_weight {
+        acc_pauli = acc_pauli * 4.0
+        idx_pauli = idx_pauli + 1
+    }
+    return acc_pauli
+}
+
+// Clifford classical-shadow worst-case shadow-norm² bound — verbatim port
+// of verify_cli::_shadow_clifford_var_bound (HKP Theorem 1, traceless O).
+// ||O||²_shadow_Clifford <= 3 * Tr(O²) = 3 * 2^n for any non-identity Pauli.
+// 1-arg closed-form: n_qubits (>= 1).
+fn _shadow_clifford_var_bound_register(n_qubits: int) -> float {
+    if n_qubits < 1 { return _NOCALC_F_REGISTER }
+    let mut dim_f = 1.0
+    let mut idx_q = 0
+    while idx_q < n_qubits {
+        dim_f = dim_f * 2.0
+        idx_q = idx_q + 1
+    }
+    return 3.0 * dim_f
+}
+
+// Page-curve entropy peak — verbatim port of verify_cli::_page_curve_entropy_peak
+// (Page 1993 PRL 71 1291, arXiv:gr-qc/9305007 Eq.2). For a bipartite pure
+// state on Hilbert space dim_a ⊗ dim_b with dim_a <= dim_b, the average
+// entanglement entropy of subsystem A over the Haar measure peaks at
+//     S_max(dim_a) = ln(dim_a)  -  dim_a / (2 * dim_b)     (nats)
+// 2-arg closed-form.
+fn _page_curve_entropy_peak_register(dim_subsystem_a: int, dim_subsystem_b: int) -> float {
+    if dim_subsystem_a < 1 { return _NOCALC_F_REGISTER }
+    if dim_subsystem_b < 1 { return _NOCALC_F_REGISTER }
+    if dim_subsystem_a > dim_subsystem_b { return _NOCALC_F_REGISTER }
+    let d_a = to_float(dim_subsystem_a)
+    let d_b = to_float(dim_subsystem_b)
+    let ln_da = log(d_a)
+    let correction = d_a / (2.0 * d_b)
+    return ln_da - correction
+}
+
+// Qdrift random-product channel diamond-distance error bound — verbatim port
+// of verify_cli::_qdrift_error_bound (Campbell 2019 PRL 123 070503,
+// arXiv:1811.08017 Eq.3). For total Hamiltonian L1-norm lambda over time t
+// and big_n random one-term steps,
+//     epsilon  <=  2 * (lambda * t)^2 / big_n
+// 2-arg closed-form: a0 = lambda_times_time, a1 = big_n_as_float.
+fn _qdrift_error_bound_register(lambda_times_time: float, big_n_steps: int) -> float {
+    if big_n_steps < 1 { return _NOCALC_F_REGISTER }
+    if lambda_times_time < 0.0 { return _NOCALC_F_REGISTER }
+    let n_f = to_float(big_n_steps)
+    return 2.0 * lambda_times_time * lambda_times_time / n_f
+}
+
+// Symmetry-adjusted classical-shadow per-shot variance F2 bound — verbatim
+// port of verify_cli::_sym_shadow_var_bound (Zhao-Rubin-Babbush 2024 npj QI
+// symmetry adjustment on top of HKP 2020 Pauli shadow). For an observable
+// O = Sum_{j=1..m} c_j P_j of m single-Pauli terms each of locality ≤ k,
+//     var_bound  =  5 * m * 4^k
+// 2-arg closed-form: takes (num_paulis m ≥ 1, pauli_locality k ≥ 0).
+fn _sym_shadow_var_bound_register(num_paulis: int, pauli_locality: int) -> float {
+    if num_paulis < 1 { return _NOCALC_F_REGISTER }
+    if pauli_locality < 0 { return _NOCALC_F_REGISTER }
+    let mut four_pow_k = 1.0
+    let mut idx_loc = 0
+    while idx_loc < pauli_locality {
+        four_pow_k = four_pow_k * 4.0
+        idx_loc = idx_loc + 1
+    }
+    return 5.0 * to_float(num_paulis) * four_pow_k
+}
+
+// Overlap-guided ADAPT-VQE H2 STO-3G constant shift — verbatim port of
+// verify_cli::_overlap_vqe_h2_shift_ha (Oh et al. 2023, arXiv 2301.10196;
+// F-QM-CHEM-N5 H2/STO-3G/2q frozen-core reduced-Hamiltonian). The 2-qubit
+// reduced Hamiltonian's energy needs the frozen-core + nuclear-repulsion
+// shift to recover absolute FCI ground-state energy:
+//     E_FCI_full(Ha)  =  E_2q_reduced  +  constant_shift_ha
+// constant_shift_ha = 0.7151043390810812 Ha (verbatim PySCF 2.13.0 RHF
+// reduction at R=0.74Å). 0-arg closed-form constant.
+fn _overlap_vqe_h2_shift_ha_register() -> float {
+    return 0.7151043390810812
+}
+
+// Robust Phase Estimation (RPE) Heisenberg-limit standard deviation bound —
+// verbatim port of verify_cli::_rpe_heisenberg_sigma (Kimmel-Low-Yoder PRA
+// 92, 062315 (2015), arXiv:1502.02677; Eqs. (10)-(13) / Fig. 2). For K
+// Heisenberg generations and M shots per circuit,
+//     sigma_HB(K, M)  =  1 / ( 2^(K-1) * sqrt(M) )
+// — the Heisenberg-limited 1/V scaling vs SQL 1/sqrt(V). 2-arg closed-form:
+// takes (k_gens K ≥ 1, m_per_k M ≥ 1) → sigma_HB as float.
+fn _rpe_heisenberg_sigma_register(k_gens: int, m_per_k: int) -> float {
+    if k_gens < 1 { return _NOCALC_F_REGISTER }
+    if m_per_k < 1 { return _NOCALC_F_REGISTER }
+    let mut two_kmax = 1.0
+    let mut idx_gen = 0
+    let exp_gen = k_gens - 1
+    while idx_gen < exp_gen {
+        two_kmax = two_kmax * 2.0
+        idx_gen = idx_gen + 1
+    }
+    return 1.0 / (two_kmax * sqrt(to_float(m_per_k)))
+}
+
+// Mirror-circuit volumetric benchmarking heavy-output-generation (HOG)
+// Porter-Thomas asymptote — verbatim port of verify_cli::_mirror_bench_hog
+// _asymptote (Cross-Bishop-Sheldon-Nation-Gambetta PRA 100, 032328 (2019),
+// arXiv:1811.12926; quantum-volume heavy-output test). For a Haar-random
+// w-qubit circuit at approximate-2-design depth,
+//     HOG_asymptote  =  (1 + ln 2) / 2  ~=  0.8466
+// — Porter-Thomas anticoncentration anchor of the QV test. 0-arg constant.
+fn _mirror_bench_hog_asymptote_register() -> float {
+    let ln_two = 0.6931471805599453
+    return (1.0 + ln_two) / 2.0
+}
+
 // float dispatch — fn_name → recompute. Mirrors verify_cli::_recompute_float.
 // RFC 045 qmirror PR-A atoms (chsh_tsirelson · hardy_bound · mabk_quantum_max
 // · pt_doily_quantum_win · pt_doily_classical_bound) are mirrored here as
 // the atlas_cli register-arm companion to the verify-arm dispatch added in
-// PR #626. 0-arg fns ignore a0/a1; 1-arg fns take a0; 2-arg take a0,a1.
+// PR #626. PR-B atoms (cdr_perfect_mitigation · wigner_stabilizer_sn) and
+// PR-C atoms (vqe_h2_fci_sto3g · qfi_sql · qfi_ghz · shadow_pauli_var_bound
+// · shadow_clifford_var_bound) added via PR #625/#655 verify dispatch.
+// PR-D atoms (page_curve_entropy_peak · qdrift_error_bound) added via
+// PR #663 verify dispatch. PR-E atoms (sym_shadow_var_bound ·
+// overlap_vqe_h2_shift_ha · rpe_heisenberg_sigma · mirror_bench_hog_asymptote)
+// added via PR #667 verify dispatch.
+// 0-arg fns ignore a0/a1; 1-arg fns take a0; 2-arg take a0,a1.
 fn _recompute_float_register(fn_name: string, a0: float, a1: float, argc: int) -> float {
     if fn_name == "welch_t_crit" { return _welch_t_crit_register(a0) }
     if fn_name == "wilson_hilferty_p" {
@@ -793,6 +974,59 @@ fn _recompute_float_register(fn_name: string, a0: float, a1: float, argc: int) -
     }
     if fn_name == "pt_doily_quantum_win" { return _ptd_quantum_win_register() }
     if fn_name == "pt_doily_classical_bound" { return _ptd_classical_bound_register() }
+    // RFC 045 qmirror PR-B — register mirror of verify_cli dispatch (#625).
+    if fn_name == "cdr_perfect_mitigation" {
+        return _cdr_perfect_mitigation_register(a0)
+    }
+    if fn_name == "wigner_stabilizer_sn" {
+        let d = to_int(a0)
+        return _wigner_stabilizer_sn_register(d)
+    }
+    // RFC 045 qmirror PR-C — register mirror of verify_cli dispatch (#655).
+    if fn_name == "vqe_h2_fci_sto3g" { return _vqe_h2_fci_sto3g_register() }
+    if fn_name == "qfi_sql" {
+        let n_atoms = to_int(a0)
+        return _qfi_sql_register(n_atoms)
+    }
+    if fn_name == "qfi_ghz" {
+        let n_atoms = to_int(a0)
+        return _qfi_ghz_register(n_atoms)
+    }
+    if fn_name == "shadow_pauli_var_bound" {
+        let pauli_weight = to_int(a0)
+        return _shadow_pauli_var_bound_register(pauli_weight)
+    }
+    if fn_name == "shadow_clifford_var_bound" {
+        let n_qubits = to_int(a0)
+        return _shadow_clifford_var_bound_register(n_qubits)
+    }
+    // RFC 045 qmirror PR-D — register mirror of verify_cli dispatch (#663).
+    if fn_name == "page_curve_entropy_peak" {
+        if argc < 2 { return _NOCALC_F_REGISTER }
+        let dim_subsystem_a = to_int(a0)
+        let dim_subsystem_b = to_int(a1)
+        return _page_curve_entropy_peak_register(dim_subsystem_a, dim_subsystem_b)
+    }
+    if fn_name == "qdrift_error_bound" {
+        if argc < 2 { return _NOCALC_F_REGISTER }
+        let big_n_steps = to_int(a1)
+        return _qdrift_error_bound_register(a0, big_n_steps)
+    }
+    // RFC 045 qmirror PR-E — register mirror of verify_cli dispatch (#667).
+    if fn_name == "sym_shadow_var_bound" {
+        if argc < 2 { return _NOCALC_F_REGISTER }
+        let num_paulis = to_int(a0)
+        let pauli_locality = to_int(a1)
+        return _sym_shadow_var_bound_register(num_paulis, pauli_locality)
+    }
+    if fn_name == "overlap_vqe_h2_shift_ha" { return _overlap_vqe_h2_shift_ha_register() }
+    if fn_name == "rpe_heisenberg_sigma" {
+        if argc < 2 { return _NOCALC_F_REGISTER }
+        let k_gens = to_int(a0)
+        let m_per_k = to_int(a1)
+        return _rpe_heisenberg_sigma_register(k_gens, m_per_k)
+    }
+    if fn_name == "mirror_bench_hog_asymptote" { return _mirror_bench_hog_asymptote_register() }
     return _NOCALC_F_REGISTER
 }
 
@@ -802,6 +1036,15 @@ fn _is_float_fn_register(fn_name: string) -> bool {
         || fn_name == "chsh_tsirelson" || fn_name == "hardy_bound"
         || fn_name == "mabk_quantum_max"
         || fn_name == "pt_doily_quantum_win" || fn_name == "pt_doily_classical_bound"
+        || fn_name == "cdr_perfect_mitigation" || fn_name == "wigner_stabilizer_sn"
+        || fn_name == "vqe_h2_fci_sto3g"
+        || fn_name == "qfi_sql" || fn_name == "qfi_ghz"
+        || fn_name == "shadow_pauli_var_bound" || fn_name == "shadow_clifford_var_bound"
+        || fn_name == "page_curve_entropy_peak" || fn_name == "qdrift_error_bound"
+        || fn_name == "sym_shadow_var_bound"
+        || fn_name == "overlap_vqe_h2_shift_ha"
+        || fn_name == "rpe_heisenberg_sigma"
+        || fn_name == "mirror_bench_hog_asymptote"
 }
 
 // is fn_name a 0-arg closed-form constant? Mirrors verify_cli::_is_zero_arg_float_fn.
@@ -811,6 +1054,9 @@ fn _is_zero_arg_float_fn_register(fn_name: string) -> bool {
     return fn_name == "chsh_tsirelson"
         || fn_name == "pt_doily_quantum_win"
         || fn_name == "pt_doily_classical_bound"
+        || fn_name == "vqe_h2_fci_sto3g"
+        || fn_name == "overlap_vqe_h2_shift_ha"
+        || fn_name == "mirror_bench_hog_asymptote"
 }
 
 // _fstr_register — float → string for verdict echo / node text.
