@@ -6953,10 +6953,25 @@ fn gen2_enum_decl(node) {
     if _has_payload {
         parts.push("// @payload: enum " + name + " carries single-field payload variants — runtime form is HexaVal array [tag, payload]\n")
     }
+    // PR-2.1 (enum-to-string-codegen-emit RFC, stack PR-2/3, 2026-05-24):
+    // single-enum TAG_ENUM emit. Scoped strictly to `Direction` so the
+    // migration surface is one enum — every other enum still emits the
+    // legacy `hexa_int(N)` form and routes through the TAG_INT path
+    // (zero regression). Only unit-variant (no payload) variants migrate;
+    // a payload-bearing Direction would keep the array form (defensive —
+    // the test enum has none). The display literal "<Name>::<Variant>" is
+    // read directly by the now-live _hexa_to_string_rec TAG_ENUM branch,
+    // closing `to_string(Direction::X)`. PR-2.2 widens the gate to all
+    // unit-variant enums; PR-3 swaps the renderer to __enum_<Name>_names[].
+    let _enum_tag_migrate = (name == "Direction") && (!_has_payload)
     let mut i = 0
     while i < vc {
         let v = node.variants[i]
-        parts.push("#define " + name + "_" + v.name + " hexa_int(" + to_string(i) + ")\n")
+        if _enum_tag_migrate {
+            parts.push("#define " + name + "_" + v.name + " hexa_enum_str(\"" + name + "::" + v.name + "\")\n")
+        } else {
+            parts.push("#define " + name + "_" + v.name + " hexa_int(" + to_string(i) + ")\n")
+        }
         i = i + 1
     }
     // (b) variant names emit — additive metadata (RFC enum-to-string-codegen-emit P2,
