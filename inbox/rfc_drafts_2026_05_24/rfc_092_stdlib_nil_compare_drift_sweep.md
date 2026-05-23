@@ -1,7 +1,7 @@
 ---
 rfc: 092
 title: stdlib nil-compare drift sweep — cycle 13 #618 carry-forward
-status: in-flight (B1 LANDED · B2-B5 pending)
+status: in-flight (B1 LANDED → B1+B2 LANDED · B3-B5 pending)
 priority: medium
 filed: 2026-05-24
 filed_by: claude-code worktree agent-aa65e9c131586e0bf
@@ -98,7 +98,8 @@ PR #618 + inbox/notes/2026-05-24-stdlib-fs-nil-parser-reject-drift.md 에서
 | batch | files | hits | 예상 LoC delta | status |
 |---|---|---:|---:|---|
 | B1 | `self/stdlib/fs.hexa` (남은 5건 잔존분) | 5 | ~10 | **LANDED 2026-05-24 — `fix/rfc-092-b1-fs-nil-drift-batch-2026-05-24` (#618 OPEN supersede)** |
-| B2 | `compiler/link/incr_cache.hexa` + `stdlib/net/{http_request,http_response,concurrent_serve}.hexa` | 8 | ~16 | pending |
+| B2 | `compiler/link/incr_cache.hexa` | 4 | ~8 | **LANDED 2026-05-24 — `fix/rfc-092-b2-incr-cache-drift-2026-05-24`** |
+| B2b | `stdlib/net/{http_request,http_response,concurrent_serve}.hexa` | 4 | ~8 | pending (B2 narrowed scope spillover) |
 | B3 | `self/runtime/arena_pure.hexa` + `self/test_arena_pure.hexa` | 6 | ~12 | pending |
 | B4 | `self/ml/{lora_serve,eval_harness,distributed_train}.hexa` | 14 | ~28 | pending |
 | B5 | `self/serve/{serve_alm,serve}.hexa` | 20 | ~40 | pending |
