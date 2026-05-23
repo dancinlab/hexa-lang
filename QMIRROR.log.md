@@ -2,6 +2,17 @@
 
 Append-only history sister of `QMIRROR.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
+## 2026-05-24 — cycle 17 — PR-E atom register batch (register mirror + n6 sync + ATLAS_F_NODES + milestone 5/5 close — QMIRROR 100% 🛸🛸🛸🛸🛸)
+
+- [x] PR-E Support — atlas_cli register-arm mirror 4 atom (`_sym_shadow_var_bound_register` · `_overlap_vqe_h2_shift_ha_register` · `_rpe_heisenberg_sigma_register` · `_mirror_bench_hog_asymptote_register`), verify_cli (#667) VERBATIM port
+- [x] `_recompute_float_register` dispatch table 확장 4 atom (sym_shadow_var_bound · overlap_vqe_h2_shift_ha · rpe_heisenberg_sigma · mirror_bench_hog_asymptote) — 2-arg branch with argc<2 guard (sym_shadow · rpe) + 0-arg constant (overlap · mirror)
+- [x] `_is_float_fn_register` 화이트리스트 4 atom 추가
+- [x] `_is_zero_arg_float_fn_register` overlap_vqe_h2_shift_ha + mirror_bench_hog_asymptote 추가 (0-arg)
+- [x] n6/atlas.n6 sync — 4 atom append (`@F verified-overlap_vqe_h2_shift_ha-num` = 0.7151043390810812 · `@F verified-mirror_bench_hog_asymptote-num` = 0.8465735902799727 · `@F verified-sym_shadow_var_bound-3-2-num` = 240.0 · `@F verified-rpe_heisenberg_sigma-7-8-num` = 0.005524271728019902)
+- [x] compiler/atlas/by_kind/f.gen.hexa ATLAS_F_NODES 확장 — 17 → 21 atom (PR-E 4 추가)
+- [x] QMIRROR.md PR-E milestone `- [x]` flip — **milestone 5/5 close — QMIRROR 100% 🛸🛸🛸🛸🛸** (▓▓▓▓▓ 100%)
+
+
 ## 2026-05-24 — cycle 16 — PR-D atom register batch (register mirror + n6 sync + ATLAS_F_NODES + milestone 4/5 close)
 
 - [x] PR-D Dynamics — atlas_cli register-arm mirror 2 atom (`_page_curve_entropy_peak_register` · `_qdrift_error_bound_register`), verify_cli (#663) VERBATIM port
