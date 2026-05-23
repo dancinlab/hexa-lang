@@ -2231,7 +2231,7 @@ HexaVal hexa_ptr_addr(HexaVal v) {
 //
 // Purpose: expose dlopen+dlsym+extern_call as HexaVal builtins so the
 // self-host interpreter (self/interpreter.hexa) can dispatch @link externs
-// at runtime without going through codegen_c2.hexa's static __ffi_sym_*
+// at runtime without going through codegen.hexa's static __ffi_sym_*
 // registration. The native (compile-to-native) path already works via
 // codegen; this reopens the same pipeline for `./hexa run`.
 //
@@ -2729,7 +2729,7 @@ HexaVal hexa_bytes_to_str_raw(HexaVal arr);
 static HexaVal bytes_to_str_raw;
 
 // 2026-05-12 (RFC 030 sibling fix): farr_* primitive shims. The
-// codegen_c2.hexa entries route `farr_zeros / get / set / len / free`
+// codegen.hexa entries route `farr_zeros / get / set / len / free`
 // to their hexa_farr_* C impls (added recently), but the currently
 // shipped hexa_v2 binary predates those entries, so transpiles of the
 // interpreter dispatch handlers (hexa_full.hexa:~10700) emit bare
@@ -2776,7 +2776,7 @@ static HexaVal farr_int_free;
 // Mirror the farr_* pattern: bare static carriers so transpiled C
 // resolves `hexa_call*(safetensors_mmap_*, ...)` to direct calls into
 // the hexa_safetensors_mmap_* impls below. fn_shim registration in
-// _hexa_init_fn_shims; AOT codegen entries in codegen_c2.hexa.
+// _hexa_init_fn_shims; AOT codegen entries in codegen.hexa.
 HexaVal hexa_safetensors_mmap_open(HexaVal path_v);
 HexaVal hexa_safetensors_mmap_header(HexaVal h_v);
 HexaVal hexa_safetensors_mmap_data_offset(HexaVal h_v);
@@ -2859,7 +2859,7 @@ static inline HexaVal farr_matmul(HexaVal a, HexaVal ar, HexaVal ac,
     return hexa_farr_matmul(a, ar, ac, b, bc);
 }
 // RFC 050 L1 slice 1 — bare-wrapper seam for the forge dispatcher.
-// codegen_c2.hexa registers `forge_dispatch_matmul` as a 5-arg builtin
+// codegen.hexa registers `forge_dispatch_matmul` as a 5-arg builtin
 // lowering to hexa_forge_dispatch_matmul, but the deployed hexa_v2
 // bootstrap (not yet rebuilt from that SSOT codegen) emits the bare
 // `forge_dispatch_matmul(...)` call literally — same ≥5-arg direct-C
@@ -2941,7 +2941,7 @@ HexaVal hexa_adamw_step(HexaVal p_v, HexaVal g_v, HexaVal m_v, HexaVal v_v,
 // function). The user.c TU sees only runtime.h, so these MUST have
 // external linkage + a runtime.h decl (no codegen branch required —
 // same fallback contract RFC 038 farr_uccsd_apply relies on, made
-// link-clean for the multi-TU runtime.h split). The codegen_c2.hexa
+// link-clean for the multi-TU runtime.h split). The codegen.hexa
 // branches are additionally provided so a future `hexa cc --regen`
 // emits the direct typed `hexa_ad_*` call; both paths are valid.
 HexaVal ad_tape_begin;
@@ -4735,7 +4735,7 @@ HexaVal hexa_from_char_code(HexaVal n) {
 // chr(N) → byte-level 1-char string. Distinct from hexa_from_char_code
 // (UTF-8 codepoint encoder): chr_byte masks N to a single byte (N & 0xFF)
 // and returns a 1-byte string. Used by URL-decode / raw-byte builders
-// (the codegen mapping `chr` → hexa_chr_byte at codegen_c2.hexa L4452
+// (the codegen mapping `chr` → hexa_chr_byte at codegen.hexa L4452
 // has existed without a runtime impl — the new tier-2 transpiler emits
 // it from self/main.hexa::cmd_url_decode, exposing the gap).
 HexaVal hexa_chr_byte(HexaVal n) {
@@ -6719,7 +6719,7 @@ HexaVal hexa_farr_uccsd_apply(HexaVal re_v, HexaVal im_v,
 //  without per-byte boxing — typed copies land in `farr` packed
 //  buffers (for f32/f64) or in raw int arrays (for integral dtypes).
 //
-//  Builtins (registered via fn_shim + codegen_c2.hexa):
+//  Builtins (registered via fn_shim + codegen.hexa):
 //      safetensors_mmap_open(path)              -> int handle  (-1 on err)
 //      safetensors_mmap_header(handle)          -> string (raw JSON header)
 //      safetensors_mmap_data_offset(handle)     -> int    (8 + header_len)
@@ -10156,7 +10156,7 @@ HexaVal hexa_time_ms(void) {
 // (`time_now_ms`, `__builtin_time_now_ms`, etc.). The hexa-side wrappers
 // in self/std_time.hexa get `extern` forward declarations in the generated
 // C; without these symbols defined, link fails. Cheaper than the codegen
-// intercept (which also exists in codegen_c2.hexa) — no hexa_v2 rebuild
+// intercept (which also exists in codegen.hexa) — no hexa_v2 rebuild
 // needed; just runtime.c recompile (every wilson build picks it up).
 // Filed at incoming/patches/wilson-needs-time-now-ms-builtin.md.
 // Wilson 2026-05-13 — TAG_FN globals for std_time.hexa wrapper names.
@@ -10206,7 +10206,7 @@ HexaVal hexa_dict_keys(HexaVal m) {
 }
 
 // Step 5 #4 (2026-05-22): __fd_write_bytes(fd, s) — POSIX write(2) thin shim.
-// Companion to the codegen_c2.hexa inline-emit handler. The SSOT codegen
+// Companion to the codegen.hexa inline-emit handler. The SSOT codegen
 // branch returns `hexa_int((int64_t)write(...))` inline; the shipped
 // hexa_v2 binary still emits this builtin as a hexa_call2() reference
 // (binary regen pending — Phase C.2 merge gap, see self/main.hexa
@@ -11419,7 +11419,7 @@ static void _hexa_init_pty_fn_shims(void);    // fwd decl — body in native/pty
 static void _hexa_init_fn_shims(void) {
     if (_fn_shims_ready) return;
     // bootstrap free-fn shims (join, char_code, chr, bit_or)
-    // (`split` was retired 2026-04-21 — codegen_c2.hexa now emits hexa_str_split directly.)
+    // (`split` was retired 2026-04-21 — codegen.hexa now emits hexa_str_split directly.)
     join       = hexa_fn_new((void*)hexa_str_join,        2);
     char_code  = hexa_fn_new((void*)hexa_char_code,       2);
     chr        = hexa_fn_new((void*)hexa_from_char_code,   1);
@@ -11549,7 +11549,7 @@ static void _hexa_init_fn_shims(void) {
     // 4-arg hexa_callN ceiling — same pattern as farr_pauli_exp_inplace).
     ham_free                        = hexa_fn_new((void*)hexa_ham_free,                        1);
     ansatz_free                     = hexa_fn_new((void*)hexa_ansatz_free,                     1);
-    // RFC 037 (2026-05-13): batch kernel routes via codegen_c2.hexa special
+    // RFC 037 (2026-05-13): batch kernel routes via codegen.hexa special
     // 9-arg branch to hexa_farr_pauli_expectation_batch; carrier kept for
     // function-as-value uses.
     farr_pauli_expectation_batch    = hexa_fn_new((void*)hexa_farr_pauli_expectation_batch,    9);
@@ -11565,7 +11565,7 @@ static void _hexa_init_fn_shims(void) {
     hx_exec_capture = hexa_fn_new((void*)_w_exec_capture, 1);
     // hxa-004 ext: bare `push(arr, v)` emitted by legacy hexa_v2 as hexa_call2
     hx_push         = hexa_fn_new((void*)_w_push,         2);
-    // Cycle 55 recovery — stdlib/fs builtins. codegen_c2.hexa maps the
+    // Cycle 55 recovery — stdlib/fs builtins. codegen.hexa maps the
     // bare names `fs_append_atomic/fs_stat/fs_rotate_if_over/fs_mkdir_p`
     // to rt_fs_* C names, but the bootstrap hexa_v2 binary hasn't been
     // re-deployed with that mapping. Bridge via bt73-style TAG_FN.
@@ -11728,7 +11728,7 @@ static void _hexa_init_fn_shims(void) {
 /* ═══════════════════════════════════════════════════════════════════
  * B20 / roadmap 55 Phase 1 — deterministic FP control-word init.
  *
- * Exposes void hexa_fp_init(void). codegen_c2.hexa emits a call to it
+ * Exposes void hexa_fp_init(void). codegen.hexa emits a call to it
  * as the first statement of generated main(). Implementation in
  * self/native/fp_init.c normalizes MXCSR (x86_64) or FPCR (aarch64)
  * to IEEE-default behavior (no FTZ/DAZ/FZ, round-to-nearest-even) so
@@ -11798,7 +11798,7 @@ static void _hexa_init_fn_shims(void) {
  * Source: self/native/term_ffi.c — 12 raw POSIX symbols (no HexaVal).
  * Wrappers below bridge to HexaVal for hexa source dispatch.
  *
- * Builtin names exposed to hexa (codegen_c2.hexa + env.hexa + hexa_full.hexa):
+ * Builtin names exposed to hexa (codegen.hexa + env.hexa + hexa_full.hexa):
  *   term_raw_enter()         -> Int (rc 0/-1)
  *   term_raw_restore()       -> Int (rc 0/-1)
  *   term_winsize_rows()      -> Int (rows or -1)
@@ -12451,9 +12451,9 @@ HexaVal exec_stream_write(HexaVal handle, HexaVal data) { return hexa_exec_strea
 HexaVal exec_stream_close_stdin(HexaVal handle) { return hexa_exec_stream_close_stdin_impl(handle); }
 
 /* Path A (A′) builtin shims — is_alpha/is_alphanumeric have no runtime
- * symbol (legacy codegen_c2 inlines them as C exprs). The native
+ * symbol (legacy codegen inlines them as C exprs). The native
  * compiler codegen backend calls them as functions, so provide additive
- * linkable wrappers mirroring codegen_c2:3527/3535 exactly. Pure-
+ * linkable wrappers mirroring codegen:3527/3535 exactly. Pure-
  * additive: legacy C path inlines and never calls these → no collision. */
 HexaVal hexa_is_alpha(HexaVal a) {
     return hexa_bool((HX_IS_STR(a) && HX_STR(a) && hxlcl_isalpha((unsigned char)HX_STR(a)[0]))
@@ -12495,7 +12495,7 @@ HexaVal hexa_is_alphanumeric(HexaVal a) {
  * hexa_forge_dispatch_matmul — RFC 050 L1 slice 1.
  *
  * The hexa-callable wrapper around the forge dispatcher. flame's NN
- * stdlib calls the `forge_dispatch_matmul` builtin (codegen_c2.hexa
+ * stdlib calls the `forge_dispatch_matmul` builtin (codegen.hexa
  * lowers it here) so its FP64 GPU matmul routes through the RFC 050
  * dispatch contract instead of calling hexa_farr_matmul directly.
  *
