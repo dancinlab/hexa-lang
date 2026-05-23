@@ -5434,15 +5434,20 @@ fn gen2_expr(node) {
                 let a = gen2_expr(node.args[0])
                 return "(HX_IS_STR(" + a + ")?hexa_str_parse_int(" + a + "):hexa_int((int64_t)__hx_to_double(" + a + ")))"
             }
+            // min/max — mixed int/float promotion (2026-05-24 FIX).
+            // Prior emit cast both args to int64_t, so `min(2, 1.5)` truncated
+            // 1.5 to 1 (got=1, want=1.5). New rule mirrors comptime_eval at
+            // L8013-8024: both args TAG_INT keeps fast int64 path; otherwise
+            // promote both to double and return hexa_float.
             if name == "min" {
                 let a = gen2_expr(node.args[0])
                 let b = gen2_expr(node.args[1])
-                return "({ int64_t __a = hexa_as_num(" + a + "); int64_t __b = hexa_as_num(" + b + "); hexa_int(__a < __b ? __a : __b); })"
+                return "({ HexaVal __ha = (" + a + "), __hb = (" + b + "); (HX_IS_INT(__ha) && HX_IS_INT(__hb)) ? ({ int64_t __a = HX_INT(__ha); int64_t __b = HX_INT(__hb); hexa_int(__a < __b ? __a : __b); }) : ({ double __fa = __hx_to_double(__ha); double __fb = __hx_to_double(__hb); hexa_float(__fa < __fb ? __fa : __fb); }); })"
             }
             if name == "max" {
                 let a = gen2_expr(node.args[0])
                 let b = gen2_expr(node.args[1])
-                return "({ int64_t __a = hexa_as_num(" + a + "); int64_t __b = hexa_as_num(" + b + "); hexa_int(__a > __b ? __a : __b); })"
+                return "({ HexaVal __ha = (" + a + "), __hb = (" + b + "); (HX_IS_INT(__ha) && HX_IS_INT(__hb)) ? ({ int64_t __a = HX_INT(__ha); int64_t __b = HX_INT(__hb); hexa_int(__a > __b ? __a : __b); }) : ({ double __fa = __hx_to_double(__ha); double __fb = __hx_to_double(__hb); hexa_float(__fa > __fb ? __fa : __fb); }); })"
             }
             // M1 full · file Step 5: direct rt_file_* emit (shims removed).
             if name == "read_file" {
@@ -7949,8 +7954,17 @@ fn comptime_eval(node) {
         return comptime_eval(last.left)
     }
     // Call(name, args) — fold a small whitelist of pure builtins.
+    //
+    // 2026-05-24 FIX: parser.hexa:3309-3320 emits `Call` with `name=""` and
+    // the callee in `left` (must be `Ident`). Reading `node.name` always got
+    // "", so NO BuiltinCall ever folded at codegen time — int/int min/max
+    // happened to match runtime by coincidence, but `min(2, 1.5)` exposed
+    // the latent gap (runtime emit at gen2_expr L5437 cast both to int64).
+    // Mirror gen2_expr's Call path (L4907-4910): read `node.left.name`.
     if k == "Call" {
-        let fname = node.name
+        if type_of(node.left) == "string" { return "" }
+        if node.left.kind != "Ident" { return "" }
+        let fname = node.left.name
         if type_of(node.args) == "string" { return "" }
         let nargs = len(node.args)
         // Single-arg numeric builtins.
