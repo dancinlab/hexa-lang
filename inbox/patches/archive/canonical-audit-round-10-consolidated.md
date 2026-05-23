@@ -1,5 +1,19 @@
 # canonical-deviation audit round 10 — consolidated (4 axes + P0 CRITICAL)
 
+> **ARCHIVED (2026-05-24) — ALL round-10 actionable items CLOSED.** Re-verified
+> the P0 (200-char identifier truncation) **does NOT reproduce** against HEAD
+> (transpile → C-emit → clang → run at 206 / 207 / 300 / 500 / 1000-char idents:
+> exactly 1 distinct C symbol per ident, full length preserved at decl/fwd-decl/use,
+> binary runs and prints the correct value). Root cause class (fixed-size codegen
+> buffer) **does not exist** — `_hexa_mangle_ident` (`self/codegen.hexa:229`) returns
+> the full name unchanged (only `u_`-prefixes reserved names), and the lexer ident
+> path (`self/lexer.hexa:204-215`) uses a dynamic `word_parts` array + `join`, not a
+> scratch buffer. Closed by the codegen-rename + regen cycle and documented in PR #442;
+> P1 `@derive` cluster landed (#436); r10-15g `@cold`/`@noinline` placement landed (#440);
+> r10-8 trailing-comma VERIFIED-CLOSED. No code fix needed — moving to `archive/` to stop
+> cycle re-triage as a live P0. Remaining r10 entries (r10-15b/c/d attr-whitelist,
+> r10-18d error-snippet) are intentional cycle-8+ design candidates, not P0/P1.
+
 > **Status (2026-05-23):** PROBE r10 surfaces **1 🚨 P0 CRITICAL silent-failure** (200-char identifier — parser PASS but codegen TRUNCATES decl-vs-use, yielding a broken binary), **2 P1** (attribute hygiene — `@derive(D) @derive(D)` rejected; `@derive` on `fn` emits generic `LBrace` error instead of a semantic message), and a cluster of small DX gaps. Two FIX-SURGICAL clusters are in-flight this cycle (long-ident codegen, `@derive` attribute cluster) — separate PRs. This doc is the **consolidated round-10 inbox**: axis tables + priority queue + structural-notes mirror.
 
 PROBE round 10 결과 (24 probes, 4 axes: lexer edges · whitespace/layout · error recovery & diagnostics · attribute hygiene). FIX-SURGICAL 항목은 별도 PR — 본 문서는 **language-surface audit** consolidated 기록.
