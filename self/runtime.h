@@ -355,6 +355,8 @@ HexaVal hexa_poly1305_onetimeauth(HexaVal key, HexaVal msg);         /* native/c
 HexaVal hexa_sha256_bytes(HexaVal data);                             /* native/crypto_sodium.c:101 */
 HexaVal hexa_sha256(HexaVal s_val);                                  /* native/exec_argv_sha256.c:290 */
 HexaVal hexa_sha256_file(HexaVal path_val);                          /* native/exec_argv_sha256.c:303 */
+HexaVal hexa_sha1(HexaVal s_val);                                    /* native/exec_argv_sha256.c — 40-char lowercase hex (RFC 6455 WS handshake) */
+HexaVal hexa_sha1_bytes(HexaVal s_val);                              /* native/exec_argv_sha256.c — raw 20-byte digest (binary-safe) */
 HexaVal hexa_ed25519_verify(HexaVal pub, HexaVal msg, HexaVal sig);  /* native/crypto_sodium.c:160 */
 HexaVal hexa_sha512(HexaVal data);                                   /* native/crypto_sodium.c:81 */
 HexaVal hexa_ed25519_sign(HexaVal priv, HexaVal msg);                /* native/crypto_sodium.c:135 */
@@ -556,6 +558,8 @@ extern HexaVal hx_pipe_alive;                                                   
 extern HexaVal hx_exec_argv;                                                       /* native/exec_argv_sha256.c:331 */
 extern HexaVal hx_exec_argv_with_status;                                           /* native/exec_argv_sha256.c:332 */
 extern HexaVal hx_sha256;                                                          /* native/exec_argv_sha256.c (init shim) */
+extern HexaVal sha1;                                                               /* runtime.c — RFC 6455 WS handshake bare-ident bridge (regen-gated) */
+extern HexaVal sha1_bytes;                                                         /* runtime.c — raw 20-byte digest bare-ident bridge (regen-gated) */
 HexaVal hexa_farr_apply_single_farr(HexaVal re_v, HexaVal im_v,
                                     HexaVal gre_h, HexaVal gim_h,
                                     HexaVal target_v, HexaVal nq_v);               /* runtime.c:6924 (proto), def 8512 */

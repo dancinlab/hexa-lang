@@ -5566,6 +5566,12 @@ fn gen2_expr(node) {
                 // the `exec("shasum")` shell-out path in stdlib/cert/meta2_validator.hexa.
                 if name == "sha256"         { return "hexa_sha256(" + a0 + ")" }
                 if name == "sha256_file"    { return "hexa_sha256_file(" + a0 + ")" }
+                // RFC 6455 WebSocket handshake (2026-05-23) — SHA-1 sibling.
+                // sha1 → 40-char lowercase hex; sha1_bytes → raw 20-byte
+                // binary-safe digest for base64_encode(sha1_bytes(key+magic)).
+                // FIPS 180-4 reference impl in self/native/exec_argv_sha256.c.
+                if name == "sha1"           { return "hexa_sha1(" + a0 + ")" }
+                if name == "sha1_bytes"     { return "hexa_sha1_bytes(" + a0 + ")" }
                 // G4-ISO8601 2026-05-06 (.roadmap.stdlib.G4) — format/parse mirrors
                 // of utc_iso_now (runtime.c hexa_utc_iso_format / hexa_utc_iso_parse).
                 if name == "utc_iso_format" { return "hexa_utc_iso_format(" + a0 + ")" }
