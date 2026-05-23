@@ -1265,6 +1265,17 @@ HexaVal hexa_float(double f) { return (HexaVal){.tag=TAG_FLOAT, .f=f}; }
 HexaVal hexa_bool(int b) { return (HexaVal){.tag=TAG_BOOL, .b=b}; }
 HexaVal hexa_void() { return (HexaVal){.tag=TAG_VOID}; }
 
+// PR-2.1 (enum-to-string-codegen-emit RFC, stack PR-2/3, 2026-05-24): live
+// constructor for a single migrated unit-variant enum (Direction). `display`
+// is the codegen-emitted "<Type>::<Variant>" string literal (e.g.
+// "Direction::Left"); it is stored in the `.s` slot so `_hexa_to_string_rec`
+// renders it directly and `hexa_eq` compares it. Pointer is a read-only
+// static literal — never freed (matches the wider runtime no-free contract).
+// PR-2.2 will widen the codegen gate to all unit-variant enums; PR-3 will
+// switch the renderer to the `__enum_<Name>_names[]` table (#555) once the
+// per-variant (type_id, variant_idx) carrier lands.
+HexaVal hexa_enum_str(const char* display) { return (HexaVal){.tag=TAG_ENUM, .s=(char*)display}; }
+
 // T32: unwrap a HexaVal (possibly VALSTRUCT-wrapped by the interpreter) into
 // a raw C double. The prior inline `v.tag==TAG_FLOAT?v.f:(double)v.i` read
 // only the outer tag, so interpreter values (which carry TAG_VALSTRUCT with
@@ -5879,19 +5890,16 @@ static HexaVal _hexa_to_string_rec(HexaVal v, int depth) {
 #endif
         }
         case TAG_ENUM: {
-            // PR-2.0 (enum-to-string-codegen-emit RFC, stack PR-2/3,
-            // 2026-05-24): defensive branch for the new TAG_ENUM slot.
-            // Currently DEAD CODE — no emitter produces TAG_ENUM yet;
-            // gen2_enum_decl still emits `#define <Name>_<Variant>
-            // hexa_int(N)`, which routes through the TAG_INT case above.
-            // PR-2.1 will migrate a single enum (Direction) to emit a
-            // TAG_ENUM-bearing HexaVal carrying (type_id, variant_idx);
-            // PR-3 will then read __enum_<Name>_names[] (already emitted
-            // additively in PR-1 #555 under #ifdef HEXA_ENUM_NAMES_TABLE)
-            // and render "<Type>::<Variant>". Until those layers land,
-            // this case is unreachable; the fallback string preserves
-            // tag visibility for any defensive synthesis path.
-            return hexa_str("<enum>");
+            // PR-2.1 (enum-to-string-codegen-emit RFC, stack PR-2/3,
+            // 2026-05-24): LIVE branch. A single migrated unit-variant enum
+            // (Direction) now emits hexa_enum_str("<Type>::<Variant>") at
+            // its `#define` site, storing the display literal in `.s`.
+            // Render it directly so `to_string(Direction::Left)` yields
+            // "Direction::Left" instead of the prior "0" (TAG_INT path).
+            // `.s` is a static string literal from codegen; NULL only on a
+            // malformed value — fall back to "<enum>" defensively.
+            // PR-3 will switch to the __enum_<Name>_names[] table (#555).
+            return hexa_str(HX_STR(v) ? HX_STR(v) : "<enum>");
         }
         case TAG_MAP: {
             if (depth >= 8) return hexa_str("{...}");
@@ -6226,16 +6234,16 @@ HexaVal hexa_eq(HexaVal a, HexaVal b) {
                     ? (HX_CLO_PTR(a) == HX_CLO_PTR(b))
                     : (a.clo_ptr == b.clo_ptr));
         case TAG_ENUM: {
-            // PR-2.0 (enum-to-string-codegen-emit RFC, stack PR-2/3,
-            // 2026-05-24): defensive branch for the new TAG_ENUM slot.
-            // DEAD CODE today — gen2_enum_decl still emits hexa_int(N),
-            // so two enum values compare equal through the TAG_INT case
-            // above (HX_INT(a) == HX_INT(b)). When PR-2.1 migrates an
-            // enum to emit TAG_ENUM-bearing values, this branch will
-            // compare (type_id, variant_idx) — until then a conservative
-            // pointer-eq via HX_INT keeps the slot's contract consistent
-            // with the eventual real-compare semantics.
-            return hexa_bool(HX_INT(a) == HX_INT(b));
+            // PR-2.1 (enum-to-string-codegen-emit RFC, stack PR-2/3,
+            // 2026-05-24): LIVE branch. A migrated unit-variant enum carries
+            // its "<Type>::<Variant>" display literal in `.s`; two enum
+            // values are equal iff they name the same variant. The same
+            // `#define` reuses one string literal, so the pointer-eq
+            // fast-path covers the common case; strcmp is the fallback for
+            // distinct literal copies (e.g. across translation units).
+            if (HX_STR(a) == HX_STR(b)) return hexa_bool(1);
+            if (!HX_STR(a) || !HX_STR(b)) return hexa_bool(0);
+            return hexa_bool(hxlcl_strcmp(HX_STR(a), HX_STR(b)) == 0);
         }
         default: return hexa_bool(0);
     }

@@ -101,6 +101,10 @@ HexaVal hexa_int(int64_t n);                          /* runtime.c:1231 */
 HexaVal hexa_bool(int b);                             /* runtime.c:1233 */
 HexaVal hexa_void(void);                              /* runtime.c:1234 */
 HexaVal hexa_str(const char* s);                      /* runtime.c:1346 */
+/* PR-2.1 (enum-to-string-codegen-emit, stack PR-2/3, 2026-05-24): TAG_ENUM
+ * constructor for a single migrated unit-variant enum (Direction). `display`
+ * is a codegen-emitted "<Type>::<Variant>" string literal. */
+HexaVal hexa_enum_str(const char* display);           /* runtime_core.c — TAG_ENUM */
 int     hexa_truthy(HexaVal v);                       /* runtime.c:4686 */
 HexaVal hexa_eq(HexaVal a, HexaVal b);                /* runtime.c:4785 */
 HexaVal hexa_struct_pack_map(const char* type_name, int n,
