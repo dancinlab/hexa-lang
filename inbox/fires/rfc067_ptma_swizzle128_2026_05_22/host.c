@@ -87,7 +87,7 @@ static unsigned short f32_to_f16(float f) {
     return out;
 }
 
-#define N_SHAPES 6
+#define N_SHAPES 9
 
 typedef struct {
     int M, N, K;
@@ -187,10 +187,10 @@ static int load_ptx_kernel(const char *ptx_path,
 }
 
 int main(int argc, char **argv) {
-    int shapes[N_SHAPES] = { 512, 1024, 2048, 4096, 6144, 8192 };
+    int shapes[N_SHAPES] = { 256, 384, 448, 512, 1024, 2048, 4096, 6144, 8192 };
 
     if (argc < 1 + N_SHAPES) {
-        fprintf(stderr, "usage: %s <ptx_512> <ptx_1024> <ptx_2048> <ptx_4096> <ptx_6144> <ptx_8192>\n", argv[0]);
+        fprintf(stderr, "usage: %s <ptx_256> <ptx_384> <ptx_448> <ptx_512> <ptx_1024> <ptx_2048> <ptx_4096> <ptx_6144> <ptx_8192>\n", argv[0]);
         return 2;
     }
 

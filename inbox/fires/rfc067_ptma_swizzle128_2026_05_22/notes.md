@@ -20,6 +20,48 @@ Closes: gap #2 from N200-full honest readout (bank conflicts on ldmatrix)
 All 6 shapes bit-exact (`maxabs = 0.0000`, `maxrel = 0.000000`).
 Peak ratio 0.978 at M=8192 (was 0.819 with N200-full SWIZZLE_NONE).
 
+### Extended sweep (9 shape, 2026-05-24) — adds 256/384/448
+
+Re-fired on ubu-1 (RTX 5070 sm_120, CUDA 12.9, driver 13000, runtime 12090) with
+`host.c` extended to N_SHAPES=9 (shapes = {256, 384, 448, 512, 1024, 2048, 4096,
+6144, 8192}). N200 SWIZZLE_NONE baseline was not re-measured for the 3 small
+shapes (256/384/448) — those cells left blank.
+
+| M=N=K | cuBLAS TFLOPS | hexa N201 TFLOPS | ratio  | maxabs | maxrel | CTAs   |
+|-------|---------------|------------------|--------|--------|--------|--------|
+| 256   |  4.559        |  4.481           | 0.9829 | 0.0000 | 0.0    |    16  |
+| 384   | 13.254        | 11.836           | 0.8930 | 0.0000 | 0.0    |    64  |
+| 448   | 15.830        | 15.524           | 0.9807 | 0.0000 | 0.0    |    64  |
+| 512   | 23.237        | 23.109           | 0.9945 | 0.0000 | 0.0    |    64  |
+| 1024  | 52.245        | 48.806           | 0.9342 | 0.0000 | 0.0    |   256  |
+| 2048  | 66.967        | 63.475           | 0.9479 | 0.0000 | 0.0    |  1024  |
+| 4096  | 69.685        | 67.720           | 0.9718 | 0.0000 | 0.0    |  4096  |
+| 6144  | 70.458        | 68.510           | 0.9724 | 0.0000 | 0.0    | 16384  |
+| 8192  | 70.207        | 68.614           | 0.9773 | 0.0000 | 0.0    | 16384  |
+
+**9/9 bit-exact** (`maxabs = 0.0`, `maxrel = 0.0`). Peak ratio 0.9945 @ M=512.
+
+Notes on the 3 new small shapes:
+- **M=256 → ratio 0.9829.** 16 CTAs total (4x4 tile grid, hilbert_p=4). Launch
+  + epilogue dominate; both kernels under-utilize the SM array. cuBLAS
+  median 7.36 us, hexa 7.49 us — Δ = 130 ns. Effectively noise-bound.
+- **M=384 → ratio 0.8930 (dip).** Tile grid 6x6, hilbert_p=next_pow2(6)=8 →
+  16 of 64 Hilbert d-indices land OOB (`@%phlb_oob bra $hilbert_oob_ret`).
+  CTAs launched 64, real 36 → 56% live CTA efficiency (cf. M=6144: 9216/16384
+  also = 56% but compute-bound regime hides it). Combined with K=384 = 6 outer
+  TMA iters (vs 8 at M=512), this shape sits at the worst launch-vs-compute
+  ratio in the sweep. cuBLAS at M=384 likely uses a smaller tile (32x32 or
+  64x32) that fits the 384x384 grid cleanly.
+- **M=448 → ratio 0.9807.** Tile grid 7x7 = 49 real CTAs of 64 launched (77%
+  Hilbert efficiency), K=448 = 7 outer iters. Recovers nicely vs M=384 —
+  hexa is back to within 2% of cuBLAS.
+
+Honest readout: the 384 dip confirms that Hilbert-padding loss at
+`p = next_pow2(side)` and small K_TILES_OUTER both eat into the ratio at
+non-power-of-2 shapes whose side is between 2^k and 2^(k+1). For shapes
+where `side` is itself a power of 2 (256/512/1024/...), the ratio is
+consistently >= 0.93.
+
 ## Honest readout
 
 1. **Swizzle alone is not the only change.** To use SWIZZLE_128B, the TMA box
