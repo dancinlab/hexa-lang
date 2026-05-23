@@ -2,6 +2,18 @@
 
 Append-only history sister of `STDLIB.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
+## 2026-05-24T21:30:00Z — TTR in-silico track 흡수 — 6 마일스톤 신규 등록 (1 deferred)
+
+- [x] `inbox/notes/2026-05-24-ttr-external-port-candidates.md` 리뷰 → STDLIB 도메인 흡수
+- [x] STDLIB.md `### TTR — in-silico track` 섹션 신설 — 4 tier 분류
+- [x] Tier-1 thin REST adapter 3종 등록 — pubchem-api · brenda-api · uniprot-alphafold-api (각 ~200-300 LOC)
+- [x] Tier-2 cheminformatics 2종 — rdkit-subset (★★★ active) · open-babel-subset (GPL-2 라이선스 검토 DEFERRED)
+- [x] Tier-3 docking 1종 — autodock-vina-port (★★★, ~5 kloc Apache-2)
+- [x] Tier-4 MD 1종 — openmm-core (★★, ~3-5 kloc MIT)
+- [x] AlphaFold DB API sunset 2026-06-25 risk 명시 (uniprot-alphafold-api 코멘트에 기록)
+
+밀스톤 총합 10 → 16 (1 closed · 14 open · 1 deferred). 후속 우선순위 — TTR Tier-1 (M3 즉시 사용 가능, 가장 가벼움) 부터.
+
 ## 2026-05-24T21:10:00Z — arxiv-api 포팅 (P1 #1/3 closed) — measured-oracle PASS
 
 - [x] `stdlib/research/arxiv.hexa` — `ArxivPaper` struct + `arxiv_search` · `arxiv_fetch` · `arxiv_pdf_url` · `arxiv_parse_atom`
