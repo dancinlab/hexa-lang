@@ -4591,9 +4591,18 @@ HexaVal hexa_str_char_at(HexaVal s, HexaVal idx) {
     if (!HX_IS_STR(s)) return hexa_str("");
     int64_t i = HX_INT(idx);
     int64_t n = (int64_t)HX_STRLEN(s);
+    int64_t _orig = i;
     // Python-style negative index — align interp `s[-1]` 지원 (`c` 반환).
     if (i < 0) i += n;
-    if (i < 0 || i >= n) return hexa_str("");
+    if (i < 0 || i >= n) {
+        // PROBE r12 #16: align with array OOB (throws cleanly at
+        // hexa_array_get L2003).  String previously returned silent ""
+        // which inverts the silent-failure-enforcement discipline.
+        char _buf[128];
+        snprintf(_buf, sizeof(_buf), "string[%lld] out of bounds (len %lld)", (long long)_orig, (long long)n);
+        hexa_throw(hexa_str(_buf));
+        return hexa_str("");
+    }
     char buf[2] = { HX_STR(s)[i], '\0' };
     return hexa_str(buf);
 }
