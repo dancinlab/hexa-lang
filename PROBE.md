@@ -1,8 +1,19 @@
 # PROBE — hexa canonical-deviation audit
 
+@goal: PROBE r14 next-list 23 entries 모두 closed (LANDED PR 또는 filed inbox RFC) — 식별된 canonical deviation 100% 처리. 종료 후 r15 sweep 진입.
+
 표준(Go·Rust·Swift·C#·Python) 모델 대비 hexa의 의미론 이탈을 체계적으로
 발굴해 (a) 표면 fix 가능 건은 직접 수정, (b) breaking/design-level 건은
 inbox 패치로 제출.
+
+## 진행 (milestones)
+
+- [x] r14 cycle 1-13 surgical+RFC fan-out 완주 (~64 PR 생성 · CHANGELOG/PROBE.log batch sync [#597, #620])
+- [x] r14 INBOX 23 entries 모두 closed (LANDED PR 14건 + filed inbox RFC 9건, PROBE.log r14 next-list mass-flip [#620])
+- [x] PROBE.log r14 next-list `- [ ]` 23개 → `- [x]` 모두 flip (LANDED PR# 또는 RFC# 표기, [#620])
+- [x] PROBE.md coverage table 최종 업데이트 (r14 cycle 7-11 + cycle 13 행 추가, 🔵 inflight → r15-sweep 후보 교체)
+- [ ] OPEN PR ~36 머지 정리 (Phase 1 runtime · Phase 2 file-hotspot 1개씩 rebase · Phase 3 regen batch — admin merge는 user-only 권장)
+- [ ] r15 sweep 진입 (depletion criterion · 새 deviation 모두 surface, count 무관)
 
 ## 방법
 
