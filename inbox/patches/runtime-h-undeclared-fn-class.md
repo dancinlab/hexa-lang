@@ -1,6 +1,6 @@
 # runtime.h declaration debt — `defined-but-undeclared` class
 
-**Status:** 🟠 FILED / OPEN (2026-05-23)
+**Status:** ✅ codegen-called subset FIXED (2026-05-23) — a re-audit against current `origin/main` shows the *codegen-referenced* gap collapsed from the original 102 to **7** (intervening per-fn PRs + term_isatty fix #401 cleared the rest). All 7 now declared in `self/runtime.h`: `hexa_base64_decode` · `hexa_host_ffi_call_6` · `hexa_is_type` · `hexa_log2` · `hexa_map_count` · `hexa_str_concat` · `hexa_str_eq`. The remaining ~73 defined-but-undeclared fns are NOT referenced by codegen, so they are not active clang landmines — left as low-priority debt (resolution option 1 "automate decl-gen" still stands for drift-prevention). Verified: `clang -fsyntax-only` of a TU including the patched `runtime.h` passes.
 **Reporter:** anima session — hexa canonical-deviation audit
 **Severity:** high — every entry is a clang hard-error waiting on the
 first user program that exercises the feature (ISO C99+ rejects

@@ -1353,4 +1353,16 @@ HexaVal hexa_u_floor(HexaVal a, HexaVal b); /* runtime_core.c:6364 */
 HexaVal hexa_utc_iso_format(HexaVal epoch_v); /* runtime.c:10313 */
 HexaVal hexa_utc_iso_parse(HexaVal s_v); /* runtime.c:10326 */
 
+/* codegen-called wrappers that were defined-but-undeclared (inbox patch
+ * runtime-h-undeclared-fn-class). User-code TU includes runtime.h before
+ * runtime.c, so a missing forward-decl is a clang C99 implicit-declaration
+ * hard-error the moment codegen lowers the matching feature. */
+HexaVal hexa_base64_decode(HexaVal s);                  /* runtime.c:11317 */
+HexaVal hexa_host_ffi_call_6(HexaVal fn_ptr, HexaVal nargs_v, HexaVal float_mask, HexaVal ret_kind, HexaVal a0, HexaVal a1, HexaVal a2, HexaVal a3, HexaVal a4, HexaVal a5); /* runtime.c:2327 */
+int     hexa_is_type(HexaVal v, const char* type_name); /* runtime_core.c:3046 */
+HexaVal hexa_log2(HexaVal v);                           /* runtime_core.c:6484 */
+HexaVal hexa_map_count(HexaVal m, HexaVal pred);        /* runtime_core.c:2866 */
+HexaVal hexa_str_concat(HexaVal a, HexaVal b);          /* runtime_core.c:4321 */
+int     hexa_str_eq(HexaVal a, HexaVal b);              /* runtime_core.c:4446 */
+
 #endif /* HEXA_RUNTIME_H */
