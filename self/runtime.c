@@ -1107,8 +1107,17 @@ static int __attribute__((noinline)) hxlcl_fcntl(int fd, int cmd, long arg) {
 static int __attribute__((noinline)) hxlcl_ioctl(int fd, unsigned long req, void *arg) {
     return (int)_hxlcl_syscall3(HXLCL_SYS_IOCTL, (long)fd, (long)req, (long)arg);
 }
+// PR #426 follow-up — libc lseek (same Darwin arm64 carry-flag class as
+// open/read/write/close/dup2 in cycle-66 / #414). The raw `svc #0x80`
+// `_hxlcl_syscall3` cannot read the carry flag, so a failed lseek returns
+// the positive errno (e.g. EBADF=9 / ESPIPE=29) that callers mistake for
+// a valid small offset. Latent today (no `< 0` test bypass in current
+// hot paths) but identical structural hazard — route through libc so
+// failures return -1 + set errno. lseek prototype comes from the
+// top-of-file <unistd.h> include (uses off_t — no extern decl to avoid
+// conflicting with the libc signature).
 static long __attribute__((noinline)) hxlcl_lseek(int fd, long off, int whence) {
-    return _hxlcl_syscall3(HXLCL_SYS_LSEEK, (long)fd, off, (long)whence);
+    return (long)lseek(fd, (off_t)off, whence);
 }
 static int __attribute__((noinline)) hxlcl_select(int nfds, void *r, void *w, void *e, void *t) {
     return (int)_hxlcl_syscall6(HXLCL_SYS_SELECT, (long)nfds, (long)r, (long)w, (long)e, (long)t, 0);
@@ -1141,11 +1150,19 @@ static int __attribute__((noinline)) hxlcl_open_sys(const char *path, int flags,
      * write_file content-leak + false `true` return.) */
     return open(path, flags, mode);
 }
+// PR #426 follow-up — libc fstat/stat (same Darwin arm64 carry-flag class
+// as open in #414). Raw syscall returned positive errno on failure that
+// future callers could mis-treat (a `< 0` sentinel test would be defeated
+// by the encoded-positive-errno return). Latent today but identical
+// structural hazard. Route through libc for uniform errno semantics —
+// matches Linux block. Prototypes come from top-of-file <sys/stat.h>
+// (Darwin uses __DARWIN_INODE64 symbol renaming — no extern decl, must
+// use the header's `struct stat *` signature).
 static int __attribute__((noinline)) hxlcl_fstat(int fd, void *buf) {
-    return (int)_hxlcl_syscall2(HXLCL_SYS_FSTAT, (long)fd, (long)buf);
+    return fstat(fd, (struct stat *)buf);
 }
 static int __attribute__((noinline)) hxlcl_stat(const char *path, void *buf) {
-    return (int)_hxlcl_syscall2(HXLCL_SYS_STAT, (long)path, (long)buf);
+    return stat(path, (struct stat *)buf);
 }
 // Cycle 65 — close out remaining real syscalls.
 #define HXLCL_SYS_GETTIMEOFDAY 116
@@ -1153,8 +1170,19 @@ static void __attribute__((noinline, noreturn)) hxlcl_exit(int code) {
     (void)_hxlcl_syscall1(HXLCL_SYS_EXIT, (long)code);
     __builtin_trap();  // unreachable; ensure noreturn satisfaction
 }
+// PR #426 follow-up — libc mmap (same Darwin arm64 carry-flag class).
+// On failure the kernel returns errno in x0 instead of MAP_FAILED, so
+// the raw `_hxlcl_syscall6` path returned a small positive integer cast
+// to `void *` — callers comparing against MAP_FAILED ((void *)-1) would
+// treat that errno-pointer as a valid mapping and dereference into the
+// low VA space (segfault or, worse, silent data into a low page).
+// Latent today (hxlcl_malloc / safetensors loader compare against
+// MAP_FAILED — a stray small-int "pointer" would fail later) but the
+// structural hazard is identical to PR #414's open carry-flag bug.
+// Route through libc for proper MAP_FAILED + errno semantics — matches
+// the Linux block below. Prototype from top-of-file <sys/mman.h>.
 static void *__attribute__((noinline)) hxlcl_mmap(void *addr, unsigned long len, int prot, int flags, int fd, long off) {
-    return (void *)_hxlcl_syscall6(HXLCL_SYS_MMAP, (long)addr, (long)len, (long)prot, (long)flags, (long)fd, off);
+    return mmap(addr, (size_t)len, prot, flags, fd, (off_t)off);
 }
 static int __attribute__((noinline)) hxlcl_clock_gettime(int clk, void *ts) {
     // Use gettimeofday(2) (syscall 116) since clock_gettime is a vDSO
