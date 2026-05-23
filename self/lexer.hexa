@@ -211,8 +211,161 @@ pub fn tokenize(source) {
                 col = col + 1
             }
             let word = join(word_parts, "")
-            let kind = keyword_kind(word)
-            tokens.push(Token { kind: kind, value: word, line: line, col: start_col })
+            // PROBE r14-JJ: Python f-string `f"x={x}"` interpolation. Bare ident
+            // `f` immediately followed by `"` (no space) desugars to `format(
+            // "x={}", x )` at the lexer level — single site, no parser / codegen /
+            // runtime touch (the existing variadic `format(template, args...)` →
+            // `hexa_format_n` path handles brace-escape and per-type formatting).
+            // Format spec `{x:.2f}` is DEFERRED (parse error with hint); empty
+            // `{}` is a parse error (Python convention); `{{` / `}}` are literal
+            // braces (passed through to `format`, which already escapes).
+            if word == "f" && pos < len_chars && chars[pos] == '"' {
+                // Consume opening "
+                pos = pos + 1
+                col = col + 1
+                let mut tmpl_parts = []
+                let mut arg_sources = []
+                let mut fdone = false
+                while pos < len_chars && !fdone {
+                    let fc = chars[pos]
+                    if fc == '"' {
+                        fdone = true
+                        pos = pos + 1
+                        col = col + 1
+                    } else if fc == '\\' {
+                        // Escape — same set as regular string
+                        pos = pos + 1
+                        col = col + 1
+                        if pos < len_chars {
+                            let esc = chars[pos]
+                            if esc == 'n' { tmpl_parts.push("\n") }
+                            else if esc == 't' { tmpl_parts.push("\t") }
+                            else if esc == 'r' { tmpl_parts.push("\r") }
+                            else if esc == '\\' { tmpl_parts.push("\\") }
+                            else if esc == '"' { tmpl_parts.push("\"") }
+                            else if esc == '0' { tmpl_parts.push("\0") }
+                            else { tmpl_parts.push(to_string(esc)) }
+                            pos = pos + 1
+                            col = col + 1
+                        }
+                    } else if fc == '{' {
+                        // `{{` → literal `{` (Python convention; format() runtime
+                        // also accepts `{{` per #381 brace-escape — pass through)
+                        if pos + 1 < len_chars && chars[pos + 1] == '{' {
+                            tmpl_parts.push("{{")
+                            pos = pos + 2
+                            col = col + 2
+                        } else {
+                            // Interpolation — scan expression source until matching `}`
+                            pos = pos + 1
+                            col = col + 1
+                            let mut depth = 1
+                            let mut expr_parts = []
+                            let mut saw_colon_fmt = false
+                            while pos < len_chars && depth > 0 {
+                                let ec = chars[pos]
+                                if ec == '{' {
+                                    depth = depth + 1
+                                    expr_parts.push(to_string(ec))
+                                    pos = pos + 1
+                                    col = col + 1
+                                } else if ec == '}' {
+                                    depth = depth - 1
+                                    if depth == 0 {
+                                        pos = pos + 1
+                                        col = col + 1
+                                    } else {
+                                        expr_parts.push(to_string(ec))
+                                        pos = pos + 1
+                                        col = col + 1
+                                    }
+                                } else if ec == ':' && depth == 1 {
+                                    // Format spec `{x:.2f}` — DEFERRED. Python supports;
+                                    // hexa `format` does not yet. Fail loud with hint
+                                    // (callers can use format_float() / explicit casts).
+                                    saw_colon_fmt = true
+                                    expr_parts.push(to_string(ec))
+                                    pos = pos + 1
+                                    col = col + 1
+                                } else if ec == '\n' {
+                                    expr_parts.push(to_string(ec))
+                                    pos = pos + 1
+                                    line = line + 1
+                                    col = 1
+                                } else {
+                                    expr_parts.push(to_string(ec))
+                                    pos = pos + 1
+                                    col = col + 1
+                                }
+                            }
+                            if depth > 0 {
+                                println("error: unterminated f-string interpolation `{...` at line " + to_string(line) + ":" + to_string(start_col) + " — missing closing `}`")
+                                exit(1)
+                            }
+                            let expr_src = join(expr_parts, "")
+                            if expr_src == "" {
+                                println("error: empty f-string interpolation `{}` at line " + to_string(line) + ":" + to_string(start_col) + " — Python disallows; use `{0}` style or include an expression")
+                                exit(1)
+                            }
+                            if saw_colon_fmt {
+                                println("error: f-string format spec `{x:fmt}` not yet supported at line " + to_string(line) + ":" + to_string(start_col) + " — use explicit format(\"...{}\", format_float(x, n)) for now (follow-up RFC pending)")
+                                exit(1)
+                            }
+                            tmpl_parts.push("{}")
+                            arg_sources.push(expr_src)
+                        }
+                    } else if fc == '}' {
+                        // `}}` → literal `}` (Python convention)
+                        if pos + 1 < len_chars && chars[pos + 1] == '}' {
+                            tmpl_parts.push("}}")
+                            pos = pos + 2
+                            col = col + 2
+                        } else {
+                            println("error: stray `}` in f-string at line " + to_string(line) + ":" + to_string(col) + " — use `}}` for a literal `}`")
+                            exit(1)
+                        }
+                    } else {
+                        tmpl_parts.push(to_string(fc))
+                        pos = pos + 1
+                        if fc == '\n' {
+                            line = line + 1
+                            col = 1
+                        } else {
+                            col = col + 1
+                        }
+                    }
+                }
+                if !fdone {
+                    println("error: unterminated f-string at line " + to_string(line) + ":" + to_string(start_col))
+                    exit(1)
+                }
+                let tmpl = join(tmpl_parts, "")
+                // Emit `format ( "<tmpl>" [, arg]* )` — recursive tokenize each
+                // arg source so `{x + 1}` becomes `x + 1` token stream inline.
+                tokens.push(Token { kind: "Ident", value: "format", line: line, col: start_col })
+                tokens.push(Token { kind: "LParen", value: "(", line: line, col: start_col })
+                paren_depth = paren_depth + 1
+                tokens.push(Token { kind: "StringLit", value: tmpl, line: line, col: start_col })
+                let mut ai = 0
+                while ai < len(arg_sources) {
+                    tokens.push(Token { kind: "Comma", value: ",", line: line, col: start_col })
+                    let sub_tokens = tokenize(arg_sources[ai])
+                    let mut ti = 0
+                    while ti < len(sub_tokens) {
+                        let st = sub_tokens[ti]
+                        if st.kind != "Eof" && st.kind != "Newline" {
+                            tokens.push(st)
+                        }
+                        ti = ti + 1
+                    }
+                    ai = ai + 1
+                }
+                tokens.push(Token { kind: "RParen", value: ")", line: line, col: start_col })
+                paren_depth = paren_depth - 1
+            } else {
+                let kind = keyword_kind(word)
+                tokens.push(Token { kind: kind, value: word, line: line, col: start_col })
+            }
         } else if is_digit(ch) {
             // Number literal — integer, float, or hex (0x)
             // Underscore separators: 1_000_000 -> 1000000, 0xFF_FF -> 0xFFFF
