@@ -3487,6 +3487,20 @@ fn gen2_method_builtin(obj_expr, method, args) {
     if method == "drop" {
         return "hexa_array_drop(" + obj_expr + ", " + gen2_expr(args[0]) + ")"
     }
+    // Rust canonical iterator method aliases (round-5 iterator probe).
+    // `.skip(n)` is the Rust name for `.drop(n)`; `.first/.nth` wrap
+    // the existing `hexa_array_get` runtime fn (which already handles
+    // negative idx wrap + OOB throw, per #355).  `.last` needs a
+    // dedicated runtime helper to avoid double-eval — separate cycle.
+    if method == "skip" {
+        return "hexa_array_drop(" + obj_expr + ", " + gen2_expr(args[0]) + ")"
+    }
+    if method == "first" {
+        return "hexa_array_get(" + obj_expr + ", 0)"
+    }
+    if method == "nth" {
+        return "hexa_array_get(" + obj_expr + ", HX_INT(" + gen2_expr(args[0]) + "))"
+    }
     if method == "zip" {
         return "hexa_array_zip(" + obj_expr + ", " + gen2_expr(args[0]) + ")"
     }
