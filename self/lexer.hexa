@@ -253,6 +253,67 @@ pub fn tokenize(source) {
                         // else: trailing _ or __ — stop; _ left for next token
                     }
                 }
+                // PROBE r14-B: IEEE 754 hex-float literal `0x1.8p+1`.
+                // After hex significand digits, if we see `.<hexdigit>` or
+                // `p`/`P`, switch to float mode. C99 hex-float syntax:
+                //   hex-prefix  hex-digits [ . hex-digits ]  p|P [+-]? decimal-digits
+                // Significand+exponent form (`0x1p+0`) and dotted form (`0x1.8p+1`)
+                // both supported. The exponent suffix is REQUIRED in C99 — without
+                // `p` the literal would be ambiguous (hex digits vs hex range `..`).
+                // We pass the literal text through as the FloatLit value; both
+                // downstream paths handle it: C codegen emits `hexa_float(0x1.8p+1)`
+                // which is a valid C99 hex-float literal, and the comptime folder
+                // calls strtod() which natively accepts C hex-floats.
+                let mut is_hex_float = false
+                // Optional fractional part: `.<hexdigit>`
+                if pos + 1 < len_chars && chars[pos] == '.' && is_hex_digit(chars[pos + 1]) {
+                    is_hex_float = true
+                    num_parts.push(".")
+                    pos = pos + 1
+                    col = col + 1
+                    while pos < len_chars && is_hex_digit(chars[pos]) {
+                        num_parts.push(to_string(chars[pos]))
+                        pos = pos + 1
+                        col = col + 1
+                        if pos < len_chars && chars[pos] == '_' {
+                            if pos + 1 < len_chars && is_hex_digit(chars[pos + 1]) {
+                                pos = pos + 1
+                                col = col + 1
+                            }
+                        }
+                    }
+                }
+                // Binary exponent `p`/`P` [+-]? decimal-digits.
+                // If a `.<hexdigit>` was consumed, the exponent is required (C99);
+                // otherwise the bare `p` triggers the hex-float transition.
+                if pos < len_chars && (chars[pos] == 'p' || chars[pos] == 'P') {
+                    let mut ep = pos + 1
+                    if ep < len_chars && (chars[ep] == '+' || chars[ep] == '-') { ep = ep + 1 }
+                    if ep < len_chars && is_digit(chars[ep]) {
+                        is_hex_float = true
+                        num_parts.push(to_string(chars[pos]))
+                        pos = pos + 1
+                        col = col + 1
+                        if pos < len_chars && (chars[pos] == '+' || chars[pos] == '-') {
+                            num_parts.push(to_string(chars[pos]))
+                            pos = pos + 1
+                            col = col + 1
+                        }
+                        while pos < len_chars && is_digit(chars[pos]) {
+                            num_parts.push(to_string(chars[pos]))
+                            pos = pos + 1
+                            col = col + 1
+                        }
+                    } else if is_hex_float {
+                        // Already saw `.<hex>` so exponent is required.
+                        println("error: hex-float literal requires binary exponent `p±N` at line " + to_string(line) + ":" + to_string(start_col) + " — e.g. `0x1.8p+1`")
+                        exit(1)
+                    }
+                }
+                if is_hex_float {
+                    is_float = true
+                    is_hex = false
+                }
             } else {
                 // Decimal integer part: collect digits; accept _ only between digits
                 while pos < len_chars && is_digit(chars[pos]) {
