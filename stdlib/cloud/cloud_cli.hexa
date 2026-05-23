@@ -24,6 +24,7 @@ fn _cloud_help() {
     println("  cloud status <pod_id>                                  single pod snapshot")
     println("  cloud orphans                                          pods with no `::owner=<tag>` marker")
     println("  cloud owner-tag <pod_id>                               print the parsed owner tag for one pod")
+    println("  cloud diag <host> [conn] [--pid N] [--log path]        nvidia-smi + ps + tail logfile, one ssh trip per section")
     println("  cloud help | version")
     println("")
     println("connection flags [conn] (before `--`):")
@@ -150,7 +151,7 @@ fn main() {
     while i < len(av) {
         let t = av[i]
         if si < 0 {
-            if t == "run" || t == "nohup" || t == "poll" || t == "copy-to" || t == "copy-from" || t == "list" || t == "status" || t == "orphans" || t == "owner-tag" || t == "help" || t == "--help" || t == "-h" || t == "version" || t == "--version" || t == "-v" {
+            if t == "run" || t == "nohup" || t == "poll" || t == "copy-to" || t == "copy-from" || t == "list" || t == "status" || t == "orphans" || t == "owner-tag" || t == "diag" || t == "help" || t == "--help" || t == "-h" || t == "version" || t == "--version" || t == "-v" {
                 si = i
                 sub = t
             }
@@ -317,6 +318,59 @@ fn main() {
             exit(1)
         }
         println("[cloud] owner-tag · pod " + r.pod_id + " · " + r.owner_tag)
+        return
+    }
+    if sub == "diag" {
+        if si + 1 >= len(av) {
+            println("[cloud] diag: usage — cloud diag <host> [--port N] [--insecure] [--pid N] [--log path]")
+            exit(2)
+        }
+        let host = av[si + 1]
+        let ssh_opts = _ssh_opts_cli(av, si + 2)
+        let mut pid_s = ""
+        let mut log_path = ""
+        let mut k = si + 2
+        while k < len(av) {
+            let t = av[k]
+            if t == "--pid" && k + 1 < len(av) {
+                pid_s = av[k + 1]
+                k = k + 2
+            } else if t == "--log" && k + 1 < len(av) {
+                log_path = av[k + 1]
+                k = k + 2
+            } else {
+                k = k + 1
+            }
+        }
+        println("=== cloud diag · " + host + " ===")
+        println("--- nvidia-smi (gpu_name,util_gpu,mem_used,mem_total) ---")
+        let gpu = cloud_run_opts(host, ssh_opts, ["nvidia-smi", "--query-gpu=name,utilization.gpu,memory.used,memory.total", "--format=csv,noheader,nounits"])
+        if len(gpu.stdout_) > 0 {
+            println(gpu.stdout_)
+        }
+        if gpu.ok == 0 {
+            println("[cloud] nvidia-smi: " + gpu.message)
+        }
+        if len(pid_s) > 0 {
+            println("--- ps -p " + pid_s + " (etime,stat,cmd) ---")
+            let pr = cloud_run_opts(host, ssh_opts, ["ps", "-p", pid_s, "-o", "pid,etime,stat,cmd"])
+            if len(pr.stdout_) > 0 {
+                println(pr.stdout_)
+            }
+            if pr.exit_code != 0 {
+                println("[cloud] pid " + pid_s + " not running (ps exit " + str(pr.exit_code) + ")")
+            }
+        }
+        if len(log_path) > 0 {
+            println("--- tail -n 20 " + log_path + " ---")
+            let tl = cloud_run_opts(host, ssh_opts, ["tail", "-n", "20", log_path])
+            if len(tl.stdout_) > 0 {
+                println(tl.stdout_)
+            }
+            if tl.exit_code != 0 {
+                println("[cloud] tail " + log_path + ": exit " + str(tl.exit_code))
+            }
+        }
         return
     }
     if sub == "copy-from" {
