@@ -82,6 +82,7 @@
     {"name": "optim.hexa",                  "kind": "module",  "purpose": "optimizer entry-point (re-exports stdlib/optim/)"},
     {"name": "parse.hexa",                  "kind": "module",  "purpose": "generic parser combinators"},
     {"name": "path.hexa",                   "kind": "module",  "purpose": "filesystem path helpers"},
+    {"name": "plot",                        "kind": "dir",     "purpose": "minimal native SVG charting (line/bar/scatter)"},
     {"name": "policy",                      "kind": "dir",     "purpose": "governance and policy primitives"},
     {"name": "portable_fs.hexa",            "kind": "module",  "purpose": "portable filesystem API"},
     {"name": "proc.hexa",                   "kind": "module",  "purpose": "process spawn and wait"},
