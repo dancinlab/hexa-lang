@@ -3,17 +3,18 @@
 
 @I := "hexa-lang" :: identity [active]
   kind   = "Native compiler with atlas-bound theorems (8 strict-lint stages · no LLVM · no C-transpile · 💎)"
-  brief  = "Write code that cites a theorem atlas at compile time; lint stages reject formula-bearing code without @cite. Self-host compiler + interpreter; in-house prover + linker; English-only diagnostics; zero runtime GC."
+  brief  = "Code cites a theorem atlas at compile time; lint rejects formula-bearing code without @cite."
   parent = "dancinlab"
   ssot   = "github.com/dancinlab/hexa-lang (`hx install hexa-lang`)"
 
-@D := "hexa-lang" :: governance [active]
-  do   = "Subagent cycles MUST git diff <baseline>...HEAD on every guarded file BEFORE staging. Use the pre-commit hook (.githooks/pre-commit) — opt in via `git config core.hooksPath .githooks`."
-  dont = "Never commit deletions in stdlib/runtime/** · self/runtime*.c · self/runtime_arena.c · self/codegen_c2.hexa · compiler/check/bind.hexa · self/rt/core.hexa unless the cycle declares 'runtime/stdlib/codegen' scope in the subject. Sub-agent worktrees are 8-session shared; a stale tree silently drops re-lands. WIPE-OK: <reason> trailer is the only escape."
-  g_runtime_wipe_guard = "Pre-commit wipe-guard (.githooks/pre-commit) blocks any staged commit deleting >50 lines across guarded paths (stdlib/runtime/** · self/runtime.c · self/runtime_core.c · self/runtime_arena.c · self/codegen_c2.hexa · compiler/check/bind.hexa · self/rt/core.hexa) unless the subject mentions runtime|stdlib|codegen|rt_|RUNTIME|restore|re-land|recover, or a `WIPE-OK: <reason>` trailer is present. Opt-in per clone via `git config core.hooksPath .githooks`. Background: inbox/notes/2026-05-22-wipe-governance-proposal.md. Motivated by 10 silent wipes in 3 weeks (5 in 48h: c39afbbe + 0d59c419 + 724c38b3 + c4c721bc + e8c2dc1c)."
-  g_llm_pluggable = "hexa loop --dfs (RFC 080) is the ONLY path that may invoke an external LLM. Opt-in (default off); requires a pluggable --llm-cmd (no vendor baked in); gates real exec behind --allow-llm; MUST enforce a budget cap (--llm-calls/--llm-time/--llm-budget) AND the dfs_verify_child gate (cite-required + cite-in-atlas + English-only via CJK-band 0xE3-0xED reject + Greek normalize). LLM output lands in inbox/atlas_candidates/** AND absorption MUST follow g_atlas_absorb_direct (no intermediate file, no embedded.gen direct write outside the canonical _fold_into_embedded pattern). SSOT: TECS-L.md + inbox/rfc_drafts_2026_05_22/rfc_080_hexa_loop_dfs.md."
-  g_atlas_absorb_direct = "EVERY atlas absorption verb (hexa atlas register --auto-pr {--from-verify | --from-drill}, hexa kick/drill --auto-pr, hexa loop --dfs auto-absorption, future absorbers) MUST fold the discovered AtlasNode DIRECTLY into compiler/atlas/embedded.gen.hexa — the binary built-in SSOT, per g_atlas_binary_builtin — via the canonical fold pipeline: build in-memory AtlasNode struct-literal text → check id-duplicate against the embed → splice into the matching kind section (P|C|L|E|F|R|S|X|Q) before the closing `]` → git switch -c <branch> → git add embedded.gen.hexa → git commit → gh pr create (or GitHub API HTTP 201 fallback). NO intermediate artifact: NO `.n6` staging shard (no atlas.append.*.n6 emission outside hand-curated path), NO inbox/atlas_candidates markdown intermediate, NO <HX_DATA_DIR>/atlas.overlay.n6 export-write. The PR diff IS the absorption record on embedded.gen.hexa; promotion human-gated by PR review (PR-only fold-to-live; direct fold-to-live without PR is forbidden). Canonical implementation: tool/atlas_cli.hexa::_build_node_struct_text + _fold_into_embedded + _branch_commit_pr — future absorbers MUST reuse or mirror this exact pipeline (extracting to compiler/atlas/embed_fold.hexa is the planned consolidation). HONEST: never claim a PR was opened unless `gh` rc=0 or HTTP 201."
+@D diff_guard := "subagent diff-guard before staging" :: governance [required active]
+  do   = "subagent cycles `git diff <baseline>...HEAD` guarded files before staging · `.githooks/pre-commit`"
 
-@D naming_generic := "file names — generic, no version suffix" :: governance [required active]
-  do   = "name files by ROLE (`codegen.hexa` · `parser.hexa`); version → SemVer · CHANGELOG · git log"
-  dont = "bake version in filenames (`_c2` · `_v2` · `_v1` · `_old` · `_legacy`); supersede by overwriting"
+@D wipe_guard := "wipe-guard — >50-line deletions need scope or WIPE-OK" :: governance [required active]
+  dont = "commit >50-line deletions in stdlib/runtime/codegen/rt without scoped subject or `WIPE-OK:` trailer"
+
+@D external_llm := "external LLM only via `hexa loop --dfs`" :: governance [required active]
+  dont = "invoke external LLM outside `hexa loop --dfs` (pluggable --llm-cmd · budget cap · verify gate)"
+
+@D atlas_fold := "atlas fold — embedded.gen.hexa via branch → commit → PR" :: governance [required active]
+  dont = "fold atlas nodes anywhere but compiler/atlas/embedded.gen.hexa via branch → commit → PR"
