@@ -203,29 +203,81 @@
 - [x] inbox stdlib-for-cpu-port umbrella — all 5 sub-patches landed — DOCS [#468]
 - [x] inbox exec() builtin silently swallows child stdout under hexa run — FILED [#398]
 
-## 2026-05-23 라운드 14 — 다음 사이클 (TBD)
+## 2026-05-23 라운드 14 cycle 1-6 — surgical sweep
 
-- [ ] enum to_string proper repr (round 3 INBOX carry)
-- [ ] shadowing scope leak — `_gen2_collect_lets` flat-hoist 재설계 (r3 INBOX, #347 코델)
-- [ ] panic/try-catch 채널 의미론 결정 (r3 INBOX)
-- [ ] postfix `?` error-propagation + Result ABI (r3 INBOX)
-- [ ] `?.` optional chaining parser/codegen 완성 (r3 INBOX)
-- [ ] built-in Some/None prelude 정책 (r3 INBOX)
-- [ ] `nil`/`null` alias 또는 reserved 진단 (r3 INBOX)
-- [ ] try-as-expression · finally (r3 INBOX)
-- [ ] `${name}` JS 템플릿 silent literal 진단 (r3 INBOX)
-- [ ] `printf`/`sprintf` undeclared (r3 INBOX)
-- [ ] `.codepoints()` Rust alias (r3 INBOX)
-- [ ] `.graphemes()` UAX-29 stdlib gap (r3 INBOX)
-- [ ] slice `[..b]` / `[a..]` open-range parser (r3 INBOX)
+### cycle 1 (5 fan-out, 4 PR landed + 1 dup-skip)
+
+- [x] r14-A `nil`/`null` reserved-name 진단 — LANDED [#474]
+- [x] r14-B hex-float `0x1.8p+1` lexer — LANDED [#473]
+- [x] r14-C slice open-range `[..b]`/`[a..]`/`[..]` — DUP-skipped (landed via [#480] other session)
+- [x] r14-D slice neg-wrap (Python canonical) — LANDED [#482]
+- [x] r14-E `to_string` NaN/inf Rust casing — LANDED [#475]
+
+### cycle 2 (5 fan-out, 4 PR landed + 1 STOP)
+
+- [⛔] r14-F enum `to_string` variant name — STOP (architectural, RFC filed [#489])
+- [x] r14-G `printf`/`sprintf` use-format hint — LANDED [#484]
+- [x] r14-H `inf`/`nan` 식별자 상수 magic — LANDED [#488]
+- [x] r14-I `HEXA_STRICT_MATCH` env gate (warn → error) — LANDED [#485]
+- [x] r14-J NaN-in-sort canonical comparator — LANDED [#486]
+
+### cycle 3 (5 fan-out, 4 PR landed + 1 STOP + RFC R)
+
+- [⛔] r14-K `-1.0/0.0 → -inf` fold — STOP (already landed via `codegen.hexa:4417-4440`, PROBE r3+r7 closure)
+- [x] r14-L `print_val` NaN/inf + 0.0 parity — LANDED [#492]
+- [x] r14-M Swift `0...N` inclusive parser (alias `0..=N`) — LANDED [#491]
+- [x] r14-N `HEXA_STRICT_LET` env gate — LANDED [#490]
+- [x] r14-R enum `to_string` codegen-emit RFC (F follow-up) — LANDED [#489]
+
+### cycle 4 (6 fan-out — surgical + design RFC mix, all OPEN)
+
+- [ ] r14-S bare-block `{ … }` statement parse — OPEN [#498]
+- [ ] r14-T mixed int/float div codegen fold — OPEN [#497]
+- [ ] r14-U `.graphemes()` UAX-29 minimal stub — OPEN [#495]
+- [ ] r14-W macro expander Phase 2 design RFC — OPEN [#493]
+- [ ] r14-X postfix `?` + Result ABI design RFC — OPEN [#494]
+- [ ] r14-AA shadowing scope leak codegen-redesign RFC — OPEN [#496]
+
+### cycle 5 (6 fan-out, all OPEN + 1 DUP-skip)
+
+- [ ] r14-BB optional chaining `?.` for struct fields — OPEN [#504]
+- [⛔] r14-CC multi-arg enum payload parse — DUP-skipped (already landed [#366])
+- [ ] r14-DD `hexa_div` mixed int/float canonical IEEE promotion (runtime) — OPEN [#499]
+- [ ] r14-EE panic channel semantics design RFC — OPEN [#501]
+- [ ] r14-FF try-as-expression + finally clause design RFC — OPEN [#502]
+- [ ] r14-GG Range repr `.start`/`.end` metadata design RFC — OPEN [#500]
+
+### cycle 6 (6 fan-out — 3 surgical + 3 RFC)
+
+- [ ] r14-HH match-arm multi-arg enum payload bind (codegen) — IN-FLIGHT (no PR yet)
+- [ ] r14-II `let inf`/`nan` shadow-of-reserved 진단 (H follow-up) — OPEN [#507]
+- [ ] r14-JJ Python `f"x={x}"` lexer — IN-FLIGHT (no PR yet)
+- [ ] r14-KK Option `Some`/`None` prelude policy RFC — OPEN [#505]
+- [ ] r14-LL tuple type design RFC — OPEN [#506]
+- [ ] r14-MM chained comparison Python-style design RFC — OPEN [#508]
+
+### cycle 1-6 요약
+
+- merged 14 (cycle 1-3 surgical) + open 14 (cycle 4-6 mix) + in-flight 2 (HH/JJ, no PR yet) + STOP 3 (F → RFC #489 · K already-landed · CC already-landed #366) = 33 items
+- surgical lane = 16 (lexer/parser/codegen/runtime/type_checker)
+- design-RFC lane = 11 (postfix `?` · `?.` · shadow scope · macro Phase 2 · panic · try-expr · Range repr · Some/None prelude · tuple · chained cmp · enum to_string)
+
+## 잔여 (cycle 7+ candidates)
+
+- [ ] r14-NN `is_comparison_op` token-name fix (MM finding)
+- [ ] Swift `"x=\(x)"` interp 표현 (r3 #2)
+- [ ] underscore numeric separator `1_000_000` (lexer)
+- [ ] iterator `.take/.collect/.sum/.filter` aliases (codegen, #385 follow-up)
+- [ ] hexa_v2 regen batch — cycle 4-6 `.hexa` changes activation
+- [ ] `codegen.hexa:3106` panic recover comment doc-bug (EE finding)
+- [ ] raw string `r"..."` literal (design RFC pending)
+- [ ] multi-line `"""..."""` literal (design RFC pending)
+- [ ] if-let / while-let (Rust/Swift, design RFC pending)
+- [ ] async/await (design RFC pending)
+- [ ] destructuring `let {x, y}` / `let [a, b]` (design RFC pending)
+- [ ] hex-float regen activation ([#473] follow-up)
+- [ ] f-string regen activation (cycle 6 JJ follow-up)
+- [ ] `non-exhaustive match` warn → error strict path ([#453] follow-up, #347 cluster)
 - [ ] `[].pop()` Option lane (r3 INBOX)
-- [ ] slice negative wrap silently clamp 통일 (r3 INBOX)
-- [ ] non-exhaustive match strict (warn → error path, #453 follow-up)
-- [ ] enum `<`/`>` ordering spec 결정 (r3 INBOX)
-- [ ] Range repr `.start`/`.end` (materialize 손실, r3 INBOX)
-- [ ] Swift `0...5` inclusive 정책 (r3 INBOX)
-- [ ] hex-float `0x1.8p+1` literal lexer (r3 INBOX)
-- [ ] `inf`/`nan` 키워드 상수 stdlib (r3 INBOX)
-- [ ] `to_string` nan/inf casing 통일 (r3 INBOX)
-- [ ] NaN-in-sort 동작 결정 (r3 INBOX)
-- [ ] macro expander Phase 2 (#462 follow-up)
+- [ ] enum `<`/`>` ordering spec (r3 INBOX)
+- [ ] `${name}` JS 템플릿 silent literal 진단 (r3 INBOX, [#478] warn-only landed)
