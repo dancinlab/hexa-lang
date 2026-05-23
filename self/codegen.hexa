@@ -2887,6 +2887,10 @@ fn gen2_stmt(node, depth) {
         if expr.kind == "MatchExpr" {
             return gen2_match_stmt(expr, depth)
         }
+        // PROBE r14-VV: IfLetExpr at stmt position → desugar to MatchExpr + route through gen2_match_stmt.
+        if expr.kind == "IfLetExpr" {
+            return gen2_match_stmt(_gen2_iflet_to_match(expr), depth)
+        }
         if expr.kind == "IfExpr" {
             // PROBE r11 B4: comptime-fold the condition.  `if false { … }` at
             // statement position now drops the dead branch entirely instead of
@@ -6787,6 +6791,14 @@ fn gen2_expr(node) {
         exit(1)
     }
     if k == "" { return "hexa_map_new()" }
+    // PROBE r14-VV: IfLetExpr in expression position → synthesize MatchExpr.
+    // `let x = if let PAT = e { THEN } else { ELSE }` is rare today (the
+    // probe uses stmt form), but symmetry with `if/match` (both have
+    // stmt + expr handlers) keeps the surface honest. gen2_match_expr
+    // emits a ternary chain that reuses EnumPath tag/payload codegen.
+    if k == "IfLetExpr" {
+        return gen2_match_expr(_gen2_iflet_to_match(node))
+    }
     // Fail loud at TRANSPILE time — sibling of the stmt-kind branch.
     // Returning an in-binary trap stub hid the failure behind clang +
     // link; an unhandled kind is a compiler gap, exit before clang runs.
@@ -7132,6 +7144,55 @@ fn gen2_hex_mask(bits) {
 // ═══════════════════════════════════════════════════════════
 //  Match statement — generate if-else chain
 // ═══════════════════════════════════════════════════════════
+
+// PROBE r14-VV (SS follow-up): IfLetExpr lowering.
+// `if let PAT = SCRUT { THEN } else { ELSE }` desugars to:
+//   match SCRUT { PAT => { THEN }, _ => { ELSE } }
+// Parser (G32, parser.hexa L2535-2573) already produces IfLetExpr with
+// .left=pattern · .right=scrutinee · .then_body=array · .else_body=array.
+// We synthesize a MatchExpr node and let gen2_match_stmt / gen2_match_expr
+// do the heavy lifting (EnumPath tag-equality + payload binding already
+// landed via PR #366). When else_body is missing/empty, the wildcard arm
+// emits an empty body — a no-op fallthrough, matching `if cond { ... }`
+// without else.
+fn _gen2_iflet_to_match(node) {
+    let pattern = node.left
+    let scrutinee = node.right
+    let then_body = node.then_body
+    let else_body = node.else_body
+    // First arm: PAT => { then_body }
+    let arm_then = #{
+        "kind": "MatchArm", "name": "", "value": "", "op": "",
+        "left": pattern, "right": "", "cond": "", "then_body": "", "else_body": "",
+        "params": "", "body": then_body, "args": "", "fields": "", "items": "",
+        "variants": "", "arms": "", "iter_expr": "", "ret_type": "",
+        "target": "", "trait_name": "", "methods": ""
+    }
+    // Second arm: _ => { else_body }  (else_body may be [] when no `else` clause)
+    let mut wild_body = else_body
+    if type_of(wild_body) == "string" { wild_body = [] }
+    let arm_else = #{
+        "kind": "MatchArm", "name": "", "value": "", "op": "",
+        "left": #{
+            "kind": "Wildcard", "name": "_", "value": "", "op": "",
+            "left": "", "right": "", "cond": "", "then_body": "", "else_body": "",
+            "params": "", "body": "", "args": "", "fields": "", "items": "",
+            "variants": "", "arms": "", "iter_expr": "", "ret_type": "",
+            "target": "", "trait_name": "", "methods": ""
+        },
+        "right": "", "cond": "", "then_body": "", "else_body": "",
+        "params": "", "body": wild_body, "args": "", "fields": "", "items": "",
+        "variants": "", "arms": "", "iter_expr": "", "ret_type": "",
+        "target": "", "trait_name": "", "methods": ""
+    }
+    return #{
+        "kind": "MatchExpr", "name": "", "value": "", "op": "",
+        "left": scrutinee, "right": "", "cond": "", "then_body": "", "else_body": "",
+        "params": "", "body": "", "args": "", "fields": "", "items": "",
+        "variants": "", "arms": [arm_then, arm_else], "iter_expr": "", "ret_type": "",
+        "target": "", "trait_name": "", "methods": ""
+    }
+}
 
 fn gen2_match_stmt(node, depth) {
     let pad = gen2_indent(depth)
