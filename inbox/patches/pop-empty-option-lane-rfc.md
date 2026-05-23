@@ -1,6 +1,7 @@
 # `[].pop()` empty → Option lane design RFC
 
-**Status**: design-level (PROBE round 3 INBOX line 63, r14 cycle 13, 2026-05-24)
+**Status**: UUUU-B1 LANDED (stop-gap throw, 2026-05-24) · UUUU-A1/A2 deferred (옵션 A — KK Option prelude #505 미착륙)
+**Status (orig)**: design-level (PROBE round 3 INBOX line 63, r14 cycle 13, 2026-05-24)
 **Priority**: P2 (silent void = silent miscompile cluster · Option/Some/None prelude 의존)
 **SSOT**: PROBE.log.md round 3 Array entry · r14-KK Option prelude (#505) · r14-X postfix ? (#494)
 
@@ -66,7 +67,7 @@ probe `/tmp/probe_pop_option_r14.hexa` 빌드+실행 결과 (compiled path, exit
 ## 구현 단계
 
 stop-gap (옵션 B, 즉시):
-1. **UUUU-B1**: `hexa_array_pop` empty → throw "pop from empty array" (~10줄 runtime)
+1. **UUUU-B1** ✅ LANDED (2026-05-24): `hexa_array_pop` + `hexa_array_shift` empty/non-array → `hexa_throw` (`runtime_core.c`, both #ifndef/#else stdlib-port branches). 메시지 = `"array.pop(): empty array"` / `"array.shift(): empty array"` — 형제 빌트인 `array.last()`/`array.get()` 패턴 정합. probe 검증: `[1,2,3].pop()`→`321` exit 0 · `[].pop()`→throw exit 1 (no silent void). try/catch 로 잡힘 (표준 `hexa_throw` 경유).
 
 full (옵션 A, KK 후):
 2. **UUUU-A1**: `pop() -> Option[T]` (KK Option prelude land 후)

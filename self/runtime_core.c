@@ -4785,18 +4785,38 @@ HexaVal hexa_str_byte_at(HexaVal s, HexaVal idx) {
 
 // ── Array operations ─────────────────────────────────
 // Step-3 cycle 74 port — in-place pop/shift using arr.truncate() and
-// arr[i]=v hexa-source builtins. Empty/non-array guard stays C-side
-// (returns hexa_void(); hexa source can't produce that literal).
+// arr[i]=v hexa-source builtins. Empty/non-array guard stays C-side and
+// throws (PROBE r14-UUUU-B1): empty pop previously returned hexa_void(),
+// a silent miscompile (`[].pop() + 1` -> "void1" garbage). Now matches the
+// sibling array.last()/array.get() contract — throw on empty/non-array.
 #ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal hexa_array_pop(HexaVal arr) {
-    if (!HX_IS_ARRAY(arr) || HX_ARR_LEN(arr) == 0) return hexa_void();
+    if (!HX_IS_ARRAY(arr)) {
+        char _buf[128];
+        snprintf(_buf, sizeof(_buf), "array.pop(): container is not an array (tag=%d)", (int)HX_TAG(arr));
+        hexa_throw(hexa_str(_buf));
+        return hexa_void();
+    }
+    if (HX_ARR_LEN(arr) == 0) {
+        hexa_throw(hexa_str("array.pop(): empty array"));
+        return hexa_void();
+    }
     int n = HX_ARR_LEN(arr);
     HexaVal last = HX_ARR_ITEMS(arr)[n - 1];
     HX_SET_ARR_LEN(arr, n - 1);
     return last;
 }
 HexaVal hexa_array_shift(HexaVal arr) {
-    if (!HX_IS_ARRAY(arr) || HX_ARR_LEN(arr) == 0) return hexa_void();
+    if (!HX_IS_ARRAY(arr)) {
+        char _buf[128];
+        snprintf(_buf, sizeof(_buf), "array.shift(): container is not an array (tag=%d)", (int)HX_TAG(arr));
+        hexa_throw(hexa_str(_buf));
+        return hexa_void();
+    }
+    if (HX_ARR_LEN(arr) == 0) {
+        hexa_throw(hexa_str("array.shift(): empty array"));
+        return hexa_void();
+    }
     HexaVal first = HX_ARR_ITEMS(arr)[0];
     int n = HX_ARR_LEN(arr);
     for (int i = 0; i < n - 1; i++) {
@@ -4809,11 +4829,29 @@ HexaVal hexa_array_shift(HexaVal arr) {
 extern HexaVal rt_array_pop(HexaVal arr);
 extern HexaVal rt_array_shift(HexaVal arr);
 HexaVal hexa_array_pop(HexaVal arr) {
-    if (!HX_IS_ARRAY(arr) || HX_ARR_LEN(arr) == 0) return hexa_void();
+    if (!HX_IS_ARRAY(arr)) {
+        char _buf[128];
+        snprintf(_buf, sizeof(_buf), "array.pop(): container is not an array (tag=%d)", (int)HX_TAG(arr));
+        hexa_throw(hexa_str(_buf));
+        return hexa_void();
+    }
+    if (HX_ARR_LEN(arr) == 0) {
+        hexa_throw(hexa_str("array.pop(): empty array"));
+        return hexa_void();
+    }
     return rt_array_pop(arr);
 }
 HexaVal hexa_array_shift(HexaVal arr) {
-    if (!HX_IS_ARRAY(arr) || HX_ARR_LEN(arr) == 0) return hexa_void();
+    if (!HX_IS_ARRAY(arr)) {
+        char _buf[128];
+        snprintf(_buf, sizeof(_buf), "array.shift(): container is not an array (tag=%d)", (int)HX_TAG(arr));
+        hexa_throw(hexa_str(_buf));
+        return hexa_void();
+    }
+    if (HX_ARR_LEN(arr) == 0) {
+        hexa_throw(hexa_str("array.shift(): empty array"));
+        return hexa_void();
+    }
     return rt_array_shift(arr);
 }
 #endif
