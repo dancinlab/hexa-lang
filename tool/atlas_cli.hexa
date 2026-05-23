@@ -882,6 +882,68 @@ fn _qdrift_error_bound_register(lambda_times_time: float, big_n_steps: int) -> f
     return 2.0 * lambda_times_time * lambda_times_time / n_f
 }
 
+// Symmetry-adjusted classical-shadow per-shot variance F2 bound — verbatim
+// port of verify_cli::_sym_shadow_var_bound (Zhao-Rubin-Babbush 2024 npj QI
+// symmetry adjustment on top of HKP 2020 Pauli shadow). For an observable
+// O = Sum_{j=1..m} c_j P_j of m single-Pauli terms each of locality ≤ k,
+//     var_bound  =  5 * m * 4^k
+// 2-arg closed-form: takes (num_paulis m ≥ 1, pauli_locality k ≥ 0).
+fn _sym_shadow_var_bound_register(num_paulis: int, pauli_locality: int) -> float {
+    if num_paulis < 1 { return _NOCALC_F_REGISTER }
+    if pauli_locality < 0 { return _NOCALC_F_REGISTER }
+    let mut four_pow_k = 1.0
+    let mut idx_loc = 0
+    while idx_loc < pauli_locality {
+        four_pow_k = four_pow_k * 4.0
+        idx_loc = idx_loc + 1
+    }
+    return 5.0 * to_float(num_paulis) * four_pow_k
+}
+
+// Overlap-guided ADAPT-VQE H2 STO-3G constant shift — verbatim port of
+// verify_cli::_overlap_vqe_h2_shift_ha (Oh et al. 2023, arXiv 2301.10196;
+// F-QM-CHEM-N5 H2/STO-3G/2q frozen-core reduced-Hamiltonian). The 2-qubit
+// reduced Hamiltonian's energy needs the frozen-core + nuclear-repulsion
+// shift to recover absolute FCI ground-state energy:
+//     E_FCI_full(Ha)  =  E_2q_reduced  +  constant_shift_ha
+// constant_shift_ha = 0.7151043390810812 Ha (verbatim PySCF 2.13.0 RHF
+// reduction at R=0.74Å). 0-arg closed-form constant.
+fn _overlap_vqe_h2_shift_ha_register() -> float {
+    return 0.7151043390810812
+}
+
+// Robust Phase Estimation (RPE) Heisenberg-limit standard deviation bound —
+// verbatim port of verify_cli::_rpe_heisenberg_sigma (Kimmel-Low-Yoder PRA
+// 92, 062315 (2015), arXiv:1502.02677; Eqs. (10)-(13) / Fig. 2). For K
+// Heisenberg generations and M shots per circuit,
+//     sigma_HB(K, M)  =  1 / ( 2^(K-1) * sqrt(M) )
+// — the Heisenberg-limited 1/V scaling vs SQL 1/sqrt(V). 2-arg closed-form:
+// takes (k_gens K ≥ 1, m_per_k M ≥ 1) → sigma_HB as float.
+fn _rpe_heisenberg_sigma_register(k_gens: int, m_per_k: int) -> float {
+    if k_gens < 1 { return _NOCALC_F_REGISTER }
+    if m_per_k < 1 { return _NOCALC_F_REGISTER }
+    let mut two_kmax = 1.0
+    let mut idx_gen = 0
+    let exp_gen = k_gens - 1
+    while idx_gen < exp_gen {
+        two_kmax = two_kmax * 2.0
+        idx_gen = idx_gen + 1
+    }
+    return 1.0 / (two_kmax * sqrt(to_float(m_per_k)))
+}
+
+// Mirror-circuit volumetric benchmarking heavy-output-generation (HOG)
+// Porter-Thomas asymptote — verbatim port of verify_cli::_mirror_bench_hog
+// _asymptote (Cross-Bishop-Sheldon-Nation-Gambetta PRA 100, 032328 (2019),
+// arXiv:1811.12926; quantum-volume heavy-output test). For a Haar-random
+// w-qubit circuit at approximate-2-design depth,
+//     HOG_asymptote  =  (1 + ln 2) / 2  ~=  0.8466
+// — Porter-Thomas anticoncentration anchor of the QV test. 0-arg constant.
+fn _mirror_bench_hog_asymptote_register() -> float {
+    let ln_two = 0.6931471805599453
+    return (1.0 + ln_two) / 2.0
+}
+
 // float dispatch — fn_name → recompute. Mirrors verify_cli::_recompute_float.
 // RFC 045 qmirror PR-A atoms (chsh_tsirelson · hardy_bound · mabk_quantum_max
 // · pt_doily_quantum_win · pt_doily_classical_bound) are mirrored here as
@@ -890,7 +952,9 @@ fn _qdrift_error_bound_register(lambda_times_time: float, big_n_steps: int) -> f
 // PR-C atoms (vqe_h2_fci_sto3g · qfi_sql · qfi_ghz · shadow_pauli_var_bound
 // · shadow_clifford_var_bound) added via PR #625/#655 verify dispatch.
 // PR-D atoms (page_curve_entropy_peak · qdrift_error_bound) added via
-// PR #663 verify dispatch.
+// PR #663 verify dispatch. PR-E atoms (sym_shadow_var_bound ·
+// overlap_vqe_h2_shift_ha · rpe_heisenberg_sigma · mirror_bench_hog_asymptote)
+// added via PR #667 verify dispatch.
 // 0-arg fns ignore a0/a1; 1-arg fns take a0; 2-arg take a0,a1.
 fn _recompute_float_register(fn_name: string, a0: float, a1: float, argc: int) -> float {
     if fn_name == "welch_t_crit" { return _welch_t_crit_register(a0) }
@@ -948,6 +1012,21 @@ fn _recompute_float_register(fn_name: string, a0: float, a1: float, argc: int) -
         let big_n_steps = to_int(a1)
         return _qdrift_error_bound_register(a0, big_n_steps)
     }
+    // RFC 045 qmirror PR-E — register mirror of verify_cli dispatch (#667).
+    if fn_name == "sym_shadow_var_bound" {
+        if argc < 2 { return _NOCALC_F_REGISTER }
+        let num_paulis = to_int(a0)
+        let pauli_locality = to_int(a1)
+        return _sym_shadow_var_bound_register(num_paulis, pauli_locality)
+    }
+    if fn_name == "overlap_vqe_h2_shift_ha" { return _overlap_vqe_h2_shift_ha_register() }
+    if fn_name == "rpe_heisenberg_sigma" {
+        if argc < 2 { return _NOCALC_F_REGISTER }
+        let k_gens = to_int(a0)
+        let m_per_k = to_int(a1)
+        return _rpe_heisenberg_sigma_register(k_gens, m_per_k)
+    }
+    if fn_name == "mirror_bench_hog_asymptote" { return _mirror_bench_hog_asymptote_register() }
     return _NOCALC_F_REGISTER
 }
 
@@ -962,6 +1041,10 @@ fn _is_float_fn_register(fn_name: string) -> bool {
         || fn_name == "qfi_sql" || fn_name == "qfi_ghz"
         || fn_name == "shadow_pauli_var_bound" || fn_name == "shadow_clifford_var_bound"
         || fn_name == "page_curve_entropy_peak" || fn_name == "qdrift_error_bound"
+        || fn_name == "sym_shadow_var_bound"
+        || fn_name == "overlap_vqe_h2_shift_ha"
+        || fn_name == "rpe_heisenberg_sigma"
+        || fn_name == "mirror_bench_hog_asymptote"
 }
 
 // is fn_name a 0-arg closed-form constant? Mirrors verify_cli::_is_zero_arg_float_fn.
@@ -972,6 +1055,8 @@ fn _is_zero_arg_float_fn_register(fn_name: string) -> bool {
         || fn_name == "pt_doily_quantum_win"
         || fn_name == "pt_doily_classical_bound"
         || fn_name == "vqe_h2_fci_sto3g"
+        || fn_name == "overlap_vqe_h2_shift_ha"
+        || fn_name == "mirror_bench_hog_asymptote"
 }
 
 // _fstr_register — float → string for verdict echo / node text.
