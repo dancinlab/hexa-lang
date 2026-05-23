@@ -144,8 +144,9 @@
   trees: [build-artifact]
   compiler_impact: none expected — rebuild + OOM-stabilize + promote ~/.hx/bin/hexa_real. (if the rebuild surfaces a bug, that's the real work.)
   selftest_delta: 0 (existing self/test_async_codegen.hexa should go 0/4 -> 4/4 once the deployed binary has the AwaitExpr branches)
-  status: applied
+  status: archived
   applied_at: 2026-05-11
+  archived_at: 2026-05-24
   opened: 2026-05-10
   note: |
     Re-promoted ~/.hx/bin/hexa_real (and ~/.hx/packages/hexa/hexa.real, same
