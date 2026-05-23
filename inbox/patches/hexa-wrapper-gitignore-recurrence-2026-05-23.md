@@ -1,4 +1,6 @@
 # hexa wrapper — gitignore-vs-tracked recurrence guard (2026-05-23)
+> **Status:** FIXED (2026-05-23) — removed `hexa` line from `.gitignore` so the root `./hexa` wrapper is normally tracked (no more gitignored-but-tracked mismatch). The line only matched files NAMED exactly `hexa` — build binaries (`build/hexa_cli_driver`, `build/hexa_module_loader`, etc.) have suffixes and are unaffected. The wrapper itself was already tracked on origin/main via #421 force-add; this PR closes the recurrence by making the gitignore/tracked state consistent. Future checkouts/clean cycles now update the wrapper canonically.
+
 
 > Cycle-8 PR #444 side-finding (anima 2026-05-23 session): "hexa bash wrapper
 > was missing on disk mid-session (only hexa.real + hxv2 present, hexa.shim-
