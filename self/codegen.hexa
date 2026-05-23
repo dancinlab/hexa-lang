@@ -2808,6 +2808,26 @@ fn gen2_stmt(node, depth) {
         if op == "%" {
             return pad + lhs + " = hexa_mod(" + lhs + ", " + rhs + ");\n"
         }
+        // r14-MMMM: `**=` `<<=` `>>=` `|=` `&=` `^=` mirror the BinaryOp
+        // emit shapes (codegen.hexa:4574-4580) — runtime helpers reused.
+        if op == "**" {
+            return pad + lhs + " = hexa_pow(" + lhs + ", " + rhs + ");\n"
+        }
+        if op == "<<" {
+            return pad + lhs + " = hexa_int(HX_INT(" + lhs + ") << HX_INT(" + rhs + "));\n"
+        }
+        if op == ">>" {
+            return pad + lhs + " = hexa_int(HX_INT(" + lhs + ") >> HX_INT(" + rhs + "));\n"
+        }
+        if op == "|" {
+            return pad + lhs + " = hexa_int(HX_INT(" + lhs + ") | HX_INT(" + rhs + "));\n"
+        }
+        if op == "&" {
+            return pad + lhs + " = hexa_int(HX_INT(" + lhs + ") & HX_INT(" + rhs + "));\n"
+        }
+        if op == "^" {
+            return pad + lhs + " = hexa_int(HX_INT(" + lhs + ") ^ HX_INT(" + rhs + "));\n"
+        }
         return pad + "/* compound " + op + " */\n"
     }
 

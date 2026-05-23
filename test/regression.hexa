@@ -246,6 +246,28 @@ record("T40", "logical assign (??=, ||=, &&=)",
     "a=[" + t40_a + "] b=[" + t40_b + "] c=[" + t40_c + "] d=[" + t40_d + "] e=[" + t40_e + "]")
 
 // ------------------------------------------------------------
+// T40b — Compound assign for `**` `<<` `>>` `|` `&` `^` (PROBE r14-MMMM
+//        / WWW-1). Lexer 가 `**=` 등 6 토큰을 `op` + `=` 로 깨뜨려
+//        "unexpected token Eq" 던지던 회귀 방지. binary op runtime
+//        helper 재사용으로 codegen 변경 최소.
+// ------------------------------------------------------------
+let mut t40b_a = 5
+t40b_a **= 2                  // 25
+let mut t40b_b = 8
+t40b_b <<= 1                  // 16
+let mut t40b_c = 32
+t40b_c >>= 2                  // 8
+let mut t40b_d = 5
+t40b_d |= 3                   // 7
+let mut t40b_e = 7
+t40b_e &= 5                   // 5
+let mut t40b_f = 5
+t40b_f ^= 3                   // 6
+record("T40b", "compound assign (**=, <<=, >>=, |=, &=, ^=)",
+    t40b_a == 25 && t40b_b == 16 && t40b_c == 8 && t40b_d == 7 && t40b_e == 5 && t40b_f == 6,
+    "a=" + to_string(t40b_a) + " b=" + to_string(t40b_b) + " c=" + to_string(t40b_c) + " d=" + to_string(t40b_d) + " e=" + to_string(t40b_e) + " f=" + to_string(t40b_f))
+
+// ------------------------------------------------------------
 // T41 — `.method()` 다음-줄 체인 continuation (Rust/JS-style).
 //        이전: "unexpected token Dot" interp / silent drop AOT.
 // ------------------------------------------------------------

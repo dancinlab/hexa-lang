@@ -1466,7 +1466,7 @@ fn parse_stmt() {
     let pk = p_peek_kind()
     // Empty-LHS guard: reject `  = rhs` / `  += rhs` etc. with clear error.
     let lhs_kind = expr.kind
-    let is_assign_tok = pk == "Eq" || pk == "PlusEq" || pk == "MinusEq" || pk == "StarEq" || pk == "SlashEq" || pk == "PercentEq" || pk == "NullCoalescingAssign" || pk == "OrAssign" || pk == "AndAssign"
+    let is_assign_tok = pk == "Eq" || pk == "PlusEq" || pk == "MinusEq" || pk == "StarEq" || pk == "SlashEq" || pk == "PercentEq" || pk == "PowerEq" || pk == "ShlEq" || pk == "ShrEq" || pk == "BitOrEq" || pk == "BitAndEq" || pk == "BitXorEq" || pk == "NullCoalescingAssign" || pk == "OrAssign" || pk == "AndAssign"
     if is_assign_tok && (lhs_kind == "" || lhs_kind == "Empty") {
         p_record_error(stmt_start_tok.line, stmt_start_tok.col, "empty LHS before '=' — expected identifier or expression on left-hand side")
         // Recover: consume the assign op + RHS so parse_stmt advances past the bad line.
@@ -1486,9 +1486,9 @@ fn parse_stmt() {
             "target": "", "trait_name": "", "methods": ""
         }
     }
-    if pk == "PlusEq" || pk == "MinusEq" || pk == "StarEq" || pk == "SlashEq" || pk == "PercentEq" {
+    if pk == "PlusEq" || pk == "MinusEq" || pk == "StarEq" || pk == "SlashEq" || pk == "PercentEq" || pk == "PowerEq" || pk == "ShlEq" || pk == "ShrEq" || pk == "BitOrEq" || pk == "BitAndEq" || pk == "BitXorEq" {
         let op_tok = p_advance()
-        let op_str = if pk == "PlusEq" { "+" } else { if pk == "MinusEq" { "-" } else { if pk == "StarEq" { "*" } else { if pk == "SlashEq" { "/" } else { "%" } } } }
+        let op_str = if pk == "PlusEq" { "+" } else { if pk == "MinusEq" { "-" } else { if pk == "StarEq" { "*" } else { if pk == "SlashEq" { "/" } else { if pk == "PercentEq" { "%" } else { if pk == "PowerEq" { "**" } else { if pk == "ShlEq" { "<<" } else { if pk == "ShrEq" { ">>" } else { if pk == "BitOrEq" { "|" } else { if pk == "BitAndEq" { "&" } else { "^" } } } } } } } } } }
         p_skip_newlines()
         let rhs = parse_expr()
         return #{
