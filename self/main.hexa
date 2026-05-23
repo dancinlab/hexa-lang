@@ -1644,28 +1644,81 @@ fn install_dir_from_argv0() {
     return pd
 }
 
+// ── F-LIVE-DISPATCH (2026-05-24): multiarch hexa_v2 selection ──────────
+// The committed transpiler binary is platform-specific: `self/native/hexa_v2`
+// is the Mac arm64 Mach-O (legacy name, preserved to avoid churning the
+// build chain), and `self/native/hexa_v2_linux_x86_64` is the Linux x86_64
+// ELF (added PR #554). The runtime cmd_* path (cmd_build → resolve_hexa_v2)
+// previously hardcoded the legacy `hexa_v2` name at all three probe sites, so
+// a `hexa drill` (→ dispatch_absorbed → cmd_run → hexa build → cmd_build)
+// dispatched to a Linux pool host invoked the Mac arm64 binary on Linux →
+// SIGSEGV ("Segmentation fault (core dumped)" on the [1/2] transpile step).
+//
+// This is the runtime-side counterpart of tool/build_hexa_cli.hexa's
+// _pick_hexa_v2(): same (os, arch) → basename mapping, same graceful
+// fallback to the legacy name when the arch-specific binary isn't committed
+// yet (older clones). Kept as a sibling here (rather than imported) because
+// self/main.hexa is the self-host dispatcher root and must stay flatten-clean
+// without a cross-tool `use` edge into tool/.
+// See [[reference_ubu_arch_transpiler_constraint]].
+fn _hexa_v2_basename() {
+    // host (os, arch) → committed-binary basename.
+    let os   = exec("uname 2>/dev/null | tr -d ' \\n\\t'")
+    let arch = exec("uname -m 2>/dev/null | tr -d ' \\n\\t'")
+    if os == "Linux" && (arch == "x86_64" || arch == "amd64") {
+        return "hexa_v2_linux_x86_64"
+    }
+    // Mac arm64 (legacy name) + every other host (graceful: surfaces an
+    // exec/arch error rather than a wrong-dir miss, matching pre-multiarch).
+    return "hexa_v2"
+}
+
+// _pick_hexa_v2_in_dir: given the directory that contains `self/native/`,
+// return the executable arch-matching transpiler path, or "" if neither the
+// arch-specific binary nor the legacy `hexa_v2` is present/executable there.
+// Mirrors _pick_hexa_v2()'s per-dir graceful fallback (arch-specific first,
+// then legacy name within the SAME dir).
+fn _pick_hexa_v2_in_dir(native_dir) {
+    let base = _hexa_v2_basename()
+    if base != "hexa_v2" {
+        let arch_bin = native_dir + "/" + base
+        let arch_chk = exec("test -x '" + arch_bin + "' && printf yes || printf no")
+        if arch_chk == "yes" {
+            return arch_bin
+        }
+    }
+    // Fallback to the legacy name in the same dir (covers Mac arm64 and
+    // pre-multiarch clones where the suffixed binary isn't checked in).
+    let legacy_bin = native_dir + "/hexa_v2"
+    let legacy_chk = exec("test -x '" + legacy_bin + "' && printf yes || printf no")
+    if legacy_chk == "yes" {
+        return legacy_bin
+    }
+    return ""
+}
+
 fn resolve_hexa_v2() {
     // 1) argv[0] 기반 — 가장 우선. 설치 디렉토리와 `./hexa` 실행 경로가 같은
-    //    서브트리라는 성질 이용 (dirname(./hexa) + /self/native/hexa_v2).
+    //    서브트리라는 성질 이용 (dirname(./hexa) + /self/native/<arch-bin>).
     let inst = install_dir_from_argv0()
     if len(inst) > 0 {
-        let argv_bin = inst + "/self/native/hexa_v2"
-        let argv_chk = exec("test -x '" + argv_bin + "' && printf yes || printf no")
-        if argv_chk == "yes" {
+        let argv_bin = _pick_hexa_v2_in_dir(inst + "/self/native")
+        if len(argv_bin) > 0 {
             return argv_bin
         }
     }
     // 2) cwd-relative — 리포 루트에서 실행 시 기존 동작 유지.
-    let cwd_bin = "./self/native/hexa_v2"
-    let cwd_chk = exec("test -x '" + cwd_bin + "' && printf yes || printf no")
-    if cwd_chk == "yes" {
+    let cwd_bin = _pick_hexa_v2_in_dir("./self/native")
+    if len(cwd_bin) > 0 {
         return cwd_bin
     }
     // 3) $HOME fallback — 개발 기본 위치.
-    let home_bin = exec("printf '%s' \"$HEXA_LANG/self/native/hexa_v2\"")
-    let home_chk = exec("test -x '" + home_bin + "' && printf yes || printf no")
-    if home_chk == "yes" {
-        return home_bin
+    let home_root = exec("printf '%s' \"$HEXA_LANG/self/native\"")
+    if len(home_root) > 0 {
+        let home_bin = _pick_hexa_v2_in_dir(home_root)
+        if len(home_bin) > 0 {
+            return home_bin
+        }
     }
     return ""
 }
