@@ -188,12 +188,12 @@ fn main() {
     println("[PASS.quick] ROI#152 IC-slot regen: decls=" + to_string(decl_count) + " refs=" + to_string(ref_count) + " missing=0")
 
     // ── Extended scale test ─────────────────────────────────
-    // Compile self/codegen_c2.hexa (9K+ LOC, 900+ IC slots) via hexa_v2.
+    // Compile self/codegen.hexa (9K+ LOC, 900+ IC slots) via hexa_v2.
     // This is the exact module that regressed historically — it is BOTH
     // the victim (its compiled output drops IC decls) AND the compiler
     // (its source holds the fix), so it's the right stress case.
     // Skip if ROI152_SKIP_BIG is set (e.g. CI without interp binary).
-    let big_src = "self/codegen_c2.hexa"
+    let big_src = "self/codegen.hexa"
     if !file_exists(big_src) {
         println("  (extended test skipped — " + big_src + " absent)")
         return

@@ -46,7 +46,7 @@ p2_stage(
 // Stage 2 — Native lowering via existing C backend
 p2_stage(
     "P2_LOWER_C",
-    "PLANNED (reuses self/codegen_c2.hexa)",
+    "PLANNED (reuses self/codegen.hexa)",
     "build/hexa_ir_phase2.json",
     "build/hexa_self_p2.c"
 )
