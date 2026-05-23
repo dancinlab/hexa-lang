@@ -159,7 +159,7 @@ pub fn incr_cache_compute_key(obj_path: string) -> string {
     if len(obj_path) == 0 { return "" }
     if !pfs_file_exists(obj_path) { return "" }
     let h = sha256_file(obj_path)
-    if h == nil { return "" }
+    if !h { return "" }
     return h
 }
 
@@ -256,7 +256,7 @@ fn _load_cache_rows(cache_dir: string, abi_version: int,
     let path = _join_path(cache_dir, _incr_cache_blob_name())
     if !pfs_file_exists(path) { return [] }
     let bytes = read_file_bytes(path)
-    if bytes == nil { return [] }
+    if !bytes { return [] }
     // Reassemble bytes → string for the HXC v2 codec (lib expects
     // string input; the bytes are already the encoded blob).
     let mut blob = ""
@@ -270,7 +270,7 @@ fn _load_cache_rows(cache_dir: string, abi_version: int,
         i = i + 1
     }
     let rows = hxc_v2_decode_records(blob)
-    if rows == nil { return [] }
+    if !rows { return [] }
     if rows.length == 0 { return [] }
     // Validate header — invalidation §3.E (1)/(2)/(3)/(4).
     let hdr = rows[0] as array
@@ -292,7 +292,7 @@ fn _save_cache_rows(cache_dir: string, rows: array) -> bool {
     let path = _join_path(cache_dir, _incr_cache_blob_name())
     let tmp = path + ".tmp"
     let blob = hxc_v2_encode_records(rows)
-    if blob == nil { return false }
+    if !blob { return false }
     // String → [int] bytes for write_bytes; preserves the byte-canonical
     // wire (every char is one byte in the cc2 output domain).
     let buf = []
