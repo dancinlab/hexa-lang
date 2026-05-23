@@ -79,6 +79,31 @@ verify --expr wilson_hilferty(1)=0
 작업 지시의 제약 — "verify 가 numerical 불가면 finding note 만" — 에 따라 등록을
 보류하고 본 note 만 남긴다. (g5: LLM self-judge 금지, verdict 는 위 VERBATIM 인용.)
 
+## 해제됨 (2026-05-24 — `feat/verify-float-recompute-path`)
+
+verify 계산기에 **float NUMERICAL recompute path** 추가 (`tool/verify_cli.hexa`):
+- `welch_t_crit(df)` + `wilson_hilferty_p(t, df)` 등록 (engine.hexa verbatim port).
+- `--expr` 가 float-fn 을 `to_int` truncation 전에 라우팅 → ε=1e-9 tolerance 비교.
+- within-ε → 🟢 SUPPORTED-NUMERICAL · out-of-ε → 🔴 FALSIFIED (둘 다 closed).
+- 부수: `nodes_of_kind` 누락 helper 추가 (PR #312 hxc-retire 후 `bin/hexa-verify`
+  rebuild 차단하던 pre-existing 컴파일 break — `cmd_verify_id` 전용).
+
+해제 후 실측 (VERBATIM):
+```
+$ hexa verify --expr welch_t_crit 1 12.706
+verify --expr welch_t_crit(1.0)=12.706
+  calc   = 12.706  ≈ expected 12.706  (|Δ|=0.0 ≤ ε=1e-9)
+  tier   = 🟢 SUPPORTED-NUMERICAL  (hexa-native libm-class recompute, TECS-L n6-rep Tier2)
+
+$ hexa verify --expr wilson_hilferty_p 0 10 1.0
+verify --expr wilson_hilferty_p(0.0,10.0)=1.0
+  calc   = 1.0  ≈ expected 1.0  (|Δ|=0.0 ≤ ε=1e-9)
+  tier   = 🟢 SUPPORTED-NUMERICAL  (hexa-native libm-class recompute, TECS-L n6-rep Tier2)
+```
+→ 이제 RFC 047/046 의 통계-변환 atom (`mc_integrator_welch_t_table` ·
+`wilson_hilferty_transform`) 은 🟢 NUMERICAL 게이트를 충족. (단 `register_from_event`
+는 여전히 🔵 만 promotable — 🟢 atom 등록은 atlas register 게이트의 별도 follow-up.)
+
 ## 등록을 풀려면 (carry-forward — 별도 사이클)
 g5 를 충족하려면 verify 계산기에 float 통계 recompute path 를 추가해야 한다. 후보:
 
