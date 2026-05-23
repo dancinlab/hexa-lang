@@ -1,0 +1,158 @@
+// stdlib/cloud/env_passthrough_test.hexa — falsifiers for
+// cloud_validate_env_passthrough (G5, inbox patch
+// runpod-env-var-wiring-audit-helper-2026-05-24).
+//
+// LLM-free, network-free unit test. Materialises minimal dispatcher
+// (bash) + train (python) fixtures to /tmp, runs the helper, asserts the
+// 5 falsifiers from the inbox patch + a couple of corner cases.
+//
+// Run:   hexa run stdlib/cloud/env_passthrough_test.hexa
+// PASS:  exits 0, prints "env_passthrough_test PASS".
+
+use "stdlib/cloud/runpod"
+
+fn _write(path: str, body: str) {
+    write_file(path, body)
+}
+
+fn _has(xs: [str], s: str) -> int {
+    let mut i = 0
+    while i < len(xs) {
+        if xs[i] == s { return 1 }
+        i = i + 1
+    }
+    return 0
+}
+
+fn _ts() -> str {
+    return to_string(timestamp())
+}
+
+fn _fail(case: str, msg: str) {
+    println("FAIL " + case + ": " + msg)
+    exit(1)
+}
+
+fn main() {
+    let stamp = _ts()
+    let dir = "/tmp/env_pt_test_" + stamp
+    exec("mkdir -p " + dir)
+    let disp = dir + "/dispatch.sh"
+    let train = dir + "/train.py"
+
+    // ── case 1: F-G5-1 — dispatcher defines AXIS_FOO but does NOT forward
+    //            it to the train command → missing_passthrough = ["AXIS_FOO"]
+    _write(disp, "#!/bin/bash\nAXIS_FOO=1.5\npython3 train.py --steps 100\n")
+    _write(train, "import argparse\nimport os\np = argparse.ArgumentParser()\np.add_argument('--steps', type=int)\nargs = p.parse_args()\n")
+    let r1 = cloud_validate_env_passthrough(disp, train, ["AXIS_FOO"])
+    if r1.ok != 0 { _fail("case1", "expected ok=0, got " + to_string(r1.ok)) }
+    if _has(r1.missing_passthrough, "AXIS_FOO") == 0 {
+        _fail("case1", "expected AXIS_FOO in missing_passthrough, got " + r1.message)
+    }
+    println("case1 PASS — F-G5-1 dispatcher non-forwarding caught")
+
+    // ── case 2: F-G5-2 — argparse hyphenated flag (--axis-foo) satisfies
+    //            consumption, dispatcher forwards via --env. PASS.
+    _write(disp, "#!/bin/bash\nAXIS_FOO=1.5\nrunpodctl pod create --env AXIS_FOO=$AXIS_FOO -- python3 train.py --axis-foo=$AXIS_FOO\n")
+    _write(train, "import argparse\np = argparse.ArgumentParser()\np.add_argument('--axis-foo', type=float)\nargs = p.parse_args()\n")
+    let r2 = cloud_validate_env_passthrough(disp, train, ["AXIS_FOO"])
+    if r2.ok != 1 { _fail("case2", "expected ok=1 (argparse hyphen), got " + r2.message) }
+    println("case2 PASS — F-G5-2 argparse --axis-foo satisfies consumption")
+
+    // ── case 2b: argparse underscore flag (--axis_foo) — also satisfies
+    _write(train, "import argparse\np = argparse.ArgumentParser()\np.add_argument('--axis_foo', type=float)\nargs = p.parse_args()\n")
+    let r2b = cloud_validate_env_passthrough(disp, train, ["AXIS_FOO"])
+    if r2b.ok != 1 { _fail("case2b", "expected ok=1 (argparse underscore), got " + r2b.message) }
+    println("case2b PASS — argparse --axis_foo satisfies consumption")
+
+    // ── case 2c: os.environ.get("AXIS_FOO") consumption form
+    _write(train, "import os\nval = os.environ.get('AXIS_FOO', '0.0')\n")
+    let r2c = cloud_validate_env_passthrough(disp, train, ["AXIS_FOO"])
+    if r2c.ok != 1 { _fail("case2c", "expected ok=1 (os.environ.get), got " + r2c.message) }
+    println("case2c PASS — os.environ.get satisfies consumption")
+
+    // ── case 2d: os.getenv("AXIS_FOO") consumption form
+    _write(train, "import os\nval = os.getenv('AXIS_FOO', '0.0')\n")
+    let r2d = cloud_validate_env_passthrough(disp, train, ["AXIS_FOO"])
+    if r2d.ok != 1 { _fail("case2d", "expected ok=1 (os.getenv), got " + r2d.message) }
+    println("case2d PASS — os.getenv satisfies consumption")
+
+    // ── case 2e: os.environ["AXIS_FOO"] consumption form
+    _write(train, "import os\nval = os.environ['AXIS_FOO']\n")
+    let r2e = cloud_validate_env_passthrough(disp, train, ["AXIS_FOO"])
+    if r2e.ok != 1 { _fail("case2e", "expected ok=1 (os.environ[]), got " + r2e.message) }
+    println("case2e PASS — os.environ[] satisfies consumption")
+
+    // ── case 3: F-G5-4 — multi-line $CMD with backslash continuation.
+    //            Whole-file scan must still see the AXIS_FOO reference.
+    _write(disp, "#!/bin/bash\nAXIS_FOO=1.5\nCMD=\"python3 train.py \\\n  --axis-foo=$AXIS_FOO \\\n  --steps 100\"\neval $CMD\n")
+    _write(train, "import argparse\np = argparse.ArgumentParser()\np.add_argument('--axis-foo', type=float)\nargs = p.parse_args()\n")
+    let r3 = cloud_validate_env_passthrough(disp, train, ["AXIS_FOO"])
+    if r3.ok != 1 { _fail("case3", "expected ok=1 (line-continuation), got " + r3.message) }
+    println("case3 PASS — F-G5-4 multi-line $CMD handled")
+
+    // ── case 4: F-G5-5 — bash ${AXIS_FOO:-default} brace form
+    _write(disp, "#!/bin/bash\nAXIS_FOO=1.5\npython3 train.py --axis-foo=${AXIS_FOO:-0.5}\n")
+    _write(train, "import argparse\np = argparse.ArgumentParser()\np.add_argument('--axis-foo', type=float)\nargs = p.parse_args()\n")
+    let r4 = cloud_validate_env_passthrough(disp, train, ["AXIS_FOO"])
+    if r4.ok != 1 { _fail("case4", "expected ok=1 (brace default), got " + r4.message) }
+    println("case4 PASS — F-G5-5 ${VAR:-default} brace form handled")
+
+    // ── case 5: multi-var — some passthrough, some consumption missing.
+    //   AXIS_LR     — fully wired (in disp + in train)
+    //   AXIS_BSZ    — in disp but train does not read it       → consumption miss
+    //   AXIS_HEAD_LR — NOT in disp, but train DOES read it     → passthrough miss
+    _write(disp,
+        "#!/bin/bash\n" +
+        "AXIS_LR=1e-3\n" +
+        "AXIS_BSZ=8\n" +
+        "runpodctl pod create --env AXIS_LR=$AXIS_LR --env AXIS_BSZ=$AXIS_BSZ -- python3 train.py --axis-lr=$AXIS_LR\n")
+    _write(train,
+        "import os\nimport argparse\n" +
+        "p = argparse.ArgumentParser()\n" +
+        "p.add_argument('--axis-lr', type=float)\n" +
+        "args = p.parse_args()\n" +
+        "head_lr = os.environ.get('AXIS_HEAD_LR', '1e-4')\n")
+    let r5 = cloud_validate_env_passthrough(disp, train, ["AXIS_LR", "AXIS_BSZ", "AXIS_HEAD_LR"])
+    if r5.ok != 0 { _fail("case5", "expected ok=0 (mixed), got " + r5.message) }
+    if _has(r5.missing_passthrough, "AXIS_HEAD_LR") == 0 {
+        _fail("case5", "expected AXIS_HEAD_LR in missing_passthrough — " + r5.message)
+    }
+    if _has(r5.missing_consumption, "AXIS_BSZ") == 0 {
+        _fail("case5", "expected AXIS_BSZ in missing_consumption — " + r5.message)
+    }
+    if _has(r5.missing_passthrough, "AXIS_LR") == 1 {
+        _fail("case5", "AXIS_LR should NOT be missing_passthrough — " + r5.message)
+    }
+    if _has(r5.missing_consumption, "AXIS_LR") == 1 {
+        _fail("case5", "AXIS_LR should NOT be missing_consumption — " + r5.message)
+    }
+    println("case5 PASS — multi-var mixed verdict correct")
+
+    // ── case 6: anima R8 saga shape — 0 reads / 0 forwarding.
+    //            All 3 axes in both missing_* lists.
+    _write(disp, "#!/bin/bash\nAXIS_LR=1e-3\nAXIS_BSZ=8\nAXIS_HEAD_LR=1e-4\npython3 train.py --steps 100\n")
+    _write(train, "import argparse\np = argparse.ArgumentParser()\np.add_argument('--steps', type=int)\nargs = p.parse_args()\n")
+    let r6 = cloud_validate_env_passthrough(disp, train, ["AXIS_LR", "AXIS_BSZ", "AXIS_HEAD_LR"])
+    if r6.ok != 0 { _fail("case6", "expected ok=0 (anima R8), got " + r6.message) }
+    if len(r6.missing_passthrough) != 3 { _fail("case6", "expected 3 missing_passthrough, got " + to_string(len(r6.missing_passthrough))) }
+    if len(r6.missing_consumption) != 3 { _fail("case6", "expected 3 missing_consumption, got " + to_string(len(r6.missing_consumption))) }
+    println("case6 PASS — anima R8 silent-bypass shape detected (3/3 + 3/3)")
+
+    // ── case 7: empty env_vars — vacuous PASS
+    let r7 = cloud_validate_env_passthrough(disp, train, [])
+    if r7.ok != 1 { _fail("case7", "expected ok=1 (empty vars), got " + r7.message) }
+    println("case7 PASS — empty env_vars vacuous PASS")
+
+    // ── case 8: missing dispatcher — fail with clear message
+    let r8 = cloud_validate_env_passthrough("/nonexistent/disp.sh", train, ["AXIS_FOO"])
+    if r8.ok != 0 { _fail("case8", "expected ok=0 (missing disp), got " + r8.message) }
+    if r8.message.index_of("not found") < 0 { _fail("case8", "expected 'not found' in message, got " + r8.message) }
+    println("case8 PASS — missing dispatcher detected")
+
+    // ── cleanup
+    exec("rm -rf " + dir)
+
+    println("env_passthrough_test PASS — 10/10 cases")
+    exit(0)
+}
