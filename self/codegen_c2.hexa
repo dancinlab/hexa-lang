@@ -1386,6 +1386,14 @@ fn codegen_c2(ast) {
     // 이전 구현은 `int main()` 으로 argv 를 받지 않아 args() 가 항상 빈 배열을
     // 반환했다. main.hexa 의 dispatch (av[2] 등) 가 동작하려면 필수.
     parts.push("int main(int argc, char** argv) {\n")
+    // Line-buffer stdout/stderr so `eprintln` / `print` from a daemon
+    // (`while true`) hits the destination FD per line instead of sitting
+    // in the process-local FILE* buffer until exit. Without this, hexa_run
+    // daemons under `nohup > out 2> err &` show 0-byte log files until
+    // they exit. _IOLBF matches the de-facto Unix daemon convention.
+    // (inbox patch proc-spawn-supervised-daemon-silent-exit gap #2.)
+    parts.push("    setvbuf(stdout, NULL, _IOLBF, 0);\n")
+    parts.push("    setvbuf(stderr, NULL, _IOLBF, 0);\n")
     parts.push("    hexa_set_args(argc, argv);\n")
     // B20: per-thread FP control word init. Always safe to call — zero-op on
     // substrates without MXCSR/FPCR. Placing before any user init ensures
@@ -8338,6 +8346,11 @@ fn codegen_c2_full(ast) {
     out_parts.push(fn_parts.join(""))
     // T3 fix: emit `int main(int argc, char** argv)` + hexa_set_args.
     out_parts.push("int main(int argc, char** argv) {\n")
+    // Line-buffer stdout/stderr per daemon convention — see sibling main()
+    // emit above for rationale. (inbox patch
+    // proc-spawn-supervised-daemon-silent-exit gap #2.)
+    out_parts.push("    setvbuf(stdout, NULL, _IOLBF, 0);\n")
+    out_parts.push("    setvbuf(stderr, NULL, _IOLBF, 0);\n")
     out_parts.push("    hexa_set_args(argc, argv);\n")
     if len(_strlit_keys) > 0 {
         out_parts.push("    __hexa_strlit_init__" + _hexa_cert_module_name() + "();\n")
