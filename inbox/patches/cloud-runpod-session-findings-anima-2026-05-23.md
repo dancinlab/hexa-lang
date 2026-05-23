@@ -1,6 +1,18 @@
 # `hexa cloud` / runpod — anima 2026-05-23 session findings (4 items)
 
-> **Status (partial):** R1 fixed — `stdlib/cloud/runpod.hexa` adds `runpod_list_pods()` which tries the canonical `runpodctl pod list -o json` (2.x) and falls back to deprecated `get pods` (1.x) on `unknown command`/`unrecognized`. Stable interface for downstream orphan-detection scripts. R2/R3/R4 still open — feature additions (auto-terminate watchdog · `--resume` / `--via-hf` copy · structured `--env K=v`).
+> **Status (2026-05-24 sync):**
+> - **R1 — CLOSED** by PR #388 (`490b05ab` `feat(stdlib/cloud/runpod): runpod_list_pods — runpodctl 2.x/1.x bridge`). Downstream sees a stable interface independent of runpodctl version.
+> - **R2 (auto-terminate-on result.json watchdog) — OPEN**, partially overlapped by:
+>   - PR #612 `cloud(diag): pod 상태 진단 verb — cloud list + cloud status` (read-only status surface)
+>   - PR #614 `cloud(diag): orphans + owner-tag verb` (orphan detection L2)
+>   - PR #615 `cloud(diag): diag verb (nvidia-smi+ps+tail) + HEXA_LANG log` (L3 introspection)
+>   - Diag verbs give the watchdog its inputs but the **`result.json`-triggered auto-teardown loop itself is not yet wired**. Sibling patch `hexa cloud guard UX + pod-lock` (PR #646, F5) proposes a tag-based `owner_lock + protected_until` extension to `cloud_create_pod_opts` — orthogonal mechanism (lifecycle-side, not completion-side) but converges on the same operator-time saving.
+> - **R3 (`--resume` / `--via-hf` copy-from) — OPEN**. Existing `cloud_copy_from_opts` in `stdlib/cloud/cloud.hexa:331` is single-shot scp. No `rsync --partial --append-verify` wrapper. The HF-via-pod pattern (R3 option 2) remains the only evidence-backed mitigation; anima continues to use it ad-hoc per fire.
+> - **R4 (`hexa cloud run --env K=V` structured env) — OPEN**. `cloud_run_opts(host, ssh_opts, argv)` already takes a structured `argv: [str]` (so values with spaces survive once they enter the CLI layer), but `bin/cloud_cli.hexa` exposes no `--env` flag — anima-side `dispatch_*.sh` still composes `env K=v ...` as a shell string and word-splits remotely. Needs `--env K=V` (repeatable) or `--env-file <path>` in `cloud_cli.hexa::main` + prepend to `argv` before `cloud_run_opts`.
+>
+> **Related merged work (not closing R2/R3/R4 directly):** PR #429 (vast.ai backend mirror) · PR #429 retain-on-fail guard · PR #629 dispatcher bootstrap + wait + ssh-endpoint surface · PR #646 cloud-guard UX + pod-lock filing.
+>
+> Net: **1 of 4 CLOSED, 3 OPEN (R2/R3/R4 carry forward as feature work, not regressions).**
 
 **Reporter**: anima (`dancinlab/anima` downstream consumer)
 **Severity**: low-medium (each item independently workaroundable; consolidation reduces operator wall-time)
