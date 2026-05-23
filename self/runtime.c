@@ -10030,10 +10030,17 @@ HexaVal hexa_exec_capture(HexaVal cmd) {
         hxlcl_execl("/bin/sh", "sh", "-c", HX_STR(cmd), (char*)NULL);
         _exit(127);
     }
-    // parent: close write ends, drain both pipes.
-    // Simple drain loop: alternate non-blocking would be better but for
-    // typical build-script command sizes (sub-MB) sequential is fine —
-    // we close(write) immediately so EOF propagates once child exits.
+    // parent: close write ends, drain both pipes via select().
+    //
+    // The previous loop read stdout then stderr with BLOCKING reads in
+    // strict alternation. That deadlocks on any child that writes a lot to
+    // one stream and little to the other: while the parent blocks reading
+    // the empty stream, the busy stream's 64 KB kernel pipe buffer fills,
+    // the child blocks on write(), and so never produces the byte the
+    // parent is waiting for — a permanent hang. Observed downstream as
+    // `hexa cloud run` hanging on >1-min remote jobs after they exit clean
+    // (inbox patch cloud-cli-run-hang). select() reads whichever fd is
+    // ready, so neither buffer can wedge the other.
     hxlcl_close(out_pipe[1]);
     hxlcl_close(err_pipe[1]);
     char buf[4096];
@@ -10046,7 +10053,17 @@ HexaVal hexa_exec_capture(HexaVal cmd) {
     int of = out_pipe[0], ef = err_pipe[0];
     int open_mask = 3; // bit 0 = stdout, bit 1 = stderr
     while (open_mask) {
-        if (open_mask & 1) {
+        fd_set rfds;
+        FD_ZERO(&rfds);
+        int maxfd = -1;
+        if (open_mask & 1) { FD_SET(of, &rfds); if (of > maxfd) maxfd = of; }
+        if (open_mask & 2) { FD_SET(ef, &rfds); if (ef > maxfd) maxfd = ef; }
+        if (maxfd < 0) break;
+        int sr = hxlcl_select(maxfd + 1, &rfds, (void*)0, (void*)0, (void*)0);
+        // sr < 0: select error (EINTR or otherwise) — stop draining; the
+        // child is still reaped by waitpid below. Never busy-loop.
+        if (sr < 0) break;
+        if ((open_mask & 1) && FD_ISSET(of, &rfds)) {
             ssize_t n = hxlcl_read(of, buf, sizeof(buf));
             if (n > 0 && obuf) {
                 while (olen + (size_t)n + 1 > ocap) {
@@ -10056,11 +10073,11 @@ HexaVal hexa_exec_capture(HexaVal cmd) {
                     obuf = nb;
                 }
                 if (obuf) { hxlcl_memcpy(obuf + olen, buf, (size_t)n); olen += (size_t)n; obuf[olen] = '\0'; }
-            } else if (n == 0 || (n < 0)) {
+            } else if (n <= 0) {
                 open_mask &= ~1;
             }
         }
-        if (open_mask & 2) {
+        if ((open_mask & 2) && FD_ISSET(ef, &rfds)) {
             ssize_t n = hxlcl_read(ef, buf, sizeof(buf));
             if (n > 0 && ebuf) {
                 while (elen + (size_t)n + 1 > ecap) {
@@ -10070,7 +10087,7 @@ HexaVal hexa_exec_capture(HexaVal cmd) {
                     ebuf = nb;
                 }
                 if (ebuf) { hxlcl_memcpy(ebuf + elen, buf, (size_t)n); elen += (size_t)n; ebuf[elen] = '\0'; }
-            } else if (n == 0 || (n < 0)) {
+            } else if (n <= 0) {
                 open_mask &= ~2;
             }
         }
