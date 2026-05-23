@@ -1870,7 +1870,18 @@ fn gen2_fn_decl(node) {
                     }
                     let mut _skip = false
                     if inner_kind == "IfExpr" { _skip = true }
-                    if inner_kind == "MatchExpr" { _skip = true }
+                    // PROBE r14: trailing MatchExpr now routes through the
+                    // generic `return <expr>;` path below — gen2_match_expr
+                    // lowers MatchExpr to a (cond1 ? val1 : (cond2 ? val2 :
+                    // default)) ternary that is a valid C expression, so
+                    // wrapping it in `return __hexa_fn_arena_return(...)`
+                    // works. Previously this was marked _skip → the match
+                    // got emitted as a bare if/else cascade with each arm's
+                    // value silently discarded, and the void footer returned
+                    // hexa_void(). Repro fn:
+                    //   fn f(x: int) -> int { match x { 1 => 100, _ => 999 } }
+                    // pre-fix: print(f(1)) emitted "void"; post-fix: "100".
+                    // Sibling to the 2026-05-18 IfExpr tail-returnify fix.
                     // Call-to-void-builtin: wrapping `return println(...)`
                     // in C fails because hexa_println returns void. Skip
                     // the rewrite for these Call forms.
