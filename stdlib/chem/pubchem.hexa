@@ -1,0 +1,248 @@
+// stdlib/chem/pubchem.hexa — PubChem PUG-REST API client (compound properties).
+//
+// Endpoints: /compound/cid/<CID>/property/<…>/JSON (by id) and
+// /compound/name/<name>/cids/JSON (by name lookup).
+//
+// Strategy: lightweight `"key": …` substring slicing — sufficient for the
+// flat PropertyTable shape (one record under Properties[0]). Preserves
+// raw numeric tokens verbatim (so `MolecularWeight` survives as the exact
+// "180.16" string the API emitted, no float-rounding drift).
+//
+// PubChem 2025 schema: legacy `CanonicalSMILES` / `IsomericSMILES` were
+// collapsed into `SMILES` (isomeric, with stereo) and `ConnectivitySMILES`
+// (connectivity-only = legacy canonical). Both legacy + new keys probed.
+
+struct PubchemCompound {
+    cid: int,
+    name: string,
+    smiles_canonical: string,
+    smiles_isomeric: string,
+    molecular_formula: string,
+    molecular_weight: float,
+    iupac_name: string,
+    inchi: string,
+    inchi_key: string,
+    xlogp: float,
+    hbond_donors: int,
+    hbond_acceptors: int,
+    tpsa: float,
+}
+
+let PUBCHEM_BASE = "https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound"
+let PUBCHEM_PROPS = "CanonicalSMILES,IsomericSMILES,MolecularFormula,MolecularWeight,IUPACName,InChI,InChIKey,XLogP,HBondDonorCount,HBondAcceptorCount,TPSA"
+
+// ── string utilities ────────────────────────────────────────────────
+
+fn _idx(hay: string, needle: string, from: int) -> int {
+    let n = len(hay)
+    let m = len(needle)
+    if m == 0 { return from }
+    if m > n { return -1 }
+    let mut i = from
+    while i + m <= n {
+        if hay.substring(i, i + m) == needle { return i }
+        i = i + 1
+    }
+    return -1
+}
+
+fn _is_ws(c: string) -> bool {
+    return c == " " || c == "\t" || c == "\n" || c == "\r"
+}
+
+// Locate `"key":` in `body`; return byte index of the colon, -1 on miss.
+fn _key_colon(body: string, key: string, from: int) -> int {
+    let probe = "\"" + key + "\""
+    let p = _idx(body, probe, from)
+    if p < 0 { return -1 }
+    let mut i = p + len(probe)
+    let n = len(body)
+    while i < n && _is_ws(body.substring(i, i + 1)) { i = i + 1 }
+    if i >= n { return -1 }
+    if body.substring(i, i + 1) != ":" { return -1 }
+    return i
+}
+
+fn _skip_ws(body: string, i: int) -> int {
+    let n = len(body)
+    let mut k = i
+    while k < n && _is_ws(body.substring(k, k + 1)) { k = k + 1 }
+    return k
+}
+
+// Read the JSON string starting at `start` (must be `"`). Handles
+// \" \\ \n \t \r \/ — enough for PubChem (no \u in property fields).
+fn _read_str_at(body: string, start: int) -> string {
+    let n = len(body)
+    if start >= n || body.substring(start, start + 1) != "\"" { return "" }
+    let mut out = ""
+    let mut i = start + 1
+    while i < n {
+        let c = body.substring(i, i + 1)
+        if c == "\"" { return out }
+        if c == "\\" && i + 1 < n {
+            let e = body.substring(i + 1, i + 2)
+            if e == "\"" { out = out + "\""; i = i + 2; continue }
+            if e == "\\" { out = out + "\\"; i = i + 2; continue }
+            if e == "/"  { out = out + "/";  i = i + 2; continue }
+            if e == "n"  { out = out + "\n"; i = i + 2; continue }
+            if e == "t"  { out = out + "\t"; i = i + 2; continue }
+            if e == "r"  { out = out + "\r"; i = i + 2; continue }
+            out = out + e
+            i = i + 2
+            continue
+        }
+        out = out + c
+        i = i + 1
+    }
+    return out
+}
+
+// Read a bare numeric token at `start` (digits, -, ., e, E, +). Verbatim.
+fn _read_num_at(body: string, start: int) -> string {
+    let n = len(body)
+    let mut i = start
+    let mut out = ""
+    while i < n {
+        let c = body.substring(i, i + 1)
+        let is_digit = c == "0" || c == "1" || c == "2" || c == "3" || c == "4"
+                    || c == "5" || c == "6" || c == "7" || c == "8" || c == "9"
+        let is_sign  = c == "-" || c == "+"
+        let is_dot   = c == "."
+        let is_exp   = c == "e" || c == "E"
+        if !(is_digit || is_sign || is_dot || is_exp) { break }
+        out = out + c
+        i = i + 1
+    }
+    return out
+}
+
+fn _get_str(body: string, key: string, from: int) -> string {
+    let colon = _key_colon(body, key, from)
+    if colon < 0 { return "" }
+    let v = _skip_ws(body, colon + 1)
+    return _read_str_at(body, v)
+}
+
+fn _get_num_token(body: string, key: string, from: int) -> string {
+    let colon = _key_colon(body, key, from)
+    if colon < 0 { return "" }
+    let v = _skip_ws(body, colon + 1)
+    return _read_num_at(body, v)
+}
+
+fn _get_int(body: string, key: string, from: int) -> int {
+    let t = _get_num_token(body, key, from)
+    if len(t) == 0 { return 0 }
+    return to_int(t)
+}
+
+fn _get_float(body: string, key: string, from: int) -> float {
+    // MolecularWeight = JSON string ("180.16"); XLogP/TPSA = bare number.
+    let s = _get_str(body, key, from)
+    if len(s) > 0 { return to_float(s) }
+    let t = _get_num_token(body, key, from)
+    if len(t) == 0 { return 0.0 }
+    return to_float(t)
+}
+
+// ── public surface ──────────────────────────────────────────────────
+
+// Parse a PubChem PropertyTable body into a single PubchemCompound. Pure
+// (no network). Missing fields fall through as "" / 0 / 0.0 sentinels.
+pub fn pubchem_parse_compound(json_body: string) -> PubchemCompound {
+    let empty = PubchemCompound{
+        cid: 0, name: "", smiles_canonical: "", smiles_isomeric: "",
+        molecular_formula: "", molecular_weight: 0.0, iupac_name: "",
+        inchi: "", inchi_key: "", xlogp: 0.0,
+        hbond_donors: 0, hbond_acceptors: 0, tpsa: 0.0,
+    }
+    if len(json_body) == 0 { return empty }
+
+    // Single-record CID lookup: every key appears once, scan from 0.
+    let from = 0
+
+    // 2025 schema: ConnectivitySMILES = legacy canonical; SMILES =
+    // isomeric. Legacy keys probed as fallback for older snapshots.
+    let mut smi_can = _get_str(json_body, "ConnectivitySMILES", from)
+    if len(smi_can) == 0 { smi_can = _get_str(json_body, "CanonicalSMILES", from) }
+    let mut smi_iso = _get_str(json_body, "IsomericSMILES", from)
+    if len(smi_iso) == 0 { smi_iso = _get_str(json_body, "SMILES", from) }
+
+    return PubchemCompound{
+        cid: _get_int(json_body, "CID", from),
+        name: "",
+        smiles_canonical: smi_can,
+        smiles_isomeric: smi_iso,
+        molecular_formula: _get_str(json_body, "MolecularFormula", from),
+        molecular_weight: _get_float(json_body, "MolecularWeight", from),
+        iupac_name: _get_str(json_body, "IUPACName", from),
+        inchi: _get_str(json_body, "InChI", from),
+        inchi_key: _get_str(json_body, "InChIKey", from),
+        xlogp: _get_float(json_body, "XLogP", from),
+        hbond_donors: _get_int(json_body, "HBondDonorCount", from),
+        hbond_acceptors: _get_int(json_body, "HBondAcceptorCount", from),
+        tpsa: _get_float(json_body, "TPSA", from),
+    }
+}
+
+// Live fetch by CID. Returns empty sentinel (cid == 0) on bad input or
+// network failure — disambiguate via `c.cid > 0`.
+pub fn pubchem_fetch(cid: int) -> PubchemCompound {
+    let empty = PubchemCompound{
+        cid: 0, name: "", smiles_canonical: "", smiles_isomeric: "",
+        molecular_formula: "", molecular_weight: 0.0, iupac_name: "",
+        inchi: "", inchi_key: "", xlogp: 0.0,
+        hbond_donors: 0, hbond_acceptors: 0, tpsa: 0.0,
+    }
+    if cid <= 0 { return empty }
+    let url = PUBCHEM_BASE + "/cid/" + to_string(cid)
+        + "/property/" + PUBCHEM_PROPS + "/JSON"
+    let body = http_get(url)
+    if len(body) == 0 { return empty }
+    return pubchem_parse_compound(body)
+}
+
+// Parse the `IdentifierList.CID` array from a `/cids/JSON` body.
+fn _parse_cid_list(body: string) -> [int] {
+    let mut out = []
+    let key = _idx(body, "\"CID\"", 0)
+    if key < 0 { return out }
+    let lb = _idx(body, "[", key)
+    if lb < 0 { return out }
+    let rb = _idx(body, "]", lb)
+    if rb < 0 { return out }
+    let arr = body.substring(lb + 1, rb)
+    let parts = arr.split(",")
+    let mut i = 0
+    while i < len(parts) {
+        let t = parts[i].trim()
+        if len(t) > 0 { out.push(to_int(t)) }
+        i = i + 1
+    }
+    return out
+}
+
+fn _name_encode(name: string) -> string {
+    return name.replace(" ", "%20")
+}
+
+// Live name → CID list (most-relevant first per PubChem ranking).
+pub fn pubchem_search_by_name(name: string) -> [int] {
+    if len(name) == 0 { return [] }
+    let url = PUBCHEM_BASE + "/name/" + _name_encode(name) + "/cids/JSON"
+    let body = http_get(url)
+    if len(body) == 0 { return [] }
+    return _parse_cid_list(body)
+}
+
+// Live SMILES → first matching CID (0 sentinel on miss).
+pub fn pubchem_smiles_to_cid(smiles: string) -> int {
+    if len(smiles) == 0 { return 0 }
+    let url = PUBCHEM_BASE + "/smiles/" + smiles + "/cids/JSON"
+    let body = http_get(url)
+    if len(body) == 0 { return 0 }
+    let cids = _parse_cid_list(body)
+    if len(cids) == 0 { return 0 }
+    return cids[0]
+}
