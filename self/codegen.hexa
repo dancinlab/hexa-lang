@@ -6953,17 +6953,24 @@ fn gen2_enum_decl(node) {
     if _has_payload {
         parts.push("// @payload: enum " + name + " carries single-field payload variants — runtime form is HexaVal array [tag, payload]\n")
     }
-    // PR-2.1 (enum-to-string-codegen-emit RFC, stack PR-2/3, 2026-05-24):
-    // single-enum TAG_ENUM emit. Scoped strictly to `Direction` so the
-    // migration surface is one enum — every other enum still emits the
-    // legacy `hexa_int(N)` form and routes through the TAG_INT path
-    // (zero regression). Only unit-variant (no payload) variants migrate;
-    // a payload-bearing Direction would keep the array form (defensive —
-    // the test enum has none). The display literal "<Name>::<Variant>" is
-    // read directly by the now-live _hexa_to_string_rec TAG_ENUM branch,
-    // closing `to_string(Direction::X)`. PR-2.2 widens the gate to all
-    // unit-variant enums; PR-3 swaps the renderer to __enum_<Name>_names[].
-    let _enum_tag_migrate = (name == "Direction") && (!_has_payload)
+    // PR-2.2 (enum-to-string-codegen-emit RFC, stack PR-2/3, 2026-05-24):
+    // all-unit-variant TAG_ENUM emit. Widens PR-2.1's single-enum gate
+    // (`name == "Direction"`) to EVERY unit-variant (payload-free) enum.
+    // Each such enum's `#define <Name>_<Variant>` now emits
+    // hexa_enum_str("<Name>::<Variant>") (TAG_ENUM) instead of the legacy
+    // hexa_int(N) (TAG_INT) form, so `to_string(<Name>::<Variant>)` renders
+    // the display literal directly via the live _hexa_to_string_rec TAG_ENUM
+    // branch. The migration is value-uniform: the `#define` is the single
+    // source for both use-site values AND match-pattern constants, so the
+    // match path (gen2_match_cond plain-variant `hexa_eq(scrut, <Name>_<V>)`)
+    // stays correct — both operands flow through the same TAG_ENUM literal
+    // and hexa_eq's pointer-eq fast-path matches. Payload-bearing enums keep
+    // the legacy hexa_int(N) form for ALL their variants (the tag is reused
+    // as array index 0 by the `[tag, payload]` runtime shape + the payload
+    // match cond `hexa_eq(hexa_index_get(scrut, 0), <Name>_<V>)`), so the
+    // `!_has_payload` guard preserves that contract with zero regression.
+    // PR-3 swaps the renderer to the __enum_<Name>_names[] table (#555).
+    let _enum_tag_migrate = (!_has_payload)
     let mut i = 0
     while i < vc {
         let v = node.variants[i]
