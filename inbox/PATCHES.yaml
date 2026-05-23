@@ -37,7 +37,13 @@
   compiler_impact: shared via stdlib; v0 path uses curl shellout
   selftest_delta: "+1 (14 -> 15)"
   downstream_consumer: orpheus recovery/module/method_bitcoin_core_rpc.hexa
-  status: pending_external
+  status: applied
+  applied_at: 2026-05-24
+  note: |
+    Verified during cycle 12-15 housekeeping sweep (2026-05-24):
+    stdlib/http.hexa ships http_post_with_headers (line 179) +
+    http_post_with_headers_status (line 191), both listed in
+    @capabilities (line 12). pending_external → applied sync.
 
 - id: rfc020-enum-payload-variants
   source_commit: pending
