@@ -7103,9 +7103,11 @@ fn gen2_match_ternary(arms, scrutinee_c, idx) {
     // value may reference it (e.g. `Shape::Circle(r) -> r * r * 3`). A ternary
     // chain can't introduce a C local mid-expression, so wrap the value in a
     // GCC statement-expression that binds the var from `scrutinee_c[1]`.
+    let mut _enum_bind_name = ""
     if type_of(pat) != "string" && pat.kind == "EnumPath" && type_of(pat.left) != "string" && pat.left.kind == "Ident" {
         let _bn = pat.left.name
         if type_of(_bn) == "string" && _bn != "_" {
+            _enum_bind_name = _bn
             val = "({ HexaVal " + _hexa_mangle_ident(_bn) + " = hexa_index_get(" + scrutinee_c + ", hexa_int(1)); (" + val + "); })"
         }
     }
@@ -7135,6 +7137,14 @@ fn gen2_match_ternary(arms, scrutinee_c, idx) {
         // stmt-expr so the guard sees the scrutinee.
         if len(_bind_name) > 0 {
             _guard_c = "({ HexaVal " + _hexa_mangle_ident(_bind_name) + " = " + scrutinee_c + "; (" + _guard_c + "); })"
+        }
+        // PROBE r14-BBBB (ZZZ-1 follow-up): for an EnumPath payload binder
+        // (e.g. `Some(n) if n > 0 => …`) the guard expression refers to the
+        // payload binding `n`. Previously the wrap happened only for `val`,
+        // so the guard hit clang with `undeclared n`. Mirror the same
+        // stmt-expr wrap into the guard so `n` is in scope for the cond too.
+        if len(_enum_bind_name) > 0 {
+            _guard_c = "({ HexaVal " + _hexa_mangle_ident(_enum_bind_name) + " = hexa_index_get(" + scrutinee_c + ", hexa_int(1)); (" + _guard_c + "); })"
         }
         cond = "(" + cond + " && hexa_truthy(" + _guard_c + "))"
     }
