@@ -1,0 +1,364 @@
+// stdlib/stdlib_cli.hexa — `hexa stdlib` catalog CLI.
+//
+// CLI surface:
+//   hexa stdlib                       Catalog table (default = list).
+//   hexa stdlib list                  Same.
+//   hexa stdlib list --json           Machine-readable JSON.
+//   hexa stdlib --help, -h, help      Usage.
+//   hexa stdlib --version, -v         Version line.
+//
+// Purpose source = first-line header comment of each module file:
+//   // <prefix> — <purpose>    (em dash separator, hexa convention)
+// For directory entries the entry-point is probed in order:
+//   <dir>/<dir>.hexa  →  <dir>/mod.hexa  →  first *.hexa alphabetically.
+// SSOT lives with the source — no sidecar JSON.
+//
+// Stdlib root resolution:
+//   1. $HEXA_LANG/stdlib  (canonical repo-root override).
+//   2. ./stdlib           (in-tree run).
+//   3. <argv-script-dir>  (install: stdlib_cli.hexa sits inside stdlib/).
+
+let VERSION = "0.1.0"
+
+fn _stdlib_help() {
+    println("hexa stdlib — stdlib catalog (modules · dirs · tests · docs)")
+    println("")
+    println("usage:")
+    println("  stdlib                       Catalog table (default = list)")
+    println("  stdlib list                  Same")
+    println("  stdlib list --json           JSON dump (name, kind, purpose)")
+    println("  stdlib help | --help | -h")
+    println("  stdlib version | --version | -v")
+}
+
+// Read a process env var via the shell. Mirrors the intrinsics impl.
+fn _getenv(name: string) -> string {
+    if len(name) == 0 { return "" }
+    let n = len(name)
+    let mut i = 0
+    while i < n {
+        let c = name[i]
+        let ok_first = (c >= "A" && c <= "Z") || c == "_"
+        let ok_rest  = ok_first || (c >= "0" && c <= "9")
+        let allowed = if i == 0 { ok_first } else { ok_rest }
+        if !allowed { return "" }
+        i = i + 1
+    }
+    return exec("echo \"$" + name + "\" 2>/dev/null").trim()
+}
+
+// One-fork directory test: `find <p> -maxdepth 0 -type d` echoes <p>
+// only when it exists and is a directory.
+fn _is_dir(path: string) -> bool {
+    if len(path) == 0 { return false }
+    let q = path.replace("'", "'\\''")
+    let r = exec("find '" + q + "' -maxdepth 0 -type d 2>/dev/null").trim()
+    return len(r) > 0
+}
+
+fn _stdlib_root() -> string {
+    let env = _getenv("HEXA_LANG")
+    if len(env) > 0 {
+        let p = env + "/stdlib"
+        if _is_dir(p) { return p }
+    }
+    if _is_dir("stdlib") { return "stdlib" }
+    let av = args()
+    let mut i = 0
+    while i < len(av) {
+        if av[i].ends_with("stdlib_cli.hexa") {
+            let s = av[i]
+            let cut = len(s) - len("/stdlib_cli.hexa")
+            if cut > 0 { return s.substring(0, cut) }
+        }
+        i = i + 1
+    }
+    return ""
+}
+
+// Basenames of immediate child directories under `root`. One fork.
+fn _dir_set(root: string) -> [string] {
+    let q = root.replace("'", "'\\''")
+    let raw = exec("find '" + q + "' -maxdepth 1 -mindepth 1 -type d -exec basename {} \\; 2>/dev/null").trim()
+    if len(raw) == 0 { return [] }
+    return raw.split("\n")
+}
+
+fn _in_set(set: [string], name: string) -> bool {
+    let mut i = 0
+    while i < len(set) {
+        if set[i] == name { return true }
+        i = i + 1
+    }
+    return false
+}
+
+// Classify an entry by suffix (callers pass the cached `_dir_set` list).
+fn _kind_of(dirs: [string], name: string) -> string {
+    if _in_set(dirs, name)             { return "dir" }
+    if name.ends_with("_test.hexa")    { return "test" }
+    if name.ends_with(".ai.md")        { return "ai-doc" }
+    if name.ends_with(".hexa")         { return "module" }
+    if name.ends_with(".md")           { return "doc" }
+    if name.ends_with(".json")         { return "doc" }
+    return "other"
+}
+
+// Linear substring search; `from` is a byte offset.
+fn _index_of(hay: string, needle: string, from: int) -> int {
+    let n = len(hay)
+    let m = len(needle)
+    if m == 0 { return from }
+    if m > n { return -1 }
+    let mut i = from
+    while i + m <= n {
+        if hay.substring(i, i + m) == needle { return i }
+        i = i + 1
+    }
+    return -1
+}
+
+// Strip ASCII whitespace from both ends.
+fn _trim(s: string) -> string {
+    let n = len(s)
+    let mut a = 0
+    while a < n {
+        let c = s.substring(a, a + 1)
+        if c != " " && c != "\t" && c != "\r" { break }
+        a = a + 1
+    }
+    let mut b = n
+    while b > a {
+        let c = s.substring(b - 1, b)
+        if c != " " && c != "\t" && c != "\r" { break }
+        b = b - 1
+    }
+    return s.substring(a, b)
+}
+
+// Extract the purpose (right-of-em-dash) from a file's header. Scans the
+// first ~12 lines for the first `// ... — <purpose>` pattern. Returns ""
+// when the file is missing or carries no recognisable header.
+//
+// Convention this honours (hexa-native, see g1):
+//   // stdlib/<path> — <purpose>
+//   // HEXA Standard Library — <name> (<purpose>)
+// Decorative boxes (// ════) and blank `//` lines are skipped automatically
+// because they contain no em dash.
+fn _header_purpose(path: string) -> string {
+    let body = read_file(path)
+    if len(body) == 0 { return "" }
+    // Read at most ~1.5 KB to avoid scanning whole large files.
+    let head = if len(body) > 1536 { body.substring(0, 1536) } else { body }
+    let lines = head.split("\n")
+    let mut k = 0
+    let mut probed = 0
+    while k < len(lines) && probed < 12 {
+        let l = lines[k]
+        probed = probed + 1
+        k = k + 1
+        if !l.starts_with("//") { continue }
+        // Em dash U+2014 is the convention; also accept ASCII `-- ` as a
+        // pragmatic fallback for older modules.
+        let mut sep_at = _index_of(l, " — ", 0)
+        let mut sep_len = 5  // " — " bytes: 0x20 0xE2 0x80 0x94 0x20
+        if sep_at < 0 {
+            sep_at = _index_of(l, " -- ", 0)
+            sep_len = 4
+        }
+        if sep_at < 0 { continue }
+        let raw = l.substring(sep_at + sep_len, len(l))
+        let trimmed = _trim(raw)
+        if len(trimmed) == 0 { continue }
+        return trimmed
+    }
+    return ""
+}
+
+// Choose a representative file inside `<root>/<name>/` for a dir entry.
+// Probe order: <name>/<name>.hexa → <name>/mod.hexa → first *.hexa.
+fn _dir_entrypoint(root: string, name: string) -> string {
+    let base = root + "/" + name
+    let cand_a = base + "/" + name + ".hexa"
+    if file_exists(cand_a) { return cand_a }
+    let cand_b = base + "/mod.hexa"
+    if file_exists(cand_b) { return cand_b }
+    let children = list_dir(base)
+    let mut i = 0
+    while i < len(children) {
+        let c = children[i]
+        if c.ends_with(".hexa") && !c.ends_with("_test.hexa") {
+            return base + "/" + c
+        }
+        i = i + 1
+    }
+    return ""
+}
+
+// Resolve purpose for an entry by reading its header.
+//   - .hexa  → read header directly.
+//   - dir    → probe entry-point file then read its header.
+//   - other  → "" (no purpose).
+fn _purpose_of(root: string, name: string, kind: string) -> string {
+    if kind == "dir" {
+        let ep = _dir_entrypoint(root, name)
+        if len(ep) == 0 { return "" }
+        return _header_purpose(ep)
+    }
+    if name.ends_with(".hexa") {
+        return _header_purpose(root + "/" + name)
+    }
+    return ""
+}
+
+// Compact a purpose string for table display: drop trailing period, cap
+// to 70 cols, strip any in-purpose ` — ` continuation (we keep the head).
+fn _compact(s: string, max_w: int) -> string {
+    let mut t = _trim(s)
+    // Trim trailing period for table cleanliness.
+    let tn = len(t)
+    if tn > 0 && t.substring(tn - 1, tn) == "." {
+        t = t.substring(0, tn - 1)
+    }
+    if len(t) > max_w {
+        t = t.substring(0, max_w - 1) + "…"
+    }
+    return t
+}
+
+fn _pad(s: string, w: int) -> string {
+    let mut out = s
+    let mut k = len(s)
+    while k < w {
+        out = out + " "
+        k = k + 1
+    }
+    return out
+}
+
+fn _json_esc(s: string) -> string {
+    let mut out = ""
+    let n = len(s)
+    let mut i = 0
+    while i < n {
+        let c = s[i]
+        if c == "\"" {
+            out = out + "\\\""
+        } else if c == "\\" {
+            out = out + "\\\\"
+        } else if c == "\n" {
+            out = out + "\\n"
+        } else if c == "\t" {
+            out = out + "\\t"
+        } else {
+            out = out + c
+        }
+        i = i + 1
+    }
+    return out
+}
+
+fn _list_json(root: string) {
+    let dirs = _dir_set(root)
+    let entries = list_dir(root)
+    println("{")
+    println("  \"root\": \"" + _json_esc(root) + "\",")
+    println("  \"entries\": [")
+    let n = len(entries)
+    let mut i = 0
+    let mut first = true
+    while i < n {
+        let nm = entries[i]
+        i = i + 1
+        if nm.substring(0, 1) == "." { continue }
+        let kind = _kind_of(dirs, nm)
+        let purpose = _purpose_of(root, nm, kind)
+        let prefix = if first { "    " } else { "    ," }
+        println(prefix + "{\"name\": \"" + _json_esc(nm) + "\", \"kind\": \"" + kind + "\", \"purpose\": \"" + _json_esc(purpose) + "\"}")
+        first = false
+    }
+    println("  ]")
+    println("}")
+}
+
+fn _list_table(root: string) {
+    let dirs = _dir_set(root)
+    let entries = list_dir(root)
+    let mut max_name = 4
+    let mut i = 0
+    while i < len(entries) {
+        let nm = entries[i]
+        if nm.substring(0, 1) != "." && len(nm) > max_name {
+            max_name = len(nm)
+        }
+        i = i + 1
+    }
+    if max_name > 36 { max_name = 36 }
+    let purpose_w = 70
+    println("hexa stdlib — catalog (root: " + root + ")")
+    println("")
+    println(_pad("NAME", max_name + 1) + "  KIND     PURPOSE")
+    println(_pad("----", max_name + 1) + "  ----     -------")
+    let mut shown = 0
+    i = 0
+    while i < len(entries) {
+        let nm = entries[i]
+        i = i + 1
+        if nm.substring(0, 1) == "." { continue }
+        let kind = _kind_of(dirs, nm)
+        let purpose = _compact(_purpose_of(root, nm, kind), purpose_w)
+        let label = if kind == "dir" { nm + "/" } else { nm }
+        println(_pad(label, max_name + 1) + "  " + _pad(kind, 7) + "  " + purpose)
+        shown = shown + 1
+    }
+    println("")
+    println(to_string(shown) + " entries")
+}
+
+fn main() {
+    let argv = args()
+    let n = len(argv)
+    let mut start = -1
+    let mut i = 0
+    while i < n {
+        if argv[i].ends_with("stdlib_cli.hexa") { start = i + 1; break }
+        i = i + 1
+    }
+    if start < 0 { start = 1 }
+
+    let mut sub = ""
+    if start < n { sub = argv[start] }
+
+    if sub == "--help" || sub == "-h" || sub == "help" {
+        _stdlib_help()
+        return
+    }
+    if sub == "--version" || sub == "-v" || sub == "version" {
+        println("hexa stdlib " + VERSION)
+        return
+    }
+
+    let root = _stdlib_root()
+    if len(root) == 0 {
+        println("hexa stdlib: stdlib/ root not found (set HEXA_LANG or run from repo root)")
+        exit(2)
+    }
+
+    // Default verb = list. `list` may take `--json`.
+    let mut json = false
+    let mut k = start
+    if sub == "list" { k = start + 1 }
+    while k < n {
+        if argv[k] == "--json" { json = true }
+        k = k + 1
+    }
+
+    if sub == "" || sub == "list" {
+        if json { _list_json(root) } else { _list_table(root) }
+        return
+    }
+
+    println("hexa stdlib: unknown subcommand '" + sub + "'")
+    println("run 'hexa stdlib --help' for usage")
+    exit(2)
+}

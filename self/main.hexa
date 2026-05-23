@@ -89,6 +89,8 @@ fn cmd_help() {
     println("  cloud [run|nohup|poll|copy-to|copy-from] <host> [--port N] [--insecure] -- <argv...>")
     println("                                          structured-argv remote dispatch (PR #81/#84/#86/#88)")
     println("    e.g. hexa cloud run ubu-2 -- python3 train.py    (also: cloud copy-to / copy-from)")
+    println("  stdlib [list [--json]]                  stdlib catalog (modules · dirs · tests · docs)")
+    println("    e.g. hexa stdlib                      table view (purpose harvested from each module header)")
     println("  sim-universe [status|selftest|anu|multiverse|qpu|qrng|bostrom|godel|")
     println("                fvd|stark|qdarwin|ca-qm|supremacy|mbs|dtc|z2gauge|")
     println("                preheating|multipolar|surface-code|ssh|hofstadter|dqpt|wdw]")
@@ -5154,6 +5156,24 @@ if len(av) < 3 {
             }
             cmd_run(qm_script, qm_args)
         }
+    } else if sub == "stdlib" {
+        // stdlib/stdlib_cli.hexa — catalog CLI. Walks stdlib/ and extracts
+        // each module's purpose from its first-line header comment
+        // (`// <prefix> — <purpose>` convention). `hexa stdlib list --json`
+        // for machine-readable form. SSOT lives with the source.
+        let __inst_sl = install_dir_from_argv0()
+        let mut sl_args = []
+        let mut sli = 3
+        while sli < len(av) {
+            sl_args.push(av[sli])
+            sli = sli + 1
+        }
+        let mut sl_script = "stdlib/stdlib_cli.hexa"
+        if len(__inst_sl) > 0 {
+            let inst_path = __inst_sl + "/stdlib/stdlib_cli.hexa"
+            if file_exists(inst_path) { sl_script = inst_path }
+        }
+        cmd_run(sl_script, sl_args)
     } else if sub == "loop" {
         // RFC 065 — stdlib/loop/cycle.hexa dispatch.
         // 8-stage self-growing atlas cycle (SCAN · LENS · DEDUP · GATE ·

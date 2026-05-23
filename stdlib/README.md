@@ -2,8 +2,9 @@
 
 사용자가 `import "../stdlib/xxx.hexa"` 로 쓰는 고수준 모듈.
 
-전체 인벤토리 SSOT: **[STDLIB.json](STDLIB.json)** — 99 entries (50 dir + 36
-module + 6 test + 7 ai-doc). 이 README 의 표는 자주 쓰는 일부 발췌.
+전체 인벤토리는 `hexa stdlib` 로 조회 — 각 모듈의 첫 줄 헤더 코멘트
+(`// <prefix> — <purpose>`) 에서 purpose 를 자동 추출. JSON 출력은
+`hexa stdlib list --json`. 이 README 의 표는 자주 쓰는 일부 발췌.
 
 | 파일 | 역할 |
 |---|---|
