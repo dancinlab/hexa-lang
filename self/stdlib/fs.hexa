@@ -240,13 +240,13 @@ fn fs_append_atomic_wrap(path, data) {
 // exists/error distinction.
 fn fs_stat_size(path) {
     let st = fs_stat(to_string(path))
-    if st == nil { return -1 }
+    if !st { return -1 }
     return st[0]
 }
 
 fn fs_stat_mtime_ns(path) {
     let st = fs_stat(to_string(path))
-    if st == nil { return -1 }
+    if !st { return -1 }
     return st[1]
 }
 
@@ -483,7 +483,7 @@ fn _fs_selftest() {
     //     not a dir, mode bits set). G5 B.
     n = n + 1
     let st = fs_stat(log_path)
-    if st == nil {
+    if !st {
         eprintln("FAIL 26 fs_stat(atomic.log) returned nil")
         fail = fail + 1
     } else {
@@ -512,7 +512,7 @@ fn _fs_selftest() {
     // 20. fs_stat — directory case (is_dir == 1).
     n = n + 1
     let dst = fs_stat(scratch + "/a/b/c")
-    if dst == nil {
+    if !dst {
         eprintln("FAIL 31 fs_stat(dir) returned nil")
         fail = fail + 1
     } else {
@@ -526,7 +526,7 @@ fn _fs_selftest() {
     // 21. fs_stat — missing path returns void (nil).
     n = n + 1
     let mst = fs_stat(scratch + "/no_such_path_xyz")
-    if mst != nil {
+    if mst {
         eprintln("FAIL 33 fs_stat(missing) expected nil")
         fail = fail + 1
     }
