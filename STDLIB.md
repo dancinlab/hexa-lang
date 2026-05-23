@@ -43,3 +43,14 @@ Tier-3 — docking (★★★ priority, ~5 kloc full port, TTR M3 docking):
 Tier-4 — molecular dynamics (★★ priority, ~3-5 kloc core, TTR M5 MD/QM):
 
 - [x] openmm-core stdlib — Velocity-Verlet integrator + Lennard-Jones pair force ※ PBC / Ewald / bonded forces deferred → `stdlib/chem/md/`
+
+## cycle 3 — deferred sub-feature completion (정공법 · 완성도기준)
+
+cycle 1+2 가 14개 모듈 land 했지만 6개에 `※ ... deferred` 표시. 본 사이클은 그 deferred sub-feature 들을 닫아 모듈 완성도 100% 로 끌어올림. 각 항목 measured-oracle PASS (`_test.hexa` ±tol 비교) 까지 absorbed=false.
+
+- [ ] rdkit-descriptors stdlib — logP (Wildman-Crippen 1999) · TPSA (Ertl 2000) · HBA · HBD counters · rotatable bond count → `stdlib/chem/rdkit_subset/descriptors.hexa` (parent: rdkit-subset)
+- [ ] vina-search stdlib — Monte Carlo (Metropolis) + iterated local search + grid affinity map pre-compute → `stdlib/chem/vina/search.hexa` + `grid.hexa` (parent: autodock-vina-port)
+- [ ] iedb-mhc-pan stdlib — NetMHCpan-style position-specific scoring + SVM/ANN-equivalent binder predictor (simplified linear model, paper-compatible thresholds) → `stdlib/bio/immuno/mhc_pan.hexa` (parent: iedb-epitope)
+- [ ] seq-align-msa stdlib — progressive MSA (ClustalW-style: pairwise distance → guide tree NJ → progressive alignment) → `stdlib/bio/seq_align/msa.hexa` (parent: seq-align)
+- [ ] openmm-bonded stdlib — bond stretch (harmonic) + angle bend (harmonic) + dihedral torsion (Fourier series) + PBC minimum-image + Ewald summation (real+reciprocal) → `stdlib/chem/md/bonded.hexa` + `pbc.hexa` + `ewald.hexa` (parent: openmm-core)
+- [ ] brenda-soap-wire stdlib — BRENDA SOAP request/response wire (기존 parse-surface 위에 실 SOAP HTTP body 합성 + WS-Security MD5 password) → `stdlib/bio/brenda.hexa` extension (parent: brenda-api)
