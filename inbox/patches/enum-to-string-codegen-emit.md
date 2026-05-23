@@ -1,8 +1,32 @@
 # enum `to_string` 변종-이름 codegen-emit RFC
 
-**Status**: design-level (PROBE r14-F STOP follow-up, 2026-05-23)
+**Status**: ✅ IMPLEMENTED (PR-2.1 + PR-3 landed, PROBE r14-F, 2026-05-24)
 **Priority**: P2 (silent miscompile cluster — `to_string` 의미 손실)
 **SSOT**: PROBE.log.md round 3 enum 엔트리 · `self/test_compact_enum.hexa` (14 FAIL 기록)
+
+## 구현 요약 (2026-05-24, PR-2.1 + PR-3)
+
+`to_string(Color::Red)` / `print(Color::Red)` 가 이제 RFC Qualified 캐노니컬
+`"Color::Red"` 를 산출 (이전엔 tag 정수 `"0"`). type_of 는 `"enum"` 으로 surface,
+동음이의 변종 (`Color::Red` vs `Severity::Red`) 도 distinct type_id 로 구분됨.
+
+채택한 g0(가장 단순 충분) 경로 — RFC §"진짜 fix" 3-surface 를 별도 HashMap registry
+대신 **C constructor-attribute 자동등록**으로 압축:
+
+| Surface | 구현 |
+|---|---|
+| (a) TAG_ENUM 래퍼 | `HexaVal.i` 에 `(type_id << 32) \| variant_idx` 패킹 — 레이아웃 무변경 (16B 유지). `hexa_enum_make(type_id, idx)` 생성자. `hexa_eq` TAG_ENUM 분기는 단일 64-bit 비교로 type+variant 동시 검사 |
+| (b) per-enum 메타 emit | `gen2_enum_decl` 가 `__enum_<Name>_names[]` (PR-1 의 `#ifdef` 제거, 항상 emit) + `int __enum_<Name>_id` + `__attribute__((constructor))` 등록함수를 emit. `#define <Name>_<Variant>` 가 `hexa_int(N)` → `hexa_enum_make(__enum_<Name>_id, N)` 으로 교체 |
+| (c) render | `_hexa_to_string_rec` / `hexa_print_val` / `hexa_eprint(ln)` TAG_ENUM 분기 → `hexa_enum_to_string()` 가 registry id 로 lookup 하여 `"<Type>::<Variant>"` 합성 (미등록/범위초과 시 `"<Type>::?<idx>"` defense) |
+
+구현 파일: `self/runtime_core.c` (registry + 생성자 + render), `self/runtime.h`
+(prototype), `self/codegen.hexa` `gen2_enum_decl` (emit). 생성물 `self/native/hexa_cc.c`
+/ `hexa_v2` 는 deploy ceremony 에서 `hexa cc --regen` 으로 재생성 (이 PR 은 SSOT 소스만).
+
+**별개 발견 (본 RFC 범위 외)**: `fn f(x) -> T { match x {...} }` 형태에서 match 가
+tail-expression 일 때 arm 값이 함수 반환으로 안 이어지고 `void` 반환 (statement form
+lower). HEAD baseline transpiler 에서도 동일 재현 — 내 변경과 무관한 기존 결함. enum 과
+무관 (int 스칼라 match 도 동일). 별도 RFC 대상.
 
 ## 현재 deviation
 

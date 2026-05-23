@@ -1265,6 +1265,81 @@ HexaVal hexa_float(double f) { return (HexaVal){.tag=TAG_FLOAT, .f=f}; }
 HexaVal hexa_bool(int b) { return (HexaVal){.tag=TAG_BOOL, .b=b}; }
 HexaVal hexa_void() { return (HexaVal){.tag=TAG_VOID}; }
 
+// ═══════════════════════════════════════════════════════════
+//  Enum runtime registry + TAG_ENUM constructor
+//  (enum-to-string-codegen-emit RFC, PR-2.1 + PR-3, 2026-05-24)
+//
+//  PR-2.0 reserved the TAG_ENUM slot + defensive branches; this PR
+//  wires the real emit + render path. Design (g0 — simplest sufficient):
+//    * gen2_enum_decl emits a per-enum __attribute__((constructor)) that
+//      calls hexa_register_enum_type("Color", names, count) BEFORE main,
+//      stashing the returned registry id in `int __enum_Color_id`.
+//    * the `#define Color_Red` macro becomes hexa_enum_make(__enum_Color_id, 0).
+//    * a TAG_ENUM HexaVal packs (type_id, variant_idx) into the .i union
+//      field: ((int64_t)type_id << 32) | (uint32_t)variant_idx. No layout
+//      change (16-byte HexaVal preserved) — only the .i interpretation.
+//  to_string / type_of / eq read the registry by type_id to render
+//  "<Type>::<Variant>" (RFC Qualified canonical, matches Rust Debug).
+// ═══════════════════════════════════════════════════════════
+
+typedef struct {
+    const char*        type_name;     // e.g. "Color" (static — owned by emitted .c)
+    const char* const* variant_names; // e.g. {"Red","Green","Blue"}
+    int                count;
+} HexaEnumType;
+
+#define HEXA_ENUM_REGISTRY_MAX 1024
+static HexaEnumType __hexa_enum_registry[HEXA_ENUM_REGISTRY_MAX];
+static int          __hexa_enum_registry_len = 0;
+
+// Register an enum type; returns its registry id (index). Idempotent by
+// type_name pointer/string: a second registration of the same name returns
+// the existing id (guards against duplicate constructors across TUs).
+int hexa_register_enum_type(const char* type_name,
+                            const char* const* variant_names, int count) {
+    for (int i = 0; i < __hexa_enum_registry_len; i++) {
+        if (__hexa_enum_registry[i].type_name == type_name) return i;
+        if (__hexa_enum_registry[i].type_name && type_name &&
+            hxlcl_strcmp(__hexa_enum_registry[i].type_name, type_name) == 0) return i;
+    }
+    if (__hexa_enum_registry_len >= HEXA_ENUM_REGISTRY_MAX) return 0;
+    int id = __hexa_enum_registry_len++;
+    __hexa_enum_registry[id].type_name     = type_name;
+    __hexa_enum_registry[id].variant_names = variant_names;
+    __hexa_enum_registry[id].count         = count;
+    return id;
+}
+
+// Construct a TAG_ENUM value packing (type_id, variant_idx) into .i.
+HexaVal hexa_enum_make(int type_id, int variant_idx) {
+    int64_t packed = ((int64_t)(uint32_t)type_id << 32) | (int64_t)(uint32_t)variant_idx;
+    return (HexaVal){.tag = TAG_ENUM, .i = packed};
+}
+
+#define HX_ENUM_TYPE_ID(v)  ((int)(((uint64_t)(v).i) >> 32))
+#define HX_ENUM_VARIANT(v)  ((int)((uint32_t)((v).i)))
+
+// Render a TAG_ENUM value as "<Type>::<Variant>" (RFC Qualified). Falls
+// back to "<Type>::?<idx>" for an unregistered/out-of-range variant and
+// "<enum#id?idx>" when even the type id is unknown (defense; never expected
+// once the constructor has run pre-main).
+HexaVal hexa_enum_to_string(HexaVal v) {
+    int tid = HX_ENUM_TYPE_ID(v);
+    int vidx = HX_ENUM_VARIANT(v);
+    char buf[128];
+    if (tid >= 0 && tid < __hexa_enum_registry_len) {
+        HexaEnumType* t = &__hexa_enum_registry[tid];
+        if (vidx >= 0 && vidx < t->count && t->variant_names) {
+            snprintf(buf, sizeof(buf), "%s::%s", t->type_name, t->variant_names[vidx]);
+            return hexa_str(buf);
+        }
+        snprintf(buf, sizeof(buf), "%s::?%d", t->type_name ? t->type_name : "enum", vidx);
+        return hexa_str(buf);
+    }
+    snprintf(buf, sizeof(buf), "<enum#%d?%d>", tid, vidx);
+    return hexa_str(buf);
+}
+
 // T32: unwrap a HexaVal (possibly VALSTRUCT-wrapped by the interpreter) into
 // a raw C double. The prior inline `v.tag==TAG_FLOAT?v.f:(double)v.i` read
 // only the outer tag, so interpreter values (which carry TAG_VALSTRUCT with
@@ -5554,6 +5629,15 @@ void hexa_print_val(HexaVal v) {
             else printf("<value>");
             break;
         }
+        case TAG_ENUM: {
+            // PR-2.1 + PR-3 (enum-to-string-codegen-emit RFC, 2026-05-24):
+            // print(Color::Red) and to_string(Color::Red) must agree (byte-eq).
+            // Delegate to the same hexa_enum_to_string the to_string path uses.
+            HexaVal s = hexa_enum_to_string(v);
+            if (HX_IS_STR(s) && HX_STR(s)) printf("%s", HX_STR(s));
+            else printf("<value>");
+            break;
+        }
         default: printf("<value>"); break;
     }
 }
@@ -5668,7 +5752,10 @@ HexaVal hexa_eprintln(HexaVal v) {
             break;
         case TAG_VOID: fprintf(stderr, "void\n"); break;
         case TAG_ARRAY:
-        case TAG_MAP: {
+        case TAG_MAP:
+        // PR-2.1 + PR-3 (enum-to-string-codegen-emit RFC, 2026-05-24): TAG_ENUM
+        // joins the hexa_to_string delegation (which renders "<Type>::<Variant>").
+        case TAG_ENUM: {
             // 2026-04-20 silent-fallback fix: TAG_ARRAY/TAG_MAP branches
             // added. Prior default emitted "<value>\n" — lossy for
             // eprintln(arr) / eprintln(map). Delegate to hexa_to_string.
@@ -5730,7 +5817,10 @@ HexaVal hexa_eprint(HexaVal v) {
             break;
         case TAG_VOID: fprintf(stderr, "void"); break;
         case TAG_ARRAY:
-        case TAG_MAP: {
+        case TAG_MAP:
+        // PR-2.1 + PR-3 (enum-to-string-codegen-emit RFC, 2026-05-24): TAG_ENUM
+        // delegates to hexa_to_string ("<Type>::<Variant>") like array/map.
+        case TAG_ENUM: {
             HexaVal s = hexa_to_string(v);
             if (HX_IS_STR(s) && HX_STR(s)) fprintf(stderr, "%s", HX_STR(s));
             else fprintf(stderr, "<value>");
@@ -5879,19 +5969,12 @@ static HexaVal _hexa_to_string_rec(HexaVal v, int depth) {
 #endif
         }
         case TAG_ENUM: {
-            // PR-2.0 (enum-to-string-codegen-emit RFC, stack PR-2/3,
-            // 2026-05-24): defensive branch for the new TAG_ENUM slot.
-            // Currently DEAD CODE — no emitter produces TAG_ENUM yet;
-            // gen2_enum_decl still emits `#define <Name>_<Variant>
-            // hexa_int(N)`, which routes through the TAG_INT case above.
-            // PR-2.1 will migrate a single enum (Direction) to emit a
-            // TAG_ENUM-bearing HexaVal carrying (type_id, variant_idx);
-            // PR-3 will then read __enum_<Name>_names[] (already emitted
-            // additively in PR-1 #555 under #ifdef HEXA_ENUM_NAMES_TABLE)
-            // and render "<Type>::<Variant>". Until those layers land,
-            // this case is unreachable; the fallback string preserves
-            // tag visibility for any defensive synthesis path.
-            return hexa_str("<enum>");
+            // PR-2.1 + PR-3 (enum-to-string-codegen-emit RFC, 2026-05-24):
+            // gen2_enum_decl now emits hexa_enum_make(<type_id>, <idx>) and a
+            // per-enum constructor that registers (type_name, variant_names).
+            // Render "<Type>::<Variant>" (RFC Qualified — Rust Debug canonical,
+            // matches self/test_compact_enum.hexa expectations).
+            return hexa_enum_to_string(v);
         }
         case TAG_MAP: {
             if (depth >= 8) return hexa_str("{...}");
@@ -6226,15 +6309,13 @@ HexaVal hexa_eq(HexaVal a, HexaVal b) {
                     ? (HX_CLO_PTR(a) == HX_CLO_PTR(b))
                     : (a.clo_ptr == b.clo_ptr));
         case TAG_ENUM: {
-            // PR-2.0 (enum-to-string-codegen-emit RFC, stack PR-2/3,
-            // 2026-05-24): defensive branch for the new TAG_ENUM slot.
-            // DEAD CODE today — gen2_enum_decl still emits hexa_int(N),
-            // so two enum values compare equal through the TAG_INT case
-            // above (HX_INT(a) == HX_INT(b)). When PR-2.1 migrates an
-            // enum to emit TAG_ENUM-bearing values, this branch will
-            // compare (type_id, variant_idx) — until then a conservative
-            // pointer-eq via HX_INT keeps the slot's contract consistent
-            // with the eventual real-compare semantics.
+            // PR-2.1 (enum-to-string-codegen-emit RFC, 2026-05-24): a TAG_ENUM
+            // value packs (type_id << 32 | variant_idx) into .i, so the single
+            // 64-bit compare below tests BOTH the enum type and the variant in
+            // one shot — `Color::Red == Severity::Red` is false (distinct
+            // type_id) and `Color::Red == Color::Green` is false (distinct
+            // variant). The HX_TAG(a) != HX_TAG(b) guard above already rejects
+            // enum-vs-non-enum, so this is the full equality semantics.
             return hexa_bool(HX_INT(a) == HX_INT(b));
         }
         default: return hexa_bool(0);

@@ -100,6 +100,14 @@ typedef struct HexaVal_ {
 HexaVal hexa_int(int64_t n);                          /* runtime.c:1231 */
 HexaVal hexa_bool(int b);                             /* runtime.c:1233 */
 HexaVal hexa_void(void);                              /* runtime.c:1234 */
+/* enum-to-string-codegen-emit RFC (PR-2.1 + PR-3, 2026-05-24): enum runtime
+ * registry + TAG_ENUM constructor. gen2_enum_decl emits a per-enum
+ * __attribute__((constructor)) calling hexa_register_enum_type before main
+ * and `#define <Name>_<Variant> hexa_enum_make(<type_id>, <idx>)`. */
+int     hexa_register_enum_type(const char* type_name,
+                                const char* const* variant_names, int count);
+HexaVal hexa_enum_make(int type_id, int variant_idx);
+HexaVal hexa_enum_to_string(HexaVal v);
 HexaVal hexa_str(const char* s);                      /* runtime.c:1346 */
 int     hexa_truthy(HexaVal v);                       /* runtime.c:4686 */
 HexaVal hexa_eq(HexaVal a, HexaVal b);                /* runtime.c:4785 */

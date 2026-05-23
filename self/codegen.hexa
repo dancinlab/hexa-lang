@@ -6953,33 +6953,52 @@ fn gen2_enum_decl(node) {
     if _has_payload {
         parts.push("// @payload: enum " + name + " carries single-field payload variants — runtime form is HexaVal array [tag, payload]\n")
     }
+    // (b) variant names table — now ALWAYS emitted (was #ifdef-gated dead code
+    // in PR-1 #555). RFC enum-to-string-codegen-emit PR-2.1 + PR-3, 2026-05-24.
+    // Emits per-enum:
+    //   static const char* const __enum_<Name>_names[<vc>] = { "Var1", ... };
+    //   static int __enum_<Name>_id = 0;  // filled by the constructor below
+    // The names array is consumed at runtime by hexa_enum_to_string via the
+    // registry id, so it can no longer be dead-stripped.
+    if vc > 0 {
+        parts.push("static const char* const __enum_" + name + "_names[" + to_string(vc) + "] = {")
+        let mut ni = 0
+        while ni < vc {
+            let nv = node.variants[ni]
+            if ni > 0 { parts.push(", ") }
+            parts.push("\"" + nv.name + "\"")
+            ni = ni + 1
+        }
+        parts.push("};\n")
+    } else {
+        parts.push("static const char* const* const __enum_" + name + "_names = 0;\n")
+    }
+    parts.push("static int __enum_" + name + "_id = 0;\n")
+    // (b.2) registration constructor — runs BEFORE main (C constructor attr),
+    // so __enum_<Name>_id is valid by the time any `#define <Name>_<Variant>`
+    // macro is evaluated. Registers (type_name, variant_names, count) into the
+    // runtime registry; hexa_enum_to_string reads it back by id.
+    parts.push("__attribute__((constructor)) static void __enum_" + name + "_register(void) {\n")
+    parts.push("    __enum_" + name + "_id = hexa_register_enum_type(\"" + name + "\", ")
+    if vc > 0 {
+        parts.push("__enum_" + name + "_names")
+    } else {
+        parts.push("(const char* const*)0")
+    }
+    parts.push(", " + to_string(vc) + ");\n")
+    parts.push("}\n")
+    // (c) unit-variant tag macros — now TAG_ENUM-bearing (was hexa_int(N)).
+    // Each variant `<Name>::<Variant>` lowers to hexa_enum_make(type_id, idx),
+    // packing (type_id, variant_idx) so to_string / type_of / eq render and
+    // compare the proper variant repr. Payload-bearing variants still build a
+    // HexaVal array [tag, payload] at the use-site (gen2_expr EnumPath); the
+    // bare tag macro is what that array's index-0 carries, so eq stays correct.
     let mut i = 0
     while i < vc {
         let v = node.variants[i]
-        parts.push("#define " + name + "_" + v.name + " hexa_int(" + to_string(i) + ")\n")
+        parts.push("#define " + name + "_" + v.name + " hexa_enum_make(__enum_" + name + "_id, " + to_string(i) + ")\n")
         i = i + 1
     }
-    // (b) variant names emit — additive metadata (RFC enum-to-string-codegen-emit P2,
-    // PR-1 of 3-PR stack). Dead-code OK: no runtime consumer until PR-2 (TAG_ENUM) +
-    // PR-3 (`_hexa_to_string_rec` branch) land. Emits per-enum:
-    //   static const char* __enum_<Name>_names[<vc>] = { "Var1", "Var2", ... };
-    //   static const int   __enum_<Name>_count       = <vc>;
-    // Guarded behind `#ifdef HEXA_ENUM_NAMES_TABLE` so additive-only is enforced —
-    // C compiler skips entire region unless future PR-2/3 enables the macro. This
-    // keeps PR-1 a true no-op at runtime (binary byte-equality preserved) while
-    // landing the codegen scaffolding the stack depends on.
-    parts.push("#ifdef HEXA_ENUM_NAMES_TABLE\n")
-    parts.push("static const char* __enum_" + name + "_names[" + to_string(vc) + "] = {")
-    let mut ni = 0
-    while ni < vc {
-        let nv = node.variants[ni]
-        if ni > 0 { parts.push(", ") }
-        parts.push("\"" + nv.name + "\"")
-        ni = ni + 1
-    }
-    parts.push("};\n")
-    parts.push("static const int __enum_" + name + "_count = " + to_string(vc) + ";\n")
-    parts.push("#endif\n")
     return parts.join("")
 }
 
