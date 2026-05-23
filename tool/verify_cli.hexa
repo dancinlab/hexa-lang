@@ -660,6 +660,43 @@ fn _ptd_classical_bound_const() -> float {
     return 8.0 / 9.0
 }
 
+// Page-curve entropy peak (Page 1993 PRL 71 1291, arXiv:gr-qc/9305007).
+// For a bipartite pure state on Hilbert space dim_a ⊗ dim_b with
+// dim_a <= dim_b, the average entanglement entropy of subsystem A over
+// the Haar measure on the joint state peaks at the equal-split point
+// dim_a = sqrt(dim_total), with Page-curve maximum
+//     S_max(dim_a) = ln(dim_a)  -  dim_a / (2 * dim_b)     (nats, dim_a <= dim_b)
+// The leading ln(dim_a) is the entropy ceiling; the subtraction is the
+// Page subtraction term encoding the universal -1/2 correction at the
+// equal-split. 2-arg closed-form. (Page 1993 Eq.2, dim_a small limit.)
+fn _page_curve_entropy_peak(dim_subsystem_a: int, dim_subsystem_b: int) -> float {
+    if dim_subsystem_a < 1 { return _NOCALC_F }
+    if dim_subsystem_b < 1 { return _NOCALC_F }
+    if dim_subsystem_a > dim_subsystem_b { return _NOCALC_F }
+    let d_a = to_float(dim_subsystem_a)
+    let d_b = to_float(dim_subsystem_b)
+    let ln_da = log(d_a)
+    let correction = d_a / (2.0 * d_b)
+    return ln_da - correction
+}
+
+// Qdrift random-product channel diamond-distance error bound (Campbell
+// 2019 PRL 123 070503, arXiv:1811.08017 Eq.3). For evolution time t and
+// total Hamiltonian L1-norm lambda = sum_j |h_j|, the Qdrift channel
+// composed of big_n random one-term steps approximates exp(-i H t) in
+// diamond norm with error
+//     epsilon  <=  2 * (lambda * t)^2 / big_n
+// (Campbell 2019 Eq.3 — t^2 N^{-1} scaling, the Qdrift advertised
+// asymptotic over deterministic Trotter at high precision).
+// 3-arg closed-form but a0=lambda*t pre-product, a1=big_n (we keep the
+// 2-float dispatch shape: a0 = lambda_times_time, a1 = big_n_as_float).
+fn _qdrift_error_bound(lambda_times_time: float, big_n_steps: int) -> float {
+    if big_n_steps < 1 { return _NOCALC_F }
+    if lambda_times_time < 0.0 { return _NOCALC_F }
+    let n_f = to_float(big_n_steps)
+    return 2.0 * lambda_times_time * lambda_times_time / n_f
+}
+
 // float dispatch — fn_name → recompute. 0-arg fns ignore a0/a1 (constants);
 // 1-arg fns take a0; 2-arg take a0,a1. Returns _NOCALC_F when no float path
 // exists (caller then tries the int path / degrades). The 🟢 NUMERICAL
@@ -718,6 +755,22 @@ fn _recompute_float(fn_name: string, a0: float, a1: float, argc: int) -> float {
         let n_qubits = to_int(a0)
         return _shadow_clifford_var_bound(n_qubits)
     }
+    // RFC 045 qmirror PR-D atoms (Dynamics — Page-curve / Qdrift):
+    //   page_curve_entropy_peak(dim_a, dim_b)  2-arg closed-form:
+    //     ln(dim_a) - dim_a / (2*dim_b)  (Page 1993 Eq.2, dim_a <= dim_b)
+    //   qdrift_error_bound(lambda*t, N)        2-arg closed-form:
+    //     2 * (lambda*t)^2 / N           (Campbell 2019 Eq.3)
+    if fn_name == "page_curve_entropy_peak" {
+        if argc < 2 { return _NOCALC_F }
+        let dim_subsystem_a = to_int(a0)
+        let dim_subsystem_b = to_int(a1)
+        return _page_curve_entropy_peak(dim_subsystem_a, dim_subsystem_b)
+    }
+    if fn_name == "qdrift_error_bound" {
+        if argc < 2 { return _NOCALC_F }
+        let big_n_steps = to_int(a1)
+        return _qdrift_error_bound(a0, big_n_steps)
+    }
     return _NOCALC_F
 }
 
@@ -732,6 +785,7 @@ fn _is_float_fn(fn_name: string) -> bool {
         || fn_name == "vqe_h2_fci_sto3g"
         || fn_name == "qfi_sql" || fn_name == "qfi_ghz"
         || fn_name == "shadow_pauli_var_bound" || fn_name == "shadow_clifford_var_bound"
+        || fn_name == "page_curve_entropy_peak" || fn_name == "qdrift_error_bound"
 }
 
 // is fn_name a 0-arg closed-form constant? (--expr <fn> <v>, no operands).
