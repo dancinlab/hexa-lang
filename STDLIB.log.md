@@ -2,6 +2,29 @@
 
 Append-only history sister of `STDLIB.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
+## 2026-05-24T22:30:00Z — /cycle 사이클 1: 8 마일스톤 병렬 흡수 — 8/8 oracle PASS
+
+8 백그라운드 에이전트 (worktree isolation) 병렬 fan-out, 전수 머지:
+
+| PR | sha | milestone | oracle |
+|---|---|---|---|
+| #633 | 1623f2f4 | pubmed-api               | 7 fields/1 entry |
+| #634 | 5b8bdd38 | clinicaltrials-api       | 9 fields/4 entries |
+| #635 | b4ffc879 | brenda-api               | parse-surface (SOAP deferred) |
+| #636 | cbaba90a | ncbi-entrez              | 7 fields/1 entry |
+| #637 | 1e28abe3 | ode-bifurcation          | 4 tests (RK4·RK45·logistic·saddle-node) |
+| #638 | 27290140 | uniprot-alphafold-api    | 13 fields/2 entries |
+| #639 | f8920307 | pubchem-api              | 10 fields/1 entry |
+| #640 | 99192a51 | doench-grna-score        | 5 cases tol=±0.05 (16/16 sub) |
+
+- [x] 8 마일스톤 체크박스 STDLIB.md 갱신
+- [x] 0 fail · 1 정직-deferred (brenda SOAP 인증 후속)
+- [x] 모든 모듈 `hexa parse` + `hexa run` PASS gate 통과 후 머지
+- [x] 모든 모듈 `// stdlib/<path> — <purpose>` 헤더 규격 (자동 `hexa stdlib` harvest 대상)
+- [x] Python/shell-out 제거 — 전부 `http_get` + lightweight XML/JSON tag-slicing
+
+진행 상태: 9/16 closed (56%) · 6 open · 1 deferred. 후속 우선순위 — seq-align · crispr-off-target (P0 잔여) · rdkit-subset (TTR Tier-2 시작점).
+
 ## 2026-05-24T21:30:00Z — TTR in-silico track 흡수 — 6 마일스톤 신규 등록 (1 deferred)
 
 - [x] `inbox/notes/2026-05-24-ttr-external-port-candidates.md` 리뷰 → STDLIB 도메인 흡수
