@@ -1228,4 +1228,126 @@ HexaVal farr_adamw_step_gpu(HexaVal w, HexaVal m, HexaVal v, HexaVal g,
                             HexaVal n, HexaVal lr, HexaVal b1, HexaVal b2,
                             HexaVal eps, HexaVal wd, HexaVal step_t);          /* runtime.c — RFC 040 Phase B2 (11-arg direct) */
 
+
+/* ═══════════════════════════════════════════════════════════════
+ * mass declaration — defined-but-undeclared backlog clearance
+ *
+ * 102 codegen-called runtime functions whose definitions exist in
+ * runtime.c / runtime_core.c but lacked forward declarations here.
+ * Each is emitted by self/codegen_c2.hexa as it lowers a user
+ * feature (array iterator method, format, math intrinsic, regex,
+ * callbacks, exec_stream, terminal, JSON, struct, arena, …).
+ * Without these decls modern clang treats every such call as a
+ * hard error (ISO C99+ rejects implicit function declarations) —
+ * features parsed + codegen'd cleanly but failed at link.
+ *
+ * Class siblings already shipped individually:
+ *   #348 hexa_is_type       — trait/impl dispatch
+ *   #350 hexa_array_shift   — .shift()
+ *   #356 hexa_await_unwrap  — await <expr>
+ * Class survey + automation proposal: inbox patch #357.
+ * ═══════════════════════════════════════════════════════════════ */
+HexaVal hexa_argmax(HexaVal a); /* runtime.c:11052 */
+HexaVal hexa_array_chunk(HexaVal arr, HexaVal nv); /* runtime.c:3952 */
+HexaVal hexa_array_drop(HexaVal arr, HexaVal nv); /* runtime.c:3875 */
+HexaVal hexa_array_find(HexaVal arr, HexaVal fn); /* runtime.c:3507 */
+HexaVal hexa_array_flat_map(HexaVal arr, HexaVal fn); /* runtime.c:3555 */
+HexaVal hexa_array_for_each(HexaVal arr, HexaVal fn); /* runtime.c:3720 */
+HexaVal hexa_array_frequencies(HexaVal arr); /* runtime.c:4333 */
+HexaVal hexa_array_group_by(HexaVal arr, HexaVal fn); /* runtime.c:4310 */
+HexaVal hexa_array_interleave(HexaVal a, HexaVal b); /* runtime.c:4142 */
+HexaVal hexa_array_max(HexaVal arr); /* runtime.c:3623 */
+HexaVal hexa_array_mean(HexaVal arr); /* runtime.c:4245 */
+HexaVal hexa_array_min(HexaVal arr); /* runtime.c:3611 */
+HexaVal hexa_array_partition(HexaVal arr, HexaVal fn); /* runtime.c:4105 */
+HexaVal hexa_array_product(HexaVal arr); /* runtime.c:4208 */
+HexaVal hexa_array_push_nostat(HexaVal arr, HexaVal item); /* runtime_core.c:1909 */
+HexaVal hexa_array_rotate(HexaVal arr, HexaVal kv); /* runtime.c:4070 */
+HexaVal hexa_array_sample(HexaVal arr, HexaVal nv); /* runtime.c:4356 */
+HexaVal hexa_array_scan(HexaVal arr, HexaVal init, HexaVal fn); /* runtime.c:4182 */
+HexaVal hexa_array_set(HexaVal arr, int64_t idx, HexaVal val); /* runtime_core.c:2014 */
+HexaVal hexa_array_shift(HexaVal arr); /* runtime_core.c:4722 */
+HexaVal hexa_array_take(HexaVal arr, HexaVal nv); /* runtime.c:3863 */
+HexaVal hexa_array_unique(HexaVal arr); /* runtime.c:4034 */
+HexaVal hexa_array_window(HexaVal arr, HexaVal nv); /* runtime.c:3996 */
+HexaVal hexa_array_zeros_float(HexaVal nv); /* runtime.c:3789 */
+HexaVal hexa_array_zip(HexaVal a, HexaVal b); /* runtime.c:3918 */
+HexaVal hexa_await_unwrap(HexaVal v); /* runtime_core.c:3046 */
+HexaVal hexa_callback_create(HexaVal fn_val); /* runtime.c:2628 */
+HexaVal hexa_callback_free(HexaVal ptr); /* runtime.c:2647 */
+HexaVal hexa_callback_slot_id(HexaVal ptr); /* runtime.c:2661 */
+HexaVal hexa_clamp(HexaVal xv, HexaVal lov, HexaVal hiv); /* runtime.c:11122 */
+HexaVal hexa_count_poly(HexaVal obj, HexaVal arg); /* runtime.c:3482 */
+HexaVal hexa_deref(HexaVal ptr); /* runtime.c:2448 */
+HexaVal hexa_exec_stream_kill(HexaVal handle); /* runtime.c:12276 */
+HexaVal hexa_farr_apply_single(HexaVal re_v, HexaVal im_v, HexaVal gate_re, HexaVal gate_im, HexaVal target_v, HexaVal nq_v); /* runtime.c:5730 */
+HexaVal hexa_fma(HexaVal a, HexaVal b, HexaVal c); /* runtime_core.c:6863 */
+HexaVal hexa_format(HexaVal fmt, HexaVal arg); /* runtime_core.c:6479 */
+HexaVal hexa_format_float(HexaVal f, HexaVal prec); /* runtime_core.c:7009 */
+HexaVal hexa_format_float_sci(HexaVal f, HexaVal prec); /* runtime_core.c:7028 */
+HexaVal hexa_gelu(HexaVal a); /* runtime.c:11040 */
+HexaVal hexa_hadamard(HexaVal a, HexaVal b); /* runtime.c:11015 */
+HexaVal hexa_host_ffi_call(HexaVal fn_ptr, HexaVal args_arr, HexaVal float_mask, HexaVal ret_kind); /* runtime.c:2275 */
+HexaVal hexa_host_ffi_open(HexaVal lib_name); /* runtime.c:2230 */
+HexaVal hexa_host_ffi_sym(HexaVal handle, HexaVal symbol); /* runtime.c:2239 */
+HexaVal hexa_is_error(HexaVal v); /* runtime.c:4661 */
+HexaVal hexa_json_decode(HexaVal s) { return hexa_json_parse(s); } ; /* runtime.c:10803 */
+HexaVal hexa_json_encode(HexaVal v) { return hexa_json_stringify(v); } ; /* runtime.c:10914 */
+HexaVal hexa_map_entries(HexaVal m); /* runtime_core.c:2668 */
+HexaVal hexa_map_filter_keys(HexaVal m, HexaVal fn); /* runtime_core.c:2733 */
+HexaVal hexa_map_from_array(HexaVal self_map, HexaVal arr); /* runtime_core.c:2796 */
+HexaVal hexa_map_invert(HexaVal m); /* runtime_core.c:2770 */
+HexaVal hexa_map_map_values(HexaVal m, HexaVal fn); /* runtime_core.c:2728 */
+HexaVal hexa_map_merge(HexaVal a, HexaVal b); /* runtime_core.c:2706 */
+HexaVal hexa_map_remove_impl(HexaVal m, const char* key); /* runtime_core.c:2888 */
+HexaVal hexa_map_set_impl(HexaVal m, const char* key, HexaVal val); /* runtime_core.c:2374 */
+HexaVal hexa_map_to_array(HexaVal m); /* runtime_core.c:2691 */
+HexaVal hexa_map_values(HexaVal m); /* runtime_core.c:2624 */
+HexaVal hexa_matmul(HexaVal a, HexaVal b, HexaVal mv, HexaVal kv, HexaVal nv); /* runtime.c:11242 */
+HexaVal hexa_matvec(HexaVal w, HexaVal x, HexaVal rows_v, HexaVal cols_v); /* runtime.c:4617 */
+HexaVal hexa_now_monotonic_s(void); /* runtime.c:10278 */
+HexaVal hexa_one_hot(HexaVal idxv, HexaVal nv); /* runtime.c:11142 */
+HexaVal hexa_pad_left(HexaVal s, HexaVal width); /* runtime_core.c:6797 */
+HexaVal hexa_pad_right(HexaVal s, HexaVal width); /* runtime_core.c:6826 */
+HexaVal hexa_ptr_addr(HexaVal v); /* runtime.c:2213 */
+HexaVal hexa_ptr_null() { return hexa_int(0); } ; /* runtime.c:2211 */
+HexaVal hexa_ptr_offset(HexaVal ptr, HexaVal offset); /* runtime.c:2442 */
+HexaVal hexa_real_args(); /* runtime_core.c:6308 */
+HexaVal hexa_regex_findall(HexaVal pat_v, HexaVal s_v); /* runtime.c:10446 */
+HexaVal hexa_regex_match(HexaVal pat_v, HexaVal s_v); /* runtime.c:10397 */
+HexaVal hexa_regex_match_full(HexaVal pat_v, HexaVal s_v); /* runtime.c:10411 */
+HexaVal hexa_regex_replace(HexaVal pat_v, HexaVal s_v, HexaVal repl_v); /* runtime.c:10512 */
+HexaVal hexa_regex_search(HexaVal pat_v, HexaVal s_v); /* runtime.c:10427 */
+HexaVal hexa_regex_split(HexaVal pat_v, HexaVal s_v); /* runtime.c:10476 */
+HexaVal hexa_script_path(); /* runtime_core.c:6302 */
+HexaVal hexa_silu(HexaVal a); /* runtime.c:11030 */
+HexaVal hexa_sleep(HexaVal sec); /* runtime.c:4458 */
+HexaVal hexa_sleep_ns(HexaVal ns); /* runtime.c:10262 */
+HexaVal hexa_sleep_s(HexaVal n); /* runtime.c:10229 */
+HexaVal hexa_softmax(HexaVal a); /* runtime.c:11202 */
+HexaVal hexa_struct_free(HexaVal ptr); /* runtime.c:2516 */
+HexaVal hexa_struct_pack(HexaVal* args, int nargs); /* runtime.c:2467 */
+HexaVal hexa_struct_point(HexaVal x, HexaVal y); /* runtime.c:2500 */
+HexaVal hexa_struct_rect(HexaVal x, HexaVal y, HexaVal w, HexaVal h); /* runtime.c:2490 */
+HexaVal hexa_struct_size_pack(HexaVal w, HexaVal h); /* runtime.c:2508 */
+HexaVal hexa_struct_unpack(HexaVal ptr, HexaVal index); /* runtime.c:2481 */
+HexaVal hexa_swiglu_vec(HexaVal gate, HexaVal up); /* runtime.c:10946 */
+HexaVal hexa_tensor_add(HexaVal a, HexaVal b); /* runtime.c:10974 */
+HexaVal hexa_tensor_dot(HexaVal a, HexaVal b); /* runtime.c:10988 */
+HexaVal hexa_tensor_mul_scalar(HexaVal a, HexaVal sv); /* runtime.c:11001 */
+HexaVal hexa_tensor_ones(HexaVal nv); /* runtime.c:10935 */
+HexaVal hexa_tensor_zeros(HexaVal nv); /* runtime.c:10925 */
+HexaVal hexa_term_fd_close(HexaVal fd); /* runtime.c:11884 */
+HexaVal hexa_term_fd_poll(HexaVal fd, HexaVal timeout_ms); /* runtime.c:11889 */
+HexaVal hexa_term_fd_read(HexaVal fd, HexaVal max_bytes); /* runtime.c:11860 */
+HexaVal hexa_term_fd_write(HexaVal fd, HexaVal data); /* runtime.c:11875 */
+HexaVal hexa_term_isatty_stdin(void) { return hexa_int((int64_t)term_isatty_stdin()); } ; /* runtime.c:11826 */
+HexaVal hexa_term_isatty_stdout(void) { return hexa_int((int64_t)term_isatty_stdout()); } ; /* runtime.c:11827 */
+HexaVal hexa_term_pty_reap(HexaVal pid); /* runtime.c:11896 */
+HexaVal hexa_term_pty_spawn_sh(HexaVal cmd, HexaVal rows, HexaVal cols); /* runtime.c:11840 */
+HexaVal hexa_to_bool(HexaVal v); /* runtime.c:10585 */
+HexaVal hexa_u_floor(HexaVal a, HexaVal b); /* runtime_core.c:6364 */
+HexaVal hexa_utc_iso_format(HexaVal epoch_v); /* runtime.c:10313 */
+HexaVal hexa_utc_iso_parse(HexaVal s_v); /* runtime.c:10326 */
+
 #endif /* HEXA_RUNTIME_H */
