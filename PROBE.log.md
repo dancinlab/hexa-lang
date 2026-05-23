@@ -203,7 +203,87 @@
 - [x] inbox stdlib-for-cpu-port umbrella — all 5 sub-patches landed — DOCS [#468]
 - [x] inbox exec() builtin silently swallows child stdout under hexa run — FILED [#398]
 
-## 2026-05-23 라운드 14 — 다음 사이클 (TBD)
+## 2026-05-24 라운드 14 cycle 7-9 — RFC mass-file + surgical fix
+
+### Cycle 7-9 surgical fixes (LANDED)
+
+- [x] lexer hex-float literal `0x1.8p+1` (r14-B) — LANDED [#473]
+- [x] parser `nil`/`null` reserved-name 진단 (r14-A) — LANDED [#474]
+- [x] runtime `to_string` NaN/inf casing (r14-E) — LANDED [#475]
+- [x] codegen `.codepoints()` Rust canonical alias (r14-E) — LANDED [#476]
+- [x] lexer `${...}` JS-template warn (r14-A) — LANDED [#478]
+- [x] parser open-range slice `[..b]` / `[a..]` / `[..]` (r14-C) — LANDED [#480]
+- [x] runtime slice negative-index wrap Python-canonical (r14-D) — LANDED [#482]
+- [x] codegen `printf`/`sprintf` use-format hint (r14-G) — LANDED [#484]
+- [x] type_checker `HEXA_STRICT_MATCH` env gate (r14-I) — LANDED [#485]
+- [x] runtime NaN-in-sort canonical NaN-last comparator (r14-J) — LANDED [#486]
+- [x] codegen `inf`/`nan` identifier constants (r14-H) — LANDED [#488]
+- [x] type_checker `HEXA_STRICT_LET` env gate (r14-N) — LANDED [#490]
+- [x] parser `0...N` Swift inclusive alias (r14-M) — LANDED [#491]
+- [x] runtime `print_val` NaN/inf + 0.0 parity (r14-L) — LANDED [#492]
+- [x] cycle 1-6 sync docs(PROBE) — 14 merged / 14 open / 2 in-flight / 3 STOP (r14-PP) — FILED [#512]
+
+### Cycle 7-9 design RFC (inbox)
+
+- [ ] macro expander Phase 2 (r14-W) — RFC [#493]
+- [ ] postfix `?` + Result ABI (r14-X) — RFC [#494]
+- [ ] codegen `.graphemes()` UAX-29 minimal stub (r14-U) — OPEN [#495]
+- [ ] shadowing scope leak codegen-redesign (r14-AA, round 3 #6) — RFC [#496]
+- [ ] codegen mixed int/float divide IEEE promotion (r14-T) — OPEN [#497]
+- [ ] parser bare-block statement (r14-S) — OPEN [#498]
+- [ ] runtime `hexa_div` mixed int/float IEEE promotion (r14-DD) — OPEN [#499]
+- [ ] Range repr `.start`/`.end` metadata (r14-GG) — RFC [#500]
+- [ ] panic channel semantics (r14-EE) — RFC [#501]
+- [ ] try-as-expression + finally clause (r14-FF) — RFC [#502]
+- [ ] codegen optional chaining `?.` for struct fields (r14-BB) — OPEN [#504]
+- [ ] Option Some/None prelude policy (r14-KK) — RFC [#505]
+- [ ] tuple type (r14-LL) — RFC [#506]
+- [ ] parser `let inf`/`let nan` shadow-of-reserved 진단 (r14-II, H follow-up) — OPEN [#507]
+- [ ] chained comparison Python-style (r14-MM) — RFC [#508]
+- [ ] parser `is_comparison_op` LtEq/GtEq token-name sync (r14-NN) — OPEN [#509]
+- [ ] lexer Python f-string `f"x={x}"` interpolation (r14-JJ, round 3 #2) — OPEN [#510]
+- [ ] raw string literal (r14-RR) — RFC [#511]
+- [x] if-let / while-let pattern binding (r14-SS) — RFC LANDED [#513]
+- [ ] async/await (r14-TT) — RFC [#514]
+- [ ] destructuring let-decl (r14-UU) — RFC [#515]
+- [ ] codegen match-arm multi-arg enum payload binding (r14-HH, CC follow-up) — OPEN [#516]
+- [ ] channel + spawn Go-style 동시성 (r14-JJJ, TT sister) — RFC [#517]
+- [x] multi-line string `"""..."""` literal (r14-III) — RFC LANDED [#518]
+- [ ] set literal (r14-LLL) — RFC [#519]
+- [ ] pipe operator `|>` design (r14-KKK) — RFC [#520]
+- [ ] regex literal (r14-MMM) — RFC [#521]
+- [ ] compound assignment completeness (r14-WWW) — RFC [#523]
+- [ ] numeric literal augment (underscore + 0b/0o) (r14-XXX) — RFC [#524]
+- [ ] codegen IfLetExpr handler (parse-OK/codegen-ERROR 닫음) (r14-VV) — OPEN [#525]
+- [x] struct field default values (r14-YYY) — RFC LANDED [#526]
+- [ ] lexer+codegen pipe operator `|>` token emit + desugar (r14-NNN) — OPEN [#527]
+- [ ] match arm guard if-cond (r14-ZZZ) — RFC [#528]
+- [ ] parser destructure rename `let { x: alias } = p` (r14-PPP, UU follow-up) — OPEN [#529]
+
+## 2026-05-24 라운드 14 cycle 10 — cycle-full phase-0 brainstorm depleted
+
+- [x] struct field default values 코드-랜딩 (r14-CCCC, YYY-1, breaking change + silent corruption 닫음) — MERGED [#538]
+- [x] match-arm guard EnumPath payload binder visibility (r14-BBBB, ZZZ-1, silent miscompile) — MERGED [#543]
+- [ ] lexer `0b`/`0o` numeric literals (r14-DDDD, XXX-1) — OPEN [#537]
+- [ ] trait dyn dispatch `&dyn Trait` design RFC (r14-GGGG) — RFC [#532]
+- [ ] iterator aliases take/filter/collect/sum/zip/enumerate/chain RFC (r14-EEEE, #385 follow-up · 13/16 닫음 · gaps: collect/chain/count) — RFC [#533]
+- [ ] defer pattern Swift/Go design RFC (r14-FFFF, 80% impl found, 4 gaps) — RFC [#534]
+- [ ] smart pointer Box/Rc/Arc stub design RFC (r14-IIII) — RFC [#535]
+- [ ] lifetime `'a` annotation rejection RFC (r14-HHHH, GC-camp 정책) — RFC [#536]
+- [⛔] author self-merge 감지 — `gh pr merge --admin` 자동 머지 패턴 발견 (#538/#543) → sidecar `gh-api-guard` 0.1.0 + commons `@D g55` LANDED (외부 거버넌스 정착)
+
+## 2026-05-24 라운드 14 cycle 11 — 부분-잔여 (disk-full)
+
+- [ ] stdlib smart_ptr Box/Rc/Arc identity stubs (r14-NNNN, IIII-1) — OPEN [#549]
+- [ ] codegen iterator `.collect`/`.chain`/`.count` no-args alias (r14-JJJJ, EEEE bundle) — OPEN [#550]
+- [⛔] KKKK / LLLL / MMMM / OOOO / PPPP — disk-full + 셸 routing → cycle 12 재진행 큐
+
+## 2026-05-24 라운드 14 cycle 12 — 진행중 (current)
+
+- [x] CHANGELOG + PROBE.log r14 cycle 7-11 batch sync (r14-PPPP) — 본 PR
+- [ ] RFC 087 macro-expander pass design promote (inbox/rfc_drafts) — OPEN [#556]
+
+## 2026-05-23 라운드 14 — 초기 carry-over (cycle 7 이전 INBOX, 일부는 위에서 닫힘)
 
 - [ ] enum to_string proper repr (round 3 INBOX carry)
 - [ ] shadowing scope leak — `_gen2_collect_lets` flat-hoist 재설계 (r3 INBOX, #347 코델)
