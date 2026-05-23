@@ -7090,6 +7090,18 @@ HexaVal hexa_div(HexaVal a, HexaVal b) {
         if (HX_FLOAT(b) == 0.0) { hexa_throw(hexa_str("division by zero")); return hexa_float(0.0); }
         return hexa_float(HX_FLOAT(a) / HX_FLOAT(b));
     }
+    // PROBE r14-DD (T follow-up): mixed int/float divide promotes int to
+    // double and routes to IEEE float divide.  `1 / 0.0` → +inf, `-1 / 0.0`
+    // → -inf, `0 / 0.0` → NaN — same canonical as Python/JS/Rust runtime.
+    // Pure int/int still throws (Python canonical) via the branch above.
+    // PR #497 (r14-T) closes the codegen literal-fold side; this closes the
+    // runtime-value side.
+    if (HX_IS_INT(a) && HX_IS_FLOAT(b)) {
+        return hexa_float((double)HX_INT(a) / HX_FLOAT(b));
+    }
+    if (HX_IS_FLOAT(a) && HX_IS_INT(b)) {
+        return hexa_float(HX_FLOAT(a) / (double)HX_INT(b));
+    }
     double fb = __hx_to_double(b);
     if (fb == 0.0) { hexa_throw(hexa_str("division by zero")); return hexa_float(0.0); }
     return hexa_float(__hx_to_double(a) / fb);
