@@ -139,7 +139,8 @@ fn cmd_rubric() {
     println("usage:")
     println("  hexa verify <id> [--absorb]              atlas atom: lookup + calc recompute")
     println("  hexa verify --expr <fn> <n> <v> [--absorb]   recompute fn(n)==v hexa-native")
-    println("  hexa verify --expr <fn> <a> <b> <v> [--absorb]   2-operand (sigma_k/jacobi/...)")
+    println("  hexa verify --expr <fn> <a> <b> <v> [--absorb]   2-operand (sigma_k/jacobi/ssh_winding/...)")
+    println("  hexa verify --expr <fn> <a> <b> <c> <v> [--absorb]   3-operand (tknn_chern p q r)")
     println("  hexa verify --fence <claim>              ⚪ SPECULATION-FENCED (honest)")
     println("  hexa verify rubric | list                this rubric")
     println("")
@@ -149,7 +150,8 @@ fn cmd_rubric() {
     println("             them; the binary built-in atlas grows with proven closed-forms.")
     println("  calc fns : sigma|sigma_0|sigma_2|phi|mu|tau|is_perfect|aliquot|gamma0_index|")
     println("             gamma0_cusps|gamma0_genus|isotropy_lcm|first_cusp_form_weight")
-    println("             2-op: sigma_k|jacobi|kronecker|dim_cusp_forms  (extend _recompute on gap)")
+    println("             2-op: sigma_k|jacobi|kronecker|dim_cusp_forms|ssh_winding  (extend _recompute on gap)")
+    println("             3-op: tknn_chern (RFC 046 TKNN Chern/Hall integer · Diophantine gap label)")
     println("  float fns: welch_t_crit(df)  wilson_hilferty_p(t,df)   → 🟢 NUMERICAL (ε=1e-9")
     println("             tolerance; libm-class, NOT closed-form; extend _recompute_float on gap)")
 }
@@ -183,12 +185,76 @@ fn _recompute(fn_name: string, n: int) -> int {
     return NOCALC
 }
 
-// two-arg NT forms (k-th divisor power sum · Jacobi/Kronecker symbols).
+// two-arg NT / topological forms (k-th divisor power sum · Jacobi/Kronecker
+// symbols · SSH Zak winding {0,1}).
 fn _recompute2(fn_name: string, a: int, b: int) -> int {
     if fn_name == "sigma_k"   { return sigma_k(a, b) }
     if fn_name == "jacobi"    { return jacobi_symbol(a, b) }
     if fn_name == "kronecker" { return kronecker_symbol(a, b) }
     if fn_name == "dim_cusp_forms" { return dim_cusp_forms(a, b) }
+    // SSH Zak winding invariant: ssh_winding(v, w) = 1 if w > v else 0.
+    // The d(k) circle of radius w centred at (v,0) encloses the origin iff
+    // w > v → TOPOLOGICAL (W=1, 2 protected edge modes); else TRIVIAL (W=0).
+    // Verbatim port of stdlib/sim_universe/experiments/ssh_topology/
+    // ssh_topo.hexa::_winding_closed (a=v, b=w).
+    if fn_name == "ssh_winding" {
+        if b > a { return 1 }
+        return 0
+    }
+    return NOCALC
+}
+
+// ── three-arg integer closed-forms (RFC 046 topological atoms) ─────────
+//
+// extended Euclid: returns [g, x, y] with a*x + b*y = g = gcd(a,b).
+// Verbatim port of stdlib/sim_universe/experiments/hofstadter/
+// hofstadter.hexa::_ext_euclid.
+fn _ext_euclid(a: int, b: int) -> array {
+    let mut old_r = a
+    let mut r = b
+    let mut old_s = 1
+    let mut s = 0
+    let mut old_t = 0
+    let mut t = 1
+    while r != 0 {
+        let qq = old_r / r
+        let tr = old_r - qq * r
+        old_r = r; r = tr
+        let ts = old_s - qq * s
+        old_s = s; s = ts
+        let tt = old_t - qq * t
+        old_t = t; t = tt
+    }
+    return [old_r, old_s, old_t]
+}
+
+// TKNN Diophantine gap labelling: solve  r = q*s + p*t,  |t| <= q/2.
+// Returns the Chern / Hall integer t (the total Chern number of the bands
+// below gap r; TKNN PRL 49 405 1982 / Hofstadter PRB 14 2239 1976).
+// Verbatim port of hofstadter.hexa::_dio_label, returning the t component.
+fn _tknn_chern(p: int, q: int, rgap: int) -> int {
+    let ee = _ext_euclid(q, p)        // q*x + p*y = 1  (p,q coprime)
+    let mut s = ee[1] * rgap
+    let mut t = ee[2] * rgap
+    // general solution (s,t) = (s0 - p*k, t0 + q*k); pick k to put t into
+    // (-q/2, q/2] — the unique TKNN/Wannier label, |t| <= q/2.
+    let half = q / 2
+    while t > half {
+        t = t - q
+        s = s + p
+    }
+    while t <= (0 - half) {
+        t = t + q
+        s = s - p
+    }
+    return t
+}
+
+// three-arg integer forms (TKNN Chern gap label). Returns NOCALC if no
+// 3-op closed-form path exists for fn_name.
+fn _recompute3(fn_name: string, a: int, b: int, c: int) -> int {
+    // tknn_chern(p, q, r): Chern/Hall integer t of the bands below gap r.
+    if fn_name == "tknn_chern" { return _tknn_chern(a, b, c) }
     return NOCALC
 }
 
@@ -535,8 +601,17 @@ fn cmd_expr(rest) {
     let mut got = NOCALC
     let mut label = ""
     let mut v = 0
+    let n6 = len(rest) >= 6 && to_string(rest[5]) != "--absorb"
     let n5 = len(rest) >= 5 && to_string(rest[4]) != "--absorb"
-    if n5 {
+    if n6 {
+        // 3-operand: --expr <fn> <a> <b> <c> <v>  (tknn_chern p q r → Chern t)
+        let a = to_int(to_string(rest[2]))
+        let b = to_int(to_string(rest[3]))
+        let c = to_int(to_string(rest[4]))
+        v = to_int(to_string(rest[5]))
+        got = _recompute3(fnm, a, b, c)
+        label = fnm + "(" + to_string(a) + "," + to_string(b) + "," + to_string(c) + ")=" + to_string(v)
+    } else if n5 {
         let a = to_int(to_string(rest[2]))
         let b = to_int(to_string(rest[3]))
         v = to_int(to_string(rest[4]))
