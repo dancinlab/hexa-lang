@@ -90,6 +90,24 @@ inbox/rfc_drafts_2026_05_24/
 
 RFC 088 은 cycle 5 lane 4 진행 중이라 파일 미생성. PR filed 후 본 INDEX 를 update 한다.
 
+## 추가 RFC (별도 lineage — GPU SGEMM perf)
+
+본 catalog (084-088) 와 lineage 가 다른 design-draft. numbering 은 첫 빈
+슬롯 (076; 084-088 보다 앞) 을 채운다.
+
+| RFC | slug | 영역 | status | priority | filed_at | PR | 한 줄 요약 |
+|---|---|---|---|---|---|---|---|
+| **076** | `non_pow2_adaptive_tile_scheduling` | GPU SGEMM (RFC 067 N201 후속) | proposed (design-draft) | medium | 2026-05-24 | TBD | RFC 067 N201 9-shape sweep 의 M=384 ratio dip (0.8930, 다른 8 shape >= 0.93) 의 근본원인 3복합 (Hilbert padding idle 43.8% · K_TILES_OUTER non-2^k · 고정 64x64 vs cuBLAS adaptive) → 설계 옵션 A/B/C + 권고 B (raster fallback) + falsifier (M=384 ratio >= 0.93 AND 회귀 0) |
+
+- **rfc_076** — non-2^k adaptive tile scheduling. Severity: MEDIUM
+  (M=384-특이 perf dip · design only). Source = RFC 067 fire
+  `inbox/fires/rfc067_ptma_swizzle128_2026_05_22/` (notes.md + result.json,
+  cycle 4 E · PR #540). 권고 = 옵션 B (Hilbert padding 제거 / raster
+  fallback, 회귀 위험 최저). primary falsifier = F-RFC076-B-M384-RATIO
+  (>= 0.93) AND F-RFC076-B-NO-REGRESS (다른 8 shape 회귀 0). Cross-link:
+  `[[reference_gpu_fire_infra]]` · `[[reference_ptx_diff_perf_oracle]]` ·
+  `[[feedback_instrument_first_methodology]]`.
+
 ## 참고
 
 - 본 디렉토리 모든 RFC 의 source: 각 RFC 의 `Source` 필드 + cross-link memory
