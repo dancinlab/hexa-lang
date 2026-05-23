@@ -1,5 +1,6 @@
 # `runtime.h` missing symbols after PHASE 1.3.B → wilson uncompilable
 
+> **Status**: resolved-53164c1f-8be9b03f-39db1501-a7a36991-7e3da064-acfc3113 (2026-05-25 housekeeping cross-link · Category A/B 모두 SSOT 에 랜딩 완료)
 > **VERIFIED-CLOSED 2026-05-20** — all 12 sample missing externs (hexa_map_keys / hexa_map_remove / hexa_str_substr / hexa_input / hexa_read_stdin / hexa_exec_with_status / hexa_timestamp / hexa_time_ms / hexa_from_char_code / hexa_sleep_ms / hexa_term_raw_enter / hexa_term_poll_stdin) now present in `self/runtime.h`. Close-only marker.
 
 **Layer:** codegen / runtime header (compile-speed track)
