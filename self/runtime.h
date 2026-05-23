@@ -269,6 +269,7 @@ HexaVal hexa_abs(HexaVal v);                                            /* runti
 /* container indexing */
 HexaVal hexa_index_get(HexaVal container, HexaVal key); /* runtime.c:2643 */
 HexaVal hexa_array_pop(HexaVal arr);                    /* runtime.c:3878 */
+HexaVal hexa_array_shift(HexaVal arr);                  /* runtime_core.c:4722 — pop from front */
 HexaVal hexa_array_truncate(HexaVal arr, HexaVal new_len_v); /* runtime.c:2041 */
 
 /* map predicates */
