@@ -4164,6 +4164,13 @@ fn gen2_expr(node) {
             // Unknown target type — pass through (no-op cast).
             return l
         }
+        // PROBE r7: `x in container` — Python/Swift membership op.
+        // hexa_contains_poly dispatches by container tag (array → element
+        // equality, string → substring).  Convention: `x in arr` reads as
+        // "needle in haystack" → container is the rhs.
+        if op == "in" {
+            return "hexa_contains_poly(" + r + ", " + l + ")"
+        }
         eprintln("[codegen_c2] ERROR: unhandled binary operator: " + op)
         return "(fprintf(stderr, \"CODEGEN ERROR: unhandled binop: " + op + "\\n\"), exit(1), hexa_void())"
     }
