@@ -39,7 +39,7 @@
 typedef enum {
     TAG_INT = 0, TAG_FLOAT, TAG_BOOL, TAG_STR, TAG_VOID,
     TAG_ARRAY, TAG_MAP, TAG_FN, TAG_CHAR, TAG_CLOSURE,
-    TAG_VALSTRUCT
+    TAG_VALSTRUCT, TAG_ENUM
 } HexaTag;
 
 typedef struct HexaVal_       HexaVal;

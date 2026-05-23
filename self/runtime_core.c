@@ -914,7 +914,7 @@ typedef enum {
     // 13 hash-table insertions. Replacing with a flat 12-field C struct
     // collapses that to a single heap alloc, eliminating 7GB+ RSS pressure.
     // Fields mirror `struct Val` in self/hexa_full.hexa exactly (12 fields).
-    TAG_VALSTRUCT
+    TAG_VALSTRUCT, TAG_ENUM
 } HexaTag;
 
 // ── Optimization #10: Hash-map backing store ─────────────
@@ -1442,6 +1442,12 @@ static HexaVal _cached_str_char;
 static HexaVal _cached_str_closure;
 static HexaVal _cached_str_unknown;
 static HexaVal _cached_str_value;  // "<value>" fallback
+// PR-2.0 (enum-to-string-codegen-emit RFC, 2026-05-24): cached "enum" tag
+// label for `type_of()` on a TAG_ENUM value. PR-2.1 will produce TAG_ENUM
+// HexaVals; until then this is dead under the unreachable TAG_ENUM branch
+// of hexa_type_of, but mirrors the cache-init contract followed by every
+// other tag (initialized in _hexa_init_cached_strs, used via switch case).
+static HexaVal _cached_str_enum;
 static int     _cached_strs_ready = 0;
 // S1-D2 Blocker C: forward decl — defined after bt73 wrappers near EOF.
 static void _hexa_init_fn_shims(void);
@@ -1463,6 +1469,7 @@ static void _hexa_init_cached_strs(void) {
     _cached_str_closure = hexa_str("closure");
     _cached_str_unknown = hexa_str("unknown");
     _cached_str_value   = hexa_str("<value>");
+    _cached_str_enum    = hexa_str("enum");
     _cached_strs_ready  = 1;
 }
 
@@ -5939,6 +5946,11 @@ HexaVal hexa_type_of(HexaVal v) {
         case TAG_CLOSURE: return _cached_str_closure;
         // rt 32-G: Val is a struct at the Hexa level; surface "struct".
         case TAG_VALSTRUCT: return _cached_str_struct;
+        // PR-2.0 (enum-to-string-codegen-emit RFC, 2026-05-24): surface
+        // "enum" so user-level `type_of(Color::Red) == "enum"` works once
+        // PR-2.1 migrates emit to TAG_ENUM. DEAD CODE under PR-2.0 (no
+        // emitter produces TAG_ENUM yet — Color::Red is TAG_INT).
+        case TAG_ENUM: return _cached_str_enum;
         default: return _cached_str_unknown;
     }
 }
@@ -6191,6 +6203,18 @@ HexaVal hexa_eq(HexaVal a, HexaVal b) {
                 (a.clo_ptr && b.clo_ptr)
                     ? (HX_CLO_PTR(a) == HX_CLO_PTR(b))
                     : (a.clo_ptr == b.clo_ptr));
+        case TAG_ENUM: {
+            // PR-2.0 (enum-to-string-codegen-emit RFC, stack PR-2/3,
+            // 2026-05-24): defensive branch for the new TAG_ENUM slot.
+            // DEAD CODE today — gen2_enum_decl still emits hexa_int(N),
+            // so two enum values compare equal through the TAG_INT case
+            // above (HX_INT(a) == HX_INT(b)). When PR-2.1 migrates an
+            // enum to emit TAG_ENUM-bearing values, this branch will
+            // compare (type_id, variant_idx) — until then a conservative
+            // pointer-eq via HX_INT keeps the type's slot consistent
+            // with the eventual real-compare contract.
+            return hexa_bool(HX_INT(a) == HX_INT(b));
+        }
         default: return hexa_bool(0);
     }
 }
