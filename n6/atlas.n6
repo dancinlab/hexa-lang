@@ -61719,3 +61719,15 @@
   verified-by = "hexa verify --expr shadow_clifford_var_bound 4 48.0"
   cite = "RFC 045 qmirror — Huang-Kueng-Preskill 2020 Nat. Phys. 16 1050 (arXiv:2002.08953) Theorem 1; Clifford 2-design shadow worst-case ||O||²_shadow <= 3*Tr(O²) = 3*2^n for non-identity Pauli on n qubits"
   provenance = "tool/atlas_cli.hexa register --from-verify (direct node-gen, no .n6; 🟢 numerical)"
+
+@F verified-page_curve_entropy_peak-4-16-num = page_curve_entropy_peak(4, 16) = 1.2612943611198906 :: formula [d=2026-05-24 active]
+  tier = "🟢 SUPPORTED-NUMERICAL"
+  verified-by = "hexa verify --expr page_curve_entropy_peak 4 16 1.2612943611198906"
+  cite = "RFC 045 qmirror — Page 1993 PRL 71 1291 (arXiv:gr-qc/9305007) Eq.2; bipartite pure-state Haar-average entanglement entropy peak S_max(dim_a) = ln(dim_a) - dim_a/(2*dim_b) for dim_a <= dim_b"
+  provenance = "tool/atlas_cli.hexa register --from-verify (direct node-gen, no .n6; 🟢 numerical)"
+
+@F verified-qdrift_error_bound-10.0-200-num = qdrift_error_bound(10.0, 200) = 1.0 :: formula [d=2026-05-24 active]
+  tier = "🟢 SUPPORTED-NUMERICAL"
+  verified-by = "hexa verify --expr qdrift_error_bound 10.0 200 1.0"
+  cite = "RFC 045 qmirror — Campbell 2019 PRL 123 070503 (arXiv:1811.08017) Eq.3; Qdrift random-product channel diamond-norm error epsilon <= 2*(lambda*t)^2/N for N one-term steps"
+  provenance = "tool/atlas_cli.hexa register --from-verify (direct node-gen, no .n6; 🟢 numerical)"
