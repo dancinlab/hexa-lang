@@ -1250,6 +1250,11 @@ HexaVal hexa_void() { return (HexaVal){.tag=TAG_VOID}; }
 double __hx_to_double(HexaVal v) {
     if (HX_IS_FLOAT(v)) return HX_FLOAT(v);
     if (HX_IS_INT(v))   return (double)HX_INT(v);
+    // Bool → numeric coercion (Python canonical: True=1, False=0).  Without
+    // this, `true * 5` fell through to `return 0.0` → silently `0`.  The
+    // sibling static `_hexa_f` (runtime.c:4474) already had this branch for
+    // the math family; aligning the slow path here.  Round-7 probe finding.
+    if (HX_IS_BOOL(v))  return HX_BOOL(v) ? 1.0 : 0.0;
     // ComptimeConst eval: to_float("3.14") at compile time needs string parsing.
     // Without this branch, returned 0.0, silently producing wrong constants.
     // atof handles both ints and floats correctly ("3" → 3.0, "3.14" → 3.14).
@@ -5804,6 +5809,11 @@ HexaVal hexa_type_of(HexaVal v) {
 /* PHASE 1.2.B (2026-05-15): de-staticized. Slow-path fallback for the
  * hexa_add macro emitted into runtime.h — user.c TUs link against this. */
 HexaVal hexa_add_slow(HexaVal a, HexaVal b) {
+    // Bool → int coercion (Python canonical: True=1, False=0).  Without this,
+    // `true + 1` fell through to `hexa_to_string + str_concat` → "true1".
+    // Round-7 probe finding.
+    if (HX_IS_BOOL(a)) a = hexa_int(HX_BOOL(a) ? 1 : 0);
+    if (HX_IS_BOOL(b)) b = hexa_int(HX_BOOL(b) ? 1 : 0);
     if (HX_IS_INT(a) && HX_IS_INT(b)) return hexa_int(HX_INT(a) + HX_INT(b));
     if (HX_IS_FLOAT(a) || HX_IS_FLOAT(b)) {
         // T39: unwrap via __hx_to_double so TAG_VALSTRUCT wrappers don't
@@ -6887,12 +6897,22 @@ HexaVal hexa_pad_right(HexaVal s, HexaVal width) {
 
 // B-19: Polymorphic arithmetic — T39 routes through __hx_to_double.
 // ROI-47: explicit float+float fast path avoids 2x __hx_to_double tag dispatch.
+// Bool → int coercion shared across sub/mul/div/mod (Python canonical).
+// Without this, `true * 5` fell to __hx_to_double which returned 0.0 (no bool
+// branch) → silently 0.  Now bool first promotes to int before the int/int
+// fast path, keeping the result type consistent with `hexa_add_slow`.
+#define _HX_COERCE_BOOL(_a, _b) do { \
+    if (HX_IS_BOOL(_a)) _a = hexa_int(HX_BOOL(_a) ? 1 : 0); \
+    if (HX_IS_BOOL(_b)) _b = hexa_int(HX_BOOL(_b) ? 1 : 0); \
+} while (0)
 HexaVal hexa_sub(HexaVal a, HexaVal b) {
+    _HX_COERCE_BOOL(a, b);
     if (HX_IS_INT(a) && HX_IS_INT(b)) return hexa_int(HX_INT(a) - HX_INT(b));
     if (HX_IS_FLOAT(a) && HX_IS_FLOAT(b)) return hexa_float(HX_FLOAT(a) - HX_FLOAT(b));
     return hexa_float(__hx_to_double(a) - __hx_to_double(b));
 }
 HexaVal hexa_mul(HexaVal a, HexaVal b) {
+    _HX_COERCE_BOOL(a, b);
     if (HX_IS_INT(a) && HX_IS_INT(b)) return hexa_int(HX_INT(a) * HX_INT(b));
     if (HX_IS_FLOAT(a) && HX_IS_FLOAT(b)) return hexa_float(HX_FLOAT(a) * HX_FLOAT(b));
     return hexa_float(__hx_to_double(a) * __hx_to_double(b));
@@ -6918,6 +6938,7 @@ HexaVal hexa_fma(HexaVal a, HexaVal b, HexaVal c) {
 }
 #endif
 HexaVal hexa_div(HexaVal a, HexaVal b) {
+    _HX_COERCE_BOOL(a, b);
     if (HX_IS_INT(a) && HX_IS_INT(b)) {
         // 이전엔 silent 0 반환 → 버그 은폐. interp 는 이미 throw + void.
         // hexa_throw 는 try-stack 이 있으면 longjmp, 없으면 stderr + exit.
@@ -6933,6 +6954,7 @@ HexaVal hexa_div(HexaVal a, HexaVal b) {
     return hexa_float(__hx_to_double(a) / fb);
 }
 HexaVal hexa_mod(HexaVal a, HexaVal b) {
+    _HX_COERCE_BOOL(a, b);
     if (HX_IS_INT(a) && HX_IS_INT(b)) {
         if (HX_INT(b) == 0) { hexa_throw(hexa_str("modulo by zero")); return hexa_int(0); }
         return hexa_int(HX_INT(a) % HX_INT(b));
