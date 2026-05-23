@@ -40,6 +40,27 @@ A 200-char identifier (`a_…_a` × 200) **parses successfully** but the codegen
 - FIX-SURGICAL PR — long-ident codegen buffer fix (separate branch). Replace fixed-size scratch with growable buffer or assert + fail-loud at codegen ident-emit when len > MAX.
 - Regression test: a 200-char ident declared + used; assert decl-symbol == use-symbol.
 
+### Status update (2026-05-23) — ✅ ALREADY FIXED (verified, no truncation)
+
+Re-verified against the canonical committed transpiler (`self/native/hexa_v2` == HEAD `b036121d`,
+identical blob hash for `self/codegen.hexa`). **The P0 does NOT reproduce** — the codegen ident
+path has no fixed-size buffer: `_hexa_mangle_ident` (`self/codegen.hexa:229`) returns the full
+name unchanged (only prefixes `u_` for reserved names), and every decl/use/fwd-decl site routes
+through that one function. Likely closed by the earlier codegen-rename + regen cycle (PR #403 →
+regens #413/#437).
+
+Repro evidence (transpile → clang → run, full ident at every site):
+
+| ident len | distinct C symbols emitted | runs | output |
+|---|---|---|---|
+| 199-char `fn` (`a_…_a`) | 1 (decl == fwd-decl == use) | ✅ | `42` |
+| 199-char `let` var (`b_…_b`) | 1 | ✅ | `99` |
+| 200 / 300 / 500 / 1000-char `fn` | 1 each (maxlen-in-C == ident len) | — | full-length, no cliff |
+| short-ident regression (`add`) | — | ✅ | `5` |
+
+`hexa parse self/codegen.hexa` clean. No code change needed — this entry is closed as a
+docs-only status update.
+
 ## Axis 1 — Lexer edges
 
 | probe | hexa-current | canonical | verdict |
@@ -120,7 +141,7 @@ Error recovery **mechanics are strong** (synchronize + cap + dedup), but **diagn
 
 | 항목 | 규모 | 상태 |
 |---|---|---|
-| **r10-P0** long-ident codegen truncation (200-char) | small-medium (fixed-buffer → growable, or assert + fail-loud) | 🟡 in-flight (separate PR) |
+| **r10-P0** long-ident codegen truncation (200-char) | small-medium (fixed-buffer → growable, or assert + fail-loud) | ✅ already-fixed (verified 2026-05-23 — no truncation; see §P0 status update) |
 | **r10-P1** `@derive` cluster — duplicate-derive dedup + fn-target semantic msg | small (parser.hexa:747 + parse_derive_decl call-site dispatch) | 🟡 in-flight (separate PR) |
 
 ## 우선순위 (cycle 8+ 후보)
@@ -156,7 +177,7 @@ Error recovery **mechanics are strong** (synchronize + cap + dedup), but **diagn
 - prior round inbox: `inbox/patches/canonical-audit-round-7-consolidated.md` (PR #395)
 - prior round inbox: `inbox/patches/canonical-audit-round-8-consolidated.md` (PR #400)
 - prior round inbox: `inbox/patches/canonical-audit-round-9-consolidated.md` (PR #418)
-- cycle 7 FIX-SURGICAL (r10-P0 long-ident codegen): separate PR, in-flight
+- cycle 7 FIX-SURGICAL (r10-P0 long-ident codegen): ✅ already-fixed (verified 2026-05-23 — no truncation, no fixed buffer; closed by prior codegen-rename + regen #403/#413/#437)
 - cycle 7 FIX-SURGICAL (r10-P1 `@derive` cluster): separate PR, in-flight
 - r9-7 follow-up landed: PR #432 (`@derive_meta` surface + `@derive` deprecation hint)
 - r9-6 FIX-SURGICAL landed: PR #419 (`MacroCall` parse-time fail-loud + expander design inbox)
