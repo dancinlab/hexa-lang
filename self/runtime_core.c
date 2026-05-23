@@ -5319,6 +5319,17 @@ static const char* __hexa_print_float_fmt(void) {
     return fmt;
 }
 
+// PROBE r14-E (2026-05-23): canonical Rust-style casing for special floats.
+// glibc/macOS libc render NaN/inf in lowercase via "%g" ("nan"/"inf"); align
+// with the g1 canonical-first policy (Rust: "NaN", "inf", "-inf"). Returns
+// a static string or NULL when `f` is finite. Used by both the print-path
+// and to_string-path so println/to_string/eprintln stay consistent.
+static const char* __hexa_float_special_repr(double f) {
+    if (isnan(f)) return "NaN";
+    if (isinf(f)) return f < 0.0 ? "-inf" : "inf";
+    return NULL;
+}
+
 // ── Stderr ──────────────────────────────────────────
 void hexa_eprint_val(HexaVal v) {
     // 2026-04-20 silent-fallback fix: prior body dropped TAG_VOID /
@@ -5679,9 +5690,12 @@ HexaVal hexa_to_string(HexaVal v) {
         return _cached_small_ints[HX_INT(v) - SMALL_INT_CACHE_MIN];
     }
     /* Non-integer-valued float: env-honoring fmt (default %g, opt-in g15/g17
-     * via HEXA_FLOAT_REPR — matches print_val path).  PROBE r11 B6. */
+     * via HEXA_FLOAT_REPR — matches print_val path).  PROBE r11 B6.
+     * PROBE r14-E: pre-empt NaN/inf with Rust canonical casing. */
     if (HX_IS_FLOAT(v)) {
         double f = HX_FLOAT(v);
+        const char* sp = __hexa_float_special_repr(f);
+        if (sp) return hexa_str(sp);
         if (!(isfinite(f) && f == floor(f) && f >= -1e15 && f <= 1e15)) {
             char buf[64];
             snprintf(buf, 64, __hexa_print_float_fmt(), f);
@@ -5718,7 +5732,12 @@ static HexaVal _hexa_to_string_rec(HexaVal v, int depth) {
             // finite + within int-representable range; env-honoring fmt
             // (default %g, opt-in g15/g17 via HEXA_FLOAT_REPR) otherwise.
             // PROBE r11 B6.
+            // PROBE r14-E (2026-05-23): pre-empt NaN/inf with Rust canonical
+            // casing ("NaN"/"inf"/"-inf") before falling through to %g/%.1f
+            // (libc default is lowercase "nan"/"inf").
             double f = HX_FLOAT(v);
+            const char* sp = __hexa_float_special_repr(f);
+            if (sp) return hexa_str(sp);
             if (isfinite(f) && f == floor(f) && f >= -1e15 && f <= 1e15) {
                 snprintf(buf, 64, "%.1f", f);
             } else {
