@@ -327,6 +327,21 @@ pub fn drill_run(seed: string, opts: DrillOpts) -> DrillResult {
     }
 
     // Resume support.
+    //
+    // `round` is the cumulative round counter (1-indexed, includes any
+    // rounds restored from a checkpoint). `rounds_this_call` is the
+    // per-invocation budget — bounded by `opts.max_rounds` regardless of
+    // whether we resumed mid-stream. This decouples the user-visible
+    // `--rounds N` flag from the historical round counter so that:
+    //
+    //   • a fresh `hexa drill --rounds 10` always runs 10 rounds, and
+    //   • a resumed call (cp.round == 5) with `--rounds 10` runs 10 MORE
+    //     rounds (ending at cumulative round 15), not just 5.
+    //
+    // Pre-fix: the loop guard `while round < opts.max_rounds` mis-treated
+    // `max_rounds` as a cumulative cap, so a resume from round 5 with
+    // `--rounds 10` only executed rounds 6-10 (5 rounds, not 10) — and
+    // resuming from cp.round >= max_rounds executed 0 rounds.
     let mut round: i64 = 0
     let mut total: i64 = 0
     let mut yields_log: array = []
@@ -334,6 +349,7 @@ pub fn drill_run(seed: string, opts: DrillOpts) -> DrillResult {
     let mut saturated = false
     let mut verifier_stopped = false
     let mut verifier_last_verdict: string = ""
+    let mut resumed_from: i64 = 0   // cumulative round at resume entry (0 = fresh)
 
     if opts.fresh {
         checkpoint_clear()
@@ -342,6 +358,7 @@ pub fn drill_run(seed: string, opts: DrillOpts) -> DrillResult {
         if cp.found {
             round = cp.round
             total = cp.total
+            resumed_from = cp.round
             if !opts.quiet {
                 println("  [resume] seed_hash=" + cp.seed_hash + " round=" + to_string(round) + " total=" + to_string(total))
             }
@@ -355,8 +372,10 @@ pub fn drill_run(seed: string, opts: DrillOpts) -> DrillResult {
     // round_run_with_pool by K_POOL.
     let mut seed_pool: array = []
 
-    while round < opts.max_rounds {
+    let mut rounds_this_call: i64 = 0
+    while rounds_this_call < opts.max_rounds {
         round = round + 1
+        rounds_this_call = rounds_this_call + 1
         let rr = round_run_with_pool(seed, round, opts.depth_smash, opts.depth_free,
                                       opts.depth_res, mkx_on, seed_pool)
         if !opts.quiet {
@@ -430,7 +449,13 @@ pub fn drill_run(seed: string, opts: DrillOpts) -> DrillResult {
 
     if !opts.quiet {
         if !saturated {
-            println("  max rounds reached (" + to_string(opts.max_rounds) + ") — total=" + to_string(total))
+            if resumed_from > 0 {
+                println("  max rounds reached (" + to_string(opts.max_rounds)
+                    + " this call · cumulative round " + to_string(round)
+                    + " from resume at " + to_string(resumed_from) + ") — total=" + to_string(total))
+            } else {
+                println("  max rounds reached (" + to_string(opts.max_rounds) + ") — total=" + to_string(total))
+            }
         }
     }
 
