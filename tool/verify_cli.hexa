@@ -159,6 +159,11 @@ fn cmd_rubric() {
     println("             hardy_bound(N)     → p_N^max    (RFC 045 multipartite Hardy, Adhikary-Mandal Eq.5)")
     println("             cdr_perfect_mitigation(p) → 1/(1-p)  (RFC 045 CDR Claim 2, Czarnik 2021)")
     println("             wigner_stabilizer_sn(d)   → 0        (RFC 045 Wigner stab. sn, Veitch 2014)")
+    println("             vqe_h2_fci_sto3g()        → -1.137283834488502  (RFC 045 VQE H2 STO-3G/0.74Å FCI, 0-arg)")
+    println("             qfi_sql(N)                → N        (RFC 045 QFI SQL spin-coherent, 1-arg)")
+    println("             qfi_ghz(N)                → N^2      (RFC 045 QFI GHZ Heisenberg, 1-arg)")
+    println("             shadow_pauli_var_bound(k) → 4^k      (RFC 045 HKP Pauli shadow var, 1-arg)")
+    println("             shadow_clifford_var_bound(n_qubits) → 3*2^n  (RFC 045 HKP Clifford shadow Thm1, 1-arg)")
     println("             mabk_quantum_max(N) → 2^((N-1)/2)  (RFC 045 MABK-Ardehali quantum bound, N≥2)")
     println("             pt_doily_quantum_win()      → 1.0  (RFC 045 magic-square pseudo-tel quantum win, 0-arg)")
     println("             pt_doily_classical_bound()  → 8/9  (RFC 045 LP-tight LHV magic-square bound, 0-arg)")
@@ -528,6 +533,90 @@ fn _wigner_stabilizer_sn(d: int) -> float {
     return 0.0
 }
 
+// ── RFC 045 qmirror PR-C atoms (Variational/Fisher/Shadow) ─────────────
+//
+// VQE H2 STO-3G/0.74Å FCI ground-state energy — the canonical hard-coded
+// spectroscopic-accuracy reference of the F-QM-CHEM-N5 falsifier. PySCF
+// 2.13.0 RHF + FCI at H2/STO-3G/R=0.74 Å yields E_FCI = -1.137283834488502
+// Ha (1 µHa tolerance). Verbatim port of the source-of-truth constant in
+// stdlib/quantum/chemistry_vqe/module/chemistry_vqe_native.hexa::h2_fci_ref_ha()
+// (lines 100-106) which the chemistry_vqe selftest uses as comparator.
+// 0-arg closed-form anchor — the well-known canonical H2 minimal-basis FCI
+// energy at the equilibrium R=0.74 Å bond length.
+fn _vqe_h2_fci_sto3g() -> float {
+    return 0.0 - 1.137283834488502
+}
+
+// QFI SQL (Standard Quantum Limit) closed form — product spin-coherent
+// state |+>^N. The Quantum Fisher Information for a phase phi imprinted
+// via R_z = exp(-i phi S_z) is F_phi = 4 Var(S_z), and for |+>^N
+//     <S_z> = 0,    <S_z^2> = N/4    =>    F_phi = N
+// This is the SHOT-NOISE / STANDARD QUANTUM LIMIT scaling (alpha=1).
+// Verbatim port of the F1 closed-form anchor in
+// stdlib/quantum/qfi-spin-motion/module/qfi_spin_motion.hexa:1187
+// (F_SQL_closed = N) — the alpha_SQL=1 invariant of the metrology axis.
+// 1-arg closed-form: takes N (n_atoms >= 1); returns N as float.
+fn _qfi_sql(n_atoms: int) -> float {
+    if n_atoms < 1 { return _NOCALC_F }
+    return to_float(n_atoms)
+}
+
+// QFI GHZ (Heisenberg-limit) closed form — N-atom GHZ state
+// (|0>^N + |1>^N)/sqrt(2). For phi imprinted via R_z = exp(-i phi S_z),
+//     <S_z> = 0,    <S_z^2> = N^2/4    =>    F_phi = N^2
+// This is the HEISENBERG-LIMIT scaling (alpha=2) — the optimal quantum-
+// metrology speed-up for separable initial states and a sum-generator.
+// Verbatim port of the F2 closed-form anchor in qfi_spin_motion.hexa:1187
+// (F_GHZ_closed = N^2) — the alpha_GHZ=2 invariant of the metrology axis
+// (the Heisenberg ceiling F <= N^2).
+// 1-arg closed-form: takes N (n_atoms >= 1); returns N^2 as float.
+fn _qfi_ghz(n_atoms: int) -> float {
+    if n_atoms < 1 { return _NOCALC_F }
+    let n_f = to_float(n_atoms)
+    return n_f * n_f
+}
+
+// Pauli classical-shadow per-snapshot variance bound (Huang-Kueng-Preskill
+// 2020, Nat. Phys. 16 1050, arXiv:2002.08953). For a Pauli observable O
+// with non-identity support on k qubits ("weight k"), the d=0 tensor-
+// product-Clifford shadow protocol gives
+//     ||O||^2_shadow_Pauli  =  4^k
+// (HKP Lemma S2 / Eq. (S13) specialised to the per-qubit Pauli channel).
+// Verbatim port of stdlib/quantum/shallow-shadows/module/shallow_shadows
+// .hexa::pauli_var_bound (lines 1424-1428) — a multiplicative loop of 4.0
+// over the support, equivalent to the closed form 4^k.
+// 1-arg closed-form: takes pauli_weight (k = |supp(O)|, k >= 0); returns 4^k.
+fn _shadow_pauli_var_bound(pauli_weight: int) -> float {
+    if pauli_weight < 0 { return _NOCALC_F }
+    let mut acc_pauli = 1.0
+    let mut idx_pauli = 0
+    while idx_pauli < pauli_weight {
+        acc_pauli = acc_pauli * 4.0
+        idx_pauli = idx_pauli + 1
+    }
+    return acc_pauli
+}
+
+// Clifford classical-shadow worst-case shadow-norm² upper bound (HKP
+// Theorem 1, traceless observable). For a Pauli observable O on an n-qubit
+// register, the full-Clifford 2-design shadow gives
+//     ||O||^2_shadow_Clifford  <=  3 * Tr(O^2)  =  3 * 2^n
+// (HKP Thm 1 specialised: Tr(O^2) = 2^n for any non-identity Pauli on n
+// qubits since each single-qubit Pauli squares to I). Verbatim port of
+// shallow_shadows.hexa:1402 (let clifford_var_bound = 3.0 * trace_O_sq,
+// trace_O_sq = dim_f = 2^n) — the F3 worst-case anchor of the shadow axis.
+// 1-arg closed-form: takes n_qubits (>= 1); returns 3 * 2^n_qubits.
+fn _shadow_clifford_var_bound(n_qubits: int) -> float {
+    if n_qubits < 1 { return _NOCALC_F }
+    let mut dim_f = 1.0
+    let mut idx_q = 0
+    while idx_q < n_qubits {
+        dim_f = dim_f * 2.0
+        idx_q = idx_q + 1
+    }
+    return 3.0 * dim_f
+}
+
 // MABK-Ardehali quantum maximum (Mermin 1990 PRL 65 1838 / Ardehali 1992
 // PRA 46 5375 / Belinskii-Klyshko 1993): the multipartite Bell-correlation
 // inequality M_N has quantum bound
@@ -606,6 +695,29 @@ fn _recompute_float(fn_name: string, a0: float, a1: float, argc: int) -> float {
     }
     if fn_name == "pt_doily_quantum_win" { return _ptd_quantum_win() }
     if fn_name == "pt_doily_classical_bound" { return _ptd_classical_bound_const() }
+    // RFC 045 qmirror PR-C atoms (Variational/Fisher/Shadow):
+    //   vqe_h2_fci_sto3g()          0-arg closed-form: -1.137283834488502 Ha (H2 STO-3G/0.74Å FCI)
+    //   qfi_sql(N)                  1-arg closed-form: N           (spin-coherent product-state SQL)
+    //   qfi_ghz(N)                  1-arg closed-form: N^2         (GHZ Heisenberg-limit)
+    //   shadow_pauli_var_bound(k)   1-arg closed-form: 4^k         (HKP Pauli shadow variance, k=|supp|)
+    //   shadow_clifford_var_bound(n_qubits)  1-arg closed-form: 3*2^n  (HKP Thm 1 worst-case)
+    if fn_name == "vqe_h2_fci_sto3g" { return _vqe_h2_fci_sto3g() }
+    if fn_name == "qfi_sql" {
+        let n_atoms = to_int(a0)
+        return _qfi_sql(n_atoms)
+    }
+    if fn_name == "qfi_ghz" {
+        let n_atoms = to_int(a0)
+        return _qfi_ghz(n_atoms)
+    }
+    if fn_name == "shadow_pauli_var_bound" {
+        let pauli_weight = to_int(a0)
+        return _shadow_pauli_var_bound(pauli_weight)
+    }
+    if fn_name == "shadow_clifford_var_bound" {
+        let n_qubits = to_int(a0)
+        return _shadow_clifford_var_bound(n_qubits)
+    }
     return _NOCALC_F
 }
 
@@ -617,6 +729,9 @@ fn _is_float_fn(fn_name: string) -> bool {
         || fn_name == "cdr_perfect_mitigation" || fn_name == "wigner_stabilizer_sn"
         || fn_name == "mabk_quantum_max"
         || fn_name == "pt_doily_quantum_win" || fn_name == "pt_doily_classical_bound"
+        || fn_name == "vqe_h2_fci_sto3g"
+        || fn_name == "qfi_sql" || fn_name == "qfi_ghz"
+        || fn_name == "shadow_pauli_var_bound" || fn_name == "shadow_clifford_var_bound"
 }
 
 // is fn_name a 0-arg closed-form constant? (--expr <fn> <v>, no operands).
@@ -624,6 +739,7 @@ fn _is_zero_arg_float_fn(fn_name: string) -> bool {
     return fn_name == "chsh_tsirelson"
         || fn_name == "pt_doily_quantum_win"
         || fn_name == "pt_doily_classical_bound"
+        || fn_name == "vqe_h2_fci_sto3g"
 }
 
 // trim trailing zeros of a float→string for tidy verdict echo.
