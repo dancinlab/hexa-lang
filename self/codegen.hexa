@@ -1241,7 +1241,11 @@ fn codegen(ast) {
             }
             // ROI #43: @thread_local → _Thread_local C storage class
             let _tls_val = ast[i].value
-            let _is_tls = false
+            // `let mut` (not `let`): _is_tls is reassigned below. The plain-let
+            // comptime-fold (PROBE r11 B3) would otherwise register the
+            // immutable `false` and inline it on the assignment LHS, emitting
+            // the un-buildable `hexa_bool(0) = hexa_bool(1);`.
+            let mut _is_tls = false
             if type_of(_tls_val) == "string" {
                 if _tls_val == "thread_local" {
                     _is_tls = true
@@ -2508,6 +2512,9 @@ fn _gen2_arm_block_expr(body) {
     if type_of(body) == "string" { return "hexa_void()" }
     if len(body) == 0 { return "hexa_void()" }
     let n = len(body)
+    // Scope-isolate this block body's comptime-const folds: any `let x = <lit>`
+    // emitted here must not bleed into a sibling arm or the enclosing scope.
+    let _cc_mark = _comptime_const_scope_mark()
     let mut chunks = []
     chunks.push("({ ")
     let mut bi = 0
@@ -2527,6 +2534,7 @@ fn _gen2_arm_block_expr(body) {
         }
         chunks.push("hexa_void(); })")
     }
+    _comptime_const_scope_restore(_cc_mark)
     return chunks.join("")
 }
 
@@ -2620,6 +2628,24 @@ fn _gen2_nested_index_assign_stmt(lhs, val_c, pad) {
 fn gen2_stmt(node, depth) {
     let pad = gen2_indent(depth)
     let k = node.kind
+
+    // PROBE r14-S (round 3 #6 carry-over): bare-block `{ stmt; stmt; }` as a
+    // statement (parser.hexa BlockStmt branch). Emits a plain C brace-group
+    // so the contained stmts execute in sequence. NOTE: hexa flat-hoists
+    // `let` per function (`_gen2_collect_lets`), so this brace-group does
+    // NOT introduce a fresh lexical scope today — the separate scope-leak
+    // RFC owns that fix. WhileStmt's body-loop is the structural template.
+    if k == "BlockStmt" {
+        let mut chunks = []
+        chunks.push(pad + "{\n")
+        let mut bi = 0
+        while bi < len(node.body) {
+            chunks.push(gen2_stmt(node.body[bi], depth + 1))
+            bi = bi + 1
+        }
+        chunks.push(pad + "}\n")
+        return chunks.join("")
+    }
 
     // AtomicLet (`atomic let x = …`) shares LetMutStmt's shape (name +
     // left=init); single-threaded codegen treats `atomic` as an annotation
@@ -2878,6 +2904,10 @@ fn gen2_stmt(node, depth) {
         if type_of(expr) == "string" { return "" }
         if expr.kind == "MatchExpr" {
             return gen2_match_stmt(expr, depth)
+        }
+        // PROBE r14-VV: IfLetExpr at stmt position → desugar to MatchExpr + route through gen2_match_stmt.
+        if expr.kind == "IfLetExpr" {
+            return gen2_match_stmt(_gen2_iflet_to_match(expr), depth)
         }
         if expr.kind == "IfExpr" {
             // PROBE r11 B4: comptime-fold the condition.  `if false { … }` at
@@ -3199,6 +3229,63 @@ fn gen2_stmt(node, depth) {
         return chunks.join("")
     }
 
+    // ── WhileLetStmt → loop + match desugar (SS-3) ────────
+    // `while let PAT = EXPR { body }` is the canonical pattern-binding loop.
+    // It lowers to the Rust-standard form
+    //   loop { match EXPR { PAT => { body }, _ => break } }
+    // reusing the existing match codegen (gen2_match_stmt) so all the
+    // pattern + payload-binding machinery (EnumPath, wildcard, single-field
+    // payload binders) is shared with `match` — no new pattern infra. The
+    // scrutinee EXPR is re-evaluated each iteration (the loop semantics), and
+    // a non-matching value falls into the synthetic `_ => break` arm and
+    // exits the loop. node.left = pattern, node.right = scrutinee.
+    if k == "WhileLetStmt" {
+        // Synthetic wildcard pattern for the fall-through break arm.
+        let _wild = #{
+            "kind": "Wildcard", "name": "_", "value": "", "op": "",
+            "left": "", "right": "", "cond": "", "then_body": "", "else_body": "",
+            "params": "", "body": "", "args": "", "fields": "", "items": "",
+            "variants": "", "arms": "", "iter_expr": "", "ret_type": "",
+            "target": "", "trait_name": "", "methods": ""
+        }
+        // `break;` statement for the non-matching arm body.
+        let _break_stmt = #{
+            "kind": "BreakStmt", "name": "", "value": "", "op": "",
+            "left": "", "right": "", "cond": "", "then_body": "", "else_body": "",
+            "params": "", "body": "", "args": "", "fields": "", "items": "",
+            "variants": "", "arms": "", "iter_expr": "", "ret_type": "",
+            "target": "", "trait_name": "", "methods": ""
+        }
+        // Arm 0: PAT => { body } (carries the pattern + loop body).
+        let _arm_match = #{
+            "kind": "MatchArm", "name": "", "value": "", "op": "",
+            "left": node.left, "right": "", "cond": "", "then_body": "", "else_body": "",
+            "params": "", "body": node.body, "args": "", "fields": "", "items": "",
+            "variants": "", "arms": "", "iter_expr": "", "ret_type": "",
+            "target": "", "trait_name": "", "methods": ""
+        }
+        // Arm 1: _ => { break }
+        let _arm_break = #{
+            "kind": "MatchArm", "name": "", "value": "", "op": "",
+            "left": _wild, "right": "", "cond": "", "then_body": "", "else_body": "",
+            "params": "", "body": [_break_stmt], "args": "", "fields": "", "items": "",
+            "variants": "", "arms": "", "iter_expr": "", "ret_type": "",
+            "target": "", "trait_name": "", "methods": ""
+        }
+        let _match_node = #{
+            "kind": "MatchExpr", "name": "", "value": "", "op": "",
+            "left": node.right, "right": "", "cond": "", "then_body": "", "else_body": "",
+            "params": "", "body": "", "args": "", "fields": "", "items": "",
+            "variants": "", "arms": [_arm_match, _arm_break], "iter_expr": "", "ret_type": "",
+            "target": "", "trait_name": "", "methods": ""
+        }
+        let mut chunks = []
+        chunks.push(pad + "while (1) {\n")
+        chunks.push(gen2_match_stmt(_match_node, depth + 1))
+        chunks.push(pad + "}\n")
+        return chunks.join("")
+    }
+
     // (KEYWORD_DEMOTE Phase 1: GuardStmt + GuardLetStmt removed — `guard`
     // keyword had 0/0 block-form usage; `if !cond { ... }` covers the same
     // pattern. Identifier uses like `guard = guard + 1` now just work.)
@@ -3399,17 +3486,26 @@ fn gen2_stmt(node, depth) {
     }
 
     // ── MapDestructLetStmt → map/dict-key destructure (PROBE r7) ──
-    //   let {x, y} = map
-    // AST: params = [x, y], left = rhs.  Each ident is looked up by the
-    // identifier's string name as the map key (mirrors JS/Rust shorthand).
+    //   let {x, y} = map           → key=x bound to var x, key=y bound to var y
+    //   let {x: px, y: py} = map   → key=x bound to var px, key=y bound to var py
+    // AST: params = [target names], fields = [source keys], left = rhs.
+    // No-rename form (shorthand) carries fields[i] == params[i]; rename form
+    // (PROBE r14-PPP, UU follow-up) carries the source key in fields[i].
+    // Back-compat: if `fields` is missing or length-mismatched (older AST),
+    // fall back to params[i] as the key (no rename).
     if k == "MapDestructLetStmt" {
         let _mtmp = "__destr_" + to_string(_destr_counter)
         _destr_counter = _destr_counter + 1
         let _mrhs = gen2_expr(node.left)
         let mut _mout = pad + "{ HexaVal " + _mtmp + " = " + _mrhs + ";"
+        let _has_fields = type_of(node.fields) != "string" && len(node.fields) == len(node.params)
         let mut _mi = 0
         while _mi < len(node.params) {
-            _mout = _mout + " " + node.params[_mi] + " = hexa_map_get(" + _mtmp + ", \"" + node.params[_mi] + "\");"
+            let mut _mkey = node.params[_mi]
+            if _has_fields {
+                _mkey = node.fields[_mi]
+            }
+            _mout = _mout + " " + node.params[_mi] + " = hexa_map_get(" + _mtmp + ", \"" + _mkey + "\");"
             _mi = _mi + 1
         }
         return _mout + " }\n"
@@ -3455,6 +3551,14 @@ fn gen2_method_builtin(obj_expr, method, args) {
     }
     // PROBE r14 (2026-05-23) — Rust canonical alias `.codepoints()` for `.chars()`.
     if method == "codepoints" {
+        return cg_string_sym("str_chars") + "(" + obj_expr + ")"
+    }
+    // PROBE r14-U (2026-05-23) — `.graphemes()` UAX-29 minimal stub.
+    // DEGRADED: aliases to `.chars()` (codepoint walk). Correct for ASCII
+    // and non-combining text; for ZWJ/RI/marks/Hangul L+V+T it returns
+    // codepoint count, NOT canonical UAX-29 cluster count. Full UAX-29
+    // requires a GraphemeBreak property table — deferred to follow-up RFC.
+    if method == "graphemes" {
         return cg_string_sym("str_chars") + "(" + obj_expr + ")"
     }
     // 2026-05-19 parity-gate t45b — UTF-8 char-aware string methods.
@@ -4406,6 +4510,34 @@ fn gen2_expr(node) {
 
     if k == "BinOp" {
         let op = node.op
+        // PROBE r14-NNN: pipe operator `|>` (F#/Elixir/OCaml) — desugar
+        // `x |> f(a, b)` → `f(x, a, b)` (Elixir-style first-arg prepend).
+        // Parser emits BinOp{op:"|>", left:x, right:Call(f, [a,b])}; here we
+        // synthesize the prepended Call AST and recurse. See r14-KKK RFC
+        // (PR #520) for the full design table.
+        if op == "|>" {
+            let _pr = node.right
+            if type_of(_pr) == "string" || _pr.kind != "Call" {
+                eprintln("[codegen] ERROR: |> RHS must be a call expression")
+                return "(fprintf(stderr, \"CODEGEN ERROR: |> RHS not a Call\\n\"), exit(1), hexa_void())"
+            }
+            let mut _new_args = []
+            _new_args.push(node.left)
+            let mut _pi = 0
+            let _orig_args = _pr.args
+            while _pi < len(_orig_args) {
+                _new_args.push(_orig_args[_pi])
+                _pi = _pi + 1
+            }
+            let _synth_call = #{
+                "kind": "Call", "name": "", "value": "", "op": "",
+                "left": _pr.left, "right": "", "cond": "", "then_body": "", "else_body": "",
+                "params": "", "body": "", "args": _new_args, "fields": "", "items": "",
+                "variants": "", "arms": "", "iter_expr": "", "ret_type": "",
+                "target": "", "trait_name": "", "methods": ""
+            }
+            return gen2_expr(_synth_call)
+        }
         // STRUCTURAL-2 Phase A: IntLit+IntLit unboxing — bypass HexaVal
         // boxing entirely when both operands are integer literals.
         // Emits `hexa_int((L) OP (R))` which the C compiler constant-folds.
@@ -4445,6 +4577,24 @@ fn gen2_expr(node) {
         if _rk == "FloatLit" { _rflit = node.right.value }
         if _rk == "UnaryOp" && node.right.op == "-" && type_of(node.right.left) != "string" && node.right.left.kind == "FloatLit" {
             _rflit = "-" + node.right.left.value
+        }
+        // PROBE r14-T: mixed int/float div-zero canonical IEEE 754.
+        // If ONE side is a float literal and the OTHER is an int literal
+        // (or UnaryMinus(IntLit)), promote the int to (double) and route
+        // through the same float fold:  `1/0.0`→inf · `-1/0.0`→-inf ·
+        // `1.0/0`→inf · `0/0.0`→NaN.  Pure int/int divide is untouched
+        // (still throws on zero — Python/Go canonical for pure integers).
+        if _lflit != "" && _rflit == "" {
+            if _rk == "IntLit" { _rflit = "(double)(" + node.right.value + ")" }
+            if _rk == "UnaryOp" && node.right.op == "-" && type_of(node.right.left) != "string" && node.right.left.kind == "IntLit" {
+                _rflit = "(double)(-" + node.right.left.value + ")"
+            }
+        }
+        if _rflit != "" && _lflit == "" {
+            if _lk == "IntLit" { _lflit = "(double)(" + node.left.value + ")" }
+            if _lk == "UnaryOp" && node.left.op == "-" && type_of(node.left.left) != "string" && node.left.left.kind == "IntLit" {
+                _lflit = "(double)(-" + node.left.left.value + ")"
+            }
         }
         if _lflit != "" && _rflit != "" {
             if op == "+" || op == "-" || op == "*" || op == "/" {
@@ -6212,6 +6362,14 @@ fn gen2_expr(node) {
             if method == "codepoints" {
                 return cg_string_sym("str_chars") + "(" + obj + ")"
             }
+            // PROBE r14-U (2026-05-23) — `.graphemes()` UAX-29 minimal stub.
+            // DEGRADED: aliases to `.chars()` (codepoint walk). Correct for
+            // ASCII and non-combining text; ZWJ/RI/marks/Hangul L+V+T return
+            // codepoint count, NOT canonical UAX-29 cluster count. Full
+            // UAX-29 requires a GraphemeBreak property table — deferred.
+            if method == "graphemes" {
+                return cg_string_sym("str_chars") + "(" + obj + ")"
+            }
             if method == "contains" {
                 return "hexa_contains_poly(" + obj + ", " + gen2_expr(node.args[0]) + ")"
             }
@@ -6685,6 +6843,14 @@ fn gen2_expr(node) {
         exit(1)
     }
     if k == "" { return "hexa_map_new()" }
+    // PROBE r14-VV: IfLetExpr in expression position → synthesize MatchExpr.
+    // `let x = if let PAT = e { THEN } else { ELSE }` is rare today (the
+    // probe uses stmt form), but symmetry with `if/match` (both have
+    // stmt + expr handlers) keeps the surface honest. gen2_match_expr
+    // emits a ternary chain that reuses EnumPath tag/payload codegen.
+    if k == "IfLetExpr" {
+        return gen2_match_expr(_gen2_iflet_to_match(node))
+    }
     // Fail loud at TRANSPILE time — sibling of the stmt-kind branch.
     // Returning an in-binary trap stub hid the failure behind clang +
     // link; an unhandled kind is a compiler gap, exit before clang runs.
@@ -6953,10 +7119,32 @@ fn gen2_enum_decl(node) {
     if _has_payload {
         parts.push("// @payload: enum " + name + " carries single-field payload variants — runtime form is HexaVal array [tag, payload]\n")
     }
+    // PR-2.2 (enum-to-string-codegen-emit RFC, stack PR-2/3, 2026-05-24):
+    // all-unit-variant TAG_ENUM emit. Widens PR-2.1's single-enum gate
+    // (`name == "Direction"`) to EVERY unit-variant (payload-free) enum.
+    // Each such enum's `#define <Name>_<Variant>` now emits
+    // hexa_enum_str("<Name>::<Variant>") (TAG_ENUM) instead of the legacy
+    // hexa_int(N) (TAG_INT) form, so `to_string(<Name>::<Variant>)` renders
+    // the display literal directly via the live _hexa_to_string_rec TAG_ENUM
+    // branch. The migration is value-uniform: the `#define` is the single
+    // source for both use-site values AND match-pattern constants, so the
+    // match path (gen2_match_cond plain-variant `hexa_eq(scrut, <Name>_<V>)`)
+    // stays correct — both operands flow through the same TAG_ENUM literal
+    // and hexa_eq's pointer-eq fast-path matches. Payload-bearing enums keep
+    // the legacy hexa_int(N) form for ALL their variants (the tag is reused
+    // as array index 0 by the `[tag, payload]` runtime shape + the payload
+    // match cond `hexa_eq(hexa_index_get(scrut, 0), <Name>_<V>)`), so the
+    // `!_has_payload` guard preserves that contract with zero regression.
+    // PR-3 swaps the renderer to the __enum_<Name>_names[] table (#555).
+    let _enum_tag_migrate = (!_has_payload)
     let mut i = 0
     while i < vc {
         let v = node.variants[i]
-        parts.push("#define " + name + "_" + v.name + " hexa_int(" + to_string(i) + ")\n")
+        if _enum_tag_migrate {
+            parts.push("#define " + name + "_" + v.name + " hexa_enum_str(\"" + name + "::" + v.name + "\")\n")
+        } else {
+            parts.push("#define " + name + "_" + v.name + " hexa_int(" + to_string(i) + ")\n")
+        }
         i = i + 1
     }
     // (b) variant names emit — additive metadata (RFC enum-to-string-codegen-emit P2,
@@ -7009,6 +7197,55 @@ fn gen2_hex_mask(bits) {
 //  Match statement — generate if-else chain
 // ═══════════════════════════════════════════════════════════
 
+// PROBE r14-VV (SS follow-up): IfLetExpr lowering.
+// `if let PAT = SCRUT { THEN } else { ELSE }` desugars to:
+//   match SCRUT { PAT => { THEN }, _ => { ELSE } }
+// Parser (G32, parser.hexa L2535-2573) already produces IfLetExpr with
+// .left=pattern · .right=scrutinee · .then_body=array · .else_body=array.
+// We synthesize a MatchExpr node and let gen2_match_stmt / gen2_match_expr
+// do the heavy lifting (EnumPath tag-equality + payload binding already
+// landed via PR #366). When else_body is missing/empty, the wildcard arm
+// emits an empty body — a no-op fallthrough, matching `if cond { ... }`
+// without else.
+fn _gen2_iflet_to_match(node) {
+    let pattern = node.left
+    let scrutinee = node.right
+    let then_body = node.then_body
+    let else_body = node.else_body
+    // First arm: PAT => { then_body }
+    let arm_then = #{
+        "kind": "MatchArm", "name": "", "value": "", "op": "",
+        "left": pattern, "right": "", "cond": "", "then_body": "", "else_body": "",
+        "params": "", "body": then_body, "args": "", "fields": "", "items": "",
+        "variants": "", "arms": "", "iter_expr": "", "ret_type": "",
+        "target": "", "trait_name": "", "methods": ""
+    }
+    // Second arm: _ => { else_body }  (else_body may be [] when no `else` clause)
+    let mut wild_body = else_body
+    if type_of(wild_body) == "string" { wild_body = [] }
+    let arm_else = #{
+        "kind": "MatchArm", "name": "", "value": "", "op": "",
+        "left": #{
+            "kind": "Wildcard", "name": "_", "value": "", "op": "",
+            "left": "", "right": "", "cond": "", "then_body": "", "else_body": "",
+            "params": "", "body": "", "args": "", "fields": "", "items": "",
+            "variants": "", "arms": "", "iter_expr": "", "ret_type": "",
+            "target": "", "trait_name": "", "methods": ""
+        },
+        "right": "", "cond": "", "then_body": "", "else_body": "",
+        "params": "", "body": wild_body, "args": "", "fields": "", "items": "",
+        "variants": "", "arms": "", "iter_expr": "", "ret_type": "",
+        "target": "", "trait_name": "", "methods": ""
+    }
+    return #{
+        "kind": "MatchExpr", "name": "", "value": "", "op": "",
+        "left": scrutinee, "right": "", "cond": "", "then_body": "", "else_body": "",
+        "params": "", "body": "", "args": "", "fields": "", "items": "",
+        "variants": "", "arms": [arm_then, arm_else], "iter_expr": "", "ret_type": "",
+        "target": "", "trait_name": "", "methods": ""
+    }
+}
+
 fn gen2_match_stmt(node, depth) {
     let pad = gen2_indent(depth)
     let scrutinee = gen2_expr(node.left)
@@ -7052,13 +7289,37 @@ fn gen2_match_stmt(node, depth) {
                 chunks.push(_pad3 + "HexaVal " + _hexa_mangle_ident(_bn) + " = hexa_index_get(__match_val, hexa_int(1));\n")
             }
         }
+        // PROBE r14-HH (CC follow-up to PR #366): multi-arg payload binders
+        // (`Shape::Square(w, h)`) live in `pat.items`. Emit one `HexaVal <n>`
+        // per Ident item, reading `__match_val[i+1]` (index 0 holds the tag).
+        // Wildcard items (`_`) and non-Ident sub-patterns are skipped (no bind).
+        if type_of(pat) != "string" && pat.kind == "EnumPath" && type_of(pat.items) != "string" {
+            let _pad3 = gen2_indent(depth + 2)
+            let mut _pi = 0
+            while _pi < len(pat.items) {
+                let _it = pat.items[_pi]
+                if type_of(_it) != "string" && _it.kind == "Ident" {
+                    let _in = _it.name
+                    if type_of(_in) == "string" && _in != "_" {
+                        chunks.push(_pad3 + "HexaVal " + _hexa_mangle_ident(_in) + " = hexa_index_get(__match_val, hexa_int(" + to_string(_pi + 1) + "));\n")
+                    }
+                }
+                _pi = _pi + 1
+            }
+        }
 
-        // Arm body
+        // Arm body — scope-isolate the comptime-const fold table so a
+        // `let x = <lit>` in this arm does not leak its folded literal into a
+        // sibling arm or the enclosing scope (statement-position sibling to the
+        // _gen2_arm_block_expr fix; closes the integer-match block-body scope
+        // leak: arm-3 `a` was inlined to arm-1's stale value → 210 not 300).
+        let _cc_mark = _comptime_const_scope_mark()
         let mut bi = 0
         while bi < len(arm.body) {
             chunks.push(gen2_stmt(arm.body[bi], depth + 2))
             bi = bi + 1
         }
+        _comptime_const_scope_restore(_cc_mark)
         chunks.push(pad2 + "}")
         ai = ai + 1
     }
@@ -7120,7 +7381,13 @@ fn gen2_match_cond(pat, scrutinee_var) {
         // array form `[tag, payload]`; compare the *tag only* (index 0), gated
         // on HX_IS_ARRAY so a bare-tag unit value can't crash. Plain (no-binder)
         // variants keep the original whole-value equality test.
+        // PROBE r14-HH (CC follow-up to PR #366): multi-arg payload form
+        // (`Shape::Square(w, h)`) lives in `pat.items` (parse_match_pattern
+        // stores plist there when len > 1). Same array+tag test applies.
         if type_of(pat.left) != "string" {
+            return "(HX_IS_ARRAY(" + scrutinee_var + ") && hexa_truthy(hexa_eq(hexa_index_get(" + scrutinee_var + ", hexa_int(0)), " + enum_const + ")))"
+        }
+        if type_of(pat.items) != "string" && len(pat.items) > 0 {
             return "(HX_IS_ARRAY(" + scrutinee_var + ") && hexa_truthy(hexa_eq(hexa_index_get(" + scrutinee_var + ", hexa_int(0)), " + enum_const + ")))"
         }
         return "hexa_truthy(hexa_eq(" + scrutinee_var + ", " + enum_const + "))"
@@ -7180,6 +7447,26 @@ fn gen2_match_ternary(arms, scrutinee_c, idx) {
         if type_of(_bn) == "string" && _bn != "_" {
             _enum_bind_name = _bn
             val = "({ HexaVal " + _hexa_mangle_ident(_bn) + " = hexa_index_get(" + scrutinee_c + ", hexa_int(1)); (" + val + "); })"
+        }
+    }
+    // PROBE r14-HH (CC follow-up to PR #366): multi-arg payload binders in
+    // ternary-form match expressions. Compose all bindings into the GCC
+    // stmt-expr wrap; each item reads `scrutinee_c[i+1]` (i=0 is the tag).
+    if type_of(pat) != "string" && pat.kind == "EnumPath" && type_of(pat.items) != "string" && len(pat.items) > 0 {
+        let mut _binds = ""
+        let mut _pi = 0
+        while _pi < len(pat.items) {
+            let _it = pat.items[_pi]
+            if type_of(_it) != "string" && _it.kind == "Ident" {
+                let _in = _it.name
+                if type_of(_in) == "string" && _in != "_" {
+                    _binds = _binds + "HexaVal " + _hexa_mangle_ident(_in) + " = hexa_index_get(" + scrutinee_c + ", hexa_int(" + to_string(_pi + 1) + ")); "
+                }
+            }
+            _pi = _pi + 1
+        }
+        if len(_binds) > 0 {
+            val = "({ " + _binds + "(" + val + "); })"
         }
     }
     // Bare-Ident binder: bind the whole scrutinee into the arm value.
@@ -7746,6 +8033,38 @@ fn comptime_eval(node) {
 fn _register_comptime_const(name, value_node) {
     _comptime_const_names.push(name)
     _comptime_const_nodes.push(value_node)
+}
+
+// ── match/block-body scope isolation for the comptime-const fold table ──
+// The "PROBE r11 B3" plain-immutable-`let` comptime-fold registers folded
+// literals into the GLOBAL parallel arrays above with no scope handling, and
+// _lookup_comptime_const returns the FIRST match. Two match arms (or if/else
+// arms) that each bind the same name with a literal initializer therefore
+// collided: `match v { 1 -> { let a = 10; a + 1 }, 3 -> { let a = 100; let b
+// = 200; a + b } }` folded arm-3's `a` to arm-1's stale `10` (first-wins),
+// yielding `10 + 200 = 210` instead of `300`. Snapshot the table length
+// before walking an arm/block body and truncate back to it afterwards so each
+// arm's folded lets stay local — they cannot leak into a sibling arm or into
+// the enclosing scope. Returns the pre-body length; pass it to
+// _comptime_const_scope_restore once the body has been emitted.
+fn _comptime_const_scope_mark() {
+    return len(_comptime_const_names)
+}
+
+fn _comptime_const_scope_restore(mark) {
+    // Rebuild both parallel arrays to length `mark` using index+push only
+    // (the most portable in-place truncation across compiled-binary vintages —
+    // avoids relying on .slice / .truncate codegen branches).
+    let mut _names = []
+    let mut _nodes = []
+    let mut i = 0
+    while i < mark {
+        _names.push(_comptime_const_names[i])
+        _nodes.push(_comptime_const_nodes[i])
+        i = i + 1
+    }
+    _comptime_const_names = _names
+    _comptime_const_nodes = _nodes
 }
 
 // ── C3: Closure capture support ──────────────────────────
@@ -8985,7 +9304,9 @@ fn codegen_full(ast) {
             }
             // ROI #43: @thread_local → _Thread_local C storage class
             let _tls_val2 = ast[i].value
-            let _is_tls2 = false
+            // `let mut` (not `let`): see _is_tls note above — reassigned below,
+            // so the B3 plain-let comptime-fold must not capture it.
+            let mut _is_tls2 = false
             if type_of(_tls_val2) == "string" {
                 if _tls_val2 == "thread_local" {
                     _is_tls2 = true

@@ -139,7 +139,8 @@ fn cmd_rubric() {
     println("usage:")
     println("  hexa verify <id> [--absorb]              atlas atom: lookup + calc recompute")
     println("  hexa verify --expr <fn> <n> <v> [--absorb]   recompute fn(n)==v hexa-native")
-    println("  hexa verify --expr <fn> <a> <b> <v> [--absorb]   2-operand (sigma_k/jacobi/...)")
+    println("  hexa verify --expr <fn> <a> <b> <v> [--absorb]   2-operand (sigma_k/jacobi/ssh_winding/...)")
+    println("  hexa verify --expr <fn> <a> <b> <c> <v> [--absorb]   3-operand (tknn_chern p q r)")
     println("  hexa verify --fence <claim>              ⚪ SPECULATION-FENCED (honest)")
     println("  hexa verify rubric | list                this rubric")
     println("")
@@ -149,7 +150,10 @@ fn cmd_rubric() {
     println("             them; the binary built-in atlas grows with proven closed-forms.")
     println("  calc fns : sigma|sigma_0|sigma_2|phi|mu|tau|is_perfect|aliquot|gamma0_index|")
     println("             gamma0_cusps|gamma0_genus|isotropy_lcm|first_cusp_form_weight")
-    println("             2-op: sigma_k|jacobi|kronecker|dim_cusp_forms  (extend _recompute on gap)")
+    println("             2-op: sigma_k|jacobi|kronecker|dim_cusp_forms|ssh_winding  (extend _recompute on gap)")
+    println("             3-op: tknn_chern (RFC 046 TKNN Chern/Hall integer · Diophantine gap label)")
+    println("  float fns: welch_t_crit(df)  wilson_hilferty_p(t,df)   → 🟢 NUMERICAL (ε=1e-9")
+    println("             tolerance; libm-class, NOT closed-form; extend _recompute_float on gap)")
 }
 
 let NOCALC: int = -999999
@@ -181,13 +185,262 @@ fn _recompute(fn_name: string, n: int) -> int {
     return NOCALC
 }
 
-// two-arg NT forms (k-th divisor power sum · Jacobi/Kronecker symbols).
+// two-arg NT / topological forms (k-th divisor power sum · Jacobi/Kronecker
+// symbols · SSH Zak winding {0,1}).
 fn _recompute2(fn_name: string, a: int, b: int) -> int {
     if fn_name == "sigma_k"   { return sigma_k(a, b) }
     if fn_name == "jacobi"    { return jacobi_symbol(a, b) }
     if fn_name == "kronecker" { return kronecker_symbol(a, b) }
     if fn_name == "dim_cusp_forms" { return dim_cusp_forms(a, b) }
+    // SSH Zak winding invariant: ssh_winding(v, w) = 1 if w > v else 0.
+    // The d(k) circle of radius w centred at (v,0) encloses the origin iff
+    // w > v → TOPOLOGICAL (W=1, 2 protected edge modes); else TRIVIAL (W=0).
+    // Verbatim port of stdlib/sim_universe/experiments/ssh_topology/
+    // ssh_topo.hexa::_winding_closed (a=v, b=w).
+    if fn_name == "ssh_winding" {
+        if b > a { return 1 }
+        return 0
+    }
     return NOCALC
+}
+
+// ── three-arg integer closed-forms (RFC 046 topological atoms) ─────────
+//
+// extended Euclid: returns [g, x, y] with a*x + b*y = g = gcd(a,b).
+// Verbatim port of stdlib/sim_universe/experiments/hofstadter/
+// hofstadter.hexa::_ext_euclid.
+fn _ext_euclid(a: int, b: int) -> array {
+    let mut old_r = a
+    let mut r = b
+    let mut old_s = 1
+    let mut s = 0
+    let mut old_t = 0
+    let mut t = 1
+    while r != 0 {
+        let qq = old_r / r
+        let tr = old_r - qq * r
+        old_r = r; r = tr
+        let ts = old_s - qq * s
+        old_s = s; s = ts
+        let tt = old_t - qq * t
+        old_t = t; t = tt
+    }
+    return [old_r, old_s, old_t]
+}
+
+// TKNN Diophantine gap labelling: solve  r = q*s + p*t,  |t| <= q/2.
+// Returns the Chern / Hall integer t (the total Chern number of the bands
+// below gap r; TKNN PRL 49 405 1982 / Hofstadter PRB 14 2239 1976).
+// Verbatim port of hofstadter.hexa::_dio_label, returning the t component.
+fn _tknn_chern(p: int, q: int, rgap: int) -> int {
+    let ee = _ext_euclid(q, p)        // q*x + p*y = 1  (p,q coprime)
+    let mut s = ee[1] * rgap
+    let mut t = ee[2] * rgap
+    // general solution (s,t) = (s0 - p*k, t0 + q*k); pick k to put t into
+    // (-q/2, q/2] — the unique TKNN/Wannier label, |t| <= q/2.
+    let half = q / 2
+    while t > half {
+        t = t - q
+        s = s + p
+    }
+    while t <= (0 - half) {
+        t = t + q
+        s = s - p
+    }
+    return t
+}
+
+// three-arg integer forms (TKNN Chern gap label). Returns NOCALC if no
+// 3-op closed-form path exists for fn_name.
+fn _recompute3(fn_name: string, a: int, b: int, c: int) -> int {
+    // tknn_chern(p, q, r): Chern/Hall integer t of the bands below gap r.
+    if fn_name == "tknn_chern" { return _tknn_chern(a, b, c) }
+    return NOCALC
+}
+
+// ── float NUMERICAL recompute (🟢) ─────────────────────────────────────
+//
+// The integer paths above are CLOSED-FORM (🔵 FORMAL). Statistical
+// transforms (Welch-t critical table · Wilson-Hilferty t→z + Φ) are
+// libm-class NUMERICAL recomputes — TECS-L n6-rep Tier 2. They reproduce
+// the source impl (stdlib/mc_integrate/engine.hexa) hexa-natively, then
+// compare against the claimed value with a tolerance ε (NOT exact-eq) —
+// the honest float gate that sidesteps the libm≠reimpl byte-eq hazard
+// (feedback_flame_transcendental_byteeq_hazard). A within-ε match →
+// 🟢 SUPPORTED-NUMERICAL; a deterministic out-of-ε disagreement → 🔴.
+//
+// _NOCALC_F is the float sentinel (mirrors NOCALC for the int path).
+let _NOCALC_F: float = -999999.0
+let _VERIFY_EPS: float = 0.000000001   // ε = 1e-9 numerical tolerance
+
+// parse a decimal string → float (sign · int part · frac part · e-exp).
+// Self-contained so verify_cli stays single-`main` with no extra `use`.
+fn _parse_float(s: string) -> float {
+    let t = s.trim()
+    let n = len(t)
+    if n == 0 { return 0.0 }
+    let mut i = 0
+    let mut sign = 1.0
+    if t[i] == "-" { sign = 0.0 - 1.0; i = i + 1 }
+    else if t[i] == "+" { i = i + 1 }
+    let mut int_part = 0.0
+    while i < n && t[i] >= "0" && t[i] <= "9" {
+        int_part = int_part * 10.0 + to_float(to_int(t[i]))
+        i = i + 1
+    }
+    let mut frac = 0.0
+    let mut scale = 1.0
+    if i < n && t[i] == "." {
+        i = i + 1
+        while i < n && t[i] >= "0" && t[i] <= "9" {
+            scale = scale / 10.0
+            frac = frac + to_float(to_int(t[i])) * scale
+            i = i + 1
+        }
+    }
+    let mut val = sign * (int_part + frac)
+    // optional exponent: e/E [sign] digits
+    if i < n && (t[i] == "e" || t[i] == "E") {
+        i = i + 1
+        let mut esign = 1
+        if i < n && t[i] == "-" { esign = -1; i = i + 1 }
+        else if i < n && t[i] == "+" { i = i + 1 }
+        let mut eexp = 0
+        while i < n && t[i] >= "0" && t[i] <= "9" {
+            eexp = eexp * 10 + to_int(t[i])
+            i = i + 1
+        }
+        let mut k = 0
+        while k < eexp {
+            if esign > 0 { val = val * 10.0 } else { val = val / 10.0 }
+            k = k + 1
+        }
+    }
+    return val
+}
+
+fn _fabs(x: float) -> float {
+    if x < 0.0 { return 0.0 - x }
+    return x
+}
+
+// Welch-t α=0.05 two-tailed critical value, df-aware. NIST/SEMATECH
+// e-Handbook §1.3.6.7.2 (0.025 upper) breakpoints + Welch–Satterthwaite
+// linear interpolation. Verbatim port of
+// stdlib/mc_integrate/engine.hexa::_t_crit_005_two_tailed.
+fn _welch_t_crit(df: float) -> float {
+    if df <= 0.0 { return 12.706 }
+    if df < 1.0 { return 12.706 }
+    if df >= 10000.0 { return 1.960 }
+    let dfs = [1.0, 2.0, 3.0, 4.0, 5.0, 10.0, 20.0, 30.0, 50.0, 100.0, 10000.0]
+    let tcs = [12.706, 4.303, 3.182, 2.776, 2.571, 2.228, 2.086, 2.042, 2.009, 1.984, 1.960]
+    let cnt = len(dfs)
+    let mut i = 0
+    while i + 1 < cnt {
+        let lo = dfs[i]
+        let hi = dfs[i + 1]
+        if df >= lo && df <= hi {
+            let span = hi - lo
+            if span <= 0.0 { return tcs[i] }
+            let frac = (df - lo) / span
+            return tcs[i] + frac * (tcs[i + 1] - tcs[i])
+        }
+        i = i + 1
+    }
+    return 1.960
+}
+
+// Standard normal CDF Φ(z) — Abramowitz & Stegun 26.2.17 rational
+// approx (max abs err ~7.5e-8), φ(z) via Taylor of exp(-z²/2). Verbatim
+// port of stdlib/mc_integrate/engine.hexa::_norm_cdf.
+fn _norm_cdf_v(z: float) -> float {
+    let p = 0.2316419
+    let b1 = 0.319381530
+    let b2 = 0.0 - 0.356563782
+    let b3 = 1.781477937
+    let b4 = 0.0 - 1.821255978
+    let b5 = 1.330274429
+    let pi = 3.14159265358979323846
+    let abs_z = if z < 0.0 { 0.0 - z } else { z }
+    let x = 0.0 - (abs_z * abs_z) / 2.0
+    let mut term = 1.0
+    let mut sum = 1.0
+    let mut k = 1
+    while k <= 40 {
+        term = term * x / to_float(k)
+        sum = sum + term
+        if k > 5 {
+            let abs_term = if term < 0.0 { 0.0 - term } else { term }
+            if abs_term < 0.0000000001 { k = 41 }
+        }
+        k = k + 1
+    }
+    let phi = sum / sqrt(2.0 * pi)
+    let t = 1.0 / (1.0 + p * abs_z)
+    let t2 = t * t
+    let t3 = t2 * t
+    let t4 = t3 * t
+    let t5 = t4 * t
+    let upper_tail = phi * (b1 * t + b2 * t2 + b3 * t3 + b4 * t4 + b5 * t5)
+    let cdf_pos = 1.0 - upper_tail
+    if z < 0.0 { return 1.0 - cdf_pos }
+    return cdf_pos
+}
+
+// Wilson-Hilferty t→z (Hill-style small-sample correction) → two-tailed
+// p-value via Φ. Verbatim port of
+// stdlib/mc_integrate/engine.hexa::_welch_p_value.
+fn _wilson_hilferty_p(t_stat: float, df: float) -> float {
+    if df <= 0.0 { return 1.0 }
+    let abs_t = if t_stat < 0.0 { 0.0 - t_stat } else { t_stat }
+    if abs_t <= 0.0 { return 1.0 }
+    let correction = 1.0 - 1.0 / (4.0 * df)
+    let denom = sqrt(1.0 + (abs_t * abs_t) / (2.0 * df))
+    let z = abs_t * correction / denom
+    let upper = 1.0 - _norm_cdf_v(z)
+    let p_two = 2.0 * upper
+    if p_two < 0.0 { return 0.0 }
+    if p_two > 1.0 { return 1.0 }
+    return p_two
+}
+
+// float dispatch — fn_name → recompute. 1-arg fns take a0; 2-arg take
+// a0,a1. Returns _NOCALC_F when no float path exists (caller then tries
+// the int path / degrades). The 🟢 NUMERICAL companion to _recompute.
+fn _recompute_float(fn_name: string, a0: float, a1: float, argc: int) -> float {
+    if fn_name == "welch_t_crit" { return _welch_t_crit(a0) }
+    if fn_name == "wilson_hilferty_p" {
+        if argc < 2 { return _NOCALC_F }
+        return _wilson_hilferty_p(a0, a1)
+    }
+    return _NOCALC_F
+}
+
+// is fn_name a registered float-NUMERICAL form? (cheap pre-check so
+// cmd_expr can route float args before to_int truncation).
+fn _is_float_fn(fn_name: string) -> bool {
+    return fn_name == "welch_t_crit" || fn_name == "wilson_hilferty_p"
+}
+
+// trim trailing zeros of a float→string for tidy verdict echo.
+fn _fstr(x: float) -> string {
+    return to_string(x)
+}
+
+// nodes_of_kind — return the per-kind bucket of an AtlasIndex by kind
+// letter (P|C|L|E|F|R|S|X|Q). Mirrors static_index field layout; kept
+// local so verify_cli stays a single `main`-bearing tool.
+fn nodes_of_kind(idx, kind: string) -> array {
+    if kind == "P" { return idx.p_nodes }
+    if kind == "C" { return idx.c_nodes }
+    if kind == "L" { return idx.l_nodes }
+    if kind == "E" { return idx.e_nodes }
+    if kind == "F" { return idx.f_nodes }
+    if kind == "R" { return idx.r_nodes }
+    if kind == "S" { return idx.s_nodes }
+    if kind == "X" { return idx.x_nodes }
+    if kind == "Q" { return idx.q_nodes }
+    return []
 }
 
 // extract trailing "= <int>" claimed value from a raw header before "::".
@@ -283,6 +536,54 @@ fn cmd_verify_id(rest) {
     }
 }
 
+// cmd_expr_float — the 🟢 NUMERICAL path. fn_name is a registered float
+// transform (welch_t_crit · wilson_hilferty_p). Args + claimed value are
+// parsed as floats; the recompute is compared with tolerance ε (NOT exact
+// -eq, the honest libm-class gate). Within ε → 🟢 SUPPORTED-NUMERICAL;
+// deterministic out-of-ε → 🔴 FALSIFIED.
+//   1-arg:  --expr <fn> <a0> <v>          (rest len 4)
+//   2-arg:  --expr <fn> <a0> <a1> <v>     (rest len 5)
+fn cmd_expr_float(rest, fnm: string) {
+    let has5 = len(rest) >= 5 && to_string(rest[4]) != "--absorb"
+    let mut a0 = 0.0
+    let mut a1 = 0.0
+    let mut v = 0.0
+    let mut argc = 1
+    let mut label = ""
+    if has5 {
+        a0 = _parse_float(to_string(rest[2]))
+        a1 = _parse_float(to_string(rest[3]))
+        v = _parse_float(to_string(rest[4]))
+        argc = 2
+        label = fnm + "(" + _fstr(a0) + "," + _fstr(a1) + ")=" + _fstr(v)
+    } else {
+        a0 = _parse_float(to_string(rest[2]))
+        v = _parse_float(to_string(rest[3]))
+        argc = 1
+        label = fnm + "(" + _fstr(a0) + ")=" + _fstr(v)
+    }
+    let got = _recompute_float(fnm, a0, a1, argc)
+    println("verify --expr " + label)
+    if got == _NOCALC_F {
+        println("  tier   = 🟠 INSUFFICIENT")
+        println("  reason = float calculator system has NO path for '" + fnm + "'")
+        println("  gap    = extend tool/verify_cli.hexa::_recompute_float (계산기시스템 개선 후보)")
+        return
+    }
+    let diff = _fabs(got - v)
+    if diff <= _VERIFY_EPS {
+        println("  calc   = " + _fstr(got) + "  ≈ expected " + _fstr(v) + "  (|Δ|=" + _fstr(diff) + " ≤ ε=1e-9)")
+        println("  tier   = 🟢 SUPPORTED-NUMERICAL  (hexa-native libm-class recompute, TECS-L n6-rep Tier2)")
+        if _has_absorb(rest) {
+            _absorb(label, fnm + " hexa-native numerical recompute = " + _fstr(got) + " ≈ claimed " + _fstr(v) + " (|Δ|=" + _fstr(diff) + " ≤ 1e-9)",
+                    "[numerical transform — hexa-native libm-class recompute, TECS-L Tier2]")
+        }
+    } else {
+        println("  calc   = " + _fstr(got) + "  ≠ expected " + _fstr(v) + "  (|Δ|=" + _fstr(diff) + " > ε=1e-9)")
+        println("  tier   = 🔴 FALSIFIED  (calc deterministically disagrees beyond ε — TECS-L result-agnostic closed negative)")
+    }
+}
+
 fn cmd_expr(rest) {
     // 1-operand:  --expr <fn> <n> <v>            (rest len 4)
     // 2-operand:  --expr <fn> <a> <b> <v>        (rest len 5)
@@ -291,11 +592,26 @@ fn cmd_expr(rest) {
         exit(2)
     }
     let fnm = to_string(rest[1])
+    // float-NUMERICAL forms (welch_t_crit · wilson_hilferty_p) route to the
+    // 🟢 path BEFORE the int parser truncates real-valued args.
+    if _is_float_fn(fnm) {
+        cmd_expr_float(rest, fnm)
+        return
+    }
     let mut got = NOCALC
     let mut label = ""
     let mut v = 0
+    let n6 = len(rest) >= 6 && to_string(rest[5]) != "--absorb"
     let n5 = len(rest) >= 5 && to_string(rest[4]) != "--absorb"
-    if n5 {
+    if n6 {
+        // 3-operand: --expr <fn> <a> <b> <c> <v>  (tknn_chern p q r → Chern t)
+        let a = to_int(to_string(rest[2]))
+        let b = to_int(to_string(rest[3]))
+        let c = to_int(to_string(rest[4]))
+        v = to_int(to_string(rest[5]))
+        got = _recompute3(fnm, a, b, c)
+        label = fnm + "(" + to_string(a) + "," + to_string(b) + "," + to_string(c) + ")=" + to_string(v)
+    } else if n5 {
         let a = to_int(to_string(rest[2]))
         let b = to_int(to_string(rest[3]))
         v = to_int(to_string(rest[4]))

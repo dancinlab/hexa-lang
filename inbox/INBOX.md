@@ -25,8 +25,22 @@ A patch entry walks one of the following statuses:
                        inbox entry has not been verified yet
 - `applied`          — patch is on `main`, source files exist with the
                        expected layout, both trees have been checked
-- `archived`         — entry has aged past the retention window and has
-                       been moved into `manifest_log.jsonl` (audit trail)
+- `archived`         — patch is resolved (fixed / applied / closed /
+                       shipped / superseded), recorded in
+                       `manifest_log.jsonl`, and the standalone `.md` is
+                       physically moved into `patches/archive/` (audit
+                       trail preserved — `git mv`, never deleted)
+
+### Why archived patches move into `patches/archive/`
+
+A `status: archived` entry in `manifest_log.jsonl` is **not enough on its
+own** — the standalone patch file must also leave `inbox/patches/*.md`.
+Cycle triage enumerates the top-level glob `inbox/patches/*.md` (non-
+recursive), so a resolved patch left in place is re-triaged every cycle
+and burns a NO-OP lane. Moving the file into the `patches/archive/`
+subdirectory (excluded by the non-recursive glob) is what actually stops
+the re-triage. Files are moved with `git mv` — never deleted — so the
+full audit trail is retained.
 
 ## How to add a patch
 

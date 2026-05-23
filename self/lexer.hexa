@@ -134,6 +134,26 @@ fn is_hex_digit(ch) {
     return false
 }
 
+// Regex-literal disambiguation (PROBE r14-MMM, `/pat/flags` JS-style).
+// A `/` begins a regex literal only in expression-START position — i.e. when
+// the previous significant token does NOT end a value. After a value (Ident,
+// number/string/bool literal, closing `)`/`]`/`}`) the `/` is division. This
+// mirrors JS/Perl/Ruby. Newline is treated as expression-start (statement
+// boundary), so it is never a value-ender.
+@pure
+fn regex_value_ender(kind) {
+    if kind == "Ident" { return true }
+    if kind == "IntLit" { return true }
+    if kind == "FloatLit" { return true }
+    if kind == "StringLit" { return true }
+    if kind == "BoolLit" { return true }
+    if kind == "CharLit" { return true }
+    if kind == "RParen" { return true }
+    if kind == "RBracket" { return true }
+    if kind == "RBrace" { return true }
+    return false
+}
+
 // Main tokenizer function
 @compile_trace
 pub fn tokenize(source) {
@@ -211,8 +231,161 @@ pub fn tokenize(source) {
                 col = col + 1
             }
             let word = join(word_parts, "")
-            let kind = keyword_kind(word)
-            tokens.push(Token { kind: kind, value: word, line: line, col: start_col })
+            // PROBE r14-JJ: Python f-string `f"x={x}"` interpolation. Bare ident
+            // `f` immediately followed by `"` (no space) desugars to `format(
+            // "x={}", x )` at the lexer level — single site, no parser / codegen /
+            // runtime touch (the existing variadic `format(template, args...)` →
+            // `hexa_format_n` path handles brace-escape and per-type formatting).
+            // Format spec `{x:.2f}` is DEFERRED (parse error with hint); empty
+            // `{}` is a parse error (Python convention); `{{` / `}}` are literal
+            // braces (passed through to `format`, which already escapes).
+            if word == "f" && pos < len_chars && chars[pos] == '"' {
+                // Consume opening "
+                pos = pos + 1
+                col = col + 1
+                let mut tmpl_parts = []
+                let mut arg_sources = []
+                let mut fdone = false
+                while pos < len_chars && !fdone {
+                    let fc = chars[pos]
+                    if fc == '"' {
+                        fdone = true
+                        pos = pos + 1
+                        col = col + 1
+                    } else if fc == '\\' {
+                        // Escape — same set as regular string
+                        pos = pos + 1
+                        col = col + 1
+                        if pos < len_chars {
+                            let esc = chars[pos]
+                            if esc == 'n' { tmpl_parts.push("\n") }
+                            else if esc == 't' { tmpl_parts.push("\t") }
+                            else if esc == 'r' { tmpl_parts.push("\r") }
+                            else if esc == '\\' { tmpl_parts.push("\\") }
+                            else if esc == '"' { tmpl_parts.push("\"") }
+                            else if esc == '0' { tmpl_parts.push("\0") }
+                            else { tmpl_parts.push(to_string(esc)) }
+                            pos = pos + 1
+                            col = col + 1
+                        }
+                    } else if fc == '{' {
+                        // `{{` → literal `{` (Python convention; format() runtime
+                        // also accepts `{{` per #381 brace-escape — pass through)
+                        if pos + 1 < len_chars && chars[pos + 1] == '{' {
+                            tmpl_parts.push("{{")
+                            pos = pos + 2
+                            col = col + 2
+                        } else {
+                            // Interpolation — scan expression source until matching `}`
+                            pos = pos + 1
+                            col = col + 1
+                            let mut depth = 1
+                            let mut expr_parts = []
+                            let mut saw_colon_fmt = false
+                            while pos < len_chars && depth > 0 {
+                                let ec = chars[pos]
+                                if ec == '{' {
+                                    depth = depth + 1
+                                    expr_parts.push(to_string(ec))
+                                    pos = pos + 1
+                                    col = col + 1
+                                } else if ec == '}' {
+                                    depth = depth - 1
+                                    if depth == 0 {
+                                        pos = pos + 1
+                                        col = col + 1
+                                    } else {
+                                        expr_parts.push(to_string(ec))
+                                        pos = pos + 1
+                                        col = col + 1
+                                    }
+                                } else if ec == ':' && depth == 1 {
+                                    // Format spec `{x:.2f}` — DEFERRED. Python supports;
+                                    // hexa `format` does not yet. Fail loud with hint
+                                    // (callers can use format_float() / explicit casts).
+                                    saw_colon_fmt = true
+                                    expr_parts.push(to_string(ec))
+                                    pos = pos + 1
+                                    col = col + 1
+                                } else if ec == '\n' {
+                                    expr_parts.push(to_string(ec))
+                                    pos = pos + 1
+                                    line = line + 1
+                                    col = 1
+                                } else {
+                                    expr_parts.push(to_string(ec))
+                                    pos = pos + 1
+                                    col = col + 1
+                                }
+                            }
+                            if depth > 0 {
+                                println("error: unterminated f-string interpolation `{...` at line " + to_string(line) + ":" + to_string(start_col) + " — missing closing `}`")
+                                exit(1)
+                            }
+                            let expr_src = join(expr_parts, "")
+                            if expr_src == "" {
+                                println("error: empty f-string interpolation `{}` at line " + to_string(line) + ":" + to_string(start_col) + " — Python disallows; use `{0}` style or include an expression")
+                                exit(1)
+                            }
+                            if saw_colon_fmt {
+                                println("error: f-string format spec `{x:fmt}` not yet supported at line " + to_string(line) + ":" + to_string(start_col) + " — use explicit format(\"...{}\", format_float(x, n)) for now (follow-up RFC pending)")
+                                exit(1)
+                            }
+                            tmpl_parts.push("{}")
+                            arg_sources.push(expr_src)
+                        }
+                    } else if fc == '}' {
+                        // `}}` → literal `}` (Python convention)
+                        if pos + 1 < len_chars && chars[pos + 1] == '}' {
+                            tmpl_parts.push("}}")
+                            pos = pos + 2
+                            col = col + 2
+                        } else {
+                            println("error: stray `}` in f-string at line " + to_string(line) + ":" + to_string(col) + " — use `}}` for a literal `}`")
+                            exit(1)
+                        }
+                    } else {
+                        tmpl_parts.push(to_string(fc))
+                        pos = pos + 1
+                        if fc == '\n' {
+                            line = line + 1
+                            col = 1
+                        } else {
+                            col = col + 1
+                        }
+                    }
+                }
+                if !fdone {
+                    println("error: unterminated f-string at line " + to_string(line) + ":" + to_string(start_col))
+                    exit(1)
+                }
+                let tmpl = join(tmpl_parts, "")
+                // Emit `format ( "<tmpl>" [, arg]* )` — recursive tokenize each
+                // arg source so `{x + 1}` becomes `x + 1` token stream inline.
+                tokens.push(Token { kind: "Ident", value: "format", line: line, col: start_col })
+                tokens.push(Token { kind: "LParen", value: "(", line: line, col: start_col })
+                paren_depth = paren_depth + 1
+                tokens.push(Token { kind: "StringLit", value: tmpl, line: line, col: start_col })
+                let mut ai = 0
+                while ai < len(arg_sources) {
+                    tokens.push(Token { kind: "Comma", value: ",", line: line, col: start_col })
+                    let sub_tokens = tokenize(arg_sources[ai])
+                    let mut ti = 0
+                    while ti < len(sub_tokens) {
+                        let st = sub_tokens[ti]
+                        if st.kind != "Eof" && st.kind != "Newline" {
+                            tokens.push(st)
+                        }
+                        ti = ti + 1
+                    }
+                    ai = ai + 1
+                }
+                tokens.push(Token { kind: "RParen", value: ")", line: line, col: start_col })
+                paren_depth = paren_depth - 1
+            } else {
+                let kind = keyword_kind(word)
+                tokens.push(Token { kind: kind, value: word, line: line, col: start_col })
+            }
         } else if is_digit(ch) {
             // Number literal — integer, float, or hex (0x)
             // Underscore separators: 1_000_000 -> 1000000, 0xFF_FF -> 0xFFFF
@@ -222,15 +395,77 @@ pub fn tokenize(source) {
             let mut is_float = false
             let mut is_hex = false
 
-            // Reject octal (`0o…`) / binary (`0b…`) prefixes loudly.  hexa
-            // does not yet implement them, and the prior silence let `0o17`
-            // / `0b1010` lex as `0` + identifier `o17` / `b1010`, leaking
-            // through to clang as `undeclared identifier 'o17'`.  Fail
-            // loud at lex time with a clear hint instead.
-            if ch == '0' && pos + 1 < len_chars && (chars[pos + 1] == 'o' || chars[pos + 1] == 'O' || chars[pos + 1] == 'b' || chars[pos + 1] == 'B') && pos + 2 < len_chars && is_digit(chars[pos + 2]) {
-                let _prefix = "0" + to_string(chars[pos + 1])
-                println("error: literal prefix `" + _prefix + "` (octal/binary) not supported at line " + to_string(line) + ":" + to_string(start_col) + " — use decimal or `0x` hex")
-                exit(1)
+            // Binary (`0b…`) / octal (`0o…`) integer literals.  PROBE r14-DDDD
+            // converts the prior reject branch (PR #371) into a land branch
+            // that mirrors the hex scanner: scan base-N digits with conservative
+            // underscore separators (no leading/trailing/double), accumulate the
+            // integer value, and emit IntLit with a decimal string value so the
+            // downstream codegen (`hexa_int(<value>)`) needs no changes.
+            // Invalid digits (`0b2`, `0o8`) fail loud at the lex site.
+            if ch == '0' && pos + 1 < len_chars && (chars[pos + 1] == 'b' || chars[pos + 1] == 'B' || chars[pos + 1] == 'o' || chars[pos + 1] == 'O') {
+                let _pfx_ch = chars[pos + 1]
+                let mut base = 2
+                let mut base_name = "binary"
+                if _pfx_ch == 'o' || _pfx_ch == 'O' {
+                    base = 8
+                    base_name = "octal"
+                }
+                let _prefix = "0" + to_string(_pfx_ch)
+                let _digit_set = if base == 2 { "[0-1]" } else { "[0-7]" }
+                pos = pos + 2
+                col = col + 2
+                let zero_code = char_code('0', 0)
+                let mut acc = 0
+                let mut digit_count = 0
+                let mut scanning = true
+                while scanning && pos < len_chars {
+                    let dch = chars[pos]
+                    if dch == '_' {
+                        // Conservative underscore: only valid between digits.
+                        // Leading `_` (digit_count == 0) and trailing `_` (next
+                        // not a valid base digit) and double `__` (next is `_`)
+                        // all fall through and stop the scan; the `_` is left
+                        // for the next token (will likely fail downstream).
+                        if digit_count > 0 && pos + 1 < len_chars {
+                            let nch = chars[pos + 1]
+                            let nco = char_code(nch, 0) - zero_code
+                            if nch != '_' && nco >= 0 && nco < base {
+                                pos = pos + 1
+                                col = col + 1
+                                // loop continues; next iteration consumes digit
+                            } else {
+                                scanning = false
+                            }
+                        } else {
+                            scanning = false
+                        }
+                    } else {
+                        let dco = char_code(dch, 0) - zero_code
+                        if dco >= 0 && dco < base {
+                            acc = acc * base + dco
+                            digit_count = digit_count + 1
+                            pos = pos + 1
+                            col = col + 1
+                        } else if is_digit(dch) {
+                            // Digit, but out of range for this base (e.g. `0b2`, `0o8`)
+                            println("error: invalid " + base_name + " digit '" + to_string(dch) + "' at line " + to_string(line) + ":" + to_string(col) + " — `" + _prefix + "` accepts " + _digit_set + " digits")
+                            exit(1)
+                        } else {
+                            scanning = false
+                        }
+                    }
+                }
+                if digit_count == 0 {
+                    println("error: empty " + base_name + " literal `" + _prefix + "` at line " + to_string(line) + ":" + to_string(start_col) + " — `" + _prefix + "` requires at least one " + _digit_set + " digit")
+                    exit(1)
+                }
+                // Reject literal suffix adjacency (mirror decimal/hex path below)
+                if pos < len_chars && is_ident_start(chars[pos]) {
+                    println("error: literal suffix `" + _prefix + to_string(acc) + to_string(chars[pos]) + "…` not supported at line " + to_string(line) + ":" + to_string(start_col) + " — typed-suffix is not yet implemented")
+                    exit(1)
+                }
+                tokens.push(Token { kind: "IntLit", value: to_string(acc), line: line, col: start_col })
+                continue
             }
             // Check for hex prefix 0x / 0X
             if ch == '0' && pos + 1 < len_chars && (chars[pos + 1] == 'x' || chars[pos + 1] == 'X') {
@@ -615,7 +850,111 @@ pub fn tokenize(source) {
                     col = col + 1
                 }
             } else if ch == '/' {
-                if pos + 1 < len_chars && chars[pos + 1] == '=' {
+                // PROBE r14-MMM: regex literal `/pattern/flags` (JS/Perl-style).
+                // Only in expression-START position (prev token not a value-
+                // ender) — otherwise `/` is division. `/=` after a value stays
+                // SlashEq. An empty `//` is already consumed as a line comment
+                // upstream, so a regex never starts with `/`.
+                let prev_is_value = len(tokens) > 0 && regex_value_ender(tokens[len(tokens) - 1].kind)
+                if !prev_is_value && pos + 1 < len_chars && chars[pos + 1] != '=' {
+                    // Scan the pattern body until an unescaped closing `/`.
+                    let mut rx_parts = []
+                    let mut rx_pos = pos + 1
+                    let mut rx_col = col + 1
+                    let mut rx_done = false
+                    let mut rx_terminated = false
+                    while rx_pos < len_chars && !rx_done {
+                        let rc = chars[rx_pos]
+                        if rc == '\\' {
+                            // Keep escape verbatim so the pattern string passed
+                            // to the runtime (POSIX ERE) is faithful.
+                            rx_parts.push("\\")
+                            rx_pos = rx_pos + 1
+                            rx_col = rx_col + 1
+                            if rx_pos < len_chars {
+                                rx_parts.push(to_string(chars[rx_pos]))
+                                rx_pos = rx_pos + 1
+                                rx_col = rx_col + 1
+                            }
+                        } else if rc == '/' {
+                            rx_done = true
+                            rx_terminated = true
+                            rx_pos = rx_pos + 1
+                            rx_col = rx_col + 1
+                        } else if rc == '\n' {
+                            // Unterminated regex — bail out of regex mode.
+                            rx_done = true
+                        } else {
+                            rx_parts.push(to_string(rc))
+                            rx_pos = rx_pos + 1
+                            rx_col = rx_col + 1
+                        }
+                    }
+                    if rx_terminated {
+                        let mut rx_pat = join(rx_parts, "")
+                        // Collect a postfix flag run (alphanumeric).
+                        let mut flag_parts = []
+                        while rx_pos < len_chars && is_alphanumeric(chars[rx_pos]) {
+                            flag_parts.push(to_string(chars[rx_pos]))
+                            rx_pos = rx_pos + 1
+                            rx_col = rx_col + 1
+                        }
+                        let flags = join(flag_parts, "")
+                        // Compile-time validation: reject an empty pattern and
+                        // unbalanced ()/[].
+                        if len(rx_pat.chars()) == 0 {
+                            println("error: empty regex literal `//` at line " + to_string(line) + ":" + to_string(start_col))
+                            exit(1)
+                        }
+                        let pchars = rx_pat.chars()
+                        let mut paren_bal = 0
+                        let mut brack_bal = 0
+                        let mut vi = 0
+                        let plen = len(pchars)
+                        while vi < plen {
+                            let pc = pchars[vi]
+                            if pc == '\\' { vi = vi + 2 } else {
+                                if pc == '(' { paren_bal = paren_bal + 1 }
+                                else if pc == ')' { paren_bal = paren_bal - 1 }
+                                else if pc == '[' { brack_bal = brack_bal + 1 }
+                                else if pc == ']' { brack_bal = brack_bal - 1 }
+                                vi = vi + 1
+                            }
+                        }
+                        if paren_bal != 0 || brack_bal != 0 {
+                            println("error: unbalanced regex literal /" + rx_pat + "/ at line " + to_string(line) + ":" + to_string(start_col) + " — unmatched () or []")
+                            exit(1)
+                        }
+                        // Flag handling (POSIX ERE): `i` → inline `(?i)` prefix
+                        // (already supported by stdlib/regex). `m` is accepted
+                        // as a no-op (POSIX ^/$ are line-anchored by default).
+                        // Any other flag is rejected loudly.
+                        let fchars = flags.chars()
+                        let mut fi = 0
+                        let mut want_i = false
+                        while fi < len(fchars) {
+                            let fc = fchars[fi]
+                            if fc == 'i' { want_i = true }
+                            else if fc == 'm' { fi = fi }
+                            else {
+                                println("error: unsupported regex flag `" + to_string(fc) + "` in /" + rx_pat + "/" + flags + " at line " + to_string(line) + ":" + to_string(start_col) + " — POSIX ERE supports i (and m as no-op)")
+                                exit(1)
+                            }
+                            fi = fi + 1
+                        }
+                        if want_i {
+                            rx_pat = "(?i)" + rx_pat
+                        }
+                        tokens.push(Token { kind: "RegexLit", value: rx_pat, line: line, col: start_col })
+                        pos = rx_pos
+                        col = rx_col
+                    } else {
+                        // Not a valid regex — fall back to a division token.
+                        tokens.push(Token { kind: "Slash", value: "/", line: line, col: start_col })
+                        pos = pos + 1
+                        col = col + 1
+                    }
+                } else if pos + 1 < len_chars && chars[pos + 1] == '=' {
                     tokens.push(Token { kind: "SlashEq", value: "/=", line: line, col: start_col })
                     pos = pos + 2
                     col = col + 2
@@ -713,6 +1052,14 @@ pub fn tokenize(source) {
                         pos = pos + 2
                         col = col + 2
                     }
+                } else if pos + 1 < len_chars && chars[pos + 1] == '>' {
+                    // PROBE r14-NNN: pipe operator `|>` (F#/Elixir/OCaml).
+                    // Emits Pipe token; parser `parse_pipe` (L2830) builds
+                    // BinOp { op: "|>" }; codegen dispatches in BinOp branch
+                    // by desugaring `x |> f(a, b)` → `f(x, a, b)`.
+                    tokens.push(Token { kind: "Pipe", value: "|>", line: line, col: start_col })
+                    pos = pos + 2
+                    col = col + 2
                 } else {
                     tokens.push(Token { kind: "BitOr", value: "|", line: line, col: start_col })
                     pos = pos + 1

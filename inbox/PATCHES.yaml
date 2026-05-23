@@ -172,7 +172,7 @@
     promote (proof the live binary now has sleep_ms; the prior cd817981 build
     errored "undefined function: sleep_ms"). sha256 + backup paths also in
     inbox/manifest_log.jsonl (promote row, 2026-05-12).
-  detail: patches/wilson-needs-hexa-real-promotion.md
+  detail: patches/archive/wilson-needs-hexa-real-promotion.md
 
 - id: wilson-needs-streaming-http-sse
   source: wilson session — de-STUBbing provider-anthropic found stdlib/http_sse.hexa (claimed in wilson's gap-audit) does NOT exist; only buffered anthropic_send/http2_post available.
@@ -436,7 +436,7 @@
     interp callers (`hexa run`) get sleep_ms; `hexa build` consumers
     already get it via the repo's regenerated hexa_v2 + self/runtime.c.
     Reporter: wilson (provider-claude-cli poll loop).
-  detail: patches/stdlib-subsecond-sleep.md
+  detail: patches/archive/stdlib-subsecond-sleep.md
 
 - id: stdlib-arr-shift
   source_commit: pending
@@ -586,7 +586,7 @@
     to keep IME text as raw UTF-8.
   status: applied
   opened: 2026-05-18
-  detail: patches/modifyotherkeys-non-ascii-decoder-gap.md
+  detail: patches/archive/modifyotherkeys-non-ascii-decoder-gap.md
 
 - id: input-decoder-chr-vs-from_char_code
   source_commit: 7c98cf03  # + ec468224 (decoder cluster B — CSI u L454)

@@ -763,8 +763,8 @@ fn p_continue_bin_op(kinds) {
 fn is_comparison_op(k) {
     if k == "Lt" { return true }
     if k == "Gt" { return true }
-    if k == "Le" { return true }
-    if k == "Ge" { return true }
+    if k == "LtEq" { return true }
+    if k == "GtEq" { return true }
     if k == "EqEq" { return true }
     if k == "NotEq" { return true }
     return false
@@ -1419,6 +1419,30 @@ fn parse_stmt() {
         return parse_attribute_prefix()
     }
 
+    // PROBE r14-S (round 3 #6 carry-over): bare-block `{ stmt; stmt; }` as a
+    // statement (Rust block-stmt · C `{ }` · Swift do-block analog). At
+    // STATEMENT position LBrace is unambiguous — expression-position struct
+    // and map literals are reached via `let x = { … }` / `= { … }` / args,
+    // never as the leading token of a stmt. The codegen path emits a plain
+    // C `{ … }` brace-group so downstream stmts execute in sequence.
+    //
+    // NOTE on scope: hexa codegen flat-hoists every `let` per function
+    // (`_gen2_collect_lets` — see PROBE.log r3 #6). So `let` inside the
+    // bare-block does NOT introduce a fresh lexical scope today; the
+    // outer-leak behavior is unchanged. This PR ships only the PARSE
+    // acceptance — lexical-scope correctness is a separate codegen RFC
+    // (the same RFC that fixes match-arm `let` leak).
+    if kind == "LBrace" {
+        let body = parse_block()
+        return #{
+            "kind": "BlockStmt", "name": "", "value": "", "op": "",
+            "left": "", "right": "", "cond": "", "then_body": "", "else_body": "",
+            "params": "", "body": body, "args": "", "fields": "", "items": "",
+            "variants": "", "arms": "", "iter_expr": "", "ret_type": "",
+            "target": "", "trait_name": "", "methods": ""
+        }
+    }
+
     // Expression statement or assignment (incl. compound: +=, -=, *=, /=, %=)
     //
     // T2 FIX-A Patch #5 — empty-LHS ident edge resume point.
@@ -1539,11 +1563,24 @@ fn parse_let() {
     }
 
     // G9: map/struct destructuring — let {x, y} = expr
+    // PROBE r14-PPP: also accept rename form `let {x: px, y: py} = expr`.
+    //   patterns[i] = bound name (target — what becomes a local var)
+    //   keys[i]     = source key looked up on the rhs map
+    // No-rename form keeps keys[i] == patterns[i] (JS/Rust shorthand).
+    // Stored on AST node as params=patterns, fields=keys (parallel arrays).
     if p_peek_kind() == "LBrace" {
         p_advance() // consume {
         let mut patterns = []
+        let mut keys = []
         while p_peek_kind() != "RBrace" && p_peek_kind() != "Eof" {
-            patterns.push(p_expect_ident())
+            let src = p_expect_ident()
+            let mut tgt = src
+            if p_peek_kind() == "Colon" {
+                p_advance() // consume :
+                tgt = p_expect_ident()
+            }
+            keys.push(src)
+            patterns.push(tgt)
             if p_peek_kind() == "Comma" {
                 p_advance()
             }
@@ -1554,18 +1591,30 @@ fn parse_let() {
         return #{
             "kind": "MapDestructLetStmt", "name": "", "value": "", "op": "",
             "left": expr, "right": "", "cond": "", "then_body": "", "else_body": "",
-            "params": patterns, "body": "", "args": "", "fields": "", "items": "",
+            "params": patterns, "body": "", "args": "", "fields": keys, "items": "",
             "variants": "", "arms": "", "iter_expr": "", "ret_type": "",
             "target": "", "trait_name": "", "methods": ""
         }
     }
 
     // FIX-6 (BG-HX2): reject reserved keywords as let-binding name.
+    let name_tok = p_peek()
     let mut name = ""
     if p_check_strict_reserved("let-binding name") {
         name = ""
     } else {
         name = p_expect_ident()
+    }
+    // PROBE r14-II (H follow-up): block `let inf = ...` / `let nan = ...`
+    // shadowing of the reserved float constants emitted by codegen (PR #488).
+    // Mirror of PR #474 (`nil`/`null` parse_primary intercept) — same
+    // diagnostic machinery, applied at the let-binding site only. Function
+    // arguments and enum variants are NOT touched (they don't route through
+    // parse_let). The codegen `inf`/`nan` Ident interception (PR #488) is
+    // gentler than `nil` (it preserves locals); the parser-side gate raises
+    // a clear footgun warning at the source.
+    if name == "inf" || name == "nan" {
+        p_emit_parse_error(name_tok, "cannot shadow reserved value '" + name + "' — pick a different name (e.g. 'my_" + name + "')")
     }
     // optional type annotation — supports T?, (T,U), T|U via parse_type_annotation
     let mut typ = ""
@@ -2101,6 +2150,19 @@ fn parse_type_annotation() {
             let _ret = parse_type_annotation()
         }
         base = "any"
+    } else if p_peek_kind() == "BitAnd" {
+        // PROBE r14-LLLL (HHHH-1): Rust reference type `&T` / `&'a T` /
+        // `&mut T`. hexa has no borrow checker — absorb the `&` (and any
+        // `mut`), then reject lifetime annotation with a specific
+        // diagnostic, and recurse to parse the inner type. This mirrors
+        // the parse_params `&self` absorption pattern but works in
+        // type-annotation position (return types, struct field types,
+        // generic args). Without this branch, `-> &'a str` cascaded
+        // ~6 errors per occurrence.
+        p_advance() // consume '&'
+        if p_peek_kind() == "Mut" { p_advance() }
+        p_skip_lifetime_label()
+        base = parse_type_annotation()
     } else if p_peek_kind() == "Star" {
         p_advance() // consume '*'
         base = "*" + p_expect_ident()
@@ -2510,6 +2572,26 @@ fn parse_for_stmt() {
 
 fn parse_while_stmt() {
     p_advance() // consume 'while'
+    // SS-2: while let PATTERN = EXPR { body } — sibling of the if-let G32
+    // branch (parse_if_expr). `let` after `while` disambiguates the
+    // pattern-binding loop from the boolean `while cond { … }` form.
+    if p_peek_kind() == "Let" {
+        p_advance() // consume 'let'
+        let pattern = parse_match_pattern()
+        p_expect("Eq") // consume '='
+        let prev_supp = p_suppress_struct_lit
+        p_suppress_struct_lit = true
+        let scrutinee = parse_expr()
+        p_suppress_struct_lit = prev_supp
+        let body = parse_block()
+        return #{
+            "kind": "WhileLetStmt", "name": "", "value": "", "op": "",
+            "left": pattern, "right": scrutinee, "cond": "", "then_body": "", "else_body": "",
+            "params": "", "body": body, "args": "", "fields": "", "items": "",
+            "variants": "", "arms": "", "iter_expr": "", "ret_type": "",
+            "target": "", "trait_name": "", "methods": ""
+        }
+    }
     // Suppress struct-literal parsing inside the condition (Name { ... } would
     // collide with while body brace).
     let prev_supp = p_suppress_struct_lit
@@ -3613,6 +3695,14 @@ fn parse_primary() {
         return node_bool_lit(tok.value)
     }
     if k == "StringLit" {
+        p_advance()
+        return node_string_lit(tok.value)
+    }
+    if k == "RegexLit" {
+        // PROBE r14-MMM: a `/pat/flags` regex literal desugars to its
+        // (validated, flag-baked) POSIX-ERE pattern STRING. It is sugar — pass
+        // it straight into the existing regex_* builtins, e.g.
+        // `regex_test(/h.llo/i, s)`. Zero codegen change (lowers as StringLit).
         p_advance()
         return node_string_lit(tok.value)
     }
@@ -5012,6 +5102,11 @@ fn parse_type_params() {
     if p_peek_kind() != "Lt" { return [] }
     p_advance() // consume <
     let mut tparams = []
+    // PROBE r14-LLLL (HHHH-1): reject Rust lifetime `'a` in generic-param
+    // position. hexa is GC-based — lifetimes have no memory-safety role.
+    // Emit one specific diagnostic per occurrence, then skip the Label
+    // token so the rest of the generic-param list parses cleanly.
+    p_skip_lifetime_label()
     let name = p_expect_ident()
     let mut bound = ""
     if p_peek_kind() == "Colon" {
@@ -5027,6 +5122,7 @@ fn parse_type_params() {
     })
     while p_peek_kind() == "Comma" {
         p_advance()
+        p_skip_lifetime_label()
         let pname = p_expect_ident()
         let mut pbound = ""
         if p_peek_kind() == "Colon" {
@@ -5043,6 +5139,21 @@ fn parse_type_params() {
     }
     p_expect("Gt")
     return tparams
+}
+
+// PROBE r14-LLLL (HHHH-1): shared helper — when the current token is a
+// Label (Rust lifetime such as `'a`, `'static`) in a type position,
+// emit a specific diagnostic with `help:` + `hint:` and consume the
+// token to suppress cascade errors. No-op if the current token is not
+// a Label. Loop-label sites (`'outer:`, `break 'outer`) never enter
+// here — they live in parse_break_stmt / parse_for_stmt / etc.
+fn p_skip_lifetime_label() {
+    if p_peek_kind() != "Label" { return 0 }
+    let tok = p_peek()
+    let name = tok.value
+    p_emit_parse_error(tok, "lifetime annotation '" + name + " is not allowed in hexa\n   = help: hexa is GC-based; remove the lifetime annotation\n   = hint: `fn longest(x: &str, y: &str) -> &str`")
+    p_advance() // consume the Label
+    return 1
 }
 
 // ── where T: Trait, U: Clone ────────────────────────────────
@@ -5132,6 +5243,10 @@ fn ast_to_string(node, indent) {
     if k == "IfLetExpr" {
         let p = ast_to_string(node.left, 0)
         return pad + "IfLetExpr(" + p + ", then=[" + to_string(len(node.then_body)) + "], else=[" + to_string(len(node.else_body)) + "])"
+    }
+    if k == "WhileLetStmt" {
+        let p = ast_to_string(node.left, 0)
+        return pad + "WhileLetStmt(" + p + ", body=[" + to_string(len(node.body)) + "])"
     }
     if k == "MatchExpr" {
         return pad + "MatchExpr([" + to_string(len(node.arms)) + " arms])"

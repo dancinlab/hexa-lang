@@ -1,0 +1,95 @@
+// ═══════════════════════════════════════════════════════════════════════════
+//  stdlib/smart_ptr.hexa — Box / Rc / Arc identity stubs (Rust migration aid)
+//
+//  @module(slug="smart_ptr", desc="Box/Rc/Arc identity wrappers for Rust copy-paste migration friendliness")
+//  @usage(use "stdlib/smart_ptr"; let b = Box::new(42); let r = Rc::new("hi"))
+//
+//  ── module governance metadata ─────────────────────────────────────────────
+//  @version 0.1.0
+//  @capabilities [Box::new, Rc::new, Rc::clone, Arc::new, Arc::clone]
+//  @stability preview
+//  @since 2026-05-23
+//  @maintainer hexa-lang
+//  @priority P3
+//
+//  ── DESIGN ────────────────────────────────────────────────────────────────
+//
+//  hexa is GC-based. There is no manual heap ownership and no reference
+//  counting at the language level. The Rust smart-pointer surface — Box, Rc,
+//  Arc — therefore has no runtime job to do; the GC already manages allocation
+//  and lifetime. The wrappers below are IDENTITY: `Box::new(v)` returns `v`,
+//  `Rc::new(v)` returns `v`, `Arc::clone(self)` returns `self`. They exist
+//  ONLY so Rust source can be copy-pasted into hexa without rewriting every
+//  allocation site.
+//
+//  PROBE r14-IIII RFC (PR #535) — option B: identity wrapper stub.
+//
+//  ── USAGE ─────────────────────────────────────────────────────────────────
+//
+//      use "stdlib/smart_ptr"
+//
+//      fn main() {
+//          let b = Box::new(42)              // → 42
+//          let r = Rc::new("hello")          // → "hello"
+//          let a = Arc::new([1, 2, 3])       // → [1, 2, 3]
+//          print(b, r, a)
+//      }
+//
+//  ── NON-GOALS ─────────────────────────────────────────────────────────────
+//
+//  These wrappers do NOT:
+//  - allocate on a separate heap (everything is GC-managed already)
+//  - track a reference count (Rc/Arc.clone is identity, never bumps a count)
+//  - enforce single-owner semantics (no borrow-check, no move semantics)
+//  - distinguish thread-safe vs single-thread (Arc == Rc; hexa runtime
+//    handles thread-safety at the value layer)
+//
+//  Users who want real refcounting or arena allocation should reach for
+//  stdlib/alloc (manual arena) or write a typed-channel/cell pattern.
+//
+//  ── IMPL NOTE ─────────────────────────────────────────────────────────────
+//
+//  `impl Box[T] { … }` (parametric impl block) is not yet supported by the
+//  parser — `parse_impl_block()` reads a bare ident, no generic param list.
+//  The associated-fn dispatch in codegen mangles `Box::new` → `Box__new`
+//  unconditionally regardless of the receiver's generic shape, so a bare
+//  `impl Box { fn new(value) … }` is sufficient: every call site lowers to
+//  the same C symbol. The struct payload is unused (GC-identity), but kept
+//  for documentation parity with Rust's `Box<T>(T)` wrapper.
+// ═══════════════════════════════════════════════════════════════════════════
+
+struct Box {
+    inner: int,
+}
+
+impl Box {
+    fn new(value) {
+        return value
+    }
+}
+
+struct Rc {
+    inner: int,
+}
+
+impl Rc {
+    fn new(value) {
+        return value
+    }
+    fn clone(self) {
+        return self
+    }
+}
+
+struct Arc {
+    inner: int,
+}
+
+impl Arc {
+    fn new(value) {
+        return value
+    }
+    fn clone(self) {
+        return self
+    }
+}
