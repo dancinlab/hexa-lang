@@ -3199,6 +3199,63 @@ fn gen2_stmt(node, depth) {
         return chunks.join("")
     }
 
+    // ── WhileLetStmt → loop + match desugar (SS-3) ────────
+    // `while let PAT = EXPR { body }` is the canonical pattern-binding loop.
+    // It lowers to the Rust-standard form
+    //   loop { match EXPR { PAT => { body }, _ => break } }
+    // reusing the existing match codegen (gen2_match_stmt) so all the
+    // pattern + payload-binding machinery (EnumPath, wildcard, single-field
+    // payload binders) is shared with `match` — no new pattern infra. The
+    // scrutinee EXPR is re-evaluated each iteration (the loop semantics), and
+    // a non-matching value falls into the synthetic `_ => break` arm and
+    // exits the loop. node.left = pattern, node.right = scrutinee.
+    if k == "WhileLetStmt" {
+        // Synthetic wildcard pattern for the fall-through break arm.
+        let _wild = #{
+            "kind": "Wildcard", "name": "_", "value": "", "op": "",
+            "left": "", "right": "", "cond": "", "then_body": "", "else_body": "",
+            "params": "", "body": "", "args": "", "fields": "", "items": "",
+            "variants": "", "arms": "", "iter_expr": "", "ret_type": "",
+            "target": "", "trait_name": "", "methods": ""
+        }
+        // `break;` statement for the non-matching arm body.
+        let _break_stmt = #{
+            "kind": "BreakStmt", "name": "", "value": "", "op": "",
+            "left": "", "right": "", "cond": "", "then_body": "", "else_body": "",
+            "params": "", "body": "", "args": "", "fields": "", "items": "",
+            "variants": "", "arms": "", "iter_expr": "", "ret_type": "",
+            "target": "", "trait_name": "", "methods": ""
+        }
+        // Arm 0: PAT => { body } (carries the pattern + loop body).
+        let _arm_match = #{
+            "kind": "MatchArm", "name": "", "value": "", "op": "",
+            "left": node.left, "right": "", "cond": "", "then_body": "", "else_body": "",
+            "params": "", "body": node.body, "args": "", "fields": "", "items": "",
+            "variants": "", "arms": "", "iter_expr": "", "ret_type": "",
+            "target": "", "trait_name": "", "methods": ""
+        }
+        // Arm 1: _ => { break }
+        let _arm_break = #{
+            "kind": "MatchArm", "name": "", "value": "", "op": "",
+            "left": _wild, "right": "", "cond": "", "then_body": "", "else_body": "",
+            "params": "", "body": [_break_stmt], "args": "", "fields": "", "items": "",
+            "variants": "", "arms": "", "iter_expr": "", "ret_type": "",
+            "target": "", "trait_name": "", "methods": ""
+        }
+        let _match_node = #{
+            "kind": "MatchExpr", "name": "", "value": "", "op": "",
+            "left": node.right, "right": "", "cond": "", "then_body": "", "else_body": "",
+            "params": "", "body": "", "args": "", "fields": "", "items": "",
+            "variants": "", "arms": [_arm_match, _arm_break], "iter_expr": "", "ret_type": "",
+            "target": "", "trait_name": "", "methods": ""
+        }
+        let mut chunks = []
+        chunks.push(pad + "while (1) {\n")
+        chunks.push(gen2_match_stmt(_match_node, depth + 1))
+        chunks.push(pad + "}\n")
+        return chunks.join("")
+    }
+
     // (KEYWORD_DEMOTE Phase 1: GuardStmt + GuardLetStmt removed — `guard`
     // keyword had 0/0 block-form usage; `if !cond { ... }` covers the same
     // pattern. Identifier uses like `guard = guard + 1` now just work.)

@@ -2510,6 +2510,26 @@ fn parse_for_stmt() {
 
 fn parse_while_stmt() {
     p_advance() // consume 'while'
+    // SS-2: while let PATTERN = EXPR { body } — sibling of the if-let G32
+    // branch (parse_if_expr). `let` after `while` disambiguates the
+    // pattern-binding loop from the boolean `while cond { … }` form.
+    if p_peek_kind() == "Let" {
+        p_advance() // consume 'let'
+        let pattern = parse_match_pattern()
+        p_expect("Eq") // consume '='
+        let prev_supp = p_suppress_struct_lit
+        p_suppress_struct_lit = true
+        let scrutinee = parse_expr()
+        p_suppress_struct_lit = prev_supp
+        let body = parse_block()
+        return #{
+            "kind": "WhileLetStmt", "name": "", "value": "", "op": "",
+            "left": pattern, "right": scrutinee, "cond": "", "then_body": "", "else_body": "",
+            "params": "", "body": body, "args": "", "fields": "", "items": "",
+            "variants": "", "arms": "", "iter_expr": "", "ret_type": "",
+            "target": "", "trait_name": "", "methods": ""
+        }
+    }
     // Suppress struct-literal parsing inside the condition (Name { ... } would
     // collide with while body brace).
     let prev_supp = p_suppress_struct_lit
@@ -5132,6 +5152,10 @@ fn ast_to_string(node, indent) {
     if k == "IfLetExpr" {
         let p = ast_to_string(node.left, 0)
         return pad + "IfLetExpr(" + p + ", then=[" + to_string(len(node.then_body)) + "], else=[" + to_string(len(node.else_body)) + "])"
+    }
+    if k == "WhileLetStmt" {
+        let p = ast_to_string(node.left, 0)
+        return pad + "WhileLetStmt(" + p + ", body=[" + to_string(len(node.body)) + "])"
     }
     if k == "MatchExpr" {
         return pad + "MatchExpr([" + to_string(len(node.arms)) + " arms])"
