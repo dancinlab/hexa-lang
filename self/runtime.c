@@ -3321,6 +3321,12 @@ HexaVal hexa_array_slice(HexaVal arr, HexaVal start, HexaVal end) {
     int n = HX_ARR_LEN(arr);
     int a = (int)HX_INT(start);
     int b = HX_IS_VOID(end) ? n : (int)HX_INT(end);
+    // PROBE r14-D — Python-canonical negative wrap before clamp.
+    // arr[-2..] ≡ arr[len-2..]; arr[..-1] ≡ arr[..len-1]. After wrap, still
+    // out-of-range bounds clamp to [0, n] (Python slice semantics, distinct
+    // from indexing which throws).
+    if (a < 0) a += n;
+    if (b < 0) b += n;
     if (a < 0) a = 0;
     if (b > n) b = n;
     if (a > b) a = b;
@@ -3353,6 +3359,11 @@ HexaVal hexa_array_slice(HexaVal arr, HexaVal start, HexaVal end) {
     int n = HX_ARR_LEN(arr);
     int64_t a = HX_INT(start);
     int64_t b = HX_IS_VOID(end) ? n : HX_INT(end);
+    // PROBE r14-D — Python-canonical negative wrap before clamp (mirrors the
+    // string path above and the #ifndef HEXA_HAS_HEXA_RT_STDLIB sibling).
+    // Wrap here so rt_array_slice_float receives already-normalized bounds.
+    if (a < 0) a += n;
+    if (b < 0) b += n;
     if (_arr_all_float(arr)) {
         return rt_array_slice_float(arr, hexa_int(a), hexa_int(b));
     }
