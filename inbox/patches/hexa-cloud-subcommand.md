@@ -1,6 +1,7 @@
 # hexa-cloud — register as `hexa cloud` subcommand
 
-> **Status:** open — filed 2026-05-22 by sidecar/commons during `/cloud` wrapper ship cycle.
+> **Status:** fixed — `hexa cloud --help` returns the full cycle A/B-1/C surface; `hexa --help` lists the cloud verb. Verified 2026-05-23 against the redeployed `~/.hx/bin/hexa.real` (PR #359 build). The subcommand wire landed in `self/main.hexa:4693`; the long-standing block was a stale deploy, not a missing source fix.
+> **Update 2026-05-22 (cycle C):** subcommand wire landed in `self/main.hexa:4693`. Cycle C extends the surface with a `preflight` verb (F-PREFLIGHT-MEM ✓). Sidecar plugin updated to expose preflight. Help text byte-eq with `stdlib/cloud/cloud_cli.hexa::_cloud_help`.
 
 **From:** sidecar (downstream consumer)
 **Sister files:** sidecar `commons.tape` g8 · sidecar `skills/cloud/` plugin
