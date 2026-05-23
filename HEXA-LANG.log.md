@@ -9,10 +9,16 @@
 
 ## Deferred RFC 사이클 (architect 결정 대기)
 
-- [ ] RFC: Option / Result lane — design draft (round-3 후속)
-- [ ] RFC: trait operator overload — design draft (round-7 후속)
-- [ ] RFC: TLS primitive — design draft (websocket wss:// + HTTPS 후속)
-- [ ] follow-up: type_checker `type_check` pass wiring → `hexa build` 통합 또는 `hexa typecheck` verb (#453 dormant 활성화)
+- [x] RFC 081 — Option / Result lane — design draft (`inbox/rfc_drafts_2026_05_23/rfc_081_option_result_lane.md`, D1-D6 decision points)
+- [x] RFC 082 — trait operator overload — design draft (`inbox/rfc_drafts_2026_05_23/rfc_082_trait_operator_overload.md`, D1-D7)
+- [x] RFC 083 — TLS primitive — design draft (`inbox/rfc_drafts_2026_05_23/rfc_083_tls_primitive.md`, D1-D7)
+- [~] follow-up: type_checker `type_check` pass wiring — source-level wiring INFLIGHT (PR #503 · `type_check_and_emit` + `hexa typecheck` verb · regen-gated activation)
+
+## architect decision (RFC 081/082/083 — next step)
+
+- [ ] RFC 081 D1-D6 결정 (가장 큰 결정 = D1 Option/Result naming + ? operator · 권고: Rust 패턴 A/A)
+- [ ] RFC 082 D1-D7 결정 (가장 큰 결정 = D2 dispatch model · 권고: static-only v1, dyn follow-up)
+- [ ] RFC 083 D1-D7 결정 (가장 큰 결정 = D1 TLS library 선택 · 권고: system 동적 링크 D)
 
 ## next batch (resolved-after-decision)
 
