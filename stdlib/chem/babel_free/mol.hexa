@@ -1,0 +1,309 @@
+// stdlib/chem/babel_free/mol.hexa — MOL V2000 (CTfile) reader + writer.
+//
+// 사용자 결정 B-2 — open-babel (GPL-2) 회피 + scratch 구현.
+// open-babel 소스/알고리즘/자료구조 참조 일절 없음.
+// 공개 format 사양만 참조 :
+//   - CTfile spec (Wikipedia)
+//     https://en.wikipedia.org/wiki/Chemical_table_file
+//   - BIOVIA CTfile Formats (2020 공개 PDF, columns 정의)
+//
+// 본 모듈이 다루는 부분집합 :
+//   1. V2000 header 3 lines (title · program · comment)
+//   2. counts line — fixed-width 3자 정수 atom_count, bond_count, …
+//   3. atom block — `x y z element …` (각각 10.4f / 10.4f / 10.4f / 3-char symbol)
+//   4. bond block — `a1 a2 type …` (3자 정수 × 3)
+//   5. `M  END` terminator
+//
+// V3000, query bonds, stereo parity, ISO/CHG property blocks, link/Sgroup
+// 모두 본 cycle 범위 밖 (deferred).
+//
+// 공개 surface :
+//   struct MolAtom  { x · y · z · element · charge }
+//   struct MolBond  { a · b · bond_type }
+//   struct Molfile  { title · program_info · comment · atoms · bonds }
+//   pub fn parse_mol_v2000(text: string)  -> Molfile
+//   pub fn write_mol_v2000(m: Molfile)    -> string
+
+// ── 자료구조 ─────────────────────────────────────────────────────────
+
+struct MolAtom {
+    x: float,
+    y: float,
+    z: float,
+    element: string,    // 원소 기호 (최대 3자, 공백 trim)
+    charge: int,        // CTfile 정수 코드 (0=중성, 1=+3, 2=+2, 3=+1, 5=-1, 6=-2, 7=-3)
+}
+
+struct MolBond {
+    a: int,             // 1-indexed atom index (CTfile 컨벤션)
+    b: int,
+    bond_type: int,     // 1=single · 2=double · 3=triple · 4=aromatic
+}
+
+struct Molfile {
+    title: string,
+    program_info: string,
+    comment: string,
+    atoms: [MolAtom],
+    bonds: [MolBond],
+}
+
+// ── 로컬 헬퍼 ────────────────────────────────────────────────────────
+
+fn _is_ws(c: string) -> bool {
+    return c == " " || c == "\t" || c == "\r" || c == "\n"
+}
+
+// 좌우 공백 제거 (V2000 fixed-width 필드 trim 용).
+fn _trim(s: string) -> string {
+    let n = len(s)
+    let mut a = 0
+    let mut b = n
+    while a < b && _is_ws(s.substring(a, a + 1)) { a = a + 1 }
+    while b > a && _is_ws(s.substring(b - 1, b)) { b = b - 1 }
+    return s.substring(a, b)
+}
+
+// 안전 float 파싱 — 공백·빈문자 → 0.0
+fn _parse_f(s: string) -> float {
+    let t = _trim(s)
+    if len(t) == 0 { return 0.0 }
+    return to_float(t)
+}
+
+// 안전 int 파싱 — 공백·빈문자 → 0
+fn _parse_i(s: string) -> int {
+    let t = _trim(s)
+    if len(t) == 0 { return 0 }
+    return to_int(t)
+}
+
+// 한 줄 분리 — CR/LF 모두 허용. 마지막 partial line 도 yield.
+fn _split_lines(text: string) -> [string] {
+    let mut out: [string] = []
+    let n = len(text)
+    let mut i = 0
+    let mut start = 0
+    while i < n {
+        let c = text.substring(i, i + 1)
+        if c == "\n" {
+            let mut e = i
+            if e > start && text.substring(e - 1, e) == "\r" {
+                e = e - 1
+            }
+            out.push(text.substring(start, e))
+            start = i + 1
+        }
+        i = i + 1
+    }
+    if start < n {
+        out.push(text.substring(start, n))
+    }
+    return out
+}
+
+// 부동소수 → fixed-width 10.4f (V2000 atom block 좌표 포맷).
+// `-10.4321` 형태, signed, 10 column right-aligned.
+fn _fmt_f10_4(x: float) -> string {
+    let mut neg = false
+    let mut v = x
+    if v < 0.0 {
+        neg = true
+        v = 0.0 - v
+    }
+    // 반올림 — 1e-4 자리.
+    let scaled = v * 10000.0 + 0.5
+    let mut whole_units = to_int(scaled)
+    // whole_units = round(v * 10000).
+    let int_part = whole_units / 10000
+    let frac_part = whole_units - int_part * 10000
+    let mut frac_str = to_string(frac_part)
+    // pad frac to 4 digits.
+    while len(frac_str) < 4 {
+        frac_str = "0" + frac_str
+    }
+    let mut body = to_string(int_part) + "." + frac_str
+    if neg {
+        body = "-" + body
+    }
+    // pad to width 10, right-justified.
+    while len(body) < 10 {
+        body = " " + body
+    }
+    return body
+}
+
+// 정수 → right-justified width-w 문자열.
+fn _fmt_iw(v: int, w: int) -> string {
+    let mut s = to_string(v)
+    while len(s) < w {
+        s = " " + s
+    }
+    return s
+}
+
+// 문자열 → left-justified width-w (atom symbol 3-char field).
+fn _fmt_sl(s: string, w: int) -> string {
+    let mut out = s
+    while len(out) < w {
+        out = out + " "
+    }
+    if len(out) > w {
+        out = out.substring(0, w)
+    }
+    return out
+}
+
+// 한 줄의 [start, end) 슬라이스 — 줄이 짧으면 빈문자 반환.
+fn _slice(line: string, start: int, end: int) -> string {
+    let n = len(line)
+    if start >= n { return "" }
+    let mut e = end
+    if e > n { e = n }
+    if e <= start { return "" }
+    return line.substring(start, e)
+}
+
+// ── parse ────────────────────────────────────────────────────────────
+//
+// V2000 columns (atom block, 0-based) :
+//   00..09  x  (10.4f)
+//   10..19  y  (10.4f)
+//   20..29  z  (10.4f)
+//   30      space
+//   31..33  element symbol (3 chars, left-justified)
+//   34..69  mass_diff · charge_code · stereo · … (본 subset 은 charge_code 만)
+//
+// V2000 columns (bond block, 0-based) :
+//   00..02  atom1 (3-int)
+//   03..05  atom2 (3-int)
+//   06..08  bond_type (3-int)
+//   09..11  stereo
+//
+// counts line :
+//   00..02  atom_count
+//   03..05  bond_count
+//   …
+//   33..38  " V2000"
+
+pub fn parse_mol_v2000(text: string) -> Molfile {
+    let lines = _split_lines(text)
+    let nl = len(lines)
+
+    // header 3 lines — 짧으면 빈문자 채움.
+    let mut title = ""
+    let mut prog  = ""
+    let mut cmt   = ""
+    if nl > 0 { title = lines[0] }
+    if nl > 1 { prog  = lines[1] }
+    if nl > 2 { cmt   = lines[2] }
+
+    let mut atoms: [MolAtom] = []
+    let mut bonds: [MolBond] = []
+
+    if nl < 4 {
+        return Molfile {
+            title: title, program_info: prog, comment: cmt,
+            atoms: atoms, bonds: bonds,
+        }
+    }
+
+    let counts = lines[3]
+    let na = _parse_i(_slice(counts, 0, 3))
+    let nb = _parse_i(_slice(counts, 3, 6))
+
+    // atom block — counts line 다음 lines[4..4+na]
+    let mut i = 0
+    while i < na {
+        let idx = 4 + i
+        if idx >= nl { i = i + 1; continue }
+        let ln = lines[idx]
+        let x = _parse_f(_slice(ln, 0, 10))
+        let y = _parse_f(_slice(ln, 10, 20))
+        let z = _parse_f(_slice(ln, 20, 30))
+        let elem = _trim(_slice(ln, 31, 34))
+        let chg  = _parse_i(_slice(ln, 36, 39))
+        atoms.push(MolAtom {
+            x: x, y: y, z: z, element: elem, charge: chg,
+        })
+        i = i + 1
+    }
+
+    // bond block — lines[4+na .. 4+na+nb]
+    let mut j = 0
+    while j < nb {
+        let idx = 4 + na + j
+        if idx >= nl { j = j + 1; continue }
+        let ln = lines[idx]
+        let a  = _parse_i(_slice(ln, 0, 3))
+        let b  = _parse_i(_slice(ln, 3, 6))
+        let bt = _parse_i(_slice(ln, 6, 9))
+        bonds.push(MolBond {
+            a: a, b: b, bond_type: bt,
+        })
+        j = j + 1
+    }
+
+    // `M  END` 이후의 property block, M  CHG 등은 본 subset 에서 무시.
+    return Molfile {
+        title: title, program_info: prog, comment: cmt,
+        atoms: atoms, bonds: bonds,
+    }
+}
+
+// ── write ────────────────────────────────────────────────────────────
+//
+// 직렬화 — V2000 fixed-width 컬럼 따라 line 단위 build, "\n" join.
+// title/program/comment 가 빈 문자열이어도 line 3개는 emit (CTfile 요구).
+
+pub fn write_mol_v2000(m: Molfile) -> string {
+    let mut out = ""
+    out = out + m.title + "\n"
+    out = out + m.program_info + "\n"
+    out = out + m.comment + "\n"
+
+    let na = len(m.atoms)
+    let nb = len(m.bonds)
+
+    // counts line — `  6  6  0  0  0  0  0  0  0  0999 V2000`
+    let mut counts = ""
+    counts = counts + _fmt_iw(na, 3)
+    counts = counts + _fmt_iw(nb, 3)
+    counts = counts + "  0  0  0  0  0  0  0  0999 V2000"
+    out = out + counts + "\n"
+
+    // atom block
+    let mut i = 0
+    while i < na {
+        let a = m.atoms[i]
+        let mut line = ""
+        line = line + _fmt_f10_4(a.x)
+        line = line + _fmt_f10_4(a.y)
+        line = line + _fmt_f10_4(a.z)
+        line = line + " "
+        line = line + _fmt_sl(a.element, 3)
+        // mass_diff(2) · charge_code(3) · stereo(3) · H_count(3) · stereo_box(3) · valence(3) · rxn_ctr(3) ·
+        // 본 subset 은 charge_code 만 emit, 나머지 0.
+        line = line + " 0"
+        line = line + _fmt_iw(a.charge, 3)
+        line = line + "  0  0  0  0  0  0  0  0  0  0"
+        out = out + line + "\n"
+        i = i + 1
+    }
+
+    // bond block
+    let mut j = 0
+    while j < nb {
+        let b = m.bonds[j]
+        let mut line = ""
+        line = line + _fmt_iw(b.a, 3)
+        line = line + _fmt_iw(b.b, 3)
+        line = line + _fmt_iw(b.bond_type, 3)
+        line = line + "  0  0  0  0"
+        out = out + line + "\n"
+        j = j + 1
+    }
+
+    out = out + "M  END\n"
+    return out
+}
