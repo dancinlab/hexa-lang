@@ -51,6 +51,14 @@ struct TypeError {
 
 let mut tc_errors = []
 
+// PROBE r14-I: HEXA_STRICT_MATCH env gate. Default unset → non-exhaustive
+// match emits [warn] (PR #453 behavior, backward compatible). When set to
+// "1", upgrades the non-exhaustive-match diagnostic to a hard error so
+// CI/strict builds can enforce exhaustiveness. Read once per type_check()
+// run from the env() builtin (same pattern as compiler/main.hexa
+// HEXA_STRICT_CITATIONS). Default = false preserves existing behavior.
+let mut tc_strict_match = false
+
 fn tc_error(msg) {
     tc_errors.push(TypeError { message: msg, name: "" })
 }
@@ -1214,10 +1222,19 @@ fn tc_infer_expr(node) {
                         miss_str = miss_str + missing[mi]
                         mi = mi + 1
                     }
-                    tc_warn("non-exhaustive match — missing variants: " + miss_str + " (add a '_ ->' arm)")
+                    let msg = "non-exhaustive match — missing variants: " + miss_str + " (add a '_ ->' arm)"
+                    if tc_strict_match {
+                        tc_error(msg)
+                    } else {
+                        tc_warn(msg)
+                    }
                 }
             } else if arm_count > 0 {
-                tc_warn("non-exhaustive match (add a '_ ->' arm)")
+                if tc_strict_match {
+                    tc_error("non-exhaustive match (add a '_ ->' arm)")
+                } else {
+                    tc_warn("non-exhaustive match (add a '_ ->' arm)")
+                }
             }
         }
         return "unknown"
@@ -1666,6 +1683,13 @@ fn type_check(stmts) {
 
     // Register builtins
     tc_register_builtins()
+
+    // PROBE r14-I: read HEXA_STRICT_MATCH env once per run. "1" → upgrade
+    // non-exhaustive-match warn to a hard error. Default (unset/empty/other)
+    // preserves PR #453 warn behavior — zero regression for existing builds.
+    tc_strict_match = false
+    let _sm_env = env("HEXA_STRICT_MATCH")
+    if _sm_env == "1" { tc_strict_match = true }
 
     // First pass: collect declarations (allows forward references)
     tc_first_pass(stmts)
