@@ -1,3 +1,18 @@
+=== shape 256 (sgemm_tma_sw128_256x256_grid) ===
+
+
+shape 256 cuFuncGetAttribute: regs/thd=66, shmem=16400 B, max_thd_per_block=896
+
+=== shape 384 (sgemm_tma_sw128_384x384_grid) ===
+
+
+shape 384 cuFuncGetAttribute: regs/thd=66, shmem=16400 B, max_thd_per_block=896
+
+=== shape 448 (sgemm_tma_sw128_448x448_grid) ===
+
+
+shape 448 cuFuncGetAttribute: regs/thd=66, shmem=16400 B, max_thd_per_block=896
+
 === shape 512 (sgemm_tma_sw128_512x512_grid) ===
 
 

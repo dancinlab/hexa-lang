@@ -1,5 +1,11 @@
 Device: NVIDIA GeForce RTX 5070 sm_120
 CUDA driver=13000 runtime=12090
+loaded N201 PTX shape 256 (sgemm_tma_sw128_256x256_grid)
+  shape 256: regs/thd=66, shmem=16400 B, max_thd_per_block=896
+loaded N201 PTX shape 384 (sgemm_tma_sw128_384x384_grid)
+  shape 384: regs/thd=66, shmem=16400 B, max_thd_per_block=896
+loaded N201 PTX shape 448 (sgemm_tma_sw128_448x448_grid)
+  shape 448: regs/thd=66, shmem=16400 B, max_thd_per_block=896
 loaded N201 PTX shape 512 (sgemm_tma_sw128_512x512_grid)
   shape 512: regs/thd=66, shmem=16400 B, max_thd_per_block=896
 loaded N201 PTX shape 1024 (sgemm_tma_sw128_1024x1024_grid)
@@ -12,28 +18,40 @@ loaded N201 PTX shape 6144 (sgemm_tma_sw128_6144x6144_grid)
   shape 6144: regs/thd=66, shmem=16400 B, max_thd_per_block=896
 loaded N201 PTX shape 8192 (sgemm_tma_sw128_8192x8192_grid)
   shape 8192: regs/thd=66, shmem=16400 B, max_thd_per_block=896
-Device VRAM free=11579.06 MB total=11772.44 MB
+Device VRAM free=11579.19 MB total=11772.44 MB
+[M= 256] allocating 0.75 MB device memory
+[M= 256] cuBLAS HGEMM             median=0.007360 ms  TFLOPS=  4.5590
+[M= 256] sanity max|hexa-cuBLAS|=0.0000 maxrel=0.000000 (cuBLAS max|C|=16.5352)
+[M= 256] N201 TMA-SWIZZLE128 median=0.007488 ms TFLOPS=  4.4811 ratio=0.9829 maxabs=0.0000 CTAs=16 regs=66 shmem=16400
+[M= 384] allocating 1.69 MB device memory
+[M= 384] cuBLAS HGEMM             median=0.008544 ms  TFLOPS= 13.2545
+[M= 384] sanity max|hexa-cuBLAS|=0.0000 maxrel=0.000000 (cuBLAS max|C|=24.7500)
+[M= 384] N201 TMA-SWIZZLE128 median=0.009568 ms TFLOPS= 11.8359 ratio=0.8930 maxabs=0.0000 CTAs=64 regs=66 shmem=16400
+[M= 448] allocating 2.30 MB device memory
+[M= 448] cuBLAS HGEMM             median=0.011360 ms  TFLOPS= 15.8302
+[M= 448] sanity max|hexa-cuBLAS|=0.0000 maxrel=0.000000 (cuBLAS max|C|=28.9102)
+[M= 448] N201 TMA-SWIZZLE128 median=0.011584 ms TFLOPS= 15.5241 ratio=0.9807 maxabs=0.0000 CTAs=64 regs=66 shmem=16400
 [M= 512] allocating 3.00 MB device memory
-[M= 512] cuBLAS HGEMM             median=0.011456 ms  TFLOPS= 23.4319
+[M= 512] cuBLAS HGEMM             median=0.011552 ms  TFLOPS= 23.2371
 [M= 512] sanity max|hexa-cuBLAS|=0.0000 maxrel=0.000000 (cuBLAS max|C|=33.0312)
-[M= 512] N201 TMA-SWIZZLE128 median=0.011552 ms TFLOPS= 23.2371 ratio=0.9917 maxabs=0.0000 CTAs=64 regs=66 shmem=16400
+[M= 512] N201 TMA-SWIZZLE128 median=0.011616 ms TFLOPS= 23.1091 ratio=0.9945 maxabs=0.0000 CTAs=64 regs=66 shmem=16400
 [M=1024] allocating 12.00 MB device memory
-[M=1024] cuBLAS HGEMM             median=0.042048 ms  TFLOPS= 51.0722
+[M=1024] cuBLAS HGEMM             median=0.041104 ms  TFLOPS= 52.2451
 [M=1024] sanity max|hexa-cuBLAS|=0.0000 maxrel=0.000000 (cuBLAS max|C|=66.0352)
-[M=1024] N201 TMA-SWIZZLE128 median=0.044352 ms TFLOPS= 48.4191 ratio=0.9481 maxabs=0.0000 CTAs=256 regs=66 shmem=16400
+[M=1024] N201 TMA-SWIZZLE128 median=0.044000 ms TFLOPS= 48.8064 ratio=0.9342 maxabs=0.0000 CTAs=256 regs=66 shmem=16400
 [M=2048] allocating 48.00 MB device memory
-[M=2048] cuBLAS HGEMM             median=0.259328 ms  TFLOPS= 66.2476
+[M=2048] cuBLAS HGEMM             median=0.256544 ms  TFLOPS= 66.9666
 [M=2048] sanity max|hexa-cuBLAS|=0.0000 maxrel=0.000000 (cuBLAS max|C|=132.0312)
-[M=2048] N201 TMA-SWIZZLE128 median=0.271616 ms TFLOPS= 63.2506 ratio=0.9548 maxabs=0.0000 CTAs=1024 regs=66 shmem=16400
+[M=2048] N201 TMA-SWIZZLE128 median=0.270656 ms TFLOPS= 63.4749 ratio=0.9479 maxabs=0.0000 CTAs=1024 regs=66 shmem=16400
 [M=4096] allocating 192.00 MB device memory
-[M=4096] cuBLAS HGEMM             median=1.981216 ms  TFLOPS= 69.3710
+[M=4096] cuBLAS HGEMM             median=1.972288 ms  TFLOPS= 69.6850
 [M=4096] sanity max|hexa-cuBLAS|=0.0000 maxrel=0.000000 (cuBLAS max|C|=264.0352)
-[M=4096] N201 TMA-SWIZZLE128 median=2.038432 ms TFLOPS= 67.4239 ratio=0.9719 maxabs=0.0000 CTAs=4096 regs=66 shmem=16400
+[M=4096] N201 TMA-SWIZZLE128 median=2.029520 ms TFLOPS= 67.7199 ratio=0.9718 maxabs=0.0000 CTAs=4096 regs=66 shmem=16400
 [M=6144] allocating 432.00 MB device memory
-[M=6144] cuBLAS HGEMM             median=6.610480 ms  TFLOPS= 70.1699
+[M=6144] cuBLAS HGEMM             median=6.583456 ms  TFLOPS= 70.4579
 [M=6144] sanity max|hexa-cuBLAS|=0.0000 maxrel=0.000000 (cuBLAS max|C|=396.0000)
-[M=6144] N201 TMA-SWIZZLE128 median=6.800080 ms TFLOPS= 68.2134 ratio=0.9721 maxabs=0.0000 CTAs=16384 regs=66 shmem=16400
+[M=6144] N201 TMA-SWIZZLE128 median=6.770592 ms TFLOPS= 68.5105 ratio=0.9724 maxabs=0.0000 CTAs=16384 regs=66 shmem=16400
 [M=8192] allocating 768.00 MB device memory
-[M=8192] cuBLAS HGEMM             median=15.668112 ms  TFLOPS= 70.1751
+[M=8192] cuBLAS HGEMM             median=15.660912 ms  TFLOPS= 70.2074
 [M=8192] sanity max|hexa-cuBLAS|=0.0000 maxrel=0.000000 (cuBLAS max|C|=528.0312)
-[M=8192] N201 TMA-SWIZZLE128 median=16.026592 ms TFLOPS= 68.6055 ratio=0.9776 maxabs=0.0000 CTAs=16384 regs=66 shmem=16400
+[M=8192] N201 TMA-SWIZZLE128 median=16.024560 ms TFLOPS= 68.6142 ratio=0.9773 maxabs=0.0000 CTAs=16384 regs=66 shmem=16400
