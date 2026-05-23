@@ -3257,17 +3257,28 @@ fn gen2_stmt(node, depth) {
     // VerifyStmt   ← @verify "NAME" { … }   (compile-time assertion block)
     // IntentStmt   ← @intent "NAME" { … }   (design-intent annotation)
     // GenerateFnStmt / GenerateStmt ← @generate … { "desc" }  (codegen hint)
-    // DeriveDecl   ← @derive(Trait, …) for Type   (trait-derivation directive)
+    // DeriveDecl   ← @derive_meta(Trait, …) for Type   (declarative-meta-only)
+    //                (also accepts legacy @derive(...) with parser-side
+    //                 deprecation hint — PROBE r9 #7, 2026-05-23)
     //
     // These are all declaration-flavored: the parser produces an AST node so
     // future static-analysis passes can read them, but they emit no runtime
     // code (same rationale as EffectDecl above). Without these skips the
     // unhandled-kind branch below would fire and inject a runtime exit(1).
+    //
+    // DeriveDecl SPECIFIC HONESTY NOTE (PROBE r9 #7):
+    //   hexa does NOT implement trait derivation. The AST node is preserved
+    //   for downstream meta-passes (lint / doc / future codegen) but emits
+    //   ZERO C code. Users wanting struct-printing should rely on the
+    //   runtime's existing _hexa_to_string_rec TAG_VALSTRUCT field-by-field
+    //   path (println(struct_value) works today via that path). A real
+    //   Path B Display emitter is sketched in inbox/patches/derive-meta-
+    //   vs-derive-real-impl.md (deferred — needs runtime tag→fn table).
     if k == "VerifyStmt" { return "" }
     if k == "IntentStmt" { return "" }
     if k == "GenerateFnStmt" { return "" }
     if k == "GenerateStmt"   { return "" }
-    if k == "DeriveDecl"     { return "" }
+    if k == "DeriveDecl"     { return "" }  // no-op by design — see honesty note above
 
     // ── DestructLetStmt → array-positional destructure (PROBE r7) ──
     //   let [a, b, ...rest] = expr

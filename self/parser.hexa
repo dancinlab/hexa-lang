@@ -744,7 +744,27 @@ fn parse_stmt() {
         // consumed `(Traits)` and silently dropped `for Type`, which then
         // confused parse_stmt into starting a for-loop. Restore explicit
         // dispatch.)
+        //
+        // PROBE r9 #7 (2026-05-23): `@derive(...)` parses → DeriveDecl AST
+        // node → codegen handler returns literal "" (no-op). NO trait impl
+        // is generated. The surface looks declarative but emits zero code,
+        // misleading users into expecting Display/Debug/Clone emission.
+        // Path A fix — accept `@derive_meta(...)` as the honest declarative-
+        // meta-only form (parses + records intent, no codegen) AND keep
+        // `@derive(...)` working for compatibility while printing a one-line
+        // deprecation hint pointing at @derive_meta. (Path B — real Display
+        // emitter — is feasible but >100 LoC for codegen + runtime tag→fn
+        // table + name-mangling; deferred. See inbox/patches/derive-meta-
+        // vs-derive-real-impl.md for the future sketch.)
+        if attr_name == "derive_meta" && p_peek_kind() == "LParen" {
+            return parse_derive_decl()
+        }
         if attr_name == "derive" && p_peek_kind() == "LParen" {
+            // Deprecation hint — println channel (non-fatal; cmd_parse only
+            // greps for the literal "Parse error" prefix, so this does not
+            // fail `hexa parse` and does not push to p_errors).
+            let _dep_tok = p_peek()
+            println("[deprecation] @derive(...) at " + to_string(_dep_tok.line) + ":" + to_string(_dep_tok.col) + " is a no-op (parses but emits no trait impl). Use @derive_meta(...) for the honest declarative-meta-only form. See inbox/patches/derive-meta-vs-derive-real-impl.md")
             return parse_derive_decl()
         }
         // ── @contract — parse requires/ensures clauses ──────
