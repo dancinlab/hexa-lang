@@ -37,8 +37,16 @@ into single-TU monolith).  Rust-style `mod` tree + `::` path resolution
 재설계).
 
 **Status quo 권장**: flatten 모델 유지, `pub`/`pub(crate)` 키워드 reserve
-+ 문서화 ("parsed but no enforcement, future-reserved").  단,
-`pub(crate)` top-level entry dispatch 버그 (r9-19) 는 별도 surgical fix.
++ 문서화 ("parsed but no enforcement, future-reserved").
+
+> **r9-19 VERIFIED-CLOSED 2026-05-23** — `pub(crate)` / `pub(super)` /
+> `pub(self)` top-level dispatch was already fixed by **PR #373** (commit
+> `858107e4` "widen `pub` parsing — struct fields · impl/trait methods ·
+> `pub(crate)`"). `parse_visibility` at `self/parser.hexa:4525` accepts
+> the keyword token kinds `Crate` / `Super` / `Self_` / `Mod` via
+> `tok.value` alongside `Ident`. Regression test:
+> `test/regression/parse_pub_crate_top_level.hexa`. No further surgical
+> action — r9-19 dropped from the cycle-5+ list below.
 
 ## Axis 2 — Macros / decorators / attributes
 
@@ -133,7 +141,7 @@ instantiation cache + codegen specialize → **large 규모, multi-cycle**.
 
 | 항목 | 규모 | 영향 |
 |---|---|---|
-| **r9-19 `pub(crate)` top-level entry dispatch fix** | small | 모듈 visibility 키워드 가 entry routing 깨는 단발 surgical |
+| ~~**r9-19 `pub(crate)` top-level entry dispatch fix**~~ | ~~small~~ | **VERIFIED-CLOSED 2026-05-23** — already fixed by PR #373 (audit doc was stale); regression-guard added in `test/regression/parse_pub_crate_top_level.hexa` |
 | **r9-7 `@derive(Display)` audit** (rename `@derive_meta` OR Display impl emitter) | small-medium | dead-feature honest-signal vs full-impl 결정 |
 | **unknown attribute warning** (`HX9xxx attribute-unknown` lint) | small | typo-friendly → typo-detect 으로 보강 |
 | **macro expander pass** (r9-6 단순 fail-loud 후속) | medium-large | full `macro_rules!` 의 디자인 — 별도 inbox design doc 트랙 |
