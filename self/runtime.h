@@ -39,7 +39,16 @@
 typedef enum {
     TAG_INT = 0, TAG_FLOAT, TAG_BOOL, TAG_STR, TAG_VOID,
     TAG_ARRAY, TAG_MAP, TAG_FN, TAG_CHAR, TAG_CLOSURE,
-    TAG_VALSTRUCT
+    TAG_VALSTRUCT,
+    /* PR-2.0 (enum-to-string-codegen-emit RFC, stack PR-2/3, 2026-05-24):
+     * dedicated tag for enum values so `to_string(Color::Red)` can render
+     * "Color::Red" instead of "0".  PR-2.0 (this PR) only reserves the
+     * tag slot + defensive `_hexa_to_string_rec` / `hexa_eq` /
+     * `hexa_type_of` branches — no codegen site emits TAG_ENUM yet
+     * (gen2_enum_decl still produces `#define Color_Red hexa_int(0)`).
+     * Slot kept LAST to preserve existing TAG_VALSTRUCT integer value
+     * (no ABI shift on any pre-built object that hard-codes the tag int). */
+    TAG_ENUM
 } HexaTag;
 
 typedef struct HexaVal_       HexaVal;
