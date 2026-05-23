@@ -105,6 +105,26 @@ HexaVal hexa_str(const char* s);                      /* runtime.c:1346 */
  * constructor for a single migrated unit-variant enum (Direction). `display`
  * is a codegen-emitted "<Type>::<Variant>" string literal. */
 HexaVal hexa_enum_str(const char* display);           /* runtime_core.c — TAG_ENUM */
+/* PROBE r14-TTTT (enum-ordering RFC, 2026-05-24): TAG_ENUM descriptor — the
+ * codegen `#define <Name>_<V>` emits this. Forward-decl HexaEnumDesc as a
+ * struct tag so user.c can declare static-const-initializer literals without
+ * including runtime_core.c. Layout MUST mirror the definition in
+ * runtime_core.c: { uint32_t magic; uint32_t variant_idx; const char* display;
+ * const char* type_name; }. */
+struct HexaEnumDesc;
+HexaVal hexa_enum_str_v(const struct HexaEnumDesc* desc); /* runtime_core.c — TAG_ENUM w/ idx */
+#ifndef HEXA_ENUM_DESC_MAGIC
+#define HEXA_ENUM_DESC_MAGIC 0x484E5544U
+#endif
+#ifndef HEXA_ENUM_DESC_DEFINED
+#define HEXA_ENUM_DESC_DEFINED 1
+struct HexaEnumDesc {
+    uint32_t    magic;       /* = HEXA_ENUM_DESC_MAGIC */
+    uint32_t    variant_idx; /* 0-based declaration order */
+    const char* display;     /* "<Type>::<Variant>" */
+    const char* type_name;   /* "<Type>" — same-enum gate */
+};
+#endif
 int     hexa_truthy(HexaVal v);                       /* runtime.c:4686 */
 HexaVal hexa_eq(HexaVal a, HexaVal b);                /* runtime.c:4785 */
 HexaVal hexa_struct_pack_map(const char* type_name, int n,
