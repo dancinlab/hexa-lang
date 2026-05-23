@@ -3221,6 +3221,12 @@ fn parse_args() {
     while p_peek_kind() == "Comma" {
         p_advance()
         p_skip_newlines()
+        // Rust-canonical trailing comma: `f(a, b,)`. After consuming a
+        // comma, if the next token closes the call, stop — mirrors the
+        // array-literal `while != RBracket` tolerance (parse_primary).
+        if p_peek_kind() == "RParen" {
+            break
+        }
         if p_peek_kind() == "DotDotDot" {
             p_advance()
             let spread_expr = parse_expr()
