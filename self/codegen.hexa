@@ -7236,11 +7236,20 @@ fn gen2_enum_decl(node) {
     // `!_has_payload` guard preserves that contract with zero regression.
     // PR-3 swaps the renderer to the __enum_<Name>_names[] table (#555).
     let _enum_tag_migrate = (!_has_payload)
+    // PROBE r14-TTTT (enum-ordering RFC, 2026-05-24): unit-variant enums now
+    // emit a static HexaEnumDesc per variant carrying display + variant_idx
+    // + type_name, so runtime hexa_cmp_{lt,gt,le,ge} can compare same-enum
+    // values by declaration order (Rust-derive-Ord). type_name field is a
+    // bare string literal in each descriptor (compile-time constant); same-
+    // enum gate uses strcmp (display + identity-pointer fast-paths handle
+    // the common cases).
     let mut i = 0
     while i < vc {
         let v = node.variants[i]
         if _enum_tag_migrate {
-            parts.push("#define " + name + "_" + v.name + " hexa_enum_str(\"" + name + "::" + v.name + "\")\n")
+            let desc_sym = "__enum_desc_" + name + "_" + v.name
+            parts.push("static const struct HexaEnumDesc " + desc_sym + " = { HEXA_ENUM_DESC_MAGIC, " + to_string(i) + "U, \"" + name + "::" + v.name + "\", \"" + name + "\" };\n")
+            parts.push("#define " + name + "_" + v.name + " hexa_enum_str_v(&" + desc_sym + ")\n")
         } else {
             parts.push("#define " + name + "_" + v.name + " hexa_int(" + to_string(i) + ")\n")
         }

@@ -1294,6 +1294,64 @@ HexaVal hexa_void() { return (HexaVal){.tag=TAG_VOID}; }
 // per-variant (type_id, variant_idx) carrier lands.
 HexaVal hexa_enum_str(const char* display) { return (HexaVal){.tag=TAG_ENUM, .s=(char*)display}; }
 
+// PROBE r14-TTTT (enum-ordering RFC, 2026-05-24): TAG_ENUM descriptor — codegen
+// emits one static const HexaEnumDesc per variant, and the `#define <Name>_<V>`
+// expands to `hexa_enum_str_v(&__enum_desc_<Name>_<V>)`. `.s` slot of the
+// returned HexaVal points at the descriptor; the renderer + eq paths route
+// through `_hexa_enum_display` / `_hexa_enum_idx` helpers which check the
+// magic sentinel to distinguish descriptor pointers from legacy bare-display
+// pointers (`hexa_enum_str(display)`) so both forms remain valid simultaneously.
+//
+// magic = 0x484E5544U ("DUNH" — Descriptor of Unit-variant eNum, Hexa) — chosen
+// because no ASCII printable string starts with these 4 bytes in
+// little-endian, so probing `*(uint32_t*)p == magic` reliably distinguishes
+// descriptor-from-bare. Layout: magic FIRST so the same probe works on any
+// future descriptor extension.
+#define HEXA_ENUM_DESC_MAGIC 0x484E5544U
+typedef struct HexaEnumDesc {
+    uint32_t    magic;       // = HEXA_ENUM_DESC_MAGIC, identifies descriptor
+    uint32_t    variant_idx; // 0-based declaration order
+    const char* display;     // "<Type>::<Variant>"
+    const char* type_name;   // "<Type>" (display prefix, no "::") — same-enum gate
+} HexaEnumDesc;
+
+HexaVal hexa_enum_str_v(const HexaEnumDesc* desc) {
+    return (HexaVal){.tag=TAG_ENUM, .s=(char*)desc};
+}
+
+// Internal helpers. Descriptor pointers begin with HEXA_ENUM_DESC_MAGIC (a
+// 4-byte sentinel). Legacy bare-string pointers begin with a printable ASCII
+// byte (e.g. "Color::Red" → 'C' = 0x43); the magic's low byte is 0x44 ('D'),
+// so we use the full 4-byte uint32 probe — guaranteed mismatch against any
+// real string literal that doesn't itself start with the exact sequence
+// "DNHU" (no such display literal because we emit "<Type>::<Variant>").
+static inline int _hexa_enum_is_desc(HexaVal v) {
+    const void* p = (const void*)HX_STR(v);
+    if (!p) return 0;
+    // Misaligned bare-string pointer would crash a 4-byte read on strict-
+    // alignment ISAs; descriptor pointers come from `static const HexaEnumDesc`
+    // which the C compiler 4B-aligns. Use memcpy for safety.
+    uint32_t first4 = 0;
+    hxlcl_memcpy(&first4, p, 4);
+    return first4 == HEXA_ENUM_DESC_MAGIC;
+}
+
+static inline const char* _hexa_enum_display(HexaVal v) {
+    if (!HX_STR(v)) return "<enum>";
+    if (_hexa_enum_is_desc(v)) return ((const HexaEnumDesc*)HX_STR(v))->display;
+    return HX_STR(v); // legacy bare display
+}
+
+static inline int64_t _hexa_enum_idx(HexaVal v) {
+    if (!HX_STR(v) || !_hexa_enum_is_desc(v)) return -1;
+    return (int64_t)((const HexaEnumDesc*)HX_STR(v))->variant_idx;
+}
+
+static inline const char* _hexa_enum_type_name(HexaVal v) {
+    if (!HX_STR(v) || !_hexa_enum_is_desc(v)) return NULL;
+    return ((const HexaEnumDesc*)HX_STR(v))->type_name;
+}
+
 // T32: unwrap a HexaVal (possibly VALSTRUCT-wrapped by the interpreter) into
 // a raw C double. The prior inline `v.tag==TAG_FLOAT?v.f:(double)v.i` read
 // only the outer tag, so interpreter values (which carry TAG_VALSTRUCT with
@@ -5961,16 +6019,11 @@ static HexaVal _hexa_to_string_rec(HexaVal v, int depth) {
 #endif
         }
         case TAG_ENUM: {
-            // PR-2.1 (enum-to-string-codegen-emit RFC, stack PR-2/3,
-            // 2026-05-24): LIVE branch. A single migrated unit-variant enum
-            // (Direction) now emits hexa_enum_str("<Type>::<Variant>") at
-            // its `#define` site, storing the display literal in `.s`.
-            // Render it directly so `to_string(Direction::Left)` yields
-            // "Direction::Left" instead of the prior "0" (TAG_INT path).
-            // `.s` is a static string literal from codegen; NULL only on a
-            // malformed value — fall back to "<enum>" defensively.
-            // PR-3 will switch to the __enum_<Name>_names[] table (#555).
-            return hexa_str(HX_STR(v) ? HX_STR(v) : "<enum>");
+            // PROBE r14-TTTT (enum-ordering RFC, 2026-05-24): route through
+            // `_hexa_enum_display` so both the new descriptor form (emitted
+            // by gen2_enum_decl after this PR) and the legacy bare-string
+            // form (pre-PR `hexa_enum_str(display)`) render identically.
+            return hexa_str(_hexa_enum_display(v));
         }
         case TAG_MAP: {
             if (depth >= 8) return hexa_str("{...}");
@@ -6305,16 +6358,16 @@ HexaVal hexa_eq(HexaVal a, HexaVal b) {
                     ? (HX_CLO_PTR(a) == HX_CLO_PTR(b))
                     : (a.clo_ptr == b.clo_ptr));
         case TAG_ENUM: {
-            // PR-2.1 (enum-to-string-codegen-emit RFC, stack PR-2/3,
-            // 2026-05-24): LIVE branch. A migrated unit-variant enum carries
-            // its "<Type>::<Variant>" display literal in `.s`; two enum
-            // values are equal iff they name the same variant. The same
-            // `#define` reuses one string literal, so the pointer-eq
-            // fast-path covers the common case; strcmp is the fallback for
-            // distinct literal copies (e.g. across translation units).
+            // PROBE r14-TTTT (enum-ordering RFC, 2026-05-24): pointer-eq
+            // covers both descriptor and bare forms (each variant has a
+            // single static instance per TU); strcmp on display string is the
+            // cross-TU fallback so the new descriptor form and the legacy
+            // bare form compare equal when they name the same variant.
             if (HX_STR(a) == HX_STR(b)) return hexa_bool(1);
-            if (!HX_STR(a) || !HX_STR(b)) return hexa_bool(0);
-            return hexa_bool(hxlcl_strcmp(HX_STR(a), HX_STR(b)) == 0);
+            const char* da = _hexa_enum_display(a);
+            const char* db = _hexa_enum_display(b);
+            if (!da || !db) return hexa_bool(0);
+            return hexa_bool(hxlcl_strcmp(da, db) == 0);
         }
         default: return hexa_bool(0);
     }
@@ -7253,7 +7306,32 @@ HexaVal hexa_mod(HexaVal a, HexaVal b) {
 // String comparisons via strcmp — 이전 경로는 __hx_to_double("abc") = atof
 // 으로 fallthrough 해서 대부분 0.0 으로 수렴 + intern pointer 비교로 떨어져
 // 의미 없는 순서 (abc>abb=false 같은 오류).
+// PROBE r14-TTTT (enum-ordering RFC, 2026-05-24): cross-cutting helper used
+// by lt/gt/le/ge. Returns 1 if both operands are TAG_ENUM with descriptors
+// from the same enum type AND writes (a_idx, b_idx) into `*out_a` / `*out_b`.
+// Returns 0 otherwise (caller falls through to non-enum dispatch). Same-enum
+// gate uses type_name pointer-eq when both descriptors live in the same TU
+// (codegen emits one __enum_type_name_<Name> static literal per enum), else
+// strcmp on the type_name string. Two distinct enums comparing must NOT
+// silently fold; we punt to the legacy `HX_INT < HX_INT` fallback (the .s
+// pointer cast to int64 — gives DEFINED-BUT-MEANINGLESS ordering that won't
+// crash but won't satisfy total order across enum types either, matching the
+// status quo for any "compare two values of unrelated types" call).
+static inline int _hexa_enum_pair_idx(HexaVal a, HexaVal b,
+                                      int64_t* out_a, int64_t* out_b) {
+    if (HX_TAG(a) != TAG_ENUM || HX_TAG(b) != TAG_ENUM) return 0;
+    const char* ta = _hexa_enum_type_name(a);
+    const char* tb = _hexa_enum_type_name(b);
+    if (!ta || !tb) return 0; // one or both are legacy bare-string form
+    if (ta != tb && hxlcl_strcmp(ta, tb) != 0) return 0; // different enum types
+    *out_a = _hexa_enum_idx(a);
+    *out_b = _hexa_enum_idx(b);
+    return 1;
+}
+
 HexaVal hexa_cmp_lt(HexaVal a, HexaVal b) {
+    int64_t ia, ib;
+    if (_hexa_enum_pair_idx(a, b, &ia, &ib)) return hexa_bool(ia < ib);
     if (HX_IS_STR(a) && HX_IS_STR(b))
         return hexa_bool(hxlcl_strcmp(HX_STR(a), HX_STR(b)) < 0);
     if (HX_IS_FLOAT(a) || HX_IS_FLOAT(b) || HX_IS_VALSTRUCT(a) || HX_IS_VALSTRUCT(b))
@@ -7261,6 +7339,8 @@ HexaVal hexa_cmp_lt(HexaVal a, HexaVal b) {
     return hexa_bool(HX_INT(a) < HX_INT(b));
 }
 HexaVal hexa_cmp_gt(HexaVal a, HexaVal b) {
+    int64_t ia, ib;
+    if (_hexa_enum_pair_idx(a, b, &ia, &ib)) return hexa_bool(ia > ib);
     if (HX_IS_STR(a) && HX_IS_STR(b))
         return hexa_bool(hxlcl_strcmp(HX_STR(a), HX_STR(b)) > 0);
     if (HX_IS_FLOAT(a) || HX_IS_FLOAT(b) || HX_IS_VALSTRUCT(a) || HX_IS_VALSTRUCT(b))
@@ -7268,6 +7348,8 @@ HexaVal hexa_cmp_gt(HexaVal a, HexaVal b) {
     return hexa_bool(HX_INT(a) > HX_INT(b));
 }
 HexaVal hexa_cmp_le(HexaVal a, HexaVal b) {
+    int64_t ia, ib;
+    if (_hexa_enum_pair_idx(a, b, &ia, &ib)) return hexa_bool(ia <= ib);
     if (HX_IS_STR(a) && HX_IS_STR(b))
         return hexa_bool(hxlcl_strcmp(HX_STR(a), HX_STR(b)) <= 0);
     if (HX_IS_FLOAT(a) || HX_IS_FLOAT(b) || HX_IS_VALSTRUCT(a) || HX_IS_VALSTRUCT(b))
@@ -7275,6 +7357,8 @@ HexaVal hexa_cmp_le(HexaVal a, HexaVal b) {
     return hexa_bool(HX_INT(a) <= HX_INT(b));
 }
 HexaVal hexa_cmp_ge(HexaVal a, HexaVal b) {
+    int64_t ia, ib;
+    if (_hexa_enum_pair_idx(a, b, &ia, &ib)) return hexa_bool(ia >= ib);
     if (HX_IS_STR(a) && HX_IS_STR(b))
         return hexa_bool(hxlcl_strcmp(HX_STR(a), HX_STR(b)) >= 0);
     if (HX_IS_FLOAT(a) || HX_IS_FLOAT(b) || HX_IS_VALSTRUCT(a) || HX_IS_VALSTRUCT(b))
