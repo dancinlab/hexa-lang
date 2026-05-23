@@ -1,5 +1,7 @@
 # `hexa cloud run`: argv guard false-positives on legitimate shell redirects inside `bash -lc '…'`
 
+> **Status:** already-resolved-in-source (2026-05-23) — `cloud_lint_argv` (`stdlib/cloud/cloud.hexa:204`) only flags C-style `/* */` comment fragments + embedded newlines; it does NOT scan for `#`, `//`, or shell redirects. All four campaign repro payloads verified hit=0 against the current guard logic (`ls -la /tmp 2>/dev/null` · `pkill -f pw.x 2>/dev/null; …` · `cd /workspace && ./reset.sh >reset.log 2>&1` · `cat /proc/cpuinfo | grep … # quick probe`), while a genuine `/* misplaced note */` correctly still hits. The demiurge false-positives were against a stale deployed `hexa` binary carrying the older broad guard — resolution is a fresh deploy, no further source change.
+
 **Reporter**: demiurge (`dancinlab/demiurge` RTSC DFT campaign, 2026-05-23)
 **Severity**: medium (workaround exists — write a local script, scp + run — but the workaround is itself a g11 violation: paper-over instead of fix-at-source)
 **Affected**: `stdlib/cloud/cloud_cli.hexa` — the argv pre-flight guard that scans positional args for "looks like a misplaced shell comment" patterns. Hit on every diagnostic / kill / reset command during the 2026-05-23 RTSC dispatch.
