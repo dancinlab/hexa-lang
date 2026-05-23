@@ -17,3 +17,5 @@ anima	0.2.0	launch.hexa	https://github.com/dancinlab/anima		AI consciousness eng
 hexa-lang	1.0.0	hexa	https://github.com/dancinlab/hexa-lang		HEXA programming language — self-host compiler + interpreter (src/ deleted 2026-04-11)
 hexa	1.0.0	hexa	https://github.com/dancinlab/hexa-lang	/Users/ghost/Dev/hexa-lang	HEXA interpreter bootstrap — bin/build.hexa 로 hexa_cc→hexa_v2→stage0 자동 빌드 후 $HX_BIN/hexa 설치
 wilson	0.0.1	bin/wilson	https://github.com/dancinlab/wilson	/Users/ghost/core/wilson	hexa-native AI coding agent — minimal core + plugin-everything-else successor to hive. bin/wilson execs build/<arch>/wilson when present, else falls back to `hexa run`.
+pool	0.5.0	bin/pool	https://github.com/dancinlab/pool		minimal host roster + remote exec · pool init bootstrap · pool clean two-tier disk-cleanup
+wisp	0.1.0	bin/wisp	https://github.com/dancinlab/wisp		WebKit shell + hexa-native core browser — `hx install wisp` for cold-clone build
