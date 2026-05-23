@@ -1,0 +1,234 @@
+// tool/build_hexa_cli.hexa — native port of build_hexa_cli.sh.
+//
+// Compiles self/main.hexa (CLI dispatcher) and self/module_loader.hexa
+// (import flattener) into native binaries via the hexa_v2 transpiler
+// + clang + runtime.c. Replaces the retired .sh, removing the last
+// .sh in the hexa-native tool/ tree (g_hexa_native_no_sh_py_writes).
+//
+// Produces:
+//   build/hexa_cli_driver     — compiled self/main.hexa  (CLI dispatcher)
+//   build/hexa_module_loader  — compiled self/module_loader.hexa
+//
+// Env:
+//   CLANG                       compiler override (default: clang)
+//   SKIP_TRANSPILE=1            reuse existing build/stage1/*.c
+//   NO_SMOKE=1                  skip smoke test
+//   LOCAL_BUILD=1               permit local Mac build (escape hatch)
+//   HEXA_POOL_BUILD_HOST=<host> ack-only marker (PR2 will auto-offload)
+//
+// Re-entry gate (kick-storm Mac kill 2026-05-23 root cause —
+// memory: feedback_pool_cli_offload_heavy_build):
+//   On Mac (Darwin) without LOCAL_BUILD=1 the build REFUSES with a
+//   hint pointing at `pool on mini`. The gate is the simplest
+//   sufficient countermeasure (g0); auto-offload follows as a
+//   separate PR.
+
+fn _die(msg: string) {
+    eprintln("build_hexa_cli: " + msg)
+    exit(1)
+}
+
+fn _must_exist(path: string, hint: string) {
+    if !file_exists(path) {
+        _die(hint + " missing: " + path)
+    }
+}
+
+fn _uname() -> string {
+    return to_string(exec("uname")).trim()
+}
+
+// shell single-quote escape: ' → '\''
+fn _shq(s: string) -> string {
+    let mut out = "'"
+    let n = len(s)
+    let mut i = 0
+    while i < n {
+        let c = s.substring(i, i + 1)
+        if c == "'" {
+            out = out + "'\\''"
+        } else {
+            out = out + c
+        }
+        i = i + 1
+    }
+    out = out + "'"
+    return out
+}
+
+fn _run(cmd: string, label: string) {
+    let r = exec_with_status(cmd)
+    let rc = r[1]
+    if rc != 0 {
+        eprintln("build_hexa_cli: " + label + " failed (rc=" + to_string(rc) + ")")
+        let out = to_string(r[0])
+        if len(out) > 0 { eprintln(out) }
+        exit(rc)
+    }
+}
+
+// REPO_ROOT — HEXA_LANG if set, else cwd.
+fn _repo_root() -> string {
+    let hl = env_var("HEXA_LANG")
+    if hl != "" { return hl }
+    return to_string(exec("pwd")).trim()
+}
+
+// Mac re-entry gate. Returns true iff the build must NOT proceed locally.
+fn _refuse_local_on_mac() -> bool {
+    if _uname() != "Darwin" { return false }
+    if env_var("LOCAL_BUILD") == "1" { return false }
+    return true
+}
+
+fn _print_refuse_hint(repo_root: string) {
+    eprintln("REFUSE: build_hexa_cli is heavy on Mac arm64.")
+    eprintln("  this guard exists because kick-storm + multi-agent")
+    eprintln("  local builds killed the Mac (2026-05-23 incident).")
+    eprintln("")
+    eprintln("  pool offload (recommended):")
+    eprintln("    pool on mini bash -lc " + _shq("cd " + repo_root + " && LOCAL_BUILD=1 tool/build_hexa_cli"))
+    eprintln("")
+    eprintln("  force local (will burden Mac):")
+    eprintln("    LOCAL_BUILD=1 tool/build_hexa_cli")
+}
+
+fn _do_build(repo_root: string) {
+    let hexa_v2   = repo_root + "/self/native/hexa_v2"
+    let main_hexa = repo_root + "/self/main.hexa"
+    let ml_hexa   = repo_root + "/self/module_loader.hexa"
+    let stage1    = repo_root + "/build/stage1"
+    let main_c    = stage1 + "/main_native.c"
+    let ml_c      = stage1 + "/module_loader.c"
+    let driver_out = repo_root + "/build/hexa_cli_driver"
+    let ml_out     = repo_root + "/build/hexa_module_loader"
+    let runtime_c  = repo_root + "/self/runtime.c"
+    let inc        = repo_root + "/self"
+
+    _must_exist(hexa_v2,   "hexa_v2 (run `hexa cc` first)")
+    _must_exist(main_hexa, "main source")
+    _must_exist(ml_hexa,   "module_loader source")
+
+    let _ = exec("mkdir -p " + _shq(stage1) + " " + _shq(repo_root + "/build"))
+
+    let mut cc = env_var("CLANG")
+    if cc == "" { cc = "clang" }
+
+    let uname = _uname()
+    let mut cflags = "-O2 -std=c11 -D_GNU_SOURCE -Wno-trigraphs -fbracket-depth=4096 -I " + _shq(inc)
+    let mut ldflags = "-lpthread -lm -Wl,-stack_size,0x4000000"
+    if uname == "Linux" {
+        cflags  = "-O2 -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs -fbracket-depth=4096 -I " + _shq(inc)
+        ldflags = "-lpthread -lm -ldl"
+    }
+
+    // ── Step 1+2: transpile
+    if env_var("SKIP_TRANSPILE") == "" {
+        println("[1/5] transpile main.hexa          → " + main_c)
+        _run(_shq(hexa_v2) + " " + _shq(main_hexa) + " " + _shq(main_c), "transpile main.hexa")
+        println("[2/5] transpile module_loader.hexa → " + ml_c)
+        _run(_shq(hexa_v2) + " " + _shq(ml_hexa) + " " + _shq(ml_c), "transpile module_loader.hexa")
+    }
+    _must_exist(main_c, "transpiled C")
+    _must_exist(ml_c,   "transpiled C")
+
+    // ── Step 3: compile (runtime.c appended as 2nd TU)
+    println("[3/5] compile hexa_cli_driver")
+    _run(cc + " " + cflags + " " + _shq(main_c) + " " + _shq(runtime_c) + " -o " + _shq(driver_out) + " " + ldflags, "compile driver")
+    println("[3/5] compile hexa_module_loader")
+    _run(cc + " " + cflags + " " + _shq(ml_c)   + " " + _shq(runtime_c) + " -o " + _shq(ml_out)     + " " + ldflags, "compile module_loader")
+
+    // ── Step 4: Darwin codesign
+    if uname == "Darwin" {
+        println("[4/5] codesign (Darwin)")
+        let _x1 = exec("codesign --force --sign - " + _shq(driver_out) + " 2>/dev/null || true")
+        let _x2 = exec("codesign --force --sign - " + _shq(ml_out)     + " 2>/dev/null || true")
+    }
+
+    // ── Step 4b: shadow install-layout in build/
+    let _ = exec("mkdir -p " + _shq(repo_root + "/build/self/native") + " " + _shq(repo_root + "/build/self/forge"))
+    let _ = exec("cp -f " + _shq(hexa_v2)                                 + " " + _shq(repo_root + "/build/self/native/hexa_v2"))
+    let _ = exec("cp -f " + _shq(repo_root + "/self/native/hexa_cc.c")    + " " + _shq(repo_root + "/build/self/native/hexa_cc.c"))
+    let _ = exec("cp -f " + _shq(repo_root + "/self/runtime.h")           + " " + _shq(repo_root + "/build/self/runtime.h"))
+    let _ = exec("cp -f " + _shq(repo_root + "/self/runtime.c")           + " " + _shq(repo_root + "/build/self/runtime.c"))
+    let _ = exec("cp -f " + _shq(repo_root + "/self/runtime_core.c")      + " " + _shq(repo_root + "/build/self/runtime_core.c"))
+    let _ = exec("cp -f " + _shq(repo_root + "/self/runtime_hi_gen.c")    + " " + _shq(repo_root + "/build/self/runtime_hi_gen.c"))
+    let _ = exec("cp -f " + _shq(repo_root + "/self/forge/forge_tier_v1.c") + " " + _shq(repo_root + "/build/self/forge/forge_tier_v1.c"))
+    let _ = exec("cp -f " + _shq(repo_root + "/self/forge/forge_tier_v1.h") + " " + _shq(repo_root + "/build/self/forge/forge_tier_v1.h"))
+
+    // native/*.c bodies — skip giant generated TUs not included by runtime.c
+    let nat_dir = repo_root + "/self/native"
+    let raw_c = to_string(exec("ls -1 " + _shq(nat_dir) + "/*.c 2>/dev/null")).trim()
+    if raw_c != "" {
+        let lines = raw_c.split("\n")
+        let mut i = 0
+        while i < len(lines) {
+            let p = lines[i]
+            let base = to_string(exec("basename " + _shq(p))).trim()
+            if base != "hexa_cc.c" && base != "codegen_c2_v2.c" && base != "lexer_v2.c" && base != "type_checker_v2.c" {
+                let _ = exec("cp -f " + _shq(p) + " " + _shq(repo_root + "/build/self/native/" + base))
+            }
+            i = i + 1
+        }
+    }
+    // native/*.h headers — all of them
+    let raw_h = to_string(exec("ls -1 " + _shq(nat_dir) + "/*.h 2>/dev/null")).trim()
+    if raw_h != "" {
+        let lines = raw_h.split("\n")
+        let mut i = 0
+        while i < len(lines) {
+            let p = lines[i]
+            let base = to_string(exec("basename " + _shq(p))).trim()
+            let _ = exec("cp -f " + _shq(p) + " " + _shq(repo_root + "/build/self/native/" + base))
+            i = i + 1
+        }
+    }
+
+    // ── Step 5: smoke
+    if env_var("NO_SMOKE") == "" {
+        println("[5/5] smoke")
+        let tmp_base = to_string(exec("mktemp /tmp/hexa_cli_smoke.XXXXXX")).trim()
+        let smoke_src = tmp_base + ".hexa"
+        let smoke_bin = tmp_base + ".bin"
+        write_file(smoke_src, "fn main() {\n    println(\"hexa-cli-smoke-ok\")\n}\n")
+
+        let r1 = exec_with_status(_shq(driver_out) + " --version >/dev/null")
+        if r1[1] != 0 { eprintln("  FAIL --version") exit(1) }
+        println("  OK   --version")
+
+        let r2 = exec_with_status(_shq(driver_out) + " parse " + _shq(smoke_src) + " >/dev/null")
+        if r2[1] != 0 { eprintln("  FAIL parse") exit(1) }
+        println("  OK   parse")
+
+        let build_cmd = "HEXA_LANG=" + _shq(repo_root) + " HEXA_MAC_BUILD_OK=1 " +
+                        _shq(driver_out) + " build " + _shq(smoke_src) +
+                        " -o " + _shq(smoke_bin) + " >/dev/null"
+        let r3 = exec_with_status(build_cmd)
+        if r3[1] != 0 { eprintln("  FAIL build") exit(1) }
+        let r4 = exec_with_status(_shq(smoke_bin) + " 2>&1")
+        let got = to_string(r4[0]).trim()
+        if got != "hexa-cli-smoke-ok" {
+            eprintln("  FAIL build-run: got '" + got + "'")
+            exit(1)
+        }
+        println("  OK   build (round-trip)")
+
+        let _ = exec("rm -f " + _shq(tmp_base) + " " + _shq(smoke_src) + " " + _shq(smoke_bin))
+    }
+
+    println("")
+    println("=== BUILD OK ===")
+    let drv_sz = to_string(exec("wc -c < " + _shq(driver_out) + " | tr -d ' '")).trim()
+    let ml_sz  = to_string(exec("wc -c < " + _shq(ml_out)     + " | tr -d ' '")).trim()
+    println("  driver        : " + driver_out + " (" + drv_sz + " bytes)")
+    println("  module_loader : " + ml_out     + " (" + ml_sz  + " bytes)")
+}
+
+fn main() {
+    let repo_root = _repo_root()
+    if _refuse_local_on_mac() {
+        _print_refuse_hint(repo_root)
+        exit(2)
+    }
+    _do_build(repo_root)
+}
