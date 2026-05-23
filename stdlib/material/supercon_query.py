@@ -1,146 +1,227 @@
 #!/usr/bin/env python3
-# supercon_query.py — `material + query` NIMS SuperCon DB thin adapter (D72/N6.3).
+# supercon_query.py — `material + query` NIMS SuperCon (MDR) thin adapter (MP P2.3).
 #
-# RTSC.md §9.4 + §9.5 N6 cohort sibling — NIMS (Japan) SuperCon Database
-# ingest. Companion to MP / OQMD / COD; unlike the other three, SuperCon
-# carries *literature-extracted Tc + composition + experimental
-# conditions* — it's the closest thing to a measurement-anchored row, but
-# it's still literature-extracted (not raw instrument readout). R4 still
-# applies: absorbed=false until a raw measurement run is attached.
+# MP.md Phase 2 §P2.3 sibling — NIMS (Japan) SuperCon Database ingest, the
+# experimental-Tc corpus companion to MP / OQMD / COD / AFLOW. Same record
+# shape, different DB. Unlike the other four (all structure / DFT-derived),
+# SuperCon carries *literature-extracted measured Tc* + composition +
+# experimental conditions — the closest sibling to a measurement-anchored
+# row. R4 still applies (see g3 / d6 below): absorbed=false 영구.
 #
-# Source endpoint:
-#   - https://supercon.nims.go.jp/  — registration-required (free,
-#     non-trivial). NO public REST API.
+# Source endpoint (no API key, no registration — public CC-BY-4.0):
+#   NIMS migrated SuperCon to the Materials Data Repository (MDR) in 2022.
+#   The legacy register-only `supercon.nims.go.jp` web UI is superseded by a
+#   public, key-free, DOI-versioned dataset on MDR:
+#     - https://mdr.nims.go.jp/concern/datasets/4q77fv540  (SuperCon 2)
+#         · supercon2_v22.12.03.csv  — 40,324 measured Tc records / 37,700
+#           papers. Direct file download (verified live 2026-05-23, HTTP 200,
+#           Content-Type text/csv):
+#             https://mdr.nims.go.jp/filesets/<uuid>/download
+#   Columns (verified live): id, rawMaterial, materialId, name, formula,
+#   doping, shape, materialClass, fabrication, substrate, variables,
+#   criticalTemperature, criticalTemperatureMeasurementMethod,
+#   appliedPressure, section, subsection, hash, title, doi, authors,
+#   publisher, journal, year.
 #
 # Behavior:
-#   - Default (no env var): emit honest skip with
-#     gate_type=supercon-registration-required. Always exit 0.
-#   - If $SUPERCON_CSV_PATH is set to a readable CSV file: parse it row-by-
-#     row and emit a typed measurement record per row. gate_type stays
-#     "external-api" (the user has provided the data); rows carry
-#     absorbed=false (literature-extracted ≠ raw instrument).
+#   - Default: GET the public MDR SuperCon-2 CSV (~14 MB), stream-filter rows
+#     by formula, emit typed measurement records. gate_type="external-api".
+#   - Any network / decode failure → gate_type="external-api-failed", honest
+#     skip, exit 0 (graceful degrade; mirrors cod/aflow d2/d7 stance).
+#   - $SUPERCON_CSV_PATH set to a readable local CSV → parse it instead of
+#     hitting the network (offline / pinned-vintage / behind-firewall path).
+#     gate_type="install-gated" (user supplied the data file). Same row shape.
 #
-# D72: thin adapter. Just argparse + CSV → JSON. No external HTTP.
-# D80: gate_type ∈ {supercon-registration-required, external-api}.
-# g3:  absorbed = false 영원히 — SuperCon entries are *literature-
-#      extracted* Tc values (digitized from papers), NOT raw instrument
-#      measurements. R4 invariant + RTSC.md §9 honest 한계.
+# d2 access-wall note: the legacy `supercon.nims.go.jp/` register-only UI is a
+# wall (no key-free REST). Breakthrough path TAKEN: the MDR migration (2022)
+# republished the identical corpus as a public CC-BY-4.0 file download — no
+# registration, no key. We hit that. Fallbacks if MDR drifts: (a) the
+# $SUPERCON_CSV_PATH install-gated local-file path, (b) the public Stanev
+# 2018 / Hamidieh 2018 ML dumps derived from the same SuperCon corpus.
+#
+# D72: thin adapter — GET + normalize + JSON dump, no math, no kernel share.
+# D80: gate_type ∈ {external-api, external-api-failed, install-gated}.
+# g3:  absorbed = false 영원히 — SuperCon Tc values are *literature-extracted*
+#      (digitized FROM published papers), NOT a raw demiurge instrument run.
+#      They are an `external_measured_reference` (NIMS' measurement, cited),
+#      NOT our measured-oracle PASS (d6). R4 invariant + MP.md §4 honest 한계.
+#      absorbed NEVER promotes for a SuperCon row.
+#
+# License: NIMS MDR SuperCon Datasheet / SuperCon-2 — Creative Commons BY
+# Attribution 4.0 International (CC-BY-4.0; verified on the MDR dataset page,
+# 2026-05-23). Free use with attribution. Per-row underlying experimental
+# papers (via `doi`) carry their own publisher copyright on verbatim text;
+# the numeric data points are facts (not copyrightable).
 
 from __future__ import annotations
 
 import csv
+import io
 import json
 import os
 import sys
 import time
+import urllib.error
+import urllib.request
 from pathlib import Path
 from typing import Any
 
 
-SUPERCON_HOME_URL = "https://supercon.nims.go.jp/"
+# Public MDR SuperCon-2 data file (no key, no registration; CC-BY-4.0).
+# fileset uuid resolved from https://mdr.nims.go.jp/concern/datasets/4q77fv540
+SUPERCON_MDR_CSV_URL = (
+    "https://mdr.nims.go.jp/filesets/"
+    "b737b44a-b07a-4853-9378-8ba63f644e79/download"  # supercon2_v22.12.03.csv
+)
+SUPERCON_MDR_DATASET_URL = "https://mdr.nims.go.jp/concern/datasets/4q77fv540"
+SUPERCON_LEGACY_URL = "https://supercon.nims.go.jp/"  # register-only (superseded)
 ENV_CSV_PATH = "SUPERCON_CSV_PATH"
+DEFAULT_TIMEOUT_S = 60.0  # ~14 MB file — generous read budget
+MAX_ROWS_EMITTED = 50  # courtesy cap — don't dump 40k rows into one record
 
 
-# ─── family classification (mirror sibling adapters) ────────────────────
+# ─── HTTP GET (stdlib only — no requests dep) ───────────────────────────
+
+
+def _http_get_text(url: str, timeout_s: float) -> tuple[str | None, str | None]:
+    """Return (text_body, error_string). Never raises."""
+    try:
+        req = urllib.request.Request(
+            url, headers={"User-Agent": "hexa-lang/supercon_query (MP-P2.3)"}
+        )
+        with urllib.request.urlopen(req, timeout=timeout_s) as resp:
+            status = getattr(resp, "status", None) or resp.getcode()
+            if status is None or not (200 <= int(status) < 300):
+                return None, f"SuperCon/MDR HTTP non-2xx: status={status}"
+            body = resp.read().decode("utf-8", errors="replace")
+        return body, None
+    except urllib.error.HTTPError as he:
+        return None, f"SuperCon/MDR HTTPError: {he.code} {he.reason}"
+    except urllib.error.URLError as ue:
+        return None, f"SuperCon/MDR URLError: {ue.reason}"
+    except TimeoutError as te:
+        return None, f"SuperCon/MDR timeout: {te}"
+    except Exception as e:  # pragma: no cover — unexpected
+        return None, f"SuperCon/MDR GET error: {type(e).__name__}: {e}"
+
+
+# ─── family classification (RTSC §8.2 enum — mirrors mp/oqmd/cod/aflow) ──
 
 
 def _classify_family(formula: str) -> str:
     f = formula.replace(" ", "")
-    f_lower = f.lower()
-    if (("pb10" in f_lower or "pb_10" in f_lower) and "p" in f_lower
-            and "o" in f_lower):
+    fl = f.lower()
+    if ("pb10" in fl or "pb_10" in fl) and "p" in fl and "o" in fl:
         return "apatite-class claim-only (hypothetical · NOT replicated)"
-    if "mgb2" in f_lower or f_lower == "mgb_2":
+    if "mgb2" in fl or fl == "mgb_2":
         return "mgb2 (replicated 2001~)"
     if f in {"H3S", "LaH10", "CaH6", "ScH9", "YH6"}:
         return "heavy-hydride (≥GPa pressure · device-impossible)"
-    if "yba2cu3o" in f_lower or "rebco" in f_lower:
+    if "yba2cu3o" in fl or "rebco" in fl:
         return "hts-cuprate (REBCO · replicated 1986~)"
-    if "bi" in f_lower and "cu" in f_lower and "o" in f_lower:
+    if "bi" in fl and "cu" in fl and "o" in fl:
         return "hts-cuprate (BSCCO family)"
-    if ("fese" in f_lower or "fease" in f_lower
-            or "feas" in f_lower or "bafe2as2" in f_lower):
+    if "fese" in fl or "fease" in fl or "feas" in fl or "bafe2as2" in fl:
         return "iron-based-sc (FeSC · replicated 2008~)"
     if f in {"NbTi", "Nb3Sn", "Nb3Ge"}:
         return "lts (low-Tc · industry mature)"
     return "unclassified (not in RTSC §8.2 candidate matrix)"
 
 
+# ─── value coercion ─────────────────────────────────────────────────────
+
+
+def _parse_quantity_K(s: str | None) -> float | None:
+    """Extract a numeric Kelvin value from a SuperCon `criticalTemperature`
+    cell like '2.8 K', '20 K', '42K' (no space), '93' (unit optional).
+    Returns None on any non-numeric / empty cell. We never invent a value;
+    the raw cell is always preserved in `measured_tc_raw` for fidelity."""
+    if s is None:
+        return None
+    tok = s.strip().split()
+    if not tok:
+        return None
+    head = tok[0].replace(",", "")
+    # tolerate a glued unit suffix ('42K' / '2.8K') by stripping a trailing K.
+    if head.endswith(("K", "k")):
+        head = head[:-1]
+    try:
+        return float(head)
+    except ValueError:
+        return None
+
+
+def _parse_quantity_GPa(s: str | None) -> float | str | None:
+    """Best-effort numeric GPa from an `appliedPressure` cell. Keep the raw
+    string when it isn't a bare number (units vary: GPa, kbar, ambient)."""
+    if s is None:
+        return None
+    raw = s.strip()
+    if not raw:
+        return None
+    tok = raw.split()
+    try:
+        return float(tok[0].replace(",", ""))
+    except ValueError:
+        return raw
+
+
+def _formula_matches(cell: str | None, formula_filter: str) -> bool:
+    if cell is None:
+        return False
+    return cell.replace(" ", "").lower() == formula_filter.replace(" ", "").lower()
+
+
 # ─── CSV row normalization ──────────────────────────────────────────────
 
 
-_NUMERIC_KEYS = {
-    "tc", "tc_k", "tc_onset", "tc_zero", "tc_mid",
-    "pressure", "pressure_gpa", "pressure_GPa",
-    "field", "field_T", "field_t", "h_c2",
-    "year", "doi_year",
-}
-
-
-def _maybe_float(s: str) -> float | str | None:
-    if s is None:
-        return None
-    s_strip = s.strip()
-    if not s_strip:
-        return None
-    try:
-        return float(s_strip)
-    except ValueError:
-        return s_strip
-
-
-def _normalize_csv_row(row: dict, formula_filter: str | None) -> dict | None:
-    """Project a SuperCon-style CSV row to the demiurge consumer shape.
-
-    SuperCon export columns vary across vintages; we keep raw_row for
-    fidelity, and surface a few commonly-present canonical fields
-    (formula / element / tc / pressure / reference). If formula_filter
-    is given, drop rows whose formula doesn't match (case-insensitive,
-    whitespace-stripped)."""
-    raw = {k: (v.strip() if isinstance(v, str) else v) for k, v in row.items()}
-    # Heuristic — find the formula column.
-    formula_col = None
-    for cand in ("formula", "Formula", "FORMULA", "element",
-                 "Element", "composition", "Composition"):
-        if cand in raw:
-            formula_col = cand
-            break
-    formula_val = raw.get(formula_col) if formula_col else None
-    if formula_filter is not None and formula_val is not None:
-        if formula_val.replace(" ", "").lower() \
-                != formula_filter.replace(" ", "").lower():
-            return None
-    # Heuristic — find Tc column.
-    tc_val: Any = None
-    tc_col_used = None
-    for cand in ("tc", "Tc", "TC", "T_c", "Tc(K)", "tc_k", "Tc_K"):
-        if cand in raw and raw[cand]:
-            tc_val = _maybe_float(raw[cand])
-            tc_col_used = cand
-            break
-    # Heuristic — pressure (GPa).
-    pressure_val: Any = None
-    for cand in ("pressure", "Pressure", "p_GPa", "pressure_GPa",
-                 "Pressure(GPa)", "p"):
-        if cand in raw and raw[cand]:
-            pressure_val = _maybe_float(raw[cand])
-            break
-    # Reference / DOI heuristic.
-    ref = None
-    for cand in ("reference", "Reference", "doi", "DOI", "citation",
-                 "Citation"):
-        if cand in raw and raw[cand]:
-            ref = raw[cand]
-            break
+def _normalize_supercon_row(row: dict) -> dict:
+    """Project a SuperCon-2 CSV row into the demiurge-consumer shape; honest
+    null for missing fields. `measured_tc_K` carries NIMS' literature-
+    extracted Tc — flagged `external_measured_reference` (NOT our oracle)."""
+    r = {k: (v.strip() if isinstance(v, str) else v) for k, v in row.items()}
     return {
-        "formula": formula_val,
-        "formula_column_used": formula_col,
-        "tc_K": tc_val,
-        "tc_column_used": tc_col_used,
-        "pressure_GPa": pressure_val,
-        "reference": ref,
-        "raw_row": raw,
+        "supercon_id": r.get("id"),
+        "formula": r.get("formula"),
+        "name": r.get("name") or None,
+        "raw_material": r.get("rawMaterial") or None,
+        "material_class": r.get("materialClass") or None,
+        "doping": r.get("doping") or None,
+        "variables": r.get("variables") or None,
+        # NIMS' literature-extracted measured Tc — an EXTERNAL reference, not
+        # a demiurge measured-oracle PASS (d6). absorbed stays false.
+        "measured_tc_K": _parse_quantity_K(r.get("criticalTemperature")),
+        "measured_tc_raw": r.get("criticalTemperature") or None,
+        "tc_measurement_method": r.get("criticalTemperatureMeasurementMethod")
+        or None,
+        "applied_pressure_GPa": _parse_quantity_GPa(r.get("appliedPressure")),
+        "tc_provenance": "external_measured_reference",  # NIMS, not our oracle
+        "doi": r.get("doi") or None,
+        "title": r.get("title") or None,
+        "authors": r.get("authors") or None,
+        "journal": r.get("journal") or None,
+        "year": r.get("year") or None,
     }
+
+
+def _scan_csv_rows(
+    text: str, formula_filter: str
+) -> tuple[list[dict], int, int]:
+    """Stream the CSV, filter by formula, normalize. Returns
+    (rows, total_scanned, filtered_out). Capped at MAX_ROWS_EMITTED."""
+    rows: list[dict] = []
+    total = 0
+    filtered = 0
+    reader = csv.DictReader(io.StringIO(text))
+    for raw in reader:
+        total += 1
+        if not _formula_matches(raw.get("formula"), formula_filter):
+            filtered += 1
+            continue
+        rows.append(_normalize_supercon_row(raw))
+        if len(rows) >= MAX_ROWS_EMITTED:
+            break
+    return rows, total, filtered
 
 
 # ─── record dump ────────────────────────────────────────────────────────
@@ -153,134 +234,144 @@ def main(out_dir: str, formula: str) -> int:
 
     citations = [
         "NIMS SuperCon Database — National Institute for Materials Science, "
-        "Japan (2002~). https://supercon.nims.go.jp/.",
-        "Stanev et al. 2018, npj Computational Materials 4, 29 — 'Machine "
-        "learning modeling of superconducting critical temperature' "
-        "(downstream user of SuperCon corpus).",
+        "Japan (2002~). Migrated to the Materials Data Repository (MDR) 2022. "
+        "https://mdr.nims.go.jp/concern/datasets/4q77fv540 (SuperCon 2).",
+        "Stanev et al. 2018, npj Comput. Mater. 4, 29 — 'Machine learning "
+        "modeling of superconducting critical temperature' (downstream user "
+        "of the SuperCon corpus).",
         "Hamidieh 2018, Comput. Mater. Sci. 154, 346 — 'A data-driven "
         "statistical model for predicting the critical temperature of a "
         "superconductor' (also uses SuperCon).",
-        "RTSC.md §9.4 + §9.5 N6 cohort — additional-source-ingest expansion.",
+        "MP.md Phase 2 §P2.3 — key-free supplementary-source ingest "
+        "(experimental-Tc corpus sibling to MP/OQMD/COD/AFLOW).",
     ]
 
     scope_caveats = [
-        "(s1) literature-extracted ≠ raw instrument — SuperCon Tc values "
-        "are digitized FROM published papers, NOT directly from "
-        "instrument measurement runs. R4 absorbed=false applies.",
-        "(s2) Tc definition varies row-to-row (Tc_onset vs Tc_midpoint vs "
-        "Tc_zero); column ambiguity is preserved in `tc_column_used`.",
-        "(s3) Composition strings are normalized inconsistently across "
-        "vintages of the DB (spaces, subscript conventions); downstream "
-        "must reconcile against MP/OQMD/COD formulas before joining.",
-        "(s4) absorbed=false for all SuperCon rows — RTSC.md §9 honest "
-        "한계 + §8.8 g3 stance. Promotion to absorbed=true requires a "
-        "raw measurement attestation, not a literature digitization.",
+        "(s1) external_measured_reference, NOT our oracle — SuperCon Tc "
+        "values are literature-extracted (digitized FROM published papers by "
+        "NIMS), not a demiurge raw-instrument measurement run. d6: "
+        "absorbed=true requires OUR MeasuredOracleRef PASS, never a cited "
+        "external Tc. `measured_tc_K` is marked tc_provenance="
+        "'external_measured_reference'.",
+        "(s2) Tc definition varies row-to-row (onset vs midpoint vs zero) and "
+        "the raw cell may carry units / ranges; we keep `measured_tc_raw` for "
+        "fidelity and best-effort-parse the leading number into "
+        "`measured_tc_K`. `tc_measurement_method` preserved when present.",
+        "(s3) Composition strings are normalized inconsistently across the DB "
+        "(spaces, doping placeholders like 'x'); downstream must reconcile "
+        "against MP/OQMD/COD/AFLOW formulas before joining. We filter on an "
+        "exact whitespace-stripped case-insensitive `formula` match.",
+        "(s4) absorbed=false for ALL SuperCon rows — MP.md §4 honest 한계 + "
+        "d6/d7. Promotion to absorbed=true requires OUR raw measurement "
+        "attestation, never a literature digitization (even a measured one).",
+        "(s5) row-emit capped at "
+        f"{MAX_ROWS_EMITTED} (courtesy; the full file is ~40k rows). "
+        "csv_stats.total_rows_scanned reports the full scan size.",
     ]
 
     csv_path_env = os.environ.get(ENV_CSV_PATH)
-    rows: list[dict] = []
     gate_type: str
     skipped_reason: str | None = None
     csv_source: str | None = None
-    total_rows_scanned = 0
+    rows: list[dict] = []
+    total_scanned = 0
     filtered_out = 0
 
-    if not csv_path_env:
-        gate_type = "supercon-registration-required"
-        skipped_reason = (
-            "NIMS SuperCon DB requires free registration at "
-            f"{SUPERCON_HOME_URL} ; no public REST API. Honest skip — "
-            "adapter never automates registration. To ingest rows, "
-            "download a CSV export from the DB and set "
-            f"${ENV_CSV_PATH}=/path/to/supercon_export.csv."
-        )
-    else:
+    if csv_path_env:
+        # install-gated: user supplied a local CSV (offline / pinned vintage).
+        gate_type = "install-gated"
         csv_path = Path(csv_path_env).expanduser()
         if not csv_path.exists() or not csv_path.is_file():
-            gate_type = "supercon-registration-required"
             skipped_reason = (
                 f"${ENV_CSV_PATH}={csv_path_env!r} does not resolve to a "
-                f"readable file. Honest skip — fix the path or unset to "
-                f"return to registration-required default."
+                f"readable file. Honest skip — fix the path or unset to use "
+                f"the public MDR download."
             )
         else:
             csv_source = str(csv_path)
             try:
-                with csv_path.open("r", encoding="utf-8", errors="replace",
-                                   newline="") as fh:
-                    reader = csv.DictReader(fh)
-                    for row in reader:
-                        total_rows_scanned += 1
-                        norm = _normalize_csv_row(row, formula)
-                        if norm is None:
-                            filtered_out += 1
-                            continue
-                        rows.append(norm)
-                gate_type = "external-api"
+                text = csv_path.read_text(encoding="utf-8", errors="replace")
+                rows, total_scanned, filtered_out = _scan_csv_rows(text, formula)
             except Exception as e:
-                gate_type = "supercon-registration-required"
+                gate_type = "external-api-failed"
                 skipped_reason = (
-                    f"CSV parse failed: {type(e).__name__}: {e}. "
-                    f"Honest skip — falling back to "
-                    f"registration-required default."
+                    f"local CSV parse failed: {type(e).__name__}: {e}"
                 )
+    else:
+        # default: hit the public MDR SuperCon-2 file (key-free, CC-BY-4.0).
+        gate_type = "external-api"
+        csv_source = SUPERCON_MDR_CSV_URL
+        body, err = _http_get_text(SUPERCON_MDR_CSV_URL, DEFAULT_TIMEOUT_S)
+        if err is not None or body is None:
+            gate_type = "external-api-failed"
+            skipped_reason = err or "empty MDR SuperCon CSV body"
+            csv_source = None
+        else:
+            try:
+                rows, total_scanned, filtered_out = _scan_csv_rows(body, formula)
+            except Exception as e:
+                gate_type = "external-api-failed"
+                skipped_reason = f"CSV parse failed: {type(e).__name__}: {e}"
+                csv_source = None
 
     record = {
         "domain": "material",
         "verb": "query",
         "kind": "supercon_lookup",
         "stamp": stamp,
-        "producer": "supercon_query@material-n6.3",
+        "producer": "supercon_query@material-p2.3",
         "measurement_gate": "GATE_OPEN",
-        "absorbed": False,            # literature-extracted ≠ raw (R4)
-        "gate_type": gate_type,       # supercon-registration-required | external-api
+        "absorbed": False,            # external measured ref != our oracle (d6/R4)
+        "gate_type": gate_type,       # external-api | external-api-failed | install-gated
         "provisional": True,
         "skipped_reason": skipped_reason,
         "query": {
             "formula": formula,
+            "composition_normalized": formula.replace(" ", ""),
             "family_classification": _classify_family(formula),
             "csv_path_env_var": ENV_CSV_PATH,
             "csv_source": csv_source,
         },
         "csv_stats": {
-            "total_rows_scanned": total_rows_scanned,
+            "total_rows_scanned": total_scanned,
             "filtered_out_by_formula": filtered_out,
             "rows_emitted": len(rows),
+            "row_emit_cap": MAX_ROWS_EMITTED,
         },
         "row_count": len(rows),
         "rows": rows,
+        "tc_is_external_measured_reference": True,  # NIMS measured, not our oracle
         "scope_caveats": scope_caveats,
         "citations": citations,
         "attribution": (
-            "Data (when present) from the NIMS SuperCon Database, "
-            f"{SUPERCON_HOME_URL}. Registration required. Cite the "
-            "underlying experimental papers referenced in each row's "
-            "`reference` field as well as NIMS for the curated DB."
+            "Data from the NIMS SuperCon Database via the Materials Data "
+            f"Repository (MDR), {SUPERCON_MDR_DATASET_URL}. "
+            "Licensed CC-BY-4.0 (attribution required). Also cite the "
+            "underlying experimental paper in each row's `doi` field."
         ),
-        "license": (
-            "NIMS SuperCon — registration-required; per-row underlying "
-            "experimental papers carry their own licenses (typically "
-            "publisher copyright; data points are facts and not "
-            "copyrightable, but verbatim text is)."
-        ),
+        "license": "CC-BY-4.0 (NIMS MDR SuperCon Datasheet / SuperCon-2)",
         "provenance": {
-            "source_url": SUPERCON_HOME_URL,
+            "source_url": csv_source or SUPERCON_MDR_CSV_URL,
             "source_citation": (
-                "NIMS SuperCon Database (2002~), supercon.nims.go.jp"
+                "NIMS SuperCon Database (2002~) via MDR (2022), "
+                "supercon2_v22.12.03"
             ),
             "primary_refs": [
-                "NIMS SuperCon DB (2002~) — primary curated corpus.",
-                "npj Comp Mater 4 29 (Stanev 2018) — ML user of SuperCon.",
-                "Comput Mater Sci 154 346 (Hamidieh 2018) — ML user.",
+                "NIMS SuperCon DB (2002~) — primary curated experimental corpus.",
+                "npj Comput. Mater. 4 29 (Stanev 2018) — ML user of SuperCon.",
+                "Comput. Mater. Sci. 154 346 (Hamidieh 2018) — ML user.",
             ],
             "api_endpoints": [
-                f"{SUPERCON_HOME_URL}  (web UI · registration required)",
-                f"env: ${ENV_CSV_PATH}  (user-provided CSV import path)",
+                f"{SUPERCON_MDR_CSV_URL}  (public file download · no key · CC-BY-4.0)",
+                f"{SUPERCON_MDR_DATASET_URL}  (MDR dataset landing page)",
+                f"env: ${ENV_CSV_PATH}  (install-gated local CSV import path)",
+                f"{SUPERCON_LEGACY_URL}  (legacy register-only UI · SUPERSEDED)",
             ],
         },
         "rtsc_anchor": (
-            "RTSC.md §9.4 + §9.5 N6 cohort — NIMS SuperCon register-only "
-            "honest-skip sibling (literature-extracted Tc corpus)"
+            "MP.md Phase 2 §P2.3 — NIMS SuperCon (MDR public CC-BY-4.0) "
+            "experimental-Tc corpus sibling to MP/OQMD/COD/AFLOW "
+            "(external_measured_reference; absorbed=false 영구)"
         ),
     }
 
@@ -293,22 +384,23 @@ def main(out_dir: str, formula: str) -> int:
         f"family={record['query']['family_classification']!r}"
     )
     print(
-        f"  · gate_type={gate_type}  row_count={len(rows)}  "
-        f"csv_source={csv_source!r}"
+        f"  · gate_type={gate_type}  rows_emitted={len(rows)}  "
+        f"scanned={total_scanned}  csv_source={csv_source!r}"
     )
     if skipped_reason:
         print(f"  · skipped_reason: {skipped_reason}")
     for r in rows[:5]:
         print(
-            f"    - formula={r.get('formula')}  Tc={r.get('tc_K')} K  "
-            f"P={r.get('pressure_GPa')} GPa  ref={r.get('reference')!r}"
+            f"    - {r.get('formula')}  Tc={r.get('measured_tc_K')} K "
+            f"(raw={r.get('measured_tc_raw')!r})  "
+            f"P={r.get('applied_pressure_GPa')}  doi={r.get('doi')}"
         )
     if len(rows) > 5:
         print(f"    ... ({len(rows) - 5} more rows)")
     print(
-        "[material+query·supercon] absorbed=false (literature-extracted "
-        "≠ raw instrument; RTSC.md §9 honest 한계 — SuperCon rows NEVER "
-        "promote to absorbed=true)"
+        "[material+query·supercon] absorbed=false (NIMS Tc is an "
+        "external_measured_reference — literature-extracted, NOT our "
+        "measured-oracle; d6/d7 + MP.md §4 — SuperCon rows NEVER promote)"
     )
     return 0
 
