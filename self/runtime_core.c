@@ -1994,7 +1994,20 @@ HexaVal hexa_array_get(HexaVal arr, int64_t idx) {
     // 해서 try/catch 로 recovery 가능.
     if (!HX_IS_ARRAY(arr)) {
         char _buf[128];
-        snprintf(_buf, sizeof(_buf), "array[%lld]: container is not an array (tag=%d)", (long long)idx, (int)HX_TAG(arr));
+        // PROBE r12 #10: chained missing-key access `m["a"]["b"]` where
+        // m["a"] returned void emits a confusing "array[4428665856]: container
+        // is not an array (tag=4)" — the bare idx int is a corrupted memory
+        // value from the void-as-key dispatch.  Surface void / map / str
+        // separately so the user sees the chain-end type, not the noise int.
+        if (HX_IS_VOID(arr)) {
+            snprintf(_buf, sizeof(_buf), "index access on void (chained missing-key?)");
+        } else if (HX_IS_MAP(arr)) {
+            snprintf(_buf, sizeof(_buf), "index access on map with int %lld — use map[\"key\"] string syntax", (long long)idx);
+        } else if (HX_IS_STR(arr)) {
+            snprintf(_buf, sizeof(_buf), "string[%lld]: use .chars()[%lld] or substring", (long long)idx, (long long)idx);
+        } else {
+            snprintf(_buf, sizeof(_buf), "array[%lld]: container is not an array (tag=%d)", (long long)idx, (int)HX_TAG(arr));
+        }
         hexa_throw(hexa_str(_buf));
         return hexa_void();
     }
