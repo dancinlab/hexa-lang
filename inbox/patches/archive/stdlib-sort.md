@@ -1,6 +1,38 @@
 # Stdlib gap: `sort_by` missing; `arr.sort()` is numeric-only
 
-> **VERIFIED-CLOSED 2026-05-20** — `self/codegen_c2.hexa` L3315-3323 + L5446-5453 dispatch `sort_by` → `hexa_array_sort_by(obj, fn)`. Close-only marker.
+> **RESOLVED 2026-05-25** — archived. Implementation shipped in main; the
+> original VERIFIED-CLOSED marker pointed at retired `self/codegen_c2.hexa`
+> paths (file no longer present after the gen2 codegen consolidation +
+> RFC-061 P1 runtime split). Current SSOT below.
+>
+> 1. **runtime impl** — `self/runtime_core.c:5085`
+>    `hexa_array_sort_by(arr, key_fn)`. Stable bottom-up merge sort over a
+>    parallel `(item, key)` buffer. Keys precomputed once per element via
+>    `hexa_call1(key_fn, item)`; closure capture avoids the `qsort_r`
+>    portability dance. Tie-break preserves insertion order — stability
+>    required by wilson event_bus priority ordering.
+> 2. **string-cmp fix** — `self/runtime_core.c:5020` `hexa_sort_cmp` now
+>    handles int / float (NaN-last canonical ordering, PROBE r14-J PR #486
+>    commit `23aa2197`) / string lexicographic via `hxlcl_strcmp` / mixed
+>    int↔float promotion. The 2026-05-14 silent identity-sort bug for
+>    `["c","a","b"].sort()` is closed.
+> 3. **codegen dispatch** — `self/codegen.hexa:3740` (gen2_method_builtin
+>    arm) and `:6615` (gen2 method-node arm). Both auto-wrap bare fn-refs
+>    via `hexa_fn_new((void*)<mangled>, 0)` (mirrors the indirect-call
+>    autowrap site at ~L4573).
+> 4. **forward-decl** — `self/runtime.h:571`
+>    `HexaVal hexa_array_sort_by(HexaVal arr, HexaVal key_fn);`.
+> 5. **hexa-side fallback** — `stdlib/runtime/numeric.hexa:381`
+>    `rt_array_sort_by` (RUNTIME.md step 3 cycle 69 commit `3dbdda5d`) +
+>    pure-hexa `self/runtime/array_higher_pure.hexa:226`
+>    `array_sort_by_pure(arr, cmp)`.
+> 6. **tests** — `self/test_array_higher_pure.hexa` (sort_by desc /
+>    default cmp), `self/test_sort_topk_rewrite.hexa`
+>    (`.sort_by(c).take(k)` rewrite detector).
+>
+> Wilson preference A (extend comparator + add `sort_by`) was the path
+> taken; option C pure-hexa fallback is also shipped via
+> `array_sort_by_pure`. No new work needed.
 
 **Filed by:** wilson. ROI audit 2026-05-14 found stable-sort-by-key is the only genuine hexa-lang gap among the three originally flagged (the map.remove and nested-mutation findings turned out to be stale docs — compiled runtime is fine).
 
