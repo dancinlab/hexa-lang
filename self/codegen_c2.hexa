@@ -6507,15 +6507,33 @@ fn gen2_match_ternary(arms, scrutinee_c, idx) {
         }
     }
 
-    if is_wildcard || idx == len(arms) - 1 {
-        if is_wildcard {
-            return val
-        }
-        let cond = gen2_match_cond(pat, scrutinee_c)
-        return "(" + cond + " ? " + val + " : hexa_void())"
+    // Build pattern-match condition; wildcard pattern is unconditional.
+    let mut cond = ""
+    if is_wildcard {
+        cond = "1"
+    } else {
+        cond = gen2_match_cond(pat, scrutinee_c)
+    }
+    // Guard (`pat if cond_expr => …` / `_ if cond_expr => …`) — AND
+    // into the arm condition. Without this the parser-captured guard
+    // (`arm.cond`) was silently dropped at codegen and the arm fired
+    // regardless of the guard's value — round-5 pattern probe
+    // headline finding (Class-1 silent failure: wrong arm executes).
+    let _guard = arm.cond
+    let _has_guard = type_of(_guard) != "string"
+    if _has_guard {
+        cond = "(" + cond + " && hexa_truthy(" + gen2_expr(_guard) + "))"
     }
 
-    let cond = gen2_match_cond(pat, scrutinee_c)
+    // Pure wildcard with no guard short-circuits to the value (existing
+    // optimization — must check `!has_guard` so `_ if cond` still
+    // emits a real check).
+    if is_wildcard && !_has_guard {
+        return val
+    }
+    if idx == len(arms) - 1 {
+        return "(" + cond + " ? " + val + " : hexa_void())"
+    }
     let rest = gen2_match_ternary(arms, scrutinee_c, idx + 1)
     return "(" + cond + " ? " + val + " : " + rest + ")"
 }
