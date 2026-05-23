@@ -1,0 +1,239 @@
+// stdlib/chem/md/ewald.hexa — Ewald 합 (Ewald Summation) 정전기 에너지.
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// References:
+//   Ewald, P.P. (1921). Die Berechnung optischer und elektrostatischer
+//     Gitterpotentiale. Ann. Phys. (Leipzig) 369, 253.
+//   Frenkel, D. & Smit, B. (2002). Understanding Molecular Simulation,
+//     2nd ed., Academic. Ch. 12.1 (Ewald).
+//   Allen, M.P. & Tildesley, D.J. (2017). Computer Simulation of Liquids,
+//     2nd ed., Oxford. Ch. 6 (long-range forces).
+//   Abramowitz, M. & Stegun, I.A. (1965). Handbook of Mathematical
+//     Functions, §7.1.26 (rational approx. erf, |ε| ≤ 1.5e-7).
+//
+// 순수 알고리즘 — I/O 없음, syscall 없음. tin-foil (metallic) 경계조건
+// 가정 (k=0 항 = 0). 입방 박스 단일 지원 (직교/triclinic 은 follow-up).
+//
+// 식:
+//   E_total = E_real + E_recip + E_self
+//   E_real  = (1/2) Σ_{i,j, n} q_i q_j erfc(α · r_{ij,n}) / r_{ij,n}
+//             where r_{ij,n} ≤ r_c   (real-space cutoff)
+//   E_recip = (2π/V) Σ_{k≠0} |S(k)|² · exp(-k²/(4α²)) / k²
+//             S(k)  = Σ_i q_i · exp(i k · r_i)
+//             k = (2π/L) · (n_x, n_y, n_z) 입방 박스
+//             |S(k)|² = (Σ q_i cos)² + (Σ q_i sin)²
+//   E_self  = -(α/√π) Σ_i q_i²
+//
+// α 와 cutoff 는 tolerance δ 로부터 자동 추론 (OpenMM 디자인):
+//   α = √(-ln(2δ)) / r_c
+//   k_max = 2 · α · √(-ln δ)
+//
+// 디폴트 δ = 1.0e-5 → α·r_c ≈ 3.28, n_max ≈ 5  (입방 박스, 짧은 데모용).
+//
+// Public surface:
+//   pub struct EwaldCharge { x, y, z, q : float }
+//   pub fn ewald_default_alpha(rc, tolerance) -> float
+//   pub fn ewald_default_kmax(L, alpha, tolerance) -> int
+//   pub fn ewald_real_energy(charges, L, alpha, rc) -> float
+//   pub fn ewald_recip_energy(charges, L, alpha, kmax) -> float
+//   pub fn ewald_self_energy(charges, alpha) -> float
+//   pub fn ewald_total_energy(charges, L, tolerance) -> float
+//
+// 단위: 자연 단위계 (4πε₀ = 1). 사용자가 SI 단위로 변환할 책임.
+
+// 박스는 항상 입방 (이번 사이클). 직교 follow-up.
+
+pub struct EwaldCharge {
+    x: float,
+    y: float,
+    z: float,
+    q: float,
+}
+
+// ── 절댓값 / 헬퍼 ─────────────────────────────────────────────────────
+
+fn _abs_f(x: float) -> float {
+    if x < 0.0 { return 0.0 - x }
+    return x
+}
+
+// ── erfc(x) — A&S 7.1.26 rational approximation ──────────────────────
+//
+// max |error| ≤ 1.5 × 10⁻⁷  (Ewald 1e-5 tolerance 와 부합).
+// x ≥ 0 에서 정의. 음수면 erfc(−x) = 2 − erfc(x).
+
+fn _erfc(x: float) -> float {
+    let sign = if x < 0.0 { 0.0 - 1.0 } else { 1.0 }
+    let ax = _abs_f(x)
+    // A&S 7.1.26 상수.
+    let p  = 0.3275911
+    let a1 = 0.254829592
+    let a2 = 0.0 - 0.284496736
+    let a3 = 1.421413741
+    let a4 = 0.0 - 1.453152027
+    let a5 = 1.061405429
+    let t  = 1.0 / (1.0 + p * ax)
+    let poly = ((((a5 * t + a4) * t) + a3) * t + a2) * t + a1
+    let erf_abs = 1.0 - poly * t * exp(0.0 - ax * ax)
+    let erf_x = sign * erf_abs
+    return 1.0 - erf_x
+}
+
+// ── α / k_max 자동 추론 — OpenMM 디자인 ───────────────────────────────
+//
+// α = √(-ln(2δ)) / r_c    so erfc(α r_c) ≈ 2δ
+// k_cutoff = 2 α √(-ln δ); n_max = ceil(k_cutoff · L / (2π))
+//
+// L 은 입방 박스 한 변. tolerance δ 는 양수 (1e-5 디폴트).
+
+pub fn ewald_default_alpha(rc: float, tolerance: float) -> float {
+    let mut tol = tolerance
+    if tol <= 0.0 { tol = 1.0e-5 }
+    if rc <= 0.0 { return 1.0 }
+    let inside = 0.0 - ln(2.0 * tol)
+    if inside <= 0.0 { return 1.0 / rc }
+    return sqrt(inside) / rc
+}
+
+pub fn ewald_default_kmax(L: float, alpha: float, tolerance: float) -> int {
+    let mut tol = tolerance
+    if tol <= 0.0 { tol = 1.0e-5 }
+    if L <= 0.0 { return 1 }
+    let inside = 0.0 - ln(tol)
+    if inside <= 0.0 { return 1 }
+    let kc = 2.0 * alpha * sqrt(inside)
+    let two_pi = 2.0 * 3.141592653589793
+    let n_real = kc * L / two_pi
+    let n = to_int(floor(n_real)) + 1
+    if n < 1 { return 1 }
+    return n
+}
+
+// ── E_real: 실공간 잘림 Coulomb ─────────────────────────────────────────
+//
+// 본 PR 은 단일 unit cell (n=0 image) 만 합산 — α·r_c ≥ 3 가정 하에
+// 보정 항이 < tolerance. 입자 i ↔ j 변위는 최소-이미지.
+
+pub fn ewald_real_energy(charges: array, L: float, alpha: float, rc: float) -> float {
+    let n = len(charges)
+    if n < 2 { return 0.0 }
+    let mut e = 0.0
+    let mut i = 0
+    while i < n {
+        let ci = charges[i]
+        let mut j = i + 1
+        while j < n {
+            let cj = charges[j]
+            // 최소-이미지 변위 (입방 박스, L>0 가정).
+            let mut dx = cj.x - ci.x
+            let mut dy = cj.y - ci.y
+            let mut dz = cj.z - ci.z
+            if L > 0.0 {
+                let qx = dx / L + 0.5
+                let qy = dy / L + 0.5
+                let qz = dz / L + 0.5
+                dx = dx - L * to_float(floor(qx))
+                dy = dy - L * to_float(floor(qy))
+                dz = dz - L * to_float(floor(qz))
+            }
+            let r2 = dx * dx + dy * dy + dz * dz
+            if r2 > 1.0e-30 {
+                let r = sqrt(r2)
+                if r <= rc {
+                    e = e + ci.q * cj.q * _erfc(alpha * r) / r
+                }
+            }
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return e
+}
+
+// ── E_recip: 역공간 합 ─────────────────────────────────────────────────
+//
+// k = (2π/L) (n_x, n_y, n_z); |n|_∞ ≤ kmax, n ≠ 0
+// |S(k)|² = (Σ_i q_i cos(k·r_i))² + (Σ_i q_i sin(k·r_i))²
+// E_recip = (2π/V) Σ_{k≠0} exp(-k²/(4α²)) / k² · |S(k)|²
+
+pub fn ewald_recip_energy(charges: array, L: float, alpha: float, kmax: int) -> float {
+    let n = len(charges)
+    if n < 2 { return 0.0 }
+    if L <= 0.0 { return 0.0 }
+    let two_pi = 2.0 * 3.141592653589793
+    let V = L * L * L
+    let inv_4a2 = 1.0 / (4.0 * alpha * alpha)
+    let prefactor = two_pi / V
+
+    let mut e = 0.0
+    let mut nx = 0 - kmax
+    while nx <= kmax {
+        let mut ny = 0 - kmax
+        while ny <= kmax {
+            let mut nz = 0 - kmax
+            while nz <= kmax {
+                if nx != 0 || ny != 0 || nz != 0 {
+                    let kx = two_pi * to_float(nx) / L
+                    let ky = two_pi * to_float(ny) / L
+                    let kz = two_pi * to_float(nz) / L
+                    let k2 = kx * kx + ky * ky + kz * kz
+                    // 구형 컷오프: |k| · L / (2π) ≤ kmax (모서리 제거).
+                    let n2_lim = kmax * kmax
+                    let nsq = nx * nx + ny * ny + nz * nz
+                    if nsq <= n2_lim && k2 > 0.0 {
+                        let mut sr = 0.0  // Σ q_i cos(k·r_i)
+                        let mut si = 0.0  // Σ q_i sin(k·r_i)
+                        let mut i = 0
+                        while i < n {
+                            let c = charges[i]
+                            let phase = kx * c.x + ky * c.y + kz * c.z
+                            sr = sr + c.q * cos(phase)
+                            si = si + c.q * sin(phase)
+                            i = i + 1
+                        }
+                        let s2 = sr * sr + si * si
+                        let weight = exp(0.0 - k2 * inv_4a2) / k2
+                        e = e + weight * s2
+                    }
+                }
+                nz = nz + 1
+            }
+            ny = ny + 1
+        }
+        nx = nx + 1
+    }
+    return prefactor * e
+}
+
+// ── E_self: 자기 보정 ─────────────────────────────────────────────────
+
+pub fn ewald_self_energy(charges: array, alpha: float) -> float {
+    let inv_sqrt_pi = 1.0 / sqrt(3.141592653589793)
+    let mut sq = 0.0
+    let mut i = 0
+    while i < len(charges) {
+        let c = charges[i]
+        sq = sq + c.q * c.q
+        i = i + 1
+    }
+    return 0.0 - alpha * inv_sqrt_pi * sq
+}
+
+// ── 총합 — tolerance-driven 자동 파라미터 ────────────────────────────
+//
+// rc = L/2 (입방 박스 표준 컷오프).
+// α 와 kmax 는 ewald_default_* 로 도출.
+
+pub fn ewald_total_energy(charges: array, L: float, tolerance: float) -> float {
+    if len(charges) == 0 { return 0.0 }
+    if L <= 0.0 { return 0.0 }
+    let rc = 0.5 * L
+    let alpha = ewald_default_alpha(rc, tolerance)
+    let kmax = ewald_default_kmax(L, alpha, tolerance)
+    let e_real  = ewald_real_energy(charges, L, alpha, rc)
+    let e_recip = ewald_recip_energy(charges, L, alpha, kmax)
+    let e_self  = ewald_self_energy(charges, alpha)
+    return e_real + e_recip + e_self
+}
