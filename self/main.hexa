@@ -2783,7 +2783,12 @@ fn cmd_run_user_direct(file, extra_args) {
             let _cl = exec("rm -f " + shq(_tmp_inflight) + " 2>/dev/null")
         }
     }
-    if brc == 0 && file_exists(tmpbin) {
+    // Cold-cache race fix (2026-05-25): 검증 조건을 `brc == 0 && file_exists(tmpbin)`
+    // → `file_exists(tmpbin)` 로 완화. tmpbin은 atomic rename(`mv -f`)로만 도달하므로
+    // 존재한다면 fully-built valid binary. 자기 build 실패(brc != 0)와 peer가 만든
+    // byte-identical binary는 직교 — race loser가 spurious "compile error" 보고 방지.
+    // (line 2779 의 "loser's overwrite is benign" 의도 완성.)
+    if file_exists(tmpbin) {
         let cli_q = shq(tmpbin)
         let mut cmd = cli_q
         let mut ai = 0
@@ -2871,7 +2876,9 @@ fn cmd_run(file, extra_args) {
         }
     }
     let mut rc = 1
-    if brc == 0 && file_exists(tmpbin) {
+    // Cold-cache race fix (2026-05-25): peer-built binary 존재 시 자기 brc 무관 실행
+    // (cmd_run_user_direct 와 동일 시맨틱). 상세 = 윗 site comment 참조.
+    if file_exists(tmpbin) {
         let mut cmd = shq(tmpbin)
         let mut ai = 0
         while ai < len(extra_args) {
@@ -2981,7 +2988,9 @@ fn _batch_run_one(file) {
             let _cl = exec("rm -f " + shq(_tmp_inflight) + " 2>/dev/null")
         }
     }
-    if brc == 0 && file_exists(tmpbin) {
+    // Cold-cache race fix (2026-05-25): _batch_run_one 도 동일 — peer-built binary
+    // 존재 시 자기 brc 무관 실행 (cmd_run_user_direct/cmd_run 와 동일 시맨틱).
+    if file_exists(tmpbin) {
         let out = exec(shq(tmpbin) + " 2>&1; echo \"__HEXA_SHIM_RC__=$?\"")
         let marker = "__HEXA_SHIM_RC__="
         let mlen = len(marker)

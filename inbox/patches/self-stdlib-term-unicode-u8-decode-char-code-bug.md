@@ -1,5 +1,6 @@
 # self/stdlib/term_unicode::_u8_decode — char_code() 1-arg form returns 0 for multi-byte strings, breaking ALL CJK/emoji width tracking
 
+> **Status**: resolved-07991501 (2026-05-24 housekeeping cross-link · direct-commit on main, no PR)
 > **VERIFIED-CLOSED 2026-05-20** — `self/stdlib/term_unicode.hexa` L55+ `_u8_decode` uses the 2-arg `char_code(s, idx)` form with inline cross-link comment to this patch. Close-only marker.
 
 **Severity: HIGH — affects every TUI built on `self/tui/render` rendering wide chars.**

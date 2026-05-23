@@ -12,6 +12,7 @@ Append-only history sister of `QMIRROR.md`. Each entry starts with `## <ISO time
 - [x] compiler/atlas/by_kind/f.gen.hexa ATLAS_F_NODES 확장 — 17 → 21 atom (PR-E 4 추가)
 - [x] QMIRROR.md PR-E milestone `- [x]` flip — **milestone 5/5 close — QMIRROR 100% 🛸🛸🛸🛸🛸** (▓▓▓▓▓ 100%)
 
+
 ## 2026-05-24 — cycle 16 — PR-D atom register batch (register mirror + n6 sync + ATLAS_F_NODES + milestone 4/5 close)
 
 - [x] PR-D Dynamics — atlas_cli register-arm mirror 2 atom (`_page_curve_entropy_peak_register` · `_qdrift_error_bound_register`), verify_cli (#663) VERBATIM port

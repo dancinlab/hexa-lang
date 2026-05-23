@@ -1,5 +1,7 @@
 # `chr(N)` produces UTF-8-encoded codepoint in interp mode but raw byte in compiled mode — asymmetric with `ord()`
 
+> **Status**: resolved-53190b26 (2026-05-24 housekeeping cross-link · Option A landed + interp retired · close-only marker, no code change)
+
 **Layer:** stdlib intrinsics — `chr(int) -> string` / `ord(string) -> int`
 **File(s):**
   - interp: `self/eval.hexa` (or wherever `chr` is dispatched) — the interp builds the string by encoding `N` as a Unicode codepoint via UTF-8

@@ -2,6 +2,8 @@
 
 > **VERIFIED-CLOSED 2026-05-20** — `self/codegen_c2.hexa` L3306-3307 + L5437-5438 dispatch `shift` → `hexa_array_shift(obj)`. Close-only marker.
 
+**Status**: resolved-ssot-#572-2026-05-25 — codegen dispatch landed via `ca903dff` (RUNTIME.md step 3 cycle 74, `hexa_array_pop` + `hexa_array_shift`), runtime.h decl via `97ce63a3`, empty-throw semantics via PR #572. Current SSOT: `self/codegen.hexa:3725-3726` + `:6601-6602` (codegen_c2.hexa was unified into codegen.hexa), `self/runtime_core.c:4925` (impl), `self/runtime.h:1316` (decl).
+
 **Filed by:** wilson. ROI audit 2026-05-14 (f3 forbidden pattern in `dancinlab/wilson` AGENTS.tape).
 
 **Date:** 2026-05-14.
