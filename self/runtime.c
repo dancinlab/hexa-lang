@@ -4730,10 +4730,16 @@ HexaVal hexa_from_char_code(HexaVal n) {
 // it from self/main.hexa::cmd_url_decode, exposing the gap).
 HexaVal hexa_chr_byte(HexaVal n) {
     int64_t code = HX_IS_INT(n) ? HX_INT(n) : (int64_t)HX_FLOAT(n);
-    char* s = (char*)malloc(2);
+    // Use hexa_strbuf_alloc(1) so the result carries a length-1 header (read
+    // by HX_STRLEN). Plain malloc + strlen-derived length silently truncated
+    // chr(0) / chr(256) (post-mask 0) and any concat containing such a byte
+    // to length 0 — Python / Go / Rust all give len 1. Mirrors the RFC 030
+    // pattern in hexa_bytes_to_str_raw (sibling fn below) and Phase 2 of
+    // wilson's bytes-to-str-raw-allow-nul resolution.
+    char* s = hexa_strbuf_alloc(1);
+    if (!s) return hexa_str("");
     s[0] = (char)(code & 0xFF);
-    s[1] = 0;
-    return hexa_str_own(s);
+    return (HexaVal){.tag=TAG_STR, .s=s};
 }
 
 // RFC 030 — `bytes_to_str_raw([int]) -> string`
