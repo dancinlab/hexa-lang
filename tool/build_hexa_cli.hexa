@@ -99,6 +99,7 @@ fn _do_build(repo_root: string) {
     let ml_hexa   = repo_root + "/self/module_loader.hexa"
     let stage1    = repo_root + "/build/stage1"
     let main_c    = stage1 + "/main_native.c"
+    let main_expanded = stage1 + "/main_expanded.hexa"
     let ml_c      = stage1 + "/module_loader.c"
     let driver_out = repo_root + "/build/hexa_cli_driver"
     let ml_out     = repo_root + "/build/hexa_module_loader"
@@ -118,27 +119,56 @@ fn _do_build(repo_root: string) {
     let mut cflags = "-O2 -std=c11 -D_GNU_SOURCE -Wno-trigraphs -fbracket-depth=4096 -I " + _shq(inc)
     let mut ldflags = "-lpthread -lm -Wl,-stack_size,0x4000000"
     if uname == "Linux" {
-        cflags  = "-O2 -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs -fbracket-depth=4096 -I " + _shq(inc)
+        // -fbracket-depth is clang-only; bootstrap.yml uses bare gcc on Linux
+        // and has no equivalent — Linux clang accepts -fbracket-depth so we
+        // honour CLANG=clang, but default cc=clang on Linux is usually gcc.
+        let mut bracket = " -fbracket-depth=4096"
+        if cc == "gcc" || cc == "cc" { bracket = "" }
+        cflags  = "-O2 -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs" + bracket + " -I " + _shq(inc)
         ldflags = "-lpthread -lm -ldl"
     }
 
-    // ── Step 1+2: transpile
+    // ── Step 1+2+3: chicken-egg flatten chain (bootstrap.yml parity).
+    //
+    // self/main.hexa `use`s 7 compiler frontend modules (lex/parse/lower/...);
+    // hexa_v2 is a single-file transpiler with no `use` resolution. Therefore
+    // transpiling main.hexa directly emits extern stubs that fail to link
+    // (undefined references to lex / parse / lower / lower_hir / static_atlas /
+    // codegen_emit_ptx_for_sm). The fix mirrors bootstrap.yml:
+    //
+    //   (1) hexa_v2 module_loader.hexa → module_loader.c        (zero `use`)
+    //   (2) cc module_loader.c → build/hexa_module_loader        (binary)
+    //   (3) hexa_module_loader main.hexa → main_expanded.hexa    (flatten)
+    //   (4) hexa_v2 main_expanded.hexa → main_native.c           (transpile)
+    //   (5) cc main_native.c → build/hexa_cli_driver             (binary)
+    //
+    // Mac arm64 only "worked" before this fix because a previously-built
+    // build/stage1/main_native.c (flattened source from an earlier session)
+    // remained on disk and SKIP_TRANSPILE-style stale-reuse masked the bug.
+    // On a fresh Linux x86_64 clone there is no such cache, and the
+    // single-step transpile path surfaces the chicken-egg immediately.
     if env_var("SKIP_TRANSPILE") == "" {
-        println("[1/5] transpile main.hexa          → " + main_c)
-        _run(_shq(hexa_v2) + " " + _shq(main_hexa) + " " + _shq(main_c), "transpile main.hexa")
-        println("[2/5] transpile module_loader.hexa → " + ml_c)
+        println("[1/5] transpile module_loader.hexa → " + ml_c)
         _run(_shq(hexa_v2) + " " + _shq(ml_hexa) + " " + _shq(ml_c), "transpile module_loader.hexa")
+
+        println("[2/5] compile hexa_module_loader (stage-1 flattener)")
+        _run(cc + " " + cflags + " " + _shq(ml_c) + " " + _shq(runtime_c) + " -o " + _shq(ml_out) + " " + ldflags, "compile module_loader")
+
+        println("[3/5] flatten main.hexa            → " + main_expanded)
+        _run(_shq(ml_out) + " " + _shq(main_hexa) + " " + _shq(main_expanded), "flatten main.hexa")
+
+        println("[3/5] transpile main_expanded.hexa → " + main_c)
+        _run(_shq(hexa_v2) + " " + _shq(main_expanded) + " " + _shq(main_c), "transpile main_expanded.hexa")
     }
     _must_exist(main_c, "transpiled C")
     _must_exist(ml_c,   "transpiled C")
+    _must_exist(ml_out, "compiled module_loader")
 
-    // ── Step 3: compile (runtime.c appended as 2nd TU)
-    println("[3/5] compile hexa_cli_driver")
+    // ── Step 4: compile driver (runtime.c appended as 2nd TU)
+    println("[4/5] compile hexa_cli_driver")
     _run(cc + " " + cflags + " " + _shq(main_c) + " " + _shq(runtime_c) + " -o " + _shq(driver_out) + " " + ldflags, "compile driver")
-    println("[3/5] compile hexa_module_loader")
-    _run(cc + " " + cflags + " " + _shq(ml_c)   + " " + _shq(runtime_c) + " -o " + _shq(ml_out)     + " " + ldflags, "compile module_loader")
 
-    // ── Step 4: Darwin codesign
+    // ── Step 4b: Darwin codesign
     if uname == "Darwin" {
         println("[4/5] codesign (Darwin)")
         let _x1 = exec("codesign --force --sign - " + _shq(driver_out) + " 2>/dev/null || true")
