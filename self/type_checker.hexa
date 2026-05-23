@@ -988,6 +988,7 @@ fn tc_infer_expr(node) {
     if k == "StringLit" { return "string" }
     if k == "CharLit" { return "char" }
     if k == "Array" { return "array" }
+    if k == "MapLit" { return "map" }
     if k == "Tuple" { return "tuple" }
     if k == "Wildcard" { return "any" }
     if k == "Range" {
