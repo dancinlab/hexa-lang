@@ -22,11 +22,15 @@
 - [x] RFC 082 D1 = **A** (Static only v1 monomorphization, `dyn Trait`은 follow-up)
 - [x] RFC 083 D1 = **D** (system OpenSSL/SecureTransport 동적 링크 v1, vendored는 reproducible-build 시점 follow-up)
 
-### D2+ — open (다음 architect 사이클)
+### D2+ — decided 2026-05-23 (전부 권고 채택)
 
-- [ ] RFC 081 D2-D6 (propagation operator · nil keyword · boxed error · runtime repr · prelude policy)
-- [ ] RFC 082 D2-D7 (coherence/orphan · operator-method 매핑 · derive · trait surface 등)
-- [ ] RFC 083 D2-D7 (sync/async API · CA bundle · ALPN · session resume 등)
+- [x] RFC 081 D2-D6: A (Rust `?`) · A (silent-erase `nil`) · A (generic `Result<T,E>` v1, boxed alias follow-up) · A (tagged enum repr) · B (`_opt` 변종 점진 deprecate, g4 호환)
+- [x] RFC 082 D2-D7: A (Rust strict orphan) · D3a NO `Index` v1 + D3b YES `*Assign` · A (`@derive`) · C (both `<T:Bound>` + where) · A (supertrait) · D7 deferred (D1=A로 vtable 미존재)
+- [x] RFC 083 D2-D7: C (sync + non-blocking) · A+C (system trust store + `HEXA_TLS_CA_BUNDLE` override) · A v1 opaque handle (RFC 082 후 method-bearing follow-up) · A+B opt-in (`HEXA_TLS_INSECURE=1`) · A (PQ system 위임) · B (`stdlib/net/tls.hexa` + websocket/http 동반 이동)
+
+### impl 진입 가능 — 이번 사이클
+
+- [~] RFC 082 impl phase a — trait bound parser surface scaffold (INFLIGHT 이 세션)
 
 ## next batch (resolved-after-decision)
 
