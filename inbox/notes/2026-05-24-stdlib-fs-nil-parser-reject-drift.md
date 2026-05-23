@@ -1,5 +1,15 @@
 # self/stdlib/fs.hexa `== nil` parser reject — main parser와 drift (2026-05-24)
 
+## status: RESOLVED (2026-05-24)
+
+cycle 10 lane 1 #609 에서 발견 → cycle 11 carry-forward 에서
+`fix/stdlib-fs-nil-parser-drift-2026-05-24` 브랜치로 surgical fix 5곳 머지.
+패턴 `if x == nil` → `if !x` (그리고 `if x != nil` → `if x`) 정식 적용.
+검증: `hexa parse self/stdlib/fs.hexa` PASS · verify CLI `welch_t_crit(1.0)`
+🟢 SUPPORTED-NUMERICAL 게이트 통과.
+
+archive 이동 권고 (cycle 11 lane 4 패턴).
+
 ## 한 줄 요약
 `self/stdlib/fs.hexa` 의 `fs_stat_size`/`fs_stat_mtime_ns` + selftest 5곳이 `if st == nil`
 패턴을 쓰는데, main 의 parser 가 cycle 7-11 batch 중 `nil` 값-비교를 거부하도록 강화됨
