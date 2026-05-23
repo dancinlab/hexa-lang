@@ -290,6 +290,19 @@ pub fn tokenize(source) {
                 }
             }
             let num_str = join(num_parts, "")
+            // Reject literal suffix adjacency loudly.  `5i32` / `5_i32`
+            // / `1.0f32` (Rust-style typed-suffix) — and `1e5` scientific
+            // (not yet supported) — were silently lexed as a numeric
+            // token followed by a bare identifier (`i32` / `_i32` / `f32`
+            // / `e5`), which then leaked through to clang as
+            // `undeclared identifier`.  Fail loud at the lex site.
+            // Underscore separator `1_000_000` is unaffected: the existing
+            // decimal loop consumes `_` only when followed by a digit, so
+            // it never reaches this check.
+            if pos < len_chars && is_ident_start(chars[pos]) {
+                println("error: literal suffix `" + num_str + to_string(chars[pos]) + "…` not supported at line " + to_string(line) + ":" + to_string(start_col) + " — typed-suffix (`5i32`, `1.0f32`, scientific `1e5`) is not yet implemented")
+                exit(1)
+            }
             if is_float {
                 tokens.push(Token { kind: "FloatLit", value: num_str, line: line, col: start_col })
             } else {
