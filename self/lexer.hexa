@@ -208,6 +208,16 @@ pub fn tokenize(source) {
             let mut is_float = false
             let mut is_hex = false
 
+            // Reject octal (`0o…`) / binary (`0b…`) prefixes loudly.  hexa
+            // does not yet implement them, and the prior silence let `0o17`
+            // / `0b1010` lex as `0` + identifier `o17` / `b1010`, leaking
+            // through to clang as `undeclared identifier 'o17'`.  Fail
+            // loud at lex time with a clear hint instead.
+            if ch == '0' && pos + 1 < len_chars && (chars[pos + 1] == 'o' || chars[pos + 1] == 'O' || chars[pos + 1] == 'b' || chars[pos + 1] == 'B') && pos + 2 < len_chars && is_digit(chars[pos + 2]) {
+                let _prefix = "0" + to_string(chars[pos + 1])
+                println("error: literal prefix `" + _prefix + "` (octal/binary) not supported at line " + to_string(line) + ":" + to_string(start_col) + " — use decimal or `0x` hex")
+                exit(1)
+            }
             // Check for hex prefix 0x / 0X
             if ch == '0' && pos + 1 < len_chars && (chars[pos + 1] == 'x' || chars[pos + 1] == 'X') {
                 is_hex = true
