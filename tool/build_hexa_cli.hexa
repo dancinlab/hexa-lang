@@ -14,14 +14,15 @@
 //   SKIP_TRANSPILE=1            reuse existing build/stage1/*.c
 //   NO_SMOKE=1                  skip smoke test
 //   LOCAL_BUILD=1               permit local Mac build (escape hatch)
-//   HEXA_POOL_BUILD_HOST=<host> ack-only marker (PR2 will auto-offload)
+//   HEXA_POOL_BUILD_HOST=<host> override default offload target (mini)
 //
-// Re-entry gate (kick-storm Mac kill 2026-05-23 root cause —
+// Re-entry behavior (kick-storm Mac kill 2026-05-23 root cause —
 // memory: feedback_pool_cli_offload_heavy_build):
-//   On Mac (Darwin) without LOCAL_BUILD=1 the build REFUSES with a
-//   hint pointing at `pool on mini`. The gate is the simplest
-//   sufficient countermeasure (g0); auto-offload follows as a
-//   separate PR.
+//   On Mac (Darwin) without LOCAL_BUILD=1:
+//     1. probe HEXA_POOL_BUILD_HOST (else "mini") for hexa-lang prereqs
+//     2. ready  → ssh build + scp artifacts back (auto-offload)
+//        not ready → refuse-gate with `pool on mini` hint (exit 2)
+//   On Linux: build locally (ubu-* hosts).
 
 fn _die(msg: string) {
     eprintln("build_hexa_cli: " + msg)
@@ -91,6 +92,43 @@ fn _print_refuse_hint(repo_root: string) {
     eprintln("")
     eprintln("  force local (will burden Mac):")
     eprintln("    LOCAL_BUILD=1 tool/build_hexa_cli")
+}
+
+// Probe a remote pool host for build prereqs (hexa_v2 + driver binary
+// at standard ~/core/hexa-lang location). Returns "READY" or "".
+fn _probe_remote(host: string) -> string {
+    let probe = "test -x ~/core/hexa-lang/self/native/hexa_v2 && test -x ~/core/hexa-lang/build/hexa_cli_driver && echo READY"
+    let cmd = "ssh -o BatchMode=yes -o ConnectTimeout=5 " + _shq(host) + " " + _shq(probe) + " 2>/dev/null"
+    let r = exec_with_status(cmd)
+    let out = to_string(r[0]).trim()
+    if r[1] == 0 && out == "READY" { return "READY" }
+    return ""
+}
+
+// Offload to remote pool host: SSH `LOCAL_BUILD=1 tool/build_hexa_cli`
+// invocation, then scp(1) artifacts back to local build/. Returns rc.
+//
+// Remote repo path assumed canonical at ~/core/hexa-lang (mini = arm64
+// Mac, same layout as caller; cross-host artifact compat = arm64-arm64).
+fn _auto_offload(repo_root: string, host: string) -> int {
+    println("[offload] Mac arm64 → " + host + " (LOCAL_BUILD=1 to force local)")
+    let inner = "cd ~/core/hexa-lang && LOCAL_BUILD=1 tool/build_hexa_cli"
+    let r = exec_with_status("ssh -o BatchMode=yes " + _shq(host) + " " + _shq(inner))
+    let out = to_string(r[0])
+    if len(out) > 0 { println(out) }
+    if r[1] != 0 {
+        eprintln("[offload] " + host + " build failed (rc=" + to_string(r[1]) + ")")
+        return r[1]
+    }
+    let _ = exec("mkdir -p " + _shq(repo_root + "/build"))
+    let s1 = exec_with_status("scp -q " + _shq(host + ":~/core/hexa-lang/build/hexa_cli_driver")    + " " + _shq(repo_root + "/build/hexa_cli_driver"))
+    let s2 = exec_with_status("scp -q " + _shq(host + ":~/core/hexa-lang/build/hexa_module_loader") + " " + _shq(repo_root + "/build/hexa_module_loader"))
+    if s1[1] != 0 || s2[1] != 0 {
+        eprintln("[offload] scp artifacts back failed (driver=" + to_string(s1[1]) + " ml=" + to_string(s2[1]) + ")")
+        return 1
+    }
+    println("[offload] artifacts scp'd back → " + repo_root + "/build/")
+    return 0
 }
 
 fn _do_build(repo_root: string) {
@@ -227,6 +265,14 @@ fn _do_build(repo_root: string) {
 fn main() {
     let repo_root = _repo_root()
     if _refuse_local_on_mac() {
+        // 1. probe HEXA_POOL_BUILD_HOST (else mini) for prereqs
+        let mut host = env_var("HEXA_POOL_BUILD_HOST")
+        if host == "" { host = "mini" }
+        if _probe_remote(host) == "READY" {
+            exit(_auto_offload(repo_root, host))
+        }
+        // 2. probe failed → safe fallback to refuse-gate + hint
+        eprintln("[offload] probe " + host + " missing hexa-lang prereqs — falling back to refuse-gate")
         _print_refuse_hint(repo_root)
         exit(2)
     }
