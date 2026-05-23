@@ -69,7 +69,7 @@ docs-only status update.
 | **200-char ident** | ✓ parse, **🔴 codegen TRUNCATES** | Rust / Go / Py (no limit) | **P0 CRITICAL** (fix in cycle 7) |
 | 30-level paren nesting | ✓ PASS | canonical | ✅ PASS |
 | unicode string literal (UTF-8 bytes) | ✓ PASS | canonical | ✅ PASS |
-| unicode identifier (e.g. `한글`, `αβ`) | ❌ NOT tokenized — `is_ident_start = is_alpha` ASCII-only (lexer.hexa:101-105) | Rust `XID_Start` / Py PEP 3131 / Go letters+digits | 🟠 r10-4 design (XID_Start gap) |
+| unicode identifier (e.g. `한글`, `αβ`) | ✅ FIXED — `is_unicode_byte` (byte ≥ 0x80) wired into `is_ident_start`/`is_ident_char`; Go-style (any UTF-8 letter byte). Verified `日本()`/`café`/`λ` build+run; clang accepts verbatim-UTF-8 C symbols; self-host `=== BUILD OK ===` | Rust `XID_Start` / Py PEP 3131 / Go letters+digits | ✅ FIXED (lexer-only, regen-gated) |
 
 ### 핵심 design 결정
 
