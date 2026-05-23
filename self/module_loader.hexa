@@ -172,7 +172,17 @@ fn ml_split_lines(s) {
 // ── directive parser ───────────────────────────────────────
 
 fn ml_parse_import(line) {
-    let trimmed = ml_trim_left(line)
+    let raw = ml_trim_left(line)
+    // round-4 (pub-use re-export): accept an optional `pub ` prefix on the
+    // directive so `pub use "mod"` / `pub import "mod"` re-export forms reach
+    // the loader. Rust `pub use` semantics — the inner module must still be
+    // loaded/flattened (v1: treated as a normal inline import; cross-module
+    // re-export VISIBILITY is a follow-up since hexa's flat namespace already
+    // exposes inlined pubs to importers transitively).
+    let mut trimmed = raw
+    if ml_starts_with(raw, "pub ") {
+        trimmed = ml_trim_left(raw.substring(4, len(raw)))
+    }
     let mut prefix_len = 0
     if ml_starts_with(trimmed, "import ") {
         prefix_len = 7
@@ -204,7 +214,13 @@ fn ml_parse_import(line) {
 // path only so existing call sites (collect_imports, walker) stay
 // untouched until the second-half I1 implementation lands.
 fn ml_parse_import_alias(line) {
-    let trimmed = ml_trim_left(line)
+    let raw = ml_trim_left(line)
+    // round-4 (pub-use re-export): mirror ml_parse_import's optional `pub `
+    // prefix so `pub use "mod" as x` still surfaces the alias.
+    let mut trimmed = raw
+    if ml_starts_with(raw, "pub ") {
+        trimmed = ml_trim_left(raw.substring(4, len(raw)))
+    }
     let mut prefix_len = 0
     if ml_starts_with(trimmed, "import ") {
         prefix_len = 7
@@ -803,7 +819,8 @@ fn ml_collect_imports_with_alias(src) {
             }
             if k < ln {
                 let fc = line[k]
-                if fc == 'i' || fc == 'u' || fc == 'f' {
+                // round-4: 'p' admits `pub use`/`pub import` re-export forms.
+                if fc == 'i' || fc == 'u' || fc == 'f' || fc == 'p' {
                     let path  = ml_parse_import(line)
                     if path != "" {
                         let alias = ml_parse_import_alias(line)
@@ -962,7 +979,11 @@ fn ml_strip_and_clean(src) {
         return s
     }
     // First-line directive / pub — rare but correct-handle.
-    if ml_starts_with(s, "import ") || ml_starts_with(s, "use ") || ml_starts_with(s, "from \"") {
+    // round-4: `pub use "` / `pub import "` are import-directive forms (NOT
+    // top-level pub decls), so they must be commented out wholesale, not have
+    // their `pub ` prefix shaved (which would leave a bare `use "..."` line for
+    // clang to choke on). Check these BEFORE the `pub fn`/`pub struct` arm.
+    if ml_starts_with(s, "import ") || ml_starts_with(s, "use ") || ml_starts_with(s, "from \"") || ml_starts_with(s, "pub use \"") || ml_starts_with(s, "pub import \"") {
         let nl = s.index_of("\n")
         let prefix = "// [ml-stripped] "
         if nl < 0 {
@@ -983,6 +1004,12 @@ fn ml_strip_and_clean(src) {
         s = s.substring(4, len(s))
     }
     // Interior (after a newline) — builtin replace, O(n), no intermediate arrays.
+    // round-4: strip `pub use "`/`pub import "` re-export directives too. These
+    // run BEFORE the `\npub fn `→`\nfn ` rewrites; the `"` after the keyword
+    // disambiguates an import directive from a `pub use SomeIdent;` (none such
+    // in hexa) so no decl is harmed.
+    s = s.replace("\npub use \"", "\n// [ml-stripped] pub use \"")
+    s = s.replace("\npub import \"", "\n// [ml-stripped] pub import \"")
     s = s.replace("\nimport py \"", "\n// [ml-stripped] import py \"")
     s = s.replace("\nimport \"", "\n// [ml-stripped] import \"")
     s = s.replace("\nuse \"", "\n// [ml-stripped] use \"")
@@ -1040,6 +1067,56 @@ let mut g_file_aliases = #{}
 //   g_file_py_imports[parent_path] = [{module, alias}, ...]
 let mut g_file_py_imports = #{}
 
+// round-4 (E0252-style collision diagnostic). Scans one parent file's
+// import list for two divergence classes and emits a stderr WARN for each:
+//   (1) alias collision   — `use "a" as x; use "b" as x` (two distinct paths
+//                            bound to the same alias; last-writer-wins).
+//   (2) duplicate import   — the same module path imported twice (redundant;
+//                            the loader dedups by path so the second is a
+//                            no-op, but it is still a likely source mistake).
+// WARN-only by design (self-host safety): a hard error here would have to be
+// proven not to break any existing self/* or stdlib import graph first.
+fn ml_warn_import_collisions(parent, imps_pa) {
+    let n = len(imps_pa)
+    let mut i = 0
+    while i < n {
+        let pi = imps_pa[i]
+        let ai = pi["alias"]
+        let xi = pi["path"]
+        let mut j = i + 1
+        while j < n {
+            let pj = imps_pa[j]
+            let aj = pj["alias"]
+            let xj = pj["path"]
+            // alias collision: same non-empty alias bound to different paths
+            if len(ai) > 0 && ai == aj && xi != xj {
+                let mut w = []
+                w.push("[module_loader] WARN: alias collision in ")
+                w.push(parent)
+                w.push("\n    alias `")
+                w.push(ai)
+                w.push("` bound to both \"")
+                w.push(xi)
+                w.push("\" and \"")
+                w.push(xj)
+                w.push("\" — last writer wins (Rust E0252). Rename one alias.")
+                eprintln(w.join(""))
+            } else if xi == xj {
+                // duplicate import of the same module path
+                let mut w = []
+                w.push("[module_loader] WARN: duplicate import in ")
+                w.push(parent)
+                w.push("\n    module \"")
+                w.push(xi)
+                w.push("\" imported more than once — second import is redundant.")
+                eprintln(w.join(""))
+            }
+            j = j + 1
+        }
+        i = i + 1
+    }
+}
+
 fn ml_iter_walk(start_file) {
     let MARKER = "<<EMIT>>"
     let mut stack = []
@@ -1083,6 +1160,14 @@ fn ml_iter_walk(start_file) {
                 // pre-existing callers; we use the with-alias form here.
                 let imps_pa = ml_collect_imports_with_alias(src)
                 let dn = len(imps_pa)
+                // round-4 (alias / duplicate-import collision diagnostic):
+                // Rust E0252 errors on `use a as x; use b as x` and on a
+                // module imported twice. hexa's flat namespace silently lets
+                // the last writer win (g_path_alias) / re-flattens. WARN-FIRST
+                // (not a hard error) so any existing self/* or stdlib double-
+                // import keeps building; promotion to a hard error is a
+                // follow-up gated on a clean self-host audit.
+                ml_warn_import_collisions(top, imps_pa)
                 let mut my_aliases = []
                 // Reverse-push so first `use` is popped first → natural order.
                 let mut di = dn - 1
@@ -1390,6 +1475,11 @@ fn main() {
         assert ml_parse_import("  use \"a/b.hexa\"") == "a/b.hexa"
         assert ml_parse_import("let x = 1") == ""
         assert ml_parse_import("// import \"x\"") == ""
+        // round-4 (pub-use re-export): `pub use`/`pub import` reach the loader.
+        assert ml_parse_import("pub use \"mod_a.hexa\"") == "mod_a.hexa"
+        assert ml_parse_import("pub import \"a/b.hexa\"") == "a/b.hexa"
+        assert ml_parse_import("  pub use \"c.hexa\"") == "c.hexa"
+        assert ml_parse_import_alias("pub use \"mod_a.hexa\" as ma") == "ma"
         let ls = ml_split_lines("a\nb\nc")
         assert len(ls) == 3
         assert ls[0] == "a"

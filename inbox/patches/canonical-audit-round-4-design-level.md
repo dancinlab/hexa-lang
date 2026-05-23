@@ -1,5 +1,38 @@
 # canonical-deviation audit round 4 — design-level findings batch
 
+**Status:** 🟠 PARTIAL — 2 module-hygiene items SHIPPED (2026-05-23), rest OPEN
+
+**Shipped this round (module-hygiene PR):**
+- ✅ **`pub use "…"` / `pub import "…"` re-export** — `ml_parse_import` /
+  `ml_parse_import_alias` now accept an optional `pub ` prefix; the
+  `ml_collect_imports_with_alias` fast-path admits `p`-leading lines;
+  `ml_strip_and_clean` comments out `pub use`/`pub import` directive lines
+  (first-line + interior); and `self/main.hexa`'s build-time loader-trigger
+  gate now fires on `pub use`/`pub import` (parallel to the `from` gate fix).
+  Result: the re-exported inner module is now actually loaded/flattened and
+  its pubs are inlined (verified end-to-end: `pub use "lib.hexa"` →
+  `greet()` resolves + binary runs). The parser already accepted the syntax
+  (`parse_visibility()` consumes `Pub` before the `use`/`import` dispatch).
+  **Re-export VISIBILITY follow-up:** hexa's flat namespace already exposes
+  the inlined pubs transitively, so a separate selective re-export table is
+  NOT yet implemented — `pub use` currently behaves as a plain inline import.
+- ✅ **alias collision / duplicate-import DIAGNOSTIC (warn-first)** —
+  `ml_warn_import_collisions` scans each parent file's import list and emits
+  a stderr WARN on (a) the same non-empty alias bound to two different module
+  paths (`use "a" as x; use "b" as x` → Rust E0252) and (b) the same module
+  path imported twice. WARN-only by design to protect the self-host build;
+  promotion to a hard error is gated on a clean self/* + stdlib audit.
+
+**Deferred (larger surgery, documented):**
+- 🟠 **symbol collision silent shadow** (two modules both define `greet`,
+  first wins) — needs a cross-module symbol-table dedup pass over the
+  flattened output, not a per-line scan. Bigger than this round.
+- 🟠 **multiple imports per line** (`use "a"; use "b"` → only first kept) —
+  needs the line-based directive parser to split on `;` and loop; touches
+  `ml_parse_import` return contract (single path → list). Deferred.
+
+**Original filing below.**
+
 **Status:** 🟠 FILED / OPEN (2026-05-23)
 **Reporter:** anima session — hexa canonical-deviation audit, round 4
 **Severity:** mixed — none silent miscompiles in the codegen sense
@@ -19,10 +52,10 @@ class. Design-level residue collected here.
 | non-`pub` leaks to importer | `use "mod"; private_helper()` works | Rust E0603 / Go lowercase invisible | flat namespace, `pub` only an alias prefix marker | module-system symbol-table + diagnostic pass |
 | brace-group `"…"::{a,b}` non-restrictive | imports unlisted items too | Rust selective | trailing `::{…}` ignored, full module loaded | extend `ml_parse_import` to filter |
 | `from "X" import a, b` non-selective | binds last-loaded sibling | Python filter | walker treats as plain `use` | same surface |
-| `pub use "…"` re-export missing | inner module never loaded | Rust `pub use` | `ml_parse_import` rejects `pub` prefix | add `pub use` / `pub import` arms (fix-surgical, noted) |
-| symbol collision silent shadow | two modules define `greet`; first wins | Rust E0252 | flat concat, first wins | duplicate-symbol lint pass |
-| alias collision silent first-wins | `use "a" as x; use "b" as x` | Rust E0252 | last-writer-wins comment in loader | (fix-surgical, noted) |
-| multiple imports per line | `use "a"; use "b"` | each evaluated | only first kept | (fix-surgical, noted) |
+| ✅ `pub use "…"` re-export missing | (SHIPPED) inner module now loaded | Rust `pub use` | `ml_parse_import` + fast-path + stripper + main.hexa gate accept `pub ` prefix | RESOLVED — visibility-table follow-up noted |
+| symbol collision silent shadow | two modules define `greet`; first wins | Rust E0252 | flat concat, first wins | DEFERRED — cross-module symbol-table dedup pass |
+| ✅ alias collision silent first-wins | (SHIPPED) WARN diagnostic | `use "a" as x; use "b" as x` | Rust E0252 | RESOLVED — `ml_warn_import_collisions` warn-first |
+| multiple imports per line | `use "a"; use "b"` | each evaluated | only first kept | DEFERRED — directive `;`-split + list return |
 | circular import silent | A↔B no diag | Go cycle error / Rust tolerates | DFS cycle-skip silently | warning policy choice |
 | local-scope `use` silent | inside-fn `use` no effect | Rust local `use` works | scan top-level only | (fix-surgical, noted) |
 | env-var in path not expanded | `$HEXA_LANG/…` literal | shell convention | not substituted | design — env vs `HEXA_PATH` |
