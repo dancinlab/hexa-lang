@@ -1,0 +1,158 @@
+// stdlib/bio/mirna/target.hexa — TargetScan canonical seed-match scanner + context-score table.
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// PURE algorithmic miRNA → 3'UTR target-site prediction following the
+// TargetScan canonical seed-match definitions (Lewis et al. 2005; Agarwal
+// et al. 2015 — TargetScan 7.0/7.2). No I/O, no network.
+//
+// Alphabet convention — RNA throughout (A/C/G/U). Both the miRNA and
+// the 3' UTR are RNA strings (caller is responsible for `T → U` if
+// importing DNA-alphabet sequences from a FASTA file).
+//
+// Seed = nt positions 2-7 of the mature miRNA (1-indexed), length 6.
+// A canonical site on the UTR is the *reverse complement* of the seed
+// (Watson-Crick A-U, C-G; for U the complement is A, etc.).
+//
+// Site types (TargetScan canonical):
+//   6mer     : 6-nt match to seed only.
+//   7mer-A1  : 6-nt seed match + adenine at UTR position opposite miRNA pos 1.
+//   7mer-m8  : 6-nt seed match + Watson-Crick match at UTR position
+//              opposite miRNA pos 8.
+//   8mer     : 7mer-m8 + adenine at UTR position opposite miRNA pos 1.
+//
+// Published TargetScan 7.2 context-score weights (Agarwal et al. 2015
+// supplementary; "context++ score" intercepts per site type):
+//   8mer     : -0.30
+//   7mer-m8  : -0.16
+//   7mer-A1  : -0.13
+//   6mer     : -0.06
+// More-negative = stronger repression. (Sign convention: log-fold
+// change in target mRNA; negative = down-regulated.)
+//
+// Public surface:
+//   pub fn mirna_seed_scan(mirna: string, utr_3p: string) -> [MirnaSeedMatch]
+//   pub fn mirna_seed_score(match_type: string) -> float
+
+struct MirnaSeedMatch {
+    mirna_name: string,
+    mirna_sequence: string,
+    utr_position: int,       // 0-indexed start of the 6-nt seed match on the UTR
+    match_type: string,      // "6mer" | "7mer-A1" | "7mer-m8" | "8mer"
+    score: float,            // TargetScan context score for the match type
+}
+
+// ── helpers ──────────────────────────────────────────────────────────
+
+// Watson-Crick complement on RNA alphabet. Unknown bases (incl. T) map
+// to "N" — caller should pre-normalize T→U if importing from DNA FASTA.
+fn _wc_comp(c: string) -> string {
+    if c == "A" { return "U" }
+    if c == "U" { return "A" }
+    if c == "C" { return "G" }
+    if c == "G" { return "C" }
+    if c == "T" { return "A" }
+    return "N"
+}
+
+// Reverse complement of an RNA string (left-to-right).
+fn _rev_comp(s: string) -> string {
+    let n = len(s)
+    let mut out = ""
+    let mut i = n - 1
+    while i >= 0 {
+        out = out + _wc_comp(s.substring(i, i + 1))
+        i = i - 1
+    }
+    return out
+}
+
+// Extract seed (miRNA nt 2-7, 1-indexed → substring(1, 7) 0-indexed).
+// Returns "" if miRNA is too short.
+fn _seed_of(mirna: string) -> string {
+    if len(mirna) < 7 { return "" }
+    return mirna.substring(1, 7)
+}
+
+// ── public score table ──────────────────────────────────────────────
+
+pub fn mirna_seed_score(match_type: string) -> float {
+    if match_type == "8mer"    { return 0.0 - 0.30 }
+    if match_type == "7mer-m8" { return 0.0 - 0.16 }
+    if match_type == "7mer-A1" { return 0.0 - 0.13 }
+    if match_type == "6mer"    { return 0.0 - 0.06 }
+    return 0.0
+}
+
+// ── scan ─────────────────────────────────────────────────────────────
+//
+// Layout — UTR is 5' → 3', miRNA binds antiparallel, so:
+//
+//   miRNA   3'  N N N N N N N N  N  N ...  1   5'
+//                                 |
+//                              pos 8     pos 1
+//
+//   UTR     5'  X X X X X X X X  A         3'
+//                ^       ^                 ^
+//                m8      seed-end      A1-anchor
+//
+// We search the UTR for windows that match `rev_comp(seed)` (length 6).
+// At each hit starting at UTR index i:
+//   - The 6-nt window utr[i .. i+6) corresponds to miRNA pos 7..2.
+//   - The base at utr[i-1] (immediately 5' of the seed window) is the
+//     match candidate for miRNA pos 8 → check rev_comp(miRNA[7]).
+//   - The base at utr[i+6] (immediately 3' of the seed window) is the
+//     A1 anchor → must be 'A' for 7mer-A1 or 8mer.
+//
+// Classification precedence: 8mer > 7mer-m8 > 7mer-A1 > 6mer.
+
+pub fn mirna_seed_scan(mirna: string, utr_3p: string) -> array {
+    let mut hits = []
+    let seed = _seed_of(mirna)
+    if seed == "" { return hits }
+    let n = len(utr_3p)
+    let target = _rev_comp(seed)  // 6-nt UTR pattern to find
+    let m = len(target)
+    if m == 0 || n < m { return hits }
+
+    // m8 candidate base = rev_comp(miRNA pos 8) = rev_comp(mirna[7])
+    let mut m8_base = ""
+    if len(mirna) >= 8 {
+        m8_base = _wc_comp(mirna.substring(7, 8))
+    }
+
+    let mut i = 0
+    while i + m <= n {
+        let window = utr_3p.substring(i, i + m)
+        if window == target {
+            // Check m8 (UTR pos i-1).
+            let mut has_m8 = false
+            if i >= 1 && m8_base != "" {
+                let b = utr_3p.substring(i - 1, i)
+                if b == m8_base { has_m8 = true }
+            }
+            // Check A1 (UTR pos i+6).
+            let mut has_a1 = false
+            if i + m < n {
+                let a = utr_3p.substring(i + m, i + m + 1)
+                if a == "A" { has_a1 = true }
+            }
+
+            let mut mt = "6mer"
+            if has_m8 && has_a1 { mt = "8mer" }
+            else if has_m8      { mt = "7mer-m8" }
+            else if has_a1      { mt = "7mer-A1" }
+
+            hits.push(MirnaSeedMatch {
+                mirna_name: "",
+                mirna_sequence: mirna,
+                utr_position: i,
+                match_type: mt,
+                score: mirna_seed_score(mt),
+            })
+        }
+        i = i + 1
+    }
+    return hits
+}
