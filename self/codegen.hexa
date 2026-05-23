@@ -6051,6 +6051,26 @@ fn gen2_expr(node) {
                 }
             }
             let nargs = len(node.args)
+            // PROBE r14-G (2026-05-23): `printf` / `sprintf` are not hexa
+            // builtins — canonical is `println(...)` for stdout and
+            // `format("...{}", v)` for string-building. Previously these
+            // fell through to `hexa_call_N(u_printf, …)`, surfacing as a
+            // raw clang "use of undeclared identifier 'u_printf'" with no
+            // language-level hint. Emit a specific, locationed diagnostic
+            // BEFORE the fallback so the user sees actionable canonical
+            // advice. Only fires when the name is NOT a user-defined fn
+            // (`_is_known_fn_global` is populated by the pre-pass at
+            // L935-986 from FnDecl/ExternFnDecl/PureFnDecl etc.) — so a
+            // legitimate `fn printf(…) { … }; printf(…)` continues to
+            // resolve through the user-defined path below.
+            if (name == "printf" || name == "sprintf") && !_is_known_fn_global(name) {
+                if name == "printf" {
+                    eprintln("[codegen_c2] ERROR: 'printf' is not a hexa builtin — use println(...) for stdout or format(\"...{}\", x) for string-building")
+                } else {
+                    eprintln("[codegen_c2] ERROR: 'sprintf' is not a hexa builtin — use format(\"...{}\", x)")
+                }
+                exit(1)
+            }
             // Reserved-name callee must match its mangled declaration:
             // `let double = |x| …` is declared `u_double` (double is a C
             // type keyword, _hexa_name_is_reserved). The bare-call
