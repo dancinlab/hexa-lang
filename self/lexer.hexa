@@ -418,6 +418,26 @@ pub fn tokenize(source) {
                         ts_done = true
                         pos = pos + 3
                         col = col + 3
+                    } else if chars[pos] == '\\' {
+                        // PROBE r14-QQQQ (III GAP A): triple-quote `"""..."""`
+                        // interprets escape sequences identically to the
+                        // single-quote `"..."` scanner (Python/Swift model)
+                        // for consistency — NOT raw-by-default (Scala/Kotlin).
+                        // Escape table mirrors the regular-string handler below.
+                        pos = pos + 1
+                        col = col + 1
+                        if pos < len_chars {
+                            let esc = chars[pos]
+                            if esc == 'n' { ts_parts.push("\n") }
+                            else if esc == 't' { ts_parts.push("\t") }
+                            else if esc == 'r' { ts_parts.push("\r") }
+                            else if esc == '\\' { ts_parts.push("\\") }
+                            else if esc == '"' { ts_parts.push("\"") }
+                            else if esc == '0' { ts_parts.push("\0") }
+                            else { ts_parts.push(to_string(esc)) }
+                            pos = pos + 1
+                            col = col + 1
+                        }
                     } else {
                         let tc = chars[pos]
                         // PROBE r14: detect JS-style `${...}` template syntax and warn once
