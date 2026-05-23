@@ -3390,6 +3390,12 @@ fn gen2_method_builtin(obj_expr, method, args) {
     if method == "reverse" {
         return "hexa_array_reverse(" + obj_expr + ")"
     }
+    // Rust canonical alias — `.rev()` on an iterator/range produces reversed
+    // iteration. Range values materialize to arrays in hexa, so it routes
+    // through the same array-reverse runtime.
+    if method == "rev" {
+        return "hexa_array_reverse(" + obj_expr + ")"
+    }
     if method == "sort" {
         return "hexa_array_sort(" + obj_expr + ")"
     }
@@ -5710,6 +5716,11 @@ fn gen2_expr(node) {
                 return "hexa_array_shift(" + obj + ")"
             }
             if method == "reverse" {
+                return "hexa_array_reverse(" + obj + ")"
+            }
+            // Rust canonical alias for iterators/ranges — see sibling at the
+            // `if method == "reverse"` arm earlier in this file.
+            if method == "rev" {
                 return "hexa_array_reverse(" + obj + ")"
             }
             if method == "sort" {
