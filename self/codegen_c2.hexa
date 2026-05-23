@@ -4166,7 +4166,13 @@ fn gen2_expr(node) {
     // Emit an inline zero-field struct pack so `Linear {}` works regardless of
     // whether Linear has fields — caller is opting out of positional init.
     if k == "StructInit" {
-        let name = node.name
+        let mut name = node.name
+        // `Self { … }` inside an impl block resolves to the enclosing
+        // impl target — without this the codegen emits `Self(args)` and
+        // clang errors on undeclared `Self`.
+        if name == "Self" && len(_cur_impl_target) > 0 {
+            name = _cur_impl_target
+        }
         if len(node.fields) == 0 {
             return "hexa_struct_pack_map(\"" + name + "\", 0, (const char* const*)0, (const HexaVal*)0)"
         }
@@ -6472,6 +6478,12 @@ fn gen2_arm_value(body) {
 // mangled calls (Type__method) guarded by hexa_is_type().
 let mut _method_registry = []
 
+// Current impl target while emitting methods of an `impl T { ... }` block.
+// gen2_impl_block sets this before walking each method body and restores
+// it after. Consumed by StructInit codegen so `Self { … }` literals
+// inside the impl body resolve to the enclosing target type T.
+let mut _cur_impl_target = ""
+
 fn _method_registry_lookup(name) {
     let mut out = []
     let mut i = 0
@@ -6490,6 +6502,11 @@ fn _method_registry_lookup(name) {
 // method into `_method_registry`.
 fn gen2_impl_block(node) {
     let type_n = node.target
+    // Push impl-target onto the codegen context so `Self { … }` ctor
+    // literals inside method bodies resolve to type_n.  Save+restore
+    // around the method-walk so a nested impl keeps proper nesting.
+    let _prev_impl_target = _cur_impl_target
+    _cur_impl_target = type_n
     let mut fwd_chunks = []
     let mut fn_chunks = []
     let methods = node.methods
@@ -6521,6 +6538,7 @@ fn gen2_impl_block(node) {
         fn_chunks.push(body_chunks.join(""))
         mi = mi + 1
     }
+    _cur_impl_target = _prev_impl_target
     return #{
         "forward": fwd_chunks.join(""),
         "fn_code": fn_chunks.join("")
