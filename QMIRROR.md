@@ -6,5 +6,5 @@
 - [x] PR-A Bells/Nonlocality — CHSH · Hardy · MABK · Pseudo-tel
 - [x] PR-B Mitigation/Clifford — CDR · Wigner
 - [x] PR-C Variational/Fisher — VQE · QFI · Shadow
-- [ ] PR-D Dynamics — Page-curve · Qdrift
+- [x] PR-D Dynamics — Page-curve · Qdrift
 - [ ] PR-E Support — Sym-shadow · Overlap-VQE · RPE · Mirror-bench

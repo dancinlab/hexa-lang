@@ -852,6 +852,36 @@ fn _shadow_clifford_var_bound_register(n_qubits: int) -> float {
     return 3.0 * dim_f
 }
 
+// Page-curve entropy peak — verbatim port of verify_cli::_page_curve_entropy_peak
+// (Page 1993 PRL 71 1291, arXiv:gr-qc/9305007 Eq.2). For a bipartite pure
+// state on Hilbert space dim_a ⊗ dim_b with dim_a <= dim_b, the average
+// entanglement entropy of subsystem A over the Haar measure peaks at
+//     S_max(dim_a) = ln(dim_a)  -  dim_a / (2 * dim_b)     (nats)
+// 2-arg closed-form.
+fn _page_curve_entropy_peak_register(dim_subsystem_a: int, dim_subsystem_b: int) -> float {
+    if dim_subsystem_a < 1 { return _NOCALC_F_REGISTER }
+    if dim_subsystem_b < 1 { return _NOCALC_F_REGISTER }
+    if dim_subsystem_a > dim_subsystem_b { return _NOCALC_F_REGISTER }
+    let d_a = to_float(dim_subsystem_a)
+    let d_b = to_float(dim_subsystem_b)
+    let ln_da = log(d_a)
+    let correction = d_a / (2.0 * d_b)
+    return ln_da - correction
+}
+
+// Qdrift random-product channel diamond-distance error bound — verbatim port
+// of verify_cli::_qdrift_error_bound (Campbell 2019 PRL 123 070503,
+// arXiv:1811.08017 Eq.3). For total Hamiltonian L1-norm lambda over time t
+// and big_n random one-term steps,
+//     epsilon  <=  2 * (lambda * t)^2 / big_n
+// 2-arg closed-form: a0 = lambda_times_time, a1 = big_n_as_float.
+fn _qdrift_error_bound_register(lambda_times_time: float, big_n_steps: int) -> float {
+    if big_n_steps < 1 { return _NOCALC_F_REGISTER }
+    if lambda_times_time < 0.0 { return _NOCALC_F_REGISTER }
+    let n_f = to_float(big_n_steps)
+    return 2.0 * lambda_times_time * lambda_times_time / n_f
+}
+
 // float dispatch — fn_name → recompute. Mirrors verify_cli::_recompute_float.
 // RFC 045 qmirror PR-A atoms (chsh_tsirelson · hardy_bound · mabk_quantum_max
 // · pt_doily_quantum_win · pt_doily_classical_bound) are mirrored here as
@@ -859,6 +889,8 @@ fn _shadow_clifford_var_bound_register(n_qubits: int) -> float {
 // PR #626. PR-B atoms (cdr_perfect_mitigation · wigner_stabilizer_sn) and
 // PR-C atoms (vqe_h2_fci_sto3g · qfi_sql · qfi_ghz · shadow_pauli_var_bound
 // · shadow_clifford_var_bound) added via PR #625/#655 verify dispatch.
+// PR-D atoms (page_curve_entropy_peak · qdrift_error_bound) added via
+// PR #663 verify dispatch.
 // 0-arg fns ignore a0/a1; 1-arg fns take a0; 2-arg take a0,a1.
 fn _recompute_float_register(fn_name: string, a0: float, a1: float, argc: int) -> float {
     if fn_name == "welch_t_crit" { return _welch_t_crit_register(a0) }
@@ -904,6 +936,18 @@ fn _recompute_float_register(fn_name: string, a0: float, a1: float, argc: int) -
         let n_qubits = to_int(a0)
         return _shadow_clifford_var_bound_register(n_qubits)
     }
+    // RFC 045 qmirror PR-D — register mirror of verify_cli dispatch (#663).
+    if fn_name == "page_curve_entropy_peak" {
+        if argc < 2 { return _NOCALC_F_REGISTER }
+        let dim_subsystem_a = to_int(a0)
+        let dim_subsystem_b = to_int(a1)
+        return _page_curve_entropy_peak_register(dim_subsystem_a, dim_subsystem_b)
+    }
+    if fn_name == "qdrift_error_bound" {
+        if argc < 2 { return _NOCALC_F_REGISTER }
+        let big_n_steps = to_int(a1)
+        return _qdrift_error_bound_register(a0, big_n_steps)
+    }
     return _NOCALC_F_REGISTER
 }
 
@@ -917,6 +961,7 @@ fn _is_float_fn_register(fn_name: string) -> bool {
         || fn_name == "vqe_h2_fci_sto3g"
         || fn_name == "qfi_sql" || fn_name == "qfi_ghz"
         || fn_name == "shadow_pauli_var_bound" || fn_name == "shadow_clifford_var_bound"
+        || fn_name == "page_curve_entropy_peak" || fn_name == "qdrift_error_bound"
 }
 
 // is fn_name a 0-arg closed-form constant? Mirrors verify_cli::_is_zero_arg_float_fn.
