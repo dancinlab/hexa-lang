@@ -157,6 +157,8 @@ fn cmd_rubric() {
     println("             tolerance; libm-class, NOT closed-form; extend _recompute_float on gap)")
     println("             chsh_tsirelson()   → 2*sqrt(2)  (RFC 045 CHSH Tsirelson bound, 0-arg)")
     println("             hardy_bound(N)     → p_N^max    (RFC 045 multipartite Hardy, Adhikary-Mandal Eq.5)")
+    println("             cdr_perfect_mitigation(p) → 1/(1-p)  (RFC 045 CDR Claim 2, Czarnik 2021)")
+    println("             wigner_stabilizer_sn(d)   → 0        (RFC 045 Wigner stab. sn, Veitch 2014)")
 }
 
 let NOCALC: int = -999999
@@ -475,6 +477,54 @@ fn _hardy_bound(big_n: int) -> float {
     return trN * omtN / (1.0 - trN)
 }
 
+// CDR perfect-mitigation slope (Czarnik-Arrasmith-Coles-Cincio, Quantum 5,
+// 592 (2021) / arXiv:2005.10189, Claim 2). Under the global depolarising
+// channel rho -> (1-p) rho + p I/2^n, every traceless Pauli expectation
+// satisfies <O>_noisy = (1-p) <O>_exact, so the OLS regression on the
+// near-Clifford training cloud recovers EXACTLY
+//     b  =  1 / (1 - p)            slope (the CDR mitigation factor)
+//     a  =  0                       intercept (machine precision)
+// and <O>_target^mit = a + b * <O>_target^noisy reproduces the noise-free
+// expectation. Verbatim port of the closed-form identity that
+// stdlib/quantum/clifford-data-regression/module/clifford_data_regression
+// .hexa Claim 2 block (lines 68-87) quotes.
+// 1-arg closed-form: returns the slope b for noise strength p in [0, 1).
+// p=1 is the totally-depolarising limit where the channel kills the signal
+// (division by zero) -> _NOCALC_F.
+fn _cdr_perfect_mitigation(p_noise: float) -> float {
+    if p_noise < 0.0 { return _NOCALC_F }
+    if p_noise > 0.999999999 { return _NOCALC_F }
+    return 1.0 / (1.0 - p_noise)
+}
+
+// Discrete Wigner sum-negativity of a STABILIZER state at odd prime
+// dimension d (Veitch 2014 New J. Phys. 16 013009 / Gross J. Math. Phys.
+// 47 122107 -- the Gross-Hudson theorem). At odd prime d the Wootters
+// discrete Wigner function W(p,q) is non-negative on EVERY stabilizer
+// state, so
+//     sn(rho_stab)  =  ( Sum_u |W(u)|  -  1 ) / 2
+//                   =  ( Sum_u W(u)    -  1 ) / 2          (W >= 0)
+//                   =  ( 1              -  1 ) / 2  =  0    (W normalised)
+// The closed-form anchor is exactly 0 for any stabilizer state at any
+// odd prime d in {3, 5, 7, ...}. Verbatim port of the F1/F4 falsifier
+// invariants in stdlib/quantum/wigner-negativity-discrete/module/
+// wigner_negativity_discrete.hexa lines 1020-1075 (sn(|0>_d) = 0 exactly).
+// 1-arg closed-form: takes d (must be odd prime, >= 3); returns 0.
+fn _wigner_stabilizer_sn(d: int) -> float {
+    if d < 3 { return _NOCALC_F }
+    // odd prime gate: d=4,6,8,9,... fail (composite or even).
+    if (d % 2) == 0 { return _NOCALC_F }
+    // small-prime sieve (covers the registered selftest range d in {3, 5, 7, 11, 13}).
+    let mut k = 3
+    let mut is_prime = 1
+    while k * k <= d {
+        if (d % k) == 0 { is_prime = 0 }
+        k = k + 2
+    }
+    if is_prime == 0 { return _NOCALC_F }
+    return 0.0
+}
+
 // float dispatch — fn_name → recompute. 0-arg fns ignore a0/a1 (constants);
 // 1-arg fns take a0; 2-arg take a0,a1. Returns _NOCALC_F when no float path
 // exists (caller then tries the int path / degrades). The 🟢 NUMERICAL
@@ -493,6 +543,14 @@ fn _recompute_float(fn_name: string, a0: float, a1: float, argc: int) -> float {
         let big_n = to_int(a0)
         return _hardy_bound(big_n)
     }
+    // RFC 045 qmirror PR-B atoms (mitigation/Clifford):
+    //   cdr_perfect_mitigation(p)    1-arg closed-form: 1 / (1 - p)
+    //   wigner_stabilizer_sn(d)      1-arg closed-form: 0  (odd prime d)
+    if fn_name == "cdr_perfect_mitigation" { return _cdr_perfect_mitigation(a0) }
+    if fn_name == "wigner_stabilizer_sn" {
+        let d_int = to_int(a0)
+        return _wigner_stabilizer_sn(d_int)
+    }
     return _NOCALC_F
 }
 
@@ -501,6 +559,7 @@ fn _recompute_float(fn_name: string, a0: float, a1: float, argc: int) -> float {
 fn _is_float_fn(fn_name: string) -> bool {
     return fn_name == "welch_t_crit" || fn_name == "wilson_hilferty_p"
         || fn_name == "chsh_tsirelson" || fn_name == "hardy_bound"
+        || fn_name == "cdr_perfect_mitigation" || fn_name == "wigner_stabilizer_sn"
 }
 
 // is fn_name a 0-arg closed-form constant? (--expr <fn> <v>, no operands).
