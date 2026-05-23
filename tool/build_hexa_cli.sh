@@ -1,10 +1,9 @@
 #!/bin/bash
 # build_hexa_cli.sh — compile the hexa CLI driver as a NATIVE BINARY.
 #
-# interp-retirement R7 gates #2 + #4. Today `hexa build` / `hexa parse` /
-# `hexa cc` run ON the interpreter (the interpreter executes self/main.hexa,
-# the CLI dispatch driver). The interpreter cannot be deleted until the
-# driver runs compiled. This recipe produces that compiled driver.
+# Produces the hexa CLI driver as a native binary so `hexa build` /
+# `hexa parse` / `hexa cc` run compiled. `self/main.hexa` is the CLI
+# dispatch driver; this recipe compiles it and the import flattener.
 #
 # Two binaries are built:
 #   build/hexa_cli_driver     — compiled self/main.hexa  (the CLI dispatcher)
@@ -18,7 +17,7 @@
 # main.hexa probes build/hexa_module_loader and, when present, runs the
 # flatten step interp-free.
 #
-# Pipeline (mirrors tool/build_interp.hexa single-TU model):
+# Pipeline (single-TU model):
 #   1. hexa_v2  self/main.hexa          build/stage1/main_native.c
 #   2. hexa_v2  self/module_loader.hexa build/stage1/module_loader.c
 #   3. clang  <stageN.c>  self/runtime.c  -o <out>     (runtime.c as 2nd TU)
