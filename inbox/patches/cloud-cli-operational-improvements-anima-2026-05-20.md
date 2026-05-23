@@ -1,5 +1,29 @@
 # `stdlib/cloud` operational improvements — anima 2026-05-20 cycle pain points
 
+> **Status (2026-05-24 sync):** P1 CLOSED · P4 partial (list CLOSED, create-cascade/ssh-port/terminate OPEN) · P7 partial (orphan detection CLOSED, util-watchdog OPEN) · P9 superseded by P1 fix · P2/P3/P5/P6/P8/P10/P11 OPEN. **Net: 2 of 11 fully CLOSED, 2 partial, 6 OPEN, 1 superseded.**
+>
+> - **P1 (run hang) — CLOSED** by PR #423 `7b8e15b3` `fix(runtime): exec_capture select()-multiplexed drain — kill pipe deadlock`. Root cause was in `hexa_exec_capture` (`self/runtime.c`), not `cloud_cli.hexa`. Sibling patch `cloud-cli-run-hang.md` already marked FIXED.
+> - **P2 (`--max-wall`) — OPEN.** No max-wall flag on `cloud run`. Now lower urgency since P1 hang is gone, but still useful for bounded predictable jobs. Out-of-scope for this sync.
+> - **P3 (`cloud watch`) — OPEN.** Partially substitutable today with `cloud diag <host> --pid N --log path` (PR #615) but not the auto-loop-until-dead pattern. Low priority per anima ranking.
+> - **P4 (runpod abstraction) — PARTIAL:**
+>   - `cloud list` — **CLOSED** by PR #388 (`runpod_list_pods` runpodctl 2.x/1.x bridge) + PR #612 (`cloud list` / `cloud status` verbs).
+>   - `cloud runpod create-cascade` — **OPEN.** Still hand-rolled GraphQL in anima dispatch scripts. Partially overlaps PR #629 (`cloud_bootstrap_sources` + `cloud_poll_until` + `cloud_run_with_wait`) which covers post-create orchestration but not create itself.
+>   - `cloud runpod ssh-port <pod_id>` — **OPEN.** Endpoint-surface gap captured in PR #629 (`hexa-cloud-dispatcher-bootstrap-wait-endpoint`).
+>   - `cloud runpod terminate <pod_id>` — **OPEN.** No idempotent terminate verb in cloud_cli.
+> - **P5 (batch / recursive copy-to) — OPEN.** Each `cloud copy-to` still spawns a fresh scp. No `--batch` or `--recursive` flag.
+> - **P6 (`--verify-sha`) — OPEN.** No post-transfer sha256 verify flag.
+> - **P7 (`cloud monitor`) — PARTIAL:**
+>   - Orphan detection (`::owner=<tag>` marker) — **CLOSED** by PR #614 (`cloud orphans` + `cloud owner-tag` read-only L2).
+>   - GPU-util threshold watchdog with `--on-idle terminate` — **OPEN.** Diag verbs surface util data (PR #615) but no auto-action loop yet. Convergent with sibling PR #646 F5 (`owner_lock + protected_until`).
+> - **P8 (`--auto-nohup-over`) — OPEN.** Run/nohup are still distinct verbs; no auto-promote heuristic.
+> - **P9 (`--fallback=ssh-direct`) — SUPERSEDED.** Designed as a workaround for P1. Since P1 (PR #423) closed the hang at the transport layer, this flag is no longer load-bearing. Not pursuing.
+> - **P10 (stderr propagation on non-zero) — OPEN.** Remote exit-code surfaces but no automatic last-50-lines stash. `cloud diag --log <path>` (PR #615) is an after-the-fact substitute, not the inline auto-tail proposed here.
+> - **P11 (tar provenance warning noise) — OPEN.** Cosmetic; no current filter or workaround doc.
+>
+> **Related merged work (not closing P-items directly):** PR #650 (`cloud help` text sync with diag verbs L1-L3) · PR #563 (RFC 088 hexa-cloud preflight + typed env-var, separate axis) · PR #653 (RFC 091 hexa-cloud preflight v2 DFT/HPC axis) · PR #429 (vast.ai backend mirror) · PR #629 (dispatcher bootstrap + wait + ssh-endpoint surface) · PR #646 (cloud-guard UX + pod-lock).
+>
+> Each remaining P-item is independently workaroundable today; no regression carried, only feature-request consolidation. Carry forward as standalone cycles (P2/P5/P6 are small surgical adds; P4 create-cascade/terminate is the largest remaining gap).
+
 **Reporter**: anima (`dancinlab/anima` downstream consumer)
 **Severity**: medium (workarounds exist, but consolidation needed)
 **Affected**: `stdlib/cloud/cloud_cli.hexa`, `stdlib/cloud/cloud.hexa`,
@@ -10,7 +34,7 @@ single 2026-05-20 cycle (§184 ALL TAPS RELEASE + §182 4-tier retry +
 §186 cross-ckpt fires; 5+ pods, ~$15-20 sunk in dispatch infrastructure
 bugs). Each item below is from real measurement, not speculation.
 
-## P1 — `run` mode EOF hang (already filed)
+## P1 — `run` mode EOF hang (already filed) — **CLOSED 2026-05-23**
 
 See sibling file `cloud-cli-run-hang.md`. Summary: `cloud run` with a
 remote process > ~1 min wall hangs indefinitely after the process
@@ -20,6 +44,8 @@ exits cleanly. Caused §184 v3 + §182 t1/t2/t3/t4 simultaneous hang.
 
 **Suggested fix** (from sibling file): per-stream EOF + timeout, OR
 ssh exit-status primary signal, OR `--max-wall <sec>` flag.
+
+**Resolution**: PR #423 — `hexa_exec_capture` rewritten with `select()`-multiplexed drain. Root cause was alternating blocking reads filling one pipe buffer. All `exec_capture` callers benefit. `--max-wall` ergonomic remains tracked as P2.
 
 ## P2 — no `--max-wall` on `cloud run`
 
@@ -60,7 +86,7 @@ remote pid dies, prints `ALIVE | last-3-log-lines` per tick. Saves
 ~2s per tick on SSH negotiation overhead AND removes the "did the
 loop forget to check?" class of bugs.
 
-## P4 — `cloud runpod create-cascade` (provider abstraction)
+## P4 — `cloud runpod create-cascade` (provider abstraction) — **PARTIAL (list CLOSED, create/ssh-port/terminate OPEN)**
 
 `stdlib/cloud/runpod.hexa` has `runpod_create_cascade` API, but
 cloud_cli doesn't expose it. Every anima dispatch script today
@@ -133,7 +159,7 @@ hexa cloud copy-to <host> src dst --verify-sha
 This is what anima writes manually now (post-copy `cloud run host --
 sha256sum dst` + compare); built-in flag = one less foot-gun.
 
-## P7 — `cloud monitor` — orphan-billing detection
+## P7 — `cloud monitor` — orphan-billing detection — **PARTIAL (orphan detection CLOSED via PR #614, util-watchdog OPEN)**
 
 Today's biggest cost: 4 pods × 65 min idle = ~$10-13 because corpus
 build failed (ModuleNotFoundError) and trap didn't fire while ssh was
@@ -165,7 +191,7 @@ hexa cloud run <host> --auto-nohup-over 60s -- python3 long_or_short.py
 Caller code can use `run` everywhere; cloud_cli decides whether to
 foreground or background based on actual runtime.
 
-## P9 — `--fallback=ssh-direct` on hang
+## P9 — `--fallback=ssh-direct` on hang — **SUPERSEDED by P1 fix (PR #423)**
 
 Until P1 lands, anima dispatch scripts have to *manually* implement
 "if cloud run hangs, kill it and ssh directly" fallback. Suggested:
