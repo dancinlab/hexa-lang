@@ -306,13 +306,31 @@ static size_t _hx_self_rss_bytes(void) {
                   (task_info_t)&info, &cnt) != KERN_SUCCESS) return 0;
     return (size_t)info.resident_size;
 #elif defined(__linux__)
-    FILE* f = fopen("/proc/self/statm", "r");
-    if (!f) return 0;
-    long pages_total = 0, pages_rss = 0;
-    if (fscanf(f, "%ld %ld", &pages_total, &pages_rss) != 2) {
-        fclose(f); return 0;
+    // libc-unhook safe: self/runtime.c `#define fopen → hxlcl_fopen` returns a
+    // (void*)(fd+1) shim, NOT a real glibc FILE*. `fscanf` is NOT remapped, so
+    // handing it that shim deref'd a small-int as a FILE* → SIGSEGV — fired on
+    // every mem-cap-enabled transpile of a non-trivial input (the [1/2] step of
+    // `hexa drill` dispatched to a Linux pool host injects HEXA_MEM_CAP_MB=4096,
+    // so the RSS tick poller crashed instead of measuring). Read /proc/self/statm
+    // via the unhooked syscall wrappers (hxlcl_open_sys/hxlcl_read) and parse the
+    // second whitespace-separated field (resident pages) inline — no stdio.
+    int fd = hxlcl_open_sys("/proc/self/statm", O_RDONLY);
+    if (fd < 0) return 0;
+    char buf[128];
+    long n = (long)hxlcl_read(fd, buf, sizeof(buf) - 1);
+    hxlcl_close(fd);
+    if (n <= 0) return 0;
+    buf[n] = '\0';
+    // statm: "<total> <resident> <shared> ..." — skip field 1, parse field 2.
+    const char* p = buf;
+    while (*p == ' ') p++;
+    while (*p && *p != ' ') p++;           // skip total
+    while (*p == ' ') p++;
+    long pages_rss = 0;
+    while (*p >= '0' && *p <= '9') {        // parse resident
+        pages_rss = pages_rss * 10 + (*p - '0');
+        p++;
     }
-    fclose(f);
     long ps = sysconf(_SC_PAGESIZE);
     if (ps <= 0) ps = 4096;
     return (size_t)pages_rss * (size_t)ps;
