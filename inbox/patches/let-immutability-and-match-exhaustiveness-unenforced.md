@@ -1,6 +1,25 @@
 # `let` immutability + match exhaustiveness — unenforced (canonical gap)
 
-**Status:** 🟠 FILED / OPEN (2026-05-23)
+**Status:** 🟢 DIAGNOSED (warn-by-default) — 2026-05-23. Both safety nets
+now emit type-checker WARNINGS (not hard errors) so the self-host build is
+never broken (Rust-strict-error is the eventual goal; warn is the safe
+landing that closes the "silently unenforced" gap with no flag-day
+migration). Implemented in `self/type_checker.hexa` only (mutability was
+already tracked by the parser: `LetStmt` vs `LetMutStmt`):
+- **let-immutability:** a parallel `scope_muts` array records each binding's
+  mutability (default mutable; only plain `let` is immutable). Reassigning
+  (`=`, `+=`/etc., `??=`/`||=`/`&&=`) a non-`mut` `let` binding →
+  `warning: assignment to immutable binding 'x' (declare 'let mut x' to
+  allow mutation)`. Shadowing (`let x; let x`) re-binds (newest-wins) and is
+  NOT flagged.
+- **match-exhaustiveness:** the existing exhaustiveness pass message is now
+  `non-exhaustive match (add a '_ ->' arm)` (enum-typed matches additionally
+  list the missing variants). A `_` arm is exhaustive; otherwise warn.
+
+Activation is regen-gated (type_checker is an SSOT module compiled into
+`hexa_cc`). Verified locally via regen → transpile → compile → run; the
+self+stdlib corpus warning count is recorded in the landing PR.
+
 **Reporter:** anima session — hexa canonical-deviation audit
 **Severity:** medium — silent acceptance of patterns the Rust model rejects
 at compile time; not a miscompile, but two safety nets are absent.
