@@ -2239,9 +2239,11 @@ fn cmd_build(src, out, c_only, target, shared) {
     let r1 = exec(trans)
     if len(r1) > 0 { println("    " + r1) }
     // 파싱 실패는 hexa_v2 가 stdout 에 "Parse error" 로 찍고도 exit 0 인
-    // 특성이 있어(cmd_parse 주석 참고), 출력 grep + .c 파일 존재로 2중 판정.
-    let has_perr = exec("printf '%s' \"" + r1 + "\" | grep -q 'Parse error' && printf yes || printf no")
-    if has_perr == "yes" {
+    // 특성이 있어(cmd_parse 주석 참고), 출력 문자열 + .c 파일 존재로 2중 판정.
+    // r1 을 셸 명령에 보간하면 출력 안의 백틱 / `$()` / `$VAR` 가 재평가되어
+    // 가짜 `sh:` 진단이 새어 나온다 — `.contains` 로 in-process 판정.
+    let has_perr = r1.contains("Parse error")
+    if has_perr {
         println("error: transpile failed (parse error) — " + src)
         exit(1)
     }
@@ -3293,9 +3295,12 @@ fn cmd_bench(file, runs, json_mode, compare_bin) {
 //       "Parse error" 라인 존재 여부로 exit code 를 결정한다.
 //
 // 구현 메모:
-//   - hexa_v2 는 현재 파싱 실패를 stdout 에 "Parse error at L:C: ..." 로 찍고도
-//     exit 0 하는 특성이 있어 (코드생성은 best-effort 로 진행), 출력 grep 으로
-//     판정한다. 바이너리 자체 exit 코드 버그는 별도 추적.
+//   - hexa_v2 는 파싱 실패를 stdout 에 "Parse error at L:C: ..." 로 찍고도
+//     exit 0 하는 특성이 있어 (codegen best-effort), 출력 문자열에 "Parse error"
+//     포함 여부로 판정한다. parser hard-fail (auto-invoke 충돌 `exit(1)` 등) 은
+//     비정상 종료 코드로 잡는다 — exec_with_status 로 (출력, rc) 동시 취득.
+//   - 판정은 in-process (`.contains`) — 파서 출력을 셸 명령에 보간하면 출력
+//     안의 백틱 / `$()` / `$VAR` 가 재평가되는 인젝션이 생긴다.
 //   - 출력 .c 는 /tmp/hexa_parse_check_$$.c 로 임시. 후처리 삭제.
 //   - 성공: "OK" 한 줄, exit 0. 실패: 파서 에러 라인 그대로 + exit(1).
 // ─── `hexa gpu` — GPU CLI dispatcher (GPU.md §7c) ─────────────────────
@@ -3852,13 +3857,20 @@ fn cmd_parse(src) {
     // /tmp/hexa_parse_check.<PID>.c — 셸 PID 로 충돌 회피.
     let tmp_c = exec("printf '/tmp/hexa_parse_check.%s.c' \"$$\"")
     let trans = v2 + " '" + src + "' '" + tmp_c + "' 2>&1"
-    let r = exec(trans)
+    let pair = exec_with_status(trans)
+    let r = pair[0]
+    let rc = pair[1]
     // 정리 — 생성되었든 안 되었든 best-effort.
     let _rm = exec("rm -f '" + tmp_c + "' 2>/dev/null")
-    // hexa_v2 출력에 "Parse error" 라인이 있으면 파서 실패.
-    // grep -q 는 일치 시 exit 0, 미일치 시 exit 1.
-    let has_err = exec("printf '%s' \"" + r + "\" | grep -q 'Parse error' && printf yes || printf no")
-    if has_err == "yes" {
+    // 파서 실패 판정 — in-process, 셸 아웃 금지:
+    //   · hexa_v2 는 "Parse error" 를 찍어도 exit 0 (codegen best-effort) 하므로
+    //     출력 문자열로 판정한다.
+    //   · parser hard-fail (auto-invoke 충돌 `exit(1)` 등) 은 비정상 종료
+    //     코드로 잡는다.
+    //   r 을 셸 명령에 보간하면 r 안의 백틱 / `$()` / `$VAR` 가 재평가되어
+    //   가짜 `sh:` 진단이 새어 나온다 — `.contains` 로 in-process 판정.
+    let has_err = rc != 0 || r.contains("Parse error")
+    if has_err {
         // 원본 stderr/stdout 재출력 (사용자가 라인/컬럼 정보를 볼 수 있도록).
         println(r)
         exit(1)
