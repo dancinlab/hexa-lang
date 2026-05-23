@@ -4623,6 +4623,16 @@ fn gen2_expr(node) {
             if name == "cwd" {
                 return "hexa_cwd()"
             }
+            // PROBE r8 POSIX-fs cluster (canonical-audit r8 inbox closure):
+            // tempfile() / tempdir() — POSIX mkstemp/mkdtemp wrappers, return
+            // the new /tmp/hexa_*XXXXXX path ("" on failure).  Py tempfile /
+            // Rust tempfile / Go os.CreateTemp canonical.
+            if name == "tempfile" {
+                return "hexa_tempfile()"
+            }
+            if name == "tempdir" {
+                return "hexa_tempdir()"
+            }
             // TUI-PRIM L1 (kick verdict T1.A 2026-04-27_hexa-native-tui-
             // implementation-plan): zero-arg term_* builtins for TTY control.
             // C syms: self/runtime.c hexa_term_*. Pure POSIX layer in
@@ -5304,6 +5314,14 @@ fn gen2_expr(node) {
                 // does the `ls -1` shellout + split. Needed by
                 // compiler/atlas/merger.hexa for the atlas_cli binary.
                 if name == "list_dir"       { return "hexa_list_dir(" + a0 + ")" }
+                // PROBE r8 POSIX-fs cluster (canonical-audit r8 inbox
+                // closure): glob(pattern) / listdir(path) — direct
+                // glob(3) / opendir+readdir wrappers (no shell exec).
+                // listdir mirrors Py os.listdir semantics (skip only
+                // `.` and `..`, keep hidden files) — distinct from the
+                // existing list_dir which also drops hidden entries.
+                if name == "glob"           { return "hexa_glob(" + a0 + ")" }
+                if name == "listdir"        { return "hexa_listdir(" + a0 + ")" }
                 if name == "bin"            { return "hexa_bin(" + a0 + ")" }
                 if name == "hex"            { return "hexa_hex(" + a0 + ")" }
                 if name == "base64_encode"  { return "hexa_base64_encode(" + a0 + ")" }
