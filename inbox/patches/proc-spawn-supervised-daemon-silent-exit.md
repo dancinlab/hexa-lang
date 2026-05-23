@@ -1,8 +1,53 @@
-# `stdlib/proc.proc_spawn_supervised` (+ stderr autoflush) — daemon silent-exit under nohup
+# `hexa run` daemon silent-exit — exec-capture buffers child output until exit
 
 **Reporter**: anima (`dancinlab/anima` downstream consumer · PR #121 akida_bridge .hexa port)
-**Severity**: medium (downstream live deploy blocked; python equivalent works as fallback)
-**Affected**: `stdlib/proc.hexa::proc_spawn_supervised` + (possibly) `stdlib/websocket.hexa::ws_available` + hexa runtime stderr autoflush
+**Severity**: high (every long-running `.hexa` daemon launched via `hexa run` is unobservable;
+python fallback works only because it bypasses `hexa run` entirely)
+**Affected**: `self/main.hexa::cmd_run_user_direct` line 2652 (`exec()` capture) + codegen `int main()` autoflush (fixed below)
+
+## TL;DR — the real gate
+
+`self/main.hexa::cmd_run_user_direct` runs the compiled binary via
+
+```hexa
+let out = exec(cmd + " 2>&1; echo \"__HEXA_SHIM_RC__=$?\"")
+```
+
+`exec()` is popen-style — it **captures the child's entire stdout+stderr into a single
+string**, returning only when the child exits. For daemons (`while true`, no exit), `exec()`
+NEVER returns, so hexa.real NEVER `print()`s the captured body. Every `eprintln` from the
+daemon piles into hexa.real's in-memory accumulator and is invisible at the outer
+redirect. This is the root cause; the buffering theories below (#1/#2 from the prior
+draft of this patch) were diagnostic noise on top of it.
+
+**Suggested fix**: `cmd_run_user_direct` should `execve`-replace into the compiled binary
+(Unix `python script.py` idiom — child inherits hexa.real's FDs directly, no capture, no
+shim), OR use a streaming exec that line-flushes child output as it arrives. The
+`__HEXA_SHIM_RC__` exit-code capture trick is incompatible with both — drop it in favor
+of the binary's natural exit code (execve preserves it; streaming reads it from a small
+trailer FD).
+
+## Codegen autoflush (already addressed at source — leave merged or revert as you prefer)
+
+Stacked fix this report includes (commit precedes this patch):
+
+| file | change |
+|------|--------|
+| `self/codegen_c2.hexa` (line 1388, 8361) | emit `setvbuf(stdout, NULL, _IOLBF, 0)` + `setvbuf(stderr, NULL, _IOLBF, 0)` at top of every generated `int main(int argc, char**)` |
+| `self/native/hexa_cc.c` line 11905 | matching change to the deduplicated string literal `__hexa_codegen_c2_sl_418` (the regen-cache mirror of codegen_c2.hexa, since the `.hexa → hexa_cc.c` regen pipeline is opaque from a downstream session) |
+
+Effect: every compiled `hexa_run.<hash>` binary now line-buffers stdout/stderr at startup.
+This is correct + helpful for binaries invoked **directly** (`/path/to/hexa_run.<hash>`),
+but does NOT unblock daemons launched via `hexa run` — `cmd_run_user_direct`'s
+exec-capture intercepts before any FD reaches the outer redirect. The setvbuf is a
+prerequisite (without it, even a fixed run path would block on FILE* buffering); the
+exec-capture above is the actual gate.
+
+**Originally affected** (kept for traceability — both turned out to be downstream of the
+exec-capture root cause):
+- `stdlib/proc.hexa::proc_spawn_supervised` — subprocess actually spawns fine; what was
+  invisible was the daemon's own logging, hiding spawn success/failure
+- hexa runtime stderr autoflush — addressed in the codegen change above
 
 ## Symptom
 
