@@ -168,3 +168,16 @@ bash /Users/ghost/core/hexa-lang/inbox/fires/rfc067_ptma_swizzle128_2026_05_22/m
 ```
 
 Requires `ssh ubu-1` access + `/usr/local/cuda-12.9` on ubu-1.
+
+## Extended shapes (256/384/448) — added 2026-05-23
+
+기존 6 shape (512/1024/2048/4096/6144/8192) 외 추가 fire 산출물:
+
+- `sgemm_tma_sw128_256x256_grid.ptx` (M=N=K=256, K/64=4 outer tiles)
+- `sgemm_tma_sw128_384x384_grid.ptx` (M=N=K=384, K/64=6 outer tiles)
+- `sgemm_tma_sw128_448x448_grid.ptx` (M=N=K=448, K/64=7 outer tiles)
+
+동일 N201 kernel template (TMA SWIZZLE_128B + mma.sync.m16n8k16 + Hilbert d2xy,
+per-CTA 64x64 tile, 4-warp 2x2, sm_120a). `measure.sh` SHAPES 미확장 — cuBLAS
+ratio 측정은 후속 cycle (generator SHAPES 추가 + measure.sh 재실행) 필요. fires/
+SSOT 컨벤션 (선행 ~320 PTX committed) 따라 PTX 자체는 ship.
