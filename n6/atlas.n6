@@ -23543,7 +23543,7 @@
   <- atlas-self-arch-axis-i-graph-query-witness
   => "VERDICT: COMPOSES with 5 of 6, has ONE MILD INTERFERENCE with axis-F (arrow K-ceiling)"
   => ""
-  => "axis-D (@-type evolution, 10 types): ORTHOGONAL �... [truncated, full=2467bytes]
+  => "axis-D (@-type evolution, 10 types): ORTHOGONAL �... [truncated, full=2467bytes]
 
 @C axis-i-5-check-results :: meta [4!]
   <- atlas-self-arch-axis-i-graph-query-witness
@@ -61672,4 +61672,50 @@
   tier = "🟢 SUPPORTED-NUMERICAL"
   verified-by = "hexa verify --expr pt_doily_quantum_win 1.0"
   cite = "RFC 045 qmirror — Brassard-Broadbent-Tapp 2005 Found. Phys. 35 1877 (arXiv:quant-ph/0407221); Mermin-Peres magic-square pseudo-telepathy quantum win = 1 exactly"
+  provenance = "tool/atlas_cli.hexa register --from-verify (direct node-gen, no .n6; 🟢 numerical)"
+
+# ── RFC 045 QMIRROR PR-B — Mitigation/Clifford atoms (atlas_cli register-arm sync) ──
+
+@F verified-cdr_perfect_mitigation-0.5-num = cdr_perfect_mitigation(0.5) = 2.0 :: formula [d=2026-05-24 active]
+  tier = "🟢 SUPPORTED-NUMERICAL"
+  verified-by = "hexa verify --expr cdr_perfect_mitigation 0.5 2.0"
+  cite = "RFC 045 qmirror — Czarnik-Arrasmith-Coles-Cincio 2021 Quantum 5 592 (arXiv:2005.10189) Claim 2; global depolarising channel OLS slope b = 1/(1-p)"
+  provenance = "tool/atlas_cli.hexa register --from-verify (direct node-gen, no .n6; 🟢 numerical)"
+
+@F verified-wigner_stabilizer_sn-3-num = wigner_stabilizer_sn(3) = 0.0 :: formula [d=2026-05-24 active]
+  tier = "🟢 SUPPORTED-NUMERICAL"
+  verified-by = "hexa verify --expr wigner_stabilizer_sn 3 0.0"
+  cite = "RFC 045 qmirror — Veitch 2014 New J. Phys. 16 013009 / Gross 2006 J. Math. Phys. 47 122107 (Gross-Hudson); odd prime d stabilizer W>=0 ⇒ sn = 0 exactly"
+  provenance = "tool/atlas_cli.hexa register --from-verify (direct node-gen, no .n6; 🟢 numerical)"
+
+# ── RFC 045 QMIRROR PR-C — Variational/Fisher/Shadow atoms (atlas_cli register-arm sync) ──
+
+@F verified-vqe_h2_fci_sto3g-num = vqe_h2_fci_sto3g() = -1.137283834488502 :: formula [d=2026-05-24 active]
+  tier = "🟢 SUPPORTED-NUMERICAL"
+  verified-by = "hexa verify --expr vqe_h2_fci_sto3g -1.137283834488502"
+  cite = "RFC 045 qmirror — PySCF 2.13.0 RHF+FCI H2/STO-3G/R=0.74Å canonical reference; F-QM-CHEM-N5 spectroscopic-accuracy comparator (1 µHa tolerance)"
+  provenance = "tool/atlas_cli.hexa register --from-verify (direct node-gen, no .n6; 🟢 numerical)"
+
+@F verified-qfi_sql-4-num = qfi_sql(4) = 4.0 :: formula [d=2026-05-24 active]
+  tier = "🟢 SUPPORTED-NUMERICAL"
+  verified-by = "hexa verify --expr qfi_sql 4 4.0"
+  cite = "RFC 045 qmirror — Standard Quantum Limit for spin-coherent product state |+>^N; QFI F_phi = 4 Var(S_z) = N (alpha=1 SQL invariant)"
+  provenance = "tool/atlas_cli.hexa register --from-verify (direct node-gen, no .n6; 🟢 numerical)"
+
+@F verified-qfi_ghz-4-num = qfi_ghz(4) = 16.0 :: formula [d=2026-05-24 active]
+  tier = "🟢 SUPPORTED-NUMERICAL"
+  verified-by = "hexa verify --expr qfi_ghz 4 16.0"
+  cite = "RFC 045 qmirror — Heisenberg-limit GHZ state (|0>^N+|1>^N)/sqrt(2); QFI F_phi = N^2 (alpha=2 Heisenberg ceiling, optimal metrology speed-up)"
+  provenance = "tool/atlas_cli.hexa register --from-verify (direct node-gen, no .n6; 🟢 numerical)"
+
+@F verified-shadow_pauli_var_bound-4-num = shadow_pauli_var_bound(4) = 256.0 :: formula [d=2026-05-24 active]
+  tier = "🟢 SUPPORTED-NUMERICAL"
+  verified-by = "hexa verify --expr shadow_pauli_var_bound 4 256.0"
+  cite = "RFC 045 qmirror — Huang-Kueng-Preskill 2020 Nat. Phys. 16 1050 (arXiv:2002.08953) Lemma S2; weight-k Pauli shadow variance ||O||²_shadow = 4^k"
+  provenance = "tool/atlas_cli.hexa register --from-verify (direct node-gen, no .n6; 🟢 numerical)"
+
+@F verified-shadow_clifford_var_bound-4-num = shadow_clifford_var_bound(4) = 48.0 :: formula [d=2026-05-24 active]
+  tier = "🟢 SUPPORTED-NUMERICAL"
+  verified-by = "hexa verify --expr shadow_clifford_var_bound 4 48.0"
+  cite = "RFC 045 qmirror — Huang-Kueng-Preskill 2020 Nat. Phys. 16 1050 (arXiv:2002.08953) Theorem 1; Clifford 2-design shadow worst-case ||O||²_shadow <= 3*Tr(O²) = 3*2^n for non-identity Pauli on n qubits"
   provenance = "tool/atlas_cli.hexa register --from-verify (direct node-gen, no .n6; 🟢 numerical)"
