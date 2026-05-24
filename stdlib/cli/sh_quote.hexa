@@ -1,0 +1,43 @@
+// HEXA Standard Library — cli/sh_quote
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// POSIX shell single-quote escape. Wraps a string in `'...'` and escapes
+// any embedded single quote via the standard `'\''` sequence so the
+// result is safe to interpolate into a shell command line.
+//
+// Surface:
+//   pub fn sh_quote(s: string) -> string
+//
+// STDLIB Phase 1b survey 2026-05-25: 150 duplicate `_sh_quote`
+// definitions across anima/* (CLI scaffold + cmd_selftest harness +
+// shell-invoking diagnostic harness). This module = the canonical home.
+//
+// Semantics (POSIX sh / bash):
+//   sh_quote("hello")     → 'hello'
+//   sh_quote("it's")      → 'it'\''s'
+//   sh_quote("")          → ''
+//   sh_quote("a b c")     → 'a b c'
+//
+// Single-quote wrap is robust for all chars except embedded single quote,
+// which is handled by closing the quote, inserting a literal escaped
+// single quote, and reopening — the POSIX-canonical pattern.
+
+pub fn sh_quote(s: string) -> string {
+    let mut out = "'"
+    let n = len(s)
+    let mut i = 0
+    while i < n {
+        let c = s[i]
+        if c == "'" {
+            // close ' · literal escaped \' · reopen '
+            out = out + "'\\''"
+        } else {
+            out = out + c
+        }
+        i = i + 1
+    }
+    out = out + "'"
+    return out
+}
