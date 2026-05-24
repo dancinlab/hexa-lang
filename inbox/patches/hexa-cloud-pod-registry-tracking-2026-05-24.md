@@ -1,7 +1,14 @@
 ---
 slug: hexa-cloud-pod-registry-tracking-2026-05-24
-status: open
+status: resolved
 ---
+
+**Status (2026-05-25)**: RESOLVED (MVP) by **PR #761** — `stdlib/cloud/pod_registry.hexa`
+(persistent JSONL registry at `$HOME/.hexa-cloud/pods.jsonl`; write hook on `cloud run`/
+`cloud nohup`; `hexa cloud orphans [--hours N]` lists tracked pods + flags stale, exit 1
+on any stale). Closes the core orphan-burn gap. Deferred bonus (separate follow-up, not
+blocking): `runpod_list_pods()` cross-reconcile (ORPHAN/GHOST detection) + `adopt`/`forget`
+verbs. Corroborating 2nd-domain witness: [[cloud-registry-rtsc-witness-2026-05-24]].
 
 # `hexa cloud` — 발사한 pod 추적/관리 부재 (pod registry 미존재) → orphan burn
 

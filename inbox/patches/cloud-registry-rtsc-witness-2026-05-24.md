@@ -1,7 +1,12 @@
 ---
 slug: cloud-registry-rtsc-witness-2026-05-24
-status: open
+status: resolved
 ---
+
+**Status (2026-05-25)**: RESOLVED — this is a corroborating witness (no separate fix
+proposed) for the primary [[hexa-cloud-pod-registry-tracking-2026-05-24]], which landed
+as **PR #761** (`pod_registry.hexa` + `hexa cloud orphans`). Cross-domain severity
+(RTSC/vast = 2nd witness after anima/PURE) is registered; the registry MVP closes both.
 
 # `hexa cloud` pod registry 부재 — RTSC(demiurge) 2번째-도메인 witness
 
