@@ -1,0 +1,31 @@
+// HEXA Standard Library — string/bool_s
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Boolean → string formatters. Standardises the 65+ anima inline
+// `bool_s` definitions (STDLIB Phase 1b 잔여 survey 2026-05-25). Most
+// anima callers want one of three conventions:
+//   "true"/"false" (literal lowercase)
+//   "PASS"/"FAIL"  (test/falsifier output)
+//   "OK"/"NG"      (selftest assertion output)
+//
+// Surface:
+//   pub fn bool_s(b: bool) -> string        · "true" / "false"
+//   pub fn bool_pass_fail(b: bool) -> string · "PASS" / "FAIL"
+//   pub fn bool_ok_ng(b: bool) -> string     · "OK" / "NG"
+
+pub fn bool_s(b: bool) -> string {
+    if b { return "true" }
+    return "false"
+}
+
+pub fn bool_pass_fail(b: bool) -> string {
+    if b { return "PASS" }
+    return "FAIL"
+}
+
+pub fn bool_ok_ng(b: bool) -> string {
+    if b { return "OK" }
+    return "NG"
+}
