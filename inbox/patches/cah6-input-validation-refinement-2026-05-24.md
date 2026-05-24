@@ -1,5 +1,7 @@
 # CaH₆ Sternheimer NaN 의 root cause refinement — input cell + pressure validation
 
+**Status**: cross-repo-demiurge-2026-05-25 — HERPES domain finding refinement (cell + pressure input validation). Cross-repo handoff archive.
+
 ## 직전 PR #541 의 framing 정정
 
 PR #541 (`cah6-dft-phonon-sternheimer-nan-wall-2026-05-24.md`) 이 Sternheimer NaN 을

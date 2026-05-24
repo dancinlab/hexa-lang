@@ -1,5 +1,7 @@
 # `stdlib/cloud` operational improvements — anima 2026-05-20 cycle pain points
 
+**Status**: meta-bundle-partial-2026-05-25 — 11-item anima cycle bundle. P1/P4-list/P7-orphan/P9 CLOSED via cycle 3-7 batches (#704/#715/#714 등). Remaining 6 OPEN → 각 별도 inbox/patch slug 화 권장 (single-item granularity per @D g0).
+
 > **Status (2026-05-24 sync):** P1 CLOSED · P4 partial (list CLOSED, create-cascade/ssh-port/terminate OPEN) · P7 partial (orphan detection CLOSED, util-watchdog OPEN) · P9 superseded by P1 fix · P2/P3/P5/P6/P8/P10/P11 OPEN. **Net: 2 of 11 fully CLOSED, 2 partial, 6 OPEN, 1 superseded.**
 >
 > - **P1 (run hang) — CLOSED** by PR #423 `7b8e15b3` `fix(runtime): exec_capture select()-multiplexed drain — kill pipe deadlock`. Root cause was in `hexa_exec_capture` (`self/runtime.c`), not `cloud_cli.hexa`. Sibling patch `cloud-cli-run-hang.md` already marked FIXED.

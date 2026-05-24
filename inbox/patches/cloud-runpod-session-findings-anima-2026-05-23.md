@@ -1,5 +1,7 @@
 # `hexa cloud` / runpod — anima 2026-05-23 session findings (4 items)
 
+**Status**: meta-bundle-partial-2026-05-25 — 4-item anima cycle bundle. R1 fixed in main · R2 (auto-terminate watchdog) CLOSED via PR #715 cloud_idle_autokill_watchdog · R3 (--resume / --via-hf) + R4 (structured --env) still open → 각 별도 inbox slug 화 권장.
+
 > **Status (2026-05-24 sync):**
 > - **R1 — CLOSED** by PR #388 (`490b05ab` `feat(stdlib/cloud/runpod): runpod_list_pods — runpodctl 2.x/1.x bridge`). Downstream sees a stable interface independent of runpodctl version.
 > - **R2 (auto-terminate-on result.json watchdog) — OPEN**, partially overlapped by:

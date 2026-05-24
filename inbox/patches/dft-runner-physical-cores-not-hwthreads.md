@@ -1,5 +1,7 @@
 # DFT runner / pod-orchestration tools: `nproc` returns host hwthreads in containers — physical-core derivation needed
 
+**Status**: cross-repo-demiurge-2026-05-25 — demiurge dft_runner.sh fix already shipped upstream. hexa-lang stdlib/cloud cookbook adoption deferred to future helper PR. Cross-repo handoff archive.
+
 **Reporter**: demiurge (`dancinlab/demiurge` RTSC DFT campaign, 2026-05-23)
 **Severity**: high (silent 8× MPI overcommit → pw.x zombie storm → 1h+ wall with zero progress; no error, just hang)
 **Affected (potential)**: any hexa-native tooling that dispatches MPI / OpenMP jobs into containerized rentals (Vast.ai, RunPod, generic Docker hosts) and reads `nproc` for `-np` / `OMP_NUM_THREADS`. Specifically demiurge's `dft_runner.sh` (already source-fixed today on demiurge side), but the *same* footgun is latent in `stdlib/cloud` cookbook / recipe surface and any future `hexa cloud run --auto-mpi-np` helper.

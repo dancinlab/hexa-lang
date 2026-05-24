@@ -1,5 +1,7 @@
 # CaH₆ DFT phonon Sternheimer NaN wall — Vast.ai + pool dual platform finding
 
+**Status**: cross-repo-demiurge-2026-05-25 — HERPES domain finding (demiurge RTSC campaign). DFT phonon NaN is QE ph.x numeric, not hexa-lang fix. Cross-repo handoff archive.
+
 > **Status (2026-05-24):** root-cause = **(b) downstream QE ph.x 수치
 > 발산 + (c) hexa cloud preflight gap (RFC 088 부분 흡수, DFT axis 미흡수)**.
 > hexa-lang 내부 코드 버그 (a) 없음. 진단 finding =
