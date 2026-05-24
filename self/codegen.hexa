@@ -6239,6 +6239,20 @@ fn gen2_expr(node) {
                 ai = ai + 1
             }
             if _is_known_fn_global(name) {
+                // PROBE r16-T2: arity check at the direct-call codegen site.
+                // If `name` is a registered plain user FnDecl, the arg count
+                // must equal its declared param count (hexa fns have no
+                // default/variadic params — parse_params makes every formal
+                // mandatory). A mismatch previously surfaced only as an opaque
+                // clang "too few/many arguments to function call". Now emit a
+                // hexa-level diagnostic naming the fn + expected vs got, BEFORE
+                // codegen. Registry holds plain FnDecls only (-1 = skip: extern
+                // fns, struct constructors, imported names are unaffected).
+                let _exp_arity = _fn_arity_lookup(name)
+                if _exp_arity >= 0 && len(node.args) != _exp_arity {
+                    eprintln("error: function `" + name + "` expects " + to_string(_exp_arity) + " argument(s), got " + to_string(len(node.args)))
+                    exit(1)
+                }
                 // bt-53: mangled emission for reserved fn names (e.g. user `fn main`).
                 return _hexa_mangle_ident(name) + "(" + arg_strs.join(", ") + ")"
             }
@@ -8818,6 +8832,41 @@ fn _comptime_const_scope_restore(mark) {
 let mut _known_fn_globals = []
 let mut _known_nonlocal_names = []
 
+// ── PROBE r16-T2: user-FnDecl arity registry ────────────────
+// Parallel arrays mapping a plain `fn name(...)` to its formal-parameter
+// count. Populated in codegen_full Pass-0 from FnDecl nodes ONLY (NOT
+// extern fns — variadic C signatures — NOT struct constructors, NOT
+// imported names). Consulted at the direct-call codegen site to surface a
+// hexa-level "fn X expects N args, got M" diagnostic BEFORE codegen,
+// instead of deferring an opaque "too few/many arguments" to clang. First
+// definition wins (mirrors codegen first-wins), so a redefined fn does not
+// produce spurious arity errors against a later signature.
+let mut _fn_arity_names = []
+let mut _fn_arity_counts = []
+
+fn _fn_arity_register(name, count) {
+    // First-wins: skip if already registered.
+    let mut i = 0
+    while i < len(_fn_arity_names) {
+        if _fn_arity_names[i] == name { return 0 }
+        i = i + 1
+    }
+    _fn_arity_names.push(name)
+    _fn_arity_counts.push(count)
+    return 0
+}
+
+// _fn_arity_lookup — expected arity for `name`, or -1 if not a registered
+// plain user FnDecl (callers MUST treat -1 as "skip the check").
+fn _fn_arity_lookup(name) {
+    let mut i = 0
+    while i < len(_fn_arity_names) {
+        if _fn_arity_names[i] == name { return _fn_arity_counts[i] }
+        i = i + 1
+    }
+    return -1
+}
+
 // ── ROI-23: 64-bucket hash sets for O(1) avg lookup ─────────
 // Same pattern as interpreter.hexa env_cache / memo_cache.
 let mut _known_fn_globals_set = []   // 64 buckets; each bucket is [name, ...]
@@ -9884,6 +9933,9 @@ fn codegen_full(ast) {
     _enum_variant_owners = []
     _enum_variant_ambig = []
 
+    // PROBE r16-T2: reset the user-FnDecl arity registry per transpile.
+    _fn_arity_names = []
+    _fn_arity_counts = []
     // ── Pass 0: collect known global names for closure free-var analysis ──
     let mut gi = 0
     while gi < len(ast) {
@@ -9893,6 +9945,14 @@ fn codegen_full(ast) {
             _known_nonlocal_names.push(ast[gi].name)
             _known_fn_globals_add(ast[gi].name)
             _known_nonlocal_add(ast[gi].name)
+            // PROBE r16-T2: register arity for PLAIN FnDecl only. extern fns
+            // (variadic C) and pure fns are excluded — extern arity is a C
+            // contract, and pure-fn arg coercion can differ. params is an
+            // array of Param nodes; guard with type_of in case a malformed
+            // node carries a non-array sentinel.
+            if gk == "FnDecl" && type_of(ast[gi].params) == "array" {
+                _fn_arity_register(ast[gi].name, len(ast[gi].params))
+            }
         } else if gk == "StructDecl" {
             _known_fn_globals.push(ast[gi].name)
             _known_nonlocal_names.push(ast[gi].name)
