@@ -2590,6 +2590,9 @@ fn cmd_build(src, out, c_only, target, shared) {
             let _rt_cand = _rt_cache + "/runtime." + _rt_sha + ".o"
             if !file_exists(_rt_cand) {
                 exec("mkdir -p '" + _rt_cache + "' 2>/dev/null")
+                // GO M1: lazy GC probe (only triggers on cache miss to
+                // keep the hot `runtime.<sha>.o` hit path zero-cost).
+                _hexa_cache_gc(_rt_cache, _hexa_cache_cap_mb(), _hexa_cache_ttl_days())
                 let _rt_tmp = _rt_cand + ".tmp." + to_string(mono_ns())
                 let _rt_cc = "clang -O2 " + os_clang_cflags() + strict_fp_cflags(__runtime_c) + "-Wno-trigraphs -fbracket-depth=4096 -I '" + __self_dir + "' -c '" + __runtime_c + "' -o '" + _rt_tmp + "' 2>&1"
                 let _rt_r = exec(_rt_cc)
@@ -2871,6 +2874,80 @@ fn join_shell_args(argv) {
     return out
 }
 
+// ── ~/.hexa-cache automatic GC (GO M1) ─────────────────────────────
+//
+// `~/.hexa-cache/hexa_run.<sha>_<ver>-dispatch` accumulates one binary per
+// (source-hash, version) pair on every `hexa run` / `hexa build` /
+// `hexa batch`. Without GC the directory grows unbounded (the legacy
+// `cmd_run` timestamp-keyed convention emitted unique paths per ns and
+// could fill GB in a fan-out storm). `_hexa_cache_gc` is a lazy probe
+// invoked at the top of each cache-using entry point.
+//
+// Policy:
+//   - cap_mb  = HEXA_CACHE_CAP_MB  (default 2048, ie 2 GiB)
+//   - ttl_days = HEXA_CACHE_TTL_DAYS (default 30)
+//   - Probe is throttled by a `.gc_last` sentinel file (touched after
+//     each run); skipped if newer than 60s (sub-1ms `test -nt` check).
+//   - Stale `*.tmp.<ns>` orphans (>60 min, from crashed builds) are
+//     always swept.
+//   - TTL: `find -mtime +N -delete` for `hexa_run.*` entries.
+//   - LRU: when total `du -sk` exceeds cap, delete oldest-first
+//     (`ls -tr` mtime sort) until under cap.
+//   - All errors swallowed (`2>/dev/null`): GC is best-effort cleanup,
+//     never an entry-point failure mode.
+fn _hexa_cache_gc(cache_dir, cap_mb, ttl_days) {
+    // Lazy probe throttle. Skip if sentinel was touched < 60s ago.
+    // `find -newer` is the POSIX-friendly mtime comparator.
+    let _sent = cache_dir + "/.gc_last"
+    let _skip = exec("[ -f " + shq(_sent) + " ] && find " + shq(_sent) + " -mmin -1 2>/dev/null | grep -c . || printf 0").trim()
+    if _skip == "1" { return }
+    // Tmp orphan sweep (>60 min). Crashed builds leave `<key>.tmp.<ns>`.
+    let _tmp_cl = exec("find " + shq(cache_dir) + " -maxdepth 1 -name '*.tmp.*' -mmin +60 -delete 2>/dev/null")
+    // TTL eviction.
+    if ttl_days > 0 {
+        let _ttl_cl = exec("find " + shq(cache_dir) + " -maxdepth 1 -name 'hexa_run.*' -mtime +" + to_string(ttl_days) + " -delete 2>/dev/null")
+    }
+    // LRU cap eviction. `du -sk` reports KiB; cap_mb * 1024 = cap_kb.
+    if cap_mb > 0 {
+        let _cap_kb = cap_mb * 1024
+        let _used_s = exec("du -sk " + shq(cache_dir) + " 2>/dev/null | awk '{print $1}'").trim()
+        let _used_kb = parse_int_str(_used_s)
+        if _used_kb > _cap_kb {
+            // Delete oldest-first until under cap. `ls -tr` = mtime
+            // ascending (oldest first). Loop in shell to honor the
+            // moving target (size shrinks per delete).
+            let _lru = "set -e; CAP=" + to_string(_cap_kb) + "; DIR=" + shq(cache_dir) + ";"
+                + " for f in $(ls -1tr \"$DIR\" 2>/dev/null | grep '^hexa_run\\.'); do"
+                + "   U=$(du -sk \"$DIR\" 2>/dev/null | awk '{print $1}');"
+                + "   [ \"$U\" -le \"$CAP\" ] && break;"
+                + "   rm -f \"$DIR/$f\" 2>/dev/null;"
+                + " done"
+            let _lru_r = exec(_lru + " 2>/dev/null")
+        }
+    }
+    // Refresh sentinel (best-effort).
+    let _touch = exec("touch " + shq(_sent) + " 2>/dev/null")
+}
+
+// Cache-policy resolver: reads env overrides with defaults.
+// Returns the cap in MB (env `HEXA_CACHE_CAP_MB`, default 2048).
+fn _hexa_cache_cap_mb() {
+    let _e = env_var("HEXA_CACHE_CAP_MB")
+    if len(_e) == 0 { return 2048 }
+    let _v = parse_int_str(_e)
+    if _v <= 0 { return 2048 }
+    return _v
+}
+
+// Returns the TTL in days (env `HEXA_CACHE_TTL_DAYS`, default 30).
+fn _hexa_cache_ttl_days() {
+    let _e = env_var("HEXA_CACHE_TTL_DAYS")
+    if len(_e) == 0 { return 30 }
+    let _v = parse_int_str(_e)
+    if _v <= 0 { return 30 }
+    return _v
+}
+
 // `hexa run <file>` and the `hexa://run` URL action are user-direct
 // invocations; cmd_run_user_direct compiles then executes (the
 // tree-walking interpreter is retired — g_interp_deprecated). The
@@ -2895,6 +2972,8 @@ fn cmd_run_user_direct(file, extra_args) {
     let mut _cache_dir = env_var("HOME") + "/.hexa-cache"
     if len(env_var("HOME")) == 0 { _cache_dir = "./.hexa-cache" }
     let _mk = exec("mkdir -p " + shq(_cache_dir) + " 2>/dev/null")
+    // GO M1: lazy GC probe (cap + TTL + tmp orphan sweep).
+    _hexa_cache_gc(_cache_dir, _hexa_cache_cap_mb(), _hexa_cache_ttl_days())
     // Content-addressed cache key (inbox patch
     // hexa-run-clang-fork-cache-miss-per-invocation): sha256(source)+version.
     // Identical source → identical binary → cache hit skips clang fork.
@@ -2994,6 +3073,8 @@ fn cmd_run(file, extra_args) {
     let mut _cache_dir = env_var("HOME") + "/.hexa-cache"
     if len(env_var("HOME")) == 0 { _cache_dir = "./.hexa-cache" }
     let _mk = exec("mkdir -p " + shq(_cache_dir) + " 2>/dev/null")
+    // GO M1: lazy GC probe (cap + TTL + tmp orphan sweep).
+    _hexa_cache_gc(_cache_dir, _hexa_cache_cap_mb(), _hexa_cache_ttl_days())
     // Content-addressed cache key — see cmd_run_user_direct above.
     let _src_hash = sha256_file(file)
     let _key = _src_hash.substring(0, 16) + "_" + version_str()
@@ -3105,6 +3186,8 @@ fn _batch_run_one(file) {
     let mut _cache_dir = env_var("HOME") + "/.hexa-cache"
     if len(env_var("HOME")) == 0 { _cache_dir = "./.hexa-cache" }
     let _mk = exec("mkdir -p " + shq(_cache_dir) + " 2>/dev/null")
+    // GO M1: lazy GC probe (cap + TTL + tmp orphan sweep).
+    _hexa_cache_gc(_cache_dir, _hexa_cache_cap_mb(), _hexa_cache_ttl_days())
     // Content-addressed cache (shares the hexa_run.* namespace with
     // cmd_run / cmd_run_user_direct so a `hexa batch` invocation
     // benefits from prior `hexa run` builds of the same source).
