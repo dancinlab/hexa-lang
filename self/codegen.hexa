@@ -1625,6 +1625,50 @@ fn _gen2_emit_tail_returnify_body(body_stmts, depth) {
     return chunks.join("")
 }
 
+// PROBE r15-D3: predicate — does this arm/branch body evaluate to C-void at
+// its tail? Used by gen2_fn_decl's `_all_void` tail-match guard to decide
+// whether a trailing MatchExpr is safe to returnify. Recurses so block-form
+// arms (`Some(n) => { if c { println(..) } else { println(..) } }`) and
+// nested matches are recognized as void, matching the void-awareness the
+// IfExpr path already has in _gen2_emit_tail_returnify_body. Conservative:
+// anything not provably void returns false (→ guard treats the arm as a
+// value producer and the returnify proceeds, preserving prior behavior).
+fn _gen2_arm_body_is_void(body) {
+    if type_of(body) == "string" || len(body) == 0 { return false }
+    let _last = body[len(body) - 1]
+    if type_of(_last) == "string" || _last.kind != "ExprStmt" { return false }
+    let _e = _last.left
+    if type_of(_e) == "string" { return false }
+    let _ek = _e.kind
+    // Direct void-builtin call.
+    if _ek == "Call" && type_of(_e.left) != "string" && _e.left.kind == "Ident" {
+        let _cn = _e.left.name
+        if _cn == "println" || _cn == "print" || _cn == "eprintln" || _cn == "eprint" || _cn == "exit" {
+            return true
+        }
+        return false
+    }
+    // if / if-else: void when the taken branch tails are void. A missing
+    // else means the false path yields hexa_void(), so then-void suffices.
+    if _ek == "IfExpr" {
+        let _tv = _gen2_arm_body_is_void(_e.then_body)
+        if type_of(_e.else_body) == "string" || len(_e.else_body) == 0 {
+            return _tv
+        }
+        return _tv && _gen2_arm_body_is_void(_e.else_body)
+    }
+    // Nested match: void when every arm body is void.
+    if _ek == "MatchExpr" && type_of(_e.arms) != "string" {
+        let mut _mi = 0
+        while _mi < len(_e.arms) {
+            if !_gen2_arm_body_is_void(_e.arms[_mi].body) { return false }
+            _mi = _mi + 1
+        }
+        return true
+    }
+    return false
+}
+
 fn gen2_fn_decl(node) {
     let has_restrict = gen2_has_attr(node, "restrict")
     let has_flatten = gen2_has_attr(node, "flatten")
@@ -1898,6 +1942,24 @@ fn gen2_fn_decl(node) {
                             if _cname == "eprint" { _skip = true }
                             if _cname == "exit" { _skip = true }
                         }
+                    }
+                    // PROBE r15-D3: trailing MatchExpr whose arms are all
+                    // void-call bodies (println/print/eprintln/eprint/exit)
+                    // — the synthesized ternary is C-void-typed, so wrapping
+                    // it in `return __hexa_fn_arena_return(...)` is a clang
+                    // type error. Drop the tail-returnify rewrite so the
+                    // match emits as a plain statement and the function
+                    // falls through to the void footer (matches the bare
+                    // Call-to-void-builtin sibling rule above).
+                    if inner_kind == "MatchExpr" && type_of(stmt.left.arms) != "string" {
+                        let mut _all_void = true
+                        let mut _qi = 0
+                        let _qarms = stmt.left.arms
+                        while _qi < len(_qarms) {
+                            if !_gen2_arm_body_is_void(_qarms[_qi].body) { _all_void = false }
+                            _qi = _qi + 1
+                        }
+                        if _all_void { _skip = true }
                     }
                     if !_skip {
                         // Plan B Phase 3: if this fn has defers, route
@@ -4582,6 +4644,17 @@ fn gen2_expr(node) {
                 return "hexa_float(INFINITY)"
             }
         }
+        // PROBE r15-D3: bare `None` (no shadow / decl / known global) lowers
+        // to the canonical Option/Result-style tag `hexa_str("None")`. Matched
+        // by gen2_match_cond's Ident-tag arm (sibling to `Some(v)` Call form).
+        // Mirror covers `Ok`/`Err`/`Some` used in VALUE position (rare —
+        // usually they appear as Call constructors, handled in the Call
+        // branch); keeps the surface symmetric.
+        if node.name == "None" {
+            if !_gen2_has_decl(node.name) && !_gen2_name_in_cur_lets(node.name) && !_is_known_fn_global(node.name) && !_is_known_nonlocal(node.name) {
+                return "hexa_str(\"None\")"
+            }
+        }
         if node.name == "nan" {
             if !_gen2_has_decl(node.name) && !_gen2_name_in_cur_lets(node.name) && !_is_known_fn_global(node.name) && !_is_known_nonlocal(node.name) {
                 return "hexa_float(NAN)"
@@ -5055,6 +5128,21 @@ fn gen2_expr(node) {
         let callee = node.left
         if type_of(callee) != "string" && callee.kind == "Ident" {
             let name = callee.name
+            // PROBE r15-D3: Option/Result tagged-array constructors —
+            // `Some(x)` / `Ok(x)` / `Err(x)` lower to `[hexa_str(tag), x]`,
+            // mirroring the EnumPath payload convention (`[tag, payload]`
+            // at index 0/1; see gen2_expr EnumPath branch and gen2_match_cond
+            // EnumPath arm). Bare `None` is the tag itself (hexa_str("None"),
+            // emitted in the Ident branch above). Guarded by !_gen2_has_decl
+            // so a user `fn Some(x)` shadow wins — keeps Rust-style canon
+            // (the std prelude can be shadowed) and avoids changing existing
+            // semantics for projects that already defined these names.
+            if (name == "Some" || name == "Ok" || name == "Err") && !_gen2_has_decl(name) && !_is_known_fn_global(name) {
+                let nargs_o = len(node.args)
+                if nargs_o == 1 {
+                    return "hexa_array_push(hexa_array_push(hexa_array_new(), hexa_str(\"" + name + "\")), " + gen2_expr(node.args[0]) + ")"
+                }
+            }
             // Built-in mappings
             // FIX (2026-04-20): variadic println/print — prior codegen
             // dropped args[1..], emitting only `hexa_println(args[0])`. For
@@ -7539,6 +7627,27 @@ fn gen2_match_stmt(node, depth) {
                 _pi = _pi + 1
             }
         }
+        // PROBE r15-D3: Option/Result `Call`-shape pattern arm binding —
+        // `Some(v) => …` / `Ok(v)` / `Err(e)` parses as Call{left:Ident,
+        // args:[Ident v]}. Bind each Ident arg from __match_val[i+1] (index 0
+        // = tag, mirroring EnumPath payload convention). Wildcards skipped.
+        if type_of(pat) != "string" && pat.kind == "Call" && type_of(pat.left) != "string" && pat.left.kind == "Ident" {
+            let _cn2 = pat.left.name
+            if (_cn2 == "Some" || _cn2 == "Ok" || _cn2 == "Err") && type_of(pat.args) != "string" {
+                let _pad3 = gen2_indent(depth + 2)
+                let mut _ai = 0
+                while _ai < len(pat.args) {
+                    let _it = pat.args[_ai]
+                    if type_of(_it) != "string" && _it.kind == "Ident" {
+                        let _in = _it.name
+                        if type_of(_in) == "string" && _in != "_" {
+                            chunks.push(_pad3 + "HexaVal " + _hexa_mangle_ident(_in) + " = hexa_index_get(__match_val, hexa_int(" + to_string(_ai + 1) + "));\n")
+                        }
+                    }
+                    _ai = _ai + 1
+                }
+            }
+        }
 
         // Arm body — scope-isolate the comptime-const fold table so a
         // `let x = <lit>` in this arm does not leak its folded literal into a
@@ -7606,6 +7715,25 @@ fn gen2_match_cond(pat, scrutinee_var) {
         }
         return "hexa_truthy(hexa_eq(" + scrutinee_var + ", hexa_bool(0)))"
     }
+    // PROBE r15-D3: Option/Result `Call`-shape patterns — `Some(v)` / `Ok(v)`
+    // / `Err(e)` reach the parser as `Call{left:Ident, args:[…]}` (see
+    // parse_match_pattern fallthrough to parse_expr). Test the tag at index 0
+    // with HX_IS_ARRAY guard, mirroring the EnumPath single-binder arm below.
+    // The actual `v` binding is emitted in gen2_match_stmt / gen2_match_ternary
+    // (sibling EnumPath logic was extended to recognize the same shape).
+    if k == "Call" && type_of(pat.left) != "string" && pat.left.kind == "Ident" {
+        let _cn = pat.left.name
+        if _cn == "Some" || _cn == "Ok" || _cn == "Err" {
+            return "(HX_IS_ARRAY(" + scrutinee_var + ") && hexa_truthy(hexa_eq(hexa_index_get(" + scrutinee_var + ", hexa_int(0)), hexa_str(\"" + _cn + "\"))))"
+        }
+    }
+    // PROBE r15-D3: bare `None` pattern → tag-equality with hexa_str("None").
+    // Routed before the generic Ident-binder logic in gen2_match_ternary so
+    // `None` is REFUTABLE (not an irrefutable binder of the scrutinee). The
+    // stmt-form binder block in gen2_match_stmt similarly skips it.
+    if k == "Ident" && pat.name == "None" {
+        return "hexa_truthy(hexa_eq(" + scrutinee_var + ", hexa_str(\"None\")))"
+    }
     if k == "EnumPath" {
         let enum_const = pat.name + "_" + pat.value
         // RFC-020 A4: payload-binder pattern (e.g. `Shape::Circle(r)`) — pat.left
@@ -7661,7 +7789,11 @@ fn gen2_match_ternary(arms, scrutinee_c, idx) {
     let mut _bind_name = ""
     if type_of(pat) != "string" && pat.kind == "Ident" {
         let _pn = pat.name
-        if type_of(_pn) == "string" && _pn != "_" {
+        // PROBE r15-D3: exclude Option/Result tag names from irrefutable
+        // bare-Ident binder logic — `None` is a refutable tag pattern
+        // (handled in gen2_match_cond above). `Some`/`Ok`/`Err` always
+        // appear as Call shapes; defensively excluded too.
+        if type_of(_pn) == "string" && _pn != "_" && _pn != "None" && _pn != "Some" && _pn != "Ok" && _pn != "Err" {
             _bind_name = _pn
         }
     }
@@ -7701,6 +7833,30 @@ fn gen2_match_ternary(arms, scrutinee_c, idx) {
             val = "({ " + _binds + "(" + val + "); })"
         }
     }
+    // PROBE r15-D3: Call-shape Option/Result payload binders (`Some(v)` /
+    // `Ok(v)` / `Err(e)`) in ternary-form match. Wrap val (and the guard
+    // below) in a stmt-expr that binds each Ident arg from scrutinee[i+1].
+    // Sibling to the EnumPath wrap above; uses pat.args instead of pat.items.
+    let mut _call_binds = ""
+    if type_of(pat) != "string" && pat.kind == "Call" && type_of(pat.left) != "string" && pat.left.kind == "Ident" {
+        let _cn3 = pat.left.name
+        if (_cn3 == "Some" || _cn3 == "Ok" || _cn3 == "Err") && type_of(pat.args) != "string" {
+            let mut _ai = 0
+            while _ai < len(pat.args) {
+                let _it = pat.args[_ai]
+                if type_of(_it) != "string" && _it.kind == "Ident" {
+                    let _in = _it.name
+                    if type_of(_in) == "string" && _in != "_" {
+                        _call_binds = _call_binds + "HexaVal " + _hexa_mangle_ident(_in) + " = hexa_index_get(" + scrutinee_c + ", hexa_int(" + to_string(_ai + 1) + ")); "
+                    }
+                }
+                _ai = _ai + 1
+            }
+            if len(_call_binds) > 0 {
+                val = "({ " + _call_binds + "(" + val + "); })"
+            }
+        }
+    }
     // Bare-Ident binder: bind the whole scrutinee into the arm value.
     if len(_bind_name) > 0 {
         val = "({ HexaVal " + _hexa_mangle_ident(_bind_name) + " = " + scrutinee_c + "; (" + val + "); })"
@@ -7735,6 +7891,11 @@ fn gen2_match_ternary(arms, scrutinee_c, idx) {
         // stmt-expr wrap into the guard so `n` is in scope for the cond too.
         if len(_enum_bind_name) > 0 {
             _guard_c = "({ HexaVal " + _hexa_mangle_ident(_enum_bind_name) + " = hexa_index_get(" + scrutinee_c + ", hexa_int(1)); (" + _guard_c + "); })"
+        }
+        // PROBE r15-D3: same wrap for Call-shape Option/Result binders so the
+        // guard sees the bound payload names (`Some(n) if n > 0 => …`).
+        if len(_call_binds) > 0 {
+            _guard_c = "({ " + _call_binds + "(" + _guard_c + "); })"
         }
         cond = "(" + cond + " && hexa_truthy(" + _guard_c + "))"
     }
