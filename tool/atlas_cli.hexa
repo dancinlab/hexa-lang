@@ -1,24 +1,27 @@
-// tool/atlas_cli.hexa — `hexa atlas {hash|stats|lookup|dump|register}`
+// tool/atlas_cli.hexa — `hexa atlas {hash|stats|lookup|dump|register|export}`
 //
-// @version 0.6.0
+// @version 0.7.0
 // @capabilities [fs_read, fs_write, exec]
 //
-// Atlas surface — n6/atlas.n6 is THE single SSOT (2026-05-22 directive
-// "no hxc — atlas.n6 is the single artifact"):
-//   - READ (hash/stats/lookup/dump) resolve against static_atlas() →
-//     merger::load_atlas, which parses n6/atlas.n6 at load time.
-//   - WRITE (register) is the ONE absorption verb. Each `--from-<verb>` arm
-//     runs the verb IN-PROCESS, constructs the verified AtlasNode IN MEMORY,
-//     and appends its .n6 block DIRECTLY to the live n6/atlas.n6 — the same
-//     file READ parses. No staging shard, no embedded.gen.hexa, no rebuild:
-//     the next lookup sees it. Commit n6/atlas.n6 with normal git to share.
-//     All arms share the canonical DiscoveryEvent → register_from_event sink.
+// Atlas surface — compiler/atlas/embedded.gen.hexa is THE single SSOT (the
+// binary-builtin atlas; #846 owner-directed inversion of the n6-runtime model):
+//   - READ (hash/stats/lookup/dump) resolve against static_atlas(), which
+//     TEXT-parses embedded.gen.hexa at load (extracts each AtlasNode.raw .n6
+//     block → parser::parse_atlas_string). OOM-safe: never a compile-time `use`.
+//   - WRITE (register) is the ONE absorption verb. Each `--from-<verb>` arm runs
+//     the verb IN-PROCESS, constructs the verified AtlasNode IN MEMORY, and folds
+//     it DIRECTLY into embedded.gen.hexa — visible to the next lookup with NO
+//     rebuild, NO staging shard, NO intermediate. Commit embedded.gen.hexa with
+//     normal git to share. All arms share DiscoveryEvent → register_from_event.
 //       --from-verify <fn> <n|a b> <v>   recompute IN-PROCESS, register on 🔵/🟢
 //       --from-drill  --seed "<text>"    drive the drill engine, register candidates
+//   - EXPORT (export [--out PATH]) writes the live atlas out as a portable .n6
+//     file (default n6/atlas.n6). n6/atlas.n6 is an EXPORT artifact only — NOT
+//     the runtime SSOT.
 //
-//   (append-witness staging shards, the embedded.gen.hexa fold, the `pr`
-//    verb + --auto-pr PR-only detour, and the `register <file>` STUB were
-//    abolished 2026-05-25 — they split the SSOT and hid writes from lookup.)
+//   (append-witness staging shards, the `pr` verb + --auto-pr PR-only detour, the
+//    `register <file>` STUB, and the n6-runtime-SSOT load path were abolished
+//    2026-05-25 — #831 (collapse) + #846 (embedded-SSOT inversion).)
 //
 // Wired from self/main.hexa: `hexa atlas <sub-sub> [args]`.
 // Also runnable directly: `hexa run tool/atlas_cli.hexa <sub-sub> [args]`.
@@ -2013,10 +2016,10 @@ fn _today_compact() -> string {
 // _branch_stamp — date + millis, safe for a git branch name.
 
 fn cmd_help() {
-    println("hexa atlas — atlas SSOT surface (embedded read + staging write)")
+    println("hexa atlas — atlas SSOT surface (embedded.gen.hexa read + direct-fold write)")
     println("")
-    println("read subcommands (zero-I/O over compile-time embed):")
-    println("  hash                    print ATLAS_HASH (embedded sha256 pin)")
+    println("read subcommands (TEXT-parse embedded.gen.hexa at load):")
+    println("  hash                    print ATLAS_HASH")
     println("  stats                   per-kind counts + ATLAS_HASH + source_count")
     println("  stats --audit [--scope=rodata|overlay|merged] [--format=json]")
     println("                          rich audit (grades / dups / orphans / breakthroughs)")
@@ -2025,18 +2028,20 @@ fn cmd_help() {
     println("  lookup --prefix=<p>     list nodes whose id starts with <p>")
     println("  dump [K] [--json]       emit all nodes (text or jsonl)")
     println("")
-    println("write subcommand (appends DIRECTLY to the live n6/atlas.n6 — no rebuild):")
+    println("write subcommand (folds DIRECTLY into embedded.gen.hexa — no rebuild, no intermediate):")
     println("  register --from-verify <fn> <n> <v>          recompute IN-PROCESS; register on 🔵/🟢")
     println("           --from-verify <fn> <a> <b> <v>      (2-op form)")
     println("           --from-drill  --seed \"<text>\" [--rounds N] [--engine mk9|mk10] [--id <id>]")
     println("                          Each --from-<verb> arm runs the verb IN-PROCESS, builds the")
-    println("                          verified AtlasNode IN MEMORY, and appends its .n6 block to the")
-    println("                          live n6/atlas.n6 (the same file READ parses) — visible to the")
-    println("                          next lookup with NO rebuild. HONEST DEGRADE: drill verdict=skip")
-    println("                          registers nothing; verify FALSIFIED is refused.")
-    println("                          Commit n6/atlas.n6 with normal git to share.")
+    println("                          verified AtlasNode IN MEMORY, and folds it into embedded.gen.hexa")
+    println("                          — visible to the next lookup with NO rebuild. HONEST DEGRADE:")
+    println("                          drill verdict=skip registers nothing; verify FALSIFIED is refused.")
+    println("                          Commit embedded.gen.hexa with normal git to share.")
     println("")
-    println("SSOT: n6/atlas.n6 (set $HEXA_ATLAS_N6=/abs/dir to override; else ~/core/hexa-lang/n6).")
+    println("export subcommand (live atlas → portable .n6; n6 is EXPORT-only, NOT the SSOT):")
+    println("  export [--out PATH]     write all nodes as .n6 (default n6/atlas.n6)")
+    println("")
+    println("SSOT: compiler/atlas/embedded.gen.hexa (set $HEXA_ATLAS_EMBED=/abs/dir to override).")
 }
 
 fn main() {
