@@ -19384,6 +19384,7 @@ HexaVal gen2_fn_decl(HexaVal node) {
         _gen2_current_fn_strict_fp = hexa_int(0);
     }
     HexaVal body_len = hexa_int(hexa_len(hexa_map_get_ic(node, "body", &__hexa_codegen_ic_131)));
+    HexaVal _cc_fn_mark = _comptime_const_scope_mark();
     HexaVal bi = hexa_int(0);
     while (HX_BOOL(hexa_cmp_lt(bi, body_len))) {
         HexaVal stmt = hexa_index_get(hexa_map_get_ic(node, "body", &__hexa_codegen_ic_132), bi);
@@ -19458,6 +19459,7 @@ HexaVal gen2_fn_decl(HexaVal node) {
         }
         bi = hexa_add(bi, hexa_int(1));
     }
+    _comptime_const_scope_restore(_cc_fn_mark);
     if (hexa_truthy(hexa_cmp_gt(_gen2_defer_flag_count, hexa_int(0)))) {
         hexa_array_push(chunks, __hexa_codegen_sl_492);
         hexa_array_push(chunks, __hexa_codegen_sl_493);
