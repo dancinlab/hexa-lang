@@ -121,6 +121,8 @@ hexa cloud nohup vast-foo log.out --port 16984 --insecure --max-idle 30m -- pyth
 
 ## Status
 
+**Status**: resolved-PR#715-2026-05-24 — cloud_idle_autokill_watchdog landed (stdlib/cloud/watchdog.hexa · 15 cases · dry-run gated · _should_autokill 3-gate guard)
+
 - [x] Discovered + reproduced (5 pods 18-27h idle on 2026-05-24)
 - [x] Fix A 구현 (`stdlib/cloud/watchdog.hexa` — PR stdlib-cloud-idle-autokill-2026-05-24)
   - `_should_autokill(uptime_min, util_pct, threshold_min, util_cap)` = pure closed-form decision (network-free)
