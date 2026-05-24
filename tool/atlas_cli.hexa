@@ -944,6 +944,185 @@ fn _mirror_bench_hog_asymptote_register() -> float {
     return (1.0 + ln_two) / 2.0
 }
 
+// ── Bio-physical Phase 1 (demiurge V2 unlock — atlas register mirror) ──
+// L2 wall — atlas-side companion of verify_cli bio Phase 1. Verbatim ports
+// of _exp_release · _ldl_pct · _beer_lambert. PR #732 / inbox patch
+// atlas-cli-biostat-register-2026-05-25. Cross-domain unblock: ISR ·
+// DAPTPGX · LPA · NOREFLOW · TTR · HERPES (5+ claims × 3 fns).
+
+// Exponential release (M_0 * (1 - exp(-k*t))). 3-arg.
+fn _exp_release_register(m_0: float, k_rate: float, t_time: float) -> float {
+    if m_0 < 0.0 { return _NOCALC_F_REGISTER }
+    if k_rate < 0.0 { return _NOCALC_F_REGISTER }
+    if t_time < 0.0 { return _NOCALC_F_REGISTER }
+    return m_0 * (1.0 - exp(0.0 - k_rate * t_time))
+}
+
+// LDL percent change ((final - baseline) / baseline * 100). 2-arg.
+fn _ldl_pct_register(baseline: float, final_v: float) -> float {
+    if baseline <= 0.0 { return _NOCALC_F_REGISTER }
+    return (final_v - baseline) / baseline * 100.0
+}
+
+// Beer-Lambert attenuation (I_0 * exp(-mu * x)). 3-arg.
+fn _beer_lambert_register(i_0: float, mu_abs: float, x_depth: float) -> float {
+    if i_0 < 0.0 { return _NOCALC_F_REGISTER }
+    if mu_abs < 0.0 { return _NOCALC_F_REGISTER }
+    if x_depth < 0.0 { return _NOCALC_F_REGISTER }
+    return i_0 * exp(0.0 - mu_abs * x_depth)
+}
+
+// ── Bio-statistics (LPA cycle 4 V2 — atlas register mirror) ─────────────
+// Trial-readout primitives: NNT (Laupacis 1988) · ARR (Sackett 1996) ·
+// ln_HR → HR back-transform (Cox 1972). L2 unblock for LPA · NOREFLOW etc.
+
+// Number Needed to Treat (100 / arr_pp). 1-arg.
+fn _nnt_register(arr_pp: float) -> float {
+    if arr_pp <= 0.0 { return _NOCALC_F_REGISTER }
+    return 100.0 / arr_pp
+}
+
+// Absolute Risk Reduction (p_control - p_treat). 2-arg.
+fn _arr_register(p_control: float, p_treat: float) -> float {
+    return p_control - p_treat
+}
+
+// Log Hazard Ratio → Hazard Ratio (exp(ln_HR)). 1-arg.
+fn _ln_hr_to_hr_register(ln_hr: float) -> float {
+    return exp(ln_hr)
+}
+
+// ── Bio-physical Phase 2 (demiurge V2 unlock — atlas register mirror) ──
+// Hill (1910) · Cheng-Prusoff (1973) · Fick's first law (1855) ·
+// Young-Laplace (1805/1806) · Stokes-Einstein (1905). L2 unblock for
+// receptor-binding · Ki conversion · diffusion · vessel-wall mechanics.
+
+// Hill receptor binding (L^n / (Kd^n + L^n)). 3-arg.
+fn _hill_register(l_conc: float, k_d: float, n_hill: float) -> float {
+    if l_conc < 0.0 { return _NOCALC_F_REGISTER }
+    if k_d <= 0.0 { return _NOCALC_F_REGISTER }
+    if n_hill <= 0.0 { return _NOCALC_F_REGISTER }
+    let ln_p = pow(l_conc, n_hill)
+    let kn_p = pow(k_d, n_hill)
+    let denom = kn_p + ln_p
+    if denom <= 0.0 { return _NOCALC_F_REGISTER }
+    return ln_p / denom
+}
+
+// Cheng-Prusoff Ki from IC50 (IC50 / (1 + S/Km)). 3-arg.
+fn _cheng_prusoff_register(ic50: float, s_conc: float, k_m: float) -> float {
+    if ic50 < 0.0 { return _NOCALC_F_REGISTER }
+    if s_conc < 0.0 { return _NOCALC_F_REGISTER }
+    if k_m <= 0.0 { return _NOCALC_F_REGISTER }
+    return ic50 / (1.0 + s_conc / k_m)
+}
+
+// Fick's first law of diffusion (-D * dC/dx). 3-arg.
+fn _fick1_register(d_diff: float, d_c: float, d_x: float) -> float {
+    if d_diff < 0.0 { return _NOCALC_F_REGISTER }
+    if d_x == 0.0 { return _NOCALC_F_REGISTER }
+    return 0.0 - d_diff * d_c / d_x
+}
+
+// Young-Laplace vessel wall stress (P*r / t_wall). 3-arg.
+fn _laplace_wall_register(p_press: float, r_rad: float, t_wall: float) -> float {
+    if p_press < 0.0 { return _NOCALC_F_REGISTER }
+    if r_rad < 0.0 { return _NOCALC_F_REGISTER }
+    if t_wall <= 0.0 { return _NOCALC_F_REGISTER }
+    return p_press * r_rad / t_wall
+}
+
+// Stokes-Einstein diffusion (kB*T / (6*pi*eta*r)). 3-arg.
+fn _stokes_einstein_register(t_kelvin: float, eta_visc: float, r_rad: float) -> float {
+    if t_kelvin <= 0.0 { return _NOCALC_F_REGISTER }
+    if eta_visc <= 0.0 { return _NOCALC_F_REGISTER }
+    if r_rad <= 0.0 { return _NOCALC_F_REGISTER }
+    let kB_se = 0.00000000000000000000001380649     // 1.380649e-23 J/K (CODATA-2019 exact)
+    let pi_se = 3.14159265358979323846
+    return kB_se * t_kelvin / (6.0 * pi_se * eta_visc * r_rad)
+}
+
+// ── Superconductivity (RTSC V2 closed-form — atlas register mirror) ────
+// Allen-Dynes (1975) · McMillan (1968) · BCS (1957) · Eliashberg (1960) ·
+// BEE-NET grid · Migdal (1958). L2 unblock for RTSC V2 🔵 push.
+
+// Allen-Dynes critical temperature (ω_log/1.2)·exp(-1.04(1+λ)/(λ-μ*(1+0.62λ))). 3-arg.
+fn _allen_dynes_tc_register(lam: float, omega_log_k: float, mustar: float) -> float {
+    if omega_log_k <= 0.0 { return _NOCALC_F_REGISTER }
+    let denom = lam - mustar * (1.0 + 0.62 * lam)
+    if denom <= 0.0 { return _NOCALC_F_REGISTER }
+    let exp_arg = 0.0 - 1.04 * (1.0 + lam) / denom
+    return (omega_log_k / 1.2) * exp(exp_arg)
+}
+
+// McMillan critical temperature (ω_D/1.45)·exp(-1.04(1+λ)/(λ-μ*(1+0.62λ))). 3-arg.
+fn _mcmillan_tc_register(lam: float, omega_d_k: float, mustar: float) -> float {
+    if omega_d_k <= 0.0 { return _NOCALC_F_REGISTER }
+    let denom = lam - mustar * (1.0 + 0.62 * lam)
+    if denom <= 0.0 { return _NOCALC_F_REGISTER }
+    let exp_arg = 0.0 - 1.04 * (1.0 + lam) / denom
+    return (omega_d_k / 1.45) * exp(exp_arg)
+}
+
+// BCS gap-to-Tc ratio (2π / e^γ ≈ 3.527754). 0-arg.
+fn _bcs_gap_ratio_register() -> float {
+    let pi_bcs = 3.14159265358979323846
+    let euler_gamma = 0.5772156649015329
+    return 2.0 * pi_bcs / exp(euler_gamma)
+}
+
+// Eliashberg coupling λ from precomputed moment (λ = 2*M₀). 1-arg.
+fn _lambda_eliashberg_register(moment_m0: float) -> float {
+    if moment_m0 < 0.0 { return _NOCALC_F_REGISTER }
+    return 2.0 * moment_m0
+}
+
+// BEE-NET grid bin count (floor(ω_max/Δω) + 1). 2-arg.
+fn _beenet_grid_bins_register(omega_max_mev: float, step_mev: float) -> float {
+    if omega_max_mev < 0.0 { return _NOCALC_F_REGISTER }
+    if step_mev <= 0.0 { return _NOCALC_F_REGISTER }
+    let bins = omega_max_mev / step_mev
+    let bins_int = to_int(bins)
+    return to_float(bins_int + 1)
+}
+
+// Migdal adiabaticity ratio (ω_phonon / E_Fermi). 2-arg.
+fn _migdal_ratio_register(omega_phonon: float, e_fermi: float) -> float {
+    if omega_phonon < 0.0 { return _NOCALC_F_REGISTER }
+    if e_fermi <= 0.0 { return _NOCALC_F_REGISTER }
+    return omega_phonon / e_fermi
+}
+
+// ── Bio-physical Phase 3 (demiurge V2 unlock — atlas register mirror) ──
+// Higuchi (1961) sustained-release · Tafel (1905) electrochemical
+// overpotential · Hagen-Poiseuille (1839/1840) laminar flow. Phase 3
+// introduces the 4-arg float dispatch lane (hagen_poiseuille).
+
+// Higuchi sustained-release (k_H * sqrt(t)). 2-arg.
+fn _higuchi_register(k_h: float, t_time: float) -> float {
+    if k_h < 0.0 { return _NOCALC_F_REGISTER }
+    if t_time < 0.0 { return _NOCALC_F_REGISTER }
+    return k_h * sqrt(t_time)
+}
+
+// Tafel overpotential (a + b*log10(j)) via log(j)/log(10). 3-arg.
+fn _tafel_register(a_intercept: float, b_slope: float, j_curr: float) -> float {
+    if j_curr <= 0.0 { return _NOCALC_F_REGISTER }
+    let ln10 = log(10.0)
+    return a_intercept + b_slope * (log(j_curr) / ln10)
+}
+
+// Hagen-Poiseuille laminar flow (π·r^4·dP / (8·μ·L)). 4-arg.
+fn _hagen_poiseuille_register(r_rad: float, d_p: float, mu_visc: float, l_len: float) -> float {
+    if r_rad < 0.0 { return _NOCALC_F_REGISTER }
+    if mu_visc <= 0.0 { return _NOCALC_F_REGISTER }
+    if l_len <= 0.0 { return _NOCALC_F_REGISTER }
+    let pi_hp = 3.14159265358979323846
+    let r2 = r_rad * r_rad
+    let r4 = r2 * r2
+    return pi_hp * r4 * d_p / (8.0 * mu_visc * l_len)
+}
+
 // float dispatch — fn_name → recompute. Mirrors verify_cli::_recompute_float.
 // RFC 045 qmirror PR-A atoms (chsh_tsirelson · hardy_bound · mabk_quantum_max
 // · pt_doily_quantum_win · pt_doily_classical_bound) are mirrored here as
@@ -955,8 +1134,10 @@ fn _mirror_bench_hog_asymptote_register() -> float {
 // PR #663 verify dispatch. PR-E atoms (sym_shadow_var_bound ·
 // overlap_vqe_h2_shift_ha · rpe_heisenberg_sigma · mirror_bench_hog_asymptote)
 // added via PR #667 verify dispatch.
-// 0-arg fns ignore a0/a1; 1-arg fns take a0; 2-arg take a0,a1.
-fn _recompute_float_register(fn_name: string, a0: float, a1: float, argc: int) -> float {
+// 0-arg fns ignore a0/a1/a2/a3; 1-arg fns take a0; 2-arg take a0,a1;
+// 3-arg take a0,a1,a2 (bio Phase 1/2 + supercon); 4-arg take a0,a1,a2,a3
+// (bio Phase 3 — hagen_poiseuille). Widened 2026-05-25 (atlas L2 wall fix).
+fn _recompute_float_register(fn_name: string, a0: float, a1: float, a2: float, a3: float, argc: int) -> float {
     if fn_name == "welch_t_crit" { return _welch_t_crit_register(a0) }
     if fn_name == "wilson_hilferty_p" {
         if argc < 2 { return _NOCALC_F_REGISTER }
@@ -1027,6 +1208,105 @@ fn _recompute_float_register(fn_name: string, a0: float, a1: float, argc: int) -
         return _rpe_heisenberg_sigma_register(k_gens, m_per_k)
     }
     if fn_name == "mirror_bench_hog_asymptote" { return _mirror_bench_hog_asymptote_register() }
+    // ── Bio-physical Phase 1 (atlas L2 unblock 2026-05-25) ───────────
+    //   exp_release(M_0, k, t)    3-arg: M_0 * (1 - exp(-k*t))
+    //   ldl_pct(baseline, final)  2-arg: (final - baseline)/baseline * 100
+    //   beer_lambert(I_0, mu, x)  3-arg: I_0 * exp(-mu*x)
+    if fn_name == "exp_release" {
+        if argc < 3 { return _NOCALC_F_REGISTER }
+        return _exp_release_register(a0, a1, a2)
+    }
+    if fn_name == "ldl_pct" {
+        if argc < 2 { return _NOCALC_F_REGISTER }
+        return _ldl_pct_register(a0, a1)
+    }
+    if fn_name == "beer_lambert" {
+        if argc < 3 { return _NOCALC_F_REGISTER }
+        return _beer_lambert_register(a0, a1, a2)
+    }
+    // ── Bio-statistics (LPA cycle 4 V2 — atlas L2 unblock) ────────────
+    //   nnt(arr_pp)              1-arg: 100 / arr_pp
+    //   arr(p_control, p_treat)  2-arg: p_control - p_treat
+    //   ln_hr_to_hr(ln_hr)       1-arg: exp(ln_hr)
+    if fn_name == "nnt" {
+        return _nnt_register(a0)
+    }
+    if fn_name == "arr" {
+        if argc < 2 { return _NOCALC_F_REGISTER }
+        return _arr_register(a0, a1)
+    }
+    if fn_name == "ln_hr_to_hr" {
+        return _ln_hr_to_hr_register(a0)
+    }
+    // ── Bio-physical Phase 2 (atlas L2 unblock) ───────────────────────
+    //   hill(L, Kd, n)              3-arg: L^n / (Kd^n + L^n)
+    //   cheng_prusoff(IC50, S, Km)  3-arg: IC50 / (1 + S/Km)
+    //   fick1(D, dC, dx)            3-arg: -D * dC/dx
+    //   laplace(P, r, t_wall)       3-arg: P * r / t_wall
+    //   stokes_einstein(T, eta, r)  3-arg: kB * T / (6 * pi * eta * r)
+    if fn_name == "hill" {
+        if argc < 3 { return _NOCALC_F_REGISTER }
+        return _hill_register(a0, a1, a2)
+    }
+    if fn_name == "cheng_prusoff" {
+        if argc < 3 { return _NOCALC_F_REGISTER }
+        return _cheng_prusoff_register(a0, a1, a2)
+    }
+    if fn_name == "fick1" {
+        if argc < 3 { return _NOCALC_F_REGISTER }
+        return _fick1_register(a0, a1, a2)
+    }
+    if fn_name == "laplace" {
+        if argc < 3 { return _NOCALC_F_REGISTER }
+        return _laplace_wall_register(a0, a1, a2)
+    }
+    if fn_name == "stokes_einstein" {
+        if argc < 3 { return _NOCALC_F_REGISTER }
+        return _stokes_einstein_register(a0, a1, a2)
+    }
+    // ── Superconductivity (RTSC V2 — atlas L2 unblock) ────────────────
+    //   allen_dynes_tc(λ, ω_log, μ*)   3-arg
+    //   mcmillan_tc(λ, ω_D, μ*)        3-arg
+    //   bcs_gap_ratio()                0-arg constant
+    //   lambda_eliashberg(M₀)          1-arg
+    //   beenet_grid_bins(ω_max, Δω)    2-arg
+    //   migdal_ratio(ω_phonon, E_F)    2-arg
+    if fn_name == "allen_dynes_tc" {
+        if argc < 3 { return _NOCALC_F_REGISTER }
+        return _allen_dynes_tc_register(a0, a1, a2)
+    }
+    if fn_name == "mcmillan_tc" {
+        if argc < 3 { return _NOCALC_F_REGISTER }
+        return _mcmillan_tc_register(a0, a1, a2)
+    }
+    if fn_name == "bcs_gap_ratio" { return _bcs_gap_ratio_register() }
+    if fn_name == "lambda_eliashberg" {
+        return _lambda_eliashberg_register(a0)
+    }
+    if fn_name == "beenet_grid_bins" {
+        if argc < 2 { return _NOCALC_F_REGISTER }
+        return _beenet_grid_bins_register(a0, a1)
+    }
+    if fn_name == "migdal_ratio" {
+        if argc < 2 { return _NOCALC_F_REGISTER }
+        return _migdal_ratio_register(a0, a1)
+    }
+    // ── Bio-physical Phase 3 (atlas L2 unblock — 4-arg lane) ──────────
+    //   higuchi(k_H, t)                   2-arg: k_H * sqrt(t)
+    //   tafel(a, b, j)                    3-arg: a + b * log10(j)
+    //   hagen_poiseuille(r, dP, mu, L)    4-arg: pi*r^4*dP / (8*mu*L)
+    if fn_name == "higuchi" {
+        if argc < 2 { return _NOCALC_F_REGISTER }
+        return _higuchi_register(a0, a1)
+    }
+    if fn_name == "tafel" {
+        if argc < 3 { return _NOCALC_F_REGISTER }
+        return _tafel_register(a0, a1, a2)
+    }
+    if fn_name == "hagen_poiseuille" {
+        if argc < 4 { return _NOCALC_F_REGISTER }
+        return _hagen_poiseuille_register(a0, a1, a2, a3)
+    }
     return _NOCALC_F_REGISTER
 }
 
@@ -1045,6 +1325,19 @@ fn _is_float_fn_register(fn_name: string) -> bool {
         || fn_name == "overlap_vqe_h2_shift_ha"
         || fn_name == "rpe_heisenberg_sigma"
         || fn_name == "mirror_bench_hog_asymptote"
+        // Bio-physical Phase 1 (atlas L2 unblock 2026-05-25):
+        || fn_name == "exp_release" || fn_name == "ldl_pct" || fn_name == "beer_lambert"
+        // Bio-statistics (LPA cycle 4 V2 — NNT/ARR/HR trial readout):
+        || fn_name == "nnt" || fn_name == "arr" || fn_name == "ln_hr_to_hr"
+        // Bio-physical Phase 2 (atlas L2 unblock):
+        || fn_name == "hill" || fn_name == "cheng_prusoff" || fn_name == "fick1"
+        || fn_name == "laplace" || fn_name == "stokes_einstein"
+        // Superconductivity (RTSC V2 closed-form):
+        || fn_name == "allen_dynes_tc" || fn_name == "mcmillan_tc"
+        || fn_name == "bcs_gap_ratio" || fn_name == "lambda_eliashberg"
+        || fn_name == "beenet_grid_bins" || fn_name == "migdal_ratio"
+        // Bio-physical Phase 3 (atlas L2 unblock — 4-arg lane):
+        || fn_name == "higuchi" || fn_name == "tafel" || fn_name == "hagen_poiseuille"
 }
 
 // is fn_name a 0-arg closed-form constant? Mirrors verify_cli::_is_zero_arg_float_fn.
@@ -1057,6 +1350,8 @@ fn _is_zero_arg_float_fn_register(fn_name: string) -> bool {
         || fn_name == "vqe_h2_fci_sto3g"
         || fn_name == "overlap_vqe_h2_shift_ha"
         || fn_name == "mirror_bench_hog_asymptote"
+        // Superconductivity (RTSC V2 closed-form):
+        || fn_name == "bcs_gap_ratio"
 }
 
 // _fstr_register — float → string for verdict echo / node text.
@@ -1538,23 +1833,33 @@ fn _adapt_verify_3op(fn_name: string, a_arg: int, b_arg: int, c_arg: int, expect
 // _adapt_verify_float — the 🟢 NUMERICAL adapter (RFC 047 atoms). Mirrors
 // verify_cli::cmd_expr_float: float args + claimed value are compared with
 // tolerance ε (NOT exact-eq) — within ε → 🟢 SUPPORTED-NUMERICAL; out-of-ε
-// → 🔴; no float path → 🟠 INSUFFICIENT. argc is 1 (1-arg fn) or 2 (2-arg).
-fn _adapt_verify_float(fn_name: string, a0_str: string, a1_str: string, v_str: string, argc: int, id_override: string) -> DiscoveryEvent {
+// → 🔴; no float path → 🟠 INSUFFICIENT. argc is 0 (constant) | 1 | 2 | 3
+// (bio Phase 1/2 + supercon) | 4 (bio Phase 3 hagen_poiseuille).
+fn _adapt_verify_float(fn_name: string, a0_str: string, a1_str: string, a2_str: string, a3_str: string, v_str: string, argc: int, id_override: string) -> DiscoveryEvent {
     let a0 = _parse_float_register(a0_str)
     let mut a1 = 0.0
+    let mut a2 = 0.0
+    let mut a3 = 0.0
     if argc >= 2 { a1 = _parse_float_register(a1_str) }
+    if argc >= 3 { a2 = _parse_float_register(a2_str) }
+    if argc >= 4 { a3 = _parse_float_register(a3_str) }
     let v = _parse_float_register(v_str)
     // 0-arg → empty operand echo (e.g. "chsh_tsirelson()"); 1-arg → "<a0>";
-    // 2-arg → "<a0>,<a1>". Mirrors verify_cli cmd_expr_float label.
+    // 2-arg → "<a0>,<a1>"; 3-arg → "<a0>,<a1>,<a2>"; 4-arg → "...,<a3>".
+    // Mirrors verify_cli cmd_expr_float label.
     let mut arg_echo = ""
     if argc == 1 { arg_echo = _fstr_register(a0) }
-    if argc >= 2 { arg_echo = _fstr_register(a0) + "," + _fstr_register(a1) }
+    if argc == 2 { arg_echo = _fstr_register(a0) + "," + _fstr_register(a1) }
+    if argc == 3 { arg_echo = _fstr_register(a0) + "," + _fstr_register(a1) + "," + _fstr_register(a2) }
+    if argc >= 4 { arg_echo = _fstr_register(a0) + "," + _fstr_register(a1) + "," + _fstr_register(a2) + "," + _fstr_register(a3) }
     let v_echo = _fstr_register(v)
     let mut prov = "hexa atlas register --from-verify " + fn_name
     if argc >= 1 { prov = prov + " " + a0_str }
     if argc >= 2 { prov = prov + " " + a1_str }
+    if argc >= 3 { prov = prov + " " + a2_str }
+    if argc >= 4 { prov = prov + " " + a3_str }
     prov = prov + " " + v_str
-    let got = _recompute_float_register(fn_name, a0, a1, argc)
+    let got = _recompute_float_register(fn_name, a0, a1, a2, a3, argc)
     if got == _NOCALC_F_REGISTER {
         return DiscoveryEvent { kind: "F", id: "", name: fn_name + "(" + arg_echo + ")=" + v_echo,
             raw: "", verdict: "🟠 INSUFFICIENT", source_verb: "verify", provenance: prov }
@@ -1723,7 +2028,17 @@ fn cmd_register(rest: array) {
 
     // ── dispatch ────────────────────────────────────────────────
     if from_verb == "verify" {
-        if len(positional) < 3 {
+        // 0-arg float closed-form (chsh_tsirelson · bcs_gap_ratio · ...) needs
+        // len(positional)==2 (just <fn> <v>). All other forms need ≥3. Probe
+        // zero-arg via _is_zero_arg_float_fn_register BEFORE the length gate.
+        let fn_pre = if len(positional) >= 1 { to_string(positional[0]) } else { "" }
+        let zero_arg_pre = _is_zero_arg_float_fn_register(fn_pre)
+        if zero_arg_pre {
+            if len(positional) < 2 {
+                println("error: --from-verify " + fn_pre + " needs <v> (0-arg float closed-form)")
+                exit(2)
+            }
+        } else if len(positional) < 3 {
             println("error: --from-verify needs <fn> <n> <v> (1-op) or <fn> <a> <b> <v> (2-op)")
             println("       see: hexa atlas register --help")
             exit(2)
@@ -1742,6 +2057,8 @@ fn cmd_register(rest: array) {
             let zero_arg = _is_zero_arg_float_fn_register(fn_name)
             let mut a0s = ""
             let mut a1s = ""
+            let mut a2s = ""
+            let mut a3s = ""
             let mut vs = ""
             let mut fargc = 1
             if zero_arg {
@@ -1753,15 +2070,31 @@ fn cmd_register(rest: array) {
                 vs = to_string(positional[1])
                 fargc = 0
             } else {
+                // positional layout (excludes the leading <fn_name> at index 0):
+                //   1-arg → [fn, a0, v]                    len 3
+                //   2-arg → [fn, a0, a1, v]                len 4
+                //   3-arg → [fn, a0, a1, a2, v]            len 5  (bio Phase 1/2 + supercon)
+                //   4-arg → [fn, a0, a1, a2, a3, v]        len 6  (bio Phase 3 hagen_poiseuille)
                 a0s = to_string(positional[1])
                 vs = to_string(positional[2])
-                if len(positional) >= 4 {
+                if len(positional) >= 6 {
+                    a1s = to_string(positional[2])
+                    a2s = to_string(positional[3])
+                    a3s = to_string(positional[4])
+                    vs = to_string(positional[5])
+                    fargc = 4
+                } else if len(positional) >= 5 {
+                    a1s = to_string(positional[2])
+                    a2s = to_string(positional[3])
+                    vs = to_string(positional[4])
+                    fargc = 3
+                } else if len(positional) >= 4 {
                     a1s = to_string(positional[2])
                     vs = to_string(positional[3])
                     fargc = 2
                 }
             }
-            let fev = _adapt_verify_float(fn_name, a0s, a1s, vs, fargc, id_override)
+            let fev = _adapt_verify_float(fn_name, a0s, a1s, a2s, a3s, vs, fargc, id_override)
             println("hexa atlas register --from-verify " + fev.name)
             if fev.verdict == "🟠 INSUFFICIENT" {
                 println("  tier   = 🟠 INSUFFICIENT")
