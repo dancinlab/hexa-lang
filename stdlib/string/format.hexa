@@ -1,0 +1,41 @@
+// HEXA Standard Library — string/format
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Common string conversion + formatting helpers. Standardises the 191+
+// anima inline `_str` definitions (STDLIB Phase 1b survey 2026-05-25)
+// under a single canonical name.
+//
+// Surface:
+//   pub fn str(x) -> string
+//     Polymorphic "anything to string" — thin wrapper over the runtime
+//     `to_string` builtin. The 191 anima `_str` copies all do this same
+//     conversion; this module = the canonical home.
+//
+//   pub fn pad_left(s: string, width: int, ch: string) -> string
+//     Left-pad `s` to `width` using `ch` (single-char string). For
+//     fixed-width log / table column alignment.
+//
+//   pub fn pad_right(s: string, width: int, ch: string) -> string
+//     Right-pad `s` to `width` using `ch`. Counterpart to pad_left.
+
+pub fn str(x) -> string {
+    return to_string(x)
+}
+
+pub fn pad_left(s: string, width: int, ch: string) -> string {
+    let mut out = s
+    while len(out) < width {
+        out = ch + out
+    }
+    return out
+}
+
+pub fn pad_right(s: string, width: int, ch: string) -> string {
+    let mut out = s
+    while len(out) < width {
+        out = out + ch
+    }
+    return out
+}
