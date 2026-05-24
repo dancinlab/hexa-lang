@@ -710,7 +710,6 @@ pub fn tokenize(source) {
                 }
                 let mut ts_parts = []
                 let mut ts_done = false
-                let mut ts_jstmpl_warned = false
                 while pos < len_chars && !ts_done {
                     if pos + 2 < len_chars && chars[pos] == '"' && chars[pos + 1] == '"' && chars[pos + 2] == '"' {
                         ts_done = true
@@ -738,13 +737,11 @@ pub fn tokenize(source) {
                         }
                     } else {
                         let tc = chars[pos]
-                        // PROBE r14: detect JS-style `${...}` template syntax and warn once
-                        // (hexa is function-form — use `format("...{}", x)` instead).
-                        // Escape with `\${` to silence (canonical pass-through of `$` literal).
-                        if !ts_jstmpl_warned && tc == '$' && pos + 1 < len_chars && chars[pos + 1] == '{' {
-                            println("warning: '${...}' JS template syntax not supported at line " + to_string(line) + ":" + to_string(col) + " — use format(\"...{}\", x) instead (escape with \\${ to silence)")
-                            ts_jstmpl_warned = true
-                        }
+                        // PROBE r14 / r15: `${...}` inside a PLAIN triple-quoted string
+                        // literal is legitimate content (same rationale as the regular
+                        // double-quote scanner below) — never interpolated, passed
+                        // through verbatim, no warning. Interpolation is opt-in via
+                        // f-strings (braces only).
                         ts_parts.push(to_string(tc))
                         pos = pos + 1
                         if tc == '\n' {
@@ -763,7 +760,6 @@ pub fn tokenize(source) {
                 col = col + 1
                 let mut s_parts = []
                 let mut done = false
-                let mut s_jstmpl_warned = false
                 while pos < len_chars && !done {
                     let c = chars[pos]
                     if c == '"' {
@@ -786,13 +782,13 @@ pub fn tokenize(source) {
                             col = col + 1
                         }
                     } else {
-                        // PROBE r14: detect JS-style `${...}` template syntax and warn once
-                        // (hexa is function-form — use `format("...{}", x)` instead).
-                        // Escape with `\${` to silence (canonical pass-through of `$` literal).
-                        if !s_jstmpl_warned && c == '$' && pos + 1 < len_chars && chars[pos + 1] == '{' {
-                            println("warning: '${...}' JS template syntax not supported at line " + to_string(line) + ":" + to_string(col) + " — use format(\"...{}\", x) instead (escape with \\${ to silence)")
-                            s_jstmpl_warned = true
-                        }
+                        // PROBE r14 / r15: `${...}` inside a PLAIN double-quoted string
+                        // literal is legitimate content (e.g. shell-var expansion in
+                        // `exec("... ${VAR:-default} ...")`). Plain strings are never
+                        // interpolated by hexa, so `${` is passed through verbatim — no
+                        // warning. Interpolation is opt-in via f-strings (`f"...{x}..."`,
+                        // braces only, scanned above) — that is the steer away from the
+                        // JS-template habit, not a heuristic scan of every string body.
                         s_parts.push(to_string(c))
                         pos = pos + 1
                         if c == '\n' {
