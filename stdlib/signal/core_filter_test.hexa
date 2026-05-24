@@ -4,52 +4,25 @@
 // (undefined link symbols), so the coefficient computation under test is INLINED
 // here verbatim from core_filter.hexa. The importable regression harness form
 // (below `main`, commented) becomes the canonical path once cross-import flatten
-// lands. Expected values are the anima HEXAD/VOICE frozen baseline outputs
-// (dsp_core.hexa §5) — this test pins byte-equal fidelity to that baseline.
+// lands. Trig is routed to the native libm `sin` / `cos` builtins (IEEE-correct);
+// expected values are the analytic RBJ Butterworth coefficients at the reference
+// design point, plus structural invariants that hold for any correct trig impl.
 //
 // import "stdlib/signal/core_filter.hexa"   // ← canonical once flatten lands
 
-let CF_PI = 3.14159265358979323846
 let CF_TWO_PI = 6.28318530717958647692
-
-fn _cf_fmod_native(x: float, m: float) -> float {
-    if m == 0.0 { return 0.0 }
-    let mut n = x / m
-    let mut ni = 0
-    if n >= 0.0 {
-        ni = n
-    } else {
-        ni = n - 1
-    }
-    let mut result = x - ni * m
-    if result < 0.0 { result = result + m }
-    return result
-}
-
-fn _cf_sin(x: float) -> float {
-    let t = _cf_fmod_native(x + CF_PI, CF_TWO_PI) - CF_PI
-    let t2 = t * t
-    let t3 = t2 * t
-    let t5 = t3 * t2
-    let t7 = t5 * t2
-    return t - t3 / 6.0 + t5 / 120.0 - t7 / 5040.0
-}
-
-fn _cf_cos(x: float) -> float {
-    return _cf_sin(x + CF_PI / 2.0)
-}
 
 fn _cf_biquad_omega(cutoff_hz: float, sample_rate: float) -> float {
     return CF_TWO_PI * cutoff_hz / sample_rate
 }
 
 fn _cf_biquad_alpha(omega: float, Q: float) -> float {
-    return _cf_sin(omega) / (2.0 * Q)
+    return sin(omega) / (2.0 * Q)
 }
 
 fn lpf_coeff(cutoff_hz: float, sample_rate: float, Q: float, idx: int) -> float {
     let w = _cf_biquad_omega(cutoff_hz, sample_rate)
-    let cs = _cf_cos(w)
+    let cs = cos(w)
     let al = _cf_biquad_alpha(w, Q)
     let a0 = 1.0 + al
     if idx == 0 { return ((1.0 - cs) / 2.0) / a0 }
@@ -62,7 +35,7 @@ fn lpf_coeff(cutoff_hz: float, sample_rate: float, Q: float, idx: int) -> float 
 
 fn hpf_coeff(cutoff_hz: float, sample_rate: float, Q: float, idx: int) -> float {
     let w = _cf_biquad_omega(cutoff_hz, sample_rate)
-    let cs = _cf_cos(w)
+    let cs = cos(w)
     let al = _cf_biquad_alpha(w, Q)
     let a0 = 1.0 + al
     if idx == 0 { return ((1.0 + cs) / 2.0) / a0 }
@@ -110,36 +83,42 @@ fn main() {
     let mut fails = 0
 
     // Reference design point: fc = 1000 Hz, fs = 8000 Hz, Q = 1/sqrt(2)
-    // (Butterworth). Expected coefficients are the anima HEXAD/VOICE frozen
-    // baseline (dsp_core.hexa §5), computed via the 7th-order Taylor sin/cos.
+    // (Butterworth). At ω = 2π·1000/8000 = π/4, cos ω = sin ω = √2/2, so
+    // α = sin ω / (2Q) = (√2/2)·(√2/2) = 0.5 and a0 = 1.5 EXACTLY. The expected
+    // coefficients below are the analytic RBJ Butterworth values (libm trig,
+    // IEEE-correct) — tightened tolerance pins them to 6 significant figures.
     let fc = 1000.0
     let fs = 8000.0
     let q = 0.7071067811865476
-    let tol = 0.00001
+    let tol = 0.000001
 
     // ── LPF known coefficients (b0,b1,b2,a1,a2) ──
+    // b0 = b2 = ((1-√2/2)/2)/1.5 = 0.09763107 ; b1 = (1-√2/2)/1.5 = 0.19526215
+    // a1 = (-2·√2/2)/1.5 = -0.94280904 ; a2 = (1-0.5)/1.5 = 1/3 = 0.33333333
     let lb0 = lpf_coeff(fc, fs, q, 0)
     let lb1 = lpf_coeff(fc, fs, q, 1)
     let lb2 = lpf_coeff(fc, fs, q, 2)
     let la1 = lpf_coeff(fc, fs, q, 3)
     let la2 = lpf_coeff(fc, fs, q, 4)
-    fails = fails + _check_flag("lpf_b0_known", _near(lb0,  0.439038, tol))
-    fails = fails + _check_flag("lpf_b1_known", _near(lb1,  0.878075, tol))
-    fails = fails + _check_flag("lpf_b2_known", _near(lb2,  0.439038, tol))
-    fails = fails + _check_flag("lpf_a1_known", _near(la1, -0.142844, tol))
-    fails = fails + _check_flag("lpf_a2_known", _near(la2,  0.898994, tol))
+    fails = fails + _check_flag("lpf_b0_known", _near(lb0,  0.09763107, tol))
+    fails = fails + _check_flag("lpf_b1_known", _near(lb1,  0.19526215, tol))
+    fails = fails + _check_flag("lpf_b2_known", _near(lb2,  0.09763107, tol))
+    fails = fails + _check_flag("lpf_a1_known", _near(la1, -0.94280904, tol))
+    fails = fails + _check_flag("lpf_a2_known", _near(la2,  0.33333333, tol))
 
     // ── HPF known coefficients ──
+    // b0 = b2 = ((1+√2/2)/2)/1.5 = 0.56903559 ; b1 = -(1+√2/2)/1.5 = -1.13807119
+    // a1, a2 share the LPF denominator (same ω, α).
     let hb0 = hpf_coeff(fc, fs, q, 0)
     let hb1 = hpf_coeff(fc, fs, q, 1)
     let hb2 = hpf_coeff(fc, fs, q, 2)
     let ha1 = hpf_coeff(fc, fs, q, 3)
     let ha2 = hpf_coeff(fc, fs, q, 4)
-    fails = fails + _check_flag("hpf_b0_known", _near(hb0,  0.510459, tol))
-    fails = fails + _check_flag("hpf_b1_known", _near(hb1, -1.020918, tol))
-    fails = fails + _check_flag("hpf_b2_known", _near(hb2,  0.510459, tol))
-    fails = fails + _check_flag("hpf_a1_known", _near(ha1, -0.142844, tol))
-    fails = fails + _check_flag("hpf_a2_known", _near(ha2,  0.898994, tol))
+    fails = fails + _check_flag("hpf_b0_known", _near(hb0,  0.56903559, tol))
+    fails = fails + _check_flag("hpf_b1_known", _near(hb1, -1.13807119, tol))
+    fails = fails + _check_flag("hpf_b2_known", _near(hb2,  0.56903559, tol))
+    fails = fails + _check_flag("hpf_a1_known", _near(ha1, -0.94280904, tol))
+    fails = fails + _check_flag("hpf_a2_known", _near(ha2,  0.33333333, tol))
 
     // ── Exact algebraic invariants (RBJ cookbook structure) ──
     // LPF: numerator symmetric (b0 == b2) and b1 == 2*b0.

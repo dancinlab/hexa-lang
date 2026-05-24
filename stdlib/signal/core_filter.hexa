@@ -22,13 +22,14 @@
 //     a1 =  (−2·cos ω)      / a0        a1 =  (−2·cos ω)      / a0
 //     a2 =  (1 − α)         / a0        a2 =  (1 − α)         / a0
 //
-// NOTE on sin/cos: this module reproduces anima's `sin_approx` / `cos_approx`
-// (7th-order range-reduced Taylor) and `fmod_native` VERBATIM as private
-// `_cf_*` helpers, rather than calling the native libm `sin` / `cos` builtins.
-// The anima HEXAD/VOICE frozen baseline (anima-voice/dsp_core.hexa §5) computes
-// every coefficient through those approximations; libm sin/cos differ at the
-// ulp level and would shift the coefficient bytes. Keeping the Taylor helpers
-// preserves byte-equality with that frozen baseline.
+// NOTE on sin/cos: this module uses the native libm `sin` / `cos` builtins
+// directly (IEEE-correct). An earlier revision wrapped a 7th-order range-reduced
+// Taylor `sin_approx` / `cos_approx` plus a hand-rolled `fmod_native` to mirror
+// the anima HEXAD/VOICE baseline, but that range-reduction relied on a float→int
+// truncation that does not occur here, so its sin/cos collapsed to ≈0.075 at
+// ω = π/4 and produced incorrect RBJ coefficients. libm trig is exact, consistent,
+// and drops that fragile Taylor + fmod dependency — these are the correct
+// Robert Bristow-Johnson Butterworth coefficients.
 //
 // Surface:
 //   pub fn lpf_coeff(cutoff_hz, sample_rate, Q, idx) -> float
@@ -44,64 +45,27 @@
 //       y[n] = x[n] + coeff·y[n−1]   (inverse of pre-emphasis)
 //
 // Provenance:
-//   byte-equal port of anima HEXAD/VOICE/anima-voice/dsp_core.hexa §5
+//   port of anima HEXAD/VOICE/anima-voice/dsp_core.hexa §5 structure
 //   (lpf_coeff / hpf_coeff / biquad_tick / preemphasis_tick / deemphasis_tick,
-//   plus the biquad_omega / biquad_alpha intermediates and the sin/cos/fmod
-//   approximations they depend on). BT-SPEAK-DSP-00 foundation primitives.
+//   plus the biquad_omega / biquad_alpha intermediates), with trig routed to the
+//   native libm `sin` / `cos` builtins. BT-SPEAK-DSP-00 foundation primitives.
 
-let CF_PI = 3.14159265358979323846
 let CF_TWO_PI = 6.28318530717958647692
 
-// ── _cf_fmod_native: x mod m, always positive (byte-equal port) ─────────────
-fn _cf_fmod_native(x: float, m: float) -> float {
-    if m == 0.0 { return 0.0 }
-    let mut n = x / m
-    // Truncate toward zero
-    let mut ni = 0
-    if n >= 0.0 {
-        ni = n
-    } else {
-        ni = n - 1
-    }
-    let mut result = x - ni * m
-    if result < 0.0 { result = result + m }
-    return result
-}
-
-// ── _cf_sin: Taylor 7th order, range-reduced to [-pi, pi] (byte-equal port) ──
-// |error| < 0.00016 over full range
-fn _cf_sin(x: float) -> float {
-    // Range reduction: bring x into [-PI, PI]
-    let t = _cf_fmod_native(x + CF_PI, CF_TWO_PI) - CF_PI
-
-    // Taylor series: sin(t) = t - t^3/6 + t^5/120 - t^7/5040
-    let t2 = t * t
-    let t3 = t2 * t
-    let t5 = t3 * t2
-    let t7 = t5 * t2
-
-    return t - t3 / 6.0 + t5 / 120.0 - t7 / 5040.0
-}
-
-// ── _cf_cos: sin(x + pi/2) (byte-equal port) ────────────────────────────────
-fn _cf_cos(x: float) -> float {
-    return _cf_sin(x + CF_PI / 2.0)
-}
-
-// ── biquad design intermediates (byte-equal port) ──────────────────────────
+// ── biquad design intermediates (libm trig) ─────────────────────────────────
 fn _cf_biquad_omega(cutoff_hz: float, sample_rate: float) -> float {
     return CF_TWO_PI * cutoff_hz / sample_rate
 }
 
 fn _cf_biquad_alpha(omega: float, Q: float) -> float {
-    return _cf_sin(omega) / (2.0 * Q)
+    return sin(omega) / (2.0 * Q)
 }
 
 // ── Lowpass biquad coefficients ─────────────────────────────────────────────
 // Returns coefficient by index: 0=b0, 1=b1, 2=b2, 3=a1, 4=a2 (a0 ≡ 1).
 pub fn lpf_coeff(cutoff_hz: float, sample_rate: float, Q: float, idx: int) -> float {
     let w = _cf_biquad_omega(cutoff_hz, sample_rate)
-    let cs = _cf_cos(w)
+    let cs = cos(w)
     let al = _cf_biquad_alpha(w, Q)
     let a0 = 1.0 + al
 
@@ -117,7 +81,7 @@ pub fn lpf_coeff(cutoff_hz: float, sample_rate: float, Q: float, idx: int) -> fl
 // Returns coefficient by index: 0=b0, 1=b1, 2=b2, 3=a1, 4=a2 (a0 ≡ 1).
 pub fn hpf_coeff(cutoff_hz: float, sample_rate: float, Q: float, idx: int) -> float {
     let w = _cf_biquad_omega(cutoff_hz, sample_rate)
-    let cs = _cf_cos(w)
+    let cs = cos(w)
     let al = _cf_biquad_alpha(w, Q)
     let a0 = 1.0 + al
 
