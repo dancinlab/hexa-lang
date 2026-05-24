@@ -10,11 +10,18 @@ use "stdlib/cloud/cloud"
 use "stdlib/cloud/pod_registry"
 use "stdlib/cloud/preflight"
 use "stdlib/cloud/watchdog"
+use "stdlib/cloud/vast"
+use "stdlib/cloud/runpod"
 
 fn _cloud_help() {
     println("hexa cloud — structured-argv remote dispatch (cycle A)")
     println("")
     println("usage:")
+    println("  cloud rent <provider> [--gpu T] [--image IMG] [--disk GiB] [--owner TAG] [--query Q]")
+    println("                                                         provision a GPU pod (vast|runpod), wait ssh-ready, print host:port + id (alias: up)")
+    println("  cloud down <id> [--provider P]                         destroy a pod + forget it from the registry (alias: destroy)")
+    println("  cloud list [--provider P]                              list live pods (vast + runpod, or one via --provider)")
+    println("  cloud status [--provider P]                            alias of list")
     println("  cloud preflight --params N [--gpu KEY] [opts...]        closed-form GPU mem-budget check (no pod/ssh)")
     println("  cloud run       <host> [conn] [--max-wall S] -- <argv...> run argv, wait, exit with its code")
     println("  cloud exec      <host> [conn] -- <shell-cmd>           run shell command via ssh (DEFAULT SHELL PARSES IT)")
@@ -143,6 +150,177 @@ fn _collect_after(av: [str], start: int) -> [str] {
     return out
 }
 
+// _flag_val — scan av[start..] for `<key> <value>` and return the value;
+// `dflt` when the flag is absent or has no following token.
+fn _flag_val(av: [str], start: int, key: str, dflt: str) -> str {
+    let mut i = start
+    while i < len(av) {
+        if av[i] == key && i + 1 < len(av) {
+            return av[i + 1]
+        }
+        i = i + 1
+    }
+    return dflt
+}
+
+// ── provisioning verbs (rent / down / list) ───────────────────────────
+// These WIRE the lifecycle fns already implemented in stdlib/cloud/vast.hexa
+// and stdlib/cloud/runpod.hexa into the `hexa cloud` surface (RFC 088/091).
+// The CLI layer only parses argv + reads credentials (`secret get …`,
+// ~/.ssh/*.pub) and records the result in the pod registry; the provider
+// modules own the actual search / create / wait / destroy / list logic.
+
+// _cloud_rent_vast — vast.ai provision path: search-offers → create → wait
+// ssh-ready → register. Prints host:port + instance id. Returns the exit
+// code (0 ok, 1 failure). The created instance is registered with the
+// owner tag BEFORE the ssh wait so a slow boot / crash never leaks an
+// untracked billing instance.
+fn _cloud_rent_vast(av: [str], start: int) -> int {
+    let image = _flag_val(av, start, "--image", "ubuntu:22.04")
+    let disk = _cli_atoi(_flag_val(av, start, "--disk", "30"))
+    let owner = _flag_val(av, start, "--owner", "(hexa-cloud rent)")
+    let query = _flag_val(av, start, "--query", "")
+    let mut disk_gb = disk
+    if disk_gb <= 0 {
+        disk_gb = 30
+    }
+    // verified_only=1 → vast.hexa applies the campaign-proven default
+    // filters (reliability2>=0.95 + verified + rentable). An explicit
+    // --query opts into the caller's raw predicate string instead.
+    let offer = vast_search_offers(query, 1)
+    if offer.ok == 0 {
+        println("[cloud] rent vast: " + offer.message)
+        return 1
+    }
+    println("[cloud] rent vast: picked offer " + offer.offer_id)
+    let inst = vast_create(offer.offer_id, image, disk_gb)
+    if inst.ok == 0 {
+        // create failed → return the offer claim so a sibling can reuse it.
+        vast_offer_release(offer.offer_id)
+        println("[cloud] rent vast: " + inst.message)
+        return 1
+    }
+    // Register IMMEDIATELY (before the ssh wait) so a billing instance is
+    // never untracked, then release the offer claim (the rent succeeded).
+    pod_registry_record(inst.instance_id, owner, "running")
+    vast_offer_release(offer.offer_id)
+    println("[cloud] rent vast: created instance " + inst.instance_id + " (owner=" + owner + ", registered)")
+    // 30 tries × 20s = 600s — vast community boot is 30s best / 5-10min worst.
+    let ssh = vast_wait_ssh(inst.instance_id, 30, 20)
+    if ssh.ok == 0 {
+        println("[cloud] rent vast: " + ssh.message)
+        println("[cloud] instance " + inst.instance_id + " is created + tracked; ssh not yet ready — re-check with: cloud list / vastai show instance " + inst.instance_id)
+        return 1
+    }
+    println("[cloud] rent vast: READY " + ssh.host + ":" + ssh.port + " (root@" + ssh.host + " -p " + ssh.port + ")")
+    println("instance_id=" + inst.instance_id)
+    println("host=" + ssh.host)
+    println("port=" + ssh.port)
+    println("owner=" + owner)
+    return 0
+}
+
+// _cloud_rent_runpod — runpod provision path: create (single GPU type) →
+// wait ssh-ready → register. Requires `secret get runpod.api_key` and a
+// public key at ~/.ssh/id_ed25519.pub (same contract as e2e_smoke.hexa).
+// --gpu picks the GPU type (RunPod has no offer-search; the type IS the
+// selector). Returns 0 ok / 1 failure.
+fn _cloud_rent_runpod(av: [str], start: int) -> int {
+    let api_key = exec("secret get runpod.api_key 2>/dev/null").trim()
+    if len(api_key) == 0 {
+        println("[cloud] rent runpod: no runpod.api_key (set it with: secret set runpod.api_key)")
+        return 1
+    }
+    let pubkey = read_file(env_var("HOME") + "/.ssh/id_ed25519.pub").trim()
+    if len(pubkey) == 0 {
+        println("[cloud] rent runpod: no ~/.ssh/id_ed25519.pub")
+        return 1
+    }
+    let gpu = _flag_val(av, start, "--gpu", "NVIDIA A100 80GB PCIe")
+    let image = _flag_val(av, start, "--image", "runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04")
+    let owner = _flag_val(av, start, "--owner", "(hexa-cloud rent)")
+    let pod = runpod_create(api_key, gpu, image, pubkey, owner)
+    if pod.ok == 0 {
+        println("[cloud] rent runpod: " + pod.message)
+        return 1
+    }
+    pod_registry_record(pod.pod_id, owner, "running")
+    println("[cloud] rent runpod: created pod " + pod.pod_id + " (owner=" + owner + ", registered)")
+    // 40 tries × 15s = 600s.
+    let port = runpod_wait_ssh(api_key, pod.pod_id, 40, 15)
+    if port.ok == 0 {
+        println("[cloud] rent runpod: " + port.message)
+        println("[cloud] pod " + pod.pod_id + " is created + tracked; ssh not yet ready — re-check with: cloud list")
+        return 1
+    }
+    println("[cloud] rent runpod: READY " + port.ip + ":" + port.port + " (root@" + port.ip + " -p " + port.port + ")")
+    println("pod_id=" + pod.pod_id)
+    println("host=" + port.ip)
+    println("port=" + port.port)
+    println("owner=" + owner)
+    return 0
+}
+
+// _cloud_down — destroy a pod by id, then forget it from the registry.
+// --provider picks the teardown path; defaults to vast (runpod needs an
+// api key). The registry forget runs regardless of the provider verdict
+// so a confirmed-gone pod never lingers as a GHOST row.
+fn _cloud_down(id: str, provider: str) -> int {
+    let mut ok = 0
+    if provider == "runpod" {
+        let api_key = exec("secret get runpod.api_key 2>/dev/null").trim()
+        if len(api_key) == 0 {
+            println("[cloud] down runpod: no runpod.api_key")
+            return 1
+        }
+        ok = runpod_terminate(api_key, id)
+        if ok == 1 {
+            println("[cloud] down runpod: terminated " + id)
+        } else {
+            println("[cloud] down runpod: terminate FAILED for " + id + " — verify manually")
+        }
+    } else {
+        let v = vast_destroy(id)
+        ok = v.ok
+        println("[cloud] down vast: " + v.message)
+    }
+    // Forget the registry row (status=closed) on a confirmed destroy.
+    if ok == 1 {
+        let _ = pod_registry_forget(id)
+        println("[cloud] forgot " + id + " (registry status=closed)")
+        return 0
+    }
+    return 1
+}
+
+// _cloud_list_print — print live pods. With --provider it queries one
+// provider; bare it queries BOTH (vast + runpod). Read-only ($-free for
+// vast: `show instances`; runpod: `runpod_list_pods`). Returns 0 always
+// (an empty / failed list is informational, not an error).
+fn _cloud_list_print(provider: str) -> int {
+    let do_vast = provider == "" || provider == "vast"
+    let do_runpod = provider == "" || provider == "runpod"
+    if do_vast {
+        let vl = vast_list_instances()
+        println("[cloud] vast: " + vl.message)
+        let mut i = 0
+        while i < len(vl.instance_ids) {
+            println("  vast   " + vl.instance_ids[i])
+            i = i + 1
+        }
+    }
+    if do_runpod {
+        let rl = runpod_list_pods()
+        println("[cloud] runpod: " + rl.message)
+        let mut j = 0
+        while j < len(rl.pod_ids) {
+            println("  runpod " + rl.pod_ids[j])
+            j = j + 1
+        }
+    }
+    return 0
+}
+
 fn main() {
     let av = args()
     let mut si = -1
@@ -151,7 +329,7 @@ fn main() {
     while i < len(av) {
         let t = av[i]
         if si < 0 {
-            if t == "preflight" || t == "watchdog" || t == "run" || t == "exec" || t == "nohup" || t == "poll" || t == "copy-to" || t == "copy-from" || t == "orphans" || t == "reconcile" || t == "adopt" || t == "forget" || t == "help" || t == "--help" || t == "-h" || t == "version" || t == "--version" || t == "-v" {
+            if t == "rent" || t == "up" || t == "down" || t == "destroy" || t == "list" || t == "status" || t == "preflight" || t == "watchdog" || t == "run" || t == "exec" || t == "nohup" || t == "poll" || t == "copy-to" || t == "copy-from" || t == "orphans" || t == "reconcile" || t == "adopt" || t == "forget" || t == "help" || t == "--help" || t == "-h" || t == "version" || t == "--version" || t == "-v" {
                 si = i
                 sub = t
             }
@@ -167,8 +345,46 @@ fn main() {
         return
     }
     if sub == "version" || sub == "--version" || sub == "-v" {
-        println("hexa cloud 0.1.0 — cycle A (structured-argv remote dispatch)")
+        println("hexa cloud 0.2.0 — provisioning wired (rent/down/list + structured-argv dispatch)")
         return
+    }
+    if sub == "rent" || sub == "up" {
+        // Provision a GPU pod. The first post-verb token is the provider
+        // (vast|runpod); flags follow. Wires vast.hexa / runpod.hexa
+        // lifecycle fns + pod_registry. $-INCURRING — the only verb that
+        // creates a billing instance.
+        if si + 1 >= len(av) {
+            println("[cloud] rent: missing <provider> — usage: cloud rent <vast|runpod> [--gpu T] [--image IMG] [--disk GiB] [--owner TAG] [--query Q]")
+            exit(2)
+        }
+        let provider = av[si + 1]
+        if provider == "vast" {
+            exit(_cloud_rent_vast(av, si + 2))
+        }
+        if provider == "runpod" {
+            exit(_cloud_rent_runpod(av, si + 2))
+        }
+        println("[cloud] rent: unknown provider '" + provider + "' — expected vast or runpod")
+        exit(2)
+    }
+    if sub == "down" || sub == "destroy" {
+        // Destroy a pod by id + forget it from the registry. --provider
+        // selects the teardown path (default vast). Wires vast_destroy /
+        // runpod_terminate + pod_registry_forget.
+        if si + 1 >= len(av) {
+            println("[cloud] down: missing <id> — usage: cloud down <id> [--provider vast|runpod]")
+            exit(2)
+        }
+        let id = av[si + 1]
+        let provider = _flag_val(av, si + 2, "--provider", "vast")
+        exit(_cloud_down(id, provider))
+    }
+    if sub == "list" || sub == "status" {
+        // List live pods (read-only, $-free). Bare → both providers;
+        // --provider <p> narrows. Wires vast_list_instances /
+        // runpod_list_pods.
+        let provider = _flag_val(av, si + 1, "--provider", "")
+        exit(_cloud_list_print(provider))
     }
     if sub == "preflight" {
         // Closed-form GPU memory budget check. No ssh / pod-spinup / LLM —

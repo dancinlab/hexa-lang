@@ -599,3 +599,87 @@ fn vast_list_instances() -> VastList {
     }
     return VastList { ok: 1, instance_ids: ids, message: "list — " + to_string(len(ids)) + " instances" }
 }
+
+// ── ssh endpoint + wait ───────────────────────────────────────────────
+// A freshly-created vast.ai instance is plain-SSH-reachable, but the
+// host / port mapping is not known until the instance finishes booting.
+// These thin accessors mirror runpod_get_ssh_port / runpod_wait_ssh: they
+// query `vastai show instance <iid> --raw` for the ssh_host / ssh_port
+// fields and (for vast_wait_ssh) round-trip a real `echo` so the verb
+// layer can hand the caller a connectable host:port. No new lifecycle
+// here — just the read-side endpoint discovery the create→use path needs.
+
+struct VastSsh {
+    ok:      int,   // 1 iff ssh_host AND ssh_port are present (and, for wait, reachable)
+    host:    str,   // ssh host (public ip / dns)
+    port:    str,   // ssh port (string form for ssh -p)
+    message: str
+}
+
+fn _vast_fail_ssh(msg: str) -> VastSsh {
+    return VastSsh { ok: 0, host: "", port: "", message: msg }
+}
+
+// vast_ssh_endpoint — one-shot `show instance <iid> --raw` → ssh_host /
+// ssh_port. ok=0 (not yet mapped) when either field is absent, when the
+// JSON is not an object, or when vastai is unavailable. Does NOT wait —
+// callers poll via vast_wait_ssh.
+fn vast_ssh_endpoint(iid: str) -> VastSsh {
+    if len(iid) == 0 {
+        return _vast_fail_ssh("ssh_endpoint: empty instance id")
+    }
+    let vc = _vastai_path()
+    if len(vc) == 0 {
+        return _vast_fail_ssh("vastai not found (set VASTAI_DISABLE=1 to silence)")
+    }
+    let cmd = _shq_local(vc) + " show instance " + _shq_local(iid) + " --raw 2>&1"
+    let out = exec(cmd)
+    let parsed = json_parse(out)
+    if type_of(parsed) != "map" {
+        return _vast_fail_ssh("ssh_endpoint: non-object JSON — " + out.substring(0, 160))
+    }
+    let host = json_object_get_str(parsed, "ssh_host", "")
+    // ssh_port may parse as int or string depending on vastai version.
+    let mut port = json_object_get_str(parsed, "ssh_port", "")
+    if len(port) == 0 {
+        let pv = json_object_get(parsed, "ssh_port")
+        if type_of(pv) == "int" {
+            port = to_string(pv)
+        }
+    }
+    if len(host) == 0 || len(port) == 0 {
+        return _vast_fail_ssh("ssh_endpoint: ssh_host/ssh_port not yet mapped for " + iid)
+    }
+    return VastSsh { ok: 1, host: host, port: port, message: "ssh endpoint " + host + ":" + port }
+}
+
+// vast_ssh_opts — canonical ssh_opts for an ephemeral vast.ai instance.
+// Mirrors runpod_pod_opts: non-22 port + accept the changing host key +
+// keepalives so an idle ssh is not declared dead by transient noise.
+fn vast_ssh_opts(port: str) -> [str] {
+    return ["-p", port, "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null", "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3"]
+}
+
+// vast_wait_ssh — poll the endpoint AND a real `echo` round-trip via ssh
+// until both succeed or the budget elapses. Mirrors runpod_wait_ssh.
+// vast community pods boot in 30s best case, 5-10min worst case (see
+// docs/notes/hexa-cloud-vast-usage-recipe-2026-05-22.md), so callers
+// should pass a generous budget (e.g. 30 tries × 20s = 600s).
+fn vast_wait_ssh(iid: str, max_tries: int, sleep_each_sec: int) -> VastSsh {
+    let mut i = 0
+    let sleep_cmd = "sleep " + to_string(sleep_each_sec)
+    while i < max_tries {
+        let e = vast_ssh_endpoint(iid)
+        if e.ok == 1 {
+            let probe = cloud_run_opts("root@" + e.host, vast_ssh_opts(e.port), ["echo", "__VAST_UP__"])
+            if probe.ok == 1 {
+                if probe.stdout_.index_of("__VAST_UP__") >= 0 {
+                    return e
+                }
+            }
+        }
+        exec(sleep_cmd)
+        i = i + 1
+    }
+    return _vast_fail_ssh("wait_ssh: never ready in " + to_string(max_tries * sleep_each_sec) + "s")
+}
