@@ -8,8 +8,12 @@
 // numerical primitives live in info/* + math/*.
 //
 // Surface:
-//   pub fn phi_spatial(state: int, n_cells: int, dim: int, n_bins: int)
+//   pub fn phi_spatial_pure(state: int, n_cells: int, dim: int, n_bins: int)
 //                                                              -> float
+//
+// NB: fn name `phi_spatial_pure` (not `phi_spatial`) to avoid collision
+// with the RFC 036 builtin `phi_spatial` (runtime.h:1083 extern carrier).
+// Naming convention: `*_pure` suffix = "pure-hexa replica" path.
 //     state   : flat farr handle, length ≥ n_cells * dim (row-major)
 //     n_cells : IIT cell count (≤ 20 exhaustive bipartition; > 20 = panic)
 //     dim     : per-cell vector length
@@ -32,7 +36,7 @@
 import "stdlib/math/bitops.hexa"
 import "stdlib/info/mutual_info.hexa"
 
-pub fn phi_spatial(state: int, n_cells: int, dim: int, n_bins: int) -> float {
+pub fn phi_spatial_pure(state: int, n_cells: int, dim: int, n_bins: int) -> float {
     if n_cells <= 0 { return 0.0 }
     if dim <= 0 { return 0.0 }
     if n_bins <= 0 { return 0.0 }
