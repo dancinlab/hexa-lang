@@ -2,6 +2,18 @@
 
 Append-only history sister of `INBOX.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
+## 2026-05-25T08:30Z — fresh worktree self-test 바이너리 부재 (stdlib .hexa link 실패 · NOVEL-TOOL stdlib agent 반복 발견)
+
+NOVEL-TOOL stdlib primitive agent 들 (M2 demag/halbach · M3 welford/logsumexp/kahan/lambert_w) 이 일관되게 보고하는 환경 gap. fresh `/tmp` 격리 worktree 에서 stdlib `.hexa` self-test 가 비-sqrt math_pure fn link 실패. stub-first (g60).
+
+- [ ] **증상** — 새 `git worktree add /tmp/<wt>` 후 `./hexa run` 또는 `hexa.real run <stdlib>.hexa` 시 `log_pure`/`asin_pure`/`sin_pure` 등 비-sqrt math_pure fn 이 `"compiled module_loader not found — falling back to raw src"` 으로 link 실패. raw fallback 은 `sqrt_pure` 만 flatten.
+- [ ] **원인** — gitignored `build/hexa_module_loader` + `hexa.real` (또는 compiled module_loader) 가 worktree 에 없음 (canonical root `~/core/hexa-lang` 에만 존재).
+- [ ] **영향** — stdlib primitive self-test 가 fresh worktree 에서 불가 → 매 agent 가 바이너리 수동 copy 로 우회 (반복 toil · [[feedback_demiurge_assets_simulation_mandatory]] / [[reference_hexa_verify_build_broken]] 관련).
+- [ ] **제안** — (a) worktree 생성 시 build artifact symlink/copy 자동화 (post-worktree hook), 또는 (b) `hexa run` 이 canonical root 의 module_loader 를 worktree 에서도 찾도록 (`HEXA_BUILD_ROOT` env), 또는 (c) module_loader 를 git-track (크기 허용 시).
+- [ ] **확인된 깨짐** — `numerics_mcmillan_solver.hexa` 도 fresh worktree 에서 동일 (기존 stdlib 영향 증거).
+
+Status: open · proposed-by:agent · severity:medium (반복 toil) · source:NOVEL-TOOL stdlib round 2026-05-25
+
 ## 2026-05-25T08:10Z — RTSC N5/SSCHA 캠페인 발견 2 gap (from: demiurge RTSC micro-exp 세션)
 
 demiurge RTSC h3o micro-exp + SSCHA dispatch 중 발견된 hexa-lang 2 gap. stub-first (g60).
