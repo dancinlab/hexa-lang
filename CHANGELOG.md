@@ -10,6 +10,8 @@ For the full audit trail, see `git log`.
 
 phi_rs inbox closure + `/cycle` 1-6 라운드 머지 배치. 코드 변경(codegen/runtime)은 enum 스택 일부, 나머지는 RFC promote · inbox housekeeping.
 
+- **inbox/atlas_candidates 폐기 + 루트 `INBOX` 도메인 생성** — atlas 가 직접 흡수(RFC-080 · `compiler/atlas/embedded.gen.hexa` in-memory register)로 전환되어 markdown 후보 스테이징(`inbox/atlas_candidates/`)이 deprecated → 3건(n7_break lattice-locked · grade_distribution · lens_table cite audit, 전부 `fire_needed:false` · RFC-065 hexa-loop era) retire(claim 은 embedded.gen 반영 + git 이력 복구 가능). 동시에 cross-repo handoff 수신용 루트 `INBOX` 도메인(`INBOX.md` + `INBOX.log.md`) 생성 — sidecar commons `g11`/`g59`(hexa-lang gap → handoff) 정합. hexa-lang 자체 upstream-patch staging `inbox/`(patches·notes·fires·rfc_drafts, sunset 예정)는 **별개 시스템**으로 그대로 유지.
+
 ### codegen / runtime — enum-to-string 스택
 
 - **enum variant names 배열 emit** (PR #555, stack PR-1/3) — `to_string(enum)` 의 첫 단계로 variant 이름 배열을 codegen 에서 additive emit
