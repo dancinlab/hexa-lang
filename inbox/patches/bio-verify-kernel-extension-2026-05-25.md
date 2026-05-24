@@ -1,9 +1,9 @@
-# bio-verify-kernel-extension — `hexa verify --expr` _recompute_float gap (Phase 1)
+# bio-verify-kernel-extension — `hexa verify --expr` _recompute_float gap (Phases 1-3)
 
-**status**: Phase 1 LANDING (this PR) — float-arg parser already present in `_parse_float`;
-3 bio identities added to `_recompute_float` (`exp_release` · `ldl_pct` · `beer_lambert`).
-Phase 2 follow-up stacked PR extends with Hill · Cheng-Prusoff · Higuchi · Fick · Tafel · LaPlace
-· Hagen-Poiseuille and other bio-physical closed-form anchors.
+**status**: RESOLVED 2026-05-25 — three-phase landing.
+- Phase 1 (PR #707, MERGED): float-arg parser + 3 identities (`exp_release` · `ldl_pct` · `beer_lambert`).
+- Phase 2 (PR #711, MERGED): 5 more 3-arg identities (`hill` · `cheng_prusoff` · `fick1` · `laplace` · `stokes_einstein`).
+- Phase 3 (this PR): 3 final identities (`higuchi` 2-arg simple form · `tafel` 3-arg log10 · `hagen_poiseuille` 4-arg via new `a3` dispatch lane). Closes the inbox list.
 
 **discovered**: 2026-05-25 (demiurge cross-domain V2 milestone push — 🔵 SUPPORTED-FORMAL
 fanout)

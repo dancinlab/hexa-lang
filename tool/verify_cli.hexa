@@ -182,6 +182,9 @@ fn cmd_rubric() {
     println("             fick1(D,dC,dx)              → -D*dC/dx            (Fick's first law of diffusion, 3-arg)")
     println("             laplace(P,r,t_wall)         → P*r/t_wall          (Young-Laplace vessel wall stress, 3-arg)")
     println("             stokes_einstein(T,eta,r)    → kB*T/(6π·η·r)       (Stokes-Einstein diffusion D, kB=1.380649e-23, 3-arg)")
+    println("             higuchi(k_H,t)              → k_H*sqrt(t)         (Higuchi sustained-release simple form, 2-arg)")
+    println("             tafel(a,b,j)                → a + b*log10(j)      (Tafel electrochemical overpotential, 3-arg)")
+    println("             hagen_poiseuille(r,dP,mu,L) → π·r^4·dP/(8μL)      (Hagen-Poiseuille laminar flow, 4-arg)")
     println("             allen_dynes_tc(λ,ω_log,μ*)  → (ω_log/1.2)·exp(-1.04(1+λ)/(λ-μ*(1+0.62λ)))  (Allen-Dynes Tc, RTSC V2, 3-arg)")
     println("             mcmillan_tc(λ,ω_D,μ*)       → (ω_D/1.45)·exp(-1.04(1+λ)/(λ-μ*(1+0.62λ)))   (McMillan Tc, RTSC V2, 3-arg)")
     println("             bcs_gap_ratio()             → 2π/e^γ ≈ 3.527754   (BCS weak-coupling universal gap ratio, 0-arg)")
@@ -800,8 +803,10 @@ fn _qdrift_error_bound(lambda_times_time: float, big_n_steps: int) -> float {
 //
 // Demiurge cross-domain V2 milestone (🔵 SUPPORTED-FORMAL push): the 3
 // foundational bio identities unblocked across 6 domains (ISR · DAPTPGX ·
-// LPA · NOREFLOW · TTR · HERPES). Phase 2 (Hill · Cheng-Prusoff · Higuchi ·
-// Fick · Tafel · LaPlace · Hagen-Poiseuille) lands in a follow-up stacked PR.
+// LPA · NOREFLOW · TTR · HERPES). Phase 2 (Hill · Cheng-Prusoff · Fick ·
+// LaPlace · Stokes-Einstein) + Phase 3 (Higuchi · Tafel · Hagen-Poiseuille)
+// close the inbox patch list (Higuchi simple-form + Tafel 3-arg + 4-arg
+// Hagen-Poiseuille via the a3 dispatch lane).
 // ref: inbox/patches/bio-verify-kernel-extension-2026-05-25.md
 //
 // All three are 🟢 NUMERICAL tier (libm-class `exp` recompute, ε=1e-9
@@ -1020,11 +1025,59 @@ fn _migdal_ratio(omega_phonon: float, e_fermi: float) -> float {
     return omega_phonon / e_fermi
 }
 
-// float dispatch — fn_name → recompute. 0-arg fns ignore a0/a1/a2 (constants);
-// 1-arg fns take a0; 2-arg take a0,a1; 3-arg take a0,a1,a2. Returns _NOCALC_F
-// when no float path exists (caller then tries the int path / degrades). The
-// 🟢 NUMERICAL companion to _recompute.
-fn _recompute_float(fn_name: string, a0: float, a1: float, a2: float, argc: int) -> float {
+// ── Bio-physical Phase 3 (demiurge cross-domain V2 closure) ─────────
+// Three remaining identities from the inbox patch — Higuchi sustained
+// release (2-arg, simple form) · Tafel overpotential (3-arg, log10 path)
+// · Hagen-Poiseuille laminar flow (4-arg, requires arg4 dispatch lane).
+
+// Higuchi sustained-release (matrix-controlled drug delivery):
+//   M_t = k_H * sqrt(t)
+// Cumulative drug release from a planar matrix as a function of time.
+// 2-arg closed-form (simple-form). Source: Higuchi 1961 J Pharm Sci
+// 50:874-875; canonical sustained-release / Type-II controlled-release
+// kinetic. (Full 4-arg form `sqrt(D*(2*C_0-Cs)*Cs*t)` deferred — same
+// dispatch lane, different helper.)
+fn _higuchi(k_h: float, t_time: float) -> float {
+    if k_h < 0.0 { return _NOCALC_F }
+    if t_time < 0.0 { return _NOCALC_F }
+    return k_h * sqrt(t_time)
+}
+
+// Tafel overpotential (electrochemistry kinetic-control regime):
+//   η = a + b * log10(j)
+// Activation overpotential η as a function of current density j at fixed
+// Tafel slope b and intercept a. 3-arg closed-form (libm log path —
+// log10 computed as log(x)/log(10) since the runtime exposes natural
+// log only). Source: Tafel 1905 Z Phys Chem 50:641; canonical
+// electrochemical electrode kinetics / corrosion overvoltage.
+fn _tafel(a_intercept: float, b_slope: float, j_curr: float) -> float {
+    if j_curr <= 0.0 { return _NOCALC_F }
+    let ln10 = log(10.0)
+    return a_intercept + b_slope * (log(j_curr) / ln10)
+}
+
+// Hagen-Poiseuille laminar flow (Newtonian fluid, circular pipe):
+//   Q = π * r^4 * ΔP / (8 * μ * L)
+// Volumetric flow rate Q for laminar steady incompressible flow through
+// a pipe of radius r, length L, dynamic viscosity μ, pressure drop ΔP.
+// 4-arg closed-form. Source: Hagen 1839 / Poiseuille 1840; canonical
+// blood-flow / capillary-rheology model (cardiovascular hemodynamics).
+fn _hagen_poiseuille(r_rad: float, d_p: float, mu_visc: float, l_len: float) -> float {
+    if r_rad < 0.0 { return _NOCALC_F }
+    if mu_visc <= 0.0 { return _NOCALC_F }
+    if l_len <= 0.0 { return _NOCALC_F }
+    let pi_hp = 3.14159265358979323846
+    let r2 = r_rad * r_rad
+    let r4 = r2 * r2
+    return pi_hp * r4 * d_p / (8.0 * mu_visc * l_len)
+}
+
+// float dispatch — fn_name → recompute. 0-arg fns ignore a0/a1/a2/a3
+// (constants); 1-arg fns take a0; 2-arg take a0,a1; 3-arg take a0,a1,a2;
+// 4-arg take a0,a1,a2,a3 (Phase 3 — hagen_poiseuille). Returns _NOCALC_F
+// when no float path exists (caller then tries the int path / degrades).
+// The 🟢 NUMERICAL companion to _recompute.
+fn _recompute_float(fn_name: string, a0: float, a1: float, a2: float, a3: float, argc: int) -> float {
     if fn_name == "welch_t_crit" { return _welch_t_crit(a0) }
     if fn_name == "wilson_hilferty_p" {
         if argc < 2 { return _NOCALC_F }
@@ -1196,6 +1249,22 @@ fn _recompute_float(fn_name: string, a0: float, a1: float, a2: float, argc: int)
         if argc < 2 { return _NOCALC_F }
         return _migdal_ratio(a0, a1)
     }
+    // ── Bio-physical Phase 3 (demiurge cross-domain V2 closure) ─────────
+    //   higuchi(k_H, t)                   2-arg: k_H * sqrt(t)
+    //   tafel(a, b, j)                    3-arg: a + b * log10(j)
+    //   hagen_poiseuille(r, dP, mu, L)    4-arg: pi*r^4*dP / (8*mu*L)
+    if fn_name == "higuchi" {
+        if argc < 2 { return _NOCALC_F }
+        return _higuchi(a0, a1)
+    }
+    if fn_name == "tafel" {
+        if argc < 3 { return _NOCALC_F }
+        return _tafel(a0, a1, a2)
+    }
+    if fn_name == "hagen_poiseuille" {
+        if argc < 4 { return _NOCALC_F }
+        return _hagen_poiseuille(a0, a1, a2, a3)
+    }
     return _NOCALC_F
 }
 
@@ -1226,6 +1295,8 @@ fn _is_float_fn(fn_name: string) -> bool {
         || fn_name == "allen_dynes_tc" || fn_name == "mcmillan_tc"
         || fn_name == "bcs_gap_ratio" || fn_name == "lambda_eliashberg"
         || fn_name == "beenet_grid_bins" || fn_name == "migdal_ratio"
+        // Bio-physical Phase 3 (demiurge cross-domain V2 closure):
+        || fn_name == "higuchi" || fn_name == "tafel" || fn_name == "hagen_poiseuille"
 }
 
 // is fn_name a 0-arg closed-form constant? (--expr <fn> <v>, no operands).
@@ -1356,21 +1427,25 @@ fn cmd_verify_id(rest) {
 // cmd_expr_float — the 🟢 NUMERICAL path. fn_name is a registered float
 // transform (welch_t_crit · wilson_hilferty_p · chsh_tsirelson · hardy_bound
 // · exp_release · ldl_pct · beer_lambert · nnt · arr · ln_hr_to_hr
-// · hill · cheng_prusoff · fick1 · laplace · stokes_einstein).
+// · hill · cheng_prusoff · fick1 · laplace · stokes_einstein
+// · higuchi · tafel · hagen_poiseuille).
 // Args + claimed value are parsed as floats; the recompute is compared with
 // tolerance ε (NOT exact-eq, the honest libm-class gate). Within ε →
 // 🟢 SUPPORTED-NUMERICAL; deterministic out-of-ε → 🔴 FALSIFIED.
-//   0-arg:  --expr <fn> <v>                    (rest len 3; closed-form constant)
-//   1-arg:  --expr <fn> <a0> <v>               (rest len 4)
-//   2-arg:  --expr <fn> <a0> <a1> <v>          (rest len 5)
-//   3-arg:  --expr <fn> <a0> <a1> <a2> <v>     (rest len 6; bio Phase 1)
+//   0-arg:  --expr <fn> <v>                         (rest len 3; closed-form constant)
+//   1-arg:  --expr <fn> <a0> <v>                    (rest len 4)
+//   2-arg:  --expr <fn> <a0> <a1> <v>               (rest len 5)
+//   3-arg:  --expr <fn> <a0> <a1> <a2> <v>          (rest len 6; bio Phase 1/2)
+//   4-arg:  --expr <fn> <a0> <a1> <a2> <a3> <v>     (rest len 7; bio Phase 3 — hagen_poiseuille)
 fn cmd_expr_float(rest, fnm: string) {
     let zero_arg = _is_zero_arg_float_fn(fnm)
+    let has7 = len(rest) >= 7 && to_string(rest[6]) != "--absorb"
     let has6 = len(rest) >= 6 && to_string(rest[5]) != "--absorb"
     let has5 = len(rest) >= 5 && to_string(rest[4]) != "--absorb"
     let mut a0 = 0.0
     let mut a1 = 0.0
     let mut a2 = 0.0
+    let mut a3 = 0.0
     let mut v = 0.0
     let mut argc = 1
     let mut label = ""
@@ -1378,6 +1453,14 @@ fn cmd_expr_float(rest, fnm: string) {
         v = _parse_float(to_string(rest[2]))
         argc = 0
         label = fnm + "()=" + _fstr(v)
+    } else if has7 {
+        a0 = _parse_float(to_string(rest[2]))
+        a1 = _parse_float(to_string(rest[3]))
+        a2 = _parse_float(to_string(rest[4]))
+        a3 = _parse_float(to_string(rest[5]))
+        v = _parse_float(to_string(rest[6]))
+        argc = 4
+        label = fnm + "(" + _fstr(a0) + "," + _fstr(a1) + "," + _fstr(a2) + "," + _fstr(a3) + ")=" + _fstr(v)
     } else if has6 {
         a0 = _parse_float(to_string(rest[2]))
         a1 = _parse_float(to_string(rest[3]))
@@ -1397,7 +1480,7 @@ fn cmd_expr_float(rest, fnm: string) {
         argc = 1
         label = fnm + "(" + _fstr(a0) + ")=" + _fstr(v)
     }
-    let got = _recompute_float(fnm, a0, a1, a2, argc)
+    let got = _recompute_float(fnm, a0, a1, a2, a3, argc)
     println("verify --expr " + label)
     if got == _NOCALC_F {
         println("  tier   = 🟠 INSUFFICIENT")
@@ -1420,10 +1503,11 @@ fn cmd_expr_float(rest, fnm: string) {
 }
 
 fn cmd_expr(rest) {
-    // 0-operand:  --expr <fn> <v>                (rest len 3; chsh_tsirelson)
-    // 1-operand:  --expr <fn> <n> <v>            (rest len 4)
-    // 2-operand:  --expr <fn> <a> <b> <v>        (rest len 5)
-    // 3-operand:  --expr <fn> <a> <b> <c> <v>    (rest len 6)
+    // 0-operand:  --expr <fn> <v>                    (rest len 3; chsh_tsirelson)
+    // 1-operand:  --expr <fn> <n> <v>                (rest len 4)
+    // 2-operand:  --expr <fn> <a> <b> <v>            (rest len 5)
+    // 3-operand:  --expr <fn> <a> <b> <c> <v>        (rest len 6)
+    // 4-operand:  --expr <fn> <a> <b> <c> <d> <v>    (rest len 7; bio Phase 3 hagen_poiseuille)
     let fnm_pre = if len(rest) >= 2 { to_string(rest[1]) } else { "" }
     let zero_arg_pre = _is_zero_arg_float_fn(fnm_pre)
     if len(rest) < 4 && !zero_arg_pre {
