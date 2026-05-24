@@ -3299,7 +3299,13 @@ fn parse_multiplication() {
 // decreases x — structural
 fn parse_unary() {
     let k = p_peek_kind()
-    if k == "Not" || k == "Minus" || k == "BitNot" {
+    // PROBE r16 Q2: unary plus `+x` is the identity prefix (numeric passthrough).
+    // Previously `Plus` was unhandled here and fell through to parse_primary,
+    // which recorded a parse error and returned empty_node() → codegen emitted
+    // `hexa_map_new()` (`{}`). A leading Plus reaching parse_unary is always
+    // unary (binary `+` is consumed by parse_addition only after its left
+    // operand). Canonical Go/Rust/Swift: unary `+` = identity on a numeric.
+    if k == "Plus" || k == "Not" || k == "Minus" || k == "BitNot" {
         let op_tok = p_advance()
         let operand = parse_unary()
         return #{
