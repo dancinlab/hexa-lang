@@ -1,0 +1,79 @@
+// HEXA Standard Library — stats/correlation tests
+//
+// Import-based: single-file `hexa build` does NOT flatten `import "stdlib/..."`,
+// so this asserts at the source level. Run via the stdlib test harness (which
+// resolves stdlib imports), or eyeball the algorithm via a self-contained copy.
+//
+// Cases:
+//   1. perfectly correlated  (ys = 2·xs + 1)         → pearson_r ≈ +1.0
+//   2. perfectly anti-corr   (ys = −xs)              → pearson_r ≈ −1.0
+//   3. zero variance in ys   (ys constant)           → pearson_r == 0.0 (guard)
+//   4. spearman on a monotone-but-nonlinear pair     → spearman_rho ≈ +1.0
+//   5. spearman on a strictly-decreasing pair        → spearman_rho ≈ −1.0
+
+import "stdlib/stats/correlation"
+
+fn _approx(a: float, b: float, tol: float) -> bool {
+    let d = a - b
+    let ad = if d < 0.0 { 0.0 - d } else { d }
+    return ad <= tol
+}
+
+fn _fill5(a: float, b: float, c: float, d: float, e: float) -> int {
+    let h = farr_zeros(5)
+    let _ = farr_set(h, 0, a)
+    let _ = farr_set(h, 1, b)
+    let _ = farr_set(h, 2, c)
+    let _ = farr_set(h, 3, d)
+    let _ = farr_set(h, 4, e)
+    return h
+}
+
+fn main() {
+    let mut pass = 0
+    let mut fail = 0
+
+    // 1. perfectly positively correlated (linear): ys = 2x + 1
+    let x1 = _fill5(1.0, 2.0, 3.0, 4.0, 5.0)
+    let y1 = _fill5(3.0, 5.0, 7.0, 9.0, 11.0)
+    let r1 = pearson_r(x1, y1, 5)
+    if _approx(r1, 1.0, 0.0001) { pass = pass + 1; println("PASS pearson perfect+ r=" + to_string(r1)) }
+    else { fail = fail + 1; println("FAIL pearson perfect+ r=" + to_string(r1)) }
+
+    // 2. perfectly anti-correlated: ys = -x
+    let x2 = _fill5(1.0, 2.0, 3.0, 4.0, 5.0)
+    let y2 = _fill5(-1.0, -2.0, -3.0, -4.0, -5.0)
+    let r2 = pearson_r(x2, y2, 5)
+    if _approx(r2, -1.0, 0.0001) { pass = pass + 1; println("PASS pearson perfect- r=" + to_string(r2)) }
+    else { fail = fail + 1; println("FAIL pearson perfect- r=" + to_string(r2)) }
+
+    // 3. zero variance in ys → guard returns 0.0
+    let x3 = _fill5(1.0, 2.0, 3.0, 4.0, 5.0)
+    let y3 = _fill5(7.0, 7.0, 7.0, 7.0, 7.0)
+    let r3 = pearson_r(x3, y3, 5)
+    if _approx(r3, 0.0, 0.0000001) { pass = pass + 1; println("PASS pearson zero-var r=" + to_string(r3)) }
+    else { fail = fail + 1; println("FAIL pearson zero-var r=" + to_string(r3)) }
+
+    // 4. spearman monotone-nonlinear: ys = x^3 → ρ ≈ +1
+    let x4 = _fill5(1.0, 2.0, 3.0, 4.0, 5.0)
+    let y4 = _fill5(1.0, 8.0, 27.0, 64.0, 125.0)
+    let s4 = spearman_rho(x4, y4, 5)
+    if _approx(s4, 1.0, 0.0001) { pass = pass + 1; println("PASS spearman monotone+ rho=" + to_string(s4)) }
+    else { fail = fail + 1; println("FAIL spearman monotone+ rho=" + to_string(s4)) }
+
+    // 5. spearman strictly decreasing → ρ ≈ -1
+    let x5 = _fill5(1.0, 2.0, 3.0, 4.0, 5.0)
+    let y5 = _fill5(50.0, 40.0, 30.0, 20.0, 10.0)
+    let s5 = spearman_rho(x5, y5, 5)
+    if _approx(s5, -1.0, 0.0001) { pass = pass + 1; println("PASS spearman decreasing rho=" + to_string(s5)) }
+    else { fail = fail + 1; println("FAIL spearman decreasing rho=" + to_string(s5)) }
+
+    let _ = farr_free(x1); let _ = farr_free(y1)
+    let _ = farr_free(x2); let _ = farr_free(y2)
+    let _ = farr_free(x3); let _ = farr_free(y3)
+    let _ = farr_free(x4); let _ = farr_free(y4)
+    let _ = farr_free(x5); let _ = farr_free(y5)
+
+    println("stats/correlation: " + to_string(pass) + " passed, " + to_string(fail) + " failed")
+    if fail > 0 { panic("stats/correlation test FAILED") }
+}
