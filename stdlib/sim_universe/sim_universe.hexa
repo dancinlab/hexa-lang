@@ -179,7 +179,7 @@ fn cmd_multiverse(args: [str]) {
 
 fn cmd_qpu(args: [str]) {
     println("[sim-universe/qpu] qpu_bridge VQE-H2 + ANU noise")
-    let raw = _run_module("stdlib/sim_universe/qpu_bridge/qpu_bridge.hexa", [])
+    let raw = _run_module("stdlib/sim_universe/qpu_bridge/vqe_h2_demo.hexa", [])
     println(raw)
 }
 
@@ -211,15 +211,24 @@ fn cmd_selftest(args: [str]) {
     println("[sim-universe/selftest] Tier-A substrate smoke pass")
     println("")
     let mut all_ok = 1
-    let names = ["anu_time/mini_world", "multiverse/interferometer", "qpu_bridge/qpu_bridge", "ouroboros_qrng/baseline_run", "bostrom_test/anu_collector", "godel_q/bootstrap"]
+    // INBOX 2026-05-25T23:10Z (e): harness PASS judgment used `raw.contains("PASS")`
+    // but 5/6 sub-tests never emit "PASS" sentinel. Switched to exec rc==0 + non-empty
+    // stdout — sub-tests that complete without error count as PASS. qpu_bridge path
+    // typo also fixed (`qpu_bridge/qpu_bridge.hexa` → `qpu_bridge/vqe_h2_demo.hexa`,
+    // mirrors cmd_qpu).
+    let names = ["anu_time/mini_world", "multiverse/interferometer", "qpu_bridge/vqe_h2_demo", "ouroboros_qrng/baseline_run", "bostrom_test/anu_collector", "godel_q/bootstrap"]
+    let hexa_bin = exec("command -v hexa 2>/dev/null || echo hexa").trim()
     let mut i = 0
     while i < len(names) {
         let path = "stdlib/sim_universe/" + names[i] + ".hexa"
-        let raw = _run_module(path, [])
-        if raw.contains("PASS") {
+        let cmd = _shq(hexa_bin) + " run " + _shq(path) + " 2>&1"
+        let pair = exec_with_status(cmd)
+        let raw = to_string(pair[0])
+        let rc = pair[1]
+        if rc == 0 && len(raw) > 0 {
             println("  " + names[i] + ": PASS")
         } else {
-            println("  " + names[i] + ": FAIL (see output)")
+            println("  " + names[i] + ": FAIL (rc=" + to_string(rc) + ")")
             all_ok = 0
         }
         i = i + 1

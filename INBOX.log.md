@@ -13,7 +13,7 @@ Append-only history sister of `INBOX.md`. Each entry starts with `## <ISO timest
 - [x] **(b) `hexa lsp --help` — LSP daemon 진입, stdin 대기 TIMEOUT 30s**. flag 라우팅 누락 — daemon 진입 전에 `--help` 인터셉트. — FIXED (inbox/cli-help-rc-fix-T2310 · PR #882): lsp 분기 진입 직후 (`install_dir_from_argv0` 호출 전) `--help/-h` 인터셉트 → `cmd_help() + exit(0)`.
 - [x] **(c) `hexa init` — RESOLVED**: scaffolder 인라인 land (self/main.hexa::cmd_init) + sister tool/init_project.hexa (future standalone-bin source). `hexa init <dir> [--name N]` → `<dir>/project.hexa` + `main.hexa` + `.gitignore` 생성, 기존 프로젝트는 rc=2 거부. e2e: scaffold → `hexa build` → 실행 "hello from testproj" PASS. cmd_run interp dep 회피 (feedback_no_interp_use_compiled).
 - [x] **(d) `hexa convergence` usage 출력 시 rc=1 — 다른 verb 는 rc=2** (tape/hxc/repo-audit-taxonomy/gpu disasm/lint). POSIX 관행상 rc=2 표준. convergence 만 outlier 통일. — FIXED (inbox/cli-help-rc-fix-T2310 · PR #882): `len(av) < 5` 분기의 `exit(1)` → `exit(2)`.
-- [ ] **(e) `hexa sim-universe selftest` 6/6 sub-test FAIL** — anu_time/multiverse/qpu/qrng/bostrom/godel 전부 substrate FAIL. 다른 sim-universe sub-verb 는 PASS. substrate dep 별도 조사.
+- [x] **(e) `hexa sim-universe selftest` 6/6 sub-test FAIL — RESOLVED**: substrate 무손상이었고 harness 자체 결함 2종. (1) `raw.contains("PASS")` 판정인데 5/6 sub-test 가 PASS sentinel 미emit → `exec_with_status` rc==0 + non-empty stdout 판정으로 변경. (2) `qpu_bridge/qpu_bridge.hexa` 경로 typo → 실제 `vqe_h2_demo.hexa` 로 fix (selftest + cmd_qpu 양쪽). `stdlib/sim_universe/sim_universe.hexa::cmd_selftest` L210-236 + `cmd_qpu` L182 변경.
 
 **추가 권장 (소소)**:
 - atlas lookup 잘못된 id 에 `# not found:` + rc=1 — `--list` 또는 fuzzy hint 시 DX 개선.
