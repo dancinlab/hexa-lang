@@ -1,0 +1,201 @@
+#!hexa strict
+// ============================================================================
+// stdlib/material/magnet/halbach_envelope.hexa — segmented-Halbach field envelope
+//
+// General-purpose Halbach (1980) discrete-segment field-envelope primitive.
+// Pure geometry / harmonic content — no domain (NMR / motor / undulator / etc.)
+// baked in. Topical / domain-specific verifiers should `use` this module and
+// supply their own segment counts and remanence; this file is the SSOT.
+//
+// An ideal continuous Halbach cylinder produces a perfectly uniform transverse
+// bore field B = B_r·ln(r_o/r_in). A physical array discretizes the continuous
+// magnetization rotation into N piecewise-uniform segments per pole-pair; this
+// staircase approximation attenuates the fundamental by the segment sinc factor
+// (the k-th spatial harmonic of a box-car of angular width 2π/N):
+//
+//     factor(N, k) = sin(k·π/N) / (k·π/N)            (segment sinc / Dirichlet)
+//
+// with k = 1 the working fundamental. Combined with the dipole-cylinder bore
+// law (thin-shell linearization B ∝ B_r·(1 − r_in/r_o)) this gives the usable
+// bore field of a discrete array:
+//
+//     B = B_r · (1 − r_in/r_o) · factor(N, 1)
+//
+// Limits:
+//   N → ∞  (continuous Halbach):  factor → 1            (no segmentation loss)
+//   N = 4  (4-segment / pole-pair): factor = sin(π/4)/(π/4) ≈ 0.9003
+//   N = 2  (2-segment):            factor = sin(π/2)/(π/2) = 2/π ≈ 0.6366
+//   k = N  (Nyquist harmonic):     factor = sin(π)/π = 0    (segment-invisible)
+//   monotone: factor increases with N (finer segmentation → less loss)
+//
+// Honest scope (commons g3):
+//   · Captures only the leading segment-sinc attenuation of the fundamental
+//     and the thin-shell bore linearization. NOT a full magnetostatic solve
+//     (no per-segment fringing, no soft-iron return path, no finite axial
+//     length end-fields, no temperature/demag of the segments themselves).
+//   · `factor` is dimensionless ∈ (0, 1] for 0 < k < N. For k ≥ N the sinc
+//     passes through its zeros / sidelobes (harmonic content the array cannot
+//     reproduce); this is physically meaningful (those harmonics vanish).
+//
+// Surface (pure functions):
+//   fn halbach_envelope(n_seg, k)                  → sinc attenuation factor
+//   fn halbach_field_ratio(b_r, r_in, r_out, n_seg) → bore B (same unit as b_r)
+//
+// Self-test (this file):
+//   · continuous limit  N = 10000  →  factor → 1   (rel < 1e-3)
+//   · 4-segment         N = 4, k=1 →  factor ≈ 0.9003   (known value)
+//   · 2-segment         N = 2, k=1 →  factor = 2/π ≈ 0.6366
+//   · Nyquist           k = N       →  factor = 0
+//   · monotonicity      N↑ ⇒ factor↑  (2 < 4 < 8 < 16 fundamental)
+//
+// Run:
+//     hexa run stdlib/material/magnet/halbach_envelope.hexa
+//
+// @no-lock-needed
+
+use "self/runtime/math_pure"
+
+let VERSION = "1.0.0"
+
+// ─── check harness ──────────────────────────────────────────────────────
+
+let mut RUN = 0
+let mut FAIL = 0
+
+fn _check(ok: bool, label: str, detail: str) {
+    RUN = RUN + 1
+    let mark = if ok { "PASS" } else { "FAIL" }
+    if !ok { FAIL = FAIL + 1 }
+    println("  [" + mark + "] " + label)
+    if detail.len() > 0 { println("         · " + detail) }
+}
+
+fn abs_f(x: float) -> float { if x < 0.0 { return -x } return x }
+
+fn rel_err(a: float, b: float) -> float {
+    let d = abs_f(a - b)
+    let abs_b = abs_f(b)
+    if abs_b < 1.0e-30 { return d }
+    return d / abs_b
+}
+
+// ─── physical constants ─────────────────────────────────────────────────
+
+let PI: float = 3.14159265358979323846
+
+// ─── Halbach segmented-array sinc envelope ──────────────────────────────
+
+// Segment sinc attenuation of the k-th harmonic for an N-segment-per-pole-pair
+// array: factor = sin(k·π/N) / (k·π/N).  k = 1 is the working fundamental.
+// (n_seg, k) → dimensionless attenuation factor
+fn halbach_envelope(n_seg: float, k: float) -> float {
+    let x = k * PI / n_seg
+    if abs_f(x) < 1.0e-30 { return 1.0 }     // sinc(0) = 1 (continuous limit)
+    return sin_pure(x) / x
+}
+
+// Usable bore field of a discrete Halbach cylinder: thin-shell bore law
+// B = B_r·(1 − r_in/r_o) attenuated by the fundamental (k=1) segment sinc.
+// (B_r, r_in, r_out, n_seg) → B  (same unit as B_r)
+fn halbach_field_ratio(b_r: float, r_in: float,
+                       r_out: float, n_seg: float) -> float {
+    let bore = b_r * (1.0 - r_in / r_out)
+    return bore * halbach_envelope(n_seg, 1.0)
+}
+
+// ─── analytical limit sanity checks (self-test) ─────────────────────────
+
+fn check_continuous_limit() {
+    // N → ∞: the staircase becomes a continuous rotation → factor → 1
+    // (the ideal, segmentation-loss-free Halbach cylinder).
+    let f = halbach_envelope(10000.0, 1.0)
+    _check(rel_err(f, 1.0) < 1.0e-3,
+        "continuous limit (N=1e4): sinc → 1 (no segmentation loss)",
+        "factor=" + str(f))
+}
+
+fn check_four_segment() {
+    // 4 segments / pole-pair: sin(π/4)/(π/4) = (√2/2)/(π/4) ≈ 0.90032.
+    let f = halbach_envelope(4.0, 1.0)
+    let known = 0.900316316157106
+    _check(rel_err(f, known) < 1.0e-4,
+        "4-segment array N=4,k=1: factor ≈ 0.9003 (known value)",
+        "factor=" + str(f) + "  known=" + str(known) +
+        "  rel_err=" + str(rel_err(f, known)))
+}
+
+fn check_two_segment() {
+    // 2 segments / pole-pair: sin(π/2)/(π/2) = 1/(π/2) = 2/π ≈ 0.63662.
+    let f = halbach_envelope(2.0, 1.0)
+    let two_over_pi = 2.0 / PI
+    _check(rel_err(f, two_over_pi) < 1.0e-6,
+        "2-segment array N=2,k=1: factor = 2/π ≈ 0.6366",
+        "factor=" + str(f) + "  2/π=" + str(two_over_pi))
+}
+
+fn check_nyquist_zero() {
+    // k = N (Nyquist harmonic): sin(N·π/N)/(N·π/N) = sin(π)/π = 0.
+    // The array cannot reproduce a harmonic at its own segment count.
+    let f = halbach_envelope(4.0, 4.0)
+    _check(abs_f(f) < 1.0e-12,
+        "Nyquist harmonic k=N: factor = sin(π)/π = 0",
+        "factor=" + str(f))
+}
+
+fn check_monotonicity() {
+    // Finer segmentation reduces loss: factor(N=2) < (4) < (8) < (16),
+    // approaching 1 from below. Equivalently N↓ ⇒ factor↓.
+    let f2 = halbach_envelope(2.0, 1.0)
+    let f4 = halbach_envelope(4.0, 1.0)
+    let f8 = halbach_envelope(8.0, 1.0)
+    let f16 = halbach_envelope(16.0, 1.0)
+    _check(f2 < f4 && f4 < f8 && f8 < f16 && f16 < 1.0,
+        "monotonicity N↑ ⇒ factor↑ (N=2,4,8,16 fundamental, all < 1)",
+        "f(2)=" + str(f2) + "  f(4)=" + str(f4) +
+        "  f(8)=" + str(f8) + "  f(16)=" + str(f16))
+}
+
+// ─── falsifiers ─────────────────────────────────────────────────────────
+
+let FALSIFIERS = [
+    "continuous-limit break — sinc(N=1e4) deviates > 0.1 % from 1 → DEMOTE ideal-Halbach asymptote",
+    "4-segment break — N=4,k=1 factor ≠ 0.9003 → DEMOTE segment-sinc calibration",
+    "2-segment break — N=2,k=1 factor ≠ 2/π → DEMOTE Dirichlet-kernel fundamental",
+    "Nyquist break — k=N yields nonzero factor → DEMOTE segment-invisibility of own-count harmonic",
+    "monotonicity break — finer segmentation does not raise factor → DEMOTE staircase-refinement direction",
+]
+
+// ─── main ───────────────────────────────────────────────────────────────
+
+fn main() {
+    println("========================================================================")
+    println("  stdlib/material/magnet — segmented-Halbach field-envelope primitive")
+    println("========================================================================")
+    println("  factor(N, k) = sin(k·π/N) / (k·π/N)        (segment sinc, k=1 working)")
+    println("  B = B_r·(1 − r_in/r_o)·factor(N, 1)        (thin-shell bore × sinc)")
+    println("  N→∞ ⇒ factor→1 · N=4 ⇒ 0.9003 · N=2 ⇒ 2/π · k=N ⇒ 0")
+    println("")
+
+    println("  Analytical limit sanity checks:")
+    check_continuous_limit()
+    check_four_segment()
+    check_two_segment()
+    check_nyquist_zero()
+    check_monotonicity()
+
+    println("")
+    println("  FALSIFIERS (" + str(FALSIFIERS.len()) + "):")
+    for f in FALSIFIERS { println("    ✗ " + f) }
+
+    println("========================================================================")
+    let pass_n = RUN - FAIL
+    println("  " + str(pass_n) + "/" + str(RUN) + " checks passed")
+    if FAIL > 0 {
+        println("  Halbach-envelope primitive self-test FAILED — see per-check output above.")
+        println("__HEXA_STDLIB_MATERIAL_MAGNET_HALBACH_ENVELOPE__ FAIL")
+        exit(1)
+    }
+    println("  segmented-Halbach field-envelope primitive: PASS")
+    println("__HEXA_STDLIB_MATERIAL_MAGNET_HALBACH_ENVELOPE__ PASS")
+    exit(0)
+}
