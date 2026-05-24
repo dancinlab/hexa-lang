@@ -981,6 +981,20 @@ opt-in via `git config core.hooksPath .githooks`) + project.tape @D
 - Prerequisite for cycle 66 retry: rebuild + promote `self/native/hexa_v2` so the `__arr_alloc_items_zero{,_int}` builtins lower to runtime calls (or land a codegen branch in hexa_v2 source that maps the identifier to `hexa_array_zeros_float` / `hexa_array_alloc` direct C calls). Separate work, not in cycle 66 scope
 - Acceptance line: `cycle 66: __chkstk_darwin DEFERRED · externs N/A → N/A · smoke N/A · PR none` — bail-out clause invoked per task spec
 
+### 2026-05-25 — cycle 67: aprime_cc build-unblock — CLOSED (s4_flatc_post helper injection)
+
+- cycle 67 — `tool/build_aprime.sh` stage-4 clang **PASS** (was: `error: use of undeclared identifier '__arr_alloc_items_zero'`). aprime_cc binary builds locally on main HEAD (`6a6f8bce`)
+- Approach: extend `tool/s4_flatc_post.py` with rule (5) — inject 2 `static HexaVal __arr_alloc_items_zero{,_int}(HexaVal nv)` helper functions right after the runtime include anchor, mirroring the runtime.c `hexa_array_zeros_float` / `hexa_array_alloc` non-dispatch bodies (single calloc + malloc + zero-fill, TAG_FLOAT 0.0 / TAG_INT 0 slots). `_Generic` dispatch in `hexa_call1(__arr_alloc_items_zero, n)` resolves to the injected helpers (function-pointer arm of the macro)
+- Why helper-inject vs rewrite-to-existing-symbol: a direct `hexa_call1(__arr_alloc_items_zero, n)` → `hexa_array_zeros_float(n)` substitution recurses under `-DHEXA_HAS_HEXA_RT_STDLIB=1` (the build script sets this) — the dispatch wrapper calls `rt_array_zeros_float` which in hexa source returns `__arr_alloc_items_zero(n)`, looping. Confirmed via 30s SIGKILL on first try. Helper-inject bodies are direct calloc and do NOT call back into rt_*
+- Build chain verified: stage 1 flatten 45 files / 34839 lines · stage 2 transpile 37310 C lines · stage 3 post-process (5 rules) · stage 4 clang **1,243,240 B Mach-O 64-bit executable arm64**
+- Externs after rebuild: **31** (baseline May 22 was 24). Increase = 7 net new externs from r16 series — `_backtrace_symbols_fd` `_environ` `_flock` `_fstat` `_lseek` `_mmap` `_open` `_stat` (rough delta vs baseline) — not artifacts of this cycle
+- Smoke: **FAIL (separate regression)** — aprime_cc loops on `compiler/main.hexa _load_atlas() → static_atlas() → _extract_raw_blocks() → rt_str_join_str` (sampled via `sample <pid>`). Physical footprint 2.3 GB at 2s wall, no progress. Atlas TEXT-parse path introduced in r16 commits has its own infinite-loop bug — NOT in the array allocator scope. May 22 baseline aprime_cc on same args runs in seconds, confirming the regression is r16-side, not from this fix
+- Unblocks: this fix removes the clang stage-4 block, so cycle 66 (`___chkstk_darwin` removal) and follow-up Phase-1 residual cleanup cycles can run as soon as the static_atlas-loop regression is fixed in a separate cycle. Without this cycle 67 fix neither chain could even attempt a binary baseline
+- Files touched (per @D `g_runtime_wipe_guard`, subject mentions `tool` only):
+  - `tool/s4_flatc_post.py` — rule (5) helper-inject block right after the runtime include hoist anchor; docblock entry added
+  - `RUNTIME.md` (this entry)
+- Acceptance line: `cycle 67: aprime_cc-unblock CLOSED · externs 24 → 31 · smoke FAIL (atlas-loop regression) · PR #(this)` — clang-stage-4 PASS satisfies the primary unblock criterion; smoke failure is a documented separate regression filed as follow-up
+
 ## Phase 2 — Tier-B stdlib primitives (step 2)
 
 ### 2026-05-21 — 🛸 step 2 POC: hxlcl_isalnum + isalpha → stdlib/runtime/ctype.hexa (cycle 1)
