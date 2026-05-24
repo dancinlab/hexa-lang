@@ -1,0 +1,40 @@
+// HEXA Standard Library — test/import_check
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Import-time presence check helpers. Standardises the 173+ anima inline
+// `test_import` definitions (STDLIB Phase 1b survey 2026-05-25) — every
+// CLI tool checks that its expected imports loaded correctly before
+// running the main logic.
+//
+// Surface:
+//   pub fn assert_fn_exists(name: string, exists: bool)
+//     Assert that a named fn was imported · panic with diagnostic if
+//     `exists` is false. Caller passes the existence boolean since hexa
+//     does not have reflective fn-lookup (it's a parse-time check).
+//
+//   pub fn assert_module_loaded(name: string, sentinel: bool)
+//     Assert that a module's top-level sentinel was set during import.
+//     Convention: each module exposes a `MODULE_LOADED_<NAME>` constant
+//     that callers check via this fn.
+//
+// Both fns terminate with a clear error message on failure (panic) so
+// the caller's selftest output gets a definitive missing-import line
+// instead of a runtime "undefined" deep in the call chain.
+
+pub fn assert_fn_exists(name: string, exists: bool) {
+    if exists {
+        println("  import check: " + name + " : OK")
+    } else {
+        panic("import check FAIL: fn " + name + " not found — check the import path or build")
+    }
+}
+
+pub fn assert_module_loaded(name: string, sentinel: bool) {
+    if sentinel {
+        println("  module load: " + name + " : OK")
+    } else {
+        panic("module load FAIL: " + name + " sentinel false — module not imported or not initialised")
+    }
+}
