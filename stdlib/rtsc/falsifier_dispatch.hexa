@@ -447,7 +447,7 @@ fn dynamic_caveats(env: map, results: [map]) -> [string] {
 // ─── Top-level dispatcher ───────────────────────────────────────────────
 
 fn dispatch_falsifiers(env: map) -> map {
-    let results: [map] = [
+    let mut results: [map] = [
         eval_f_sc_1_bcs_isotope(env),
         eval_f_sc_2_mcmillan_tc(env),
         eval_f_sc_3_hc2_whh(env),
@@ -455,6 +455,32 @@ fn dispatch_falsifiers(env: map) -> map {
         eval_f_rtsc_2_r_of_t(env),
         eval_f_rtsc_3_replication(env),
     ]
+    // WORKAROUND (hexa compiler bug): same-named `let id` / `let name`
+    // string-literal locals across the eval_* functions collapse to the
+    // FIRST function's value (F-SC-1) in codegen — status/evidence stay
+    // correct but the id/name fields leak F-SC-1 onto every result.
+    // Re-stamp id/name by index from the fixed dispatch order above so
+    // callers (MaterialFalsifierDispatch.swift looks up results by id)
+    // get the right identifiers. Remove when the compiler bug is fixed
+    // (handed off to inbox/notes — same-name let-literal const collision).
+    let canonical_ids = [
+        "F-SC-1-bcs-isotope", "F-SC-2-mcmillan-tc", "F-SC-3-hc2-whh",
+        "F-RTSC-1-meissner", "F-RTSC-2-r-of-t", "F-RTSC-3-replication",
+    ]
+    let canonical_names = [
+        "BCS isotope effect (α ≈ 0.5)",
+        "McMillan/Allen-Dynes Tc consistency",
+        "Hc2(0) WHH extrapolation",
+        "Meissner effect (χ < 0)",
+        "R(T) drop within [0.5·Tc_pred, 2.0·Tc_pred]",
+        "Independent-lab replication (≥ 2)",
+    ]
+    let mut ri = 0
+    while ri < len(results) {
+        results[ri]["id"]   = canonical_ids[ri]
+        results[ri]["name"] = canonical_names[ri]
+        ri = ri + 1
+    }
     let agg = aggregate_verdict(results)
     let caveats = dynamic_caveats(env, results)
     let mut out = json_parse("{}")
