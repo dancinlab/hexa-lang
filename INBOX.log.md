@@ -2,6 +2,28 @@
 
 Append-only history sister of `INBOX.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
+## 2026-05-25T04:20Z — codegen: 함수 간 동명 `let` comptime-const fold 충돌 ("이름 도둑") — RESOLVED #829
+
+**중복 핸드오프 통합** — 동일 루트코즈 2건을 1건으로:
+- anima MODERNIZE M6 (INBOX #824) — #829 fix 의 원 reporter.
+- demiurge CARDIO+ X10 PAPER (`_paper.hexa`) — `_cmd_compile` 의 `let pdf = "pdflatex …"`(string literal)가 `_cmd_lint` 의 `let pdf = dir + "/main.pdf"`(non-literal)를 덮어씀 → lint 가 엉뚱한 문자열을 `test -e` → 실제 10p PDF인데 FAIL.
+
+**루트코즈**: codegen 의 comptime-const fold 테이블이 module-global 이라, 한 함수의 `let <id> = <literal>` 이 다른 함수의 동명 `<id>` 까지 stale 리터럴로 inline. `gen2_fn_decl` 이 본문 emit 시 comptime-const scope mark/restore 를 안 걸어 fn 경계에서 fold 가 누수 (block/loop/arm 본문은 이미 mark/restore 됨). silent wrong-answer (build-clean, 잘못된 출력). → [[reference_comptime_fold_shadow_family]] (D17 #724 · D18 #766 · F-FOLD #797 동일 뿌리).
+
+**3-function 최소 repro** (string 변종 = _paper.hexa 패턴):
+```
+fn cmd_compile() -> str { let pdf = "pdflatex -interaction=nonstopmode"; return pdf }
+fn cmd_lint(dir: str) -> str { let pdf = dir + "/main.pdf"; return pdf }
+fn main() {
+    let _ = cmd_compile()
+    println(cmd_lint("/work/paper"))   // 버그: "pdflatex …" · 정상: "/work/paper/main.pdf"
+}
+```
+
+- [x] **RESOLVED on main by #829** (`9e7ed729 fix(codegen): scope-isolate comptime-const folds per fn body`) — `gen2_fn_decl` 본문 emit 루프를 `_comptime_const_scope_mark()`/`_comptime_const_scope_restore()` 로 감쌈 (block/loop/arm 과 동일 패턴). module-level const 는 유지, per-fn fold 는 fn 종료 시 폐기.
+- [x] **검증** (2026-05-25, from-main 트랜스파일러): 위 string repro 5× transpile → emitted C md5 동일(결정적) · 0/5 가 `cmd_lint` 에 stale 리터럴 inline (전부 `hexa_add(dir, "/main.pdf")` 클린) · 실행 `/work/paper/main.pdf` PASS. #829 의 int/float repro(2147483648 → 10.0) 도 동일 PASS. → string 케이스 포함 fix 확정. (workaround 미적용 — 근본수정 우선 원칙대로.)
+- [ ] **배포 갭 (consumer action)**: 배포된 컴파일러(`~/.hx/bin` · repo dir 이 `chore/abolish-inbox-folder` = pre-#829 계보)는 아직 버그 잔존 → `_paper.hexa` 증상은 컴파일러를 #829+ 로 갱신해야 사라짐. `_paper.hexa` 쪽 rename 우회는 하지 않음(@user). hexa-lang 코어 fix 는 완료 — 남은 건 배포 refresh 뿐.
+
 ## 2026-05-25T03:00Z — codegen: 파라미터명이 호출부 struct 필드명과 같으면 미스컴파일
 
 - [ ] `tool/atlas_cli.hexa` 작업 중 발견. `fn f(raw: string)`를 `f(ev.raw)`로 호출하면 함수 body의 `raw`가 호출부 인자값(394자 문자열)이 아니라 `"x"`(len 1)로 바인딩됨 — 파라미터명이 호출부 struct 필드 접근명(`raw`)과 충돌하는 codegen aliasing. `node_raw`로 rename하면 정상. 재현: 3-string-param fn에 `.<param명과 동일한>` 필드접근 인자 전달 → 빌드는 통과하나 런타임에 잘못된 값. 임시회피=param rename, 근본수정=codegen name-resolution (compiler/codegen 영역).
