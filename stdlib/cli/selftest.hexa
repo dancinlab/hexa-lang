@@ -1,0 +1,57 @@
+// HEXA Standard Library — cli/selftest
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// CLI selftest scaffold — common pattern across 173+ anima CLI tools
+// (STDLIB Phase 1b survey 2026-05-25). Every anima command-line tool
+// defines its own `cmd_selftest()` that runs a bundle of assertions
+// and reports PASS/FAIL summary.
+//
+// Surface:
+//   pub fn run_selftest(name: string, checks: array) -> bool
+//     `name`   : tool / module name (printed in header)
+//     `checks` : array of #{ "label": string, "ok": bool } records
+//     Prints per-check status + aggregate. Returns true iff all PASS.
+//
+// Convention (matches anima cmd_selftest output format):
+//   === <name> selftest ===
+//     <label>  : PASS  (or FAIL)
+//     ...
+//   pass=N fail=N (aggregate)
+//
+// Callers compose `checks` themselves (each entry pre-evaluated) and pass
+// the array to `run_selftest`. This separates *check execution* from
+// *result reporting*, letting callers also serialize the results
+// (e.g. for JSON output via stdlib/string/escape::json_escape).
+
+import "stdlib/cli/argv.hexa"
+
+pub fn run_selftest(name: string, checks: array) -> bool {
+    println("=== " + name + " selftest ===")
+    let n = len(checks)
+    let mut pass = 0
+    let mut fail = 0
+    let mut i = 0
+    while i < n {
+        let c = checks[i]
+        let label = c["label"]
+        let ok = c["ok"]
+        if ok {
+            println("  " + label + " : PASS")
+            pass = pass + 1
+        } else {
+            println("  " + label + " : FAIL")
+            fail = fail + 1
+        }
+        i = i + 1
+    }
+    println("pass=" + to_string(pass) + " fail=" + to_string(fail))
+    return fail == 0
+}
+
+// is_selftest_invoked: convenience predicate — true iff argv contains
+// "--selftest". Lets callers gate their main() with a single check.
+pub fn is_selftest_invoked() -> bool {
+    return arg_present(argv(), "--selftest")
+}
