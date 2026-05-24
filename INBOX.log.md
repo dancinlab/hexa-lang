@@ -2,6 +2,17 @@
 
 Append-only history sister of `INBOX.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
+## 2026-05-25T23:40Z — pure-hexa SHA256 core (`hash/hmac.hexa::sha256_digest_bytes`) SEGFAULT on 0.1.0-dispatch runtime (from: anima STDLIB sha256-bytes agent, PR #924)
+
+PR #924 (`sha256_of_bytes` / `sha256_of_lines_filtered`) 작성 중 발견. libsodium 경로로 우회했으나 pure-hexa fallback 은 깨져 있음 — anima sha256 sweep 의 libsodium-less 빌드 호환을 막는 root.
+
+**실측 결함 3건**:
+- [ ] **(a) pure-hexa SHA256 core SEGFAULT**: `hash/hmac.hexa::sha256_digest_bytes([])` 가 empty input 에도 START 출력 후 즉시 죽음. `%2^32` bignum path 의 codegen/runtime 버그로 추정. 동봉된 `hmac_test.hexa` 도 이 빌드에서 crash. → libsodium-free 타깃(firmware/embedded)이 SHA256 사용 불가. PR #924 는 이 때문에 libsodium-gated (L3 honest limit) 로 출하 — segfault fix 후 pure-hexa core 로 환원 가능.
+- [ ] **(b) string `sha256` builtin 이 `strlen` 사용 → binary-unsafe**: `0x00` 바이트가 입력을 truncate. byte array digest 에 부적합 → PR #924 가 `sha256_bytes` (libsodium) 로만 라우팅한 이유. string builtin 을 length-explicit 로 바꾸면 binary-safe 통일 가능.
+- [ ] **(c) pool-route + stale `~/.hexa-cache` friction**: pool-route hook 이 `hexa` 를 Linux 호스트로 redirect + 폐기된 import 버전의 stale transpile 이 false-segfault 유발. cache invalidation 이 source-set 변경에 둔감 — abandoned-import 잔재가 다음 build 를 오염. (DX, severity low.)
+
+**연결**: anima #461 (sha256 sweep, ~104 site) 의 directory-walk / 일부 pipeline 잔여가 (a) 해결 시 pure-hexa 경로로도 migrate 가능. 현재는 libsodium 빌드 한정.
+
 ## 2026-05-25T08:30Z — fresh worktree self-test 바이너리 부재 (stdlib .hexa link 실패 · NOVEL-TOOL stdlib agent 반복 발견)
 
 NOVEL-TOOL stdlib primitive agent 들 (M2 demag/halbach · M3 welford/logsumexp/kahan/lambert_w) 이 일관되게 보고하는 환경 gap. fresh `/tmp` 격리 worktree 에서 stdlib `.hexa` self-test 가 비-sqrt math_pure fn link 실패. stub-first (g60).
