@@ -2,7 +2,7 @@
 
 **Filed:** 2026-05-24 · session `inbox/websocat-tool-discovery-2026-05-23`
 **Severity:** CRITICAL — silent miscompilation, no diagnostic, no error
-**Status:** INVESTIGATED → BLOCKED (architectural; not 40 LoC; ≥150 LoC + risk surface)
+**Status:** RFC-FILED (resolved-#724, 2026-05-24T08:15Z) — architectural codegen redesign (≥150 LoC) deferred to dedicated `rfc_LEX_SCOPE_2026_05_24` cycle. Inbox 단계는 PR #724 머지로 종결; 실제 fix 는 후속 RFC 사이클 (P0-P3 phases below).
 
 ## Repro
 
