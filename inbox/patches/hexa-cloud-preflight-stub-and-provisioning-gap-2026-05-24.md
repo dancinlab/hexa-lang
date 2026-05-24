@@ -1,5 +1,20 @@
 # hexa cloud preflight stub + provisioning verb 부재 — RTSC BEE-NET fine-tune 발견
 
+## 상태 (2026-05-24 updated)
+
+- **gap 1 (preflight 미수용 스텁) — 해소 (PR pending)**: closed-form GPU 메모리
+  budget 계산을 `stdlib/cloud/preflight.hexa` 로 구현. params + grads + opt_state
+  + activations + temps + reserved_overhead 합산, --gpu 미지정 시 ladder 에서
+  최소 충족 tier 추천. 옵티마이저 9종 (sgd / sgd-momentum / adamw / adamw-amp-fp16
+  / adamw-8bit / paged-adamw-8bit / lion / zero2 / zero3) + dtype 9종 + GPU tier
+  19종. FAIL 시 downgrade 사다리 제안 (`adamw → adamw-8bit → paged-adamw-8bit →
+  lion → sgd-momentum → sgd`). LLM·pod-spinup·network egress 0건. Standalone
+  실행: `hexa run stdlib/cloud/preflight.hexa -- --params N --gpu KEY ...`.
+  cloud_cli.hexa `preflight` verb wiring 은 별도 PR (scope guard).
+- **gap 2 (provisioning verb 부재) — 추적 유지**: rent/destroy verb 는
+  inbox/rfc_drafts_2026_05_24/rfc_088_hexa_cloud_preflight.md (P-series) 에서
+  본 patch 와 별도 사이클로 진행. 본 PR 는 gap 1 만 해소.
+
 ## TL;DR
 
 `hexa cloud` 는 transport-only (run/nohup/poll/copy-to/copy-from) — GPU pod 를

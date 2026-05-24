@@ -1,0 +1,581 @@
+// stdlib/cloud/preflight.hexa — closed-form GPU memory budget preflight.
+//
+// Purpose: catch OOM-by-spec at the dispatch host BEFORE any pod-spinup
+// or training step. No external LLM, no pod-spinup, no network egress —
+// pure arithmetic on the workload spec (params, dtype, optimizer, batch).
+//
+// Origin: inbox/patches/hexa-cloud-preflight-stub-and-provisioning-gap-
+// 2026-05-24.md (gap#1 = preflight stub returned a fixed model recommendation
+// regardless of input). Closed-form schema follows RFC 088 §2.3.
+//
+// Run standalone:
+//   hexa run stdlib/cloud/preflight.hexa --params 8920000000 \
+//     --param-dtype bf16 --grad-dtype bf16 --optimizer adamw \
+//     --bsz 4 --seq 2048 --n-layer 32 --d-model 4096 \
+//     --gpu h100-80gb
+//
+// Cycle-A scope: standalone CLI only. Wiring into `hexa cloud preflight`
+// via cloud_cli.hexa is a follow-up PR (RFC 088 P3), respecting the
+// inbox-patch scope guard (preflight* only).
+
+// ── unit constants (integer bytes; no float) ─────────────────────────
+
+fn _kib() -> int { return 1024 }
+fn _mib() -> int { return 1048576 }
+fn _gib() -> int { return 1073741824 }
+
+// ── dtype byte width ─────────────────────────────────────────────────
+
+// _dtype_bytes — return the byte width of a parameter / gradient dtype.
+// Recognized: "f64" "f32" "tf32" "bf16" "f16" "i8" "fp8" "i4".
+// Unknown returns 0 (caller treats as configuration error).
+fn _dtype_bytes(dt: str) -> int {
+    if dt == "f64" { return 8 }
+    if dt == "f32" { return 4 }
+    if dt == "tf32" { return 4 }
+    if dt == "bf16" { return 2 }
+    if dt == "f16" { return 2 }
+    if dt == "fp16" { return 2 }
+    if dt == "i8" { return 1 }
+    if dt == "fp8" { return 1 }
+    if dt == "i4" { return 1 }
+    return 0
+}
+
+// ── optimizer state multiplier (×n_params bytes) ─────────────────────
+
+// Each optimizer keeps some number of f32-equivalent slots per parameter.
+//   sgd                = 0    (no per-param state)
+//   sgd-momentum       = 4    (1× f32 momentum)
+//   adamw              = 8    (m + v, both f32)
+//   adamw-amp-fp16     = 12   (m + v f32 + fp16 master copy slop)
+//   adamw-8bit         = 21/10 = 2.1
+//   paged-adamw-8bit   = 21/10 = 2.1 (paged to CPU on overflow)
+//   lion               = 4    (1× f32 momentum)
+//   zero2              = 8 / n_gpu (optimizer state shard)
+//   zero3              = 8 / n_gpu (param + grad + opt all shard — caller
+//                                   passes pre-sharded n_params)
+//
+// Returned as (numerator, denominator) pair so the caller can multiply by
+// n_params without losing precision. Multiplier units = bytes per param.
+struct OptMult {
+    num: int,
+    den: int
+}
+
+fn _opt_mult(name: str, n_gpu: int) -> OptMult {
+    if name == "sgd"               { return OptMult { num: 0,  den: 1  } }
+    if name == "sgd-momentum"      { return OptMult { num: 4,  den: 1  } }
+    if name == "momentum"          { return OptMult { num: 4,  den: 1  } }
+    if name == "adamw"             { return OptMult { num: 8,  den: 1  } }
+    if name == "adam"              { return OptMult { num: 8,  den: 1  } }
+    if name == "adamw-amp-fp16"    { return OptMult { num: 12, den: 1  } }
+    if name == "adamw-8bit"        { return OptMult { num: 21, den: 10 } }
+    if name == "paged-adamw-8bit"  { return OptMult { num: 21, den: 10 } }
+    if name == "lion"              { return OptMult { num: 4,  den: 1  } }
+    if name == "zero2" {
+        let d = if n_gpu > 0 { n_gpu } else { 1 }
+        return OptMult { num: 8, den: d }
+    }
+    if name == "zero3" {
+        let d = if n_gpu > 0 { n_gpu } else { 1 }
+        return OptMult { num: 8, den: d }
+    }
+    // Unknown optimizer — conservative default = adamw (8×).
+    return OptMult { num: 8, den: 1 }
+}
+
+// Suggest a less-expensive optimizer when the current one busts the cap.
+// Returns "" if already at the cheapest (sgd).
+fn _opt_downgrade(name: str) -> str {
+    if name == "adamw-amp-fp16"   { return "adamw" }
+    if name == "adamw"            { return "adamw-8bit" }
+    if name == "adam"             { return "adamw-8bit" }
+    if name == "adamw-8bit"       { return "paged-adamw-8bit" }
+    if name == "paged-adamw-8bit" { return "lion" }
+    if name == "lion"             { return "sgd-momentum" }
+    if name == "sgd-momentum"     { return "sgd" }
+    if name == "momentum"         { return "sgd" }
+    return ""
+}
+
+// ── GPU tier table (canonical names + memory in bytes) ──────────────
+
+// Returns (mem_bytes, canonical_name). mem_bytes == 0 means unknown tier.
+struct GpuTier {
+    mem_bytes: int,
+    name:      str
+}
+
+fn _gpu_tier(key: str) -> GpuTier {
+    // Consumer / workstation cards
+    if key == "rtx-3060-12gb"   { return GpuTier { mem_bytes: 12 * _gib(), name: "RTX 3060 12GB" } }
+    if key == "rtx-3090-24gb"   { return GpuTier { mem_bytes: 24 * _gib(), name: "RTX 3090 24GB" } }
+    if key == "rtx-4070-12gb"   { return GpuTier { mem_bytes: 12 * _gib(), name: "RTX 4070 12GB" } }
+    if key == "rtx-4080-16gb"   { return GpuTier { mem_bytes: 16 * _gib(), name: "RTX 4080 16GB" } }
+    if key == "rtx-4090-24gb"   { return GpuTier { mem_bytes: 24 * _gib(), name: "RTX 4090 24GB" } }
+    if key == "rtx-5070-12gb"   { return GpuTier { mem_bytes: 12 * _gib(), name: "RTX 5070 12GB" } }
+    if key == "rtx-5090-32gb"   { return GpuTier { mem_bytes: 32 * _gib(), name: "RTX 5090 32GB" } }
+    // Datacenter
+    if key == "l4-24gb"         { return GpuTier { mem_bytes: 24 * _gib(), name: "L4 24GB" } }
+    if key == "l40-48gb"        { return GpuTier { mem_bytes: 48 * _gib(), name: "L40 48GB" } }
+    if key == "l40s-48gb"       { return GpuTier { mem_bytes: 48 * _gib(), name: "L40S 48GB" } }
+    if key == "a10-24gb"        { return GpuTier { mem_bytes: 24 * _gib(), name: "A10 24GB" } }
+    if key == "a40-48gb"        { return GpuTier { mem_bytes: 48 * _gib(), name: "A40 48GB" } }
+    if key == "a100-40gb"       { return GpuTier { mem_bytes: 40 * _gib(), name: "A100 40GB" } }
+    if key == "a100-80gb"       { return GpuTier { mem_bytes: 80 * _gib(), name: "A100 80GB" } }
+    if key == "h100-80gb"       { return GpuTier { mem_bytes: 80 * _gib(), name: "H100 80GB HBM3" } }
+    if key == "h100-nvl"        { return GpuTier { mem_bytes: 94 * _gib(), name: "H100 NVL 94GB" } }
+    if key == "h200-141gb"      { return GpuTier { mem_bytes: 141 * _gib(), name: "H200 141GB" } }
+    // Apple Silicon unified memory (approximations)
+    if key == "m3-max-36gb"     { return GpuTier { mem_bytes: 36 * _gib(), name: "Apple M3 Max 36GB" } }
+    if key == "m3-max-128gb"    { return GpuTier { mem_bytes: 128 * _gib(), name: "Apple M3 Max 128GB" } }
+    return GpuTier { mem_bytes: 0, name: "" }
+}
+
+// Ladder of GPU tiers ordered by memory (smallest → largest). Used by
+// _recommend_tier to find the cheapest tier that fits.
+fn _gpu_ladder() -> [str] {
+    return [
+        "rtx-3060-12gb",
+        "rtx-4070-12gb",
+        "rtx-5070-12gb",
+        "rtx-4080-16gb",
+        "rtx-3090-24gb",
+        "a10-24gb",
+        "l4-24gb",
+        "rtx-4090-24gb",
+        "rtx-5090-32gb",
+        "m3-max-36gb",
+        "a100-40gb",
+        "a40-48gb",
+        "l40-48gb",
+        "l40s-48gb",
+        "a100-80gb",
+        "h100-80gb",
+        "h100-nvl",
+        "m3-max-128gb",
+        "h200-141gb"
+    ]
+}
+
+// ── budget breakdown ─────────────────────────────────────────────────
+
+struct MemBreakdown {
+    params:      int,
+    grads:       int,
+    opt_state:   int,
+    activations: int,
+    temps:       int,
+    overhead:    int,
+    total:       int,
+    cap:         int,
+    fits:        int,   // 1 if total <= cap, else 0
+    warn_15pct:  int    // 1 if total > cap * 85/100, else 0
+}
+
+// _activation_envelope — closed-form envelope for activation memory.
+// Formula: bsz × seq_len × d_model × n_layer × param_dtype_bytes × factor
+// Factor: 2 if gradient_checkpointing else 18 (midpoint of 10-25 envelope).
+fn _activation_envelope(bsz: int, seq_len: int, d_model: int, n_layer: int,
+                        param_dtype_bytes: int, grad_ckpt: int) -> int {
+    let base = bsz * seq_len * d_model * n_layer * param_dtype_bytes
+    if grad_ckpt == 1 {
+        return base * 2
+    }
+    return base * 18
+}
+
+// _compute_breakdown — pure arithmetic. No allocations beyond the struct.
+fn _compute_breakdown(n_params: int, param_dt_bytes: int, grad_dt_bytes: int,
+                       opt: OptMult, bsz: int, seq_len: int, d_model: int,
+                       n_layer: int, grad_ckpt: int, gpu_mem: int,
+                       reserved_overhead: int) -> MemBreakdown {
+    let params    = n_params * param_dt_bytes
+    let grads     = n_params * grad_dt_bytes
+    // opt_state = n_params * (opt.num / opt.den) — apply division last to
+    // avoid premature precision loss when opt.den > 1 (e.g. 21/10).
+    let opt_state = (n_params * opt.num) / opt.den
+    let activations = _activation_envelope(bsz, seq_len, d_model, n_layer,
+                                            param_dt_bytes, grad_ckpt)
+    let temps     = 8 * _gib()   // conservative scratch + workspace
+    let total     = params + grads + opt_state + activations + temps + reserved_overhead
+
+    let mut fits = 0
+    if total <= gpu_mem { fits = 1 }
+    let mut warn = 0
+    // total > cap * 85 / 100  (use mul-before-div to keep precision)
+    if fits == 1 {
+        let threshold = (gpu_mem * 85) / 100
+        if total > threshold { warn = 1 }
+    }
+    return MemBreakdown {
+        params:      params,
+        grads:       grads,
+        opt_state:   opt_state,
+        activations: activations,
+        temps:       temps,
+        overhead:    reserved_overhead,
+        total:       total,
+        cap:         gpu_mem,
+        fits:        fits,
+        warn_15pct:  warn
+    }
+}
+
+// _recommend_tier — walk the ladder and return the first tier key whose
+// mem_bytes >= total. Returns "" if no listed tier fits.
+fn _recommend_tier(total: int) -> str {
+    let ladder = _gpu_ladder()
+    let mut i = 0
+    while i < len(ladder) {
+        let key = ladder[i]
+        let t = _gpu_tier(key)
+        if t.mem_bytes >= total { return key }
+        i = i + 1
+    }
+    return ""
+}
+
+// ── pretty-print helpers ────────────────────────────────────────────
+
+// Format bytes as "N.NN GiB" using fixed-point math (no float).
+// Two-decimal precision.
+fn _fmt_gib(b: int) -> str {
+    // hundredths of a GiB = b * 100 / GIB
+    let h = (b * 100) / _gib()
+    let whole = h / 100
+    let frac = h - whole * 100
+    let mut fs = to_string(frac)
+    if frac < 10 { fs = "0" + fs }
+    return to_string(whole) + "." + fs + " GiB"
+}
+
+// ── CLI argv parsing ─────────────────────────────────────────────────
+
+struct PreflightArgs {
+    n_params:        int,
+    param_dtype:     str,
+    grad_dtype:      str,
+    optimizer:       str,
+    n_gpu:           int,
+    bsz:             int,
+    seq_len:         int,
+    n_layer:         int,
+    d_model:         int,
+    grad_ckpt:       int,
+    gpu_key:         str,
+    reserved_overhead: int,
+    ok:              int,
+    err:             str
+}
+
+// _atoi_pf — parse a non-negative decimal integer; non-digits abort.
+fn _atoi_pf(s: str) -> int {
+    let mut v = 0
+    let mut i = 0
+    let n = len(s)
+    if n == 0 { return -1 }
+    while i < n {
+        let cc = char_code(s.substring(i, i + 1))
+        if cc >= 48 && cc <= 57 {
+            v = v * 10 + (cc - 48)
+        } else {
+            return -1
+        }
+        i = i + 1
+    }
+    return v
+}
+
+fn _default_args() -> PreflightArgs {
+    return PreflightArgs {
+        n_params:          0,
+        param_dtype:       "bf16",
+        grad_dtype:        "bf16",
+        optimizer:         "adamw",
+        n_gpu:             1,
+        bsz:               1,
+        seq_len:           2048,
+        n_layer:           32,
+        d_model:           4096,
+        grad_ckpt:         0,
+        gpu_key:           "",
+        reserved_overhead: 4 * _gib(),
+        ok:                1,
+        err:               ""
+    }
+}
+
+// _parse_preflight_args — read argv after the "preflight" verb token.
+// Recognized flags:
+//   --params N            (required, integer count)
+//   --param-dtype DT
+//   --grad-dtype DT
+//   --optimizer NAME
+//   --n-gpu N             (for zero2/zero3 sharding)
+//   --bsz N
+//   --seq N               (sequence length)
+//   --n-layer N
+//   --d-model N
+//   --grad-checkpoint     (boolean flag)
+//   --gpu KEY             (tier key; if absent we recommend a tier)
+//   --reserved-overhead-gib N
+fn _parse_preflight_args(av: [str], start: int) -> PreflightArgs {
+    let mut a = _default_args()
+    let mut i = start
+    while i < len(av) {
+        let t = av[i]
+        if t == "--params" || t == "--n-params" {
+            if i + 1 >= len(av) { a.ok = 0; a.err = "--params requires a value"; return a }
+            let v = _atoi_pf(av[i + 1])
+            if v < 0 { a.ok = 0; a.err = "--params not a non-negative integer: " + av[i + 1]; return a }
+            a.n_params = v
+            i = i + 2
+        } else if t == "--param-dtype" {
+            if i + 1 >= len(av) { a.ok = 0; a.err = "--param-dtype requires a value"; return a }
+            a.param_dtype = av[i + 1]
+            i = i + 2
+        } else if t == "--grad-dtype" {
+            if i + 1 >= len(av) { a.ok = 0; a.err = "--grad-dtype requires a value"; return a }
+            a.grad_dtype = av[i + 1]
+            i = i + 2
+        } else if t == "--optimizer" || t == "--opt" {
+            if i + 1 >= len(av) { a.ok = 0; a.err = "--optimizer requires a value"; return a }
+            a.optimizer = av[i + 1]
+            i = i + 2
+        } else if t == "--n-gpu" || t == "--ngpu" {
+            if i + 1 >= len(av) { a.ok = 0; a.err = "--n-gpu requires a value"; return a }
+            let v = _atoi_pf(av[i + 1])
+            if v < 1 { a.ok = 0; a.err = "--n-gpu must be >= 1"; return a }
+            a.n_gpu = v
+            i = i + 2
+        } else if t == "--bsz" || t == "--batch" {
+            if i + 1 >= len(av) { a.ok = 0; a.err = "--bsz requires a value"; return a }
+            let v = _atoi_pf(av[i + 1])
+            if v < 1 { a.ok = 0; a.err = "--bsz must be >= 1"; return a }
+            a.bsz = v
+            i = i + 2
+        } else if t == "--seq" || t == "--seq-len" {
+            if i + 1 >= len(av) { a.ok = 0; a.err = "--seq requires a value"; return a }
+            let v = _atoi_pf(av[i + 1])
+            if v < 1 { a.ok = 0; a.err = "--seq must be >= 1"; return a }
+            a.seq_len = v
+            i = i + 2
+        } else if t == "--n-layer" || t == "--layers" {
+            if i + 1 >= len(av) { a.ok = 0; a.err = "--n-layer requires a value"; return a }
+            let v = _atoi_pf(av[i + 1])
+            if v < 1 { a.ok = 0; a.err = "--n-layer must be >= 1"; return a }
+            a.n_layer = v
+            i = i + 2
+        } else if t == "--d-model" || t == "--hidden" {
+            if i + 1 >= len(av) { a.ok = 0; a.err = "--d-model requires a value"; return a }
+            let v = _atoi_pf(av[i + 1])
+            if v < 1 { a.ok = 0; a.err = "--d-model must be >= 1"; return a }
+            a.d_model = v
+            i = i + 2
+        } else if t == "--grad-checkpoint" || t == "--checkpoint" {
+            a.grad_ckpt = 1
+            i = i + 1
+        } else if t == "--gpu" {
+            if i + 1 >= len(av) { a.ok = 0; a.err = "--gpu requires a value"; return a }
+            a.gpu_key = av[i + 1]
+            i = i + 2
+        } else if t == "--reserved-overhead-gib" {
+            if i + 1 >= len(av) { a.ok = 0; a.err = "--reserved-overhead-gib requires a value"; return a }
+            let v = _atoi_pf(av[i + 1])
+            if v < 0 { a.ok = 0; a.err = "--reserved-overhead-gib must be >= 0"; return a }
+            a.reserved_overhead = v * _gib()
+            i = i + 2
+        } else if t == "--help" || t == "-h" || t == "help" {
+            a.ok = 0
+            a.err = "__HELP__"
+            return a
+        } else {
+            // Skip unknown tokens silently to allow upstream verb prefixes.
+            i = i + 1
+        }
+    }
+    if a.n_params <= 0 { a.ok = 0; a.err = "missing required --params <N> (positive integer)" }
+    return a
+}
+
+// ── help text ───────────────────────────────────────────────────────
+
+fn _preflight_help() {
+    println("hexa cloud preflight — closed-form GPU memory budget check")
+    println("")
+    println("usage:")
+    println("  preflight --params N [--param-dtype bf16] [--grad-dtype bf16]")
+    println("            [--optimizer adamw] [--n-gpu 1]")
+    println("            [--bsz 1] [--seq 2048] [--n-layer 32] [--d-model 4096]")
+    println("            [--grad-checkpoint]")
+    println("            [--gpu h100-80gb] [--reserved-overhead-gib 4]")
+    println("")
+    println("optimizers: sgd · sgd-momentum · adamw · adamw-amp-fp16 · adamw-8bit ·")
+    println("            paged-adamw-8bit · lion · zero2 · zero3")
+    println("")
+    println("dtypes: f64 · f32 · tf32 · bf16 · f16 · fp16 · i8 · fp8 · i4")
+    println("")
+    println("gpu tiers (key):")
+    println("  rtx-3060-12gb · rtx-4070-12gb · rtx-5070-12gb · rtx-4080-16gb")
+    println("  rtx-3090-24gb · rtx-4090-24gb · a10-24gb · l4-24gb · rtx-5090-32gb")
+    println("  m3-max-36gb · a100-40gb · a40-48gb · l40-48gb · l40s-48gb")
+    println("  a100-80gb · h100-80gb · h100-nvl · m3-max-128gb · h200-141gb")
+    println("")
+    println("exit code: 0 = fits, 1 = invalid args / help, 2 = budget exceeds cap")
+    println("")
+    println("note: closed-form math only — no LLM, no pod-spinup, no network egress.")
+}
+
+// ── public entry point (CLI) ────────────────────────────────────────
+
+// preflight_run — parse argv (from position `start`) and emit the
+// breakdown. Returns exit code: 0 = fits, 1 = invalid args / help,
+// 2 = budget exceeds cap.
+fn preflight_run(av: [str], start: int) -> int {
+    let a = _parse_preflight_args(av, start)
+    if a.ok == 0 {
+        if a.err == "__HELP__" {
+            _preflight_help()
+            return 1
+        }
+        println("[preflight] error: " + a.err)
+        println("[preflight] try `preflight --help` for usage.")
+        return 1
+    }
+
+    let p_dt = _dtype_bytes(a.param_dtype)
+    if p_dt == 0 {
+        println("[preflight] error: unknown --param-dtype `" + a.param_dtype + "`")
+        return 1
+    }
+    let g_dt = _dtype_bytes(a.grad_dtype)
+    if g_dt == 0 {
+        println("[preflight] error: unknown --grad-dtype `" + a.grad_dtype + "`")
+        return 1
+    }
+    let opt = _opt_mult(a.optimizer, a.n_gpu)
+
+    // Pick GPU cap. If --gpu is absent we still compute (cap = "unbounded"
+    // via a sentinel huge number) and recommend a tier from the ladder.
+    let mut cap = 0
+    let mut gpu_name = ""
+    let mut gpu_present = 0
+    if len(a.gpu_key) > 0 {
+        let t = _gpu_tier(a.gpu_key)
+        if t.mem_bytes == 0 {
+            println("[preflight] error: unknown --gpu tier `" + a.gpu_key + "` (try `preflight --help`)")
+            return 1
+        }
+        cap = t.mem_bytes
+        gpu_name = t.name
+        gpu_present = 1
+    } else {
+        // No --gpu — use a huge sentinel so `fits` is meaningless; we
+        // emit the breakdown and recommend a tier.
+        cap = 1024 * _gib()
+    }
+
+    let br = _compute_breakdown(a.n_params, p_dt, g_dt, opt, a.bsz, a.seq_len,
+                                 a.d_model, a.n_layer, a.grad_ckpt, cap,
+                                 a.reserved_overhead)
+
+    // ── report ──────────────────────────────────────────────────────
+    println("=== hexa cloud preflight — closed-form GPU memory budget ===")
+    println("")
+    println("workload:")
+    println("  n_params       = " + to_string(a.n_params))
+    println("  param_dtype    = " + a.param_dtype + " (" + to_string(p_dt) + " B)")
+    println("  grad_dtype     = " + a.grad_dtype + " (" + to_string(g_dt) + " B)")
+    let mut opt_str = "  optimizer      = " + a.optimizer
+    if opt.den == 1 {
+        opt_str = opt_str + " (×" + to_string(opt.num) + " B/param)"
+    } else {
+        opt_str = opt_str + " (×" + to_string(opt.num) + "/" + to_string(opt.den) + " B/param)"
+    }
+    if a.optimizer == "zero2" || a.optimizer == "zero3" {
+        opt_str = opt_str + " · n_gpu=" + to_string(a.n_gpu)
+    }
+    println(opt_str)
+    println("  batch          = bsz " + to_string(a.bsz)
+                                       + " · seq " + to_string(a.seq_len)
+                                       + " · n_layer " + to_string(a.n_layer)
+                                       + " · d_model " + to_string(a.d_model))
+    let mut gc_str = "off"
+    if a.grad_ckpt == 1 { gc_str = "on (envelope ×2)" }
+    println("  grad_ckpt      = " + gc_str)
+    println("")
+    println("breakdown:")
+    println("  params         = " + _fmt_gib(br.params))
+    println("  grads          = " + _fmt_gib(br.grads))
+    println("  opt_state      = " + _fmt_gib(br.opt_state))
+    println("  activations    = " + _fmt_gib(br.activations))
+    println("  temps          = " + _fmt_gib(br.temps))
+    println("  reserved_overhead = " + _fmt_gib(br.overhead))
+    println("  ─────────────────")
+    println("  total          = " + _fmt_gib(br.total))
+    println("")
+
+    if gpu_present == 1 {
+        println("gpu cap        = " + _fmt_gib(br.cap) + " (" + gpu_name + ")")
+        if br.fits == 1 {
+            if br.warn_15pct == 1 {
+                println("verdict: PASS — but within 15% of cap, OOM risk elevated")
+            } else {
+                println("verdict: PASS — total fits with > 15% headroom")
+            }
+            // Also recommend the smallest tier that fits so callers see if
+            // they overshot their pod sizing.
+            let rec = _recommend_tier(br.total)
+            if len(rec) > 0 && rec != a.gpu_key {
+                let rt = _gpu_tier(rec)
+                if rt.mem_bytes < br.cap {
+                    println("hint: smaller tier `" + rec + "` (" + rt.name + ") also fits — could save cost")
+                }
+            }
+            return 0
+        }
+        // Does not fit — explain and suggest downgrade ladder.
+        println("verdict: FAIL — total " + _fmt_gib(br.total) + " exceeds cap " + _fmt_gib(br.cap))
+        let downgrade = _opt_downgrade(a.optimizer)
+        if len(downgrade) > 0 {
+            println("suggest: try --optimizer " + downgrade + " (cheaper opt_state)")
+        }
+        if a.grad_ckpt == 0 {
+            println("suggest: try --grad-checkpoint (activation envelope ×18 → ×2)")
+        }
+        let rec = _recommend_tier(br.total)
+        if len(rec) > 0 {
+            let rt = _gpu_tier(rec)
+            println("suggest: bump tier to `" + rec + "` (" + rt.name + ", "
+                    + _fmt_gib(rt.mem_bytes) + ")")
+        } else {
+            println("suggest: no listed GPU tier fits at current spec — shrink workload")
+        }
+        return 2
+    }
+
+    // No --gpu: recommend the smallest tier that fits.
+    let rec = _recommend_tier(br.total)
+    if len(rec) > 0 {
+        let rt = _gpu_tier(rec)
+        println("recommended tier: `" + rec + "` (" + rt.name + ", " + _fmt_gib(rt.mem_bytes) + ")")
+        return 0
+    }
+    println("recommended tier: NONE — total " + _fmt_gib(br.total)
+            + " exceeds every listed tier; shrink workload or shard further")
+    return 2
+}
+
+// ── main (standalone CLI entry) ─────────────────────────────────────
+
+fn main() {
+    let av = args()
+    // Skip a leading "preflight" verb token if present (for symmetry with
+    // future `hexa cloud preflight ...` invocation). Otherwise start at 0.
+    let mut start = 0
+    if len(av) > 0 && av[0] == "preflight" { start = 1 }
+    let rc = preflight_run(av, start)
+    exit(rc)
+}
