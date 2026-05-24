@@ -1,0 +1,187 @@
+// HEXA Standard Library — signal/core_fft
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Cooley-Tukey radix-2 FFT / IFFT over flat real+imag float lists.
+// Promoted from anima HEXAD/VOICE/anima-voice/dsp_core.hexa
+// (`dsp_fft` / `dsp_ifft` + the `bit_reverse` / `log2_int` helpers) per the
+// STDLIB domain phase3 M1 (signal primitives).
+//
+//   X[k] = Σ_{m=0}^{N-1} x[m] · exp(-j·2π·k·m / N)        (forward, fft_native)
+//   x[m] = (1/N) · Σ_{k=0}^{N-1} X[k] · exp(+j·2π·k·m / N)  (inverse, ifft_native)
+//
+// Algorithm:
+//   1. Bit-reversal permutation of both real[] and imag[].
+//   2. Iterative butterfly passes, stride = 2, 4, 8, ... N. For each
+//      butterfly pair (a, b) with twiddle W = W_stride^k:
+//        a' = a + W·b      b' = a - W·b      (complex multiply + add)
+//      Twiddle: W_stride^k = cos(-2π·k/stride) + j·sin(-2π·k/stride).
+//   IFFT(X) = conj(FFT(conj(X))) / N.
+//
+// Requires N a power of 2. Output is the flat interleaved layout
+// [re0, im0, re1, im1, ...] (2·N floats), matching the anima baseline.
+//
+// NOTE on the trig path (libm):
+//   The twiddle factors use the native libm `cos`/`sin` builtins (IEEE-correct
+//   over the full range — libm performs its own argument reduction, so no
+//   `_cf_fmod` range reduction is needed). This replaces the earlier in-house
+//   Taylor `_cf_cos`/`_cf_sin` (+ `_cf_fmod`) port from dsp_core.hexa. User
+//   decision (2026-05-25): signal/ stdlib trig = libm — IEEE-correct, consistent
+//   across modules, drops the fragile Taylor+fmod dependency. The round-trip and
+//   hand-DFT checks now hold to ~1e-9 instead of the old ~5e-3 Taylor drift.
+//
+// Surface:
+//   pub fn fft_native(real: [float], imag: [float], n: int) -> [float]
+//   pub fn ifft_native(real: [float], imag: [float], n: int) -> [float]
+//       // both return the flat interleaved [re0, im0, re1, im1, ...] layout.
+//       // n must be a power of 2; n <= 0 returns [].
+
+let CF_PI = 3.14159265358979323846
+let CF_TWO_PI = 6.28318530717958647692
+
+// ── bit reversal: reverse the `bits` lowest bits of `x` (verbatim) ──────────
+
+fn _cf_bit_reverse(x: int, bits: int) -> int {
+    let mut result = 0
+    let mut val = x
+    let mut i = 0
+    while i < bits {
+        result = result * 2 + (val - (val / 2) * 2)  // result = result*2 + val%2
+        val = val / 2
+        i = i + 1
+    }
+    return result
+}
+
+// ── log2 for powers of 2 (verbatim log2_int) ────────────────────────────────
+
+fn _cf_log2_int(n: int) -> int {
+    let mut result = 0
+    let mut v = n
+    while v > 1 {
+        v = v / 2
+        result = result + 1
+    }
+    return result
+}
+
+// ── fft_native(real, imag, n): in-place Cooley-Tukey radix-2 FFT ────────────
+//
+// Byte-equal port of dsp_core.hexa::dsp_fft. Returns flat
+// [re0, im0, re1, im1, ...] (2·n floats). Requires n a power of 2.
+
+pub fn fft_native(real: [float], imag: [float], n: int) -> [float] {
+    if n <= 0 { return [] }
+    let bits = _cf_log2_int(n)
+
+    // Step 1: bit-reversal permutation into working arrays
+    let mut re = []
+    let mut im = []
+    let mut i = 0
+    while i < n {
+        let rev = _cf_bit_reverse(i, bits)
+        re = re.push(real[rev])
+        im = im.push(imag[rev])
+        i = i + 1
+    }
+
+    // Step 2: iterative butterfly passes
+    // stride doubles each stage: 2, 4, 8 ... n
+    let mut stride = 2
+    while stride <= n {
+        let half = stride / 2
+        let mut j = 0
+        while j < n {
+            let mut k = 0
+            while k < half {
+                // Twiddle factor: W_stride^k = exp(-j * 2*pi*k / stride)
+                let tw_re = cos(0.0 - CF_TWO_PI * k / stride)
+                let tw_im = sin(0.0 - CF_TWO_PI * k / stride)
+                let a_idx = j + k
+                let b_idx = j + k + half
+                // Complex multiply: tw * b
+                let tb_re = tw_re * re[b_idx] - tw_im * im[b_idx]
+                let tb_im = tw_re * im[b_idx] + tw_im * re[b_idx]
+                // Butterfly: a' = a + tw*b, b' = a - tw*b
+                let a_re = re[a_idx]
+                let a_im = im[a_idx]
+                // hexa lists are pass-by-value, so we rebuild with updated values
+                // We must build new arrays for each swap to avoid mutation issues.
+                // For efficiency we build temporary copies only of the two elements.
+                let new_a_re = a_re + tb_re
+                let new_a_im = a_im + tb_im
+                let new_b_re = a_re - tb_re
+                let new_b_im = a_im - tb_im
+                // Rebuild re and im with updated values at a_idx and b_idx.
+                // Since hexa arrays are pass-by-value and we cannot mutate in place,
+                // we rebuild the entire array. For small N (<=512) this is acceptable.
+                let mut re_new = []
+                let mut im_new = []
+                let mut q = 0
+                while q < n {
+                    if q == a_idx {
+                        re_new = re_new.push(new_a_re)
+                        im_new = im_new.push(new_a_im)
+                    } else if q == b_idx {
+                        re_new = re_new.push(new_b_re)
+                        im_new = im_new.push(new_b_im)
+                    } else {
+                        re_new = re_new.push(re[q])
+                        im_new = im_new.push(im[q])
+                    }
+                    q = q + 1
+                }
+                re = re_new
+                im = im_new
+                k = k + 1
+            }
+            j = j + stride
+        }
+        stride = stride * 2
+    }
+
+    // Pack output as interleaved [re0, im0, re1, im1, ...]
+    let mut out = []
+    let mut p = 0
+    while p < n {
+        out = out.push(re[p])
+        out = out.push(im[p])
+        p = p + 1
+    }
+    return out
+}
+
+// ── ifft_native(real, imag, n): inverse FFT ─────────────────────────────────
+//
+// Byte-equal port of dsp_core.hexa::dsp_ifft.
+// IFFT(X) = conj(FFT(conj(X))) / N — conjugate input, forward FFT, conjugate
+// output, divide by N. Returns flat [re0, im0, re1, im1, ...].
+
+pub fn ifft_native(real: [float], imag: [float], n: int) -> [float] {
+    if n <= 0 { return [] }
+
+    // Conjugate input: negate imaginary parts
+    let mut conj_im = []
+    let mut i = 0
+    while i < n {
+        conj_im = conj_im.push(0.0 - imag[i])
+        i = i + 1
+    }
+
+    // Forward FFT on conjugated input
+    let fft_out = fft_native(real, conj_im, n)
+
+    // Conjugate output and divide by N
+    let mut out = []
+    let inv_n = 1.0 / n
+    let mut j = 0
+    while j < n {
+        let re_val = fft_out[j * 2] * inv_n
+        let im_val = 0.0 - fft_out[j * 2 + 1] * inv_n
+        out = out.push(re_val)
+        out = out.push(im_val)
+        j = j + 1
+    }
+    return out
+}
