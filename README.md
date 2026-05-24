@@ -187,9 +187,9 @@ hexa build <entry>.hexa -o build/X     # full pipeline → static binary
 hexa cc <file>.hexa -o build/X.o       # just lower → object (HIR → MIR → LIR → emit)
 hexa run <file>.hexa [<args>...]       # compile then execute a single file
 hexa explain HX8004                    # what does this diagnostic mean
-hexa atlas search "<query>"            # search atlas for a primitive / law / constant
-hexa atlas lookup L <id>               # exact citation lookup
-hexa atlas register <file>             # register a new @verify result
+hexa atlas lookup <id> | --prefix=<p>   # read atlas node(s) — embedded.gen.hexa SSOT
+hexa atlas register --from-verify <fn> <args> <v>   # verify IN-PROCESS → fold node into embedded.gen.hexa
+hexa atlas export [--out PATH]          # export live atlas → portable .n6 (n6 = export-only)
 hexa drill --seed "<expr>"             # OUROBOROS smash → ... → absorb cycle
 
 hx install <package>                   # install a hexa package by name (looks up dancinlab GitHub by default)
