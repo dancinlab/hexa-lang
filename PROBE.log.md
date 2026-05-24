@@ -347,15 +347,15 @@
 3rd-try sub-agent 완료 (~12분 · 15분 cap 안). reference baselines: Rust(option/range/shadow/oob) · Swift(interp/unicode) · Python(float). source code 미수정. triage 산출물 `/tmp/probe-r15/cycle1_triage.md`.
 
 ### Option/Result (5 deviations · CRITICAL)
-- [ ] r15-D1 [SURGICAL] `Option[i64]` annotation parse error — 20 LoC
+- [x] r15-D1 [SURGICAL] `Option[i64]` annotation parse error — 20 LoC — MERGED #719
 - [ ] r15-D2 [RFC] `?` operator unimplemented — desugar + flow type
-- [ ] r15-D3 [SURGICAL · HIGHEST] `Some(v) match` pattern-bind codegen scope, `v` undeclared — 30 LoC, blocks 전 Option/Result 축
-- [ ] r15-D4 [SURGICAL] `.unwrap/.unwrap_or/.map` unknown builtin — 40 LoC
+- [x] r15-D3 [SURGICAL · HIGHEST] `Some(v) match` pattern-bind codegen scope, `v` undeclared — 30 LoC, blocks 전 Option/Result 축 — MERGED #756 (+ tail void-match guard)
+- [x] r15-D4 [SURGICAL] `.unwrap/.unwrap_or/.map` unknown builtin — 40 LoC — MERGED #725
 - [ ] r15-D5 [RFC] `Option[i64] = None` 어노테이션+할당 parse fail (D1 자매)
 
 ### string_interp (3 deviations)
 - [ ] r15-D6 [RFC] `format!()` macro — [#451] follow-up
-- [ ] r15-D7 [SURGICAL] f-string `{x:.2}` spec wiring — 50 LoC
+- [x] r15-D7 [SURGICAL] f-string `{x:.2}` spec wiring — 50 LoC — MERGED #749 (`{x:.N}` precision)
 - [ ] r15-D8 [RFC] printf-style stdlib helper 부재
 
 ### unicode (3 deviations)
@@ -365,20 +365,20 @@
 
 ### oob (2 deviations)
 - [ ] r15-D12 [SURGICAL] negative index `xs[-1]` Python-style wrap (canonical=panic) — 10 LoC, **policy call**
-- [ ] r15-D13 [SURGICAL] `s.byte_at(99)` sentinel `-1` 반환 (#467 array OOB 와 불일치) — 10 LoC
+- [x] r15-D13 [SURGICAL] `s.byte_at(99)` sentinel `-1` 반환 (#467 array OOB 와 불일치) — 10 LoC — MERGED #748 (OOB throws)
 
 ### enum (3 deviations)
-- [ ] r15-D14 [SURGICAL] bare enum constructor codegen `Red/Green/Blue undeclared` — 30 LoC
+- [x] r15-D14 [SURGICAL] bare enum constructor codegen `Red/Green/Blue undeclared` — 30 LoC — MERGED #720
 - [ ] r15-D15 [RFC] single-field payload `Square(...)` codegen — REGRESSION 의심 ([[project_hexa_lang_enum_payload_works]] 검증)
 - [ ] r15-D16 [BLOCKED] multi-field payload — memory known-limit
 
 ### shadowing (3 deviations · CRITICAL)
-- [ ] r15-D17 [SURGICAL · CRITICAL] `{}` block scope 미생성 (silent correctness) — 40 LoC
+- [x] r15-D17 [SURGICAL · CRITICAL] `{}` block scope 미생성 (silent correctness) — 40 LoC — MERGED #724
 - [ ] r15-D18 [SURGICAL] type-changing shadow `let x="hello"; let x=42` resolver 누락 — 20 LoC, D17 자매
 - [ ] r15-D19 [RFC] for-loop binding semantics — `let i=100; for i in 0..3` 외부 i 유지
 
 ### range (1 deviation)
-- [ ] r15-D20 [SURGICAL] `(0..5).rev()` 첫 원소만 — 30 LoC
+- [x] r15-D20 [SURGICAL] `(0..5).rev()` 첫 원소만 — 30 LoC — MERGED #737
 
 ### float (2 deviations)
 - [ ] r15-D21 [SURGICAL] `nan/inf` 식별자 shadow error 메시지 폴리시 — 5 LoC
@@ -394,3 +394,4 @@
 1. D3 → 2. D17 → 3. D1 → 4. D4 → 5. D20 → 6. D14 → 7. D7 → 8. D10
 
 - [x] 2026-05-24 M6 closure — r15 sweep 진입 (cycle 1 완주 · 22 dev · 8 SURG + 6 RFC · PROBE 5/6 → 6/6 100% 🛸)
+- [x] 2026-05-24 cycle 2 closure — 8 SURGICAL deviation 전부 main 랜딩: D1 #719 · D3 #756 (+ tail void-match guard) · D4 #725 · D7 #749 · D13 #748 · D14 #720 · D17 #724 · D20 #737. 잔여 SURGICAL = D10(unicode graphemes) · D12(neg-index policy) · D18(type-changing shadow) · D21(nan/inf msg) · D22(NaN casing). RFC backlog = D2/D5/D6/D8/D9/D11/D15/D16/D19. (중복 PR #757/#758 close + stale worktree/branch 정리 완료)
