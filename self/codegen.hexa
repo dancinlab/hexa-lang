@@ -7220,6 +7220,13 @@ fn gen2_expr(node) {
                 let mut key_c = gen2_expr(entry.left)
                 if type_of(entry.left) != "string" && entry.left.kind == "StringLit" {
                     key_c = "\"" + c_escape(entry.left.value) + "\""
+                } else {
+                    // PROBE r16 Q4: a non-StringLit key (e.g. int `#{1: "one"}`)
+                    // produced a HexaVal expression passed where const char* is
+                    // expected → clang error. Maps are string→value, so stringify
+                    // the key (consistent with hexa_index_get/set + the map_set
+                    // builtin) — `#{1:...}` and `m["1"]` then agree.
+                    key_c = "hexa_to_cstring(" + key_c + ")"
                 }
                 out = "hexa_map_set(" + out + ", " + key_c + ", " + gen2_expr(entry.right) + ")"
                 mi = mi + 1
