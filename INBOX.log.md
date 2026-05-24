@@ -11,7 +11,7 @@ Append-only history sister of `INBOX.md`. Each entry starts with `## <ISO timest
 **실측 결함 5건** (sub-handoff 으로 각각 처리 필요):
 - [ ] **(a) `hexa run --help` / `hexa build --help` — `--help` 를 source file 로 해석** → FAIL `source file not found: --help`. flag 인터셉트가 source-file parse 보다 먼저 와야 함. 가장 빠른 DX 개선.
 - [ ] **(b) `hexa lsp --help` — LSP daemon 진입, stdin 대기 TIMEOUT 30s**. flag 라우팅 누락 — daemon 진입 전에 `--help` 인터셉트.
-- [ ] **(c) `hexa init` — `tool/init_project.hexa` 부재, "not implemented" 메시지만 출력**. 도큐멘트/help 에는 존재. stub scaffolder land 또는 help 에서 제거.
+- [x] **(c) `hexa init` — RESOLVED**: scaffolder 인라인 land (self/main.hexa::cmd_init) + sister tool/init_project.hexa (future standalone-bin source). `hexa init <dir> [--name N]` → `<dir>/project.hexa` + `main.hexa` + `.gitignore` 생성, 기존 프로젝트는 rc=2 거부. e2e: scaffold → `hexa build` → 실행 "hello from testproj" PASS. cmd_run interp dep 회피 (feedback_no_interp_use_compiled).
 - [ ] **(d) `hexa convergence` usage 출력 시 rc=1 — 다른 verb 는 rc=2** (tape/hxc/repo-audit-taxonomy/gpu disasm/lint). POSIX 관행상 rc=2 표준. convergence 만 outlier 통일.
 - [ ] **(e) `hexa sim-universe selftest` 6/6 sub-test FAIL** — anu_time/multiverse/qpu/qrng/bostrom/godel 전부 substrate FAIL. 다른 sim-universe sub-verb 는 PASS. substrate dep 별도 조사.
 
