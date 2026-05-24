@@ -995,6 +995,18 @@ opt-in via `git config core.hooksPath .githooks`) + project.tape @D
   - `RUNTIME.md` (this entry)
 - Acceptance line: `cycle 67: aprime_cc-unblock CLOSED · externs 24 → 31 · smoke FAIL (atlas-loop regression) · PR #(this)` — clang-stage-4 PASS satisfies the primary unblock criterion; smoke failure is a documented separate regression filed as follow-up
 
+### 2026-05-25 — cycle 68: atlas TEXT-parse smoke-loop — CLOSED (rt_str_join_str O(n²)→O(n))
+
+- cycle 68 — the cycle-67 smoke FAIL is fixed. aprime_cc startup now loads the full atlas and emits ASM; **smoke exit(6*7)==42 PASS** (assemble + link + run).
+- **Root cause** = `stdlib/runtime/ctype.hexa:684 rt_str_join_str` — NOT an infinite loop, an **O(n²) string-accumulation** that ballooned to 2.3 GB and made no visible forward progress (looked like a hang under `sample`). The chained body `out = out + sep + arr[i]` reallocates and copies the ENTIRE accumulated string on every `+`. PR #846 (atlas SSOT inversion) added `static_index::_extract_raw_blocks`, whose final `parts.join("")` joins ~32K parts (16,088 raw blocks × 2 pushes) totaling ~9.7 MB → O(total_chars × num_parts) churn.
+- **Why it only regressed now**: the May-22 baseline served via the single-pass C `hexa_str_join` (pre-sum size → 1 malloc → memcpy). r16 / cycle-67's build defines `-DHEXA_HAS_HEXA_RT_STDLIB=1`, under which `hexa_str_join` (self/runtime_core.c:7460) dispatches all-string arrays to the hexa-source `rt_str_join_str` — exposing its quadratic body for the first time on the 9.7 MB atlas join. Two interacting r16 changes (PR #846 atlas TEXT-parse + the HEXA_HAS_HEXA_RT_STDLIB dispatch path), not a single non-advancing line.
+- **Fix** (1 fn, ctype.hexa): replace the `+`-chain with the codebase's established O(n) byte-collect idiom (same as `rt_str_to_upper` / `rt_pad_*`) — gather every byte of every element + separator into one `[int]`, then one-shot `bytes_to_str_raw(bytes)` (single `hexa_strbuf_alloc` + single fill loop in self/runtime.c:5034). No recursion (bytes_to_str_raw never calls back into rt_str_*; sidesteps the cycle-52 / cycle-67 dispatch-loop trap).
+- **Verification (in-worktree, no pool-route hijack of the build)**: `tool/build_aprime.sh -o /tmp/aprime_cc_a214` → 1,244,336 B Mach-O arm64. Run: `aprime_cc _drv.hexa --emit=asm ... smk.hexa` → stdout `atlas: loaded 16088 nodes from embedded.gen.hexa`, exit 0, .s emitted (was: 2.3 GB / 60s+ no-progress hang). Full smoke (assemble + link runtime.c + run) → **RC 42 PASS**. All 16,088 nodes parse; no node loss.
+- Files touched (per @D `wipe_guard`, subject mentions `stdlib/runtime` only; +24/-4 lines, well under wipe threshold):
+  - `stdlib/runtime/ctype.hexa` — `rt_str_join_str` O(n²)→O(n) byte-collect
+  - `RUNTIME.md` (this entry)
+- Acceptance line: `cycle 68: atlas-loop-smoke CLOSED · root=ctype.hexa:684 rt_str_join_str (O(n²) join) · smoke PASS (exit 42) · PR #(this)`
+
 ## Phase 2 — Tier-B stdlib primitives (step 2)
 
 ### 2026-05-21 — 🛸 step 2 POC: hxlcl_isalnum + isalpha → stdlib/runtime/ctype.hexa (cycle 1)
