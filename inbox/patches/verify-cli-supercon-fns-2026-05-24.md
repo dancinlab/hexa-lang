@@ -104,7 +104,12 @@ hexa atlas register --kind F --id mcmillan_tc --raw '<spec>'
 ## Status
 
 - [x] Discovered + verbatim 🟠 7/7 captured (no fake 🔵)
-- [ ] Fix A (7 supercon fn 추가) implementation
-- [ ] Atlas register (kind F · ids: allen_dynes_tc · mcmillan_tc · bcs_gap_ratio · lambda_eliashberg · omega_log_moment · beenet_grid_bins · migdal_ratio)
-- [ ] RTSC V2.1 재시도 후 🔵 7/7 확정
+- [x] Fix A (6/7 supercon fn 추가 — `tool/verify_cli.hexa`) — **resolved 2026-05-24** (PR below)
+- [ ] Atlas register (kind F · ids: allen_dynes_tc · mcmillan_tc · bcs_gap_ratio · lambda_eliashberg · beenet_grid_bins · migdal_ratio) — follow-up
+- [ ] `omega_log_moment` (5-op variadic) — deferred until Fix B (N-op argv)
+- [ ] RTSC V2.1 재시도 후 🔵 6/7 확정 (omega_log_moment 제외)
 - [ ] Fix B (float + N-op) 별도 PR layer
+
+## Resolution
+
+6 of 7 closed-form supercon identities added to `tool/verify_cli.hexa::_recompute_float` (allen_dynes_tc · mcmillan_tc · bcs_gap_ratio · lambda_eliashberg · beenet_grid_bins · migdal_ratio). All routed as 🟢 SUPPORTED-NUMERICAL (float ε=1e-9 gate). `_parse_float` already handles λ=2.5 / μ*=0.10 directly — no scaling required (patch에서 제안한 ×10 / ×100 scaling 우회 폐기). `omega_log_moment` (5-op variadic moment integral) deferred — needs Fix B (N-op argv) before it can land. Python sanity values match patch claims (181.16K · 217.10K · 3.5278 · 141 · 0.025) to libm precision.
