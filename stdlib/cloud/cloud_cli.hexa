@@ -8,11 +8,13 @@
 
 use "stdlib/cloud/cloud"
 use "stdlib/cloud/pod_registry"
+use "stdlib/cloud/preflight"
 
 fn _cloud_help() {
     println("hexa cloud — structured-argv remote dispatch (cycle A)")
     println("")
     println("usage:")
+    println("  cloud preflight --params N [--gpu KEY] [opts...]        closed-form GPU mem-budget check (no pod/ssh)")
     println("  cloud run       <host> [conn] -- <argv...>             run argv, wait, exit with its code")
     println("  cloud exec      <host> [conn] -- <shell-cmd>           run shell command via ssh (DEFAULT SHELL PARSES IT)")
     println("  cloud nohup     <host> <logfile> [conn] -- <argv...>   background argv, print remote pid")
@@ -115,7 +117,7 @@ fn main() {
     while i < len(av) {
         let t = av[i]
         if si < 0 {
-            if t == "run" || t == "exec" || t == "nohup" || t == "poll" || t == "copy-to" || t == "copy-from" || t == "orphans" || t == "help" || t == "--help" || t == "-h" || t == "version" || t == "--version" || t == "-v" {
+            if t == "preflight" || t == "run" || t == "exec" || t == "nohup" || t == "poll" || t == "copy-to" || t == "copy-from" || t == "orphans" || t == "help" || t == "--help" || t == "-h" || t == "version" || t == "--version" || t == "-v" {
                 si = i
                 sub = t
             }
@@ -133,6 +135,15 @@ fn main() {
     if sub == "version" || sub == "--version" || sub == "-v" {
         println("hexa cloud 0.1.0 — cycle A (structured-argv remote dispatch)")
         return
+    }
+    if sub == "preflight" {
+        // Closed-form GPU memory budget check. No ssh / pod-spinup / LLM —
+        // pure arithmetic on the workload spec (preflight.hexa). The post-
+        // verb argv (av[si+1..]) is forwarded to preflight_run, which parses
+        // --params / --gpu / --optimizer / ... and exits 0 (fits) / 1
+        // (invalid args / help) / 2 (budget exceeds cap).
+        let rc = preflight_run(av, si + 1)
+        exit(rc)
     }
     if sub == "run" {
         if si + 1 >= len(av) {
