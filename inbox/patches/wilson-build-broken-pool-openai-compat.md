@@ -1,3 +1,13 @@
+> **status: cross-repo (wilson)** — 2026-05-25 cross-repo handoff attempted but NOT registered:
+> the wilson repo (`~/core/wilson`) does not exist on this machine, so there is no target
+> `inbox`/INBOX domain to file into. The report is a wilson-filed build/codegen finding whose
+> fix nominally lives in hexa-lang codegen/flatten (`float(...)` builtin coercion miscompiled
+> as `hexa_call1(float, …)` + unresolved `pool_invoke_propose`-shape forward refs in the
+> flatten). Two paths when wilson becomes reachable: (a) re-file this in wilson's inbox, or
+> (b) treat the codegen half as a hexa-lang bug and reproduce against current HEAD (the patch
+> dates to 2026-05-13; the `float`/`getenv` builtin-as-fn-ref regression may already be fixed
+> by later codegen work). Marked cross-repo so the next archive pass clears it from here.
+
 # `hexa build core/main.hexa` broken on wilson HEAD: pool + openai-compat codegen errors
 
 **Filed by:** wilson (`~/core/wilson`).
