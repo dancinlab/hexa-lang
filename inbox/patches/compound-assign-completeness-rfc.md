@@ -1,5 +1,6 @@
 # compound assignment 완성도 design RFC
 
+**Status**: rfc-draft-deferred-2026-05-25 — design-only patch (not a fix). Promote via /inbox skill if RFC track wanted.
 **Status**: design-level + part-surgical (r14 cycle 9, 2026-05-23)
 **Priority**: P3 (편의 — 산술 5종 + 논리/nullish 3종 동작, 비트/거듭제곱 6종 부재)
 **SSOT**: PROBE.log round 1 line 22 · 본 RFC

@@ -1,5 +1,6 @@
 # enum `<`/`>` ordering design RFC
 
+**Status**: rfc-draft-deferred-2026-05-25 — design-only patch (not a fix). PR #617 (probe-r14-tttt enum ordering by decl) implements runtime ordering separately; this RFC = full ordering spec.
 **Status**: design-level (PROBE round 3 INBOX line 72, r14 cycle 13, 2026-05-24)
 **Priority**: P3 (편의 — enum 을 priority/severity 로 쓸 때 ordering 필요)
 **SSOT**: PROBE.log.md round 3 enum entry · r14-F enum codegen-emit (#489)

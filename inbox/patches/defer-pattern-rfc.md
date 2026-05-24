@@ -1,5 +1,6 @@
 # defer 패턴 (Swift/Go) design RFC
 
+**Status**: rfc-draft-deferred-2026-05-25 — design-only patch (not a fix). Promote via /inbox skill if RFC track wanted.
 **Status**: design-level + 부분구현 audit (r14 cycle 10, 2026-05-24)
 **Priority**: P2 (r14-FF try-expr/finally RFC #502 권장 alternative)
 **SSOT**: 본 RFC · r14-FF (PR #502) · r14-EE panic 채널 (PR #501)

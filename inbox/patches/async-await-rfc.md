@@ -1,5 +1,6 @@
 # async / await Stage-2+ design RFC
 
+**Status**: rfc-draft-deferred-2026-05-25 — design-only patch (not a fix). Promote via /inbox skill if RFC track wanted.
 **Status**: design-level (r14 cycle 7, 2026-05-23)
 **Priority**: P3 (큰 작업 — runtime + lang surface; 종합 디자인 필요)
 **SSOT**: 본 RFC + `proposals/rfc_022_async_model.md` (Stage 1, Integrated 2026-05-10)
