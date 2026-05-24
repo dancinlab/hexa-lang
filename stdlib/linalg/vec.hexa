@@ -1,0 +1,47 @@
+// HEXA Standard Library — linalg/vec
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Vector operations on `farr` handles. Standardises the 156+ anima
+// inline definitions (61 vec_zeros + 55 vec_norm + 40 vec_dot, STDLIB
+// Phase 1b 잔여 survey 2026-05-25) under a single canonical home.
+//
+// Surface:
+//   pub fn vec_zeros(n: int) -> int
+//     Allocate a length-`n` zero-initialised farr. Thin wrapper over
+//     the runtime `farr_zeros` builtin · single canonical access.
+//
+//   pub fn vec_dot(a: int, b: int, n: int) -> float
+//     Inner product Σ a[i] * b[i] for i ∈ [0, n).
+//
+//   pub fn vec_norm(a: int, n: int) -> float
+//     L2 norm √(Σ a[i]²). Uses libm `sqrt` via runtime extern.
+//
+// All fns pure (no allocation in dot/norm). Callers own the farr handles
+// passed in · this module does not free them.
+
+pub fn vec_zeros(n: int) -> int {
+    return farr_zeros(n)
+}
+
+pub fn vec_dot(a: int, b: int, n: int) -> float {
+    let mut s = 0.0
+    let mut i = 0
+    while i < n {
+        s = s + farr_get(a, i) * farr_get(b, i)
+        i = i + 1
+    }
+    return s
+}
+
+pub fn vec_norm(a: int, n: int) -> float {
+    let mut s = 0.0
+    let mut i = 0
+    while i < n {
+        let v = farr_get(a, i)
+        s = s + v * v
+        i = i + 1
+    }
+    return sqrt(s)
+}
