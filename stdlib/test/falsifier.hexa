@@ -1,0 +1,126 @@
+// HEXA Standard Library — test/falsifier
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// 5-falsifier battery framework — canonical home for the anima/HEXAD
+// research convention where every hypothesis (H_*) preregisters exactly
+// 5 falsifiers (T1..T5, raw#12 strict) and reports PASS/FAIL per
+// falsifier + aggregate verdict via g5 rubric.
+//
+// STDLIB Phase 1b survey 2026-05-25: **1132 duplicate check_T1..T5
+// definitions** across anima/HEXAD/* (229 + 229 + 229 + 224 + 223) —
+// every H_* sweep re-implements the same battery scaffold inline. This
+// module = the canonical home.
+//
+// Surface:
+//   pub fn run_5_falsifiers(name: string, results: array) -> dict
+//     `name`    : hypothesis identifier (e.g. "H_258 mortality-salience")
+//     `results` : array of EXACTLY 5 records #{ "label": string, "ok": bool }
+//     Returns: dict { "name", "pass", "fail", "verdict", "ok", "results" }
+//       where verdict is one of:
+//         🟢 5/5 PASS                       (all 5 PASS — SUPPORTED-NUMERICAL)
+//         🟠 3-4/5 PASS                     (partial — INSUFFICIENT/DEFERRED)
+//         🔴 0-2/5 PASS                     (FALSIFIED — deterministic disagreement)
+//
+// Convention (matches anima H_* verdict output):
+//   === <name> falsifier battery ===
+//     T1 <label>  : PASS  (or FAIL)
+//     T2 ...
+//     ...
+//     pass=N fail=N
+//     verdict: <emoji tier>
+//
+// The verdict tier mapping reflects g5 rubric (🟢/🟠/🔴) at the H-level
+// aggregate. 🔵 SUPPORTED-FORMAL is not assigned here — that requires
+// closed-form/symbolic identity beyond the binary PASS/FAIL battery
+// (caller's separate determination).
+
+pub fn run_5_falsifiers(name: string, results: array) -> dict {
+    println("=== " + name + " falsifier battery ===")
+    let n = len(results)
+    if n != 5 {
+        panic("run_5_falsifiers: expected exactly 5 results, got " + to_string(n))
+    }
+    let mut pass = 0
+    let mut fail = 0
+    let mut i = 0
+    while i < 5 {
+        let r = results[i]
+        let label = r["label"]
+        let ok = r["ok"]
+        let tag = "T" + to_string(i + 1)
+        if ok {
+            println("  " + tag + " " + label + " : PASS")
+            pass = pass + 1
+        } else {
+            println("  " + tag + " " + label + " : FAIL")
+            fail = fail + 1
+        }
+        i = i + 1
+    }
+    println("  pass=" + to_string(pass) + " fail=" + to_string(fail))
+    let mut verdict = ""
+    if pass == 5 {
+        verdict = "🟢 5/5 SUPPORTED-NUMERICAL"
+    } else if pass >= 3 {
+        verdict = "🟠 " + to_string(pass) + "/5 INSUFFICIENT/DEFERRED"
+    } else {
+        verdict = "🔴 " + to_string(pass) + "/5 FALSIFIED"
+    }
+    println("  verdict: " + verdict)
+    return #{
+        "name": name,
+        "pass": pass,
+        "fail": fail,
+        "verdict": verdict,
+        "ok": pass == 5,
+        "results": results
+    }
+}
+
+// Variant for hypotheses with N != 5 falsifiers (rare · spec § L5
+// of raw#12 allows ≥5 minimum, some H exceed). Same semantics but
+// no exact-5 enforcement.
+pub fn run_falsifier_battery(name: string, results: array) -> dict {
+    println("=== " + name + " falsifier battery ===")
+    let n = len(results)
+    let mut pass = 0
+    let mut fail = 0
+    let mut i = 0
+    while i < n {
+        let r = results[i]
+        let label = r["label"]
+        let ok = r["ok"]
+        let tag = "T" + to_string(i + 1)
+        if ok {
+            println("  " + tag + " " + label + " : PASS")
+            pass = pass + 1
+        } else {
+            println("  " + tag + " " + label + " : FAIL")
+            fail = fail + 1
+        }
+        i = i + 1
+    }
+    println("  pass=" + to_string(pass) + " fail=" + to_string(fail))
+    let denom = pass + fail
+    let mut verdict = ""
+    if denom == 0 {
+        verdict = "⚪ N/A (empty battery)"
+    } else if pass == denom {
+        verdict = "🟢 " + to_string(pass) + "/" + to_string(denom) + " SUPPORTED-NUMERICAL"
+    } else if (pass * 5) >= (denom * 3) {
+        verdict = "🟠 " + to_string(pass) + "/" + to_string(denom) + " INSUFFICIENT/DEFERRED"
+    } else {
+        verdict = "🔴 " + to_string(pass) + "/" + to_string(denom) + " FALSIFIED"
+    }
+    println("  verdict: " + verdict)
+    return #{
+        "name": name,
+        "pass": pass,
+        "fail": fail,
+        "verdict": verdict,
+        "ok": pass == denom,
+        "results": results
+    }
+}
