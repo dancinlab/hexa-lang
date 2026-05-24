@@ -2,6 +2,27 @@
 
 Append-only history sister of `INBOX.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
+## 2026-05-25T22:50Z — hexa 래퍼 BASH_SOURCE 미-symlink-resolve (from: PR #873 pool-ubu-stale 진단 부산물)
+
+`/Users/ghost/core/hexa-lang/hexa` shell shim 의 `__hexa_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"` 가 BASH_SOURCE 의 symlink 를 해석하지 않음. 결과: `~/.hx/bin/hexa` (= `/Users/ghost/core/hexa-lang/hexa` symlink) 호출 시 __hexa_dir 이 symlink 경로 그대로 → `pwd -P` 가 그제서야 해석 → 결과적으로는 작동하나 `BASH_SOURCE` 처리 경로 자체가 의도와 다름.
+
+증상은 미미하지만, [[reference_install_dir_argv0_basename_cwd_shadow]] (PR #866) 와 형제 클래스. /tmp git worktree 같은 데서 hexa 라는 stray 파일이 있으면 shim 자체가 혼동될 가능성.
+
+처방: shim 의 BASH_SOURCE resolve 단계 명시 — `realpath "${BASH_SOURCE[0]}"` 한 후 dirname 한 결과를 `__hexa_dir` 로.
+
+- [ ] **shim BASH_SOURCE → realpath → dirname → pwd -P 체인 명시** — 1-line shim fix
+
+## 2026-05-25T22:55Z — ubu-2 `hexa cc --regen` MVP-merge codegen l-value 버그 (from: PR #873 pool-ubu-stale 진단 부산물)
+
+ubu-2 (Linux x86_64) 에서 `hexa cc --regen` 의 step 2 (MVP-merge: lexer/parser/type_checker/codegen 4 모듈 → hexa_cc.c.new) 가 codegen step 에서 `l-value` 에러로 실패. ubu-1 에선 같은 명령 통과 (둘 다 origin/main 같은 커밋, 같은 hexa_v2 binary, 같은 codegen.hexa source).
+
+차이: ubu-1 은 `git pull` 직후 hexa_cc.c 가 #862 fix 포함, ubu-2 는 update 미반영 가능성? 또는 ubu-2 의 cached `self/runtime.o` stale? 진단 미완.
+
+PR #873 처방은 ubu-2 에서 `cc --regen` 우회 — 기존 hexa_cc.c + module_loader 재빌드만으로도 transpile 정상이라 차단되지 않음. 단 향후 codegen.hexa 변경 분 ubu-2 에 반영 필요할 때 막힘.
+
+- [ ] **ubu-2 cc --regen MVP-merge codegen l-value 에러 재현 + 진단** — 단순 stale 인지 codegen MVP-merge 자체 결함인지 분리
+- [ ] **fix or workaround 결정** — 현재는 `cc --regen` 회피로 우회 가능
+
 ## 2026-05-25T22:35Z — stdlib 확장 요청: PK + optics fn 가족 (from: demiurge TTR-ORAL / TTR-LAC atlas-register 게이트)
 
 demiurge 의 TTR-ORAL V2 (oral PK) · TTR-LAC V2 (laser-optics) closed-form 들이 `hexa atlas register --from-verify` 로 등록 불가 — 현재 dispatcher 가 number-theoretic + 일부 float fn (sigma/phi/welch_t_crit/chsh_tsirelson) 만 지원하기 때문. atlas SSOT (`compiler/atlas/embedded.gen.hexa`) 에 dermatologic/topical PK + laser-optics 도메인 누락.
