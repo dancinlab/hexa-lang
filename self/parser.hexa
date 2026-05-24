@@ -2238,6 +2238,27 @@ fn parse_type_annotation() {
         base = "(" + join(parts, ", ") + ")"
     } else {
         base = p_expect_ident()
+        // PROBE r15-D1 (2026-05-24): generic type application using bracket
+        // syntax — `Option[i64]`, `Vec[T]`, `HashMap[K, V]`, `Result[T, E]`.
+        // This complements `T<U>` (which is reserved for struct-init / call
+        // sites due to `<` ambiguity with comparison). Bracket form is
+        // unambiguous in type-annotation position because a leading `[`
+        // (array type) is already handled above; here we are AFTER an ident,
+        // so `[` cannot start an array literal. AST shape: "Name[arg1, ...]"
+        // — same string-encoding convention parse_type_params consumers use.
+        if p_peek_kind() == "LBracket" {
+            p_advance() // consume '['
+            let mut args = []
+            if p_peek_kind() != "RBracket" {
+                args.push(parse_type_annotation())
+                while p_peek_kind() == "Comma" {
+                    p_advance()
+                    args.push(parse_type_annotation())
+                }
+            }
+            p_expect("RBracket")
+            base = base + "[" + join(args, ", ") + "]"
+        }
     }
     // G34: Optional type suffix — T?
     if p_peek_kind() == "Question" {
