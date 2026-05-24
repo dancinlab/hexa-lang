@@ -1,0 +1,49 @@
+// Canonical import-based test for stdlib/verify/byte_equal.
+// NOTE: single-file `hexa build` does not flatten `import "stdlib/..."`, so this
+// is the canonical test even though it cannot build standalone (build via the
+// bootstrap/HEXA_LANG flatten path). The self-contained inline copy is the
+// build-runnable counterpart and is intentionally NOT committed.
+
+import "stdlib/verify/byte_equal.hexa"
+
+fn _ck(name: string, got: int, want: int) -> int {
+    if got == want { println("PASS " + name) return 0 }
+    println("FAIL " + name + " got=" + to_string(got) + " want=" + to_string(want))
+    return 1
+}
+
+fn main() {
+    let mut fails = 0
+    let neg_zero = 0.0 * (0.0 - 1.0)   // -0.0
+
+    // finite
+    fails = fails + _ck("1.5==1.5", byte_equal_f64(1.5, 1.5), 1)
+    fails = fails + _ck("1.5 vs 1.6", byte_equal_f64(1.5, 1.6), 0)
+    fails = fails + _ck("+0 vs +0", byte_equal_f64(0.0, 0.0), 1)
+
+    // signed zero — the gap `==` misses
+    fails = fails + _ck("+0 vs -0 (bit-differs)", byte_equal_f64(0.0, neg_zero), 0)
+    fails = fails + _ck("-0 vs -0", byte_equal_f64(neg_zero, neg_zero), 1)
+
+    // NaN — `==` says NaN!=NaN; byte_equal treats both-NaN as equal
+    fails = fails + _ck("nan vs nan", byte_equal_f64(nan, nan), 1)
+    fails = fails + _ck("nan vs 1.0", byte_equal_f64(nan, 1.0), 0)
+
+    // inf
+    fails = fails + _ck("inf vs inf", byte_equal_f64(inf, inf), 1)
+    fails = fails + _ck("inf vs -inf", byte_equal_f64(inf, 0.0 - inf), 0)
+
+    // demonstrate the gap: `==` returns true on +0/-0, byte_equal returns false
+    let mut gap = 0
+    if 0.0 == neg_zero {
+        if byte_equal_f64(0.0, neg_zero) == 0 { gap = 1 }
+    }
+    fails = fails + _ck("gap: == true yet byte_equal false (+0/-0)", gap, 1)
+
+    if fails == 0 {
+        println("ALL PASS — stdlib verify/byte_equal")
+    } else {
+        println("FAILURES: " + to_string(fails))
+        exit(1)
+    }
+}
