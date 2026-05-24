@@ -1,5 +1,7 @@
 # `stdlib/flame` — anima Engine A/G dual-head + multi-objective overlay primitives
 
+**Status**: cross-repo-flame-2026-05-25 — flame/anima training architecture, not hexa-lang fix. Cross-repo handoff archive.
+
 **Status**: `deprioritized 2026-05-21 — Path B (ag_tape) end-to-end
 demonstrated sufficient for dual-head + composite loss (CE + L_psi +
 L_phi) via canonical template

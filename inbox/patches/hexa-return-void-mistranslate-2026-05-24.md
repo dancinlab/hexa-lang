@@ -1,5 +1,7 @@
 # hexa-lang `return void` mistranslate — bare void-literal return → undeclared identifier (B14 saga, 2026-05-24)
 
+**Status**: archived-PR#733-2026-05-25 — not-reproducible (2 minimal repros lower correctly via __hexa_fn_arena_return)
+
 **Status (2026-05-24)**: ARCHIVED — not-reproducible · agent misdiagnosis 추정 · `return void` parser/codegen 정상 동작 확인.
 
 **Resolution**: 2 minimal repros (`return void` 단독 + `type_of(p)` 직전 stmt 결합) 모두 `./self/native/hexa_v2` 로 .c 생성 → `return __hexa_fn_arena_return(hexa_void());` 로 정상 lower. 보고된 "`return void` → `return type_of(p)` mistranslate" 패턴은 현재 컴파일러(`v0.1.0-dispatch`)에서 재현 안 됨. B14 agent 가 만났던 `undeclared identifier` 에러는 다른 원인(예: `void` 가 아닌 다른 token mistype, 또는 별도 type-check stage 메시지)에서 비롯되었을 가능성 — agent 가 minimal repro 안 만들고 즉시 sentinel workaround 로 우회했기 때문에 실제 원인 미확인. **No compiler fix needed.** 후속 anima 측 sentinel pattern 의 type-safety 평가는 별개 design 작업.

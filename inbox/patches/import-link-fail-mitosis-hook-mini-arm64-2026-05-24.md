@@ -1,5 +1,7 @@
 # inbox/patches — import link fail: mitosis_hook lib on mini arm64 (anima imagination_loop blocker)
 
+**Status**: resolved-PR#722-2026-05-25 — bin/hexa-fast runs module_loader flatten on SRC with import/use/from directives (mirrors cmd_build/cmd_run)
+
 ## § Header
 
 - 일자: 2026-05-24

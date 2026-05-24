@@ -1,5 +1,7 @@
 # `grace-consent` workflow universally FAIL — `build/hexa_interp.linux` 부재
 
+**Status**: resolved-PR#706-2026-05-25 — CI grace-consent builds checker from hexa_v2_linux (fixes retired hexa_interp.linux dep)
+
 **Reporter**: anima (`dancinlab/anima` downstream consumer · cycle 11/FD 진단 · cycle 12 다중 carry 확인 · cycle 13/HA 본 patch 작성)
 **Severity**: **high** — `.md`-only / `@grace`-free PR 포함 모든 PR universally FAIL,
 trailer compliance 무관. 본 세션에만 4 PR carry: `#420` / `#438` / `#445` + 본 patch 도 self-affecting.

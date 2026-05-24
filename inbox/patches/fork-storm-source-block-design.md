@@ -1,5 +1,7 @@
 # fork-storm source-block — HX9xxx lint + runtime concurrency cap
 
+**Status**: rfc-draft-deferred-2026-05-25 — design-only patch (fork-storm source-block). Promote via /inbox skill if RFC track wanted.
+
 **Status:** 🟠 FILED / OPEN (2026-05-23)
 **Reporter:** anima session — observed during round-5 parallel probe fanout
 **Severity:** medium-high — recurring symptom (PRs #343 / #359 each closed

@@ -1,5 +1,6 @@
 # enum `to_string` 변종-이름 codegen-emit RFC
 
+**Status**: resolved-PR#582+#589-2026-05-25 — enum-to-string codegen stack closed (TAG_ENUM single + all-unit-variant); ae8415ae direct fix
 **Status**: design-level (PROBE r14-F STOP follow-up, 2026-05-23)
 **Priority**: P2 (silent miscompile cluster — `to_string` 의미 손실)
 **SSOT**: PROBE.log.md round 3 enum 엔트리 · `self/test_compact_enum.hexa` (14 FAIL 기록)
