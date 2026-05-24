@@ -1,9 +1,29 @@
 # PROBE r14-KKKK — `defer` does not fire on `throw` unwind (needs runtime defer stack first)
 
+> **Status: resolved-by-PR#559 + resolved-by-PR#570 (2026-05-25)** — 본 인보 패치는
+> "현재 `defer` 모델에서는 surgical fix 불가" blocker finding + Option A/B/C 스케치
+> 단계로 회부됐고, 그 자체는 **PR #559** (`490d8069`, 2026-05-23, `inbox(patches):
+> defer-throw needs runtime defer stack first (PROBE r14-KKKK)`) 로 main 에 랜딩됨.
+>
+> 후속 5-PR stacked landing design RFC 는 **PR #570** (`3b408eb4`, 2026-05-23,
+> `inbox(patches): runtime defer stack design RFC (PROBE r14-SSSS, KKKK follow-up)`)
+> 로 별도 랜딩 — `inbox/patches/runtime-defer-stack-design-rfc.md` 에 5-PR plan
+> (closure-conversion → runtime registry → `hexa_throw` wiring → defer emission
+> switch → flag-path retire) 이 명시됨.
+>
+> 실제 runtime defer stack 구현 (`HexaDeferEntry` struct + `hexa_defer_push/pop/
+> drain_to_try_frame` + closure-conversion codegen) 은 위 RFC 의 multi-PR cycle 에서
+> 별도 진행 예정 — 본 blocker probe 자체는 "design 단계 완료" 로 closed.
+>
+> 따라서 이 파일은 inbox triage 큐에서 빠지고 archive/ 로 이동. 재발견 시 위 두
+> PR + design RFC 를 먼저 확인할 것.
+>
+> **Original Status**: surgical fix NOT POSSIBLE in current `defer` model
+
 **Date**: 2026-05-24
 **PROBE**: r14 cycle 12 (cycle 11 retried after disk-clean)
 **Kind**: patches → STOP / blocker — needs prior architectural change
-**Status**: surgical fix NOT POSSIBLE in current `defer` model
+**Status**: resolved-by-PR#559 + resolved-by-PR#570 — 2026-05-25 (archived)
 
 ## Probe
 
