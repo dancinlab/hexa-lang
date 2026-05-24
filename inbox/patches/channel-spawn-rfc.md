@@ -1,5 +1,6 @@
 # channel + spawn (Go-style concurrency) design RFC
 
+**Status**: rfc-draft-deferred-2026-05-25 — design-only patch (not a fix). Promote via /inbox skill if RFC track wanted.
 **Status**: design-level (r14 cycle 8, 2026-05-23)
 **Priority**: P2 (RFC-022 async stage-1 land 후 다음 단계 — Go-style primitive 보강)
 **SSOT**: r14-TT async RFC (PR #514) · `proposals/rfc_022_async_model.md` · `stdlib/channel.hexa` (551L IPC mkfifo) · `stdlib/future.hexa` (89L) · `stdlib/cancel.hexa` (154L) · `self/async_runtime.hexa` (349L scheduler + task_group)
