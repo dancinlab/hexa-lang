@@ -14,6 +14,7 @@
 - [x] M6 — manifest 확장 (demo 2 entry → 10 production-hot scripts) + schema 확장 (descriptions/categories sister keys, additive)
 - [x] M7 — `version_str()` 자동 drift 검사 (M2/M3 builder ↔ cmd_run 동일 version 보장) → `tests/m_version_str_consistency_test.hexa` (static `return "<literal>"` extractor; drift = RC=1 with clear `DRIFT DETECTED` message; PASS = `"0.1.0-dispatch"` on both sides).
 - [x] M10 — hexa daemon R1 prototype (RFC 093 Phase 1). `hexa daemon {start,start-bg,stop,status,echo}` over per-user unix socket (`/tmp/hexa-daemon-$USER.sock`) · newline-text wire (PING/ECHO/SHUTDOWN) · idle-TTL self-exit · `self/runtime.c` 소켓 primitive 복원 (cycle-61 stub → real libc) · `tests/m_daemon_r1_test.hexa` 4-step e2e PASS. NO compile logic (R2). fork-storm *internal* axis 의 첫 실코드 (M2/M3 release-time precompile 와 직교).
+- [x] M11 — hexa daemon R2 (RFC 093 Phase 2). `hexa daemon compile <src>` 메서드 + in-memory cache (path → built binary). `COMPILE <src>` → `HIT <bin>` (memoized · fork 없음) / `BUILT <bin>` (1회 build + memoize + `~/.hexa-cache` mirror) / `ERR <reason>`. 캐시 키 = `sha256(source)[0:16] + "_" + version_str()` — `hexa run`/`hexa build` 과 **byte-identical** (M7 drift-check 가 보증). `tests/m_daemon_r2_test.hexa` 3 falsifier (R2-1 cache hit · R2-2 fork-mode fallback · R2-3 determinism). fork-storm *internal* axis 1차 closure — 같은 source 2번째 호출부터 컴파일러 fork 제거. (R3 = autospawn wiring · binary length-prefix wire · N=100 latency · crash-respawn.)
 
 ## cross-link
 
