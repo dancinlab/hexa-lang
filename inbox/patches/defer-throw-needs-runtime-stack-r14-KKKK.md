@@ -3,7 +3,11 @@
 **Date**: 2026-05-24
 **PROBE**: r14 cycle 12 (cycle 11 retried after disk-clean)
 **Kind**: patches → STOP / blocker — needs prior architectural change
-**Status**: surgical fix NOT POSSIBLE in current `defer` model
+**Status**: resolved-PR#559 (probe archived) + resolved-PR#570 (design RFC follow-up) — 2026-05-24
+  · 본 패치는 *blocker finding + Option A/B/C 스케치* 단계. PR #559 로 archived (MERGED).
+  · 후속 5-PR stacked landing design = `inbox/patches/runtime-defer-stack-design-rfc.md` (PR #570 MERGED).
+  · 실제 runtime defer stack 구현은 별도 multi-PR cycle 진행 예정 (RFC 의 5-PR plan).
+**Original Status**: surgical fix NOT POSSIBLE in current `defer` model
 
 ## Probe
 
