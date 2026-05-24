@@ -1225,6 +1225,155 @@ fn _hagen_poiseuille(r_rad: float, d_p: float, mu_visc: float, l_len: float) -> 
     return pi_hp * r4 * d_p / (8.0 * mu_visc * l_len)
 }
 
+// ── TTR-ORAL / TTR-LAC bundle (topical PK + laser optics · 2026-05-25) ──
+// From demiurge TTR-ORAL V2 (oral / topical PK closed-forms) + TTR-LAC V2
+// (laser-optics closed-forms) atlas-register handoff (INBOX T22:35Z). 11
+// fn family — 6 PK + 5 optics; all libm-class 🟢 Tier2 (no transcendental
+// beyond sqrt/log10/pow). New module homes:
+//   stdlib/bio/topical_pk.hexa       (PK 6)
+//   stdlib/physics/laser_optics.hexa (optics 5)
+// Names chosen to NOT collide with existing dispatch (existing `higuchi`
+// is the 2-arg simple form `k_H·sqrt(t)`; new `higuchi_flux` is the 3-arg
+// planar-diffusion flux J(t)=sqrt(2·C0·Dm·t/π). Existing `beer_lambert`
+// is the 3-arg exp-attenuation form I_0·exp(-μ·x); new `beer_lambert_log10`
+// is the 4-arg molar-absorptivity form I_0·10^(-ε·c·L) used in
+// spectrophotometry).
+
+// Higuchi planar-diffusion flux (PK 1/6):
+//   J(t) = sqrt(2 · C0 · Dm · t / π)
+// Instantaneous diffusive flux through a planar slab (semi-infinite source
+// at constant C0, diffusivity Dm in matrix, elapsed time t). 3-arg
+// closed-form. Source: Higuchi 1961 J Pharm Sci 50:874-875 (planar form).
+fn _higuchi_flux(c0: float, dm: float, t_time: float) -> float {
+    if c0 < 0.0 { return _NOCALC_F }
+    if dm < 0.0 { return _NOCALC_F }
+    if t_time < 0.0 { return _NOCALC_F }
+    let pi_hf = 3.14159265358979323846
+    return sqrt(2.0 * c0 * dm * t_time / pi_hf)
+}
+
+// Fick steady-state flux (PK 2/6):
+//   J = P · ΔC
+// Steady-state permeation flux given membrane permeability P and donor-
+// receiver concentration gradient ΔC. 2-arg closed-form. Source: Fick
+// 1855 Ann Phys 170:59-86; canonical transdermal-delivery primitive.
+fn _fick_steady_flux(p_perm: float, d_c: float) -> float {
+    if p_perm < 0.0 { return _NOCALC_F }
+    return p_perm * d_c
+}
+
+// Partition coefficient log P (PK 3/6):
+//   log P = log10(C_oct / C_water)
+// Octanol-water partition coefficient — lipophilicity proxy for oral
+// bioavailability / membrane permeation prediction. 2-arg closed-form
+// (libm log path — log10 = log/log(10)). Source: Hansch & Fujita 1964
+// JACS 86:1616; canonical drug-design Lipinski Rule-of-5 input.
+fn _partition_coeff(c_oct: float, c_water: float) -> float {
+    if c_oct <= 0.0 { return _NOCALC_F }
+    if c_water <= 0.0 { return _NOCALC_F }
+    let ln10_pc = log(10.0)
+    return log(c_oct / c_water) / ln10_pc
+}
+
+// Skin permeability (PK 4/6):
+//   P = D · K / h
+// Steady-state skin permeability coefficient given diffusivity D in the
+// stratum corneum, partition coefficient K (sc/vehicle), and barrier
+// thickness h. 3-arg closed-form. Source: Scheuplein & Blank 1971 Physiol
+// Rev 51:702; canonical Potts-Guy transdermal model input.
+fn _permeability_skin(d_diff: float, k_part: float, h_thick: float) -> float {
+    if d_diff < 0.0 { return _NOCALC_F }
+    if h_thick <= 0.0 { return _NOCALC_F }
+    return d_diff * k_part / h_thick
+}
+
+// AUC under first-order elimination (PK 5/6):
+//   AUC = C0 / ke
+// Area-under-the-curve for a single IV-bolus PK profile with mono-
+// exponential elimination (initial concentration C0, elimination rate
+// ke). 2-arg closed-form. Source: Gibaldi & Perrier 1982 (Pharmacokinetics
+// 2nd ed); canonical compartmental-PK primitive.
+fn _auc_first_order(c0: float, k_e: float) -> float {
+    if c0 < 0.0 { return _NOCALC_F }
+    if k_e <= 0.0 { return _NOCALC_F }
+    return c0 / k_e
+}
+
+// Clearance (PK 6/6):
+//   CL = Dose / AUC
+// Total plasma clearance from administered dose and observed AUC. 2-arg
+// closed-form (the dose-AUC identity). Source: Rowland & Tozer 1995
+// (Clinical Pharmacokinetics 3rd ed §6); the PK textbook definition.
+fn _clearance(dose: float, auc: float) -> float {
+    if dose < 0.0 { return _NOCALC_F }
+    if auc <= 0.0 { return _NOCALC_F }
+    return dose / auc
+}
+
+// Beer-Lambert with molar absorptivity (optics 1/5):
+//   I = I0 · 10^(-ε · c · L)
+// Spectrophotometric transmittance through a sample of concentration c,
+// path length L, molar absorptivity ε. 4-arg closed-form (libm pow path).
+// Source: Beer 1852 Ann Phys 86:78; canonical UV/Vis absorbance form.
+// Distinct from existing 3-arg `beer_lambert` (I_0·exp(-μ·x), photon-
+// attenuation form): same physical law, different parameterization.
+fn _beer_lambert_log10(i_0: float, eps: float, c_conc: float, l_path: float) -> float {
+    if i_0 < 0.0 { return _NOCALC_F }
+    if eps < 0.0 { return _NOCALC_F }
+    if c_conc < 0.0 { return _NOCALC_F }
+    if l_path < 0.0 { return _NOCALC_F }
+    return i_0 * pow(10.0, 0.0 - eps * c_conc * l_path)
+}
+
+// Fluence (optics 2/5):
+//   F = P · t / A
+// Laser fluence — energy per unit area delivered by a beam of power P
+// over exposure time t into spot area A. 3-arg closed-form. Source:
+// ANSI Z136.1 laser safety standard; canonical laser-tissue dosimetry
+// primitive (J/cm² is the canonical clinical-laser endpoint).
+fn _fluence(power_w: float, area_cm2: float, t_time: float) -> float {
+    if power_w < 0.0 { return _NOCALC_F }
+    if area_cm2 <= 0.0 { return _NOCALC_F }
+    if t_time < 0.0 { return _NOCALC_F }
+    return power_w * t_time / area_cm2
+}
+
+// Gaussian beam waist (optics 3/5):
+//   w(z) = w0 · sqrt(1 + (z/zR)^2)
+// Radius of a Gaussian-mode laser beam at axial distance z from the
+// waist w0, given Rayleigh range zR. 3-arg closed-form. Source: Siegman
+// 1986 (Lasers, §17.3); canonical Gaussian-optics beam-propagation form.
+fn _beam_waist(w0: float, z_axial: float, z_rayleigh: float) -> float {
+    if w0 < 0.0 { return _NOCALC_F }
+    if z_rayleigh <= 0.0 { return _NOCALC_F }
+    let ratio = z_axial / z_rayleigh
+    return w0 * sqrt(1.0 + ratio * ratio)
+}
+
+// Rayleigh range (optics 4/5):
+//   zR = π · w0^2 / λ
+// Distance from beam waist where the beam radius grows to sqrt(2)·w0
+// (i.e. beam area doubles). 2-arg closed-form. Source: Siegman 1986
+// (Lasers, §17.2); pairs with `beam_waist` above as Gaussian-optics
+// geometry primitive.
+fn _rayleigh_range(w0: float, lambda_wl: float) -> float {
+    if w0 < 0.0 { return _NOCALC_F }
+    if lambda_wl <= 0.0 { return _NOCALC_F }
+    let pi_rr = 3.14159265358979323846
+    return pi_rr * w0 * w0 / lambda_wl
+}
+
+// Absorption (penetration) depth (optics 5/5):
+//   δ = 1 / α
+// Characteristic 1/e penetration depth for an absorbing medium with
+// absorption coefficient α. 1-arg closed-form pure-reciprocal identity.
+// Source: Born & Wolf 1999 (Principles of Optics 7th ed §14.1);
+// canonical laser-tissue interaction penetration-depth primitive.
+fn _absorption_depth(alpha_abs: float) -> float {
+    if alpha_abs <= 0.0 { return _NOCALC_F }
+    return 1.0 / alpha_abs
+}
+
 // Compound-removal recurrence (geometric decay of a residual fraction).
 // Each cycle removes fraction x of the REMAINING quantity, so after N
 // cycles the cumulative coverage is cov(N) = 1 - (1-x)^N. Computed by a
@@ -1515,6 +1664,61 @@ fn _recompute_float(fn_name: string, a0: float, a1: float, a2: float, a3: float,
         if argc < 4 { return _NOCALC_F }
         return _hagen_poiseuille(a0, a1, a2, a3)
     }
+    // ── TTR-ORAL / TTR-LAC bundle (topical PK + laser optics · INBOX T22:35Z) ──
+    //   higuchi_flux(C0, Dm, t)            3-arg: sqrt(2·C0·Dm·t/π)
+    //   fick_steady_flux(P, ΔC)            2-arg: P·ΔC
+    //   partition_coeff(C_oct, C_water)    2-arg: log10(C_oct/C_water)
+    //   permeability_skin(D, K, h)         3-arg: D·K/h
+    //   auc_first_order(C0, ke)            2-arg: C0/ke
+    //   clearance(dose, auc)               2-arg: dose/auc
+    //   beer_lambert_log10(I0, ε, c, L)    4-arg: I0·10^(-ε·c·L)
+    //   fluence(P, A, t)                   3-arg: P·t/A
+    //   beam_waist(w0, z, zR)              3-arg: w0·sqrt(1+(z/zR)²)
+    //   rayleigh_range(w0, λ)              2-arg: π·w0²/λ
+    //   absorption_depth(α)                1-arg: 1/α
+    if fn_name == "higuchi_flux" {
+        if argc < 3 { return _NOCALC_F }
+        return _higuchi_flux(a0, a1, a2)
+    }
+    if fn_name == "fick_steady_flux" {
+        if argc < 2 { return _NOCALC_F }
+        return _fick_steady_flux(a0, a1)
+    }
+    if fn_name == "partition_coeff" {
+        if argc < 2 { return _NOCALC_F }
+        return _partition_coeff(a0, a1)
+    }
+    if fn_name == "permeability_skin" {
+        if argc < 3 { return _NOCALC_F }
+        return _permeability_skin(a0, a1, a2)
+    }
+    if fn_name == "auc_first_order" {
+        if argc < 2 { return _NOCALC_F }
+        return _auc_first_order(a0, a1)
+    }
+    if fn_name == "clearance" {
+        if argc < 2 { return _NOCALC_F }
+        return _clearance(a0, a1)
+    }
+    if fn_name == "beer_lambert_log10" {
+        if argc < 4 { return _NOCALC_F }
+        return _beer_lambert_log10(a0, a1, a2, a3)
+    }
+    if fn_name == "fluence" {
+        if argc < 3 { return _NOCALC_F }
+        return _fluence(a0, a1, a2)
+    }
+    if fn_name == "beam_waist" {
+        if argc < 3 { return _NOCALC_F }
+        return _beam_waist(a0, a1, a2)
+    }
+    if fn_name == "rayleigh_range" {
+        if argc < 2 { return _NOCALC_F }
+        return _rayleigh_range(a0, a1)
+    }
+    if fn_name == "absorption_depth" {
+        return _absorption_depth(a0)
+    }
     return _NOCALC_F
 }
 
@@ -1556,6 +1760,13 @@ fn _is_float_fn(fn_name: string) -> bool {
         || fn_name == "pippard_coherence"
         // Bio-physical Phase 3 (demiurge cross-domain V2 closure):
         || fn_name == "higuchi" || fn_name == "tafel" || fn_name == "hagen_poiseuille"
+        // TTR-ORAL / TTR-LAC bundle (topical PK + laser optics · INBOX T22:35Z):
+        || fn_name == "higuchi_flux" || fn_name == "fick_steady_flux"
+        || fn_name == "partition_coeff" || fn_name == "permeability_skin"
+        || fn_name == "auc_first_order" || fn_name == "clearance"
+        || fn_name == "beer_lambert_log10" || fn_name == "fluence"
+        || fn_name == "beam_waist" || fn_name == "rayleigh_range"
+        || fn_name == "absorption_depth"
 }
 
 // is fn_name a 0-arg closed-form constant? (--expr <fn> <v>, no operands).
