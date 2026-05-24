@@ -961,6 +961,10 @@ fn codegen(ast) {
     // enum-variant access fix: reset enum-name set per codegen invocation
     // so a second TU in the same process doesn't see stale enum names.
     _enum_names = []
+    // PROBE r15-D14: reset bare-variant lookup tables per TU (paired w/ _enum_names).
+    _enum_variant_names = []
+    _enum_variant_owners = []
+    _enum_variant_ambig = []
     // B20 / roadmap 55: reset @strict_fp TU flag per codegen invocation so
     // a second compilation in the same process doesn't inherit the first.
     _gen2_tu_has_strict_fp = 0
@@ -4552,6 +4556,24 @@ fn gen2_expr(node) {
                 return "hexa_float(NAN)"
             }
         }
+        // PROBE r15-D14 (2026-05-24): bare enum-variant Ident lookup.
+        // `let c = Red` (no `Color::` prefix) parses as a bare Ident; the
+        // gen2_enum_decl emits `#define Color_Red ...` but never `Red`, so
+        // the literal `Red` reaches clang as an undeclared identifier and
+        // compilation fails (probe_1 in /tmp/probe-r15/enum/). Mirror the
+        // Field arm fix (`<EnumName>.<VARIANT>` → `<EnumName>_<VARIANT>`)
+        // for the bare form: if the name is otherwise undeclared AND matches
+        // exactly one enum's variant, rewrite to `<Owner>_<Variant>` so the
+        // #define resolves. Locals/globals/fnrefs/user decls all win — only
+        // fires when no other binding exists. Ambiguous variant names
+        // (`Red` in both Color and Stoplight) fall through (lookup returns
+        // "") preserving the existing diagnostic.
+        if !_gen2_has_decl(node.name) && !_gen2_name_in_cur_lets(node.name) && !_is_known_fn_global(node.name) && !_is_known_nonlocal(node.name) {
+            let _evo = _enum_variant_lookup_owner(node.name)
+            if _evo != "" {
+                return _evo + "_" + node.name
+            }
+        }
         // b2-fnref: a bare name that resolves to a builtin/method (not a
         // user fn, global, or local) used in value position — emit a TAG_FN
         // wrapping a static thunk instead of a bare (undeclared) C identifier.
@@ -7192,6 +7214,15 @@ fn gen2_enum_decl(node) {
     // bogus hexa_map_get_ic(<typename>, ...) field access. This runs in
     // the decl pass, before any fn body that references the enum.
     _enum_names_add(name)
+    // PROBE r15-D14: register every variant name → owner so the gen2_expr
+    // Ident arm can rewrite bare `Red` → `Color_Red` (the #define emitted
+    // below). Ambiguous variant names (shared across enums) are flagged
+    // and skipped at lookup time.
+    let mut _vri = 0
+    while _vri < len(node.variants) {
+        _enum_variant_register(node.variants[_vri].name, name)
+        _vri = _vri + 1
+    }
     let vc = len(node.variants)
     // @compact enum: compute minimum bits for tag
     let tag_bits = gen2_min_bits(vc)
@@ -8302,6 +8333,50 @@ fn _is_enum_name(name) {
     return false
 }
 
+// ── PROBE r15-D14 (2026-05-24): bare-enum-variant Ident lookup ──
+// `let c = Red` (bare, no Color:: qualifier) parses as a plain Ident.
+// The gen2_expr Ident arm previously emitted `Red` literally → clang
+// error `use of undeclared identifier 'Red'` because the only C symbol
+// the enum decl emits is `Color_Red` (#define from gen2_enum_decl).
+// Mirror the `Field` arm fix (line ~4883) for the bare form: keep a
+// variant→owner registry populated during the decl pass, then consult
+// it in the Ident arm AFTER local/global/fnref checks (locals and
+// explicit decls always win — only fires for otherwise-undeclared
+// names that uniquely match one enum's variant).  Same-named variants
+// across multiple enums → ambiguous → skip (fall through to mangled
+// bare emit; existing diagnostic flow is preserved).
+let mut _enum_variant_names = []
+let mut _enum_variant_owners = []
+let mut _enum_variant_ambig  = []
+
+fn _enum_variant_register(variant, owner) {
+    let mut i = 0
+    while i < len(_enum_variant_names) {
+        if _enum_variant_names[i] == variant {
+            if _enum_variant_owners[i] != owner {
+                _enum_variant_ambig[i] = true
+            }
+            return
+        }
+        i = i + 1
+    }
+    _enum_variant_names.push(variant)
+    _enum_variant_owners.push(owner)
+    _enum_variant_ambig.push(false)
+}
+
+fn _enum_variant_lookup_owner(name) {
+    let mut i = 0
+    while i < len(_enum_variant_names) {
+        if _enum_variant_names[i] == name {
+            if _enum_variant_ambig[i] { return "" }
+            return _enum_variant_owners[i]
+        }
+        i = i + 1
+    }
+    return ""
+}
+
 // ═══════════════════════════════════════════════════════════════
 //  PROBE r14-CCCC (YYY-1): struct field default-value registry
 //
@@ -9272,6 +9347,10 @@ fn codegen_full(ast) {
     // enum-variant access fix: reset enum-name set in BOTH codegen entry
     // points so a second TU doesn't see the prior call's enum names.
     _enum_names = []
+    // PROBE r15-D14: reset bare-variant lookup tables here too (BOTH entry points).
+    _enum_variant_names = []
+    _enum_variant_owners = []
+    _enum_variant_ambig = []
 
     // ── Pass 0: collect known global names for closure free-var analysis ──
     let mut gi = 0
