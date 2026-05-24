@@ -4196,6 +4196,11 @@ if len(av) < 3 {
         if len(av) < 4 {
             println("error: 'run' requires <file>")
             cmd_help()
+        } else if av[3] == "--help" || av[3] == "-h" {
+            // INBOX T23:10Z (a): `hexa run --help` was interpreting "--help"
+            // as a source file path → `error: source file not found: --help`.
+            // Intercept early so the standard help text is shown (rc=0).
+            cmd_help()
         } else {
             // `--no-sentinel` opt-in flag — accepted before/after the file
             //   arg, stripped from forwarded run_args. Suppresses the
@@ -4314,6 +4319,15 @@ if len(av) < 3 {
         // process image with the binary so editor pipes are inherited
         // verbatim — no popen buffering, no __HEXA_RC sentinel interleave.
         // Falls back to legacy cmd_run() when the binary is absent.
+        //
+        // INBOX T23:10Z (b): `hexa lsp --help` was entering the LSP daemon
+        // and hanging on stdin for 30s (JSON-RPC awaiting client). Intercept
+        // --help/-h before daemon entry so the standard help text is shown.
+        let __lsp_want_help = (len(av) >= 4 && (av[3] == "--help" || av[3] == "-h"))
+        if __lsp_want_help {
+            cmd_help()
+            exit(0)
+        }
         let __inst_lsp = install_dir_from_argv0()
         let mut lsp_bin = ""
         if len(__inst_lsp) > 0 {
@@ -4333,6 +4347,11 @@ if len(av) < 3 {
     } else if sub == "build" {
         if len(av) < 4 {
             println("error: 'build' requires <file>")
+            cmd_help()
+        } else if av[3] == "--help" || av[3] == "-h" {
+            // INBOX T23:10Z (a): `hexa build --help` was interpreting "--help"
+            // as a source file path → `error: source file not found: --help`.
+            // Intercept early so the standard help text is shown (rc=0).
             cmd_help()
         } else {
             // hexa_v2 트랜스파일러 회귀: dispatch 블록 내부 `let src = av[3]`
@@ -4458,7 +4477,10 @@ if len(av) < 3 {
             println("error: 'convergence' requires <subcmd> <file>")
             println("usage: hexa convergence dump <file>")
             println("       hexa convergence dump-meta <file>")
-            exit(1)
+            // INBOX T23:10Z (d): usage exit rc=1 → rc=2 (POSIX misuse
+            // convention; aligns with tape/hxc/repo-audit-taxonomy/gpu
+            // disasm/lint and the rest of the verb table).
+            exit(2)
         } else {
             let __inst_cv = install_dir_from_argv0()
             let mut cv_args = [av[3], av[4]]

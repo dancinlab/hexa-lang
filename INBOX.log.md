@@ -9,10 +9,10 @@ Append-only history sister of `INBOX.md`. Each entry starts with `## <ISO timest
 **집계**: True PASS 87/102 = 85.3%. Wired 97/102 = 95.1%. 견고: annotator 29, drill 12 variants, external 17 (fallback 정상), atlas dispatch.
 
 **실측 결함 5건** (sub-handoff 으로 각각 처리 필요):
-- [ ] **(a) `hexa run --help` / `hexa build --help` — `--help` 를 source file 로 해석** → FAIL `source file not found: --help`. flag 인터셉트가 source-file parse 보다 먼저 와야 함. 가장 빠른 DX 개선.
-- [ ] **(b) `hexa lsp --help` — LSP daemon 진입, stdin 대기 TIMEOUT 30s**. flag 라우팅 누락 — daemon 진입 전에 `--help` 인터셉트.
+- [x] **(a) `hexa run --help` / `hexa build --help` — `--help` 를 source file 로 해석** → FAIL `source file not found: --help`. flag 인터셉트가 source-file parse 보다 먼저 와야 함. 가장 빠른 DX 개선. — FIXED (inbox/cli-help-rc-fix-T2310): run/build dispatch 진입부에 `av[3] == "--help" || "-h"` 인터셉트 추가 → `cmd_help()` rc=0.
+- [x] **(b) `hexa lsp --help` — LSP daemon 진입, stdin 대기 TIMEOUT 30s**. flag 라우팅 누락 — daemon 진입 전에 `--help` 인터셉트. — FIXED (inbox/cli-help-rc-fix-T2310): lsp 분기 진입 직후 (`install_dir_from_argv0` 호출 전) `--help/-h` 인터셉트 → `cmd_help() + exit(0)`.
 - [ ] **(c) `hexa init` — `tool/init_project.hexa` 부재, "not implemented" 메시지만 출력**. 도큐멘트/help 에는 존재. stub scaffolder land 또는 help 에서 제거.
-- [ ] **(d) `hexa convergence` usage 출력 시 rc=1 — 다른 verb 는 rc=2** (tape/hxc/repo-audit-taxonomy/gpu disasm/lint). POSIX 관행상 rc=2 표준. convergence 만 outlier 통일.
+- [x] **(d) `hexa convergence` usage 출력 시 rc=1 — 다른 verb 는 rc=2** (tape/hxc/repo-audit-taxonomy/gpu disasm/lint). POSIX 관행상 rc=2 표준. convergence 만 outlier 통일. — FIXED (inbox/cli-help-rc-fix-T2310): `len(av) < 5` 분기의 `exit(1)` → `exit(2)`.
 - [ ] **(e) `hexa sim-universe selftest` 6/6 sub-test FAIL** — anu_time/multiverse/qpu/qrng/bostrom/godel 전부 substrate FAIL. 다른 sim-universe sub-verb 는 PASS. substrate dep 별도 조사.
 
 **추가 권장 (소소)**:
