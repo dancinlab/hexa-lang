@@ -2,6 +2,26 @@
 
 Append-only history sister of `STDLIB.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
+## 2026-05-25T08:00:00Z — /cycle 사이클 4: open-babel-subset GPL-2 회피 closure — STDLIB 도메인 100% closed
+
+cycle 1+2+3 closure 후 남은 단일 open 마일스톤 = `open-babel-subset` (GPL-2 라이선스 검토 DEFERRED). 사용자 결정 = **B-2 (GPL-2 회피 + scratch 구현)** — rdkit-subset · autodock-vina-port 의 동일 회피-by-reimplementation 패턴.
+
+| PR | sha | milestone | scope | oracle |
+|---|---|---|---|---|
+| #686 | (squash) | open-babel-subset → babel-free | MOL V2000 + SDF + PDB ATOM/HETATM/CONECT (1184 LOC × 4 파일) | 7 cases PASS · open-babel 자료 참조 0, CTfile + PDB v3.3 공개 spec 만 |
+
+- [x] open-babel-subset 마일스톤 → `stdlib/chem/babel_free/{mol,sdf,pdb,format_io_test}.hexa` (B-2 path)
+- [x] `MolAtom/MolBond` struct 는 rdkit_subset 과 의미/단위/index base 달라 별도 정의 (어댑터는 future)
+- [x] PR #686 의 코멘트에 CTfile spec URL + PDB v3.3 URL 명시 (provenance)
+- [x] STDLIB.md 마일스톤 체크박스 갱신 + 본 로그
+
+진행 상태: **21/21 actionable closed (100%)** · STDLIB 도메인 first-cycle 캠페인 종료.
+
+후속 — 새 milestone 등록은 사용자 결정 대기:
+- cycle 3 sub-sub-feature 후보 (rdkit 68-type SMARTS · vina BFGS · iedb ANN · brenda credentials manager · Ertl S/P · SSSR)
+- cycle 4 새 inbox/notes/2026-05-25-* 후보 (bindingdb · chembl · drugbank · febio · openfoam · pk-sim 등)
+- 다른 도메인 pivot (HEXA_LANG · 등)
+
 ## 2026-05-25T05:30:00Z — /cycle 사이클 3: 6 deferred sub-feature 보강 — 6/6 oracle PASS · 정공법 완성도기준
 
 정공법 + 완성도기준 라운드 — cycle 1+2 의 14개 모듈 중 6개에 표시됐던 `※ ... deferred` sub-feature 들을 닫아 모듈 완성도 100% 로. 6 백그라운드 에이전트 (worktree isolation) 병렬 fan-out, 전수 squash 머지.
