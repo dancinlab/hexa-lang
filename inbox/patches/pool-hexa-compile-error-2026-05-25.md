@@ -1,11 +1,28 @@
 ---
 slug: pool-hexa-compile-error-2026-05-25
-status: open
+status: resolved
 severity: P1
 discovered: 2026-05-25
 discoverer: claude/demiurge LPA cycle 4
 filed_from: demiurge (cross-domain: LPA · ISR · NOREFLOW · DAPTPGX · HERPES)
 ---
+
+**Status (2026-05-25)**: RESOLVED — root cause was the `return void` codegen
+mistranslate (`hexa_index_get(ks, i)` leak → `ks`/`i` undeclared), fixed by
+**PR #754** (`bt-void-return` guard in `self/codegen.hexa` + regenerated
+`self/native/hexa_cc.c`). `pool.hexa` flattens `stdlib/alloc/json_object.hexa`
+(its `json_object_get`/`json_object_get_path` use `if … { return void }`,
+primed by `json_object_entries`'s `ks[i]`), so the bundle inherited the leak.
+With the rebuilt `self/native/hexa_v2` (carries the fix), the repro now passes:
+`pool list` compiles + lists all 4 hosts, **exit 0** (measured 2026-05-25).
+
+The `${...}` "JS-template syntax not supported" warnings are a **non-issue** —
+they are legitimate shell variable expansions (`${RT}`, `${POOL_CLEAN_THRESH:-85}`,
+`awk -v k="${1:-0}"`) inside the bash command strings `pool` sends to remote
+hosts. The lexer over-warns on `${` inside any string literal; the warnings are
+non-fatal and did NOT cause the link failure (that was solely the `ks`/`i` leak).
+Minor lexer-UX follow-up (suppress `${` warning inside non-f-strings) tracked
+separately if it recurs — not a `pool` blocker.
 
 # pool.hexa compile error — undeclared identifier (cross-domain wall)
 
