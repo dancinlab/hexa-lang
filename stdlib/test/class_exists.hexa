@@ -1,0 +1,22 @@
+// HEXA Standard Library — test/class_exists
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Class/type presence check. Standardises the 140+ anima inline
+// `test_class_exists` definitions (STDLIB Phase 1b survey 2026-05-25).
+// Used by selftest scaffolds to verify expected `class` / `struct` /
+// `record` types are loaded before exercising them.
+//
+// Surface:
+//   pub fn assert_class_exists(class_name: string, exists: bool)
+//     Caller passes the existence boolean (hexa has no reflective
+//     `Class.forName` equivalent). Panic with diagnostic on missing.
+
+pub fn assert_class_exists(class_name: string, exists: bool) {
+    if exists {
+        println("  class check: " + class_name + " : OK")
+    } else {
+        panic("class check FAIL: " + class_name + " not found — check imports or build")
+    }
+}
