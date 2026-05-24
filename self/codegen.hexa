@@ -8000,6 +8000,17 @@ fn gen2_match_stmt(node, depth) {
             }
         }
 
+        // RFC r16 (@ binding): bind the whole scrutinee to the name on the
+        // AtBinding wrapper as the first arm-body line (`m @ 1..=5 => …` binds
+        // m = the matched value). The match condition was handled by
+        // gen2_match_cond recursing into pat.left.
+        if type_of(pat) != "string" && pat.kind == "AtBinding" {
+            let _atn = pat.name
+            if type_of(_atn) == "string" && _atn != "" && _atn != "_" {
+                let _padat = gen2_indent(depth + 2)
+                chunks.push(_padat + "HexaVal " + _hexa_mangle_ident(_atn) + " = __match_val;\n")
+            }
+        }
         // RFC-020 A4: emit the payload binding `HexaVal <var> = hexa_index_get(__match_val, hexa_int(1));`
         // as the FIRST line inside this arm's block, when the EnumPath pattern
         // carried a binder (single-field payload only — `Shape::Circle(r)`).
@@ -8098,6 +8109,12 @@ fn gen2_match_cond(pat, scrutinee_var) {
     let k = pat.kind
     if k == "Wildcard" {
         return "1"
+    }
+    // RFC r16 (@ binding): the match test is the sub-pattern's condition; the
+    // bind itself is emitted at the arm body / value site. Recurse on the
+    // wrapped sub-pattern (e.g. `n @ 1..=5` tests the `1..=5` range).
+    if k == "AtBinding" {
+        return gen2_match_cond(pat.left, scrutinee_var)
     }
     // OR-pattern: pattern grammar reuses parse_expr which greedy-
     // consumed `1 | 2 | 3` as a BinOp(|, …) tree.  Split into a real
@@ -8318,6 +8335,18 @@ fn gen2_match_ternary(arms, scrutinee_c, idx) {
             }
         }
     }
+    // RFC r16 (@ binding): bind the whole scrutinee to the AtBinding name in
+    // the arm value (and the guard, below). Unlike the bare-Ident binder this
+    // is REFUTABLE — the sub-pattern still gates the arm (cond comes from
+    // gen2_match_cond, which recurses through AtBinding into the sub-pattern).
+    let mut _at_bind_name = ""
+    if type_of(pat) != "string" && pat.kind == "AtBinding" {
+        let _atn2 = pat.name
+        if type_of(_atn2) == "string" && _atn2 != "" && _atn2 != "_" {
+            _at_bind_name = _atn2
+            val = "({ HexaVal " + _hexa_mangle_ident(_atn2) + " = " + scrutinee_c + "; (" + val + "); })"
+        }
+    }
     // Bare-Ident binder: bind the whole scrutinee into the arm value.
     if len(_bind_name) > 0 {
         val = "({ HexaVal " + _hexa_mangle_ident(_bind_name) + " = " + scrutinee_c + "; (" + val + "); })"
@@ -8325,6 +8354,7 @@ fn gen2_match_ternary(arms, scrutinee_c, idx) {
 
     // Build pattern-match condition; wildcard + bare-Ident binder are
     // unconditional (both always match the value, refutation is the guard).
+    // An AtBinding is refutable — its cond is the sub-pattern's test.
     let mut cond = ""
     if is_wildcard || len(_bind_name) > 0 {
         cond = "1"
@@ -8357,6 +8387,11 @@ fn gen2_match_ternary(arms, scrutinee_c, idx) {
         // guard sees the bound payload names (`Some(n) if n > 0 => …`).
         if len(_call_binds) > 0 {
             _guard_c = "({ " + _call_binds + "(" + _guard_c + "); })"
+        }
+        // RFC r16 (@ binding): the guard may reference the bound name
+        // (`m @ 1..=5 if m > 2 => …`) — bind it in a stmt-expr too.
+        if len(_at_bind_name) > 0 {
+            _guard_c = "({ HexaVal " + _hexa_mangle_ident(_at_bind_name) + " = " + scrutinee_c + "; (" + _guard_c + "); })"
         }
         cond = "(" + cond + " && hexa_truthy(" + _guard_c + "))"
     }
