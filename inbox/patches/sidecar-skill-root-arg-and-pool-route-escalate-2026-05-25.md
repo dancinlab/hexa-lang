@@ -1,6 +1,6 @@
 # sidecar skill `--root` 빈-바이너리 버그 + pool-route 전면 escalate — CARDIO+ paper 작업서 발견
 
-**Status (2026-05-25)**: HANDED-OFF — #1 (skill `--root` 빈-바이너리 guard) · #2 (pool-route 전면 escalate allowlist) → sidecar INBOX (sidecar PR #118). #3 (`hexa verify --expr` ubu-2 segfault) = hexa-lang follow-up (잔류).
+**Status (2026-05-25)**: HANDED-OFF — #1 (skill `--root` 빈-바이너리 guard) · #2 (pool-route 전면 escalate allowlist) → sidecar INBOX (sidecar PR #118). **#3 (`hexa verify --expr` ubu-2 segfault) = ✅ ROOT-CAUSED + FIXED** (transpile-stage stale `hexa_v2_linux_x86_64` 바이너리 — `_hx_self_rss_bytes` fscanf #594-class 버그가 fix-전 빌드에 잔존 · 소스는 이미 fix · branch `inbox/verify-cli-segfault-2026-05-25` 에서 재빌드 + 빌드레시피 amalgam-swap 수정 · ubu-2 e2e 🟢 검증 · §#3 상세).
 
 **Reporter**: demiurge (CARDIO+ 메타도메인 X10 PAPER 작업 · 2026-05-25)
 **Severity**: high (skill 2종 완전 차단 · 모든 Bash가 Linux host로 강제 → macOS-only 자원 도달 불가)
@@ -73,9 +73,58 @@ $ hexa verify rubric                      # read-only path 는 OK (작동)
 ```
 read-only (`rubric`/`--fence`)는 작동 · `--expr` (recompute) build만 segfault.
 
-### Suggested fix
-- `verify_cli.hexa` build를 ubu-2 toolchain에서 재현 + segfault 원인 (transpile or clang stage) 격리
-- PR #658 atlas 등록된 bio calc fn (hill · fick1 · ldl_pct · exp_release)의 `_recompute_float` 확장이 실제 land됐는지 확인 — atlas RFC만 land되고 recompute kernel 미land면 verify는 🟠 (현 상태)
+### ✅ ROOT-CAUSED + FIXED (2026-05-24, ubu-2 실측)
+
+**Stage = TRANSPILE** (NOT clang, NOT runtime). `hexa verify --expr` 가 `verify_cli.hexa`
+를 build → `[1/2]` 단계가 `self/native/hexa_v2_linux_x86_64 <expanded>.hexa out.c`
+를 호출하는데 **transpiler 바이너리 자체가 SIGSEGV**. clang은 도달조차 못 함
+(`error: transpile failed — C file not produced`).
+
+**Crashing frame** (gdb bt, ubu-2 x86_64):
+```
+#0 __vfscanf_internal (s=0x4, format="%ld %ld")   ← fscanf(garbage FILE*=0x4, …) → SIGSEGV
+#1 __isoc23_fscanf
+#2 _hx_self_rss_bytes()      ← 범인
+#3 hexa_array_push()         ← mem-cap RSS tick poller
+#4 hexa_str_chars()
+#5 tokenize()
+#6 main()
+```
+
+**원인** = `_hx_self_rss_bytes()` 의 **이미 고쳐진 #594-class 버그**. fopen-shim 이
+`(void*)(fd+1)` 를 반환하는데 `fscanf` 는 remap 안 되어 그 small-int 를 `FILE*` 로
+deref → SIGSEGV. `HEXA_MEM_CAP_MB=4096` 가 모든 transpile 의 `[1/2]` 에 주입되어
+(pool Linux host 디스패치) 매번 발화. **소스(`self/runtime_core.c:301`)는 이미 syscall
+(`hxlcl_open_sys("/proc/self/statm")`) 로 고쳐져 있음 (#634/#748)** — fscanf 없음.
+
+**Environment vs source = STALE BINARY.** origin/main 에 커밋된
+`self/native/hexa_v2_linux_x86_64` (md5 `d08a647e…`, #634 동반 커밋) 가 **fix 이전
+runtime 으로 빌드된 stale 바이너리** — `strings` 에 `%ld %ld` (fscanf fmt) 잔존.
+clean rebuild 한 바이너리에는 `%ld %ld` 없음. summer 의 `hexa_v2_fresh` 도 동일 stale
+(fix 전 빌드). mini(macOS) 가 정상이던 이유 = mini transpiler 는 fix-후 빌드.
+
+증명 (ubu-2, 3중):
+| binary | `%ld %ld` (fscanf) | verify_cli transpile |
+|---|---|---|
+| 커밋 `hexa_v2_linux_x86_64` (origin/main) | **YES** | **SEGV** |
+| clean rebuild (fix 소스) | **NO** | **OK · 249KB C · e2e `--expr hill` → 🟢 0.998004 (\|Δ\|=1.1e-16)** |
+
+**왜 stale 됐나 (durable root cause)** = `tool/build_hexa_v2_linux.hexa` 의 빌드 레시피가
+`hexa_cc.c` (head `#include "runtime.h"` = 프로토타입 전용) 를 그대로 compile → runtime
+**body 가 link 안 됨** (`undefined reference to hexa_str` …). 즉 이 레시피로는 애초에
+바이너리를 재생성할 수 없었음 → #634/#748 의 runtime fix 가 Linux transpiler 에 영영
+안 흘러들어옴. 표준 `hexa build` 는 `runtime.h`→`runtime.c` amalgam swap 으로 body 를
+끌어오는데 이 스크립트만 그 단계가 빠져 있었음.
+
+### Fix (this PR — branch `inbox/verify-cli-segfault-2026-05-25`)
+1. **`self/native/hexa_v2_linux_x86_64` 재빌드** (fix 소스 amalgam, ubu-2). `%ld %ld` 제거,
+   verify_cli transpile RC=0 + `--expr hill` e2e 🟢 측정 확인. ⚠ glibc-static (ubu-2 빌드,
+   musl-cross 는 Mac 전용) 이라 1.78MB→3.3MB — 기능 동일, follow-up 으로 Mac musl 재regen 시
+   사이즈 회복 가능.
+2. **`tool/build_hexa_v2_linux.hexa` amalgam-swap 추가** (durable fix — 향후 재빌드가
+   stale 안 되도록 runtime.h→runtime.c 단계 삽입).
+
+검증 호스트: ubu-2 (x86_64). 회귀 smoke (sum 1..100=5050) PASS.
 
 ## CARDIO+ 작업서 실제 우회 (참고)
 

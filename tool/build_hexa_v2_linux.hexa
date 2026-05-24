@@ -129,10 +129,24 @@ fn main() {
 
     run_ok("mkdir -p " + exec_with_status("dirname '" + out_path + "'")[0].trim())
 
+    // hexa_cc.c heads with `#include "runtime.h"` (prototype-only header for
+    // the AOT user.c speed path) — that pulls in NO runtime function bodies,
+    // so compiling it alone fails to link (`undefined reference to hexa_str`,
+    // `__hexa_fn_arena_return`, …). The standalone transpiler binary needs the
+    // bodies, which live in runtime.c (it textually `#include`s runtime_core.c).
+    // Amalgamate by swapping the head include runtime.h → runtime.c into a temp
+    // TU, then compile THAT. (This swap was the missing step that let the
+    // committed hexa_v2_linux_x86_64 binary drift stale vs the runtime source —
+    // the #634/#748 _hx_self_rss_bytes fscanf→syscall fix never reached it,
+    // re-introducing the mem-cap-transpile SIGSEGV on Linux pool hosts.)
+    let amalgam = "/tmp/hexa_cc_amalgam_linux.c"
+    run_ok("sed 's|#include \"runtime.h\"|#include \"runtime.c\"|' " + src + " > " + amalgam)
+
     let cflags = "-O2 -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs"
-    let cmd = cc + " " + cflags + " " + extra_cflags + " -I " + inc + " " + src + " -o " + out_path + " -static -lm"
+    let cmd = cc + " " + cflags + " " + extra_cflags + " -I " + inc + " " + amalgam + " -o " + out_path + " -static -lm"
     println("  " + cmd)
     run_ok(cmd)
+    run_ok("rm -f " + amalgam)
 
     let file_info = exec_with_status("file " + out_path)[0].trim()
     let size = exec_with_status("wc -c < '" + out_path + "' | tr -d ' '")[0].trim()
