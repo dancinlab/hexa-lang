@@ -2,12 +2,14 @@
 //
 // Iterative k-means (Lloyd's algorithm) — RFC-037 2nd-wave reification of the
 // clustering stdlib promotion. Sibling to core_distance.hexa (#863) and
-// core_knn.hexa (#863). Centroid init is deterministic random-from-data via a
-// seeded LCG; k-means++ init is deferred to a follow-up cycle (RFC-037 3rd-wave).
+// core_knn.hexa (#863). Centroid init flavors:
+//   - Random-from-data via seeded LCG (RFC-037 2nd-wave, #869).
+//   - k-means++ D²-weighted (RFC-037 3rd-wave, Arthur & Vassilvitskii 2007).
 //
 // Scope (this module):
 //   - kmeans_fit(x, k, max_iter, seed) -> [int]
-//       Lloyd's algorithm. Returns one cluster label per row of `x`.
+//       Lloyd's algorithm with random-from-data init. Returns one cluster label
+//       per row of `x`.
 //       1. Init k centroids by sampling without replacement from `x`
 //          (deterministic — same seed → same indices).
 //       2. Repeat up to max_iter times:
@@ -15,13 +17,23 @@
 //            b. Recompute centroids as the mean of their assigned points.
 //            c. Halt early on a no-change assignment epoch (converged).
 //       3. Return the final per-point cluster labels.
+//   - kmeans_fit_pp(x, k, max_iter, seed) -> [int]
+//       Same Lloyd loop, but seeded with k-means++ D²-weighted init:
+//       1. Pick first centroid uniformly at random from x.
+//       2. For each remaining centroid (2..k):
+//            a. Compute D(p)² = squared distance from p to nearest existing
+//               centroid for each p in x.
+//            b. Sample next centroid with probability ∝ D²(p).
+//       Provides O(log k) approximation guarantee + tighter initial WCSS on
+//       adversarial geometries vs. random-from-data init.
 //   - wcss(x, labels, centroids) -> float
 //       Within-cluster sum of squares — Σ ‖xᵢ − μ_{labelᵢ}‖². The built-in
 //       falsifier for Lloyd's algorithm: each Lloyd iteration must produce a
 //       non-increasing wcss (theorem). The companion test asserts strict
 //       monotone-decrease across iterations.
 //
-// Determinism contract: identical (x, k, max_iter, seed) → identical labels.
+// Determinism contract: identical (x, k, max_iter, seed) → identical labels for
+// both kmeans_fit and kmeans_fit_pp.
 // Convergence contract: wcss is non-increasing across iterations until the
 // no-change epoch fires. Both are exercised by core_kmeans_test.hexa.
 //
@@ -219,6 +231,105 @@ fn _kmeans_labels_equal(a: [int], b: [int]) -> bool {
     return true
 }
 
+// --- k-means++ D²-weighted init (Arthur & Vassilvitskii 2007) ----------------
+// Internal: returns the k initial centroid indices selected by D²-weighting.
+//   1. First centroid: uniform random pick from [0, n).
+//   2. For remaining centroids: D(p)² = squared euclidean distance from p to
+//      the nearest already-chosen centroid; sample next index with probability
+//      ∝ D²(p). Realized via cumulative-sum + uniform draw in [0, total_d2).
+// Determinism: identical (n, k, seed) → identical index list. Uses the same
+// _kmeans_lcg_next stream as random init for cross-flavor seed compatibility.
+fn _kmeans_init_pp(x: [[float]], k: int, seed: int) -> [int] {
+    let n = len(x)
+    if k <= 0 || n <= 0 { return [] }
+
+    let mut state = seed
+    // Mix the seed (matches _kmeans_pick_init_indices) so seed=0 doesn't
+    // degenerate to an all-zero stream.
+    state = _kmeans_lcg_next(state + 1)
+
+    let mut want = k
+    if want > n { want = n }
+
+    // 1. First centroid: uniform random pick.
+    state = _kmeans_lcg_next(state)
+    let first_idx = state - (state / n) * n
+    let mut picked: [int] = [first_idx]
+
+    // d2[i] = squared distance from x[i] to the nearest already-picked centroid.
+    // Initialise with distance to the first centroid; updated incrementally as
+    // each new centroid is appended (only need min(d2[i], dist_to_new)).
+    let mut d2: [float] = []
+    let mut i = 0
+    while i < n {
+        let d = euclidean(x[i], x[first_idx])
+        d2 = d2 + [d * d]
+        i = i + 1
+    }
+
+    let mut found = 1
+    let lcg_m = 2147483648
+    while found < want {
+        // 2a. Sample next index ∝ d2.
+        let mut total = 0.0
+        let mut t = 0
+        while t < n {
+            total = total + d2[t]
+            t = t + 1
+        }
+        let mut next_idx = 0
+        if total <= 0.0 {
+            // All points sit on existing centroids (duplicates / k > unique).
+            // Fall back to the first not-yet-picked index for determinism.
+            let mut scan = 0
+            let mut chosen = -1
+            while scan < n && chosen < 0 {
+                let mut seen = false
+                let mut pi = 0
+                while pi < len(picked) && seen == false {
+                    if picked[pi] == scan { seen = true }
+                    pi = pi + 1
+                }
+                if seen == false { chosen = scan }
+                scan = scan + 1
+            }
+            if chosen < 0 { chosen = 0 }
+            next_idx = chosen
+        } else {
+            state = _kmeans_lcg_next(state)
+            // Uniform float in [0, total) via state/lcg_m * total.
+            let u01 = to_float(state) / to_float(lcg_m)
+            let target = u01 * total
+            let mut cum = 0.0
+            let mut j = 0
+            let mut chosen = n - 1
+            let mut done = false
+            while j < n && done == false {
+                cum = cum + d2[j]
+                if cum >= target {
+                    chosen = j
+                    done = true
+                }
+                j = j + 1
+            }
+            next_idx = chosen
+        }
+
+        picked = picked + [next_idx]
+        found = found + 1
+
+        // 2b. Update d2 with distance to the newly added centroid.
+        let mut u = 0
+        while u < n {
+            let dn = euclidean(x[u], x[next_idx])
+            let dn2 = dn * dn
+            if dn2 < d2[u] { d2[u] = dn2 }
+            u = u + 1
+        }
+    }
+    return picked
+}
+
 // kmeans_fit — Lloyd's algorithm. Returns the final per-point cluster label.
 pub fn kmeans_fit(x: [[float]], k: int, max_iter: int, seed: int) -> [int] {
     let n = len(x)
@@ -246,6 +357,49 @@ pub fn kmeans_fit(x: [[float]], k: int, max_iter: int, seed: int) -> [int] {
     }
 
     // Initial assignment.
+    let mut labels = _kmeans_assign(x, centroids)
+
+    let mut iter = 0
+    while iter < max_iter {
+        let new_centroids = _kmeans_recompute(x, labels, centroids, k_eff)
+        let new_labels = _kmeans_assign(x, new_centroids)
+        let stable = _kmeans_labels_equal(labels, new_labels)
+        centroids = new_centroids
+        labels = new_labels
+        if stable { return labels }
+        iter = iter + 1
+    }
+    return labels
+}
+
+// kmeans_fit_pp — Lloyd's algorithm with k-means++ D²-weighted init.
+// Same Lloyd loop as kmeans_fit; differs only in the centroid seeding strategy.
+// Determinism: identical (x, k, max_iter, seed) → identical labels.
+pub fn kmeans_fit_pp(x: [[float]], k: int, max_iter: int, seed: int) -> [int] {
+    let n = len(x)
+    if n == 0 { return [] }
+
+    // Degenerate guards (mirror kmeans_fit).
+    if k <= 0 {
+        let mut zeros: [int] = []
+        let mut i = 0
+        while i < n {
+            zeros = zeros + [0]
+            i = i + 1
+        }
+        return zeros
+    }
+
+    // Init centroids via k-means++ D²-weighted picking.
+    let init_idx = _kmeans_init_pp(x, k, seed)
+    let k_eff = len(init_idx)
+    let mut centroids: [[float]] = []
+    let mut s = 0
+    while s < k_eff {
+        centroids = centroids + [x[init_idx[s]]]
+        s = s + 1
+    }
+
     let mut labels = _kmeans_assign(x, centroids)
 
     let mut iter = 0

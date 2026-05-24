@@ -14,6 +14,10 @@
 //     repeated invocations.
 //   - k=1 edge case: every point labels 0.
 //   - k=0 / empty-x defined fallbacks.
+//   - k-means++ (RFC-037 3rd-wave): determinism, k=1 edge case, D²-weighting
+//     fires (picks a far point on a 2-cluster adversarial config), and final
+//     wcss avg-over-seeds is ≤ random-init wcss on an adversarial 3-cluster
+//     layout (the Arthur & Vassilvitskii 2007 expected-improvement claim).
 
 // ─── INLINED FROM stdlib/cluster/core_distance.hexa ───
 fn euclidean(a: [float], b: [float]) -> float {
@@ -231,6 +235,124 @@ fn kmeans_fit(x: [[float]], k: int, max_iter: int, seed: int) -> [int] {
     }
     return labels
 }
+
+fn _kmeans_init_pp(x: [[float]], k: int, seed: int) -> [int] {
+    let n = len(x)
+    if k <= 0 || n <= 0 { return [] }
+
+    let mut state = seed
+    state = _kmeans_lcg_next(state + 1)
+
+    let mut want = k
+    if want > n { want = n }
+
+    state = _kmeans_lcg_next(state)
+    let first_idx = state - (state / n) * n
+    let mut picked: [int] = [first_idx]
+
+    let mut d2: [float] = []
+    let mut i = 0
+    while i < n {
+        let d = euclidean(x[i], x[first_idx])
+        d2 = d2 + [d * d]
+        i = i + 1
+    }
+
+    let mut found = 1
+    let lcg_m = 2147483648
+    while found < want {
+        let mut total = 0.0
+        let mut t = 0
+        while t < n {
+            total = total + d2[t]
+            t = t + 1
+        }
+        let mut next_idx = 0
+        if total <= 0.0 {
+            let mut scan = 0
+            let mut chosen = -1
+            while scan < n && chosen < 0 {
+                let mut seen = false
+                let mut pi = 0
+                while pi < len(picked) && seen == false {
+                    if picked[pi] == scan { seen = true }
+                    pi = pi + 1
+                }
+                if seen == false { chosen = scan }
+                scan = scan + 1
+            }
+            if chosen < 0 { chosen = 0 }
+            next_idx = chosen
+        } else {
+            state = _kmeans_lcg_next(state)
+            let u01 = to_float(state) / to_float(lcg_m)
+            let target = u01 * total
+            let mut cum = 0.0
+            let mut j = 0
+            let mut chosen = n - 1
+            let mut done = false
+            while j < n && done == false {
+                cum = cum + d2[j]
+                if cum >= target {
+                    chosen = j
+                    done = true
+                }
+                j = j + 1
+            }
+            next_idx = chosen
+        }
+
+        picked = picked + [next_idx]
+        found = found + 1
+
+        let mut u = 0
+        while u < n {
+            let dn = euclidean(x[u], x[next_idx])
+            let dn2 = dn * dn
+            if dn2 < d2[u] { d2[u] = dn2 }
+            u = u + 1
+        }
+    }
+    return picked
+}
+
+fn kmeans_fit_pp(x: [[float]], k: int, max_iter: int, seed: int) -> [int] {
+    let n = len(x)
+    if n == 0 { return [] }
+
+    if k <= 0 {
+        let mut zeros: [int] = []
+        let mut i = 0
+        while i < n {
+            zeros = zeros + [0]
+            i = i + 1
+        }
+        return zeros
+    }
+
+    let init_idx = _kmeans_init_pp(x, k, seed)
+    let k_eff = len(init_idx)
+    let mut centroids: [[float]] = []
+    let mut s = 0
+    while s < k_eff {
+        centroids = centroids + [x[init_idx[s]]]
+        s = s + 1
+    }
+
+    let mut labels = _kmeans_assign(x, centroids)
+
+    let mut iter = 0
+    while iter < max_iter {
+        let new_centroids = _kmeans_recompute(x, labels, centroids, k_eff)
+        let new_labels = _kmeans_assign(x, new_centroids)
+        let stable = _kmeans_labels_equal(labels, new_labels)
+        centroids = new_centroids
+        labels = new_labels
+        if stable { return labels }
+        iter = iter + 1
+    }
+    return labels
+}
 // ─── END core_kmeans INLINE ───
 
 // Instrumented Lloyd's loop for the WCSS-monotone falsifier: returns the wcss
@@ -265,6 +387,71 @@ fn _kmeans_wcss_trace(x: [[float]], k: int, max_iter: int, seed: int) -> [float]
         iter = iter + 1
     }
     return trace
+}
+
+// Recompute final centroids from (x, labels) for wcss scoring (k inferred from
+// labels' max). Mirrors _kmeans_recompute but synthesises the prior-centroid
+// fallback from the cluster's own first point — sufficient because we only call
+// it on converged label sets where every cluster is non-empty.
+fn _final_wcss(x: [[float]], labels: [int], k: int) -> float {
+    let n = len(x)
+    if n == 0 || k == 0 { return 0.0 }
+    let dim = len(x[0])
+
+    let mut sums: [[float]] = []
+    let mut counts: [int] = []
+    let mut a = 0
+    while a < k {
+        let mut row: [float] = []
+        let mut b = 0
+        while b < dim {
+            row = row + [0.0]
+            b = b + 1
+        }
+        sums = sums + [row]
+        counts = counts + [0]
+        a = a + 1
+    }
+
+    let mut i = 0
+    while i < n {
+        let lab = labels[i]
+        if lab >= 0 && lab < k {
+            let mut d = 0
+            while d < dim {
+                sums[lab][d] = sums[lab][d] + x[i][d]
+                d = d + 1
+            }
+            counts[lab] = counts[lab] + 1
+        }
+        i = i + 1
+    }
+
+    let mut centroids: [[float]] = []
+    let mut c = 0
+    while c < k {
+        if counts[c] == 0 {
+            // Empty cluster — synth from first point as a defined fallback.
+            let mut row: [float] = []
+            let mut d = 0
+            while d < dim {
+                row = row + [x[0][d]]
+                d = d + 1
+            }
+            centroids = centroids + [row]
+        } else {
+            let cnt = counts[c]
+            let mut row: [float] = []
+            let mut d = 0
+            while d < dim {
+                row = row + [sums[c][d] / to_float(cnt)]
+                d = d + 1
+            }
+            centroids = centroids + [row]
+        }
+        c = c + 1
+    }
+    return wcss(x, labels, centroids)
 }
 
 fn check(name: string, ok: bool, pass: int, fail: int) -> [int] {
@@ -418,6 +605,92 @@ fn main() {
     let r13 = check("wcss = 0 when points coincide with centroid",
                     w0 < 0.000001 && w0 > 0.0 - 0.000001, pass, fail)
     pass = r13[0]; fail = r13[1]
+
+    // ─── k-means++ D²-weighted init tests (RFC-037 3rd-wave) ───
+
+    // ── TEST 9: kmeans_fit_pp deterministic — same seed → same labels ──
+    let pp_a = kmeans_fit_pp(x2, 2, 50, 42)
+    let pp_b = kmeans_fit_pp(x2, 2, 50, 42)
+    let mut pp_det_ok = len(pp_a) == len(pp_b) && len(pp_a) == 8
+    let mut pdi = 0
+    while pdi < len(pp_a) && pp_det_ok {
+        if pp_a[pdi] != pp_b[pdi] { pp_det_ok = false }
+        pdi = pdi + 1
+    }
+    let r14 = check("kmeans_fit_pp deterministic (same seed → same labels)",
+                    pp_det_ok, pass, fail)
+    pass = r14[0]; fail = r14[1]
+
+    // ── TEST 10: kmeans_fit_pp k=1 edge case → all labels 0 ──
+    let pp1 = kmeans_fit_pp(x2, 1, 50, 13)
+    let mut pp1_ok = len(pp1) == 8
+    let mut pp1i = 0
+    while pp1i < len(pp1) && pp1_ok {
+        if pp1[pp1i] != 0 { pp1_ok = false }
+        pp1i = pp1i + 1
+    }
+    let r15 = check("kmeans_fit_pp k=1 → all labels 0",
+                    pp1_ok, pass, fail)
+    pass = r15[0]; fail = r15[1]
+
+    // ── TEST 11: D² weighting actually fires — on a 2-cluster split, the
+    //    2nd seed centroid lands in the OPPOSITE cluster from the 1st.
+    //    With uniform random init, the 2nd pick could be in either cluster
+    //    (50/50). With D²-weighted, the 2nd pick is overwhelmingly drawn to
+    //    the far cluster (the 4 far points dominate the d² mass). We assert
+    //    this across multiple seeds — every seed must place the 2 init
+    //    centroids in distinct clusters of x2 (group A vs group B).
+    let mut d2_fires = true
+    let test_seeds = [1, 7, 13, 42, 99, 314, 2718]
+    let mut si = 0
+    while si < len(test_seeds) {
+        let idx = _kmeans_init_pp(x2, 2, test_seeds[si])
+        // Group A = indices 0..3 (near origin); Group B = indices 4..7 (near (10,10)).
+        let in_a0 = idx[0] < 4
+        let in_a1 = idx[1] < 4
+        if in_a0 == in_a1 { d2_fires = false }
+        si = si + 1
+    }
+    let r16 = check("k-means++ D² weighting picks distant 2nd centroid (7/7 seeds)",
+                    d2_fires, pass, fail)
+    pass = r16[0]; fail = r16[1]
+
+    // ── TEST 12: WCSS — k-means++ avg ≤ random-init avg on an adversarial
+    //    3-cluster layout (the Arthur & Vassilvitskii 2007 expected
+    //    improvement claim). Adversarial = 3 tight clusters, 2 of which are
+    //    near each other and 1 far — random init frequently picks both seeds
+    //    inside the near pair, collapsing one of them onto its sibling and
+    //    leaving the far cluster split. k-means++ D²-weighting biases the
+    //    third pick toward the far cluster, recovering the true split far
+    //    more often.
+    let xadv = [
+        // Cluster A — tight around (0, 0)
+        [0.0, 0.0], [0.1, 0.0], [0.0, 0.1], [0.1, 0.1], [0.05, 0.05],
+        // Cluster B — tight around (1, 0) (NEAR A)
+        [1.0, 0.0], [1.1, 0.0], [1.0, 0.1], [1.1, 0.1], [1.05, 0.05],
+        // Cluster C — tight around (50, 50) (FAR)
+        [50.0, 50.0], [50.1, 50.0], [50.0, 50.1], [50.1, 50.1], [50.05, 50.05]
+    ]
+    let seed_list = [1, 7, 13, 42, 99]
+    let mut rand_total = 0.0
+    let mut pp_total = 0.0
+    let mut wi = 0
+    while wi < len(seed_list) {
+        let s = seed_list[wi]
+        let r_lab = kmeans_fit(xadv, 3, 100, s)
+        let p_lab = kmeans_fit_pp(xadv, 3, 100, s)
+        rand_total = rand_total + _final_wcss(xadv, r_lab, 3)
+        pp_total = pp_total + _final_wcss(xadv, p_lab, 3)
+        wi = wi + 1
+    }
+    let rand_avg = rand_total / to_float(len(seed_list))
+    let pp_avg = pp_total / to_float(len(seed_list))
+    print("  [WCSS] random-init avg=" + to_string(rand_avg)
+          + "  kmpp-init avg=" + to_string(pp_avg))
+    // pp_avg should be ≤ rand_avg (Arthur 2007 expected-improvement).
+    let r17 = check("k-means++ avg-WCSS ≤ random-init avg-WCSS over 5 seeds (adversarial)",
+                    pp_avg <= rand_avg + 0.000001, pass, fail)
+    pass = r17[0]; fail = r17[1]
 
     print("")
     print("core_kmeans: " + to_string(pass) + "/" + to_string(pass + fail) + " passed")
