@@ -1,0 +1,23 @@
+// HEXA Standard Library — test/main_exists
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// `fn main()` presence check. Standardises the 115+ anima inline
+// `test_main_exists` definitions (STDLIB Phase 1b survey 2026-05-25).
+// Used by build/CI smoke to verify a tool actually has an entry point
+// before launching.
+//
+// Surface:
+//   pub fn assert_main_exists(module_name: string, has_main: bool)
+//     Caller passes the existence boolean. Panic with diagnostic on
+//     missing entry — clearer than the runtime "no fn main() defined"
+//     surface error.
+
+pub fn assert_main_exists(module_name: string, has_main: bool) {
+    if has_main {
+        println("  main check: " + module_name + " : OK")
+    } else {
+        panic("main check FAIL: " + module_name + " has no fn main() — module is not a runnable CLI")
+    }
+}
