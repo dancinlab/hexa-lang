@@ -4011,11 +4011,11 @@ fn gen2_method_builtin(obj_expr, method, args) {
     if method == "parse_float" {
         return cg_string_sym("str_parse_float") + "(" + obj_expr + ")"
     }
-    // String byte_at(i) — alias of char_code_at: raw byte value (0-255) at
-    // byte index i, or -1 if out of range. Matches interpreter
-    // self/hexa_full.hexa:16148-16156 (hxa-20260425-byteAt-builtin).
+    // String byte_at(i) — raw byte value (0-255) at byte index i. PROBE
+    // r15-D13: routes to str_byte_at (throws on OOB, matches array OOB)
+    // rather than char_code_at's -1 sentinel.
     if method == "byte_at" {
-        return cg_string_sym("str_char_code_at") + "(" + obj_expr + ", " + gen2_expr(args[0]) + ")"
+        return cg_string_sym("str_byte_at") + "(" + obj_expr + ", " + gen2_expr(args[0]) + ")"
     }
     if method == "char_code_at" {
         return cg_string_sym("str_char_code_at") + "(" + obj_expr + ", " + gen2_expr(args[0]) + ")"
@@ -6604,12 +6604,11 @@ fn gen2_expr(node) {
             if method == "char_code_at" {
                 return cg_string_sym("str_char_code_at") + "(" + obj + ", " + gen2_expr(node.args[0]) + ")"
             }
-            // `.byte_at(i)` — alias of char_code_at: raw byte value (0-255) at
-            // byte index i, or -1 if out of range. Matches interpreter
-            // self/hexa_full.hexa:16148-16156. Required for cross-language
-            // hash compatibility (hxa-20260425-byteAt-builtin).
+            // `.byte_at(i)` — raw byte value (0-255) at byte index i. PROBE
+            // r15-D13: routes to str_byte_at (throws on OOB, matches array
+            // OOB) rather than char_code_at's -1 sentinel.
             if method == "byte_at" {
-                return cg_string_sym("str_char_code_at") + "(" + obj + ", " + gen2_expr(node.args[0]) + ")"
+                return cg_string_sym("str_byte_at") + "(" + obj + ", " + gen2_expr(node.args[0]) + ")"
             }
             // ── Map methods ──
             if method == "keys" {

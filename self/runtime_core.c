@@ -4891,12 +4891,29 @@ HexaVal hexa_str_char_substring(HexaVal s, HexaVal startv, HexaVal endv) {
 }
 #endif
 
-// Byte at offset i (0..255), -1 if out-of-range. Alias of char_code_at
-// (same byte-indexed semantics) — separate name because `.byte_at` is
-// the semantically clearer surface for raw-byte access alongside the
-// codepoint-aware char_count / nth_char / char_substring above.
+// Byte at offset i (0..255). Throws on out-of-range — distinct from
+// char_code_at's -1 sentinel: `.byte_at` is the raw-byte access surface
+// and PROBE r15-D13 aligns it with array OOB (#467 "string OOB throws").
+// Negative indices wrap (align with char_at); a wrapped-negative still
+// out of range throws too. Error message matches the array OOB style.
 HexaVal hexa_str_byte_at(HexaVal s, HexaVal idx) {
-    return hexa_str_char_code_at(s, idx);
+    if (!HX_IS_STR(s)) {
+        hexa_throw(hexa_str("byte_at(): receiver is not a string"));
+        return hexa_void();
+    }
+    int64_t _orig = HX_INT(idx);
+    int64_t n = (int64_t)HX_STRLEN(s);
+    int64_t i = _orig;
+    if (i < 0) i += n;  // 음수 wraparound — char_at/char_code_at 과 align
+    if (i < 0 || i >= n) {
+        char _buf[96];
+        snprintf(_buf, sizeof(_buf),
+                 "byte_at index %lld out of bounds (len %lld)",
+                 (long long)_orig, (long long)n);
+        hexa_throw(hexa_str(_buf));
+        return hexa_void();
+    }
+    return hexa_int((int64_t)(unsigned char)HX_STR(s)[i]);
 }
 
 // ── Array operations ─────────────────────────────────

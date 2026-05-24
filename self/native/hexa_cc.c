@@ -20684,7 +20684,7 @@ HexaVal gen2_method_builtin(HexaVal obj_expr, HexaVal method, HexaVal args) {
         return __hexa_fn_arena_return(hexa_add(hexa_add(hexa_add(cg_string_sym(__hexa_codegen_sl_268), __hexa_codegen_sl_337), obj_expr), __hexa_codegen_sl_340));
     }
     if (hexa_truthy(hexa_eq(method, __hexa_codegen_sl_780))) {
-        return __hexa_fn_arena_return(hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(cg_string_sym(__hexa_codegen_sl_264), __hexa_codegen_sl_337), obj_expr), __hexa_codegen_sl_352), gen2_expr(hexa_index_get(args, hexa_int(0)))), __hexa_codegen_sl_340));
+        return __hexa_fn_arena_return(hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(cg_string_sym(__hexa_codegen_sl_316), __hexa_codegen_sl_337), obj_expr), __hexa_codegen_sl_352), gen2_expr(hexa_index_get(args, hexa_int(0)))), __hexa_codegen_sl_340));
     }
     if (hexa_truthy(hexa_eq(method, __hexa_codegen_sl_937))) {
         return __hexa_fn_arena_return(hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(cg_string_sym(__hexa_codegen_sl_264), __hexa_codegen_sl_337), obj_expr), __hexa_codegen_sl_352), gen2_expr(hexa_index_get(args, hexa_int(0)))), __hexa_codegen_sl_340));
@@ -23151,7 +23151,7 @@ HexaVal gen2_expr(HexaVal node) {
                 return __hexa_fn_arena_return(hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(cg_string_sym(__hexa_codegen_sl_264), __hexa_codegen_sl_337), obj), __hexa_codegen_sl_352), gen2_expr(hexa_index_get(hexa_map_get_ic(node, "args", &__hexa_codegen_ic_973), hexa_int(0)))), __hexa_codegen_sl_340));
             }
             if (hexa_truthy(hexa_eq(method, __hexa_codegen_sl_780))) {
-                return __hexa_fn_arena_return(hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(cg_string_sym(__hexa_codegen_sl_264), __hexa_codegen_sl_337), obj), __hexa_codegen_sl_352), gen2_expr(hexa_index_get(hexa_map_get_ic(node, "args", &__hexa_codegen_ic_974), hexa_int(0)))), __hexa_codegen_sl_340));
+                return __hexa_fn_arena_return(hexa_add(hexa_add(hexa_add(hexa_add(hexa_add(cg_string_sym(__hexa_codegen_sl_316), __hexa_codegen_sl_337), obj), __hexa_codegen_sl_352), gen2_expr(hexa_index_get(hexa_map_get_ic(node, "args", &__hexa_codegen_ic_974), hexa_int(0)))), __hexa_codegen_sl_340));
             }
             if (hexa_truthy(hexa_eq(method, __hexa_codegen_sl_798))) {
                 return __hexa_fn_arena_return(hexa_add(hexa_add(__hexa_codegen_sl_799, obj), __hexa_codegen_sl_340));
