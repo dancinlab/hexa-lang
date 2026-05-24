@@ -1,0 +1,80 @@
+// stdlib/cluster/core_distance.hexa
+//
+// Distance / similarity metrics for clustering + k-NN. RFC-037 design-override
+// reified — first wave of the clustering stdlib promotion. Iterative k-means
+// (with convergence checks) is deferred to a follow-up module + cycle. This
+// file is the static-metric foundation that k-NN (core_knn.hexa) and a future
+// k-means both build on.
+//
+// Scope (this module):
+//   - euclidean(a, b)             L2 distance       √Σ(aᵢ-bᵢ)²
+//   - manhattan(a, b)             L1 distance       Σ|aᵢ-bᵢ|
+//   - hamming(a, b)               Hamming distance  #{i: aᵢ≠bᵢ}     ([int])
+//   - cosine_similarity(a, b)     (a·b) / (‖a‖·‖b‖) ∈ [-1, 1]
+//
+// `sqrt` is the libm builtin (project.tape @D stdlib_trig_libm: no Taylor).
+// All length-mismatch / zero-norm cases return a defined fallback rather than
+// trapping — callers can treat -2.0 (cosine sentinel) or 0.0 (distance sentinel)
+// as "undefined" if they need stricter semantics.
+
+// Euclidean (L2) distance: √Σ(aᵢ - bᵢ)².
+pub fn euclidean(a: [float], b: [float]) -> float {
+    let n = len(a)
+    if n != len(b) { return 0.0 }
+    let mut sum = 0.0
+    let mut i = 0
+    while i < n {
+        let d = a[i] - b[i]
+        sum = sum + d * d
+        i = i + 1
+    }
+    return sqrt(sum)
+}
+
+// Manhattan (L1) distance: Σ|aᵢ - bᵢ|.
+pub fn manhattan(a: [float], b: [float]) -> float {
+    let n = len(a)
+    if n != len(b) { return 0.0 }
+    let mut sum = 0.0
+    let mut i = 0
+    while i < n {
+        let mut d = a[i] - b[i]
+        if d < 0.0 { d = 0.0 - d }
+        sum = sum + d
+        i = i + 1
+    }
+    return sum
+}
+
+// Hamming distance on integer vectors: count of mismatched positions.
+pub fn hamming(a: [int], b: [int]) -> int {
+    let n = len(a)
+    if n != len(b) { return 0 }
+    let mut count = 0
+    let mut i = 0
+    while i < n {
+        if a[i] != b[i] { count = count + 1 }
+        i = i + 1
+    }
+    return count
+}
+
+// Cosine similarity: (a·b) / (‖a‖·‖b‖) ∈ [-1, 1].
+// Returns -2.0 as an out-of-range sentinel for length mismatch or a zero-norm
+// vector (no defined cosine).
+pub fn cosine_similarity(a: [float], b: [float]) -> float {
+    let n = len(a)
+    if n != len(b) { return 0.0 - 2.0 }
+    let mut dot = 0.0
+    let mut na2 = 0.0
+    let mut nb2 = 0.0
+    let mut i = 0
+    while i < n {
+        dot = dot + a[i] * b[i]
+        na2 = na2 + a[i] * a[i]
+        nb2 = nb2 + b[i] * b[i]
+        i = i + 1
+    }
+    if na2 <= 0.0 || nb2 <= 0.0 { return 0.0 - 2.0 }
+    return dot / (sqrt(na2) * sqrt(nb2))
+}
