@@ -1,0 +1,275 @@
+#!hexa strict
+// ============================================================================
+// stdlib/math/special/lambert_w.hexa — Lambert W function (Halley iteration)
+//
+// Pure-math primitive for the Lambert W function, the inverse of
+// f(w) = w·eʷ, computed by Halley's third-order iteration. No domain
+// (delay differential equations / Wien's law / enzyme kinetics / network
+// percolation / etc.) baked in. Downstream callers `use` this module.
+//
+//     W(x) is defined by   W(x) · e^{W(x)} = x.
+//
+// W is multi-valued for real x ∈ [−1/e, 0):
+//   · W₀  (principal branch)  — defined for x ≥ −1/e,  W₀(x) ≥ −1.
+//   · W₋₁ (lower branch)      — defined for x ∈ [−1/e, 0),  W₋₁(x) ≤ −1.
+// The two branches meet at the branch point x = −1/e, where W = −1.
+//
+// Halley update for g(w) = w·eʷ − x  (cubic convergence):
+//
+//     eʷ      = exp(w)
+//     g       = w·eʷ − x
+//     w_{n+1} = w − g / ( eʷ·(w+1) − (w+2)·g / (2w+2) )
+//
+// Initial guesses:
+//   W₀:  x near 0      →  w₀ = x − x²              (Taylor)
+//        x large       →  w₀ = L₁ − L₂ + L₂/L₁    (L₁=ln x, L₂=ln L₁) asymptotic
+//        near −1/e     →  w₀ = −1 + √(2(e·x+1))   (branch-point series, p = √…)
+//   W₋₁: x ∈ [−1/e,0)  →  w₀ = ln(−x) − ln(−ln(−x))  (lower-branch asymptotic),
+//        near −1/e     →  w₀ = −1 − √(2(e·x+1))   (mirror branch-point series)
+//
+// Honest scope (commons g3):
+//   · Real branches W₀ (x ≥ −1/e) and W₋₁ (x ∈ [−1/e, 0)) only.
+//   · x < −1/e (no real solution) → returns the branch-point value −1
+//     (closest real); complex W is NOT covered.
+//   · Halley capped at 60 iters with a 1e-15 step tolerance.
+//
+// Surface (pure functions):
+//   fn lambert_w0(x)        → W₀(x)
+//   fn lambert_wm1(x)       → W₋₁(x)
+//
+// Self-test (this file): 5 closed-form falsifiers
+//   W₀(0)    = 0
+//   W₀(e)    = 1
+//   W₀(−1/e) = −1     (branch point)
+//   W·e^W = x identity over a sweep
+//   W₋₁(−0.1) ≈ −3.5771520639572                (known reference value)
+//
+// Run:
+//     hexa run stdlib/math/special/lambert_w.hexa
+//
+// @no-lock-needed
+
+use "self/runtime/math_pure"
+
+let VERSION = "1.0.0"
+
+// ─── check harness ──────────────────────────────────────────────────────
+
+let mut RUN = 0
+let mut FAIL = 0
+
+fn _check(ok: bool, label: str, detail: str) {
+    RUN = RUN + 1
+    let mark = if ok { "PASS" } else { "FAIL" }
+    if !ok { FAIL = FAIL + 1 }
+    println("  [" + mark + "] " + label)
+    if detail.len() > 0 { println("         · " + detail) }
+}
+
+fn abs_f(x: float) -> float { if x < 0.0 { return -x } return x }
+
+fn rel_err(a: float, b: float) -> float {
+    let d = abs_f(a - b)
+    let abs_b = abs_f(b)
+    if abs_b < 1.0e-30 { return d }
+    return d / abs_b
+}
+
+// ─── anchor constants ───────────────────────────────────────────────────
+
+// e = 2.718281828…
+let E_CONST: float = 2.71828182845904523536
+// −1/e ≈ −0.36787944117144233 — the branch point of W₀ / W₋₁.
+let NEG_INV_E: float = -0.36787944117144232160
+// Halley iteration parameters.
+let HALLEY_MAX_ITER: int = 60
+let HALLEY_TOL: float = 1.0e-15
+
+// ─── shared Halley refinement ───────────────────────────────────────────
+
+// Refine an initial guess w0 to a root of  w·eʷ = x  via Halley's method.
+// Near the branch point (w → −1) the Halley curvature term has a (2w+2)
+// denominator that vanishes; there we fall back to the Newton step (which is
+// well-defined since f'(w) = eʷ(w+1) only vanishes exactly at w = −1, handled
+// by the |f'| guard) to avoid a divide-by-zero trap.
+fn halley_refine(x: float, w0: float) -> float {
+    let mut w: float = w0
+    let mut iter = 0
+    while iter < HALLEY_MAX_ITER {
+        let ew = exp_pure(w)
+        let g = w * ew - x                  // = f(w)
+        let fprime = ew * (w + 1.0)         // = f'(w)
+        if abs_f(fprime) < 1.0e-300 { break }
+
+        let two_wp2 = 2.0 * w + 2.0
+        let mut dw: float = 0.0
+        if abs_f(two_wp2) < 1.0e-12 {
+            // Branch-point neighbourhood: pure Newton step.
+            dw = g / fprime
+        } else {
+            let denom = fprime - (w + 2.0) * g / two_wp2
+            if abs_f(denom) < 1.0e-300 { dw = g / fprime } else { dw = g / denom }
+        }
+        w = w - dw
+        if abs_f(dw) < HALLEY_TOL * (1.0 + abs_f(w)) { break }
+        iter = iter + 1
+    }
+    return w
+}
+
+// ─── principal branch W₀ (x ≥ −1/e) ─────────────────────────────────────
+
+fn lambert_w0(x: float) -> float {
+    // Exact anchor at the origin.
+    if abs_f(x) < 1.0e-30 { return 0.0 }
+
+    // Below the branch point there is no real solution → return W(−1/e) = −1.
+    if x < NEG_INV_E { return -1.0 }
+
+    // Initial guess.
+    let mut w0: float = 0.0
+    if x < -0.3 {
+        // Near the branch point: w ≈ −1 + p,  p = √(2(e·x + 1)).
+        let p = sqrt_pure(2.0 * (E_CONST * x + 1.0))
+        w0 = -1.0 + p - p * p / 3.0
+    } else {
+        if x < 1.0 {
+            // Small x: Taylor W₀(x) ≈ x − x².
+            w0 = x - x * x
+        } else {
+            let l1 = log_pure(x)
+            // The L₁−L₂+L₂/L₁ asymptotic needs L₁ = ln x safely > 1 (else ln L₁
+            // is ill-conditioned / L₁→0 at x=1). For the moderate range
+            // 1 ≤ x ≤ e use w₀ = ln x directly; Halley converges in a few steps.
+            if l1 < 1.0 {
+                w0 = l1
+            } else {
+                // Large x: asymptotic w ≈ L₁ − L₂ + L₂/L₁.
+                let l2 = log_pure(l1)
+                w0 = l1 - l2 + l2 / l1
+            }
+        }
+    }
+    return halley_refine(x, w0)
+}
+
+// ─── lower branch W₋₁ (x ∈ [−1/e, 0)) ───────────────────────────────────
+
+fn lambert_wm1(x: float) -> float {
+    // Branch point: W₋₁(−1/e) = −1.
+    if x <= NEG_INV_E { return -1.0 }
+    // W₋₁ is only real on [−1/e, 0); for x ≥ 0 there is no lower branch.
+    if x >= 0.0 { return -1.0 }
+
+    // Initial guess.
+    let mut w0: float = 0.0
+    if x < -0.3 {
+        // Near the branch point: mirror series  w ≈ −1 − p,  p = √(2(e·x+1)).
+        let p = sqrt_pure(2.0 * (E_CONST * x + 1.0))
+        w0 = -1.0 - p - p * p / 3.0
+    } else {
+        // Toward 0⁻: lower-branch asymptotic  w ≈ ln(−x) − ln(−ln(−x)).
+        let lnx = log_pure(-x)
+        w0 = lnx - log_pure(-lnx)
+    }
+    return halley_refine(x, w0)
+}
+
+// ─── analytical anchor checks (self-test) ───────────────────────────────
+
+fn check_w0_zero() {
+    // W₀(0) = 0 (0·e⁰ = 0).
+    let w = lambert_w0(0.0)
+    _check(abs_f(w) < 1.0e-14,
+        "W₀(0) = 0 (origin anchor)",
+        "W₀(0)=" + str(w))
+}
+
+fn check_w0_e() {
+    // W₀(e) = 1 (1·e¹ = e).
+    let w = lambert_w0(E_CONST)
+    _check(rel_err(w, 1.0) < 1.0e-13,
+        "W₀(e) = 1 (1·e = e anchor)",
+        "W₀(e)=" + str(w) + "  rel_err=" + str(rel_err(w, 1.0)))
+}
+
+fn check_w0_branch_point() {
+    // W₀(−1/e) = −1 (the branch point; derivative diverges here).
+    let w = lambert_w0(NEG_INV_E)
+    _check(rel_err(w, -1.0) < 1.0e-6,
+        "W₀(−1/e) = −1 (branch point)",
+        "W₀(−1/e)=" + str(w) + "  rel_err=" + str(rel_err(w, -1.0)))
+}
+
+fn check_identity_sweep() {
+    // W·e^W = x across a sweep of x (the defining identity).
+    let xs: [float] = [-0.2, -0.05, 0.001, 0.5, 1.0, 2.0, 10.0, 100.0, 1000.0]
+    let mut worst: float = 0.0
+    let mut i = 0
+    while i < xs.len() {
+        let x = xs[i]
+        let w = lambert_w0(x)
+        let recon = w * exp_pure(w)
+        let e = rel_err(recon, x)
+        if e > worst { worst = e }
+        i = i + 1
+    }
+    _check(worst < 1.0e-12,
+        "W₀(x)·e^{W₀(x)} = x identity over sweep (defining relation)",
+        "worst rel_err over 9-point sweep = " + str(worst))
+}
+
+fn check_wm1_known() {
+    // W₋₁(−0.1) = −3.5771520639572972… (known reference value).
+    let w = lambert_wm1(-0.1)
+    let recon = w * exp_pure(w)
+    _check(rel_err(w, -3.57715206395729) < 1.0e-10 &&
+           rel_err(recon, -0.1) < 1.0e-12 &&
+           w < -1.0,
+        "W₋₁(−0.1) ≈ −3.5771520639573 (lower-branch reference + identity)",
+        "W₋₁(−0.1)=" + str(w) + "  W·e^W=" + str(recon))
+}
+
+// ─── falsifiers ─────────────────────────────────────────────────────────
+
+let FALSIFIERS = [
+    "origin break — W₀(0) ≠ 0 → DEMOTE x≈0 exact anchor",
+    "W₀(e) break — W₀(e) ≠ 1 → DEMOTE Halley update on g(w)=w·eʷ−x",
+    "branch-point break — W₀(−1/e) ≠ −1 → DEMOTE √(2(e·x+1)) branch-point initial guess",
+    "identity break — W₀(x)·e^{W₀(x)} ≠ x over sweep (rel > 1e-12) → DEMOTE Halley denominator / convergence",
+    "W₋₁ break — W₋₁(−0.1) ≠ −3.5771520640 (or ≥ −1) → DEMOTE lower-branch ln(−x)−ln(−ln(−x)) guess",
+]
+
+// ─── main ───────────────────────────────────────────────────────────────
+
+fn main() {
+    println("========================================================================")
+    println("  stdlib/math/special — Lambert W (Halley iteration)")
+    println("========================================================================")
+    println("  W(x)·e^{W(x)} = x   ·   W₀ (x ≥ −1/e) principal   ·   W₋₁ (−1/e ≤ x < 0) lower")
+    println("  w ← w − g / ( eʷ(w+1) − (w+2)·g/(2w+2) ),  g = w·eʷ − x")
+    println("")
+
+    println("  Anchor checks (5 closed-form falsifiers):")
+    check_w0_zero()
+    check_w0_e()
+    check_w0_branch_point()
+    check_identity_sweep()
+    check_wm1_known()
+
+    println("")
+    println("  FALSIFIERS (" + str(FALSIFIERS.len()) + "):")
+    for f in FALSIFIERS { println("    ✗ " + f) }
+
+    println("========================================================================")
+    let pass_n = RUN - FAIL
+    println("  " + str(pass_n) + "/" + str(RUN) + " checks passed")
+    if FAIL > 0 {
+        println("  Lambert W primitive self-test FAILED — see per-check output above.")
+        println("__HEXA_STDLIB_MATH_SPECIAL_LAMBERT_W__ FAIL")
+        exit(1)
+    }
+    println("  Lambert W (Halley) primitive: PASS")
+    println("__HEXA_STDLIB_MATH_SPECIAL_LAMBERT_W__ PASS")
+    exit(0)
+}
