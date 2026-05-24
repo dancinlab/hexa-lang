@@ -1,3 +1,8 @@
+---
+slug: hexa-return-void-mistranslate-2026-05-24
+status: archived
+---
+
 # hexa-lang `return void` mistranslate — bare void-literal return → undeclared identifier (B14 saga, 2026-05-24)
 
 **Status**: archived-PR#733-2026-05-25 — not-reproducible (2 minimal repros lower correctly via __hexa_fn_arena_return)
