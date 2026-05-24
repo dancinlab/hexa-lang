@@ -1,5 +1,6 @@
 # canonical-deviation audit round 4 — design-level findings batch
 
+**Status**: audit-report-archived-2026-05-25 — meta audit report (2 module-hygiene shipped, rest design-level). Each remaining item needs separate design RFC.
 **Status:** 🟠 PARTIAL — 2 module-hygiene items SHIPPED (2026-05-23), rest OPEN
 
 **Shipped this round (module-hygiene PR):**

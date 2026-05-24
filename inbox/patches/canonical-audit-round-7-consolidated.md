@@ -1,5 +1,7 @@
 # canonical-deviation audit round 7 — consolidated (3 axes)
 
+**Status**: audit-report-archived-2026-05-25 — meta audit report (3 design-level axes). FIX-SURGICAL items already shipped; consolidated design clusters need separate RFC track.
+
 PROBE round 7 결과 (numeric coercion · destructuring · operator overload).
 FIX-SURGICAL 항목은 별도 PR 로 이미 ship — 본 문서는 **design-level**
 이탈 클러스터 consolidated 기록.

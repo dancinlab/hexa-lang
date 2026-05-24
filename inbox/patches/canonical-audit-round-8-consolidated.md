@@ -1,5 +1,7 @@
 # canonical-deviation audit round 8 — consolidated (3 axes)
 
+**Status**: audit-report-archived-2026-05-25 — meta audit report. CRITICAL write_file content-leak FIXED via PR #407. Remaining axes (concurrency · effects/error model · IO/FS/process) design-level, separate RFC track.
+
 > **Status update (2026-05-23):** the 🚨 CRITICAL `write_file` content-leak is **FIXED + deployed** (#407). Root cause: `hxlcl_open_sys` issued a raw `svc #0x80` open that ignored the macOS arm64 carry flag, so a failed open returned the positive errno as a fake fd; `fopen`/`rt_write_file` then wrote content to that low descriptor and returned `true`. Routed `hxlcl_open_sys` through libc `open()` (the carry-flag fix cycle 66 applied to read/write/close/dup2 but missed for open). Verified e2e: `write_file("/tmp/<missing>/x","…")` → `false`, no stdout leak. Remaining axes (concurrency model, effects/error model, glob/listdir/tempfile) are **design-level** — tracked, not silent-failure bugs.
 
 PROBE round 8 결과 (concurrency · effects/error model · IO/FS/process).
