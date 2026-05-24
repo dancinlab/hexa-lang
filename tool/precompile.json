@@ -1,8 +1,41 @@
 {
   "version": 1,
-  "comment": "GO M3 — declarative precompile manifest. Each listed .hexa script is compiled by tool/build_precompile.hexa into release/precompile/hexa_run.<key> where <key> = sha256(source).substring(0,16) + '_' + version_str() (must match self/main.hexa cmd_run cache key format). On `hexa run <script>` cmd_run probes release/precompile/ first → cache HIT skips clang fork (cold-cache fork-storm mitigation, internal axis). MINIMUM DEMO: 2 entries. Expansion = separate phase.",
+  "comment": "GO M3 — declarative precompile manifest. Each listed .hexa script is compiled by tool/build_precompile.hexa into release/precompile/hexa_run.<key> where <key> = sha256(source).substring(0,16) + '_' + version_str() (must match self/main.hexa cmd_run cache key format). On `hexa run <script>` cmd_run probes release/precompile/ first → cache HIT skips clang fork (cold-cache fork-storm mitigation, internal axis). GO M6 (this commit): expanded from 2 demo entries to 10 production-hot scripts. Selection criteria — high git churn (>= 2 commits / 3 months) · user-fired routinely (INBOX / GO log) · deterministic source (no mono_ns / random / mtime in source content) · CLI-facing.",
   "scripts": [
     "tool/build_hexa_cli.hexa",
-    "tool/atlas_cli.hexa"
-  ]
+    "tool/atlas_cli.hexa",
+    "tool/verify_cli.hexa",
+    "tool/inbox_sync.hexa",
+    "tool/inbox_promote.hexa",
+    "tool/cli_wrappers.hexa",
+    "tool/audit_forbidden_exts.hexa",
+    "tool/install_firmware_hook.hexa",
+    "tool/build_hexa_v2_linux.hexa",
+    "tool/build_precompile.hexa"
+  ],
+  "descriptions": {
+    "tool/build_hexa_cli.hexa":      "core CLI bootstrap — `hexa` driver build entry. Original M3 demo entry. Fired on every fresh-checkout dev cycle.",
+    "tool/atlas_cli.hexa":           "atlas SSOT verbs (hash · stats · lookup · register · dump · export). Original M3 demo. 14 commits in last 3 months — top-2 churn in tool/. User-fired routinely via /atlas slash command and `hexa atlas` driver shim.",
+    "tool/verify_cli.hexa":          "atlas verifier — `hexa verify <id>|--expr|--fence|rubric|list`. 14 commits in last 3 months — tied for top-1 churn. User-fired routinely via /verify slash command + INBOX verify-arm extension cycle.",
+    "tool/inbox_sync.hexa":          "INBOX/PATCHES.yaml well-formedness verifier. 2 commits / 3 months. User-fired weekly during inbox sweep cycles.",
+    "tool/inbox_promote.hexa":       "INBOX matured-entry archiver (applied -> archived). 2 commits / 3 months. Companion to inbox_sync, fired alongside.",
+    "tool/cli_wrappers.hexa":        "~/.hx/bin/* wrapper SSOT installer (drift detect + auto-write). 2 commits / 3 months. Fired on every wrapper drift report.",
+    "tool/audit_forbidden_exts.hexa":"FIRMWARE.md G-T0 banned-source-extension audit. 2 commits / 3 months. Fired by .githooks/pre-commit AND CI bootstrap.",
+    "tool/install_firmware_hook.hexa":"FIRMWARE.md G-T3 pre-push hook installer. Fired once per fresh checkout — fits 'sub-second first-call' UX goal exactly.",
+    "tool/build_hexa_v2_linux.hexa": "cross-build hexa_v2 transpiler for linux/x86_64 from macOS. 2 commits / 3 months. Fired by anima CLM dispatch and release-prep.",
+    "tool/build_precompile.hexa":    "self — the precompile builder itself. Fired by release CI to populate release/precompile/. Including in manifest means subsequent CI runs hit cache (bootstrap acceleration)."
+  },
+  "categories": {
+    "tool/build_hexa_cli.hexa":      "build",
+    "tool/atlas_cli.hexa":           "atlas",
+    "tool/verify_cli.hexa":          "verify",
+    "tool/inbox_sync.hexa":          "inbox",
+    "tool/inbox_promote.hexa":       "inbox",
+    "tool/cli_wrappers.hexa":        "install",
+    "tool/audit_forbidden_exts.hexa":"audit",
+    "tool/install_firmware_hook.hexa":"install",
+    "tool/build_hexa_v2_linux.hexa": "build",
+    "tool/build_precompile.hexa":    "build"
+  },
+  "schema_notes": "M6 schema extension (additive only — `tool/build_precompile.hexa::_parse_scripts` only reads the `\"scripts\"` array, ignoring everything else). `descriptions` = per-entry human reasoning (1-line per script, mirrors `scripts` keys). `categories` = coarse bucket (build/atlas/verify/inbox/install/audit) for future filtering verbs (e.g. `--category=atlas`). Both fields are documentation-only today; future M7+ may surface them via `--list --verbose` once a richer parser lands. Adding/removing scripts: update `scripts` (load-bearing) AND mirror the entry in `descriptions` + `categories` (lint-only)."
 }
