@@ -24,6 +24,17 @@
 #      `hexa_call1(free_tree, X)` which has no resolvable callee.
 #      Lower to the runtime function `hexa_val_free_tree(X)` (added in
 #      self/runtime.c at F6 step 1 / commit 0efebc88).
+#   5. __arr_alloc_items_zero{,_int} helper inject — RUNTIME.md cycle 67
+#      (aprime_cc build-unblock). stdlib/runtime/numeric.hexa cycle-105
+#      ports call `__arr_alloc_items_zero(n)` / `..._int(n)` as
+#      codegen-inline builtins. Stale hexa_v2 predates this and emits
+#      `hexa_call1(__arr_alloc_items_zero[,_int], n)` with no resolvable
+#      callee — no C symbol exists for them either. Inject 2 static C
+#      helpers right after the runtime include so the function-pointer
+#      dispatch resolves. Bodies mirror runtime.c hexa_array_zeros_float
+#      (TAG_FLOAT 0.0 slots) / hexa_array_alloc (TAG_INT 0 slots) but as
+#      direct calloc + malloc + zero-fill — NOT calling the rt_* wrappers,
+#      so no recursion through the HEXA_HAS_HEXA_RT_STDLIB dispatch.
 
 import re, sys
 
@@ -54,6 +65,41 @@ for l in src:
     if not hoisted and (s == '#include "runtime.c"' or s == '#include "runtime.h"'):
         out.append("/* S4 hoist: enum constant macros forward (define-before-use) */")
         out.extend(defs)
+        # (5) Inject __arr_alloc_items_zero{,_int} helpers (RUNTIME.md cycle 67).
+        # Direct calloc+malloc+zero-fill bodies that bypass the rt_* hexa-source
+        # dispatch (which would recurse: rt_array_zeros_float body calls
+        # __arr_alloc_items_zero, and the dispatch wrapper hexa_array_zeros_float
+        # calls rt_array_zeros_float — endless loop). These match the C contract
+        # the codegen-inline builtin would have emitted.
+        out.append("/* S4 cycle-67: __arr_alloc_items_zero{,_int} helper injection */")
+        out.append("static HexaVal __arr_alloc_items_zero(HexaVal nv) {")
+        out.append("    HexaVal out = {.tag=TAG_ARRAY};")
+        out.append("    HX_SET_ARR_PTR(out, (HexaArr*)calloc(1, sizeof(HexaArr)));")
+        out.append("    int64_t n = HX_IS_INT(nv) ? HX_INT(nv) : (int64_t)__hx_to_double(nv);")
+        out.append("    if (n <= 0) return out;")
+        out.append("    HexaVal* items = (HexaVal*)malloc(sizeof(HexaVal) * (size_t)n);")
+        out.append("    if (!items) { fprintf(stderr, \"OOM in __arr_alloc_items_zero n=%lld\\n\", (long long)n); exit(1); }")
+        out.append("    HexaVal zero = {.tag=TAG_FLOAT, .f=0.0};")
+        out.append("    for (int64_t i = 0; i < n; i++) items[i] = zero;")
+        out.append("    HX_SET_ARR_ITEMS(out, items);")
+        out.append("    HX_SET_ARR_LEN(out, (int)n);")
+        out.append("    HX_SET_ARR_CAP(out, (int)n);")
+        out.append("    return out;")
+        out.append("}")
+        out.append("static HexaVal __arr_alloc_items_zero_int(HexaVal nv) {")
+        out.append("    HexaVal out = {.tag=TAG_ARRAY};")
+        out.append("    HX_SET_ARR_PTR(out, (HexaArr*)calloc(1, sizeof(HexaArr)));")
+        out.append("    int64_t n = HX_IS_INT(nv) ? HX_INT(nv) : (int64_t)__hx_to_double(nv);")
+        out.append("    if (n <= 0) return out;")
+        out.append("    HexaVal* items = (HexaVal*)malloc(sizeof(HexaVal) * (size_t)n);")
+        out.append("    if (!items) { fprintf(stderr, \"OOM in __arr_alloc_items_zero_int n=%lld\\n\", (long long)n); exit(1); }")
+        out.append("    HexaVal zero = {.tag=TAG_INT, .i=0};")
+        out.append("    for (int64_t i = 0; i < n; i++) items[i] = zero;")
+        out.append("    HX_SET_ARR_ITEMS(out, items);")
+        out.append("    HX_SET_ARR_LEN(out, (int)n);")
+        out.append("    HX_SET_ARR_CAP(out, (int)n);")
+        out.append("    return out;")
+        out.append("}")
         hoisted = True
 
 if not hoisted:
