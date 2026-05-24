@@ -26,7 +26,7 @@ Append-only history sister of `INBOX.md`. Each entry starts with `## <ISO timest
 
 처방: shim 의 BASH_SOURCE resolve 단계 명시 — `realpath "${BASH_SOURCE[0]}"` 한 후 dirname 한 결과를 `__hexa_dir` 로.
 
-- [x] **shim BASH_SOURCE → realpath → dirname → pwd -P 체인 명시** — 1-line shim fix · RESOLVED (PR pending)
+- [x] **shim BASH_SOURCE → realpath → dirname → pwd -P 체인 명시** — 1-line shim fix · RESOLVED #878
 
 ## 2026-05-25T22:55Z — ubu-2 `hexa cc --regen` MVP-merge codegen l-value 버그 (from: PR #873 pool-ubu-stale 진단 부산물)
 
