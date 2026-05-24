@@ -2765,6 +2765,21 @@ fn gen2_stmt(node, depth) {
     return _pre + _body
 }
 
+// PROBE r16 Q1: bitwise `& | ^ << >>` require integer operands. The naked
+// `hexa_int(HX_INT(l) & HX_INT(r))` emission extracts garbage 0 from a
+// float/string-tagged value (e.g. `5.0 & 3` silently became 0). Canonical
+// Go/Rust treat a non-int bitwise operand as a TYPE ERROR. This helper emits a
+// GCC stmt-expr that binds both operands once (no double-eval of side effects),
+// throws "bitwise requires integer operands" on a non-int operand, then applies
+// the inline C bit op. TAG_CHAR is int-backed and bitwise-meaningful so it is
+// accepted alongside TAG_INT; everything else (float/string/array/...) throws.
+fn _bitop_guarded(c_op, l, r) {
+    return "({ HexaVal __bla = (" + l + "), __blb = (" + r + "); " +
+           "if (!(HX_IS_INT(__bla)||HX_TAG(__bla)==TAG_CHAR) || !(HX_IS_INT(__blb)||HX_TAG(__blb)==TAG_CHAR)) " +
+           "hexa_throw(hexa_str(\"bitwise requires integer operands\")); " +
+           "hexa_int(HX_INT(__bla) " + c_op + " HX_INT(__blb)); })"
+}
+
 fn _gen2_stmt_inner(node, depth) {
     let pad = gen2_indent(depth)
     let k = node.kind
@@ -2976,19 +2991,19 @@ fn _gen2_stmt_inner(node, depth) {
             return pad + lhs + " = hexa_pow(" + lhs + ", " + rhs + ");\n"
         }
         if op == "<<" {
-            return pad + lhs + " = hexa_int(HX_INT(" + lhs + ") << HX_INT(" + rhs + "));\n"
+            return pad + lhs + " = " + _bitop_guarded("<<", lhs, rhs) + ";\n"
         }
         if op == ">>" {
-            return pad + lhs + " = hexa_int(HX_INT(" + lhs + ") >> HX_INT(" + rhs + "));\n"
+            return pad + lhs + " = " + _bitop_guarded(">>", lhs, rhs) + ";\n"
         }
         if op == "|" {
-            return pad + lhs + " = hexa_int(HX_INT(" + lhs + ") | HX_INT(" + rhs + "));\n"
+            return pad + lhs + " = " + _bitop_guarded("|", lhs, rhs) + ";\n"
         }
         if op == "&" {
-            return pad + lhs + " = hexa_int(HX_INT(" + lhs + ") & HX_INT(" + rhs + "));\n"
+            return pad + lhs + " = " + _bitop_guarded("&", lhs, rhs) + ";\n"
         }
         if op == "^" {
-            return pad + lhs + " = hexa_int(HX_INT(" + lhs + ") ^ HX_INT(" + rhs + "));\n"
+            return pad + lhs + " = " + _bitop_guarded("^", lhs, rhs) + ";\n"
         }
         return pad + "/* compound " + op + " */\n"
     }
@@ -5099,12 +5114,14 @@ fn gen2_expr(node) {
         if op == ">=" { return "hexa_cmp_ge(" + l + ", " + r + ")" }
         if op == "&&" { return "hexa_bool(hexa_truthy(" + l + ") && hexa_truthy(" + r + "))" }
         if op == "||" { return "hexa_bool(hexa_truthy(" + l + ") || hexa_truthy(" + r + "))" }
-        // Bitwise int ops — expect TAG_INT operands; use HX_INT accessor
-        if op == "&" { return "hexa_int(HX_INT(" + l + ") & HX_INT(" + r + "))" }
-        if op == "|" { return "hexa_int(HX_INT(" + l + ") | HX_INT(" + r + "))" }
-        if op == "^" { return "hexa_int(HX_INT(" + l + ") ^ HX_INT(" + r + "))" }
-        if op == "<<" { return "hexa_int(HX_INT(" + l + ") << HX_INT(" + r + "))" }
-        if op == ">>" { return "hexa_int(HX_INT(" + l + ") >> HX_INT(" + r + "))" }
+        // Bitwise int ops — require TAG_INT (or int-backed TAG_CHAR) operands.
+        // _bitop_guarded throws "bitwise requires integer operands" on a
+        // float/string operand instead of silently extracting 0 (PROBE r16 Q1).
+        if op == "&" { return _bitop_guarded("&", l, r) }
+        if op == "|" { return _bitop_guarded("|", l, r) }
+        if op == "^" { return _bitop_guarded("^", l, r) }
+        if op == "<<" { return _bitop_guarded("<<", l, r) }
+        if op == ">>" { return _bitop_guarded(">>", l, r) }
         if op == "??" { return "hexa_null_coal(" + l + ", " + r + ")" }
         if op == "**" { return "hexa_pow(" + l + ", " + r + ")" }
         // ── as cast: x as int / x as float / x as string / x as bool ──
