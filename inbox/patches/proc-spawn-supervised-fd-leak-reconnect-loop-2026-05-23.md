@@ -1,5 +1,10 @@
 # `proc_spawn_supervised` FD/process leak in long-running reconnect loop — ~100k cycles → `fork: Resource temporarily unavailable`
 
+**Status (2026-05-25)**: stdlib-side HARDENED · caller-side HANDED-OFF to anima.
+- §5 Option (1)'s paired-cleanup verb **already exists** as `proc_reap(pid)` (= `proc_kill` + `proc_deregister`; documented `defer { proc_reap(pid) }` idiom). No `_v2` handle/signature change needed (g33 — don't add a redundant API).
+- The genuine stdlib gap — §4(b) a SIGTERM-ignoring child (`nc`/`websocat` in some modes) surviving cleanup — is now closed: `proc_kill` escalates to `kill -KILL` (pgrp+pid) when a `kill -0` liveness probe shows the process still alive after a ~250 ms grace window, gated so a cleanly-exited pid is never re-killed (no pid-reuse hit). Verified: TERM-ignoring live proc → KILLed; TERM-respecting proc → early-break ~0 overhead.
+- §4(a) FIFO inode leak + §4(b) child accumulation are **caller-side** — `proc_spawn_supervised` itself only does `setsid/nohup sh -c … & echo $!` + registry append; it never `mkfifo`s. The leaking FIFOs + per-reconnect children are created by the caller (anima `akida_bridge` nc_spawn helper). Remediation handed to anima: call `proc_reap(old_pid)` on each reconnect before respawn, and `unlink` your own FIFO paths.
+
 ## §1 — TL;DR
 
 `stdlib/proc.hexa::proc_spawn_supervised` + caller-side reconnect loop (각 iter 마다

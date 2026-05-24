@@ -301,11 +301,23 @@ fn proc_deregister(pid: int) -> bool {
 //
 // Tries `kill -TERM -PID` (pgrp) first to cascade-kill worker trees
 // spawned under the setsid path, then `kill -TERM PID` as the always-
-// applicable fallback. Returns true once the exec shell completes.
+// applicable fallback. Then escalates to `kill -KILL` IF the process is
+// still alive after a short grace window — a child that ignores SIGTERM
+// (e.g. `nc`/`websocat` in some modes) would otherwise survive proc_reap,
+// so a reconnect loop accumulates live processes until `fork: Resource
+// temporarily unavailable`. The KILL is gated on a `kill -0` liveness probe
+// so a process that exited cleanly during the grace window is NOT re-killed
+// (avoids hitting a recycled pid). Repro:
+// inbox/patches/proc-spawn-supervised-fd-leak-reconnect-loop-2026-05-23.md.
 //
-// Idempotent: safe to call on a dead pid (both kills silently no-op).
+// Idempotent: safe to call on a dead pid (all kills silently no-op).
 fn proc_kill(pid: int) -> bool {
-    let out = to_string(exec("kill -TERM -" + to_string(pid) + " 2>/dev/null; kill -TERM " + to_string(pid) + " 2>/dev/null; echo done")).trim()
+    let p = to_string(pid)
+    let out = to_string(exec(
+        "kill -TERM -" + p + " 2>/dev/null; kill -TERM " + p + " 2>/dev/null; "
+        + "a=1; for _i in 1 2 3 4 5; do kill -0 " + p + " 2>/dev/null || { a=0; break; }; sleep 0.05; done; "
+        + "[ \"$a\" = 1 ] && { kill -KILL -" + p + " 2>/dev/null; kill -KILL " + p + " 2>/dev/null; }; echo done"
+    )).trim()
     return out == "done"
 }
 
