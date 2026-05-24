@@ -1,5 +1,7 @@
 # sidecar skill `--root` 빈-바이너리 버그 + pool-route 전면 escalate — CARDIO+ paper 작업서 발견
 
+**Status (2026-05-25)**: #1·#2 → **sidecar INBOX 도메인 이관** (g36) · sidecar PR #118 MERGED (`dancinlab/sidecar` `INBOX.md`+`INBOX.log.md`, 수정은 sidecar 후속). #3 (`hexa verify --expr` ubu-2 `verify_cli.hexa` build segfault)은 hexa-lang 소관으로 잔류 — 이 파일이 #3 트래커.
+
 **Reporter**: demiurge (CARDIO+ 메타도메인 X10 PAPER 작업 · 2026-05-25)
 **Severity**: high (skill 2종 완전 차단 · 모든 Bash가 Linux host로 강제 → macOS-only 자원 도달 불가)
 **Affected**: sidecar skill wrapper (`_imagine.hexa` · `_paper.hexa` · 동일 `--root` 패턴 쓰는 skill 전부) + pool-route PreToolUse hook
@@ -92,7 +94,8 @@ read-only (`rubric`/`--fence`)는 작동 · `--expr` (recompute) build만 segfau
 
 ## metadata
 ```
-status: proposed
+status: handed-off
+handoff: sidecar PR #118 (#1·#2) · #3 hexa-lang 잔류
 type: infra-regression
 priority: P1 (#1·#2 skill 전면 차단 · #3 V2 push blocker)
 size: hook allowlist (#2) ~30 LOC · wrapper guard (#1) ~5 LOC × N skills · verify_cli segfault (#3) 조사 필요
