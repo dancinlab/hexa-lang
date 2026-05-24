@@ -1,0 +1,430 @@
+// stdlib/cluster/core_kmeans_test.hexa
+//
+// Self-contained smoke test for stdlib/cluster/core_kmeans.hexa. `hexa build`
+// does not flatten cross-module `import "stdlib/..."` for a single test file
+// — so core_distance + core_kmeans bodies are inlined verbatim, same pattern
+// as core_knn_test.hexa.
+//
+// Coverage:
+//   - 2 well-separated clusters: kmeans_fit recovers the true split (up to
+//     label permutation).
+//   - WCSS strictly decreases each Lloyd iteration on a non-trivial dataset,
+//     until convergence (the built-in falsifier for Lloyd's algorithm).
+//   - Determinism: same (x, k, max_iter, seed) yields identical labels across
+//     repeated invocations.
+//   - k=1 edge case: every point labels 0.
+//   - k=0 / empty-x defined fallbacks.
+
+// ─── INLINED FROM stdlib/cluster/core_distance.hexa ───
+fn euclidean(a: [float], b: [float]) -> float {
+    let n = len(a)
+    if n != len(b) { return 0.0 }
+    let mut sum = 0.0
+    let mut i = 0
+    while i < n {
+        let d = a[i] - b[i]
+        sum = sum + d * d
+        i = i + 1
+    }
+    return sqrt(sum)
+}
+// ─── END core_distance INLINE ───
+
+// ─── INLINED FROM stdlib/cluster/core_kmeans.hexa ───
+fn _kmeans_lcg_next(state: int) -> int {
+    let a = 1103515245
+    let c = 12345
+    let m = 2147483648
+    let mut s = state * a + c
+    let q = s / m
+    s = s - q * m
+    if s < 0 { s = s + m }
+    return s
+}
+
+fn _kmeans_pick_init_indices(n: int, k: int, seed: int) -> [int] {
+    if k <= 0 || n <= 0 { return [] }
+    let mut state = seed
+    state = _kmeans_lcg_next(state + 1)
+
+    let mut picked: [int] = []
+    let mut taken: [bool] = []
+    let mut t = 0
+    while t < n {
+        taken = taken + [false]
+        t = t + 1
+    }
+
+    let mut want = k
+    if want > n { want = n }
+
+    let mut found = 0
+    let max_attempts = (n + k) * 8 + 64
+    let mut attempts = 0
+    while found < want && attempts < max_attempts {
+        state = _kmeans_lcg_next(state)
+        let idx = state - (state / n) * n
+        if taken[idx] == false {
+            taken[idx] = true
+            picked = picked + [idx]
+            found = found + 1
+        }
+        attempts = attempts + 1
+    }
+    let mut scan = 0
+    while found < want && scan < n {
+        if taken[scan] == false {
+            taken[scan] = true
+            picked = picked + [scan]
+            found = found + 1
+        }
+        scan = scan + 1
+    }
+    return picked
+}
+
+fn wcss(x: [[float]], labels: [int], centroids: [[float]]) -> float {
+    let n = len(x)
+    if n == 0 { return 0.0 }
+    if n != len(labels) { return 0.0 }
+    let k = len(centroids)
+    if k == 0 { return 0.0 }
+
+    let mut total = 0.0
+    let mut i = 0
+    while i < n {
+        let lab = labels[i]
+        if lab >= 0 && lab < k {
+            let d = euclidean(x[i], centroids[lab])
+            total = total + d * d
+        }
+        i = i + 1
+    }
+    return total
+}
+
+fn _kmeans_assign(x: [[float]], centroids: [[float]]) -> [int] {
+    let n = len(x)
+    let k = len(centroids)
+    let mut labels: [int] = []
+    let mut i = 0
+    while i < n {
+        let mut best = 0
+        let mut best_d = euclidean(x[i], centroids[0])
+        let mut j = 1
+        while j < k {
+            let d = euclidean(x[i], centroids[j])
+            if d < best_d {
+                best_d = d
+                best = j
+            }
+            j = j + 1
+        }
+        labels = labels + [best]
+        i = i + 1
+    }
+    return labels
+}
+
+fn _kmeans_recompute(x: [[float]],
+                     labels: [int],
+                     centroids_prev: [[float]],
+                     k: int) -> [[float]] {
+    let n = len(x)
+    if n == 0 { return centroids_prev }
+    let dim = len(x[0])
+
+    let mut sums: [[float]] = []
+    let mut counts: [int] = []
+    let mut a = 0
+    while a < k {
+        let mut row: [float] = []
+        let mut b = 0
+        while b < dim {
+            row = row + [0.0]
+            b = b + 1
+        }
+        sums = sums + [row]
+        counts = counts + [0]
+        a = a + 1
+    }
+
+    let mut i = 0
+    while i < n {
+        let lab = labels[i]
+        if lab >= 0 && lab < k {
+            let mut d = 0
+            while d < dim {
+                sums[lab][d] = sums[lab][d] + x[i][d]
+                d = d + 1
+            }
+            counts[lab] = counts[lab] + 1
+        }
+        i = i + 1
+    }
+
+    let mut centroids_new: [[float]] = []
+    let mut c = 0
+    while c < k {
+        if counts[c] == 0 {
+            centroids_new = centroids_new + [centroids_prev[c]]
+        } else {
+            let cnt = counts[c]
+            let mut row: [float] = []
+            let mut d = 0
+            while d < dim {
+                row = row + [sums[c][d] / to_float(cnt)]
+                d = d + 1
+            }
+            centroids_new = centroids_new + [row]
+        }
+        c = c + 1
+    }
+    return centroids_new
+}
+
+fn _kmeans_labels_equal(a: [int], b: [int]) -> bool {
+    let n = len(a)
+    if n != len(b) { return false }
+    let mut i = 0
+    while i < n {
+        if a[i] != b[i] { return false }
+        i = i + 1
+    }
+    return true
+}
+
+fn kmeans_fit(x: [[float]], k: int, max_iter: int, seed: int) -> [int] {
+    let n = len(x)
+    if n == 0 { return [] }
+
+    if k <= 0 {
+        let mut zeros: [int] = []
+        let mut i = 0
+        while i < n {
+            zeros = zeros + [0]
+            i = i + 1
+        }
+        return zeros
+    }
+
+    let init_idx = _kmeans_pick_init_indices(n, k, seed)
+    let k_eff = len(init_idx)
+    let mut centroids: [[float]] = []
+    let mut s = 0
+    while s < k_eff {
+        centroids = centroids + [x[init_idx[s]]]
+        s = s + 1
+    }
+
+    let mut labels = _kmeans_assign(x, centroids)
+
+    let mut iter = 0
+    while iter < max_iter {
+        let new_centroids = _kmeans_recompute(x, labels, centroids, k_eff)
+        let new_labels = _kmeans_assign(x, new_centroids)
+        let stable = _kmeans_labels_equal(labels, new_labels)
+        centroids = new_centroids
+        labels = new_labels
+        if stable { return labels }
+        iter = iter + 1
+    }
+    return labels
+}
+// ─── END core_kmeans INLINE ───
+
+// Instrumented Lloyd's loop for the WCSS-monotone falsifier: returns the wcss
+// trace (one entry per iter, starting at iter=0 post-init). Mirrors kmeans_fit
+// step-for-step.
+fn _kmeans_wcss_trace(x: [[float]], k: int, max_iter: int, seed: int) -> [float] {
+    let n = len(x)
+    if n == 0 || k <= 0 { return [] }
+
+    let init_idx = _kmeans_pick_init_indices(n, k, seed)
+    let k_eff = len(init_idx)
+    let mut centroids: [[float]] = []
+    let mut s = 0
+    while s < k_eff {
+        centroids = centroids + [x[init_idx[s]]]
+        s = s + 1
+    }
+    let mut labels = _kmeans_assign(x, centroids)
+
+    let mut trace: [float] = []
+    trace = trace + [wcss(x, labels, centroids)]
+
+    let mut iter = 0
+    while iter < max_iter {
+        let new_centroids = _kmeans_recompute(x, labels, centroids, k_eff)
+        let new_labels = _kmeans_assign(x, new_centroids)
+        let stable = _kmeans_labels_equal(labels, new_labels)
+        centroids = new_centroids
+        labels = new_labels
+        trace = trace + [wcss(x, labels, centroids)]
+        if stable { return trace }
+        iter = iter + 1
+    }
+    return trace
+}
+
+fn check(name: string, ok: bool, pass: int, fail: int) -> [int] {
+    if ok {
+        print("PASS  " + name)
+        return [pass + 1, fail]
+    } else {
+        print("FAIL  " + name)
+        return [pass, fail + 1]
+    }
+}
+
+fn main() {
+    let mut pass = 0
+    let mut fail = 0
+
+    // ── 2 well-separated clusters in 2D ──
+    // Group A around (0, 0); Group B around (10, 10).
+    let x2 = [
+        [0.0, 0.0],
+        [0.1, 0.0],
+        [0.0, 0.1],
+        [0.2, 0.1],
+        [10.0, 10.0],
+        [10.1, 10.0],
+        [10.0, 10.1],
+        [10.2, 10.1]
+    ]
+
+    // ── TEST 1: kmeans_fit recovers the true split (up to label permutation) ──
+    let labels = kmeans_fit(x2, 2, 50, 42)
+
+    // Length-correct.
+    let r1 = check("kmeans_fit returns one label per point",
+                   len(labels) == 8, pass, fail)
+    pass = r1[0]; fail = r1[1]
+
+    // Same cluster within each group; different cluster between groups.
+    let same_a = labels[0] == labels[1] && labels[1] == labels[2] && labels[2] == labels[3]
+    let same_b = labels[4] == labels[5] && labels[5] == labels[6] && labels[6] == labels[7]
+    let split_ab = labels[0] != labels[4]
+    let r2 = check("kmeans_fit recovers 2-cluster split (group A homogeneous)",
+                   same_a, pass, fail)
+    pass = r2[0]; fail = r2[1]
+    let r3 = check("kmeans_fit recovers 2-cluster split (group B homogeneous)",
+                   same_b, pass, fail)
+    pass = r3[0]; fail = r3[1]
+    let r4 = check("kmeans_fit recovers 2-cluster split (A ≠ B)",
+                   split_ab, pass, fail)
+    pass = r4[0]; fail = r4[1]
+
+    // ── TEST 2: WCSS is non-increasing across Lloyd iterations ──
+    // Lloyd's algorithm theorem: each (assign + recompute) cycle weakly
+    // decreases wcss. We assert non-increase across the full trace and a
+    // strict decrease somewhere (= real work happened before convergence).
+    let trace = _kmeans_wcss_trace(x2, 2, 50, 42)
+    let mut monotone = true
+    let mut had_strict = false
+    let mut ti = 1
+    while ti < len(trace) {
+        if trace[ti] > trace[ti - 1] + 0.000001 { monotone = false }
+        if trace[ti] < trace[ti - 1] - 0.000001 { had_strict = true }
+        ti = ti + 1
+    }
+    let r5 = check("kmeans wcss non-increasing across iters",
+                   monotone, pass, fail)
+    pass = r5[0]; fail = r5[1]
+    let r6 = check("kmeans wcss strictly decreases at least once (real work)",
+                   had_strict, pass, fail)
+    pass = r6[0]; fail = r6[1]
+
+    // ── TEST 3: Determinism — same seed → same labels ──
+    let labels_a = kmeans_fit(x2, 2, 50, 42)
+    let labels_b = kmeans_fit(x2, 2, 50, 42)
+    let mut det_ok = len(labels_a) == len(labels_b)
+    let mut di = 0
+    while di < len(labels_a) && det_ok {
+        if labels_a[di] != labels_b[di] { det_ok = false }
+        di = di + 1
+    }
+    let r7 = check("kmeans_fit deterministic (same seed → same labels)",
+                   det_ok, pass, fail)
+    pass = r7[0]; fail = r7[1]
+
+    // ── TEST 4: Determinism extends to 3 clusters too ──
+    let x3 = [
+        [0.0, 0.0],
+        [0.1, 0.0],
+        [10.0, 0.0],
+        [10.1, 0.0],
+        [0.0, 10.0],
+        [0.1, 10.0]
+    ]
+    let l3a = kmeans_fit(x3, 3, 50, 7)
+    let l3b = kmeans_fit(x3, 3, 50, 7)
+    let mut det3_ok = len(l3a) == len(l3b)
+    let mut di3 = 0
+    while di3 < len(l3a) && det3_ok {
+        if l3a[di3] != l3b[di3] { det3_ok = false }
+        di3 = di3 + 1
+    }
+    let r8 = check("kmeans_fit 3-cluster determinism",
+                   det3_ok, pass, fail)
+    pass = r8[0]; fail = r8[1]
+
+    // 3-cluster split: same-pair labels equal, different-pair labels distinct.
+    let pair01 = l3a[0] == l3a[1]
+    let pair23 = l3a[2] == l3a[3]
+    let pair45 = l3a[4] == l3a[5]
+    let distinct = l3a[0] != l3a[2] && l3a[2] != l3a[4] && l3a[0] != l3a[4]
+    let r9 = check("kmeans_fit 3-cluster recovers true split",
+                   pair01 && pair23 && pair45 && distinct, pass, fail)
+    pass = r9[0]; fail = r9[1]
+
+    // ── TEST 5: k=1 edge case → all labels 0 ──
+    let l1 = kmeans_fit(x2, 1, 50, 13)
+    let mut all_zero = len(l1) == 8
+    let mut zi = 0
+    while zi < len(l1) && all_zero {
+        if l1[zi] != 0 { all_zero = false }
+        zi = zi + 1
+    }
+    let r10 = check("kmeans_fit k=1 → all labels 0",
+                    all_zero, pass, fail)
+    pass = r10[0]; fail = r10[1]
+
+    // ── TEST 6: k=0 defined fallback → all labels 0, no trap ──
+    let l0 = kmeans_fit(x2, 0, 50, 13)
+    let mut zero_fallback = len(l0) == 8
+    let mut z0 = 0
+    while z0 < len(l0) && zero_fallback {
+        if l0[z0] != 0 { zero_fallback = false }
+        z0 = z0 + 1
+    }
+    let r11 = check("kmeans_fit k=0 → defined-fallback all-zero",
+                    zero_fallback, pass, fail)
+    pass = r11[0]; fail = r11[1]
+
+    // ── TEST 7: empty x → empty labels (no trap) ──
+    let empty_x: [[float]] = []
+    let empty_labels = kmeans_fit(empty_x, 3, 50, 1)
+    let r12 = check("kmeans_fit empty x → empty labels",
+                    len(empty_labels) == 0, pass, fail)
+    pass = r12[0]; fail = r12[1]
+
+    // ── TEST 8: wcss is 0 when every point sits on its centroid ──
+    let single = [[1.0, 2.0], [1.0, 2.0]]
+    let single_lab = [0, 0]
+    let single_cen = [[1.0, 2.0]]
+    let w0 = wcss(single, single_lab, single_cen)
+    let r13 = check("wcss = 0 when points coincide with centroid",
+                    w0 < 0.000001 && w0 > 0.0 - 0.000001, pass, fail)
+    pass = r13[0]; fail = r13[1]
+
+    print("")
+    print("core_kmeans: " + to_string(pass) + "/" + to_string(pass + fail) + " passed")
+    if fail == 0 {
+        print("ALL PASS — stdlib/cluster/core_kmeans")
+    } else {
+        print("FAILURES present")
+        exit(1)
+    }
+}
