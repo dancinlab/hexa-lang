@@ -381,6 +381,51 @@ For each Tier-A sub-phase:
 
 ## Log
 
+### 2026-05-25 — Phase 1 step-1 cycle 66: _memcpy source-rewrite CLOSED (post-cycle-65 deferred)
+
+- ✅ `_memcpy` removed from `aprime_cc` undefined externs via source-level
+  rewrite at the 2 sites cycle-51 identified — `hexa_valstruct_set_by_key`
+  (`self/runtime_core.c:~3394`) + `hexa_val_heapify` (`self/runtime_core.c:~4078`).
+  `*dst = *src` aggregate-assign on 160-byte `HexaValStruct` → explicit byte-loop
+  `for (size_t i = 0; i < sizeof(HexaValStruct); i++) ((char*)dst)[i] = ((char*)src)[i];`
+- Pre-flight micro-oracle (clang -Oz -arch arm64 -fno-builtin-memcpy on
+  isolated 160-byte struct): byte-loop emits 8-instruction ldrb/strb inner
+  loop, NO `_memcpy` reference. Aggregate-copy on same struct still emits
+  `U _memcpy`. Empirically confirms cycle-51 diagnosis
+- `nm build/aprime_cc | grep -i memcpy` → only `t _hxlcl_memcpy` (the
+  in-binary definition); zero undefined `_memcpy` reference
+- ⚠️ Smoke (`exit(6*7)==42`) status: **FAIL** — pre-existing regression
+  unrelated to the byte-loop rewrite. `aprime_cc` exits 0 silently
+  after `post_parse` phase, never reaches `emit_asm`. Same hang pattern
+  reproduces with the renamed binary (rules out the external SIGKILL
+  matcher per [[reference_hexa_basename_sigkill_workaround_2026_05_19]])
+- ⚠️ Externs count: **30** (vs cycle-65 claim of 5). Many cycle 60-62
+  closures (`_open`, `_close`, `_execve`, `_fork`, `_pipe`, `_read`,
+  `_write`, posix_spawn family) appear to have regressed in later cycles
+  (likely 2026-05-22+ stdlib/runtime ports introducing new direct syscalls
+  via `hxlcl_*` wrappers in non-aprime build paths). Out of scope this
+  cycle — `_memcpy` is the on-axis target
+- **Build-unblock side-fix**: stage 4 clang refused with `use of undeclared
+  identifier '__arr_alloc_items_zero{,_int}'` (`stdlib/runtime/numeric.hexa`
+  cycle-105 codegen-inline builtins were never wired into the pre-built
+  `self/native/hexa_v2` transpiler). Added plain C bodies in `self/runtime.c`
+  next to `hexa_array_zeros_float` so the `hexa_call1(__arr_alloc_items_zero, n)`
+  fn-pointer dispatch emitted by hexa_v2 resolves. Newer hexa_v2 rebuilds
+  with proper codegen.hexa wiring will inline these calls → dead-strip
+- **Files touched**:
+  - `self/runtime_core.c` — 2 byte-loop rewrites (~+19 / -2 lines)
+  - `self/runtime.c` — 2 new `HexaVal __arr_alloc_items_zero{,_int}(HexaVal nv)`
+    bodies (+34 lines)
+- Acceptance line: `cycle 66: _memcpy CLOSED · externs ?→30 (cycle-65
+  baseline 5 unreachable — pre-existing build-broken before this patch)
+  · smoke FAIL (pre-existing post-cycle-65 silent-exit at post_parse)
+  · PR <pending>`
+- **Follow-up**: (a) bisect post-cycle-65 commits to find smoke regression
+  point; (b) wire `__arr_alloc_items_zero{,_int}` lowering into
+  `self/codegen.hexa` (next to `__arr_set_cap` at line 5658) + add to
+  `compiler/check/bind.hexa` allowlist + regen `hexa_v2` so the C stub
+  in runtime.c becomes dead-strip target
+
 ### 2026-05-22 — step 3 cycle 108: map set/remove ALIASING ports (잔여 #5 100% surface closure 6/6)
 
 Closes the remaining 2 of 6 잔여 #5 ops (`hexa_map_set` + `hexa_map_remove`)

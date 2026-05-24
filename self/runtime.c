@@ -3889,6 +3889,40 @@ HexaVal hexa_array_fill(HexaVal arr, HexaVal v) {
 //    are shared. Caller MUST guarantee no other live alias. Used at
 //    end-of-train_step to reclaim block_hs / fwd / bwd buffers known to
 //    be local. Returns hexa_void().
+// RUNTIME.md cycle 66 — aprime_cc build-unblock: the precompiled hexa_v2 in
+// tool/build_aprime.sh predates cycle 105 and does NOT inline these calls —
+// it emits hexa_call1(__arr_alloc_items_zero, n). Provide plain C symbols
+// matching the codegen-inline contract so the function-pointer dispatch
+// resolves. Newer hexa_v2 rebuilds will inline these away (dead-strip).
+HexaVal __arr_alloc_items_zero(HexaVal nv) {
+    HexaVal out = {.tag=TAG_ARRAY};
+    HX_SET_ARR_PTR(out, (HexaArr*)calloc(1, sizeof(HexaArr)));
+    int64_t n = HX_IS_INT(nv) ? HX_INT(nv) : (int64_t)__hx_to_double(nv);
+    if (n <= 0) return out;
+    HexaVal* items = (HexaVal*)malloc(sizeof(HexaVal) * (size_t)n);
+    if (!items) { fprintf(stderr, "OOM __arr_alloc_items_zero n=%lld\n", (long long)n); exit(1); }
+    HexaVal zero = {.tag=TAG_FLOAT, .f=0.0};
+    for (int64_t i = 0; i < n; i++) items[i] = zero;
+    HX_SET_ARR_ITEMS(out, items);
+    HX_SET_ARR_LEN(out, (int)n);
+    HX_SET_ARR_CAP(out, (int)n);
+    return out;
+}
+HexaVal __arr_alloc_items_zero_int(HexaVal nv) {
+    HexaVal out = {.tag=TAG_ARRAY};
+    HX_SET_ARR_PTR(out, (HexaArr*)calloc(1, sizeof(HexaArr)));
+    int64_t n = HX_IS_INT(nv) ? HX_INT(nv) : (int64_t)__hx_to_double(nv);
+    if (n <= 0) return out;
+    HexaVal* items = (HexaVal*)malloc(sizeof(HexaVal) * (size_t)n);
+    if (!items) { fprintf(stderr, "OOM __arr_alloc_items_zero_int n=%lld\n", (long long)n); exit(1); }
+    HexaVal zero = {.tag=TAG_INT, .i=0};
+    for (int64_t i = 0; i < n; i++) items[i] = zero;
+    HX_SET_ARR_ITEMS(out, items);
+    HX_SET_ARR_LEN(out, (int)n);
+    HX_SET_ARR_CAP(out, (int)n);
+    return out;
+}
+
 // Step-3 cycle 105 port — single-shot zeroed-array fast-paths now have
 // hexa-source bodies (rt_array_zeros_float / rt_array_alloc) backed by the
 // __arr_alloc_items_zero{,_int} codegen-inline builtins. The C wrapper

@@ -3391,7 +3391,15 @@ HexaVal hexa_valstruct_set_by_key(HexaVal v, const char* key, HexaVal val) {
         cow = (HexaValStruct*)malloc(sizeof(HexaValStruct));
         if (!cow) { fprintf(stderr, "OOM in valstruct COW\n"); exit(1); }
     }
-    *cow = *orig;
+    // RUNTIME.md cycle 66 — _memcpy source rewrite (per cycle-51 deferred).
+    // Explicit byte-loop instead of `*cow = *orig;` aggregate-assign, which
+    // clang -Oz reverse-pattern-matches into libc _memcpy below the
+    // -fno-builtin-memcpy flag layer (cycle-51 empirically confirmed).
+    {
+        const char* __mcs = (const char*)orig;
+        char* __mcd = (char*)cow;
+        for (size_t __mci = 0; __mci < sizeof(HexaValStruct); __mci++) __mcd[__mci] = __mcs[__mci];
+    }
     cow->from_arena = use_arena;
     HexaVal out = v;
     HX_SET_VS(out, cow);
@@ -4075,7 +4083,14 @@ HexaVal hexa_val_heapify(HexaVal v) {
                 #undef HX_SCALAR_TAG
                 HexaValStruct* hcow = (HexaValStruct*)malloc(sizeof(HexaValStruct));
                 if (hcow) {
-                    *hcow = *HX_VS(v);
+                    // RUNTIME.md cycle 66 — _memcpy source rewrite (cycle-51 deferred).
+                    // Byte-loop instead of `*hcow = *HX_VS(v);` aggregate-assign which
+                    // clang -Oz reverse-pattern-matches into libc _memcpy.
+                    {
+                        const char* __mcs = (const char*)HX_VS(v);
+                        char* __mcd = (char*)hcow;
+                        for (size_t __mci = 0; __mci < sizeof(HexaValStruct); __mci++) __mcd[__mci] = __mcs[__mci];
+                    }
                     hcow->from_arena = 0;
                     hcow->str_val      = hexa_val_heapify(hcow->str_val);
                     hcow->char_val     = hexa_val_heapify(hcow->char_val);
