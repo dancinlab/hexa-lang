@@ -1,3 +1,8 @@
+---
+slug: verify-cli-supercon-fns-2026-05-24
+status: resolved
+---
+
 # `hexa verify --expr` calculator — superconductivity domain fn 7개 누락 (RTSC V2 push 차단)
 
 **Reporter**: demiurge (RTSC 캠페인 V2 🔵 push · 2026-05-24)

@@ -1,3 +1,8 @@
+---
+slug: hexa-return-void-mistranslate-2026-05-24
+status: archived
+---
+
 # hexa-lang `return void` mistranslate — bare void-literal return → undeclared identifier (B14 saga, 2026-05-24)
 
 **Status (2026-05-24)**: ARCHIVED — not-reproducible · agent misdiagnosis 추정 · `return void` parser/codegen 정상 동작 확인.

@@ -1,3 +1,8 @@
+---
+slug: runpod-env-var-wiring-audit-helper-2026-05-24
+status: resolved
+---
+
 # `hexa cloud` / runpod — dispatcher → train script env-var wiring audit (G5)
 
 > **Status (impl-in-flight):** filing PR #662 MERGED 2026-05-24. Option A 구현 (`cloud_validate_env_passthrough` + 8/8 falsifier 케이스) `feat/runpod-env-passthrough-audit-2026-05-24` 에서 LANDING 중. Sibling to PR #627 (G1-G4) — 별도 patch 로 분리 (g54 review-only 준수).
