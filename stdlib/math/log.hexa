@@ -1,0 +1,21 @@
+// HEXA Standard Library — math/log
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// log2(x) via libm log + reciprocal-of-ln(2) factor.
+//
+// Surface:
+//   pub fn log2(x: float) -> float    // log base 2
+//
+// Reuses LN2_INV constant style from stdlib/iit_ei.hexa.
+// Reference: anima/HEXAD/LIFE/lib/phi_native.hexa § phi_entropy
+// used log(x)/log(2.0) inline — this module standardises the
+// pattern so 247+ duplicate sites across anima can sweep to a
+// single canonical impl (.STDLIB survey 2026-05-24).
+
+let LN2_INV = 1.4426950408889634   // 1 / ln(2)
+
+pub fn log2(x: float) -> float {
+    return log(x) * LN2_INV
+}
