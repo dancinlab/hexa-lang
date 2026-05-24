@@ -1,0 +1,231 @@
+// HEXA Standard Library — signal/core_fft
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Cooley-Tukey radix-2 FFT / IFFT over flat real+imag float lists.
+// Promoted from anima HEXAD/VOICE/anima-voice/dsp_core.hexa
+// (`dsp_fft` / `dsp_ifft` + the `bit_reverse` / `log2_int` helpers) per the
+// STDLIB domain phase3 M1 (signal primitives).
+//
+//   X[k] = Σ_{m=0}^{N-1} x[m] · exp(-j·2π·k·m / N)        (forward, fft_native)
+//   x[m] = (1/N) · Σ_{k=0}^{N-1} X[k] · exp(+j·2π·k·m / N)  (inverse, ifft_native)
+//
+// Algorithm:
+//   1. Bit-reversal permutation of both real[] and imag[].
+//   2. Iterative butterfly passes, stride = 2, 4, 8, ... N. For each
+//      butterfly pair (a, b) with twiddle W = W_stride^k:
+//        a' = a + W·b      b' = a - W·b      (complex multiply + add)
+//      Twiddle: W_stride^k = cos(-2π·k/stride) + j·sin(-2π·k/stride).
+//   IFFT(X) = conj(FFT(conj(X))) / N.
+//
+// Requires N a power of 2. Output is the flat interleaved layout
+// [re0, im0, re1, im1, ...] (2·N floats), matching the anima baseline.
+//
+// NOTE on the trig path (byte-equality):
+//   The twiddle factors use the in-house Taylor `_cf_cos`/`_cf_sin` (range-
+//   reduced via `_cf_fmod`) reproduced VERBATIM from dsp_core.hexa — NOT the
+//   native libm `cos`/`sin` builtins. libm differs from the Taylor series at
+//   the bit level, so this preserves the frozen anima output bit-for-bit and
+//   lets a future anima sweep import this module and stay identical (cf. the
+//   same lesson documented in stdlib/info/entropy.hexa and
+//   stdlib/signal/voss_mccartney.hexa). The helpers are intentionally NOT
+//   replaced by native pow/exp/log/sin/cos.
+//
+// Surface:
+//   pub fn fft_native(real: [float], imag: [float], n: int) -> [float]
+//   pub fn ifft_native(real: [float], imag: [float], n: int) -> [float]
+//       // both return the flat interleaved [re0, im0, re1, im1, ...] layout.
+//       // n must be a power of 2; n <= 0 returns [].
+
+let CF_PI = 3.14159265358979323846
+let CF_TWO_PI = 6.28318530717958647692
+
+// ── float modulo: x mod m, always positive (verbatim fmod_native) ───────────
+
+fn _cf_fmod(x: float, m: float) -> float {
+    if m == 0.0 { return 0.0 }
+    let n = x / m
+    // Truncate toward zero. NOTE: the anima dsp_core baseline assigned the
+    // float `n` to an int-typed local and relied on implicit narrowing; this
+    // hexa codegen does NOT narrow on assignment, so the truncation is made
+    // explicit with `to_int(.)` (int64 cast = truncate-toward-zero, the exact
+    // semantics the original intended — preserves the math bit-for-bit).
+    let mut ni = 0
+    if n >= 0.0 {
+        ni = to_int(n)
+    } else {
+        ni = to_int(n) - 1
+    }
+    let mut result = x - ni * m
+    if result < 0.0 { result = result + m }
+    return result
+}
+
+// ── sin: Taylor 7th order, range-reduced to [-π, π] (verbatim sin_approx) ───
+// |error| < 0.00016 over full range.
+
+fn _cf_sin(x: float) -> float {
+    // Range reduction: bring x into [-PI, PI]
+    let t = _cf_fmod(x + CF_PI, CF_TWO_PI) - CF_PI
+
+    // Taylor series: sin(t) = t - t^3/6 + t^5/120 - t^7/5040
+    let t2 = t * t
+    let t3 = t2 * t
+    let t5 = t3 * t2
+    let t7 = t5 * t2
+
+    return t - t3 / 6.0 + t5 / 120.0 - t7 / 5040.0
+}
+
+// ── cos: sin(x + π/2) (verbatim cos_approx) ─────────────────────────────────
+
+fn _cf_cos(x: float) -> float {
+    return _cf_sin(x + CF_PI / 2.0)
+}
+
+// ── bit reversal: reverse the `bits` lowest bits of `x` (verbatim) ──────────
+
+fn _cf_bit_reverse(x: int, bits: int) -> int {
+    let mut result = 0
+    let mut val = x
+    let mut i = 0
+    while i < bits {
+        result = result * 2 + (val - (val / 2) * 2)  // result = result*2 + val%2
+        val = val / 2
+        i = i + 1
+    }
+    return result
+}
+
+// ── log2 for powers of 2 (verbatim log2_int) ────────────────────────────────
+
+fn _cf_log2_int(n: int) -> int {
+    let mut result = 0
+    let mut v = n
+    while v > 1 {
+        v = v / 2
+        result = result + 1
+    }
+    return result
+}
+
+// ── fft_native(real, imag, n): in-place Cooley-Tukey radix-2 FFT ────────────
+//
+// Byte-equal port of dsp_core.hexa::dsp_fft. Returns flat
+// [re0, im0, re1, im1, ...] (2·n floats). Requires n a power of 2.
+
+pub fn fft_native(real: [float], imag: [float], n: int) -> [float] {
+    if n <= 0 { return [] }
+    let bits = _cf_log2_int(n)
+
+    // Step 1: bit-reversal permutation into working arrays
+    let mut re = []
+    let mut im = []
+    let mut i = 0
+    while i < n {
+        let rev = _cf_bit_reverse(i, bits)
+        re = re.push(real[rev])
+        im = im.push(imag[rev])
+        i = i + 1
+    }
+
+    // Step 2: iterative butterfly passes
+    // stride doubles each stage: 2, 4, 8 ... n
+    let mut stride = 2
+    while stride <= n {
+        let half = stride / 2
+        let mut j = 0
+        while j < n {
+            let mut k = 0
+            while k < half {
+                // Twiddle factor: W_stride^k = exp(-j * 2*pi*k / stride)
+                let tw_re = _cf_cos(0.0 - CF_TWO_PI * k / stride)
+                let tw_im = _cf_sin(0.0 - CF_TWO_PI * k / stride)
+                let a_idx = j + k
+                let b_idx = j + k + half
+                // Complex multiply: tw * b
+                let tb_re = tw_re * re[b_idx] - tw_im * im[b_idx]
+                let tb_im = tw_re * im[b_idx] + tw_im * re[b_idx]
+                // Butterfly: a' = a + tw*b, b' = a - tw*b
+                let a_re = re[a_idx]
+                let a_im = im[a_idx]
+                // hexa lists are pass-by-value, so we rebuild with updated values
+                // We must build new arrays for each swap to avoid mutation issues.
+                // For efficiency we build temporary copies only of the two elements.
+                let new_a_re = a_re + tb_re
+                let new_a_im = a_im + tb_im
+                let new_b_re = a_re - tb_re
+                let new_b_im = a_im - tb_im
+                // Rebuild re and im with updated values at a_idx and b_idx.
+                // Since hexa arrays are pass-by-value and we cannot mutate in place,
+                // we rebuild the entire array. For small N (<=512) this is acceptable.
+                let mut re_new = []
+                let mut im_new = []
+                let mut q = 0
+                while q < n {
+                    if q == a_idx {
+                        re_new = re_new.push(new_a_re)
+                        im_new = im_new.push(new_a_im)
+                    } else if q == b_idx {
+                        re_new = re_new.push(new_b_re)
+                        im_new = im_new.push(new_b_im)
+                    } else {
+                        re_new = re_new.push(re[q])
+                        im_new = im_new.push(im[q])
+                    }
+                    q = q + 1
+                }
+                re = re_new
+                im = im_new
+                k = k + 1
+            }
+            j = j + stride
+        }
+        stride = stride * 2
+    }
+
+    // Pack output as interleaved [re0, im0, re1, im1, ...]
+    let mut out = []
+    let mut p = 0
+    while p < n {
+        out = out.push(re[p])
+        out = out.push(im[p])
+        p = p + 1
+    }
+    return out
+}
+
+// ── ifft_native(real, imag, n): inverse FFT ─────────────────────────────────
+//
+// Byte-equal port of dsp_core.hexa::dsp_ifft.
+// IFFT(X) = conj(FFT(conj(X))) / N — conjugate input, forward FFT, conjugate
+// output, divide by N. Returns flat [re0, im0, re1, im1, ...].
+
+pub fn ifft_native(real: [float], imag: [float], n: int) -> [float] {
+    if n <= 0 { return [] }
+
+    // Conjugate input: negate imaginary parts
+    let mut conj_im = []
+    let mut i = 0
+    while i < n {
+        conj_im = conj_im.push(0.0 - imag[i])
+        i = i + 1
+    }
+
+    // Forward FFT on conjugated input
+    let fft_out = fft_native(real, conj_im, n)
+
+    // Conjugate output and divide by N
+    let mut out = []
+    let inv_n = 1.0 / n
+    let mut j = 0
+    while j < n {
+        let re_val = fft_out[j * 2] * inv_n
+        let im_val = 0.0 - fft_out[j * 2 + 1] * inv_n
+        out = out.push(re_val)
+        out = out.push(im_val)
+        j = j + 1
+    }
+    return out
+}
