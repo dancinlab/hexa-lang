@@ -1,23 +1,23 @@
 # `stdlib/cloud` operational improvements — anima 2026-05-20 cycle pain points
 
-**Status**: meta-bundle-partial-2026-05-25 — 11-item anima cycle bundle. P1/P2/P4-list/P7-orphan/P9 CLOSED via cycle batches (#704/#715/#714/#764 등). **P5 (copy-to `-r`/`--recursive`) + P10 (run/exec 비정상종료 fail-tail) CLOSED via cloud CLI ergonomics 번들 2026-05-25.** Remaining: P3/P6/P8/P11 OPEN + P4 create-cascade/ssh-port/terminate OPEN → 각 별도 slug 권장.
+**Status**: near-CLOSED-2026-05-25 — 11-item anima cycle bundle. 번들1(2026-05-25, cloud 0.2.2): P5+P10. **번들2(2026-05-25, cloud 0.2.3): P3 (watch poll-loop + `--then-down` teardown) · P6 (copy `--verify-sha`) · P4 ssh-port verb CLOSED.** P1/P2/P4-list/P7-orphan/P9 = 이전 배치. **P8 DEFERRED** (run 시작 후 ssh detach 불가 — `nohup`+`--max-wall` 로 충족, 근거는 P8 bullet). 잔여 OPEN: P7 util-watchdog(부분) · P11(cosmetic) · P4 raw create-cascade(=`cloud rent` 가 search→create→wait→register 로 충족, 순수 create stub 만 미구현).
 
-> **Status (2026-05-25 sync):** P1 CLOSED · P2 (`--max-wall`) CLOSED #764 · P4 partial (list CLOSED, create-cascade/ssh-port/terminate OPEN) · **P5 (recursive copy-to) CLOSED** · P7 partial (orphan detection CLOSED, util-watchdog OPEN) · P9 superseded by P1 fix · **P10 (fail-tail) CLOSED** · P3/P6/P8/P11 OPEN. **Net: 5 of 11 CLOSED, 1 partial, 4 OPEN, 1 superseded.**
+> **Status (2026-05-25 sync v2):** P1 · P2(#764) · P3 · P4(list/ssh-port/terminate=down/create-cascade=rent) · P5 · P6 · P10 = **CLOSED** · P7 partial(orphan✅ util-watchdog OPEN) · P8 **DEFERRED** · P9 superseded · P11 OPEN(cosmetic). **Net: 7 of 11 CLOSED, 1 partial, 1 deferred, 1 superseded, 1 cosmetic.**
 >
 > - **P1 (run hang) — CLOSED** by PR #423 `7b8e15b3` `fix(runtime): exec_capture select()-multiplexed drain — kill pipe deadlock`. Root cause was in `hexa_exec_capture` (`self/runtime.c`), not `cloud_cli.hexa`. Sibling patch `cloud-cli-run-hang.md` already marked FIXED.
 > - **P2 (`--max-wall`) — OPEN.** No max-wall flag on `cloud run`. Now lower urgency since P1 hang is gone, but still useful for bounded predictable jobs. Out-of-scope for this sync.
-> - **P3 (`cloud watch`) — OPEN.** Partially substitutable today with `cloud diag <host> --pid N --log path` (PR #615) but not the auto-loop-until-dead pattern. Low priority per anima ranking.
-> - **P4 (runpod abstraction) — PARTIAL:**
->   - `cloud list` — **CLOSED** by PR #388 (`runpod_list_pods` runpodctl 2.x/1.x bridge) + PR #612 (`cloud list` / `cloud status` verbs).
->   - `cloud runpod create-cascade` — **OPEN.** Still hand-rolled GraphQL in anima dispatch scripts. Partially overlaps PR #629 (`cloud_bootstrap_sources` + `cloud_poll_until` + `cloud_run_with_wait`) which covers post-create orchestration but not create itself.
->   - `cloud runpod ssh-port <pod_id>` — **OPEN.** Endpoint-surface gap captured in PR #629 (`hexa-cloud-dispatcher-bootstrap-wait-endpoint`).
->   - `cloud runpod terminate <pod_id>` — **OPEN.** No idempotent terminate verb in cloud_cli.
+> - **P3 (`cloud watch`) — CLOSED.** `cloud watch <host> <pid> [--interval N] [--max-wait S] [--then-down <id> [--provider P]]` — `cloud_poll_opts` 를 interval 마다 loop, pid 사망 시 exit 0(경과초 출력) / max-wait 초과 시 124. `--max-wait 0`(기본)=무한 babysit. `--then-down` 으로 완료 시 자동 teardown(`_cloud_down`) → R2 "auto-loop + 종료" 패턴 완성.
+> - **P4 (runpod abstraction) — CLOSED (raw-create stub만 잔존):**
+>   - `cloud list` — **CLOSED** by PR #388 + PR #612.
+>   - create-cascade — **CLOSED (사실상).** `cloud rent <vast|runpod>` (#798) 가 search→create→wait-ssh→register cascade 수행. 순수 raw `create`(대기 없이 id만) 단독 verb 만 미구현 — 필요시 별도 slug.
+>   - `cloud ssh-port <id> [--provider]` — **CLOSED.** 기존 `runpod_get_ssh_port`/`vast_ssh_endpoint` fn 을 verb 로 wiring (live host:port 출력).
+>   - terminate — **CLOSED.** `cloud down <id> [--provider]` (#798) 가 `runpod_terminate`/`vast_destroy` + registry forget 수행.
 > - **P5 (recursive copy-to) — CLOSED.** `copy-to -r`/`--recursive` → `cloud_copy_to_recursive_opts` (`scp -r` directory tree, same local-source pre-check / exit-102). `--batch` (multi-file one-shot) 은 미구현 — 디렉터리 트리로 대체 가능, 필요시 별도 slug.
-> - **P6 (`--verify-sha`) — OPEN.** No post-transfer sha256 verify flag.
+> - **P6 (`--verify-sha`) — CLOSED.** `copy-to`/`copy-from --verify-sha`: 전송 후 local 과 remote 의 sha256 비교(`cloud_verify_sha`). exit 0 일치 / 103 불일치 / 104 sha 도구 부재. portable: `sha256sum` 우선, `shasum -a 256` 폴백(양측).
 > - **P7 (`cloud monitor`) — PARTIAL:**
 >   - Orphan detection (`::owner=<tag>` marker) — **CLOSED** by PR #614 (`cloud orphans` + `cloud owner-tag` read-only L2).
 >   - GPU-util threshold watchdog with `--on-idle terminate` — **OPEN.** Diag verbs surface util data (PR #615) but no auto-action loop yet. Convergent with sibling PR #646 F5 (`owner_lock + protected_until`).
-> - **P8 (`--auto-nohup-over`) — OPEN.** Run/nohup are still distinct verbs; no auto-promote heuristic.
+> - **P8 (`--auto-nohup-over`) — DEFERRED (근거 명시).** 깔끔한 구현 불가: `run` 은 ssh 세션에 묶인 foreground 프로세스라 시작 후 background 로 detach 할 방법이 없음(detach 하려면 처음부터 `nohup` 이어야 함). 또 "N초 초과 예상" 을 사전에 알 수 없어 휴리스틱 자체가 모호. 명시적 `nohup` verb + `--max-wall` 가 동일 니즈(장기 작업 background / 상한)를 이미 충족. 새 슬랙 없이 close.
 > - **P9 (`--fallback=ssh-direct`) — SUPERSEDED.** Designed as a workaround for P1. Since P1 (PR #423) closed the hang at the transport layer, this flag is no longer load-bearing. Not pursuing.
 > - **P10 (stderr propagation on non-zero) — CLOSED.** `run`/`exec` 가 비정상 종료 시 `_print_fail_tail` 로 마지막 30줄을 `[cloud] ── exit C · last N line(s) ──` 배너와 함께 화면 맨 아래에 재출력 (terminal 은 바닥으로 스크롤 → 실패가 바로 보임). 성공/빈 출력 시 no-op.
 > - **P11 (tar provenance warning noise) — OPEN.** Cosmetic; no current filter or workaround doc.
