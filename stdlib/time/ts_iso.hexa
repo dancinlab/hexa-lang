@@ -1,0 +1,24 @@
+// HEXA Standard Library — time/ts_iso
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// ISO-8601 timestamp formatter (UTC, second-resolution).
+// Thin wrapper over `stdlib/time/iso8601::iso8601_utc_now` to standardise
+// the 91+ anima inline `_ts_iso()` definitions (STDLIB Phase 1b survey
+// 2026-05-25) under a single canonical name.
+//
+// Surface:
+//   pub fn ts_iso() -> string
+//     Current UTC time in ISO-8601 format (e.g. "2026-05-25T12:34:56Z").
+//     Drop-in for anima's `_ts_iso()` log/timestamp helpers.
+//
+// Naming note: stdlib already has `iso8601_utc_now` — `ts_iso` = shorter
+// alias canonical to anima's prevalent inline pattern. Both names valid;
+// `ts_iso` recommended for new code (matches anima convention).
+
+import "stdlib/time/iso8601.hexa"
+
+pub fn ts_iso() -> string {
+    return iso8601_utc_now()
+}

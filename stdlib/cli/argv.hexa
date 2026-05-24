@@ -1,0 +1,36 @@
+// HEXA Standard Library — cli/argv
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// argv parsing primitives — common CLI scaffold pattern across 174+ anima
+// inline copies (_argv + _arg_present combined, STDLIB Phase 1b survey
+// 2026-05-25).
+//
+// Surface:
+//   pub fn argv() -> array
+//     Returns process argv as an array of strings. Wrapper over the
+//     hexa runtime `hexa_argv` extern carrier — single canonical access.
+//
+//   pub fn arg_present(args: array, name: string) -> bool
+//     Returns true iff `name` appears anywhere in `args` (linear scan).
+//     Used by `--verbose` / `--help` / `--strict` style flag presence
+//     checks across anima CLI scaffolds.
+//
+// Both fns pure (no syscall) — relies on runtime captured argv only.
+
+pub fn argv() -> array {
+    return hexa_argv()
+}
+
+pub fn arg_present(args: array, name: string) -> bool {
+    let n = len(args)
+    let mut i = 0
+    while i < n {
+        if args[i] == name {
+            return true
+        }
+        i = i + 1
+    }
+    return false
+}

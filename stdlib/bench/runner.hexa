@@ -1,0 +1,30 @@
+// HEXA Standard Library — bench/runner
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Benchmark runner — measures wall-clock elapsed seconds for a closure
+// invocation. Standardises the 94+ anima inline `run_benchmark`
+// definitions (STDLIB Phase 1b survey 2026-05-25).
+//
+// Surface:
+//   pub fn bench_once(label: string, f) -> float
+//     Run `f` once, print "label: elapsed=X.XXX s", return elapsed.
+//     Uses stdlib/time/now::now_utc for second-resolution timing.
+//     For sub-second benches, callers should use a monotonic high-res
+//     timer (out-of-scope · future runtime extension).
+//
+// Naming convention: `bench_once` (not `run_benchmark`) — matches stdlib
+// pattern of verb_target naming and avoids namespace collision with
+// anima callers that may use `run_benchmark` as their own variant fn.
+
+import "stdlib/time/now.hexa"
+
+pub fn bench_once(label: string, f) -> float {
+    let t0 = now_utc()
+    f()
+    let t1 = now_utc()
+    let elapsed = (t1 - t0) + 0.0
+    println(label + ": elapsed=" + to_string(elapsed) + " s")
+    return elapsed
+}
