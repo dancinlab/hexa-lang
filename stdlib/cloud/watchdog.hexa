@@ -277,3 +277,146 @@ fn runpod_idle_autokill_sweep(
         message: killed_msg + " · spared " + to_string(len(spared)) + " · errors " + to_string(len(errors))
     }
 }
+
+// ── CLI entry (thin arg-parse wrapper over the sweep) ────────────────
+//
+// Mirrors preflight.hexa's `preflight_run(av, start) -> int` so cloud_cli
+// can dispatch `hexa cloud watchdog` the same way it dispatches preflight.
+// DRY-RUN BY DEFAULT — a sweep is gated on dry_run, so without an explicit
+// `--kill` / `--no-dry-run` flag the verb only lists idle pods + what WOULD
+// be terminated; it never calls runpod_terminate.
+//
+// Flags:
+//   --threshold-min N   idle uptime gate in minutes (default 60; min 5)
+//   --util-cap-pct  N   max GPU util to count as idle (default 0; 0..99)
+//   --kill | --no-dry-run   actually terminate (needs RUNPOD_API_KEY env)
+//   --help | -h
+//
+// Exit codes: 0 = clean sweep (dry-run plan emitted, or kills done) ·
+//             1 = invalid args / help · 2 = sweep failed (no creds / no
+//             runpodctl / list error).
+
+fn _wd_atoi(s: str) -> int {
+    let mut v = 0
+    let mut i = 0
+    let n = len(s)
+    if n == 0 { return -1 }
+    while i < n {
+        let cc = char_code(s.substring(i, i + 1))
+        if cc >= 48 && cc <= 57 {
+            v = v * 10 + (cc - 48)
+        } else {
+            return -1
+        }
+        i = i + 1
+    }
+    return v
+}
+
+fn _watchdog_help() {
+    println("hexa cloud watchdog — idle-pod autokill sweep (1 cycle)")
+    println("")
+    println("usage:")
+    println("  watchdog [--threshold-min N] [--util-cap-pct N] [--kill]")
+    println("")
+    println("flags:")
+    println("  --threshold-min N   idle uptime gate in minutes (default 60; min 5)")
+    println("  --util-cap-pct N    max GPU util% counted as idle (default 0; 0..99)")
+    println("  --kill              actually terminate matched pods (alias --no-dry-run)")
+    println("                      requires RUNPOD_API_KEY in env; default is DRY-RUN")
+    println("  --help | -h")
+    println("")
+    println("DRY-RUN by default: lists idle pods + what WOULD be killed, kills nothing.")
+    println("exit code: 0 = clean sweep · 1 = invalid args / help · 2 = sweep failed")
+    println("           (no runpodctl / no pods / list error).")
+}
+
+// watchdog_run — parse argv (from position `start`) and run one sweep
+// cycle. Returns the exit code described above.
+fn watchdog_run(av: [str], start: int) -> int {
+    let mut threshold_min = 60
+    let mut util_cap_pct = 0
+    let mut dry_run = 1
+    let mut i = start
+    while i < len(av) {
+        let t = av[i]
+        if t == "--threshold-min" || t == "--threshold" {
+            if i + 1 >= len(av) {
+                println("[watchdog] error: --threshold-min requires a value")
+                return 1
+            }
+            let v = _wd_atoi(av[i + 1])
+            if v < 0 {
+                println("[watchdog] error: --threshold-min not a non-negative integer: " + av[i + 1])
+                return 1
+            }
+            threshold_min = v
+            i = i + 2
+        } else if t == "--util-cap-pct" || t == "--util-cap" {
+            if i + 1 >= len(av) {
+                println("[watchdog] error: --util-cap-pct requires a value")
+                return 1
+            }
+            let v = _wd_atoi(av[i + 1])
+            if v < 0 {
+                println("[watchdog] error: --util-cap-pct not a non-negative integer: " + av[i + 1])
+                return 1
+            }
+            util_cap_pct = v
+            i = i + 2
+        } else if t == "--kill" || t == "--no-dry-run" {
+            dry_run = 0
+            i = i + 1
+        } else if t == "--dry-run" {
+            dry_run = 1
+            i = i + 1
+        } else if t == "--help" || t == "-h" || t == "help" {
+            _watchdog_help()
+            return 1
+        } else {
+            // Skip unknown tokens (tolerate upstream verb prefixes).
+            i = i + 1
+        }
+    }
+
+    let mut mode = "DRY-RUN"
+    if dry_run == 0 { mode = "LIVE (--kill)" }
+    println("=== hexa cloud watchdog — idle-pod autokill sweep ===")
+    println("mode           = " + mode)
+    println("threshold_min  = " + to_string(threshold_min))
+    println("util_cap_pct   = " + to_string(util_cap_pct))
+    println("")
+
+    // api_key is only consumed by runpod_terminate when dry_run == 0.
+    let api_key = env_var("RUNPOD_API_KEY")
+    if dry_run == 0 && len(api_key) == 0 {
+        println("[watchdog] error: --kill requires RUNPOD_API_KEY in env (live terminate)")
+        return 1
+    }
+
+    let res = runpod_idle_autokill_sweep(api_key, threshold_min, util_cap_pct, dry_run)
+    if res.ok == 0 {
+        println("[watchdog] sweep failed: " + res.message)
+        return 2
+    }
+
+    let mut ki = 0
+    while ki < len(res.killed) {
+        let label = if dry_run == 1 { "  WOULD-KILL  " } else { "  KILLED      " }
+        println(label + res.killed[ki])
+        ki = ki + 1
+    }
+    let mut si = 0
+    while si < len(res.spared) {
+        println("  spared      " + res.spared[si])
+        si = si + 1
+    }
+    let mut ei = 0
+    while ei < len(res.errors) {
+        println("  ! " + res.errors[ei])
+        ei = ei + 1
+    }
+    println("")
+    println("[watchdog] " + res.message)
+    return 0
+}
