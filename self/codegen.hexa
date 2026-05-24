@@ -7857,6 +7857,27 @@ fn gen2_match_stmt(node, depth) {
                             chunks.push(_pad3 + "HexaVal " + _hexa_mangle_ident(_in) + " = hexa_index_get(__match_val, hexa_int(" + to_string(_ai + 1) + "));\n")
                         }
                     }
+                    // PROBE r16 Q3: nested Call arg `Some(Ok(v))` — the inner
+                    // payload binder `v` lives at __match_val[outer+1][inner+1].
+                    // Walk the inner Call's args and bind each Ident from the
+                    // payload sub-array (was undeclared → clang error).
+                    if type_of(_it) != "string" && _it.kind == "Call" && type_of(_it.left) != "string" && _it.left.kind == "Ident" {
+                        let _innerc = _it.left.name
+                        if (_innerc == "Some" || _innerc == "Ok" || _innerc == "Err") && type_of(_it.args) != "string" {
+                            let _payload = "hexa_index_get(__match_val, hexa_int(" + to_string(_ai + 1) + "))"
+                            let mut _ii = 0
+                            while _ii < len(_it.args) {
+                                let _iit = _it.args[_ii]
+                                if type_of(_iit) != "string" && _iit.kind == "Ident" {
+                                    let _iin = _iit.name
+                                    if type_of(_iin) == "string" && _iin != "_" {
+                                        chunks.push(_pad3 + "HexaVal " + _hexa_mangle_ident(_iin) + " = hexa_index_get(" + _payload + ", hexa_int(" + to_string(_ii + 1) + "));\n")
+                                    }
+                                }
+                                _ii = _ii + 1
+                            }
+                        }
+                    }
                     _ai = _ai + 1
                 }
             }
@@ -7937,7 +7958,23 @@ fn gen2_match_cond(pat, scrutinee_var) {
     if k == "Call" && type_of(pat.left) != "string" && pat.left.kind == "Ident" {
         let _cn = pat.left.name
         if _cn == "Some" || _cn == "Ok" || _cn == "Err" {
-            return "(HX_IS_ARRAY(" + scrutinee_var + ") && hexa_truthy(hexa_eq(hexa_index_get(" + scrutinee_var + ", hexa_int(0)), hexa_str(\"" + _cn + "\"))))"
+            let _outer = "(HX_IS_ARRAY(" + scrutinee_var + ") && hexa_truthy(hexa_eq(hexa_index_get(" + scrutinee_var + ", hexa_int(0)), hexa_str(\"" + _cn + "\"))))"
+            // PROBE r16 Q3: nested Call-shape payload `Some(Ok(v))` — the single
+            // arg is itself a `Some`/`Ok`/`Err` Call pattern. The payload lives at
+            // scrutinee[1]; recurse gen2_match_cond against that inner accessor so
+            // the inner tag is ALSO tested (was matching outer level only). Plain
+            // (non-Call) args stay irrefutable — bound, not tested.
+            if type_of(pat.args) != "string" && len(pat.args) == 1 {
+                let _arg0 = pat.args[0]
+                if type_of(_arg0) != "string" && _arg0.kind == "Call" && type_of(_arg0.left) != "string" && _arg0.left.kind == "Ident" {
+                    let _icn = _arg0.left.name
+                    if _icn == "Some" || _icn == "Ok" || _icn == "Err" {
+                        let _inner = gen2_match_cond(_arg0, "hexa_index_get(" + scrutinee_var + ", hexa_int(1))")
+                        return "(" + _outer + " && " + _inner + ")"
+                    }
+                }
+            }
+            return _outer
         }
     }
     // PROBE r15-D3: bare `None` pattern → tag-equality with hexa_str("None").
@@ -8061,6 +8098,25 @@ fn gen2_match_ternary(arms, scrutinee_c, idx) {
                     let _in = _it.name
                     if type_of(_in) == "string" && _in != "_" {
                         _call_binds = _call_binds + "HexaVal " + _hexa_mangle_ident(_in) + " = hexa_index_get(" + scrutinee_c + ", hexa_int(" + to_string(_ai + 1) + ")); "
+                    }
+                }
+                // PROBE r16 Q3: nested Call arg `Some(Ok(v))` in ternary-form
+                // match. The inner binder `v` reads scrutinee[outer+1][inner+1].
+                if type_of(_it) != "string" && _it.kind == "Call" && type_of(_it.left) != "string" && _it.left.kind == "Ident" {
+                    let _innerc3 = _it.left.name
+                    if (_innerc3 == "Some" || _innerc3 == "Ok" || _innerc3 == "Err") && type_of(_it.args) != "string" {
+                        let _payload3 = "hexa_index_get(" + scrutinee_c + ", hexa_int(" + to_string(_ai + 1) + "))"
+                        let mut _ii = 0
+                        while _ii < len(_it.args) {
+                            let _iit = _it.args[_ii]
+                            if type_of(_iit) != "string" && _iit.kind == "Ident" {
+                                let _iin = _iit.name
+                                if type_of(_iin) == "string" && _iin != "_" {
+                                    _call_binds = _call_binds + "HexaVal " + _hexa_mangle_ident(_iin) + " = hexa_index_get(" + _payload3 + ", hexa_int(" + to_string(_ii + 1) + ")); "
+                                }
+                            }
+                            _ii = _ii + 1
+                        }
                     }
                 }
                 _ai = _ai + 1
