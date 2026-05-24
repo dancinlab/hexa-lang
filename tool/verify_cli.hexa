@@ -174,6 +174,9 @@ fn cmd_rubric() {
     println("             exp_release(M_0,k,t)        → M_0*(1-exp(-k*t))   (first-order release, Bateman / Noyes-Whitney, 3-arg)")
     println("             ldl_pct(baseline,final)     → (final-baseline)/baseline*100  (Δ%, FOURIER/GLAGOV/SELECT, 2-arg)")
     println("             beer_lambert(I_0,mu,x)      → I_0*exp(-mu*x)      (Bouguer-Lambert-Beer attenuation, 3-arg)")
+    println("             nnt(arr_pp)                 → 100/arr_pp          (Number Needed to Treat, ARR in pct points, 1-arg)")
+    println("             arr(p_control,p_treat)      → p_control-p_treat   (Absolute Risk Reduction, percentage points, 2-arg)")
+    println("             ln_hr_to_hr(ln_hr)          → exp(ln_hr)          (log-HR → HR, Cox-PH back-transform, 1-arg)")
 }
 
 let NOCALC: int = -999999
@@ -827,6 +830,34 @@ fn _beer_lambert(i_0: float, mu_abs: float, x_depth: float) -> float {
     return i_0 * exp(0.0 - mu_abs * x_depth)
 }
 
+// Number Needed to Treat (Laupacis 1988, NEJM 318:1728):
+//   NNT = 1 / ARR  where ARR is the absolute risk reduction (decimal)
+// Convention here: arr_pp is in PERCENTAGE POINTS (e.g. 4 means 4pp ARR =
+// 0.04 absolute), so NNT = 100 / arr_pp. 1-arg closed-form pure arithmetic.
+// Example: 4pp ARR → NNT 25 (FOURIER/SELECT cardiovascular trial readout).
+fn _nnt(arr_pp: float) -> float {
+    if arr_pp <= 0.0 { return _NOCALC_F }
+    return 100.0 / arr_pp
+}
+
+// Absolute Risk Reduction (Sackett 1996, BMJ 312:71):
+//   ARR = p_control - p_treat
+// Pure arithmetic on event rates expressed in matching units (both pct or
+// both decimal). 2-arg closed-form. Sign positive => treatment helps; the
+// canonical trial-readout primitive that pairs with NNT above.
+fn _arr(p_control: float, p_treat: float) -> float {
+    return p_control - p_treat
+}
+
+// Log Hazard Ratio → Hazard Ratio (Cox 1972, JRSS-B 34:187):
+//   HR = exp(ln_HR)
+// 1-arg back-transform of the Cox proportional-hazards linear predictor.
+// Routes through libm exp() so the ε=1e-9 gate handles libm-class drift
+// (consistent with exp_release / beer_lambert above).
+fn _ln_hr_to_hr(ln_hr: float) -> float {
+    return exp(ln_hr)
+}
+
 // float dispatch — fn_name → recompute. 0-arg fns ignore a0/a1/a2 (constants);
 // 1-arg fns take a0; 2-arg take a0,a1; 3-arg take a0,a1,a2. Returns _NOCALC_F
 // when no float path exists (caller then tries the int path / degrades). The
@@ -936,6 +967,20 @@ fn _recompute_float(fn_name: string, a0: float, a1: float, a2: float, argc: int)
         if argc < 3 { return _NOCALC_F }
         return _beer_lambert(a0, a1, a2)
     }
+    // ── Bio-statistics (LPA cycle 4 V2 unlock · trial-readout primitives) ──
+    //   nnt(arr_pp)              1-arg: 100 / arr_pp
+    //   arr(p_control, p_treat)  2-arg: p_control - p_treat
+    //   ln_hr_to_hr(ln_hr)       1-arg: exp(ln_hr)
+    if fn_name == "nnt" {
+        return _nnt(a0)
+    }
+    if fn_name == "arr" {
+        if argc < 2 { return _NOCALC_F }
+        return _arr(a0, a1)
+    }
+    if fn_name == "ln_hr_to_hr" {
+        return _ln_hr_to_hr(a0)
+    }
     return _NOCALC_F
 }
 
@@ -957,6 +1002,8 @@ fn _is_float_fn(fn_name: string) -> bool {
         || fn_name == "mirror_bench_hog_asymptote"
         // Bio-physical Phase 1 (demiurge cross-domain V2 unlock):
         || fn_name == "exp_release" || fn_name == "ldl_pct" || fn_name == "beer_lambert"
+        // Bio-statistics (LPA cycle 4 V2 unlock · NNT/ARR/HR trial readout):
+        || fn_name == "nnt" || fn_name == "arr" || fn_name == "ln_hr_to_hr"
 }
 
 // is fn_name a 0-arg closed-form constant? (--expr <fn> <v>, no operands).
@@ -1085,7 +1132,7 @@ fn cmd_verify_id(rest) {
 
 // cmd_expr_float — the 🟢 NUMERICAL path. fn_name is a registered float
 // transform (welch_t_crit · wilson_hilferty_p · chsh_tsirelson · hardy_bound
-// · exp_release · ldl_pct · beer_lambert).
+// · exp_release · ldl_pct · beer_lambert · nnt · arr · ln_hr_to_hr).
 // Args + claimed value are parsed as floats; the recompute is compared with
 // tolerance ε (NOT exact-eq, the honest libm-class gate). Within ε →
 // 🟢 SUPPORTED-NUMERICAL; deterministic out-of-ε → 🔴 FALSIFIED.
