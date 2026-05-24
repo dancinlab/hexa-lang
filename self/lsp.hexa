@@ -154,11 +154,12 @@ fn get_semantic_token_modifiers() -> [string] {
 // ── LSP Semantic Tokenizer ───────────────────────────────
 // Re-tokenizes source for semantic highlighting via the lexer SSOT.
 //
-// Strategy: scan_comments() handles the one thing self/lexer.hexa tokenize()
-// doesn't emit (comments — the parser doesn't need them, highlighting does).
-// Every other token comes from tokenize(), so new operators / literal kinds
-// / keyword spellings automatically flow into highlighting — no second edit
-// needed when the language adds e.g. `...` (DotDotDot) or future tokens.
+// Single source: `tokenize_with_comments(source)` from self/lexer.hexa
+// emits every token the language has — keywords (per-keyword Kind names),
+// literals, operators, AND comments (LineComment / BlockComment) — in one
+// position-sorted stream. semantic_tokenize() is just classify-and-map.
+// When the language grows (new operator, new comment style), the change
+// lands in lexer.hexa and flows here for free.
 
 struct SemanticToken {
     line: int,       // 0-based
@@ -168,94 +169,14 @@ struct SemanticToken {
     modifiers: int   // bitmask into get_semantic_token_modifiers()
 }
 
-// Scan source for comments only. Skips string-literal interiors so `//` /
-// `/*` inside strings don't false-match. Output is already sorted by
-// source position (left-to-right scan).
-fn scan_comments(source: string) -> [SemanticToken] {
-    let mut out = []
-    let chars = source.chars()
-    let total = len(chars)
-    let mut pos = 0
-    let mut line = 0
-    let mut col = 0
-    while pos < total {
-        let ch = chars[pos]
-        if ch == '\n' {
-            pos = pos + 1
-            line = line + 1
-            col = 0
-        } else if ch == '"' {
-            // Skip string interior so embedded `//` doesn't false-match.
-            pos = pos + 1
-            col = col + 1
-            let mut done = false
-            while pos < total && !done {
-                if chars[pos] == '\\' && (pos + 1) < total {
-                    pos = pos + 2
-                    col = col + 2
-                } else if chars[pos] == '"' {
-                    done = true
-                    pos = pos + 1
-                    col = col + 1
-                } else if chars[pos] == '\n' {
-                    pos = pos + 1
-                    line = line + 1
-                    col = 0
-                } else {
-                    pos = pos + 1
-                    col = col + 1
-                }
-            }
-        } else if ch == '/' && (pos + 1) < total && chars[pos + 1] == '/' {
-            let start_col = col
-            let mut clen = 0
-            while pos < total && chars[pos] != '\n' {
-                pos = pos + 1
-                clen = clen + 1
-            }
-            col = col + clen
-            out.push(SemanticToken { line: line, col: start_col, length: clen, token_type: 10, modifiers: 0 })
-        } else if ch == '/' && (pos + 1) < total && chars[pos + 1] == '*' {
-            let start_line = line
-            let start_col = col
-            let start_pos = pos
-            pos = pos + 2
-            col = col + 2
-            let mut depth = 1
-            while depth > 0 && pos < total {
-                if (pos + 1) < total && chars[pos] == '/' && chars[pos + 1] == '*' {
-                    depth = depth + 1
-                    pos = pos + 2
-                    col = col + 2
-                } else if (pos + 1) < total && chars[pos] == '*' && chars[pos + 1] == '/' {
-                    depth = depth - 1
-                    pos = pos + 2
-                    col = col + 2
-                } else if chars[pos] == '\n' {
-                    pos = pos + 1
-                    line = line + 1
-                    col = 0
-                } else {
-                    pos = pos + 1
-                    col = col + 1
-                }
-            }
-            let clen = pos - start_pos
-            out.push(SemanticToken { line: start_line, col: start_col, length: clen, token_type: 10, modifiers: 0 })
-        } else {
-            pos = pos + 1
-            col = col + 1
-        }
-    }
-    return out
-}
-
 // Map a lexer Token kind to an LSP semantic-token type id. Returns -1 to
 // skip (delimiters · newlines · eof). Identifier kinds get a default that
 // the caller may upgrade based on builtin / capitalization / call lookahead.
 // Anything not listed here — every operator the lexer recognizes, current
 // and future — falls through to type 13 (operator), so new tokens auto-flow.
 fn classify_lex_kind(kind: string) -> int {
+    if kind == "LineComment" { return 10 }
+    if kind == "BlockComment" { return 10 }
     if kind == "StringLit" { return 11 }
     if kind == "CharLit" { return 11 }
     if kind == "RegexLit" { return 11 }
@@ -280,52 +201,20 @@ fn classify_lex_kind(kind: string) -> int {
     return 13
 }
 
-// Merge two already-position-sorted streams into one stream sorted by
-// (line, col). Two-pointer O(n+m); used to interleave comments (from
-// scan_comments) with lexer tokens.
-fn merge_by_position(a: [SemanticToken], b: [SemanticToken]) -> [SemanticToken] {
-    let mut out = []
-    let na = len(a)
-    let nb = len(b)
-    let mut i = 0
-    let mut j = 0
-    while i < na && j < nb {
-        let pick_a = a[i].line < b[j].line || (a[i].line == b[j].line && a[i].col <= b[j].col)
-        if pick_a {
-            out.push(a[i])
-            i = i + 1
-        } else {
-            out.push(b[j])
-            j = j + 1
-        }
-    }
-    while i < na {
-        out.push(a[i])
-        i = i + 1
-    }
-    while j < nb {
-        out.push(b[j])
-        j = j + 1
-    }
-    return out
-}
-
 fn semantic_tokenize(source: string) -> [SemanticToken] {
-    // Lexer skips comments; scan them separately so highlighting still gets
-    // a comment-token stream.
-    let comment_toks = scan_comments(source)
-
     // Build builtin set once for O(1) lookup inside the identifier branch.
     let bi_set = #{}
     for b in get_builtins() {
         bi_set[b] = true
     }
 
-    // Everything non-comment via the lexer SSOT. Lexer line/col are
-    // 1-indexed; LSP is 0-indexed — subtract one.
-    let raw = tokenize(source)
+    // Single SSOT pass — `tokenize_with_comments` returns the same stream
+    // tokenize() would, interleaved with LineComment / BlockComment Tokens
+    // at their source positions. Lexer line/col are 1-indexed; LSP is
+    // 0-indexed — subtract one.
+    let raw = tokenize_with_comments(source)
     let n = len(raw)
-    let mut lex_toks = []
+    let mut out = []
     let mut i = 0
     while i < n {
         let tok = raw[i]
@@ -336,7 +225,7 @@ fn semantic_tokenize(source: string) -> [SemanticToken] {
         // Keyword? — single is_keyword() call covers all 56 reserved words
         // regardless of which per-keyword Kind the lexer assigned to them.
         if is_keyword(tok.value) {
-            lex_toks.push(SemanticToken { line: line0, col: col0, length: length, token_type: 9, modifiers: 0 })
+            out.push(SemanticToken { line: line0, col: col0, length: length, token_type: 9, modifiers: 0 })
             i = i + 1
             continue
         }
@@ -350,25 +239,25 @@ fn semantic_tokenize(source: string) -> [SemanticToken] {
         if tok.kind == "Ident" {
             // builtin > Type (uppercase first char) > function-call > variable
             if has_key(bi_set, tok.value) {
-                lex_toks.push(SemanticToken { line: line0, col: col0, length: length, token_type: 8, modifiers: 8 })
+                out.push(SemanticToken { line: line0, col: col0, length: length, token_type: 8, modifiers: 8 })
             } else {
                 let first_ch = tok.value.chars()[0]
                 let first_s = to_string(first_ch)
                 if is_alpha(first_ch) && first_s == first_s.to_upper() {
-                    lex_toks.push(SemanticToken { line: line0, col: col0, length: length, token_type: 1, modifiers: 0 })
+                    out.push(SemanticToken { line: line0, col: col0, length: length, token_type: 1, modifiers: 0 })
                 } else if (i + 1) < n && raw[i + 1].kind == "LParen" {
-                    lex_toks.push(SemanticToken { line: line0, col: col0, length: length, token_type: 8, modifiers: 0 })
+                    out.push(SemanticToken { line: line0, col: col0, length: length, token_type: 8, modifiers: 0 })
                 } else {
-                    lex_toks.push(SemanticToken { line: line0, col: col0, length: length, token_type: 6, modifiers: 0 })
+                    out.push(SemanticToken { line: line0, col: col0, length: length, token_type: 6, modifiers: 0 })
                 }
             }
         } else {
-            lex_toks.push(SemanticToken { line: line0, col: col0, length: length, token_type: base, modifiers: 0 })
+            out.push(SemanticToken { line: line0, col: col0, length: length, token_type: base, modifiers: 0 })
         }
         i = i + 1
     }
 
-    return merge_by_position(comment_toks, lex_toks)
+    return out
 }
 
 // Encode semantic tokens into LSP delta format.

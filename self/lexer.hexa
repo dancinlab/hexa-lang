@@ -202,9 +202,25 @@ fn regex_value_ender(kind) {
     return false
 }
 
-// Main tokenizer function
-@compile_trace
+// Main tokenizer entry — comment-stripped stream for the parser. Stable
+// signature; all existing callers go through this.
 pub fn tokenize(source) {
+    return tokenize_impl(source, false)
+}
+
+// Comment-aware tokenizer entry — same stream as tokenize() interleaved with
+// `LineComment` / `BlockComment` tokens at their source positions. Used by
+// the LSP (and any future doc-extractor / formatter) that needs to know
+// where comments are. Single SSOT scan — when hexa's comment syntax
+// changes, only the two branches inside tokenize_impl have to follow.
+pub fn tokenize_with_comments(source) {
+    return tokenize_impl(source, true)
+}
+
+// Shared implementation. `emit_comments` toggles whether the two comment
+// branches push a Token before skipping; everything else is identical.
+@compile_trace
+fn tokenize_impl(source, emit_comments) {
     let mut tokens = []
     let chars = source.chars()
     let mut pos = 0
@@ -239,15 +255,42 @@ pub fn tokenize(source) {
             line = line + 1
             col = 1
         } else if ch == '/' && pos + 1 < len_chars && chars[pos + 1] == '/' {
-            // Line comment — skip until newline
+            // Line comment — skip until newline. emit_comments=true also
+            // pushes a `LineComment` Token so tools (LSP, doc-extractors)
+            // can recover position + text; emit_comments=false (parser
+            // path) just skips, preserving the prior stream shape.
+            let cstart_line = line
+            let cstart_col = col
+            let cstart_pos = pos
             pos = pos + 2
             col = col + 2
             while pos < len_chars && chars[pos] != '\n' {
                 pos = pos + 1
                 col = col + 1
             }
+            if emit_comments {
+                let mut cparts = []
+                let mut ci = cstart_pos
+                while ci < pos {
+                    cparts.push(to_string(chars[ci]))
+                    ci = ci + 1
+                }
+                tokens.push(Token {
+                    kind: "LineComment",
+                    value: join(cparts, ""),
+                    line: cstart_line,
+                    col: cstart_col
+                })
+            }
         } else if ch == '/' && pos + 1 < len_chars && chars[pos + 1] == '*' {
-            // Block comment (supports nesting)
+            // Block comment (supports nesting). emit_comments=true also
+            // emits one `BlockComment` Token spanning open `/*` to close
+            // `*/`. Note the token's value can contain newlines for
+            // multi-line block comments — consumers (LSP) handle splitting
+            // per their own positioning rules.
+            let cstart_line = line
+            let cstart_col = col
+            let cstart_pos = pos
             pos = pos + 2
             col = col + 2
             let mut depth = 1
@@ -268,6 +311,20 @@ pub fn tokenize(source) {
                     pos = pos + 1
                     col = col + 1
                 }
+            }
+            if emit_comments {
+                let mut cparts = []
+                let mut ci = cstart_pos
+                while ci < pos {
+                    cparts.push(to_string(chars[ci]))
+                    ci = ci + 1
+                }
+                tokens.push(Token {
+                    kind: "BlockComment",
+                    value: join(cparts, ""),
+                    line: cstart_line,
+                    col: cstart_col
+                })
             }
         } else if is_ident_start(ch) {
             // Identifier or keyword
