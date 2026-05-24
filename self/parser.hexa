@@ -822,6 +822,20 @@ fn parse(tokens) {
     // Opt-out: `@manual_main` on the fn — preserves any existing intentional
     // pattern (e.g. CLI scaffold that needs the explicit call).
     _check_main_double_invoke(stmts)
+    // PROBE r16-T1: parse-error fail-stop. Historically the transpiler printed
+    // "Parse error at L:C: ..." but STILL ran codegen on the half-built AST,
+    // wrote a malformed .c, and exited 0 — deferring the real failure to clang.
+    // Now: if any REAL parse error was recorded (p_errors is populated ONLY by
+    // p_record_error at genuine syntax-error sites; warnings use plain println
+    // and do NOT push, so valid programs are unaffected), abort here BEFORE
+    // codegen runs / any .c is written and exit non-zero, surfacing the hexa
+    // parse message as the build's failure signal instead of a downstream
+    // clang error. Mirrors the existing _check_main_double_invoke fail-stop.
+    if len(p_errors) > 0 {
+        eprintln("hexa-cc: aborting — " + to_string(len(p_errors)) + " parse error(s); no output written")
+        eprintln(p_format_errors())
+        exit(1)
+    }
     return stmts
 }
 
