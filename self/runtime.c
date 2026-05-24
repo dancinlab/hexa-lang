@@ -4772,15 +4772,33 @@ HexaVal hexa_input(HexaVal prompt) {
         fputs(HX_STR(prompt), stdout);
         fflush(stdout);
     }
-    char* buf = NULL;
-    size_t cap = 0;
-    ssize_t n = getline(&buf, &cap, stdin);
-    if (n < 0) {
-        if (buf) free(buf);
-        return hexa_str("");
+    // The runtime overrides stdin with a fake FILE* ((FILE*)(uintptr_t)1,
+    // see top of file), so libc stdio (fgetc/getline) crashes inside
+    // flockfile when it dereferences that constant. Read straight from fd 0
+    // with the raw read(2) wrapper instead — the same primitive
+    // term_read_byte() uses. Stops at '\n' (consumed, not stored) or EOF;
+    // returns "" on EOF with no data read. fputs/fflush above are safe: the
+    // runtime macro-redirects them to hxlcl_fputs/hxlcl_fflush (write(2)).
+    size_t cap = 256, len = 0;
+    char* buf = (char*)malloc(cap);
+    if (!buf) return hexa_str("");
+    for (;;) {
+        unsigned char b;
+        long n = hxlcl_read(0, &b, 1);
+        if (n < 0) { if (errno == EINTR) continue; break; }
+        if (n == 0) break;            // EOF
+        if (b == '\n') break;
+        if (len + 1 >= cap) {
+            cap *= 2;
+            char* nb = (char*)realloc(buf, cap);
+            if (!nb) { free(buf); return hexa_str(""); }
+            buf = nb;
+        }
+        buf[len++] = (char)b;
     }
-    // strip trailing \n
-    if (n > 0 && buf[n-1] == '\n') buf[n-1] = 0;
+    // strip a trailing CR so CRLF input yields the bare line
+    if (len > 0 && buf[len-1] == '\r') len--;
+    buf[len] = 0;
     return hexa_str_own(buf);
 }
 
