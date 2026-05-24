@@ -1,6 +1,6 @@
 // HEXA Standard Library — nuclear/sim
 //
-// @version 0.1.0
+// @version 0.2.0
 // @capabilities [pure, io]
 //
 // NUCLEAR.md §6 Phase 4 #1 — N7 hot closed-form post-processing,
@@ -17,6 +17,8 @@
 //   pub fn viola_seaborg_log10_t(Z, Q_alpha_MeV) -> float          // NC1
 //   pub fn royer_log10_t(Z, A, Q_alpha_MeV) -> float               // NC2
 //   pub fn consensus_alpha(values: [float]) -> Consensus           // NC3
+//   pub fn c_gate_window_score(mean_log10_T, lo, hi) -> float       // N11
+//   pub fn n11_alpha_cell(Z, A, Q_alpha_MeV, lo, hi) -> NuclideScore// N11
 //
 // Source formulas (closed-form algebraic identities, not solvers):
 //   - Viola-Seaborg 1966 / Sobiczewski-Parkhomenko 2005 refit
@@ -156,6 +158,77 @@ pub fn consensus_alpha(values: [float]) -> ConsensusAlpha {
                             spread_dex: hi - lo, n: n }
 }
 
+// ── 4. N11 — (Z,N) funnel (c)-gate half-life score ─────────────────────
+//
+// NUCLEAR.md §6.2 (N11 funnel cohort) — mirror of RTSC.md §9.10 N5
+// compositional-explorer, transposed to ELEMENTAL (Z,N) discovery.
+// N11 enumerates a bounded (Z,N) candidate strip and ranks each cell by
+// a composite of the available 5-gate scores. Only the (c) gate
+// (α-decay half-life) is closed-form here — it reuses NC1+NC2+NC3 above.
+// The (a)/(b)/(d)/(e) gates are install-gated (N6 HFB / N9 shell-model
+// are external-binary B-path) and so contribute a neutral default; the
+// Python orchestrator (`n11_funnel.py`) owns gate composition + the
+// install-gated/sim skip-cascade per cell + R4 record emission.
+//
+// (c)-gate score design (closed-form, NUCLEAR.md §3.4 SHE μs-ms window):
+//   The accelerator-priority sweet spot is a half-life LONG enough to
+//   survive recoil-separator transit (~μs floor, log10 T ≳ -6) yet
+//   SHORT enough that the implant-decay correlation chain is timed-out
+//   tractable (~s ceiling, log10 T ≲ +3 for SHE recoil tagging). We
+//   score a cell by a triangular window peaking at the center of that
+//   log10-T band, normalised to [0,1]. This is a HEURISTIC priority
+//   weight, NOT a measurement — absorbed=false永久 (R4, §7).
+//
+//   center = (lo + hi) / 2   half_width = (hi - lo) / 2
+//   raw    = 1 - |mean_log10_T - center| / half_width   (clamp ≥ 0)
+//
+// Default band lo=-6.0 (μs separator-transit floor) hi=+3.0 (recoil-
+// tagging ceiling) → center=-1.5, half_width=4.5. Caller may pass a
+// different band (drip-line strips want a wider/longer window).
+
+struct NuclideScore {
+    Z:               int,
+    A:               int,
+    Q_alpha_MeV:     float,
+    mean_log10_T_s:  float,
+    spread_dex:      float,
+    c_gate_score:    float,
+    valid:           int,    // 1 = scored, 0 = Q_α ≤ 0 (caller honest-skips)
+}
+
+// (c)-gate priority window score for log10 T₁/₂ [s] vs. an accelerator
+// band [lo, hi]. Triangular peak at band center, clamped to [0,1].
+pub fn c_gate_window_score(mean_log10_T_s: float, lo: float, hi: float) -> float {
+    if hi <= lo { return 0.0 }
+    let center = (lo + hi) / 2.0
+    let half_width = (hi - lo) / 2.0
+    let dist = _fabs(mean_log10_T_s - center)
+    let raw = 1.0 - dist / half_width
+    if raw < 0.0 { return 0.0 }
+    return raw
+}
+
+// Full N11 (c)-gate cell scorer: chains NC1 (Viola-Seaborg) + NC2
+// (Royer) → NC3 consensus → window score. Q_α ≤ 0 returns valid=0 so
+// the Python orchestrator can emit gate_type=install-gated honestly
+// (NUCLEAR.md §3.3 — never fabricate Q_α; honest-skip instead).
+pub fn n11_alpha_cell(Z: int, A: int, Q_alpha_MeV: float,
+                      band_lo: float, band_hi: float) -> NuclideScore {
+    if Q_alpha_MeV <= 0.0 {
+        return NuclideScore { Z: Z, A: A, Q_alpha_MeV: Q_alpha_MeV,
+                              mean_log10_T_s: 0.0, spread_dex: 0.0,
+                              c_gate_score: 0.0, valid: 0 }
+    }
+    let vs = viola_seaborg_log10_t(Z, Q_alpha_MeV)
+    let ro = royer_log10_t(Z, A, Q_alpha_MeV)
+    let v: [float] = [vs, ro]
+    let c = consensus_alpha(v)
+    let score = c_gate_window_score(c.mean, band_lo, band_hi)
+    return NuclideScore { Z: Z, A: A, Q_alpha_MeV: Q_alpha_MeV,
+                          mean_log10_T_s: c.mean, spread_dex: c.spread_dex,
+                          c_gate_score: score, valid: 1 }
+}
+
 // ── reference-panel runner ─────────────────────────────────────────────
 //
 // Mirror of material/sim.hexa `_emit_row` + `main` pattern: emit a
@@ -177,6 +250,109 @@ fn _emit_row(name: string, Z: int, A: int, Q_alpha_MeV: float) {
             "  spread=" + to_string(c.spread_dex) + " dex")
 }
 
+fn _emit_n11(name: string, Z: int, A: int, Q_alpha_MeV: float) {
+    let s = n11_alpha_cell(Z, A, Q_alpha_MeV, 0.0 - 6.0, 3.0)
+    println("  · " + name +
+            ": mean_log10_T=" + to_string(s.mean_log10_T_s) +
+            "  c_gate_score=" + to_string(s.c_gate_score) +
+            "  valid=" + to_string(s.valid))
+}
+
+// ── N11 top-K JSON record emit (NUCLEAR.md §6.1 schema) ─────────────────
+//
+// Renders one scored (Z,N) cell as a JSON object string. gate_type +
+// absorbed=false hardcoded per R4 (§3.1). Q_α here is from the CITED
+// table only (caller never passes a fabricated value — §3.3).
+fn _n11_cell_json(name: string, Z: int, A: int, Q_alpha_MeV: float,
+                  Q_cite: string) -> string {
+    let s = n11_alpha_cell(Z, A, Q_alpha_MeV, 0.0 - 6.0, 3.0)
+    let N = A - Z
+    return "    {\n" +
+        "      \"name\": \"" + name + "\",\n" +
+        "      \"Z\": " + to_string(Z) +
+        ", \"N\": " + to_string(N) +
+        ", \"A\": " + to_string(A) + ",\n" +
+        "      \"Q_alpha_MeV\": " + to_string(Q_alpha_MeV) + ",\n" +
+        "      \"Q_alpha_source\": \"" + Q_cite + "\",\n" +
+        "      \"gate_type\": \"nuclear-novel-discovery-simulation\",\n" +
+        "      \"absorbed\": false,\n" +
+        "      \"prediction\": { \"consensus_mean_log10_T_s\": " +
+        to_string(s.mean_log10_T_s) +
+        ", \"consensus_spread_dex\": " + to_string(s.spread_dex) + " },\n" +
+        "      \"scores\": { \"c_gate_score\": " +
+        to_string(s.c_gate_score) +
+        ", \"gate_coverage\": 0.2, \"composite_score\": " +
+        to_string(s.c_gate_score * 0.2) + " }\n" +
+        "    }"
+}
+
+// Build + write the N11 top-K record to <out_dir>/top_k.json. Returns the
+// path written. The (Z,N) candidate strip here is the cited-Q_α SHE/heavy
+// shortlist (sorted by c_gate_score descending — see ordering below).
+fn _write_n11_topk(out_dir: string) -> string {
+    let path = out_dir + "/top_k.json"
+
+    // Cited cells, pre-ordered by descending c_gate_score (closest to the
+    // accelerator band center -1.5 ranks first): Lv-293 > Og-294 > Fl-289.
+    let rows: [string] = [
+        _n11_cell_json("Lv-293", 116, 293, 10.54,
+            "measured E_alpha first-detection (Lv->Fl) 10.54 MeV"),
+        _n11_cell_json("Og-294", 118, 294, 11.65,
+            "NUBASE2020 / discovery 11.65 MeV (Phase2 anchor)"),
+        _n11_cell_json("Fl-289", 114, 289, 9.71,
+            "measured decay energy 1998 Dubna 9.71 MeV"),
+    ]
+    let mut body = "[\n"
+    let mut i = 0
+    while i < len(rows) {
+        body = body + rows[i]
+        if i + 1 < len(rows) { body = body + "," }
+        body = body + "\n"
+        i = i + 1
+    }
+    body = body + "  ]"
+
+    let json = "{\n" +
+        "  \"domain\": \"nuclear\",\n" +
+        "  \"verb\": \"verify\",\n" +
+        "  \"kind\": \"n11_zn_funnel\",\n" +
+        "  \"producer\": \"sim.hexa@nuclear-N11\",\n" +
+        "  \"absorbed\": false,\n" +
+        "  \"gate_type\": \"nuclear-novel-discovery-simulation\",\n" +
+        "  \"provisional\": true,\n" +
+        "  \"query\": { \"Z_range\": [114, 122], \"N_range\": [170, 184], " +
+        "\"accelerator_band_log10_s\": [-6.0, 3.0] },\n" +
+        "  \"top_k_candidates\": " + body + ",\n" +
+        "  \"scope_caveats\": [\n" +
+        "    \"(s1) Closed-form HEURISTIC over the (c) alpha-decay " +
+        "half-life gate only; (a)(b)(d)(e) gates install-gated (N6 HFB / " +
+        "N9 shell-model are B-path).\",\n" +
+        "    \"(s2) NUCLEAR.md 3.3 NO fabrication: Q_alpha from a CITED " +
+        "table only (AME2020 / NUBASE2020 measured); uncited (Z,N) cells " +
+        "honest-skip install-gated.\",\n" +
+        "    \"(s3) absorbed=false 永久. 'Z=119 후보일 가능성' != " +
+        "'Z=119 후보임' != 'Z=119 발견됨'. (d) production sigma + (e) " +
+        "recoil-separator detection wet-lab dependent permanently.\"\n" +
+        "  ],\n" +
+        "  \"citations\": [\n" +
+        "    \"Viola & Seaborg 1966 J Inorg Nucl Chem 28:741 (NC1)\",\n" +
+        "    \"Sobiczewski/Parkhomenko 2005 PRC 72.044316 (VS refit)\",\n" +
+        "    \"Royer 2000 J Phys G 26:1149 arxiv:nucl-th/0510074 (NC2)\",\n" +
+        "    \"arxiv:2105.01035 AME2020 (Q_alpha source)\",\n" +
+        "    \"NUBASE2020 Kondev et al Chinese Phys C 45:030001\",\n" +
+        "    \"Poenaru & Gherghescu 2017 arxiv:1706.04068 (SHE context)\",\n" +
+        "    \"NUCLEAR.md 6.2 (N11) + RTSC.md 9.10 (N5 pattern)\"\n" +
+        "  ],\n" +
+        "  \"recommendation\": \"top_k is an accelerator beam-time " +
+        "priority shortlist. absorbed=true requires GSI/JINR/RIKEN beam " +
+        "+ SHIP/DGFRS/GARIS detection + IUPAC priority — none from sim " +
+        "(NUCLEAR.md 7). '가능성' != '임'.\"\n" +
+        "}\n"
+
+    write_file(path, json)
+    return path
+}
+
 fn main() {
     println("[nuclear+verify] sim.hexa — NUCLEAR.md §6 Phase 4 #1 " +
             "(hexa-native N7 closed-form)")
@@ -195,6 +371,24 @@ fn main() {
               88, 226, 4.871)
     _emit_row("Cm-244  (Z=96,  A=244, Q=5.902 MeV)",
               96, 244, 5.902)
+
+    // ── N11 (c)-gate funnel cells (NUCLEAR.md §6.2 · mirror RTSC N5) ────
+    // Accelerator band [-6, +3] log10 s (μs separator-transit floor →
+    // recoil-tagging ceiling). Cited measured-Q_α SHE α-emitters only —
+    // unsourced cells honest-skip (valid=0) per §3.3 (no Q_α fabrication).
+    println("[nuclear+verify · n11] (c)-gate funnel — band [-6,+3] log10 s")
+    _emit_n11("Og-294  (Z=118, A=294, Q=11.65 · NUBASE2020 measured)",
+              118, 294, 11.65)
+    _emit_n11("Lv-293  (Z=116, A=293, Q=10.54 · measured E_α 1st-detect)",
+              116, 293, 10.54)
+    _emit_n11("Fl-289  (Z=114, A=289, Q=9.71  · measured E_α 1998)",
+              114, 289, 9.71)
+
+    // Emit the REAL N11 top-K JSON record (NUCLEAR.md §6.1 schema).
+    let n11_out = "/tmp/nuclear_n11"
+    let _ = exec("mkdir -p " + n11_out)
+    let topk_path = _write_n11_topk(n11_out)
+    println("[nuclear+verify · n11] wrote top-K record → " + topk_path)
 
     println("[nuclear+verify] absorbed=false (R4 invariant; " +
             "NUCLEAR.md §7 wet-lab dependency permanent — Geiger-Nuttall " +
