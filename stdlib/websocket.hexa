@@ -412,13 +412,29 @@ pub fn ws_send(h, message: string) -> bool {
     }
     let in_path = to_string(h["in"])
     if len(in_path) == 0 { return false }
-    // Append-write to the FIFO. We do this via shell `printf` rather
-    // than write_file/append_file because FIFO writes need to block
-    // until the reader is present — append_file may not have FIFO
-    // semantics on every runtime backend.
+    // Append-write to the FIFO via shell `printf` (not write_file/append_file:
+    // FIFO writes need to block until the reader is present — append_file may
+    // not have FIFO semantics on every runtime backend).
+    //
+    // The write runs in the FOREGROUND (no trailing `&`) and the exit status is
+    // checked. The old backgrounded form (`printf … > fifo &`) swallowed the
+    // EPIPE that a dead reader (websocat stdin closed) raises inside the
+    // subshell, so ws_send reported `true` forever after the reader died →
+    // silent data loss with a healthy-looking forwarded counter. Foreground +
+    // exit-status surfaces the failure so the caller can reconnect / fail-fast.
+    // Wrapped in `timeout` when available so a vanished reader (a FIFO open()
+    // blocks until a reader attaches) can't hang ws_send indefinitely.
+    // Repro + root cause: inbox/patches/ws-send-fifo-backgrounded-write-race-2026-05-23.md.
     let escaped = _ws_shell_escape(message + "\n")
-    let _w = exec("printf %s " + escaped + " > " + _ws_shell_escape(in_path) + " &")
-    return true
+    let write_cmd = "printf %s " + escaped + " > " + _ws_shell_escape(in_path)
+    let has_timeout = to_string(exec("command -v timeout >/dev/null 2>&1 && echo y || echo n")).trim()
+    let wrapped = if has_timeout == "y" {
+        "timeout 5 sh -c " + _ws_shell_escape(write_cmd)
+    } else {
+        write_cmd
+    }
+    let res = exec_with_status(wrapped)
+    return res[1] == 0
 }
 
 // ws_recv — block-read up to one frame (one line).
