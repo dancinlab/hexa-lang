@@ -2762,6 +2762,18 @@ fn gen2_stmt(node, depth) {
         if type_of(node.left) != "string" {
             init = gen2_expr(node.left)
         }
+        // PROBE r15-D18: type-changing shadow let-rebind. If this name is a
+        // same-scope re-`let` (hoisted by bt 72, so `_gen2_has_decl` is true),
+        // it shadows an earlier binding — possibly with a NEW type. Any prior
+        // comptime-const fold for the name is now stale and would inline the
+        // OLD value at every later reference (`let x="hi"; let x=42; x` → "hi").
+        // `init` above already captured this RHS using the OLD registration
+        // (correct for `let n = n + 1`), so it is safe to invalidate now before
+        // the re-fold below re-registers the NEW value (or falls back to the
+        // live variable read when the new init does not fold).
+        if _gen2_has_decl(node.name) {
+            _invalidate_comptime_const(node.name)
+        }
         // STRUCTURAL-2 Phase B: register immutable let with int initializer
         // as known-int for downstream BinOp .i unboxing. Only LetStmt
         // (immutable) — LetMutStmt excluded because reassignment may change type.
@@ -8435,6 +8447,32 @@ fn comptime_eval(node) {
 fn _register_comptime_const(name, value_node) {
     _comptime_const_names.push(name)
     _comptime_const_nodes.push(value_node)
+}
+
+// PROBE r15-D18: type-changing shadow let-rebind. Hexa permits same-scope
+// `let x = "hello"; let x = 42` (canonical Rust/Swift shadow with a new type).
+// The hoist/assign path (bt 72) already emits this correctly at C level
+// (HexaVal is a tagged union, so the type change is free), BUT the comptime-
+// const fold table (PROBE r11 B3) registers the FIRST `let`'s literal and
+// _lookup_comptime_const returns the FIRST match — so every later reference to
+// the shadowed name inlines the STALE first value, ignoring the rebind
+// (`println(x)` emitted "hello" instead of 42). Drop ALL prior registrations
+// for `name` so a shadow rebind re-folds (or falls back to the live variable
+// read). Called at the LetStmt re-register site after the init C text is
+// captured (RHS reads of the OLD value are already baked into `init`).
+fn _invalidate_comptime_const(name) {
+    let mut _names = []
+    let mut _nodes = []
+    let mut i = 0
+    while i < len(_comptime_const_names) {
+        if _comptime_const_names[i] != name {
+            _names.push(_comptime_const_names[i])
+            _nodes.push(_comptime_const_nodes[i])
+        }
+        i = i + 1
+    }
+    _comptime_const_names = _names
+    _comptime_const_nodes = _nodes
 }
 
 // ── match/block-body scope isolation for the comptime-const fold table ──
