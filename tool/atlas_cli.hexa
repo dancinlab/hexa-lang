@@ -695,6 +695,38 @@ fn _chsh_tsirelson_register() -> float {
     return 2.0 * sqrt(2.0)
 }
 
+// Compound-removal recurrence — register mirror of verify_cli::_compound_coverage
+// / _cycles_to_target. cov(N)=1-(1-x)^N · cycles_to_target = min N with (1-x)^N≤tgt.
+// Deterministic cumulative-product loop (no transcendental). TTR-MN ink timeline.
+fn _compound_coverage_register(x: float, big_n: int) -> float {
+    if x <= 0.0 { return 0.0 }
+    if x >= 1.0 { return 1.0 }
+    let r = 1.0 - x
+    let mut prod = 1.0
+    let mut i = 0
+    while i < big_n {
+        prod = prod * r
+        i = i + 1
+    }
+    return 1.0 - prod
+}
+
+fn _cycles_to_target_register(x: float, target: float) -> float {
+    if x <= 0.0 { return _NOCALC_F_REGISTER }
+    if target <= 0.0 { return _NOCALC_F_REGISTER }
+    if x >= 1.0 { return 1.0 }
+    if target >= 1.0 { return 0.0 }
+    let r = 1.0 - x
+    let mut prod = 1.0
+    let mut n = 0
+    while prod > target {
+        prod = prod * r
+        n = n + 1
+        if n > 1000000 { return _NOCALC_F_REGISTER }
+    }
+    return to_float(n)
+}
+
 // Hardy multipartite — verbatim port of verify_cli::_hardy_powi / _hardy_abs /
 // _hardy_solve_tr / _hardy_bound (Newton root of x^{N+1}-2x+1=0 on (0,1);
 // p_N^max = t_r^N * (1-t_r)^N / (1 - t_r^N); Adhikary-Mandal arXiv:2505.10170 Eq.5).
@@ -1143,6 +1175,14 @@ fn _recompute_float_register(fn_name: string, a0: float, a1: float, a2: float, a
         if argc < 2 { return _NOCALC_F_REGISTER }
         return _wilson_hilferty_p_register(a0, a1)
     }
+    if fn_name == "compound_coverage" {
+        if argc < 2 { return _NOCALC_F_REGISTER }
+        return _compound_coverage_register(a0, to_int(a1))
+    }
+    if fn_name == "cycles_to_target" {
+        if argc < 2 { return _NOCALC_F_REGISTER }
+        return _cycles_to_target_register(a0, a1)
+    }
     // RFC 045 qmirror PR-A 2nd — register mirror of verify_cli dispatch (#626).
     if fn_name == "chsh_tsirelson" { return _chsh_tsirelson_register() }
     if fn_name == "hardy_bound" {
@@ -1313,6 +1353,7 @@ fn _recompute_float_register(fn_name: string, a0: float, a1: float, a2: float, a
 // is fn_name a registered float-NUMERICAL form? Mirrors verify_cli::_is_float_fn.
 fn _is_float_fn_register(fn_name: string) -> bool {
     return fn_name == "welch_t_crit" || fn_name == "wilson_hilferty_p"
+        || fn_name == "compound_coverage" || fn_name == "cycles_to_target"
         || fn_name == "chsh_tsirelson" || fn_name == "hardy_bound"
         || fn_name == "mabk_quantum_max"
         || fn_name == "pt_doily_quantum_win" || fn_name == "pt_doily_classical_bound"
