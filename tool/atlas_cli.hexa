@@ -1019,6 +1019,94 @@ fn _hagen_poiseuille_register(r_rad: float, d_p: float, mu_visc: float, l_len: f
     return pi_hp * r4 * d_p / (8.0 * mu_visc * l_len)
 }
 
+// ── TTR-ORAL / TTR-LAC bundle (topical PK + laser optics · INBOX T22:35Z) ──
+// Register mirrors of verify_cli dispatch. 11 fn family: 6 PK + 5 optics;
+// all libm-class 🟢 Tier2 (sqrt/log/pow). Names distinct from existing
+// 2-arg `higuchi` and 3-arg `beer_lambert` (see verify_cli comment).
+
+// Higuchi planar-diffusion flux (sqrt(2·C0·Dm·t/π)). 3-arg.
+fn _higuchi_flux_register(c0: float, dm: float, t_time: float) -> float {
+    if c0 < 0.0 { return _NOCALC_F_REGISTER }
+    if dm < 0.0 { return _NOCALC_F_REGISTER }
+    if t_time < 0.0 { return _NOCALC_F_REGISTER }
+    let pi_hf = 3.14159265358979323846
+    return sqrt(2.0 * c0 * dm * t_time / pi_hf)
+}
+
+// Fick steady-state flux (P·ΔC). 2-arg.
+fn _fick_steady_flux_register(p_perm: float, d_c: float) -> float {
+    if p_perm < 0.0 { return _NOCALC_F_REGISTER }
+    return p_perm * d_c
+}
+
+// Partition coefficient log P (log10(C_oct/C_water)). 2-arg.
+fn _partition_coeff_register(c_oct: float, c_water: float) -> float {
+    if c_oct <= 0.0 { return _NOCALC_F_REGISTER }
+    if c_water <= 0.0 { return _NOCALC_F_REGISTER }
+    let ln10_pc = log(10.0)
+    return log(c_oct / c_water) / ln10_pc
+}
+
+// Skin permeability (D·K/h). 3-arg.
+fn _permeability_skin_register(d_diff: float, k_part: float, h_thick: float) -> float {
+    if d_diff < 0.0 { return _NOCALC_F_REGISTER }
+    if h_thick <= 0.0 { return _NOCALC_F_REGISTER }
+    return d_diff * k_part / h_thick
+}
+
+// AUC first-order (C0/ke). 2-arg.
+fn _auc_first_order_register(c0: float, k_e: float) -> float {
+    if c0 < 0.0 { return _NOCALC_F_REGISTER }
+    if k_e <= 0.0 { return _NOCALC_F_REGISTER }
+    return c0 / k_e
+}
+
+// Clearance (dose/AUC). 2-arg.
+fn _clearance_register(dose: float, auc: float) -> float {
+    if dose < 0.0 { return _NOCALC_F_REGISTER }
+    if auc <= 0.0 { return _NOCALC_F_REGISTER }
+    return dose / auc
+}
+
+// Beer-Lambert molar form (I0·10^(-ε·c·L)). 4-arg.
+fn _beer_lambert_log10_register(i_0: float, eps: float, c_conc: float, l_path: float) -> float {
+    if i_0 < 0.0 { return _NOCALC_F_REGISTER }
+    if eps < 0.0 { return _NOCALC_F_REGISTER }
+    if c_conc < 0.0 { return _NOCALC_F_REGISTER }
+    if l_path < 0.0 { return _NOCALC_F_REGISTER }
+    return i_0 * pow(10.0, 0.0 - eps * c_conc * l_path)
+}
+
+// Fluence (P·t/A). 3-arg.
+fn _fluence_register(power_w: float, area_cm2: float, t_time: float) -> float {
+    if power_w < 0.0 { return _NOCALC_F_REGISTER }
+    if area_cm2 <= 0.0 { return _NOCALC_F_REGISTER }
+    if t_time < 0.0 { return _NOCALC_F_REGISTER }
+    return power_w * t_time / area_cm2
+}
+
+// Gaussian beam waist (w0·sqrt(1+(z/zR)²)). 3-arg.
+fn _beam_waist_register(w0: float, z_axial: float, z_rayleigh: float) -> float {
+    if w0 < 0.0 { return _NOCALC_F_REGISTER }
+    if z_rayleigh <= 0.0 { return _NOCALC_F_REGISTER }
+    let ratio = z_axial / z_rayleigh
+    return w0 * sqrt(1.0 + ratio * ratio)
+}
+
+// Rayleigh range (π·w0²/λ). 2-arg.
+fn _rayleigh_range_register(w0: float, lambda_wl: float) -> float {
+    if w0 < 0.0 { return _NOCALC_F_REGISTER }
+    if lambda_wl <= 0.0 { return _NOCALC_F_REGISTER }
+    let pi_rr = 3.14159265358979323846
+    return pi_rr * w0 * w0 / lambda_wl
+}
+
+// Absorption depth (1/α). 1-arg.
+fn _absorption_depth_register(alpha_abs: float) -> float {
+    if alpha_abs <= 0.0 { return _NOCALC_F_REGISTER }
+    return 1.0 / alpha_abs
+}
+
 // float dispatch — fn_name → recompute. Mirrors verify_cli::_recompute_float.
 // RFC 045 qmirror PR-A atoms (chsh_tsirelson · hardy_bound · mabk_quantum_max
 // · pt_doily_quantum_win · pt_doily_classical_bound) are mirrored here as
@@ -1211,6 +1299,50 @@ fn _recompute_float_register(fn_name: string, a0: float, a1: float, a2: float, a
         if argc < 4 { return _NOCALC_F_REGISTER }
         return _hagen_poiseuille_register(a0, a1, a2, a3)
     }
+    // ── TTR-ORAL / TTR-LAC bundle (topical PK + laser optics · INBOX T22:35Z) ──
+    if fn_name == "higuchi_flux" {
+        if argc < 3 { return _NOCALC_F_REGISTER }
+        return _higuchi_flux_register(a0, a1, a2)
+    }
+    if fn_name == "fick_steady_flux" {
+        if argc < 2 { return _NOCALC_F_REGISTER }
+        return _fick_steady_flux_register(a0, a1)
+    }
+    if fn_name == "partition_coeff" {
+        if argc < 2 { return _NOCALC_F_REGISTER }
+        return _partition_coeff_register(a0, a1)
+    }
+    if fn_name == "permeability_skin" {
+        if argc < 3 { return _NOCALC_F_REGISTER }
+        return _permeability_skin_register(a0, a1, a2)
+    }
+    if fn_name == "auc_first_order" {
+        if argc < 2 { return _NOCALC_F_REGISTER }
+        return _auc_first_order_register(a0, a1)
+    }
+    if fn_name == "clearance" {
+        if argc < 2 { return _NOCALC_F_REGISTER }
+        return _clearance_register(a0, a1)
+    }
+    if fn_name == "beer_lambert_log10" {
+        if argc < 4 { return _NOCALC_F_REGISTER }
+        return _beer_lambert_log10_register(a0, a1, a2, a3)
+    }
+    if fn_name == "fluence" {
+        if argc < 3 { return _NOCALC_F_REGISTER }
+        return _fluence_register(a0, a1, a2)
+    }
+    if fn_name == "beam_waist" {
+        if argc < 3 { return _NOCALC_F_REGISTER }
+        return _beam_waist_register(a0, a1, a2)
+    }
+    if fn_name == "rayleigh_range" {
+        if argc < 2 { return _NOCALC_F_REGISTER }
+        return _rayleigh_range_register(a0, a1)
+    }
+    if fn_name == "absorption_depth" {
+        return _absorption_depth_register(a0)
+    }
     return _NOCALC_F_REGISTER
 }
 
@@ -1243,6 +1375,13 @@ fn _is_float_fn_register(fn_name: string) -> bool {
         || fn_name == "beenet_grid_bins" || fn_name == "migdal_ratio"
         // Bio-physical Phase 3 (atlas L2 unblock — 4-arg lane):
         || fn_name == "higuchi" || fn_name == "tafel" || fn_name == "hagen_poiseuille"
+        // TTR-ORAL / TTR-LAC bundle (topical PK + laser optics · INBOX T22:35Z):
+        || fn_name == "higuchi_flux" || fn_name == "fick_steady_flux"
+        || fn_name == "partition_coeff" || fn_name == "permeability_skin"
+        || fn_name == "auc_first_order" || fn_name == "clearance"
+        || fn_name == "beer_lambert_log10" || fn_name == "fluence"
+        || fn_name == "beam_waist" || fn_name == "rayleigh_range"
+        || fn_name == "absorption_depth"
 }
 
 // is fn_name a 0-arg closed-form constant? Mirrors verify_cli::_is_zero_arg_float_fn.
