@@ -1,7 +1,10 @@
 # PROBE r14-TTTT · enum `<`/`>`/`<=`/`>=` 선언순(declaration-order) 비교
 
-- 상태: PR 제출
+- 상태: resolved
 - 날짜: 2026-05-24
+
+**Status (2026-05-25)**: RESOLVED by PR #617 (`feat(runtime): enum </>/<=/>= ordering by declaration order`). `self/runtime_core.c` 에 `_hexa_enum_pair_idx` helper + `hexa_cmp_lt/gt/le/ge` 의 TAG_ENUM 선언순(`_hexa_enum_idx`) 분기 land 확인. 동일-enum 게이트(type_name eq) + cross-enum legacy fallback 포함.
+
 - 영역: `self/runtime_core.c`, `self/runtime.h`, `self/codegen.hexa`
 - 선행: PR #582 (PR-2.1 단일 enum TAG_ENUM emit), PR #589 (PR-2.2 모든 unit-variant enum TAG_ENUM 마이그레이션)
 

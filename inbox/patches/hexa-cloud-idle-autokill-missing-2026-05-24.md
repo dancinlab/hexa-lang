@@ -1,5 +1,7 @@
 # `hexa cloud` idle-autokill 미존재 — 사용자가 잊으면 무한 $$/h burn
 
+**Status (2026-05-25)**: RESOLVED by PR #715 — `stdlib/cloud/watchdog.hexa` landed (`_should_autokill` 3-gate closed-form decision + `runpod_get_idle_snapshot` + `runpod_idle_autokill_sweep` dry-run-gated · `watchdog_test.hexa` 15-case falsifier). Fix A (watchdog) shipped; daemonization + Fix B/C are follow-ups.
+
 **Reporter**: demiurge (RTSC 캠페인 · 2026-05-24)
 **Severity**: high (passive money loss — 사용자가 destroy 안 하면 영구 burn)
 **Affected**: `stdlib/cloud/*` (hexa cloud subverbs · no idle-kill verb), `sidecar/pod-monitor/0.1.2/` (advisory only)
