@@ -1,0 +1,50 @@
+// HEXA Standard Library — io/path
+//
+// @version 0.1.0
+// @capabilities [io]
+//
+// Path resolution + directory utilities. Standardises the 114+ anima
+// inline definitions (57 _resolve_root + 42 resolve_root + 33 _home +
+// 39 _mkdir_p, STDLIB Phase 1b 잔여 survey 2026-05-25).
+//
+// Surface:
+//   pub fn home_dir() -> string
+//     Returns user home directory (via $HOME env var).
+//
+//   pub fn resolve_root(start: string) -> string
+//     Walks parent directories from `start` looking for a `.git` or
+//     `CLAUDE.md` marker · returns repo root path. Returns `start` if
+//     no marker found.
+//
+//   pub fn mkdir_p(path: string)
+//     Recursive mkdir (like `mkdir -p`). No-op if path exists.
+
+import "stdlib/portable_fs.hexa"
+
+pub fn home_dir() -> string {
+    return env_get("HOME")
+}
+
+pub fn resolve_root(start: string) -> string {
+    let mut cur = start
+    let mut depth = 0
+    while depth < 32 {
+        if pfs_file_exists(cur + "/.git") {
+            return cur
+        }
+        if pfs_file_exists(cur + "/CLAUDE.md") {
+            return cur
+        }
+        let parent = pfs_dirname(cur)
+        if parent == cur {
+            return start
+        }
+        cur = parent
+        depth = depth + 1
+    }
+    return start
+}
+
+pub fn mkdir_p(path: string) {
+    pfs_mkdir_p(path)
+}
