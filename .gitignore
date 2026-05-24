@@ -28,6 +28,11 @@ __pycache__/
 # AOT build cache (hexa run)
 .hexa-cache/
 
+# GO M2/M3 — release precompile output dir (binaries staged at release time
+# by tool/build_precompile.hexa from tool/precompile.json; tarball-shipped,
+# not source-controlled — same provenance as build/).
+release/precompile/
+
 # Scratch space
 tmp/
 

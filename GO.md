@@ -7,9 +7,12 @@
 ## 진행 milestone
 
 - [ ] M1 — `~/.hexa-cache/` 자동 GC (LRU + TTL + tmp orphan sweep). default cap 2 GiB / TTL 30 일 / env override (`HEXA_CACHE_CAP_MB`, `HEXA_CACHE_TTL_DAYS`).
-- [ ] M2 — `hexa run` 첫-호출 warm cost 측정 + 캐시 hit 경로 zero-fork 가시화 (TBD)
-- [ ] M3 — TBD (사용자 결정 대기)
-- [x] M5 — hexa daemon RFC draft (fork-storm internal axis · design-only) → `docs/rfc/rfc_drafts_2026_05_25/rfc_093_hexa_daemon.md`. 권장 = Option A stand-alone daemon (`hexa-daemon` verb · unix socket · opt-in autospawn · fork-mode fallback).
+- [x] M2 — `tool/build_precompile.hexa` 파이프라인 + `self/main.hexa` cmd_run lookup precompile dir 우선 probe + `tests/m_precompile_hit_test.hexa` e2e. cold-cache fork-storm 의 *내부* axis (release 시점 precompile → 사용자 첫 호출 즉시 cache HIT).
+- [x] M3 — `tool/precompile.json` declarative manifest (어떤 script 가 precompile 대상). Go 의 `go install <pkg>` 패턴 mirror. demo: 2 entry (atlas_cli · build_hexa_cli).
+- [ ] M4 — release tarball CI 통합 (`tool/build_precompile.hexa` 자동 호출 + tar 에 `release/precompile/` 동봉)
+- [x] M5 — hexa daemon RFC draft (fork-storm internal axis · design-only · *직교* — run-time persistent process vs M2/M3 release-time precompile) → `docs/rfc/rfc_drafts_2026_05_25/rfc_093_hexa_daemon.md`. 권장 = Option A stand-alone daemon (`hexa-daemon` verb · unix socket · opt-in autospawn · fork-mode fallback).
+- [ ] M6 — manifest 확장 (demo 2 entry → 실제 hot scripts 전수)
+- [ ] M7 — `version_str()` 자동 drift 검사 (M2/M3 builder ↔ cmd_run 동일 version 보장)
 
 ## cross-link
 
