@@ -1920,6 +1920,14 @@ fn gen2_fn_decl(node) {
         _gen2_current_fn_strict_fp = 0
     }
     let body_len = len(node.body)
+    // PROBE r16 cross-fn-fold: scope-isolate this fn body's comptime-const
+    // folds so a `let x = <lit>` here cannot bleed its folded literal into a
+    // sibling fn that re-binds the same name to a non-foldable init. Without
+    // this, `fn a(){let m=2147483648}` leaks m→literal into `fn b(){let m=h*2}`
+    // (b's re-let doesn't _gen2_has_decl-invalidate across fn scope, and h*2
+    // doesn't fold), so b's `m` reads inline the stale literal — a silent
+    // wrong-answer. Mirrors the block/loop/arm scope-isolation pattern.
+    let _cc_fn_mark = _comptime_const_scope_mark()
     let mut bi = 0
     while bi < body_len {
         let stmt = node.body[bi]
@@ -2017,6 +2025,7 @@ fn gen2_fn_decl(node) {
         }
         bi = bi + 1
     }
+    _comptime_const_scope_restore(_cc_fn_mark)
     // Plan B Phase 3: emit __fn_exit drain before the safety footer
     // when this fn registered any defers. The drain runs each defer
     // body in reverse-registration order (LIFO — matches Go + the
