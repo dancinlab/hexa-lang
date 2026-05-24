@@ -1,5 +1,24 @@
 # hexa-lang `list` append/concat O(n²) — corpus build 30 MiB OOM (M3 saga, 2026-05-24)
 
+**Status**: archived-already-resolved-2026-05-24 — `.push(x)` builtin 이 이미 amortised O(1) (`self/runtime.c:729` "geometric hexa_array_push growth"). Option A (vec primitive) 는 native list `.push()` 로 이미 ship 완료. 권장 migration = `out = out + [x]` → `out.push(x)`. Option C (streaming jsonl_writer) + Option D (M981b list-측 lint) 는 별도 RFC follow-up scope (이 patch 미포함).
+
+## Triage 2026-05-24 (3-signal precheck)
+
+1. `git log --grep="list.concat|list.quadratic|corpus.oom|array_concat"` → `hexa_array_concat` 은 runtime.c:4060 에 존재 (concat=두 array 끝붙임). copy-on-append O(n²) 는 `acc = acc + [x]` 표현형에서만 발생 — `.push()` 빌트인 경로는 무관.
+2. `gh pr list --search "list concat O(N2)"` → sibling string-concat PR #684 만 hit. list 측 직접 fix PR 없음.
+3. `grep "hexa_array_push" self/runtime.c` → runtime.c:729 "geometric hexa_array_push growth" 명시 — list `.push(x)` 는 이미 amortised O(1). Header-tracked realloc (cycle 잔여 #3 fix) 로 SIGSEGV 도 해결됨.
+
+**결론**: `.push(x)` 빌트인 = 패치가 제안한 `vec_push` 와 동등. Migration path = source-level `+ [x]` → `.push(x)` 1줄 변경. strbuf 같은 신규 stdlib surface 불필요.
+
+**Follow-up RFC scope** (이 patch 미포함):
+- Option C — `jsonl_writer` streaming primitive (corpus-build domain 전용)
+- Option D — `ai_native_pass.hexa` M981b 의 list-측 mirror lint (`x = x + [y]` in loop → `.push()` 권고)
+- Option B — runtime in-place grow on refcount==1 (strbuf saga 와 동일하게 deferred)
+
+원본 patch body (historical record, full design exploration) 는 아래 보존.
+
+---
+
 **Reporter**: anima (`dancinlab/anima` downstream consumer)
 **Severity**: medium-high (list-heavy work load 가 corpus-build scale 에서 macOS OOM 트리거 — string strbuf 와 parallel structural trap)
 **Affected**: `self/stdlib/core/lists.hexa` (추정) · 모든 list-heavy stream/aggregate work · corpus build / log aggregation / large script generation
