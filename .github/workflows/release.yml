@@ -16,6 +16,8 @@ name: release
 #   hexa-<target>/
 #     hexa                          # CLI binary (becomes ~/.hx/bin/hexa.real)
 #     build/hexa_module_loader      # `hexa build` flatten helper
+#     release/precompile/           # GO M4 — pre-built cache binaries (hexa_run.<key>)
+#                                   # so first `hexa run <shipped-script>` skips clang fork
 #
 # The bootstrap chain is duplicated verbatim from bootstrap.yml to keep the
 # two workflows independent (per bootstrap.yml's INDEPENDENCE clause).
@@ -121,17 +123,42 @@ jobs:
               -o hexa
           file hexa
 
+      # ── GO M4 — precompile shipped scripts into release/precompile/
+      # so the tarball's first `hexa run <script>` skips the clang fork
+      # (cold-cache fork-storm mitigation, internal axis). Each manifest
+      # entry in tool/precompile.json → release/precompile/hexa_run.<key>.
+      # HEXA_MODULE_LOADER points at the just-built loader to dodge the
+      # silent-stub link-fail trap (compiled `use` needs the env hint).
+      - name: Stage 3 — precompile shipped scripts (release/precompile/)
+        shell: bash
+        run: |
+          set -euo pipefail
+          export HEXA_LANG="$PWD"
+          export HEXA_MODULE_LOADER="$PWD/build/hexa_module_loader"
+          export PATH="$PWD:$PATH"
+          ./hexa run tool/build_precompile.hexa
+          echo "--- release/precompile/ contents ---"
+          ls -la release/precompile/
+          test -d release/precompile
+          test "$(ls -1 release/precompile/ | wc -l)" -gt 0
+
       - name: Package — hexa-darwin-arm64.tar.gz
         shell: bash
         run: |
           set -euo pipefail
           target="darwin-arm64"
           stage="dist/hexa-${target}"
-          mkdir -p "$stage/build"
+          mkdir -p "$stage/build" "$stage/release/precompile"
           cp hexa "$stage/hexa"
           cp build/hexa_module_loader "$stage/build/hexa_module_loader"
+          # GO M4 — ship precompiled binaries from Stage 3.
+          cp -R release/precompile/. "$stage/release/precompile/"
           tar -czf "hexa-${target}.tar.gz" -C dist "hexa-${target}"
           ls -la "hexa-${target}.tar.gz"
+          # GO M4 smoke — tarball MUST embed release/precompile/ with ≥1 entry.
+          n=$(tar -tzf "hexa-${target}.tar.gz" | grep -cE "hexa-${target}/release/precompile/[^/]+$" || true)
+          echo "tarball precompile entries: $n"
+          test "$n" -gt 0
 
       - name: Upload to GitHub Release
         uses: softprops/action-gh-release@v2
@@ -186,17 +213,37 @@ jobs:
               -lm -ldl
           file hexa
 
+      # ── GO M4 — see darwin-arm64 job for full rationale.
+      - name: Stage 3 — precompile shipped scripts (release/precompile/)
+        shell: bash
+        run: |
+          set -euo pipefail
+          export HEXA_LANG="$PWD"
+          export HEXA_MODULE_LOADER="$PWD/build/hexa_module_loader"
+          export PATH="$PWD:$PATH"
+          ./hexa run tool/build_precompile.hexa
+          echo "--- release/precompile/ contents ---"
+          ls -la release/precompile/
+          test -d release/precompile
+          test "$(ls -1 release/precompile/ | wc -l)" -gt 0
+
       - name: Package — hexa-linux-x86_64.tar.gz
         shell: bash
         run: |
           set -euo pipefail
           target="linux-x86_64"
           stage="dist/hexa-${target}"
-          mkdir -p "$stage/build"
+          mkdir -p "$stage/build" "$stage/release/precompile"
           cp hexa "$stage/hexa"
           cp build/hexa_module_loader "$stage/build/hexa_module_loader"
+          # GO M4 — ship precompiled binaries from Stage 3.
+          cp -R release/precompile/. "$stage/release/precompile/"
           tar -czf "hexa-${target}.tar.gz" -C dist "hexa-${target}"
           ls -la "hexa-${target}.tar.gz"
+          # GO M4 smoke — tarball MUST embed release/precompile/ with ≥1 entry.
+          n=$(tar -tzf "hexa-${target}.tar.gz" | grep -cE "hexa-${target}/release/precompile/[^/]+$" || true)
+          echo "tarball precompile entries: $n"
+          test "$n" -gt 0
 
       - name: Upload to GitHub Release
         uses: softprops/action-gh-release@v2
@@ -251,17 +298,37 @@ jobs:
               -lm -ldl
           file hexa
 
+      # ── GO M4 — see darwin-arm64 job for full rationale.
+      - name: Stage 3 — precompile shipped scripts (release/precompile/)
+        shell: bash
+        run: |
+          set -euo pipefail
+          export HEXA_LANG="$PWD"
+          export HEXA_MODULE_LOADER="$PWD/build/hexa_module_loader"
+          export PATH="$PWD:$PATH"
+          ./hexa run tool/build_precompile.hexa
+          echo "--- release/precompile/ contents ---"
+          ls -la release/precompile/
+          test -d release/precompile
+          test "$(ls -1 release/precompile/ | wc -l)" -gt 0
+
       - name: Package — hexa-linux-arm64.tar.gz
         shell: bash
         run: |
           set -euo pipefail
           target="linux-arm64"
           stage="dist/hexa-${target}"
-          mkdir -p "$stage/build"
+          mkdir -p "$stage/build" "$stage/release/precompile"
           cp hexa "$stage/hexa"
           cp build/hexa_module_loader "$stage/build/hexa_module_loader"
+          # GO M4 — ship precompiled binaries from Stage 3.
+          cp -R release/precompile/. "$stage/release/precompile/"
           tar -czf "hexa-${target}.tar.gz" -C dist "hexa-${target}"
           ls -la "hexa-${target}.tar.gz"
+          # GO M4 smoke — tarball MUST embed release/precompile/ with ≥1 entry.
+          n=$(tar -tzf "hexa-${target}.tar.gz" | grep -cE "hexa-${target}/release/precompile/[^/]+$" || true)
+          echo "tarball precompile entries: $n"
+          test "$n" -gt 0
 
       - name: Upload to GitHub Release
         uses: softprops/action-gh-release@v2

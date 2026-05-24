@@ -96,6 +96,25 @@ axis 의 첫 설계서.
 - **self-contained**: does NOT depend on M1's `_hexa_cache_gc` helper — uses `find` / `ls` / `stat` / `du` / `xargs` shell pipelines directly, so the M1 and M4 worktrees can land in either order without conflict.
 - **parity**: closes the `go clean -cache(-n)` gap — pre-M4 users had to `ls ~/.hexa-cache/ | wc -l` + `du -sh` + `rm` by hand.
 
+## 2026-05-25 · M4 (release tarball) · `.github/workflows/release.yml` 통합
+
+> M2+M3 (PR #889) 가 `tool/build_precompile.hexa` + `tool/precompile.json` 으로 cold-cache 회피 메커니즘을 ship 했으나 release pipeline 에 미통합 — 새 사용자 `hx install hexa-lang` 시 tarball 에 `release/precompile/` 비어있음 → 첫 호출 여전히 clang fork. M4 가 그 갭 closure.
+
+- **branch**: `go-m4-release-tarball-ci` (base `origin/main`)
+- **change**: `.github/workflows/release.yml` — 3 release job (darwin-arm64, linux-x86_64, linux-arm64) 각각에 `Stage 3 — precompile shipped scripts` step 추가 + 각 `Package` step 에 `mkdir release/precompile` · `cp -R release/precompile/.` · tarball entry count assert 추가. +70/-3 line.
+- **Stage 3** — `HEXA_LANG=$PWD` + `HEXA_MODULE_LOADER=$PWD/build/hexa_module_loader` (silent-stub link-fail trap 회피, ref [[reference_hexa_module_loader_env_2026_05_20]]) + `PATH=$PWD:$PATH` 으로 `./hexa run tool/build_precompile.hexa` 발사. manifest 2 entry → `release/precompile/hexa_run.<key>` 2 binary. 1+ entry 미충족 시 step fail.
+- **Package smoke** — `tar -tzf <tarball> | grep -cE "hexa-<target>/release/precompile/[^/]+$"` 으로 tarball 내부 entry 수 assert (≥1).
+- **Archive layout 헤더 코멘트** 갱신 — install.sh consumer 가 보는 새 directory 명시.
+- **gate** — workflow yaml change 만; `hexa parse` 대상 없음 (Stage 3 가 호출하는 `tool/build_precompile.hexa` 는 PR #889 에서 이미 parse-gate 통과).
+- **PR**: pr-cycle 훅이 `--auto --squash --delete-branch` 자동 큐, CI green 후 merge.
+
+### key 디자인 결정
+
+- **Stage 3 위치** — Stage 2 (`./hexa` 빌드) 직후 + Package 직전. CLI 가 존재해야 `hexa run` 호출 가능; tarball 만들기 전이어야 stage dir 에 복사 가능.
+- **3 job 모두에 동일 step 중복** — workflow yaml 은 reusable workflow 분리할 만큼 복잡하지 않음. release.yml 자체가 이미 bootstrap.yml 의 verbatim copy (INDEPENDENCE clause). 3-way 중복도 같은 트레이드오프.
+- **strict fail** — precompile bug 시 release pipeline 전체 fail (warn+continue 아님). cold-cache 회피가 M4 의 entire purpose 라 silent skip = M4 deliverable 위배.
+- **manifest 확장** — 본 PR 은 wiring 만; 실제 hot script 전수는 M6 (별 PR). 현재 2 entry (build_hexa_cli + atlas_cli) 로 smoke 충분.
+
 ## 2026-05-25 · M7 · `version_str()` drift guard (precompile silent-regression防止)
 
 - **branch**: `go-m7-version-str-drift-check` (base `origin/main`)
