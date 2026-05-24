@@ -27,8 +27,11 @@ fn _cloud_help() {
     println("  cloud exec      <host> [conn] -- <shell-cmd>           run shell command via ssh (DEFAULT SHELL PARSES IT)")
     println("  cloud nohup     <host> <logfile> [conn] [--env K=V] -- <argv...>   background argv, print remote pid")
     println("  cloud poll      <host> <pid> [conn]                    exit 0 if remote pid alive, else 1")
-    println("  cloud copy-to   <host> <local> <remote> [conn] [-r]   upload local file/dir to host:remote (scp; -r = tree)")
-    println("  cloud copy-from <host> <remote> <local> [conn] [--resume] download host:remote to local (scp; --resume = rsync)")
+    println("  cloud watch     <host> <pid> [conn] [--interval N] [--max-wait S] [--then-down <id> [--provider P]]")
+    println("                                                         loop poll until pid dies (exit 0) / max-wait (124); optional teardown")
+    println("  cloud ssh-port  <id> [--provider P]                    print live ssh host:port of a pod (vast|runpod)")
+    println("  cloud copy-to   <host> <local> <remote> [conn] [-r] [--verify-sha]  upload file/dir (scp; -r=tree; sha256 check)")
+    println("  cloud copy-from <host> <remote> <local> [conn] [--resume] [--verify-sha]  download (scp; --resume=rsync; sha256 check)")
     println("  cloud orphans   [--hours N]                            list tracked pods, flag stale (>N h, default 6)")
     println("  cloud reconcile                                        cross-ref registry vs provider: ORPHAN/GHOST/OK")
     println("  cloud adopt     <pod_id> [--purpose TEXT]              track an untracked (ORPHAN) pod")
@@ -50,6 +53,8 @@ fn _cloud_help() {
     println("  --resume        (copy-from) rsync --partial --append-verify; resume")
     println("                  an interrupted large-file pull (needs rsync >= 3.0).")
     println("  --recursive,-r  (copy-to) copy a directory tree (scp -r).")
+    println("  --verify-sha    (copy-to/copy-from) after transfer, compare sha256 of")
+    println("                  local vs remote; exit 103 mismatch / 104 if no sha tool.")
     println("")
     println("`run` uses structured argv — every token POSIX-quoted before ssh, so")
     println("no remote shell parsing / glob / /* */ comment mis-parse can corrupt")
@@ -470,6 +475,62 @@ fn _cloud_list_print(provider: str) -> int {
     return 0
 }
 
+// _cloud_ssh_port — print the live ssh endpoint (host + port) of an
+// existing pod by id (P4). Wires runpod_get_ssh_port / vast_ssh_endpoint
+// (the fns already exist; this only surfaces them as a verb). --provider
+// default vast; runpod needs `secret get runpod.api_key`. Returns 0 when
+// the endpoint is mapped, else 1.
+fn _cloud_ssh_port(id: str, provider: str) -> int {
+    if provider == "runpod" {
+        let api_key = exec("secret get runpod.api_key 2>/dev/null").trim()
+        if len(api_key) == 0 {
+            println("[cloud] ssh-port runpod: no runpod.api_key (set it with: secret set runpod.api_key)")
+            return 1
+        }
+        let r = runpod_get_ssh_port(api_key, id)
+        if r.ok == 1 {
+            println("[cloud] ssh-port runpod: " + r.ip + ":" + r.port + " (root@" + r.ip + " -p " + r.port + ")")
+            println("host=" + r.ip)
+            println("port=" + r.port)
+            return 0
+        }
+        println("[cloud] ssh-port runpod: " + r.message)
+        return 1
+    }
+    let v = vast_ssh_endpoint(id)
+    if v.ok == 1 {
+        println("[cloud] ssh-port vast: " + v.host + ":" + v.port + " (root@" + v.host + " -p " + v.port + ")")
+        println("host=" + v.host)
+        println("port=" + v.port)
+        return 0
+    }
+    println("[cloud] ssh-port vast: " + v.message)
+    return 1
+}
+
+// _cloud_watch — poll a remote pid every `interval` s until it dies (the
+// auto-loop substitute for repeatedly calling `poll`, P3). Returns 0 when
+// the pid is gone, 124 if `max_wait` s elapse first. `max_wait <= 0` waits
+// unboundedly (the default "babysit until the job finishes" mode).
+fn _cloud_watch(host: str, ssh_opts: [str], pid: int, interval: int, max_wait: int) -> int {
+    let mut step = interval
+    if step <= 0 {
+        step = 30
+    }
+    let mut elapsed = 0
+    while max_wait <= 0 || elapsed < max_wait {
+        let alive = cloud_poll_opts(host, ssh_opts, pid)
+        if alive == 0 {
+            println("[cloud] watch: pid " + str(pid) + " DEAD after ~" + str(elapsed) + "s")
+            return 0
+        }
+        let _ = exec("sleep " + str(step))
+        elapsed = elapsed + step
+    }
+    println("[cloud] watch: pid " + str(pid) + " still ALIVE after max-wait " + str(max_wait) + "s (exit 124)")
+    return 124
+}
+
 fn main() {
     let av = args()
     let mut si = -1
@@ -478,7 +539,7 @@ fn main() {
     while i < len(av) {
         let t = av[i]
         if si < 0 {
-            if t == "rent" || t == "up" || t == "down" || t == "destroy" || t == "list" || t == "status" || t == "preflight" || t == "watchdog" || t == "run" || t == "exec" || t == "nohup" || t == "poll" || t == "copy-to" || t == "copy-from" || t == "orphans" || t == "reconcile" || t == "adopt" || t == "forget" || t == "help" || t == "--help" || t == "-h" || t == "version" || t == "--version" || t == "-v" {
+            if t == "rent" || t == "up" || t == "down" || t == "destroy" || t == "list" || t == "status" || t == "preflight" || t == "watchdog" || t == "run" || t == "exec" || t == "nohup" || t == "poll" || t == "watch" || t == "ssh-port" || t == "copy-to" || t == "copy-from" || t == "orphans" || t == "reconcile" || t == "adopt" || t == "forget" || t == "help" || t == "--help" || t == "-h" || t == "version" || t == "--version" || t == "-v" {
                 si = i
                 sub = t
             }
@@ -494,7 +555,7 @@ fn main() {
         return
     }
     if sub == "version" || sub == "--version" || sub == "-v" {
-        println("hexa cloud 0.2.2 — env passthrough (--env/--env-file) · resumable copy-from (--resume) · recursive copy-to (-r) · run/exec fail-tail")
+        println("hexa cloud 0.2.3 — watch (poll-loop + teardown) · ssh-port verb · copy --verify-sha (sha256) · [0.2.2: env/resume/-r/fail-tail]")
         return
     }
     if sub == "rent" || sub == "up" {
@@ -653,6 +714,38 @@ fn main() {
         println("[cloud] pid " + str(pid) + " DEAD")
         exit(1)
     }
+    if sub == "watch" {
+        if si + 2 >= len(av) {
+            println("[cloud] watch: usage — cloud watch <host> <pid> [--port N] [--insecure] [--interval N] [--max-wait S] [--then-down <id> [--provider P]]")
+            exit(2)
+        }
+        let host = av[si + 1]
+        let pid = _cli_atoi(av[si + 2])
+        let ssh_opts = _ssh_opts_cli(av, si + 3)
+        let interval = _cli_atoi(_flag_val(av, si + 3, "--interval", "30"))
+        let max_wait = _cli_atoi(_flag_val(av, si + 3, "--max-wait", "0"))
+        let rc = _cloud_watch(host, ssh_opts, pid, interval, max_wait)
+        // On completion (pid gone), optionally tear the pod down — closes the
+        // "auto-loop-until-done + teardown" pattern (R2/P3) so the operator
+        // need not babysit. Skipped on timeout (rc 124).
+        if rc == 0 {
+            let down_id = _flag_val(av, si + 3, "--then-down", "")
+            if len(down_id) > 0 {
+                let provider = _flag_val(av, si + 3, "--provider", "vast")
+                exit(_cloud_down(down_id, provider))
+            }
+        }
+        exit(rc)
+    }
+    if sub == "ssh-port" {
+        if si + 1 >= len(av) {
+            println("[cloud] ssh-port: missing <id> — usage: cloud ssh-port <id> [--provider vast|runpod]")
+            exit(2)
+        }
+        let id = av[si + 1]
+        let provider = _flag_val(av, si + 2, "--provider", "vast")
+        exit(_cloud_ssh_port(id, provider))
+    }
     if sub == "orphans" {
         // List tracked pods, flagging stale ones (created > N hours ago and
         // not marked closed). Optional `--hours N` overrides the default 6h.
@@ -747,6 +840,11 @@ fn main() {
         }
         let r = _copy_to_run(host, ssh_opts, local_path, remote_path, want_recursive)
         println("[cloud] " + r.message + " · " + local_path + " -> " + host + ":" + remote_path)
+        if r.ok == 1 && _has_flag(av, si + 4, "--verify-sha") == 1 {
+            let v = cloud_verify_sha(host, ssh_opts, remote_path, local_path)
+            println("[cloud] verify-sha: " + v.message)
+            exit(v.exit_code)
+        }
         exit(r.exit_code)
     }
     if sub == "copy-from" {
@@ -761,6 +859,11 @@ fn main() {
         let want_resume = _has_flag(av, si + 4, "--resume")
         let r = _copy_from_run(host, ssh_opts, remote_path, local_path, want_resume)
         println("[cloud] " + r.message + " · " + host + ":" + remote_path + " -> " + local_path)
+        if r.ok == 1 && _has_flag(av, si + 4, "--verify-sha") == 1 {
+            let v = cloud_verify_sha(host, ssh_opts, remote_path, local_path)
+            println("[cloud] verify-sha: " + v.message)
+            exit(v.exit_code)
+        }
         exit(r.exit_code)
     }
 }
