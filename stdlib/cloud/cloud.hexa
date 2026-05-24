@@ -432,3 +432,79 @@ fn cloud_copy_from_opts(host: str, ssh_opts: [str], remote_path: str, local_path
 fn cloud_copy_from(host: str, remote_path: str, local_path: str) -> CloudResult {
     return cloud_copy_from_opts(host, [], remote_path, local_path)
 }
+
+// ── resumable / recursive transfer (R3 · P5, anima inbox 2026-05) ─────
+
+// _ssh_e_arg — build rsync's `-e` remote-shell string from cloud's
+// ssh_opts. rsync word-splits this string on whitespace (not a full
+// shell), and every cloud ssh_opt (-p N, -o key=val) is a space-free
+// token, so a plain space-join is faithful. BatchMode=yes keeps rsync
+// from hanging on an auth prompt, mirroring _ssh_capture.
+fn _ssh_e_arg(ssh_opts: [str]) -> str {
+    let mut e = "ssh -o BatchMode=yes -o ConnectTimeout=8"
+    let mut i = 0
+    while i < len(ssh_opts) {
+        e = e + " " + ssh_opts[i]
+        i = i + 1
+    }
+    return e
+}
+
+// cloud_copy_from_resume_opts — download host:remote_path to local_path
+// with rsync `--partial --append-verify`, so an interrupted large-file
+// transfer (a checkpoint pull cut off by a pod reboot) RESUMES from the
+// kept partial instead of restarting from byte 0. Same local-side verify
+// as cloud_copy_from_opts: rsync exit 0 alone is not enough — the file
+// must materialise non-empty. Requires rsync >= 3.0 on both ends
+// (--append-verify); rsync's own error surfaces on older builds.
+fn cloud_copy_from_resume_opts(host: str, ssh_opts: [str], remote_path: str, local_path: str) -> CloudResult {
+    let e = _ssh_e_arg(ssh_opts)
+    let mut cmd = "rsync --partial --append-verify --timeout=20 -e " + _shq(e)
+    cmd = cmd + " " + _shq(host + ":" + remote_path) + " " + _shq(local_path)
+    let res = exec_capture(cmd)
+    let rc = res[2]
+    if rc != 0 {
+        return CloudResult { ok: 0, exit_code: rc, pid: 0, stdout_: res[0],
+            message: "rsync exit " + to_string(rc) + " (resume) · " + local_path }
+    }
+    if !file_exists(local_path) {
+        return CloudResult { ok: 0, exit_code: 100, pid: 0, stdout_: res[0],
+            message: "remote_file_missing_or_rsync_silent_fail · " + local_path }
+    }
+    let sz = file_size(local_path)
+    if sz <= 0 {
+        return CloudResult { ok: 0, exit_code: 101, pid: 0, stdout_: res[0],
+            message: "zero_byte_transfer · " + local_path }
+    }
+    return CloudResult { ok: 1, exit_code: 0, pid: 0, stdout_: res[0],
+        message: "rsync exit 0 (resume) · verified " + to_string(sz) + " bytes" }
+}
+
+// cloud_copy_from_resume — cloud_copy_from_resume_opts with no extra flags.
+fn cloud_copy_from_resume(host: str, remote_path: str, local_path: str) -> CloudResult {
+    return cloud_copy_from_resume_opts(host, [], remote_path, local_path)
+}
+
+// cloud_copy_to_recursive_opts — upload a local DIRECTORY tree to
+// host:remote_path with `scp -r`. Pre-checks the local source exists
+// (exit 102 otherwise), then prepends "-r" to the scp opts so the whole
+// subtree copies. Single-file copy-to stays on cloud_copy_to_opts.
+fn cloud_copy_to_recursive_opts(host: str, ssh_opts: [str], local_path: str, remote_path: str) -> CloudResult {
+    if !file_exists(local_path) {
+        return CloudResult { ok: 0, exit_code: 102, pid: 0, stdout_: "",
+            message: "local_source_missing · " + local_path }
+    }
+    let mut ropts = ["-r"]
+    let scp_opts = _scp_opts(ssh_opts)
+    let mut i = 0
+    while i < len(scp_opts) {
+        ropts.push(scp_opts[i])
+        i = i + 1
+    }
+    return _scp_capture(ropts, local_path, host + ":" + remote_path)
+}
+
+// cloud_copy_to_recursive — cloud_copy_to_recursive_opts with no extra flags.
+fn cloud_copy_to_recursive(host: str, local_path: str, remote_path: str) -> CloudResult {
+    return cloud_copy_to_recursive_opts(host, [], local_path, remote_path)
+}
