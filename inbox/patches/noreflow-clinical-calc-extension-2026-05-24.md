@@ -1,3 +1,11 @@
+> **status: cross-repo (demiurge)** — 2026-05-25 handoff registered in demiurge
+> `inbox/patches/noreflow-clinical-calc-libs-handoff-from-hexa-lang.md` + `inbox/INDEX.md`
+> (branch `inbox/noreflow-clinical-calc-libs-handoff-2026-05-25`, commit `35e63e1`). The driver
+> is demiurge's `CARDIO+/NOREFLOW` domain (M11 formal grade-up / V2 🔵 push dependency); this
+> patch is the RFC for the actual atlas absorption which lands via hexa-lang's own atlas PR
+> cycle (@D g_atlas_binary_builtin). Archive-ready on the hexa-lang side — kept here as the
+> RFC of record for the 5 clinical calc fns.
+
 # NOREFLOW clinical calc atlas extension — Hill · exp-decay · 2-comp PK · Cox · Fick
 
 ## TL;DR

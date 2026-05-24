@@ -1,5 +1,11 @@
 # NOREFLOW external libraries inventory — DB · 표적 · 도구 · 공급처 catalogue
 
+> **status: cross-repo (demiurge)** — 2026-05-25 handoff registered in demiurge
+> `inbox/patches/noreflow-clinical-calc-libs-handoff-from-hexa-lang.md` + `inbox/INDEX.md`
+> (branch `inbox/noreflow-clinical-calc-libs-handoff-2026-05-25`, commit `35e63e1`). This is a
+> demiurge `NOREFLOW` reference-surface inventory (filing-only, not a hexa-native porting
+> trigger); its natural home is demiurge. Archive-ready on the hexa-lang side.
+
 > **opened:** 2026-05-24 KST · **driver:** demiurge `NOREFLOW` 도메인 (PCI no-reflow / IRI 보호 약물 후보)
 > **pattern source:** `inbox/notes/2026-05-24-ttr-external-port-candidates.md` (TTR external library inventory)
 > **scope:** 임상시험 · 약물 · 단백질 · imaging endpoint · in-silico · wet-lab · 한국 capacity · 공급처 · fail-history
