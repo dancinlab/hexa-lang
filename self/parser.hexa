@@ -3529,6 +3529,29 @@ fn parse_postfix() {
                 "variants": "", "arms": "", "iter_expr": "", "ret_type": "",
                 "target": "", "trait_name": "", "methods": ""
             }
+        } else if k == "Question" {
+            // PROBE r15-D2 (2026-05-24): postfix `?` try-propagation operator.
+            // `expr?` → Try{left=expr}. On success (Ok/Some tag at index 0)
+            // unwraps the payload; on failure (Err/None) the enclosing fn
+            // returns the value unchanged (identity re-wrap — hexa is
+            // dynamically typed, no Rust `From` conversion). See RFC
+            // inbox/rfc_drafts/r15-d2-question-operator.md §3.
+            //
+            // Disambiguation (RFC §3.6): this is the SOLE `Question` consumer
+            // in expression position. The `T?` type-suffix lives in the
+            // separate parse_type_annotation path (no expr flows through here)
+            // and `a?.b` optional-chaining is lexed as the distinct
+            // QuestionDot token (handled by the arm above), so neither
+            // regresses. hexa has no C-style ternary `?:`, so there is no
+            // ambiguity for a bare trailing `?`.
+            p_advance()
+            expr = #{
+                "kind": "Try", "name": "", "value": "", "op": "",
+                "left": expr, "right": "", "cond": "", "then_body": "", "else_body": "",
+                "params": "", "body": "", "args": "", "fields": "", "items": "",
+                "variants": "", "arms": "", "iter_expr": "", "ret_type": "",
+                "target": "", "trait_name": "", "methods": ""
+            }
         } else if k == "LBracket" {
             // Index access or slice syntax: arr[i], arr[1:3], arr[:3], arr[2:], arr[:]
             p_advance()
