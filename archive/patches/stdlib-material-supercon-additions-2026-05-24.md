@@ -1,7 +1,9 @@
 ---
 slug: stdlib-material-supercon-additions-2026-05-24
-status: open
+status: partial
 ---
+
+> **Status (2026-05-25): top-3 모두 처리.** #1 `allen_dynes_full` = 이미 구현됨 (`stdlib/material/sim.hexa` + `verify_cli.hexa` 미러). #18 canonical home = **`stdlib/material/sim.hexa`** 가 사실상의 home (verify_cli 가 "mirrors sim.hexa verbatim"; true import-DRY 는 verify_cli multi-module link 취약성 때문에 별도 follow-up). #4 `eliashberg_moments_from_a2f` = **CLOSED** — sim.hexa 0.3.0 에 α²F → [λ, ω_log, ω̄₂] 트라페조이드 적분 추가 (`sim_test.hexa` 해석해 anchor 8/8 PASS · diff-guard CLEAN). 잔여 = 후보 24건 (B EOS·구조 / C 등) — 필요 시 개별 slug.
 
 # stdlib/material 추가 후보 27선 — RTSC 캠페인 depletion 브레인스토밍
 
