@@ -2562,11 +2562,15 @@ fn _gen2_collect_lets_stmt(node, names) {
         if type_of(node.params) != "string" {
             let mut _dpi = 0
             while _dpi < len(node.params) {
-                names.push(node.params[_dpi])
+                // PROBE r16: skip `_` — it is a discard binder, never declared
+                // or referenced, so it must not enter the flat-hoist pool.
+                if node.params[_dpi] != "_" {
+                    names.push(node.params[_dpi])
+                }
                 _dpi = _dpi + 1
             }
         }
-        if sk == "DestructLetStmt" && type_of(node.name) == "string" && node.name != "" {
+        if sk == "DestructLetStmt" && type_of(node.name) == "string" && node.name != "" && node.name != "_" {
             names.push(node.name)
         }
     }
@@ -3687,19 +3691,48 @@ fn _gen2_stmt_inner(node, depth) {
     // Names are flat-hoisted by `_gen2_collect_lets_stmt` (mirrors LetStmt).
     // Emits a single tmp + per-name assignment so the rhs is evaluated once.
     if k == "DestructLetStmt" {
+        // PROBE r16: the binders (a, b, …, rest) must be DECLARED — earlier
+        // code emitted bare `name = …;` assignments inside a `{ }` block,
+        // relying on the fn-top flat-hoist. But that hoist only declares a name
+        // when it occurs >1× (the shadow case); a single-occurrence destructure
+        // binder got no declaration anywhere → clang "use of undeclared
+        // identifier". Fix: emit a `HexaVal <mangled> = …;` declaration at THIS
+        // site (no enclosing `{ }`, so the binders escape to the enclosing
+        // block, exactly like a plain `let`). When a binder was already hoisted
+        // (`_gen2_has_decl`), emit a plain assignment to avoid a C redefinition.
+        // `_` binders are skipped (declare + assign nothing). The rhs is bound
+        // to a single `__destr_N` temp so it evaluates exactly once.
         let _dtmp = "__destr_" + to_string(_destr_counter)
         _destr_counter = _destr_counter + 1
         let _drhs = gen2_expr(node.left)
-        let mut _dout = pad + "{ HexaVal " + _dtmp + " = " + _drhs + ";"
+        let mut _dout = pad + "HexaVal " + _dtmp + " = " + _drhs + ";"
         let mut _di = 0
         while _di < len(node.params) {
-            _dout = _dout + " " + node.params[_di] + " = hexa_array_get(" + _dtmp + ", " + to_string(_di) + ");"
+            let _dn = node.params[_di]
+            if _dn != "_" {
+                let _dmn = _hexa_mangle_ident(_dn)
+                let _drhs_i = "hexa_array_get(" + _dtmp + ", " + to_string(_di) + ");"
+                if _gen2_has_decl(_dn) {
+                    _dout = _dout + " " + _dmn + " = " + _drhs_i
+                } else {
+                    _dout = _dout + " HexaVal " + _dmn + " = " + _drhs_i
+                    _gen2_declared_names.push(_dn)
+                }
+            }
             _di = _di + 1
         }
-        if type_of(node.name) == "string" && node.name != "" {
-            _dout = _dout + " " + node.name + " = hexa_array_drop(" + _dtmp + ", " + to_string(len(node.params)) + ");"
+        if type_of(node.name) == "string" && node.name != "" && node.name != "_" {
+            let _rmn = _hexa_mangle_ident(node.name)
+            // rest: hexa_array_drop wants a HexaVal count, not a raw C int.
+            let _rrhs = "hexa_array_drop(" + _dtmp + ", hexa_int(" + to_string(len(node.params)) + "));"
+            if _gen2_has_decl(node.name) {
+                _dout = _dout + " " + _rmn + " = " + _rrhs
+            } else {
+                _dout = _dout + " HexaVal " + _rmn + " = " + _rrhs
+                _gen2_declared_names.push(node.name)
+            }
         }
-        return _dout + " }\n"
+        return _dout + "\n"
     }
 
     // ── MapDestructLetStmt → map/dict-key destructure (PROBE r7) ──
@@ -3711,21 +3744,35 @@ fn _gen2_stmt_inner(node, depth) {
     // Back-compat: if `fields` is missing or length-mismatched (older AST),
     // fall back to params[i] as the key (no rename).
     if k == "MapDestructLetStmt" {
+        // PROBE r16: same undeclared-binder fix as DestructLetStmt above —
+        // declare `HexaVal <mangled> = …;` at this site (escaping the enclosing
+        // block) instead of a bare assignment trapped inside `{ }`. Already-
+        // hoisted names get a plain assignment; `_` binders are skipped.
         let _mtmp = "__destr_" + to_string(_destr_counter)
         _destr_counter = _destr_counter + 1
         let _mrhs = gen2_expr(node.left)
-        let mut _mout = pad + "{ HexaVal " + _mtmp + " = " + _mrhs + ";"
+        let mut _mout = pad + "HexaVal " + _mtmp + " = " + _mrhs + ";"
         let _has_fields = type_of(node.fields) != "string" && len(node.fields) == len(node.params)
         let mut _mi = 0
         while _mi < len(node.params) {
-            let mut _mkey = node.params[_mi]
+            let _mtgt = node.params[_mi]
+            let mut _mkey = _mtgt
             if _has_fields {
                 _mkey = node.fields[_mi]
             }
-            _mout = _mout + " " + node.params[_mi] + " = hexa_map_get(" + _mtmp + ", \"" + _mkey + "\");"
+            if _mtgt != "_" {
+                let _mmn = _hexa_mangle_ident(_mtgt)
+                let _mrhs_i = "hexa_map_get(" + _mtmp + ", \"" + _mkey + "\");"
+                if _gen2_has_decl(_mtgt) {
+                    _mout = _mout + " " + _mmn + " = " + _mrhs_i
+                } else {
+                    _mout = _mout + " HexaVal " + _mmn + " = " + _mrhs_i
+                    _gen2_declared_names.push(_mtgt)
+                }
+            }
             _mi = _mi + 1
         }
-        return _mout + " }\n"
+        return _mout + "\n"
     }
 
     // Fail loud at TRANSPILE time — emitting an in-binary runtime trap
