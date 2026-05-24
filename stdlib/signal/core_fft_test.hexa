@@ -20,34 +20,6 @@
 let CF_PI = 3.14159265358979323846
 let CF_TWO_PI = 6.28318530717958647692
 
-fn _cf_fmod(x: float, m: float) -> float {
-    if m == 0.0 { return 0.0 }
-    let n = x / m
-    // Truncate toward zero — explicit to_int (see core_fft.hexa for the note).
-    let mut ni = 0
-    if n >= 0.0 {
-        ni = to_int(n)
-    } else {
-        ni = to_int(n) - 1
-    }
-    let mut result = x - ni * m
-    if result < 0.0 { result = result + m }
-    return result
-}
-
-fn _cf_sin(x: float) -> float {
-    let t = _cf_fmod(x + CF_PI, CF_TWO_PI) - CF_PI
-    let t2 = t * t
-    let t3 = t2 * t
-    let t5 = t3 * t2
-    let t7 = t5 * t2
-    return t - t3 / 6.0 + t5 / 120.0 - t7 / 5040.0
-}
-
-fn _cf_cos(x: float) -> float {
-    return _cf_sin(x + CF_PI / 2.0)
-}
-
 fn _cf_bit_reverse(x: int, bits: int) -> int {
     let mut result = 0
     let mut val = x
@@ -91,8 +63,8 @@ pub fn fft_native(real: [float], imag: [float], n: int) -> [float] {
         while j < n {
             let mut k = 0
             while k < half {
-                let tw_re = _cf_cos(0.0 - CF_TWO_PI * k / stride)
-                let tw_im = _cf_sin(0.0 - CF_TWO_PI * k / stride)
+                let tw_re = cos(0.0 - CF_TWO_PI * k / stride)
+                let tw_im = sin(0.0 - CF_TWO_PI * k / stride)
                 let a_idx = j + k
                 let b_idx = j + k + half
                 let tb_re = tw_re * re[b_idx] - tw_im * im[b_idx]
@@ -181,11 +153,12 @@ fn _check_flag(name: string, ok: int) -> int {
     return 1
 }
 
-// Tolerance for the Taylor-trig FFT. The in-house _cf_cos/_cf_sin carry
-// |err| < ~1.6e-4 each; across the radix-2 butterfly passes this accumulates
-// to a per-bin drift of ~2e-3 (e.g. X[0] of [1,2,3,4] = 9.998 vs exact 10.0).
-// 5e-3 sits comfortably above that drift and far below the value scale.
-let CF_TOL = 5.0e-3
+// Tolerance for the libm-trig FFT. The twiddle factors now use the native
+// libm cos/sin (IEEE-correct), so the only residual is floating-point rounding
+// across the radix-2 butterfly passes — on these N=4 cases the worst-case
+// per-bin error is ~1e-15 (well under 1e-9). 1e-9 leaves a wide margin while
+// being ~5e6× tighter than the old Taylor-drift 5e-3.
+let CF_TOL = 1.0e-9
 
 fn main() {
     let mut fails = 0

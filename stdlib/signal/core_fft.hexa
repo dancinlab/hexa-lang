@@ -22,15 +22,14 @@
 // Requires N a power of 2. Output is the flat interleaved layout
 // [re0, im0, re1, im1, ...] (2·N floats), matching the anima baseline.
 //
-// NOTE on the trig path (byte-equality):
-//   The twiddle factors use the in-house Taylor `_cf_cos`/`_cf_sin` (range-
-//   reduced via `_cf_fmod`) reproduced VERBATIM from dsp_core.hexa — NOT the
-//   native libm `cos`/`sin` builtins. libm differs from the Taylor series at
-//   the bit level, so this preserves the frozen anima output bit-for-bit and
-//   lets a future anima sweep import this module and stay identical (cf. the
-//   same lesson documented in stdlib/info/entropy.hexa and
-//   stdlib/signal/voss_mccartney.hexa). The helpers are intentionally NOT
-//   replaced by native pow/exp/log/sin/cos.
+// NOTE on the trig path (libm):
+//   The twiddle factors use the native libm `cos`/`sin` builtins (IEEE-correct
+//   over the full range — libm performs its own argument reduction, so no
+//   `_cf_fmod` range reduction is needed). This replaces the earlier in-house
+//   Taylor `_cf_cos`/`_cf_sin` (+ `_cf_fmod`) port from dsp_core.hexa. User
+//   decision (2026-05-25): signal/ stdlib trig = libm — IEEE-correct, consistent
+//   across modules, drops the fragile Taylor+fmod dependency. The round-trip and
+//   hand-DFT checks now hold to ~1e-9 instead of the old ~5e-3 Taylor drift.
 //
 // Surface:
 //   pub fn fft_native(real: [float], imag: [float], n: int) -> [float]
@@ -40,49 +39,6 @@
 
 let CF_PI = 3.14159265358979323846
 let CF_TWO_PI = 6.28318530717958647692
-
-// ── float modulo: x mod m, always positive (verbatim fmod_native) ───────────
-
-fn _cf_fmod(x: float, m: float) -> float {
-    if m == 0.0 { return 0.0 }
-    let n = x / m
-    // Truncate toward zero. NOTE: the anima dsp_core baseline assigned the
-    // float `n` to an int-typed local and relied on implicit narrowing; this
-    // hexa codegen does NOT narrow on assignment, so the truncation is made
-    // explicit with `to_int(.)` (int64 cast = truncate-toward-zero, the exact
-    // semantics the original intended — preserves the math bit-for-bit).
-    let mut ni = 0
-    if n >= 0.0 {
-        ni = to_int(n)
-    } else {
-        ni = to_int(n) - 1
-    }
-    let mut result = x - ni * m
-    if result < 0.0 { result = result + m }
-    return result
-}
-
-// ── sin: Taylor 7th order, range-reduced to [-π, π] (verbatim sin_approx) ───
-// |error| < 0.00016 over full range.
-
-fn _cf_sin(x: float) -> float {
-    // Range reduction: bring x into [-PI, PI]
-    let t = _cf_fmod(x + CF_PI, CF_TWO_PI) - CF_PI
-
-    // Taylor series: sin(t) = t - t^3/6 + t^5/120 - t^7/5040
-    let t2 = t * t
-    let t3 = t2 * t
-    let t5 = t3 * t2
-    let t7 = t5 * t2
-
-    return t - t3 / 6.0 + t5 / 120.0 - t7 / 5040.0
-}
-
-// ── cos: sin(x + π/2) (verbatim cos_approx) ─────────────────────────────────
-
-fn _cf_cos(x: float) -> float {
-    return _cf_sin(x + CF_PI / 2.0)
-}
 
 // ── bit reversal: reverse the `bits` lowest bits of `x` (verbatim) ──────────
 
@@ -140,8 +96,8 @@ pub fn fft_native(real: [float], imag: [float], n: int) -> [float] {
             let mut k = 0
             while k < half {
                 // Twiddle factor: W_stride^k = exp(-j * 2*pi*k / stride)
-                let tw_re = _cf_cos(0.0 - CF_TWO_PI * k / stride)
-                let tw_im = _cf_sin(0.0 - CF_TWO_PI * k / stride)
+                let tw_re = cos(0.0 - CF_TWO_PI * k / stride)
+                let tw_im = sin(0.0 - CF_TWO_PI * k / stride)
                 let a_idx = j + k
                 let b_idx = j + k + half
                 // Complex multiply: tw * b
