@@ -44,7 +44,6 @@
 
 use "compiler/atlas/overlay"
 use "compiler/atlas/static_index"
-use "compiler/atlas/embedded.gen"
 use "compiler/atlas/parser"
 use "compiler/drill/drill"
 use "compiler/drill/round"
