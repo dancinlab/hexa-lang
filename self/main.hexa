@@ -67,6 +67,9 @@ fn cmd_help() {
     println("              [--shared]                    Emit .so/.dylib (RFC 070 G7-A flag-")
     println("                                            wiring; F-A1/F-A2 next sub-cycle)")
     println("  bench <file> [--runs N] [--json]        Benchmark wall/RSS/alloc")
+    println("  cache stat|list|verify|clean            Inspect/prune ~/.hexa-cache/ AOT cache (GO M4)")
+    println("                                            stat · list [--sort=mtime|size] [--limit=N]")
+    println("                                            verify · clean [--prune --older-than=N --cap-mb=M]")
     println("  cc                                      Rebuild transpiler (hexa_cc)")
     println("  lsp                                     Start LSP server (stdin/stdout JSON-RPC)")
     println("  init <dir> [--name N]                   Scaffold <dir>/project.hexa")
@@ -4188,6 +4191,168 @@ fn cmd_gpu(args) {
     }
 }
 
+// ─── cmd_cache — `hexa cache <subverb>` (GO M4) ──────────────────────
+//
+// 1st-class verb over `~/.hexa-cache/` — the AOT-cache that `cmd_run` /
+// `cmd_build` populate with `runtime.<sha>.o` + `hexa_run.<key>` binary
+// entries. Pre-M4 the only way to inspect / prune was raw shell — this
+// brings the surface up to parity with `go clean -cache(-n)`.
+//
+// Subverbs:
+//   stat                                 — N entries · total size · oldest age · biggest entry
+//   list [--sort=mtime|size] [--limit=N] — `<name>  <size>  <mtime>  <age>` per line
+//   verify                               — file_exists + size > 0 over every entry
+//   clean [--prune] [--older-than=N] [--cap-mb=M]
+//                                        — dry-run by default · --prune flips to delete
+//
+// Self-contained — does NOT depend on M1's `_hexa_cache_gc` helper (which
+// may or may not have landed). Uses `find` / `stat` / `du` shell tools
+// (POSIX-compatible on macOS BSD + linux GNU via `-type f` fallback).
+fn _hexa_cache_dir() {
+    let mut d = env_var("HOME") + "/.hexa-cache"
+    if len(env_var("HOME")) == 0 { d = "./.hexa-cache" }
+    return d
+}
+
+fn cmd_cache(args) {
+    let dir = _hexa_cache_dir()
+    let _mk = exec("mkdir -p " + shq(dir) + " 2>/dev/null")
+    let sub = if len(args) >= 1 { args[0] } else { "stat" }
+
+    if sub == "help" || sub == "-h" || sub == "--help" {
+        println("usage: hexa cache <subverb>")
+        println("  stat                                  total entries · size · oldest age · biggest")
+        println("  list [--sort=mtime|size] [--limit=N]  per-entry: name  size  mtime  age")
+        println("  verify                                file_exists + size>0 over every entry")
+        println("  clean [--prune] [--older-than=N(d)] [--cap-mb=M]")
+        println("                                        dry-run unless --prune; older-than days · cap MB")
+        return
+    }
+
+    if sub == "stat" {
+        let cnt = exec("find " + shq(dir) + " -mindepth 1 -maxdepth 1 -type f 2>/dev/null | wc -l | tr -d ' \\n'")
+        let tot = exec("du -sh " + shq(dir) + " 2>/dev/null | awk '{print $1}' | tr -d '\\n'")
+        // BSD `stat -f %m` / GNU `stat -c %Y`; portable fallback via `find -printf` (GNU)
+        // or per-file `ls -lT` on BSD. We use find+awk pipeline that works both ways.
+        let oldest = exec("find " + shq(dir) + " -mindepth 1 -maxdepth 1 -type f 2>/dev/null | while read f; do printf '%s\\n' \"$f\"; done | head -1000 | xargs -I{} stat -f '%m %N' {} 2>/dev/null || find " + shq(dir) + " -mindepth 1 -maxdepth 1 -type f -printf '%T@ %p\\n' 2>/dev/null | sort -n | head -1 | awk '{ if ($1) { now=systime(); age=now-$1; if (age<60) printf \"%ds\", age; else if (age<3600) printf \"%dm\", age/60; else if (age<86400) printf \"%dh\", age/3600; else printf \"%dd\", age/86400; } else { printf \"-\"; } }'")
+        // Oldest fallback simpler — sort by mtime asc via ls -ltr.
+        let oldest2 = exec("ls -ltr " + shq(dir) + " 2>/dev/null | awk 'NR>1 && $1 !~ /^total/ {print $0; exit}' | tr -d '\\n'")
+        // Biggest entry — `du -k *` then sort.
+        let biggest = exec("find " + shq(dir) + " -mindepth 1 -maxdepth 1 -type f -exec du -k {} \\; 2>/dev/null | sort -rn | head -1 | awk '{ size=$1; name=$2; sub(\".*/\", \"\", name); if (size>=1024) printf \"%dM  %s\", size/1024, name; else printf \"%dK  %s\", size, name }'")
+        println("hexa cache stat — " + dir)
+        println("  entries:   " + cnt)
+        println("  total:     " + tot)
+        if len(oldest2) > 0 { println("  oldest:    " + oldest2) }
+        if len(biggest) > 0 { println("  biggest:   " + biggest) }
+        return
+    }
+
+    if sub == "list" {
+        let mut sort_flag = "mtime"
+        let mut limit_str = "0"
+        let mut li = 1
+        while li < len(args) {
+            let a = args[li]
+            if a.starts_with("--sort=") {
+                sort_flag = a.substring(7, len(a))
+            } else if a.starts_with("--limit=") {
+                limit_str = a.substring(8, len(a))
+            }
+            li = li + 1
+        }
+        // Use `ls -l` (mtime) or `ls -lS` (size) — both newest/largest first.
+        let ls_flag = if sort_flag == "size" { "-lS" } else { "-lt" }
+        let head_clause = if limit_str == "0" { "" } else { " | head -" + limit_str }
+        let cmd = "ls " + ls_flag + " " + shq(dir) + " 2>/dev/null | awk 'NR>1 && $1 !~ /^total/ { name=$NF; size=$5; mtime=$6\" \"$7\" \"$8; printf \"%-48s  %10s  %s\\n\", name, size, mtime }'" + head_clause
+        let out = exec(cmd)
+        let hdr = if sort_flag == "size" { "(sort: size, largest first)" } else { "(sort: mtime, newest first)" }
+        println("hexa cache list — " + dir + "  " + hdr)
+        print(out)
+        return
+    }
+
+    if sub == "verify" {
+        // count + zero-size entries
+        let cnt = exec("find " + shq(dir) + " -mindepth 1 -maxdepth 1 -type f 2>/dev/null | wc -l | tr -d ' \\n'")
+        let empty = exec("find " + shq(dir) + " -mindepth 1 -maxdepth 1 -type f -size 0 2>/dev/null | wc -l | tr -d ' \\n'")
+        let empty_list = exec("find " + shq(dir) + " -mindepth 1 -maxdepth 1 -type f -size 0 2>/dev/null | head -20")
+        println("hexa cache verify — " + dir)
+        println("  entries:        " + cnt)
+        println("  empty/broken:   " + empty)
+        if len(empty_list) > 0 {
+            println("  empty entries (up to 20):")
+            print(empty_list)
+        }
+        if empty != "0" { exit(1) }
+        return
+    }
+
+    if sub == "clean" {
+        let mut do_prune = false
+        let mut older_days = ""
+        let mut cap_mb = ""
+        let mut ci = 1
+        while ci < len(args) {
+            let a = args[ci]
+            if a == "--prune" {
+                do_prune = true
+            } else if a.starts_with("--older-than=") {
+                older_days = a.substring(13, len(a))
+            } else if a.starts_with("--cap-mb=") {
+                cap_mb = a.substring(9, len(a))
+            }
+            ci = ci + 1
+        }
+        // Strategy: collect candidate paths via `find` filters, count + sum
+        // bytes, then `xargs rm -f` iff --prune. Two policies stack:
+        //   1. --older-than=N : `find -mtime +N`
+        //   2. --cap-mb=M     : oldest-first prune until total size ≤ M MB
+        let mut victims_cmd = "find " + shq(dir) + " -mindepth 1 -maxdepth 1 -type f"
+        if len(older_days) > 0 {
+            victims_cmd = victims_cmd + " -mtime +" + older_days
+        }
+        // For --cap-mb we want oldest-first up to running-sum > cap.
+        let victims_file = exec("printf '/tmp/hexa_cache_victims.%s.txt' \"$$\"")
+        if len(cap_mb) > 0 {
+            // List all files oldest-first with sizes; awk accumulates from
+            // newest backward; everything beyond cap is a victim.
+            let cap_cmd = "ls -lt " + shq(dir) + " 2>/dev/null | awk 'NR>1 && $1 !~ /^total/ {print $5\" \"$NF}' | awk -v cap=" + cap_mb + " 'BEGIN{sum=0} {sum+=$1/1048576; if (sum>cap) print $2}' > " + victims_file
+            let _ = exec(cap_cmd)
+            // Merge into older_days victims if both — union.
+            if len(older_days) > 0 {
+                let _ = exec(victims_cmd + " -exec basename {} \\; >> " + victims_file)
+                let _ = exec("sort -u -o " + victims_file + " " + victims_file)
+            }
+        } else {
+            let _ = exec(victims_cmd + " -exec basename {} \\; > " + victims_file)
+        }
+        let n_victims = exec("wc -l < " + victims_file + " 2>/dev/null | tr -d ' \\n'")
+        let sample = exec("head -10 " + victims_file + " 2>/dev/null")
+        println("hexa cache clean — " + dir)
+        println("  candidates:    " + n_victims)
+        if len(older_days) > 0 { println("  filter:        --older-than=" + older_days + " (days)") }
+        if len(cap_mb) > 0     { println("  filter:        --cap-mb=" + cap_mb) }
+        if len(sample) > 0 {
+            println("  sample (up to 10):")
+            print(sample)
+        }
+        if do_prune {
+            // Delete by basename → full path join in awk.
+            let rm_cmd = "awk -v d=" + shq(dir) + " '{print d\"/\"$1}' " + victims_file + " | xargs rm -f 2>/dev/null"
+            let _ = exec(rm_cmd)
+            println("  PRUNED " + n_victims + " entries")
+        } else {
+            println("  (dry-run — pass --prune to delete)")
+        }
+        let _cl = exec("rm -f " + victims_file + " 2>/dev/null")
+        return
+    }
+
+    println("error: unknown 'cache' subverb: " + sub)
+    println("usage: hexa cache stat|list|verify|clean [...]")
+    exit(2)
+}
+
 // PROBE r14 wiring (#453 follow-up): `hexa typecheck <file>` runs hexa_v2 with
 // the HEXA_TYPECHECK env set so the emitted hexa-cc main runs type_check_and_emit
 // between parse and codegen. The .c output is sent to /tmp and discarded — the
@@ -5467,6 +5632,19 @@ if len(av) < 3 {
             if file_exists(inst_path) { lp_script = inst_path }
         }
         cmd_run(lp_script, lp_args)
+    } else if sub == "cache" {
+        // GO M4 (2026-05-25): `hexa cache <subverb>` — 1st-class verb over
+        // `~/.hexa-cache/`. Pre-M4 the only way to inspect / prune was raw
+        // shell (`ls ~/.hexa-cache/ | wc -l`, `du -sh`, `rm`); this brings
+        // parity with `go clean -cache(-n)`. See cmd_cache above for the
+        // 4 subverbs (stat · list · verify · clean).
+        let mut ca_args = []
+        let mut cai = 3
+        while cai < len(av) {
+            ca_args.push(av[cai])
+            cai = cai + 1
+        }
+        cmd_cache(ca_args)
     } else if sub == "gpu" {
         // GPU.md §7c — toolchain ergonomics. `hexa gpu fire <ptx> <host.c>
         // [target-host]` wraps the recurring remote-fire pattern (scp →
