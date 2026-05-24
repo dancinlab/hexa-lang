@@ -1,5 +1,6 @@
 # canonical-deviation audit — post-merge tail status
 
+**Status**: audit-report-archived-2026-05-25 — meta audit report (not a single fix). Items already absorbed via subsequent canonical-audit rounds + individual PRs.
 **Status:** 🟠 FILED / OPEN (2026-05-23)
 **Reporter:** anima session — hexa canonical-deviation audit, post-round-4
 **Severity:** mixed — none are silent miscompiles in the codegen class

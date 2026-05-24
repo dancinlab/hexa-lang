@@ -1,5 +1,6 @@
 # canonical-deviation audit round 3 — design-level findings batch
 
+**Status**: audit-report-archived-2026-05-25 — meta audit report (design-level findings batch). Each item needs separate design RFC; bulk-archive marker.
 **Status:** 🟠 FILED / OPEN (2026-05-23)
 **Reporter:** anima session — hexa canonical-deviation audit, round 3
 **Severity:** mixed — none are silent miscompiles, but each is a place
