@@ -1,5 +1,6 @@
 # Range repr — `.start`/`.end` 메타 보존 design RFC
 
+**Status**: rfc-draft-deferred-2026-05-25 — design-only patch (not a fix). Promote via /inbox skill if RFC track wanted.
 **Status**: design-level (PROBE round 3 INBOX line 85, r14 cycle 5 carry, 2026-05-23)
 **Priority**: P2 (이미 `.contains/.len/.map/.fold/.rev`는 작동, 단 `.start`/`.end` 메타만 손실)
 **SSOT**: PROBE.log.md round 3 Range entry · #351 (`.rev()`) · #385 (iterator aliases) · r14-M Swift inclusive (PR #491)

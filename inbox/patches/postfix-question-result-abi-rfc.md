@@ -1,5 +1,6 @@
 # postfix `?` + Result ABI 디자인 RFC
 
+**Status**: rfc-draft-deferred-2026-05-25 — design-only patch (not a fix). Promote via /inbox skill if RFC track wanted.
 **Status**: design-level (PROBE round 3 INBOX, r14 cycle 4 carry-over, 2026-05-23)
 **Priority**: P1 (블로커: 에러 전파 정준 부재 — 현재 `throw` + `try/catch` 만)
 **SSOT**: PROBE.log.md round 3 Option/Result entry (line 30-32) · self/parser.hexa try/catch (line 796)

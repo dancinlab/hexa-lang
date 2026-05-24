@@ -1,5 +1,6 @@
 # shadowing scope leak — `_gen2_collect_lets` codegen 재설계 RFC
 
+**Status**: rfc-draft-deferred-2026-05-25 — design-only patch (not a fix). Promote via /inbox skill if RFC track wanted.
 **Status**: design-level (PROBE round 3 #6 carry-over, 2026-05-23)
 **Priority**: P1 (silent miscompile 클러스터 — `let` 의 의미가 변형됨)
 **SSOT**: PROBE.log.md round 3 Shadowing entry (line 74-78) · `self/codegen.hexa` `_gen2_collect_lets` (line 2470-2478) · `_gen2_collect_lets_stmt` (line 2434-2468)
