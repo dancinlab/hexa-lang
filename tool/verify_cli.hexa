@@ -196,6 +196,11 @@ fn cmd_rubric() {
     println("             coherence_length(Hc2)       → sqrt(Φ₀/(2π·Hc2))   (GL coherence length ξ from Hc2(0), Φ₀=2.0678e-15 Wb, RTSC #15, 1-arg)")
     println("             isotope_exponent(M1,Tc1,M2,Tc2) → -ln(Tc2/Tc1)/ln(M2/M1)   (BCS isotope-effect exponent α, RTSC #13, 4-arg)")
     println("             gl_parameter_kappa(λ_L,ξ)   → λ_L/ξ               (Ginzburg-Landau κ, Type-I/II at 1/√2, RTSC #15, 2-arg)")
+    println("             london_penetration_depth(n_s) → sqrt(m_e/(μ₀·n_s·e²))  (London penetration depth λ_L, RTSC #15, 1-arg)")
+    println("             thermo_critical_field(Hc0,T,Tc) → Hc0·(1-(T/Tc)²)   (Tuyn parabolic critical field, RTSC #15, 3-arg)")
+    println("             condensation_energy(Bc0)    → Bc0²/(2μ₀)           (SC condensation energy density, RTSC #15, 1-arg)")
+    println("             bcs_gap_zero(Tc)            → 1.764·k_B·Tc         (BCS zero-T energy gap Δ(0), RTSC, 1-arg)")
+    println("             pippard_coherence(v_F,Tc)   → ħ·v_F/(π·1.764·k_B·Tc)  (Pippard intrinsic coherence ξ₀, RTSC #15, 2-arg)")
 }
 
 let NOCALC: int = -999999
@@ -1106,6 +1111,71 @@ fn _gl_parameter_kappa(lambda_l: float, xi: float) -> float {
     return lambda_l / xi
 }
 
+// ── Superconductivity tranche 2 (RTSC #15 device-side + BCS · 2026-05-25) ─
+// Five more closed-form supercon identities (stdlib/material/sim.hexa
+// canonical home). All libm-class (sqrt/scalar) with CODATA-2018 constants;
+// ε=1e-9 gate. @cite London 1935 / Tinkham 1996 Eq.3.10 (λ_L) · Tuyn 1929 /
+// Tinkham Eq.1.1 (Hc(T)) · Tinkham Eq.3.4 (condensation U) · BCS 1957 PR
+// 108:1175 (Δ(0)=1.764 k_B Tc) · Pippard 1953 / Tinkham Eq.1.7 (ξ₀).
+// Mirrors stdlib/material/sim.hexa arithmetic verbatim.
+
+// London magnetic penetration depth from superfluid density:
+//   λ_L = sqrt(m_e / (μ₀·n_s·e²))
+// 1-arg (n_s in m⁻³ → λ_L in metres). London 1935 / Tinkham 1996 Eq.3.10.
+// CODATA 2018 m_e, μ₀, e. Source: n_s=1e28 → 5.3140932615821511e-08 m (53 nm).
+fn _london_penetration_depth(n_s: float) -> float {
+    if n_s <= 0.0 { return _NOCALC_F }
+    let m_e = 9.1093837015e-31
+    let mu0 = 1.25663706212e-6
+    let e_q = 1.602176634e-19
+    return sqrt(m_e / (mu0 * n_s * e_q * e_q))
+}
+
+// Thermodynamic critical field Hc(T) — Tuyn parabolic law:
+//   Hc(T) = Hc(0)·(1 - (T/Tc)²)
+// 3-arg (Hc0, T, Tc; T and Tc share units). Tuyn 1929 / Tinkham 1996 Eq.1.1.
+// Returns 0 for T≥Tc (normal state). Source: (1,5,10) → 0.75.
+fn _thermo_critical_field(hc_zero: float, temp_k: float, tc_k: float) -> float {
+    if tc_k <= 0.0 { return _NOCALC_F }
+    if temp_k >= tc_k { return 0.0 }
+    if temp_k < 0.0 { return _NOCALC_F }
+    let r = temp_k / tc_k
+    return hc_zero * (1.0 - r * r)
+}
+
+// Superconducting condensation energy density:
+//   U = Bc(0)² / (2·μ₀)
+// 1-arg (Bc0 in tesla → U in J/m³). Tinkham 1996 Eq.3.4 (SI flux form).
+// CODATA 2018 μ₀. Source: Bc=1 → 397887.35751313815 J/m³.
+fn _condensation_energy(bc_zero_t: float) -> float {
+    let mu0 = 1.25663706212e-6
+    return bc_zero_t * bc_zero_t / (2.0 * mu0)
+}
+
+// BCS zero-temperature energy gap Δ(0):
+//   Δ(0) = 1.764·k_B·Tc      (2Δ(0)/k_B·Tc = 3.528 = 2π/e^γ)
+// 1-arg (Tc in K → Δ in J). BCS 1957 PR 108:1175. CODATA 2018 k_B.
+// Source: Tc=10 → 2.4354648360000004e-22 J.
+fn _bcs_gap_zero(tc_k: float) -> float {
+    if tc_k <= 0.0 { return _NOCALC_F }
+    let k_b = 1.380649e-23
+    return 1.764 * k_b * tc_k
+}
+
+// Pippard / BCS intrinsic coherence length ξ₀:
+//   ξ₀ = ħ·v_F / (π·Δ(0)),  Δ(0) = 1.764·k_B·Tc
+// 2-arg (v_F in m/s, Tc in K → ξ₀ in metres). Pippard 1953 / Tinkham Eq.1.7.
+// CODATA 2018 ħ, k_B. Source: (1e6,10) → 1.3783021215499222e-07 m (138 nm).
+fn _pippard_coherence(v_fermi: float, tc_k: float) -> float {
+    if v_fermi <= 0.0 { return _NOCALC_F }
+    if tc_k <= 0.0 { return _NOCALC_F }
+    let hbar = 1.054571817e-34
+    let k_b = 1.380649e-23
+    let pi_p = 3.14159265358979323846
+    let gap0 = 1.764 * k_b * tc_k
+    return hbar * v_fermi / (pi_p * gap0)
+}
+
 // ── Bio-physical Phase 3 (demiurge cross-domain V2 closure) ─────────
 // Three remaining identities from the inbox patch — Higuchi sustained
 // release (2-arg, simple form) · Tafel overpotential (3-arg, log10 path)
@@ -1355,6 +1425,29 @@ fn _recompute_float(fn_name: string, a0: float, a1: float, a2: float, a3: float,
         if argc < 2 { return _NOCALC_F }
         return _gl_parameter_kappa(a0, a1)
     }
+    // ── Superconductivity tranche 2 (RTSC #15 device-side + BCS · 2026-05-25) ─
+    //   london_penetration_depth(n_s)        1-arg: sqrt(m_e/(μ₀·n_s·e²))
+    //   thermo_critical_field(Hc0, T, Tc)    3-arg: Hc0·(1-(T/Tc)²)
+    //   condensation_energy(Bc0)             1-arg: Bc0²/(2μ₀)
+    //   bcs_gap_zero(Tc)                     1-arg: 1.764·k_B·Tc
+    //   pippard_coherence(v_F, Tc)           2-arg: ħ·v_F/(π·1.764·k_B·Tc)
+    if fn_name == "london_penetration_depth" {
+        return _london_penetration_depth(a0)
+    }
+    if fn_name == "thermo_critical_field" {
+        if argc < 3 { return _NOCALC_F }
+        return _thermo_critical_field(a0, a1, a2)
+    }
+    if fn_name == "condensation_energy" {
+        return _condensation_energy(a0)
+    }
+    if fn_name == "bcs_gap_zero" {
+        return _bcs_gap_zero(a0)
+    }
+    if fn_name == "pippard_coherence" {
+        if argc < 2 { return _NOCALC_F }
+        return _pippard_coherence(a0, a1)
+    }
     // ── Bio-physical Phase 3 (demiurge cross-domain V2 closure) ─────────
     //   higuchi(k_H, t)                   2-arg: k_H * sqrt(t)
     //   tafel(a, b, j)                    3-arg: a + b * log10(j)
@@ -1405,6 +1498,10 @@ fn _is_float_fn(fn_name: string) -> bool {
         || fn_name == "allen_dynes_full" || fn_name == "morel_anderson_mustar"
         || fn_name == "coherence_length" || fn_name == "isotope_exponent"
         || fn_name == "gl_parameter_kappa"
+        // Superconductivity tranche 2 (RTSC #15 device-side + BCS · 2026-05-25):
+        || fn_name == "london_penetration_depth" || fn_name == "thermo_critical_field"
+        || fn_name == "condensation_energy" || fn_name == "bcs_gap_zero"
+        || fn_name == "pippard_coherence"
         // Bio-physical Phase 3 (demiurge cross-domain V2 closure):
         || fn_name == "higuchi" || fn_name == "tafel" || fn_name == "hagen_poiseuille"
 }
