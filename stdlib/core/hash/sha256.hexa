@@ -1,6 +1,6 @@
 // HEXA Standard Library — hash/sha256
 //
-// @version 0.2.0
+// @version 0.3.0
 // @capabilities [pure]
 //
 // SHA-256 (FIPS 180-4) — closes G2-SHA256-WRAP (.roadmap.stdlib G2,
@@ -17,25 +17,76 @@
 //       lowercase hex digest of file bytes; "" on I/O error
 //   pub fn sha256_of_file(path: string) -> string
 //       alias of sha256_file_hex (anima phase-5 sweep nomenclature, #458)
+//   pub fn sha256_of_bytes(b: array, n: int) -> string         [v0.3.0]
+//       lowercase hex digest of the first n bytes of an int array (0..255)
+//   pub fn sha256_of_lines_filtered(path, skip_prefix) -> string [v0.3.0]
+//       lowercase hex digest of a file's lines EXCLUDING those starting
+//       with skip_prefix — the pure-hexa equivalent of
+//       `grep -v '<skip_prefix>' <path> | shasum -a 256`. "" on I/O error.
 //
 // Replaces:
 //   - hashlib.sha256 calls in hexa-bio _python_bridge (3 callsites)
 //   - exec("shasum -a 256 …") shell-out in stdlib/cert/meta2_validator
 //   - 91 anima call sites identified by phase-5 survey 2026-05-25 (#458)
+//   - anima #461 deferred sites: `grep -v 'timestamp' | shasum` filtered
+//     streams (→ sha256_of_lines_filtered) and byte-array digests that the
+//     1-arg string/file alias could not express (→ sha256_of_bytes).
 //
 // All functions are deterministic and pure within their input domain.
 //
+// Implementation note (v0.3.0 byte surface):
+//   The bytes / filtered-lines surface routes through the runtime
+//   `sha256_bytes` builtin (self/native/crypto_sodium.c —
+//   `hexa_sha256_bytes`), which hashes a raw [int] byte array and returns
+//   the 32-byte digest as an [int] array; this module hex-encodes it.
+//
+//   Why not the string `sha256` builtin? That one
+//   (self/native/exec_argv_sha256.c) reads its input with `strlen`, so a
+//   0x00 byte truncates the message — it is NOT binary-safe and cannot
+//   serve a genuine byte array. Why not the pure-hexa `sha256_digest_bytes`
+//   core in `hash/hmac.hexa`? It is the libsodium-FREE ideal and is
+//   FIPS-vector-correct by construction, but it SEGFAULTS on the current
+//   `0.1.0-dispatch` Mac runtime (the bignum-style %2^32 arithmetic path
+//   crashes even on the empty input) — a pre-existing runtime/codegen bug
+//   independent of this module. `sha256_bytes` is the only binary-safe
+//   path verified to produce correct digests on a built runtime here.
+//
 // Honest limits:
-//   L1 — Routing depends on the runtime `sha256` / `sha256_file` builtins
-//        (self/native/exec_argv_sha256.c). Hosts compiled without that
-//        translation unit will lack the symbol; firmware/embedded
-//        targets must verify the builtin is linked before importing.
-//   L2 — `sha256_of_file` / `sha256_file_hex` require a real filesystem
-//        with `open(2)`; bare-metal targets without a VFS cannot use
-//        them. The shell-out fallback (`exec "shasum -a 256"`) was the
-//        anima-side pattern this module supersedes — it is NOT
-//        reintroduced here; if the builtin is missing the caller
-//        receives an empty-string error, not a fork-exec.
+//   L1 — `sha256_hex` / `sha256_of_string` / `sha256_file_hex` /
+//        `sha256_of_file` route to the runtime `sha256` / `sha256_file`
+//        builtins (self/native/exec_argv_sha256.c, libsodium-FREE C
+//        reference impl). Hosts compiled without that translation unit
+//        will lack the symbol; firmware/embedded targets must verify the
+//        builtin is linked before importing.
+//   L2 — `sha256_of_file` / `sha256_file_hex` / `sha256_of_lines_filtered`
+//        require a real filesystem with `open(2)`; bare-metal targets
+//        without a VFS cannot use them. The shell-out fallback
+//        (`exec "shasum -a 256"`) was the anima-side pattern this module
+//        supersedes — it is NOT reintroduced here; if the builtin is
+//        missing the caller receives an empty-string error, not a
+//        fork-exec.
+//   L3 — RUNTIME DEPENDENCY (byte surface): `sha256_of_bytes` /
+//        `sha256_of_lines_filtered` route to the `sha256_bytes` runtime
+//        builtin, which is LIBSODIUM-GATED (compiled in only when -lsodium
+//        was detected; cmd_build adds it via pkg-config). On a build
+//        WITHOUT libsodium the builtin returns an error map, and these two
+//        functions return "" (never a crash, never a fork-exec). The
+//        string/file surface (L1) is libsodium-FREE; only this byte
+//        surface carries the libsodium dependency. The pure-hexa
+//        libsodium-free fallback (`hash/hmac.hexa::sha256_digest_bytes`)
+//        is preferred in principle but is blocked by the runtime segfault
+//        documented in the implementation note above — switch this module
+//        back onto it once that runtime bug is fixed.
+//   L4 — `sha256_of_lines_filtered` reconstructs the grep-style stream as
+//        each surviving line followed by a single `\n` (matching
+//        `grep -v … | shasum`, where grep emits newline-terminated
+//        lines). A file whose final line lacks a trailing newline will
+//        therefore hash one `\n` longer than its raw bytes — this is the
+//        intended `grep | shasum` parity, NOT a raw-byte digest of the
+//        filtered subset. Use `sha256_of_bytes` for exact raw-byte needs.
+
+// (No module import: the byte surface routes to the runtime `sha256_bytes`
+//  builtin directly — see the v0.3.0 implementation note above.)
 
 pub fn sha256_hex(s: string) -> string {
     return sha256(s)
@@ -51,4 +102,80 @@ pub fn sha256_file_hex(path: string) -> string {
 
 pub fn sha256_of_file(path: string) -> string {
     return sha256_file(path)
+}
+
+// ── internal helpers (byte surface) ──────────────────────────────────
+
+// Lowercase hex encode of a digest byte array ([int], each 0..255).
+fn _sha256_hex_of_digest(digest) -> string {
+    let hex_chars = "0123456789abcdef"
+    let mut out = ""
+    let mut i = 0
+    while i < len(digest) {
+        let v = digest[i] & 255
+        out = out + hex_chars[v / 16] + hex_chars[v % 16]
+        i = i + 1
+    }
+    return out
+}
+
+// Hex digest of a raw [int] byte array via the runtime `sha256_bytes`
+// builtin. Returns "" if the builtin is unavailable (libsodium-less
+// build → error map, see L3) so callers never see a crash or a map.
+fn _sha256_bytes_hex(data) -> string {
+    let digest = sha256_bytes(data)
+    if type_of(digest) != "array" { return "" }   // error map ⇒ no libsodium
+    if len(digest) != 32 { return "" }
+    return _sha256_hex_of_digest(digest)
+}
+
+// ── Byte-array surface (anima #461 unblock) ──────────────────────────
+// Hex digest of the first `n` bytes of an int array (each element a
+// 0..255 byte value). `n` may be < len(b) to hash a prefix slice
+// (covers the `head -c <N> … | shasum` partial-file pattern); values
+// beyond n are ignored, and n is clamped to [0, len(b)]. Routes through
+// the runtime `sha256_bytes` builtin (libsodium-gated — see L3).
+pub fn sha256_of_bytes(b: array, n: int) -> string {
+    let mut take = n
+    if take < 0 { take = 0 }
+    if take > len(b) { take = len(b) }
+    let mut data = []
+    let mut i = 0
+    while i < take {
+        data = data.push(b[i] & 255)
+        i = i + 1
+    }
+    return _sha256_bytes_hex(data)
+}
+
+// ── Filtered-line stream surface (anima #461 unblock) ────────────────
+// Hex digest of a file's lines EXCLUDING any line that starts with
+// `skip_prefix` — the equivalent of
+// `grep -v '<skip_prefix>' <path> | shasum -a 256`. Surviving lines are
+// rejoined each followed by a single `\n` (grep-output parity, see L4).
+// Returns "" when the file is unreadable / empty (rt_read_lines → []).
+// An empty `skip_prefix` filters nothing (hashes every line).
+pub fn sha256_of_lines_filtered(path: string, skip_prefix: string) -> string {
+    let lines = read_lines(path)
+    if len(lines) == 0 { return "" }
+    let mut data = []
+    let mut i = 0
+    while i < len(lines) {
+        let line = lines[i]
+        let mut excluded = false
+        if skip_prefix != "" {
+            if line.starts_with(skip_prefix) { excluded = true }
+        }
+        if !excluded {
+            // append the line's bytes, then a single newline (grep parity)
+            let mut j = 0
+            while j < len(line) {
+                data = data.push(ord(line[j]) & 255)
+                j = j + 1
+            }
+            data = data.push(10)
+        }
+        i = i + 1
+    }
+    return _sha256_bytes_hex(data)
 }
