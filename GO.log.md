@@ -119,3 +119,56 @@ axis 의 첫 설계서.
 
 - [ ] M2 후보 — `hexa run` warm-cache hit 경로 측정 (fork 회수 / wall ms)
 - [ ] M3 후보 — toolchain auto-discover (clang 부재 시 zig fallback 등)
+
+## 2026-05-25 — M6 · precompile manifest expansion (demo 2 → production 10)
+
+> M2+M3 (PR #889) 가 declarative manifest + precompile pipeline 을 ship 했지만 entry 는 demo 2 개 (`tool/build_hexa_cli.hexa`, `tool/atlas_cli.hexa`) 뿐 → 실제 hot scripts 가 비어있어 production 효과 ≈ 0. M6 가 그 gap 를 메운다.
+
+- [x] M6 — `tool/precompile.json` 확장: 2 → **10 entry** (`scripts[]`).
+- [x] M6 — schema 확장 (additive, 무손상): 신규 sibling 키 `descriptions{}` (per-entry 1-line 근거) + `categories{}` (coarse bucket: build/atlas/verify/inbox/install/audit) + `schema_notes` (확장 정책 문서화). 파서 (`_parse_scripts`) 는 `"scripts"` 만 읽으므로 backwards-compatible.
+- [x] gate — JSON validity (python json.load) PASS · 10/10 script 디스크 존재 확인 · 3 키 (`scripts` / `descriptions` / `categories`) 완전 mirror · `_parse_scripts` 시뮬레이션 10 entry 정확 추출 · `hexa.real parse tool/build_precompile.hexa` clean.
+
+### 선정 10 entry + 근거
+
+| # | path | category | 근거 |
+|---|---|---|---|
+| 1 | `tool/build_hexa_cli.hexa`        | build   | M3 demo 유지. core CLI bootstrap. fresh-checkout 마다 발사. |
+| 2 | `tool/atlas_cli.hexa`             | atlas   | M3 demo 유지. **14 commits / 3mo (top-2 churn)**. `/atlas` slash + `hexa atlas` 진입. |
+| 3 | `tool/verify_cli.hexa`            | verify  | **14 commits / 3mo (top-1 churn tied)**. `/verify` slash + INBOX verify-arm 확장 사이클. |
+| 4 | `tool/inbox_sync.hexa`            | inbox   | 2 commits / 3mo. weekly inbox sweep. |
+| 5 | `tool/inbox_promote.hexa`         | inbox   | 2 commits / 3mo. inbox_sync 동반 발사. |
+| 6 | `tool/cli_wrappers.hexa`          | install | 2 commits / 3mo. drift report 마다 발사. |
+| 7 | `tool/audit_forbidden_exts.hexa`  | audit   | 2 commits / 3mo. **`.githooks/pre-commit` + CI 자동 발사**. |
+| 8 | `tool/install_firmware_hook.hexa` | install | fresh-checkout 1회 발사 — 'sub-second first-call' UX 골 정확 매칭. |
+| 9 | `tool/build_hexa_v2_linux.hexa`   | build   | 2 commits / 3mo. anima CLM dispatch + release-prep 발사. |
+| 10| `tool/build_precompile.hexa`      | build   | self — 후속 release CI 가 자기 자신 cache HIT → bootstrap 가속. |
+
+### 제외 후보 + 사유
+
+- `tool/ai_native*.hexa` (3 개) — hexa_interp 의존 (build/hexa_interp 경로) → 빌드 deterministic 하지만 **runtime env 변동성** (HEXA_LANG path) 으로 cache-key sha256 변동 영향 미미하나, 사용빈도 < 월 5회 (사용자 직접 호출보다 CI bench 만).
+- `tool/bench_hexa_ir.hexa` — 2 commits / 3mo 이지만 bench 성격 → wall 측정이 본질, precompile 가속이 측정에 noise 도입 위험.
+- `tool/atlas_audit_full.hexa` / `tool/atlas_embed_gen.hexa` 등 atlas_* 잔여 — `atlas_cli` 가 wrapper 로 호출하는 패턴 (직접 `hexa run` 빈도 낮음).
+- 모든 `tool/*.sh` — non-`.hexa` 라 manifest scope 외.
+- `tool/check_grace_consent.hexa` — `.github/workflows/grace_consent.yml` 에서 `build/hexa_v2_linux` 로 직접 transpile (precompile 우회).
+
+### 스키마 확장 결정
+
+- **방향**: additive sister key 만 추가 (`descriptions` / `categories`). 기존 `scripts: [string...]` 그대로 유지 → 파서 (`_parse_scripts`) 무수정.
+- **이유**: 객체 형식 (`{path, category, ...}`) 로 바꾸면 파서 정규식 (`"..."` 토큰 추출) 이 `category` 값 까지 script path 로 오인 → 파서 동시 수정 필요 → atomic land 어렵고 backward compat 깨짐.
+- **확장 path** (M7+): `--list --verbose` 가 `descriptions` 출력 · `--category=<bucket>` 필터 · CI 가 `scripts` ↔ `descriptions` ↔ `categories` 키 일치 lint.
+
+### gates / smoke
+
+- `python3 -m json.tool tool/precompile.json` — VALID.
+- key mirroring (set equality) — PASS.
+- 10/10 script `test -f` — PASS.
+- `_parse_scripts` simulated extraction — 10 entry 정확.
+- `hexa.real parse tool/build_precompile.hexa` — clean.
+- **Note**: `hexa run tool/build_precompile.hexa --list` e2e 발사는 현재 self-host codegen 의 `parse_int_str` builtin 미배선 (pre-existing PR #889 잔재 — manifest 변경과 무관) 으로 clang 단계 fail. parse-gate + simulated extraction 으로 대체 검증.
+
+### 다음
+
+- [ ] M7 — release CI 에서 `tool/build_precompile.hexa` 실제 발사 → `release/precompile/` populate → tarball 동봉. (별도 PR; `parse_int_str` builtin 배선 선결 필요.)
+- [ ] M8 — `scripts` ↔ `descriptions` ↔ `categories` key consistency lint (CI / pre-commit).
+- [ ] M9 — manifest 객체 형식 migration (스키마 v2) — 파서 동시 수정.
+
