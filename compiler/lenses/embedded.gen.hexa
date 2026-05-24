@@ -141,7 +141,7 @@ pub let LENS_NODES: [LensNode] = [
     // --- family: unfold (4) — RFC 065 §9 amendment (9th family, archive-nexus heritage) -
     // archive-nexus era's atlas-growth lens family. Under RFC 065's
     // PR-only invariant (@D g_atlas_binary_builtin) the multi-emit effect
-    // is preserved (inbox/atlas_candidates/<slug>.md -> `hexa atlas pr`
+    // is preserved (archive/atlas_candidates/<slug>.md -> `hexa atlas pr`
     // -> baked); direct fold-to-live remains forbidden.
     LensNode { kind: "L", id: "unfold.cite_chain", family: "unfold",
         docstring: "Walk each P node's edges (depends_on/derives/equivalents); emit Candidate per cited id absent from baked P set (atlas-growth seed).",

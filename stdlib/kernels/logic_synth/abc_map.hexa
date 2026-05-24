@@ -77,7 +77,7 @@ fn abc_binary_path() -> str {
     // posix_spawnp-based fast path can fire when
     // HEXA_EXEC_NO_SHELL=1; the meta-bearing form falls into popen
     // which has a broken-pipe bug in the current runtime build
-    // (see inbox/notes/2026-05-21-hexa-exec-broken-pipe.md).
+    // (see docs/notes/2026-05-21-hexa-exec-broken-pipe.md).
     // Returns "" silently if `which` exits non-zero (abc absent on
     // PATH) — same semantic as the prior `command -v … || true`.
     let raw = exec("which abc")
@@ -459,7 +459,7 @@ fn abc_emit_blif(d: Design) -> str {
         // restricts the in/out signals to 1-bit nets). A naive 1-line-
         // per-$dff-cell emit collapses a 64-bit register to a single
         // latch — this is the Source 1 width-truncation documented in
-        // `inbox/notes/2026-05-21-rfc006-§5-multibit-width-truncation.md`.
+        // `docs/notes/2026-05-21-rfc006-§5-multibit-width-truncation.md`.
         //
         // Fix: when the Q-wire's recorded width W is > 1, emit W
         // parallel `.latch` lines with per-bit names `<base>__b<k>`.

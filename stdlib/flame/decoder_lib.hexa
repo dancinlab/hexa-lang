@@ -44,7 +44,7 @@ use "stdlib/flame/flame_math"
 // RFC 059 cycle-1 anchor: append-at-end head_g extension lands here.
 // New symbols planned: m_off_head_g, m_total_dual (= m_total + V*d). Existing
 // helpers below stay byte-identical so all non-dual callers are unaffected.
-// See inbox/rfc_drafts_2026_05_12/rfc_059_*.md §3.1 + §5 cycle 1.
+// See docs/rfc/rfc_drafts_2026_05_12/rfc_059_*.md §3.1 + §5 cycle 1.
 pub fn m_off_tok_emb(d: int, nh: int, nkv: int, h: int, V: int, n_layer: int) -> int {
     return 0
 }
@@ -62,7 +62,7 @@ pub fn m_total(d: int, nh: int, nkv: int, h: int, V: int, n_layer: int) -> int {
 // RFC 059 cycle-1 anchor: dual-head Mc adds logits_g[V] at end of Mc.
 // New symbols planned: mc_off_logits_g (= mc_total), mc_total_dual (= mc_total + V).
 // All existing offsets below remain unchanged so single-head callers are byte-eq.
-// See inbox/rfc_drafts_2026_05_12/rfc_059_*.md §3.1.
+// See docs/rfc/rfc_drafts_2026_05_12/rfc_059_*.md §3.1.
 pub fn mc_off_X(T: int, d: int, nh: int, nkv: int, h: int, V: int, n_layer: int) -> int {
     return 0
 }
@@ -215,7 +215,7 @@ pub fn nn_decoder_fwd(ids: int, M: int, Mc: int, cos: int, sin: int,
 // nn_decoder_grad_with_aux(..., d_aux_logits_a=0, d_aux_logits_g=0) once
 // cycle 2 lands. The single-objective path here stays byte-identical (the
 // aux-grad seed `dl += 0` is a documented no-op; F-RFC059-C2-NIL-AUX-PRESERVE
-// gates it). See inbox/rfc_drafts_2026_05_12/rfc_059_*.md §3.2 + §5 cycle 2.
+// gates it). See docs/rfc/rfc_drafts_2026_05_12/rfc_059_*.md §3.2 + §5 cycle 2.
 pub fn nn_decoder_grad(ids: int, target_t: int,
                        M: int, Mc: int, Mg: int,
                        cos: int, sin: int,
@@ -500,7 +500,7 @@ pub fn nn_decoder_predict(Mc: int,
 }
 
 // ════════════════════════════════════════════════════════════════════════
-// Per-step residual readout (inbox/patches/pt-ckpt-cross-substrate-…)
+// Per-step residual readout (archive/patches/pt-ckpt-cross-substrate-…)
 //
 // Clause B: extract a `farr` handle of last-position d-vector residual
 // state at a chosen layer boundary, for post-hoc Φ measurement

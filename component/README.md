@@ -142,5 +142,5 @@ demiurge 는 consumer; `component/` 는 SSOT (downstream-from-hexa-lang
    produced.usdz 로딩.
 6. **C6** BIPV reference 형상 (G2) + 전체 라운드트립 (G1) 측정.
 
-게이트 4 개 모두 PASS 후에만 `inbox/PATCHES.yaml` 에
+게이트 4 개 모두 PASS 후에만 `archive/patches/PATCHES.yaml` 에
 `component-usdz-producer` 엔트리 추가 + status `applied`.

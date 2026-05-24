@@ -60,7 +60,7 @@ See `stdlib/flame/PHASE4B_SCAFFOLD.md` for full findings.
 
 ### Path B — Phase 4-D GPU dispatch fire (cost-bearing, immediate)
 
-**Entry**: `inbox/rfc_drafts_2026_05_12/rfc_046_flame_phase4_compiler_fusion.md` §"Phase 4-D"
+**Entry**: `docs/rfc/rfc_drafts_2026_05_12/rfc_046_flame_phase4_compiler_fusion.md` §"Phase 4-D"
 
 **Goal**: build flame_d32_corpus_test (or d=768·12L scaled config) for Linux/CUDA host, dispatch to vast.ai or runpod A100, measure wall vs eager-PyTorch baseline (336.85s).
 

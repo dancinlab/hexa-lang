@@ -28,7 +28,7 @@
   · axis_c_model.md — C motivation (memory wall 측정, radix-중립)
   · RFC.md — 합본 초안: degree-6 hex fabric + 이진 타일 + 5 falsifier
   핵심 발견: 상용 degree-6 실리콘 0건; UC Davis 65nm 2012 단 1측정(13yr stale).
-- 2026-05-18 — RFC 번호 **057 확정** (inbox/rfc_drafts 체인 rfc_056 위, 충돌0;
+- 2026-05-18 — RFC 번호 **057 확정** (docs/rfc/rfc_drafts 체인 rfc_056 위, 충돌0;
   proposals/ 흡수체인 044–048 과도 무충돌). comb/ 커밋 c0e7aae7 (branch
   rfc043-hexa-torch, comb/ 경로만 — 타 세션 작업 미포함).
 - 2026-05-18 — **궁극 골 확정** (user gate, T2+T3): T2 = degree-6 > degree-4

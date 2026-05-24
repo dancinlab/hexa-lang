@@ -45,7 +45,7 @@ use "stdlib/flame/tensor_lib"
 use "stdlib/flame/nn_lib"
 use "stdlib/flame/flame_math"
 // SD4 (autograd-auto integration, RFC 043 scoping note
-// inbox/notes/2026-05-20-flame-autograd-auto-scoping.md §4): pull in
+// docs/notes/2026-05-20-flame-autograd-auto-scoping.md §4): pull in
 // the ag_derive vjp-rule registry so `ag_backward_reg` can dispatch
 // matmul (`ag_k_linear`) + silu-gate (`ag_k_silu_gate`) via the
 // SD1/SD3 auto-rules. SD2's `add_bwd_auto` is broadcast bias-add (a

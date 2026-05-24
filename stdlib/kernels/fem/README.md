@@ -16,7 +16,7 @@ extracted under the D72 2-layer STDLIB restructure (after
 - **①b adapter** — `stdlib/component/gmsh_skfem.py` today (BIPV /
   electronics-package geometry, material constants, load case).
   `rtsc`, `fusion`, `sscb-verify` adapters are slated next per
-  `demiurge inbox/notes/kernel-extraction-pickup.md`.
+  `demiurge docs/notes/kernel-extraction-pickup.md`.
 
 ## API
 

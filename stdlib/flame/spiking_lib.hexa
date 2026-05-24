@@ -15,7 +15,7 @@
 // (cortical co-adaptation = local STDP) expressed as flame-callable
 // array ops. hexa-bio DESCRIBES them; this lib EXPOSES them.
 //
-// Filed-as: inbox/patches/flame-spiking-substrate-primitives.md
+// Filed-as: archive/patches/flame-spiking-substrate-primitives.md
 //   (anima LEGO arc §138/§139, downstream-consumer request).
 //
 // IMPLEMENTATION NOTE — no builtin / no codegen change:
@@ -136,7 +136,7 @@ pub fn flame_stdp_pair(W: int, tr_pre: int, tr_post: int, spike: int,
 // loop in flame_stdp_pair, so F-STDP-GPU-1 BYTE-EQUAL-VS-CPU holds by
 // construction.
 //
-// Filed-as: inbox/patches/flame-stdp-pair-gpu-kernel.md
+// Filed-as: archive/patches/flame-stdp-pair-gpu-kernel.md
 //   (anima LEGO arc §141, GPU follow-up to PR #77's CPU primitives).
 //
 // HONEST CARVE-OUT (g3):

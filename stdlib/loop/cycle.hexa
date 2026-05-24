@@ -14,7 +14,7 @@
 //   Wiring lands incrementally:
 //     B-2.1  state-file I/O (\$HEXA_LANG/state/loop/<cwd_hash>/)
 //     B-3    self/main.hexa loop-verb dispatch + binary promote
-//     C      seed lens bodies + first inbox/atlas_candidates/ PR
+//     C      seed lens bodies + first archive/atlas_candidates/ PR
 //
 // Authority: AGENTS.tape @D g_atlas_binary_builtin · g6 (cite enforced)
 //   · g7 (inbox sibling stream) · g_interp_deprecated (compiled-path
@@ -245,15 +245,15 @@ fn cycle_fire(cands: array, fire_enabled: bool) {
 fn cycle_draft(cands: array, dry_run: bool) {
     let n = len(cands)
     if dry_run {
-        println("  [6/8 DRAFT]   --dry-run: " + to_string(n) + " candidate(s) -> tmpdir (no inbox/* write)")
+        println("  [6/8 DRAFT]   --dry-run: " + to_string(n) + " candidate(s) -> tmpdir (no archive/atlas_candidates write)")
         return
     }
-    // C-3: real emit — write `inbox/atlas_candidates/<slug>.md` per
+    // C-3: real emit — write `archive/atlas_candidates/<slug>.md` per
     // Candidate. PR-only invariant (RFC 065 §10): we never touch
     // compiler/atlas/embedded.gen.hexa or compiler/lenses/embedded.gen.hexa;
-    // candidates land in inbox/* for human review and `hexa atlas pr`
+    // candidates land in archive/atlas_candidates/ for human review and `hexa atlas pr`
     // / `hexa lens pr` to fold into the binary built-in.
-    let _ = exec("mkdir -p inbox/atlas_candidates")
+    let _ = exec("mkdir -p archive/atlas_candidates")
     let mut seen_slugs: array = []
     let mut i = 0
     let mut written = 0
@@ -287,7 +287,7 @@ fn cycle_draft(cands: array, dry_run: bool) {
         }
         let mut fire_str = "false"
         if c.fire_needed { fire_str = "true" }
-        let path = "inbox/atlas_candidates/" + path_slug + ".md"
+        let path = "archive/atlas_candidates/" + path_slug + ".md"
         let md = "# " + c.slug + "\n\n"
                + "- family: " + c.family + "\n"
                + "- fire_needed: " + fire_str + "\n"
@@ -299,7 +299,7 @@ fn cycle_draft(cands: array, dry_run: bool) {
         written = written + 1
         i = i + 1
     }
-    println("  [6/8 DRAFT]   " + to_string(written) + " candidate(s) -> inbox/atlas_candidates/<slug>.md (dedup skipped " + to_string(dedup_skipped) + ")")
+    println("  [6/8 DRAFT]   " + to_string(written) + " candidate(s) -> archive/atlas_candidates/<slug>.md (dedup skipped " + to_string(dedup_skipped) + ")")
 }
 
 fn cycle_audit(cands: array, cycle_no: int) {
@@ -348,7 +348,7 @@ struct DfsConfig {
 // RFC 080 DFS+LLM stage — runs between DRAFT and AUDIT when --dfs is set.
 // Treats the surviving lens candidates as DFS seeds and asks the pluggable
 // LLM to descend one or more levels deeper (TECS-L dfs_engine port). Emits
-// verified children to inbox/atlas_candidates/dfs_<parent>/ (PR-only).
+// verified children to archive/atlas_candidates/dfs_<parent>/ (PR-only).
 fn cycle_dfs(seeds: array, view: AtlasView, cycle_no: int, cfg: DfsConfig) {
     if cfg.enabled == false { return }
     if len(cfg.cmd) == 0 {

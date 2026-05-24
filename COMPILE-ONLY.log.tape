@@ -380,7 +380,7 @@
     NOT a constant-overhead memory wall. ~165 GiB to flatten the self-host
     compiler tree (compiler/* + self/* imports) into one source.
   EOF
-  diagnosis = "module_loader's import-flatten accumulator grows unbounded — same CLASS as the `acc = acc + chunk` O(n²) trap catalogued in inbox/ (de3a801e) and the strbuf landing (ed04d3e1, main). strbuf is NOT yet applied to self/module_loader.hexa (grep: 0 literal `acc = acc +`; the blowup is likely arena/splice-accumulator, a sibling mechanism). Either way: a hexa-lang SUBSTRATE / build-pipeline defect, NOT the front-end operator-lowering track."
+  diagnosis = "module_loader's import-flatten accumulator grows unbounded — same CLASS as the `acc = acc + chunk` O(n²) trap catalogued in archive/patches/ (de3a801e) and the strbuf landing (ed04d3e1, main). strbuf is NOT yet applied to self/module_loader.hexa (grep: 0 literal `acc = acc +`; the blowup is likely arena/splice-accumulator, a sibling mechanism). Either way: a hexa-lang SUBSTRATE / build-pipeline defect, NOT the front-end operator-lowering track."
   blocker_ledger <<~EOF
     Five DISTINCT substrate / build-pipeline blockers, each its own sub-track,
     each independently gating G4-G6 — NONE is the front-end fix itself:

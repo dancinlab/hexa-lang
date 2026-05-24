@@ -9,7 +9,7 @@
 // shortest possible (single-line `exec hexa run ...`) so the actual
 // logic stays in the .hexa hook body — keeping FIRMWARE.md §1 ban
 // honest (the .git/hooks/ tree is not under self/, stdlib/, compiler/,
-// tool/, or inbox/, so the few-byte trampoline is outside the ban
+// or tool/, so the few-byte trampoline is outside the ban
 // scope, but it must remain trivial).
 //
 // Run once per checkout:

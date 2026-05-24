@@ -8,7 +8,7 @@
 // `Authorization` header value plus the `x-amz-date` and
 // `x-amz-content-sha256` headers a caller must attach to the request.
 //
-// Closes inbox/patches/phanes-aws-sigv4-signer-for-stdlib.md and un-defers
+// Closes archive/patches/phanes-aws-sigv4-signer-for-stdlib.md and un-defers
 // the SigV4 path in self/stdlib/bedrock_sdk.hexa (GAP-D). SigV4 is the auth
 // primitive for every AWS service reached over HTTP/JSON (DynamoDB, S3,
 // Bedrock, STS, ...). Per @D g_stdlib_ownership it lives here once;

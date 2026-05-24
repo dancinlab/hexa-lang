@@ -2,7 +2,7 @@
 // ════════════════════════════════════════════════════════════════════════
 // tmp_hxc_v2_lib_smoke.hexa — HXC v2 downstream library API smoke
 //
-// Verifies inbox/patches/hxc-v2-no-downstream-library-api.md resolution.
+// Verifies archive/patches/hxc-v2-no-downstream-library-api.md resolution.
 // Exercises self/stdlib/hxc_v2_lib.hexa from a downstream-style call site
 // (no CLI subprocess, no interp dependency, no atlas-schema coupling).
 //

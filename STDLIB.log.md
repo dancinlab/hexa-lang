@@ -19,7 +19,7 @@ cycle 1+2+3 closure 후 남은 단일 open 마일스톤 = `open-babel-subset` (G
 
 후속 — 새 milestone 등록은 사용자 결정 대기:
 - cycle 3 sub-sub-feature 후보 (rdkit 68-type SMARTS · vina BFGS · iedb ANN · brenda credentials manager · Ertl S/P · SSSR)
-- cycle 4 새 inbox/notes/2026-05-25-* 후보 (bindingdb · chembl · drugbank · febio · openfoam · pk-sim 등)
+- cycle 4 새 docs/notes/2026-05-25-* 후보 (bindingdb · chembl · drugbank · febio · openfoam · pk-sim 등)
 - 다른 도메인 pivot (HEXA_LANG · 등)
 
 ## 2026-05-25T05:30:00Z — /cycle 사이클 3: 6 deferred sub-feature 보강 — 6/6 oracle PASS · 정공법 완성도기준
@@ -88,7 +88,7 @@ cycle 1+2+3 closure 후 남은 단일 open 마일스톤 = `open-babel-subset` (G
 
 ## 2026-05-24T21:30:00Z — TTR in-silico track 흡수 — 6 마일스톤 신규 등록 (1 deferred)
 
-- [x] `inbox/notes/2026-05-24-ttr-external-port-candidates.md` 리뷰 → STDLIB 도메인 흡수
+- [x] `docs/notes/2026-05-24-ttr-external-port-candidates.md` 리뷰 → STDLIB 도메인 흡수
 - [x] STDLIB.md `### TTR — in-silico track` 섹션 신설 — 4 tier 분류
 - [x] Tier-1 thin REST adapter 3종 등록 — pubchem-api · brenda-api · uniprot-alphafold-api (각 ~200-300 LOC)
 - [x] Tier-2 cheminformatics 2종 — rdkit-subset (★★★ active) · open-babel-subset (GPL-2 라이선스 검토 DEFERRED)

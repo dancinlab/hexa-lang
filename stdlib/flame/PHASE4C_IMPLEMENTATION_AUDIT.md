@@ -37,7 +37,7 @@ Phase 4-B-3 A2 + Path B FULL  ~5.0s     3.23×       commit 29fe4a69 (cool proje
 
 ## 2. RFC 048 mechanism summary
 
-Per `inbox/rfc_drafts_2026_05_12/rfc_048_flame_phase4c_fwd_bwd_graph_fusion.md`:
+Per `docs/rfc/rfc_drafts_2026_05_12/rfc_048_flame_phase4c_fwd_bwd_graph_fusion.md`:
 
 **Pass placement**: extends the Phase 4-B IR pass (RFC 047, currently a sed-rewrite
 + trampoline concat pipeline — see §7) with a paired-call pattern-matcher. When
@@ -344,11 +344,11 @@ paired-call detection (log-only)**.
 
 ### Design docs (read these before starting Phase 4-C work)
 
-- `inbox/rfc_drafts_2026_05_12/rfc_048_flame_phase4c_fwd_bwd_graph_fusion.md` — RFC 048 design (THIS audit's source)
-- `inbox/rfc_drafts_2026_05_12/rfc_047_flame_phase4b_block_fusion_ir_pass.md` — RFC 047 (Phase 4-B prerequisite IR pass design)
-- `inbox/rfc_drafts_2026_05_12/rfc_046_flame_phase4_compiler_fusion.md` — RFC 046 (Phase 4 fusion overall design, identifies 4-C as HIGHEST IMPACT)
-- `inbox/rfc_drafts_2026_05_12/rfc_045_flame_phase3_algorithmic_byte_eq_with_anima_oracle.md` — RFC 045 (Phase 3 closure, source #4 3.12e-5 drift attribution)
-- `inbox/rfc_drafts_2026_05_12/rfc_043_hexa_torch_compiler_only_nn_stdlib.md` — RFC 043 (flame design SSOT, §Ultimate)
+- `docs/rfc/rfc_drafts_2026_05_12/rfc_048_flame_phase4c_fwd_bwd_graph_fusion.md` — RFC 048 design (THIS audit's source)
+- `docs/rfc/rfc_drafts_2026_05_12/rfc_047_flame_phase4b_block_fusion_ir_pass.md` — RFC 047 (Phase 4-B prerequisite IR pass design)
+- `docs/rfc/rfc_drafts_2026_05_12/rfc_046_flame_phase4_compiler_fusion.md` — RFC 046 (Phase 4 fusion overall design, identifies 4-C as HIGHEST IMPACT)
+- `docs/rfc/rfc_drafts_2026_05_12/rfc_045_flame_phase3_algorithmic_byte_eq_with_anima_oracle.md` — RFC 045 (Phase 3 closure, source #4 3.12e-5 drift attribution)
+- `docs/rfc/rfc_drafts_2026_05_12/rfc_043_hexa_torch_compiler_only_nn_stdlib.md` — RFC 043 (flame design SSOT, §Ultimate)
 - `stdlib/flame/PHASE4B_SHIPPED_SUMMARY.md` — single-page Phase 4-B closure
 - `stdlib/flame/PHASE4B3_BLOCK_FWD_AUDIT.md` — section-by-section V1 methodology template (mirror for fused primitive)
 - `stdlib/flame/PHASE4B3_BWD_AUDIT.md` — bwd-side mirror of fwd audit
@@ -370,8 +370,8 @@ paired-call detection (log-only)**.
 ### Forge / GPU coordination (Phase 4-C-4 dep, parallel session)
 
 - `self/forge/FORGE.tape` — substrate role (regime-tiered, RFC 044)
-- `inbox/rfc_drafts_2026_05_12/rfc_044_forge_regime_tiered_substrate.md` — forge Phase R design
-- `inbox/rfc_drafts_2026_05_12/rfc_049_forge_mixed_precision_substrate.md` — BF16 TC + LayerCast (Phase 4-D-adjacent)
+- `docs/rfc/rfc_drafts_2026_05_12/rfc_044_forge_regime_tiered_substrate.md` — forge Phase R design
+- `docs/rfc/rfc_drafts_2026_05_12/rfc_049_forge_mixed_precision_substrate.md` — BF16 TC + LayerCast (Phase 4-D-adjacent)
 - anima eager-PyTorch baseline: `~/core/anima/state/anima_pytorch_d768x12L_fire_2026_05_16/fire.log` (336.85s reference for F-RFC048-EAGER-PYTORCH-MATCH)
 
 ---

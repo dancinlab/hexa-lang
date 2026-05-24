@@ -308,7 +308,7 @@ fn proc_deregister(pid: int) -> bool {
 // temporarily unavailable`. The KILL is gated on a `kill -0` liveness probe
 // so a process that exited cleanly during the grace window is NOT re-killed
 // (avoids hitting a recycled pid). Repro:
-// inbox/patches/proc-spawn-supervised-fd-leak-reconnect-loop-2026-05-23.md.
+// archive/patches/proc-spawn-supervised-fd-leak-reconnect-loop-2026-05-23.md.
 //
 // Idempotent: safe to call on a dead pid (all kills silently no-op).
 fn proc_kill(pid: int) -> bool {

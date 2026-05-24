@@ -24,7 +24,7 @@
   brief = "Tensor + reverse-mode autograd + nn layers + AdamW + cuBLAS, hexa build-native, ZERO hexa_interp dispatch"
   analog = "flame:hexa :: torch:Python (torch = handheld flame; project 'fire' 어휘 정합)"
   status = "Phase 0 CLEARED 2026-05-16 (preservation verified) → Phase 1 (tensor_lib + autograd_lib) IN PROGRESS"
-  parent_rfc = "RFC 043 (inbox/rfc_drafts_2026_05_12/rfc_043_hexa_torch_compiler_only_nn_stdlib.md)"
+  parent_rfc = "RFC 043 (docs/rfc/rfc_drafts_2026_05_12/rfc_043_hexa_torch_compiler_only_nn_stdlib.md)"
   structure = "fat native stdlib + thin hexa orchestration ⟹ no heavy interpreted driver loop (RFC 042 ceiling closed structurally)"
 
 # ─── §2 Layout (planned lib-split — compiled-first, NOT one file) ─────
@@ -104,19 +104,19 @@
 # (honest: branch+description authoritative if a SHA drifted).
 
 @X x_rfc043 := "RFC 043 — flame design SSOT" :: rfc [d=2026-05-16 active]
-  path = "hexa-lang inbox/rfc_drafts_2026_05_12/rfc_043_hexa_torch_compiler_only_nn_stdlib.md"
+  path = "hexa-lang docs/rfc/rfc_drafts_2026_05_12/rfc_043_hexa_torch_compiler_only_nn_stdlib.md"
   branch = "rfc043-hexa-torch" ; sha = "4dcaf80f"
   consolidates = "042 SUBSUMED · 041 kernel-backend · 040 tensor-backend · 034 autograd-foundation"
 
 @X x_rfc045 := "RFC 045 — flame Phase 3 algorithmic byte-eq with anima oracle (CLOSURE)" :: rfc [d=2026-05-17 active]
-  path = "hexa-lang inbox/rfc_drafts_2026_05_12/rfc_045_flame_phase3_algorithmic_byte_eq_with_anima_oracle.md"
+  path = "hexa-lang docs/rfc/rfc_drafts_2026_05_12/rfc_045_flame_phase3_algorithmic_byte_eq_with_anima_oracle.md"
   branch = "rfc043-hexa-torch" ; sha = "(TBD on commit)"
   closes = "F-RFC043-STEP-EQ at algorithm-byte-eq tier · 40 falsifier PASS · regression 0 · structural call_builtin = 0"
   evidence = "21-commit chain Phase 3-A..3-J · gn2[0]=7.97113 vs anima 7.97116 |Δ|=3.12e-5 · final 8.87e-7 vs 3.73e-7 (2.4× drift; same shape) · acc 8/8 = anima 8/8 · init weight byte-id max|Δ|=0.0 · source #4 (dict vs packed-farr impl-level) CONFIRMED by direct anima same-toolchain execution"
   rename_note = "Originally drafted as RFC 044 (commit 829e5076), renamed to RFC 045 to yield 044 to the parallel-session forge regime work (RFC 040/041 lineage continuation has stronger numerical-position claim)."
 
 @X x_rfc048 := "RFC 048 — flame Phase 4-C: fwd+bwd graph fusion at compile time" :: rfc [d=2026-05-17 draft]
-  path = "hexa-lang inbox/rfc_drafts_2026_05_12/rfc_048_flame_phase4c_fwd_bwd_graph_fusion.md"
+  path = "hexa-lang docs/rfc/rfc_drafts_2026_05_12/rfc_048_flame_phase4c_fwd_bwd_graph_fusion.md"
   branch = "rfc043-hexa-torch" ; sha = "(TBD on commit)"
   scope = "Stage 3 from RFC 046 (HIGHEST IMPACT — bwd is 75% of per-step wall per PERF.md 5-run). IR pass detects nn_decoder_block_fwd/bwd pairs and emits single specialized fused C function per (T,d,nh,nkv,h) tuple with register-resident block cache."
   builds_on = "RFC 047 (Phase 4-B IR pass is the prerequisite Stage 2 specialization); extends it with fwd/bwd pairing detection + rewrite"
@@ -126,7 +126,7 @@
   preserves = "flame public API (g_flame_api_fixed); Phase 3 numerics byte-id (F-RFC048-STEP-EQ preserves flame ↔ anima 3.12e-5 delta exactly)"
 
 @X x_rfc047 := "RFC 047 — flame Phase 4-B: per-block IR pass for compile-time block fusion" :: rfc [d=2026-05-17 draft]
-  path = "hexa-lang inbox/rfc_drafts_2026_05_12/rfc_047_flame_phase4b_block_fusion_ir_pass.md"
+  path = "hexa-lang docs/rfc/rfc_drafts_2026_05_12/rfc_047_flame_phase4b_block_fusion_ir_pass.md"
   branch = "rfc043-hexa-torch" ; sha = "(TBD on commit)"
   scope = "Stage 2 from RFC 046 — per-block specialized C kernel emit via IR pass at `hexa build` time; static-shape specialization on (T, d, nh, nkv, h)"
   preserves = "flame public API (g_flame_api_fixed); Phase 3 numerics byte-id (F-RFC047-STEP-EQ preserves flame ↔ anima 3.12e-5 delta exactly)"
@@ -135,7 +135,7 @@
   granularity_floor_response = "Phase 4-B's within-block fusion is the right answer to the ~32K-ops granularity floor — small reductions (drin, attention_core_bwd P·dY) become inline code in the specialized C function rather than separate farr_matmul calls"
 
 @X x_rfc046 := "RFC 046 — flame Phase 4: compiler fusion for eager-PyTorch end-to-end throughput match" :: rfc [d=2026-05-17 draft]
-  path = "hexa-lang inbox/rfc_drafts_2026_05_12/rfc_046_flame_phase4_compiler_fusion.md"
+  path = "hexa-lang docs/rfc/rfc_drafts_2026_05_12/rfc_046_flame_phase4_compiler_fusion.md"
   branch = "rfc043-hexa-torch" ; sha = "(TBD on commit)"
   asserts = "f-RFC046-EAGER-PYTORCH-MATCH: flame d=768·12L wall ≤1.3× eager-PyTorch 336.85s on A100 after Stage 3 fwd+bwd graph fusion"
   staged = "Stage 1 (epilogue fusion, ~2×, 1 cycle) → Stage 2 (block fusion, ~5×, 2 cycles) → Stage 3 (fwd+bwd graph fusion, ~10×, 2-3 cycles) → Stage 4 (GPU dispatch + eager-PyTorch comparison, ~$5-20)"
@@ -143,7 +143,7 @@
   honesty = "asserts ≤1.3× threshold based on Phase 3 baseline 18.5s d=32·3L scaling math; if Phase 4-D measures >1.3× ratio, falsifier FAILS and design iterates (no fudge)"
 
 @X x_rfc_chain := "backing RFCs 040/041/042/034" :: rfc [d=2026-05-16 active]
-  rfc_040 = "farr GPU/CUDA backend (device-farr + cuBLAS) — inbox/, branch rfc/farr-gpu-cuda-backend (design 95c208f6)"
+  rfc_040 = "farr GPU/CUDA backend (device-farr + cuBLAS) — docs/rfc/, branch rfc/farr-gpu-cuda-backend (design 95c208f6)"
   rfc_041 = "Phase B/B2 real CUDA kernels — branch rfc041-042-upstream-needs dae35fee (currently only farr_matmul_gpu has a real kernel; rest TODO[cuda] -1 stubs)"
   rfc_042 = "AOT-native trainer — SUBSUMED by 043 (rfc041-042-upstream-needs dae35fee)"
   rfc_034 = "farr reverse-mode autograd — LANDED (matmul→CE tape; flame generalizes it)"

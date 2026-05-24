@@ -3,7 +3,7 @@
 > **Status: SCAFFOLD-ONLY (2026-05-20) — `.hexa.stub` skeletons.** No
 > body returns a useful artifact yet. The codegen support for
 > `@target(firmware, ...)` lowering is the subject of RFC 063
-> (`inbox/rfc_drafts_2026_05_20/rfc_063_target_firmware_codegen.md`);
+> (`docs/rfc/rfc_drafts_2026_05_20/rfc_063_target_firmware_codegen.md`);
 > until that lands, every stub here documents the eventual capability
 > shape only.
 

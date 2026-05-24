@@ -8,9 +8,18 @@ For the full audit trail, see `git log`.
 
 ## 2026-05-24
 
-phi_rs inbox closure + `/cycle` 1-6 라운드 머지 배치. 코드 변경(codegen/runtime)은 enum 스택 일부, 나머지는 RFC promote · inbox housekeeping.
+내부 `inbox/` staging 폴더 **폐기** (user-authorized, pre-sunset). phi_rs inbox closure + `/cycle` 1-6 라운드 머지 배치. 코드 변경(codegen/runtime)은 enum 스택 일부, 나머지는 RFC promote · inbox housekeeping.
 
-- **inbox/atlas_candidates 폐기 + 루트 `INBOX` 도메인 생성** — atlas 가 직접 흡수(RFC-080 · `compiler/atlas/embedded.gen.hexa` in-memory register)로 전환되어 markdown 후보 스테이징(`inbox/atlas_candidates/`)이 deprecated → 3건(n7_break lattice-locked · grade_distribution · lens_table cite audit, 전부 `fire_needed:false` · RFC-065 hexa-loop era) retire(claim 은 embedded.gen 반영 + git 이력 복구 가능). 동시에 cross-repo handoff 수신용 루트 `INBOX` 도메인(`INBOX.md` + `INBOX.log.md`) 생성 — sidecar commons `g11`/`g59`(hexa-lang gap → handoff) 정합. hexa-lang 자체 upstream-patch staging `inbox/`(patches·notes·fires·rfc_drafts, sunset 예정)는 **별개 시스템**으로 그대로 유지.
+- **`inbox/` 내부 staging 폴더 폐기 → rehome + rewire** (user-authorized, pre-sunset) — hexa-lang 내부 upstream-patch staging `inbox/` 폴더(1401 tracked files)를 폐기. 원래 `SPEC.yaml §inbox_protocol`의 sunset trigger 는 `stage_3_fixed_point`였으나, **사용자 직접 지시로 그 이전에 선폐기**. 이력 보존을 위해 전부 `git mv` 로 rehome:
+  - `inbox/rfc_drafts*/` → `docs/rfc/`
+  - `inbox/notes/` → `docs/notes/`
+  - `inbox/patches/`(+ `archive/` · `PATCHES.yaml` · `manifest_log.jsonl`) → `archive/patches/` (manifest_log.jsonl = durable audit trail, 보존)
+  - `inbox/fires/` → `archive/fires/`
+  - `inbox/{poc,repros,tests,tools}/` → `archive/patches/`
+  - `inbox/INBOX.md`(폐기된 mechanism 의 README) → `archive/patches/README.md`
+  커플링 rewire: `SPEC.yaml §inbox_protocol`(abolished 기록으로 대체) · `tool/inbox_sync.hexa`·`tool/inbox_promote.hexa`(→ `archive/patches/`) · `tool/audit_forbidden_exts.hexa`·`FIRMWARE.md`(walked-dir 목록에서 `inbox/` 제거) · runtime write path `stdlib/loop/dfs.hexa`·`stdlib/loop/cycle.hexa`(`inbox/atlas_candidates/` → `archive/atlas_candidates/`) · `.githooks/`(wipe-governance-proposal.md 경로) · `doc/inbox_for_bedrock.md`(abolition 안내). cross-repo handoff 수신용 루트 `INBOX` 도메인과 atlas SSOT 의 `atlas/inbox/` 제출 통로는 **별개 시스템**으로 그대로 유지. 미해소 patch 3건(`pending`×2 · `pending_external`×1)은 `archive/patches/PATCHES.yaml` 에 기록 보존.
+
+- **inbox/atlas_candidates 폐기 + 루트 `INBOX` 도메인 생성** — atlas 가 직접 흡수(RFC-080 · `compiler/atlas/embedded.gen.hexa` in-memory register)로 전환되어 markdown 후보 스테이징(`inbox/atlas_candidates/`)이 deprecated → 3건(n7_break lattice-locked · grade_distribution · lens_table cite audit, 전부 `fire_needed:false` · RFC-065 hexa-loop era) retire(claim 은 embedded.gen 반영 + git 이력 복구 가능). 동시에 cross-repo handoff 수신용 루트 `INBOX` 도메인(`INBOX.md` + `INBOX.log.md`) 생성 — sidecar commons `g11`/`g59`(hexa-lang gap → handoff) 정합.
 
 ### codegen / runtime — enum-to-string 스택
 
@@ -66,7 +75,7 @@ cycle 6-9 라운드 머지 — enum-to-string codegen 스택의 마지막 단계
 
 cycle 마다 resolved 패치가 다시 triage 큐로 올라오던 누수 닫음.
 
-- **43-patch archive** (PR #588) — resolved 43 건 → `inbox/patches/archive/` 이관, manifest 동기화. cycle re-triage 멈춤
+- **43-patch archive** (PR #588) — resolved 43 건 → `archive/patches/archive/` 이관, manifest 동기화. cycle re-triage 멈춤
 - **canonical-audit r10 archive** (PR #591) — P0 long-ident truncation 재현 불가 → audit 완료 마크 + archive
 
 #### 자동 머지 흐름 라이브 가동
@@ -111,7 +120,7 @@ cycle 11에서 디스크 풀 + 셸 routing 문제로 KKKK / LLLL / MMMM / OOOO /
 ### Doc / closure
 
 - **PROBE cycle 1-6 sync** — cycle 7-9 진입 전 docs(PROBE) #512 으로 14 merged + 14 open + 2 in-flight + 3 STOP 스냅샷 filed
-- **RFC 087 promotion** — macro expander Phase 2 design을 `inbox/rfc_drafts/` 로 promote (#556)
+- **RFC 087 promotion** — macro expander Phase 2 design을 `docs/rfc/rfc_drafts/` 로 promote (#556)
 
 PR 총계 = 64 (MERGED 21 · OPEN 41 · CLOSED-unmerged 2). 자세한 매핑은 `PROBE.log.md` 라운드 14-A ~ 14-PPPP 섹션.
 
@@ -127,7 +136,7 @@ PR 총계 = 64 (MERGED 21 · OPEN 41 · CLOSED-unmerged 2). 자세한 매핑은 
 
 ### canonical-deviation audits (PROBE rounds 7-12)
 
-Inbox docs filed for each round (`inbox/patches/canonical-audit-round-N-consolidated.md`).  Surgical fixes shipped per finding:
+Inbox docs filed for each round (`archive/patches/canonical-audit-round-N-consolidated.md`).  Surgical fixes shipped per finding:
 
 - **r7** — `in` membership binop (Python/Swift canonical · `hexa_contains_poly`); `DestructLetStmt`+`MapDestructLetStmt` codegen handlers; bool→numeric coercion (silent miscompile cluster `true+1`/`true*5`/`(true as i64)`)
 - **r8** — POSIX fs cluster (`glob`/`listdir`/`tempfile`/`tempdir` builtins); `stdin` alias for `read_stdin`; `cwd()` builtin; `mkdir` returns bool; `stat`/`fstat`/`lseek`/`mmap` libc-wrapper migration (Darwin arm64 syscall carry-flag class)
@@ -146,7 +155,7 @@ Inbox docs filed for each round (`inbox/patches/canonical-audit-round-N-consolid
 
 - **`.last()` runtime helper** + iterator alias (single-eval via `hexa_array_last`)
 - **NegFloatLit fold** — `-1.0 / 0.0` constant-folds to `-inf` (matches `1.0/0.0=inf` IEEE 754)
-- **macro expander Phase 1** — `println!`/`panic!`/`vec!` intrinsics desugar at parse time (per design RFC at `inbox/patches/macro-expander-pass-design-detailed.md`)
+- **macro expander Phase 1** — `println!`/`panic!`/`vec!` intrinsics desugar at parse time (per design RFC at `archive/patches/macro-expander-pass-design-detailed.md`)
 - **type checker** — warn on immutable-let reassignment + non-exhaustive match
 - **modules** — `pub use` re-export + alias/dup-import collision diagnostic
 - **drill honesty gate** — `_honesty_gate` read the BT-AI2 verdict through the wrong `Bt2Verdict` fields (`f_a`/`f_b` instead of `f_ai2_a`/`f_ai2_b`).  Every `hexa drill` / `hexa kick` round emitted two spurious `map key 'f_a' not found` warnings, and the gate was dead.  Field names corrected.

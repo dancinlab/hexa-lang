@@ -15,7 +15,7 @@
 //                       fp64 rounding bound (max|Δ| < 1e-3 cumulative).
 //
 // Cross-link:
-//   - inbox/patches/pt-ckpt-cross-substrate-residual-readout.md (request)
+//   - archive/patches/pt-ckpt-cross-substrate-residual-readout.md (request)
 //   - ../../inbox/patches/flame-path-a-dual-head-and-multiterm-grad.md
 //     (§71 RFC 059 training-time complement)
 //   - stdlib/flame/decoder_lib.hexa (consumer of M buffer)

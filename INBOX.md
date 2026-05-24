@@ -6,4 +6,4 @@
 
 열린 handoff 없음.
 
-> 참고: hexa-lang 자체의 upstream-patch staging 은 `inbox/`(patches · notes · fires · rfc_drafts, self/+compiler/ dual-tree, sunset 예정) — **별개 시스템**. 이 INBOX 도메인은 다른 repo 가 넘긴 cross-repo handoff 전용.
+> 참고: hexa-lang 내부 upstream-patch staging `inbox/` 폴더는 폐기됐다(rehome → `archive/patches/` · `archive/fires/` · `docs/notes/` · `docs/rfc/`). upstream 변경은 일반 PR 워크플로로 흐른다. 이 INBOX 도메인은 다른 repo 가 넘긴 cross-repo handoff 전용으로 별개 시스템이며 그대로 유지된다.

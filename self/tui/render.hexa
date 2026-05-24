@@ -231,7 +231,7 @@ pub fn render_flush() -> int {
             // most macOS/iTerm2-class terminals → ghost-cell trailing.
             // tcell canonical behavior: explicitly emit a clearing space
             // at each orphaned continuation cell. See
-            // inbox/patches/self-tui-render-wide-to-narrow-ghost.md.)
+            // archive/patches/self-tui-render-wide-to-narrow-ghost.md.)
             let f_ch = f_cell[0]
             let f_w = if f_ch == "" { 1 } else {
                 let fcw = char_width_at(f_ch, 0)[0]

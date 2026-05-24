@@ -196,7 +196,7 @@ the canonical authority + simplifies post-hoc audit of fusion decisions.
 - `tool/flame_phase4b3_verify_all.sh` — CI verification battery; extends
   to 24 artifacts including `F-RFC048-PAIR-DETECT` (commit landing with
   this design doc).
-- `inbox/rfc_drafts_2026_05_12/rfc_048_flame_phase4c_fwd_bwd_graph_fusion.md`
+- `docs/rfc/rfc_drafts_2026_05_12/rfc_048_flame_phase4c_fwd_bwd_graph_fusion.md`
   — RFC 048 full design (mechanism, falsifier suite, projection).
 - `tool/flame_phase4b3_emit_trampoline.hexa` — Phase 4-B AST infra that
   Phase 4-C-2's full-AST detector (§2.3 dataflow upgrade) will extend.

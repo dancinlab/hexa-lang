@@ -238,7 +238,7 @@ fn cloud_lint_argv(argv: [str]) -> [str] {
 // marker captures that naturally, so a wall-exceeded run surfaces as
 // exit_code == 124 with a "max-wall N exceeded" message. A `max_wall` of 0
 // (or negative) applies no cap and is identical to cloud_run_opts.
-// See inbox/patches/cloud-cli-operational-improvements-anima-2026-05-20.md P2.
+// See archive/patches/cloud-cli-operational-improvements-anima-2026-05-20.md P2.
 fn cloud_run_wall_opts(host: str, ssh_opts: [str], argv: [str], max_wall: int) -> CloudResult {
     if len(argv) == 0 {
         return _cloud_fail("cloud_run: empty argv")
@@ -384,7 +384,7 @@ fn cloud_poll(host: str, pid: int) -> int {
 //   101  zero_byte_transfer       (local exists but size == 0)
 //   102  local_source_missing     (copy-to pre-check: local source absent)
 // 103-104 reserved for optional remote-size verify (not yet wired).
-// See inbox/patches/hexa-cloud-copy-from-verify-local-2026-05-24.md.
+// See archive/patches/hexa-cloud-copy-from-verify-local-2026-05-24.md.
 
 // cloud_copy_to_opts — upload `local_path` to `host:remote_path` over scp
 // with extra ssh flags `ssh_opts` (translated to scp's `-P` for port).

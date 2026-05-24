@@ -288,7 +288,7 @@ target. ~6 engineer-months total.
 - `PLAN.md` — phase / goal definitions (G1-G6)
 - `compiler/` — frontend + middle + backend stages
 - `tests/m0/`, `verify/wilson-build/` — current test infrastructure
-- `self/forge/PARADIGM_C_RESEARCH.md`, `inbox/rfc_drafts_2026_05_12/`
+- `self/forge/PARADIGM_C_RESEARCH.md`, `docs/rfc/rfc_drafts_2026_05_12/`
   `rfc_060_forge_new_compute_paradigm.md` — §3.9 measurement source
 - External: Rice (1953), Hindley-Milner (1969), Siek & Taha (2006)
   *Gradual Typing for Functional Languages*, Marques-Silva & Sakallah

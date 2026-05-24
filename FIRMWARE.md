@@ -29,7 +29,7 @@ blocks: future PRs that introduce `.c`/`.h`/`.cpp`/`.hpp`/`.cc`/`.hh`/`.s`/`.S`/
 ## §1 Forbidden source classes (write-deny — same status as `@F f2 llvm-c-transpile-backend`)
 
 The classifier below applies to **new** source files added under
-`self/` `stdlib/` `compiler/` `tool/` `inbox/` (and any future top-level
+`self/` `stdlib/` `compiler/` `tool/` (and any future top-level
 directory other than `build/` `dist/` `target/` `out/` and any path under
 `.git/`). Existing files predating this roadmap are tombstoned per §3 and
 retired per §4 — they are **not** grand-fathered as a license to add more.
@@ -51,7 +51,7 @@ Out of scope (allowed):
   intended steady state, exactly as today.
 - Vendored 3rd-party tarballs that the project does not edit (the build
   consumes them as binary inputs). If a vendored source is patched, the
-  patch lives in `inbox/patches/` as `.hexa`-codegen instructions, not as
+  patch lives in `archive/patches/` as `.hexa`-codegen instructions, not as
   a sidecar `.c` diff.
 - Existing `self/runtime.c` and the `self/native/` C frontend — these are
   the **bootstrap** layer, retired by HEXA-NATIVE-ONLY.md gates G-0..G-11
@@ -341,7 +341,7 @@ n=6 does not enter the verification — only the tool oracles do.
 - 2026-05-20 — file created. Captures the firmware/RTL extension of
   HEXA-NATIVE-ONLY.md: bans `.py`/`.sh`/`.c`/`.h`/`.cpp`/`.hpp`/`.cc`/
   `.hh`/`.s`/`.S`/`.v`/`.sv`/`.vhd`/`.vhdl` as **authored** source under
-  `self/` `stdlib/` `compiler/` `tool/` `inbox/`; phased gates G-T0..G-T3
+  `self/` `stdlib/` `compiler/` `tool/`; phased gates G-T0..G-T3
   (tombstone + glue), G-F0..G-F4 (firmware lane via `@target(firmware)`),
   G-R0..G-R4 (RTL lane via `@target(rtl)` + `stdlib/yosys/write_verilog`).
   In-flight evidence: `stdlib/yosys/read_verilog.hexa` round-trip work
@@ -502,10 +502,10 @@ n=6 does not enter the verification — only the tool oracles do.
   bodies pending RFC 063.
   (e) **G-R3 scaffold**: `stdlib/vhdl/{README, write_vhdl.hexa.stub}` —
   VHDL mirror of `stdlib/yosys/write_verilog`, pending RFC 064 G-R3.
-  (f) **RFC 063** drafted (`inbox/rfc_drafts_2026_05_20/rfc_063_target_
+  (f) **RFC 063** drafted (`docs/rfc/rfc_drafts_2026_05_20/rfc_063_target_
   firmware_codegen.md`) covering G-F0..G-F4 codegen contract,
   reconciling with `self/native/gpu_codegen_stub.c` (rt#45) and RFC 055.
-  (g) **RFC 064** drafted (`inbox/rfc_drafts_2026_05_20/rfc_064_target_
+  (g) **RFC 064** drafted (`docs/rfc/rfc_drafts_2026_05_20/rfc_064_target_
   rtl_codegen.md`) covering G-R0..G-R4 codegen contract.
   All 8 new `.hexa`/`.hexa.stub` files parse-clean
   (`/Users/ghost/.hx/bin/hexa_real parse`). Honest scope: glue + audit

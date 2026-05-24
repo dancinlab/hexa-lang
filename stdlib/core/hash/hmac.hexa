@@ -4,7 +4,7 @@
 // @capabilities [pure, crypto]
 //
 // HMAC-SHA256 (RFC 2104 / FIPS 198-1) — closes the byte-level HMAC gap
-// surfaced by inbox/patches/phanes-aws-sigv4-signer-for-stdlib.md.
+// surfaced by archive/patches/phanes-aws-sigv4-signer-for-stdlib.md.
 //
 // Why a byte-level surface is required:
 //   The pre-existing `hmac_sha256` in self/std_crypto.hexa is string-in /

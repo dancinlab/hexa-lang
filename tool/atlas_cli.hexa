@@ -15,7 +15,7 @@
 //       register       — STUB: lex→parse→discover_check→write_staging for a project file's
 //                        `@discover`-annotated fns. Needs the compiler frontend wired into a
 //                        `tool/atlas_register.hexa` companion — spec in
-//                        inbox/patches/hexa-cli-atlas-register-update-or-pr.md.
+//                        archive/patches/hexa-cli-atlas-register-update-or-pr.md.
 //       pr             — the sole landing verb under PR-only policy: fold a staging shard
 //                        onto a fresh git branch, commit the append shard, try `gh pr create`
 //                        against origin. Degrades honestly (write-shard + print exact
@@ -23,7 +23,7 @@
 //                        a PR. Equation flow: register → pr (no direct fold-to-live).
 //
 //   - The legacy `promote` arm (direct fold-to-live without PR) is RETIRED 2026-05-20 per
-//     inbox/patches/hexa-atlas-pr-only-policy.md. promote_to_atlas() is still imported and
+//     archive/patches/hexa-atlas-pr-only-policy.md. promote_to_atlas() is still imported and
 //     used internally by cmd_pr (the PR arm folds onto a branch, then opens the PR), but
 //     no contributor-facing `hexa atlas promote` verb is exposed.
 //
@@ -425,7 +425,7 @@ fn cmd_append_witness(rest: array) {
 }
 
 // RETIRED 2026-05-20 — `hexa atlas promote` (direct fold-to-live) removed per
-// inbox/patches/hexa-atlas-pr-only-policy.md (wilson governance principle #2 PR-only).
+// archive/patches/hexa-atlas-pr-only-policy.md (wilson governance principle #2 PR-only).
 // The promote_to_atlas() primitive is still imported and called internally by
 // cmd_pr (the PR arm folds onto a branch, then opens the PR). Equation flow:
 //   register → pr  (no direct fold-to-live; every equation lands via reviewable PR.)
@@ -454,7 +454,7 @@ fn cmd_append_witness(rest: array) {
 // (2) `hexa atlas register <file.hexa>` — STUB. Same status as before: needs
 //     the compiler frontend (compiler/lex/* + compiler/parse/parser.hexa::parse)
 //     wired into a companion. Tracked at
-//     inbox/patches/hexa-cli-atlas-register-update-or-pr.md.
+//     archive/patches/hexa-cli-atlas-register-update-or-pr.md.
 //
 // Per @D g_atlas_binary_builtin: the atlas is unconditionally binary built-in
 // (compiler/atlas/embedded.gen.hexa is the SSOT). Equations land via PR —
@@ -2323,7 +2323,7 @@ fn cmd_register(rest: array) {
             println("  intended: run `hexa check` (compiler-frontend check pass) IN-PROCESS, on a 🔵")
             println("            verdict construct an AtlasNode (kind C for constants, F for closed")
             println("            forms, L for laws) and hand to register_from_event.")
-            println("  spec:     inbox/patches/atlas-cli-multi-verb-discovery-pipeline.md (this file's commit)")
+            println("  spec:     archive/patches/atlas-cli-multi-verb-discovery-pipeline.md (this file's commit)")
             println("  see source: tool/atlas_cli.hexa::_adapt_check + DiscoveryEvent + register_from_event")
             exit(6)
         }
@@ -2337,7 +2337,7 @@ fn cmd_register(rest: array) {
     println("hexa atlas register: NOT YET WIRED for <file.hexa> mode.")
     println("  intended: lex→parse <file.hexa> → discover_check(Module) → write_staging — needs the")
     println("  compiler frontend (compiler/lex/* + compiler/parse/parser.hexa::parse) wired into a")
-    println("  `tool/atlas_register.hexa` companion. Spec: inbox/patches/hexa-cli-atlas-register-update-or-pr.md")
+    println("  `tool/atlas_register.hexa` companion. Spec: archive/patches/hexa-cli-atlas-register-update-or-pr.md")
     println("")
     println("  AVAILABLE arms (multi-verb discovery sink):")
     println("    --from-verify <fn> <n> <v> [--auto-pr]   (direct in-memory node-gen → PR; 2-op form too)")

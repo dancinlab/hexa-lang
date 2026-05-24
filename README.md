@@ -480,8 +480,8 @@ hexa-lang/
 ├── doc/                          runbooks, audits, explainers
 ├── convergence/                  cross-repo propagation tracking (.PRESERVE-AS-SSOT)
 ├── state/                        gitignored runtime hook markers (cargo — migration candidate)
-├── build/                        gitignored hexa build artifacts
-└── inbox/                     downstream patch reports (wilson · qmirror · etc.)
+├── archive/                      frozen records — patches/ (downstream patch reports) · fires/
+└── build/                        gitignored hexa build artifacts
 ```
 
 Full doc index: [`AGENTS.md`](AGENTS.md) + [`doc/`](doc/) + [`SPEC.yaml`](SPEC.yaml).

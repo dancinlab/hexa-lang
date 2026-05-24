@@ -276,9 +276,9 @@ See PLAN.md phases.
 
 ## Cross-references (SSOT)
 
-- Design SSOT: `inbox/rfc_drafts_2026_05_12/rfc_043_hexa_torch_compiler_only_nn_stdlib.md`
-- Phase 3 closure: `inbox/rfc_drafts_2026_05_12/rfc_045_flame_phase3_algorithmic_byte_eq_with_anima_oracle.md`
-- Phase 4 design: `inbox/rfc_drafts_2026_05_12/rfc_046_flame_phase4_compiler_fusion.md`
+- Design SSOT: `docs/rfc/rfc_drafts_2026_05_12/rfc_043_hexa_torch_compiler_only_nn_stdlib.md`
+- Phase 3 closure: `docs/rfc/rfc_drafts_2026_05_12/rfc_045_flame_phase3_algorithmic_byte_eq_with_anima_oracle.md`
+- Phase 4 design: `docs/rfc/rfc_drafts_2026_05_12/rfc_046_flame_phase4_compiler_fusion.md`
 - Backing RFCs: 040 (tensor/cuBLAS) · 041 (kernels) · 042 (subsumed) · 034 (autograd)
 - Full preservation index + verified oracles: **`FLAME.tape` §X**
 - Roadmap + Phase 0 consolidation: **`PLAN.md`**

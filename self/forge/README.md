@@ -75,7 +75,7 @@ NVPTX through hexa-lang's own codegen pipeline. The closure of `@D g5` for the
 GPU lane is the closure of forge.
 
 The named seam is **RFC 055 — hexa-src → NVPTX codegen backend**
-(`inbox/rfc_drafts_2026_05_12/rfc_055_hexa_nvptx_codegen_backend.md`, design
+(`docs/rfc/rfc_drafts_2026_05_12/rfc_055_hexa_nvptx_codegen_backend.md`, design
 draft 2026-05-17). Its honest scope:
 
 | axis | today (C/CUDA forge) | after RFC 055 lands (hexa-native forge) |
@@ -164,9 +164,9 @@ to hexa-emitted PTX. Same dispatch, different substrate.
 
 ### Design RFCs
 
-- **RFC 040** (`inbox/.../rfc_040_*.md`) — device-farr + cuBLAS Dgemm base substrate
-- **RFC 041** (`inbox/.../rfc_041_*.md`) — real `.cu` kernel design (Phase 2.B substrate 흡수)
-- **RFC 044** (`inbox/.../rfc_044_*.md`) — **dual-mechanism × regime-tiered substrate** (Phase R anchored, 14 falsifier)
+- **RFC 040** (`docs/rfc/.../rfc_040_*.md`) — device-farr + cuBLAS Dgemm base substrate
+- **RFC 041** (`docs/rfc/.../rfc_041_*.md`) — real `.cu` kernel design (Phase 2.B substrate 흡수)
+- **RFC 044** (`docs/rfc/.../rfc_044_*.md`) — **dual-mechanism × regime-tiered substrate** (Phase R anchored, 14 falsifier)
 - RFC 042 = SUBSUMED by RFC 043 (number reserved, do not reuse)
 - RFC 043 = flame stdlib (consumer of forge)
 

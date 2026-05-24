@@ -290,7 +290,7 @@ RFC 043 §Surface train_step. 측정 honest: primitive 전부 입증 ·
 조립단계 미입증 (over-claim 0).
 
 **cross-links**: RFC 043 §Surface =
-`inbox/rfc_drafts_2026_05_12/rfc_043_hexa_torch_compiler_only_nn_stdlib.md`
+`docs/rfc/rfc_drafts_2026_05_12/rfc_043_hexa_torch_compiler_only_nn_stdlib.md`
 · tape foundation = RFC 034 · leaf vjp oracles = `tool/flame_phase4b3_verify_all.sh`
 · GOAL memory = `[[flame-general-pytorch-replacement-goal]]`
 

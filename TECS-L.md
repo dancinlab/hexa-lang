@@ -58,7 +58,7 @@ DFS → Convergence → Quantum → Perfect → Verify → Grow → Paper → Re
 - 36 lens / 8 family (empty_space · paradigm_shift · cross_pollinate ·
   counterexample_mine · invariant_stress · scale_extrapolate ·
   constraint_flip · falsify_self · unfold)
-- emit 경로: `inbox/atlas_candidates/<slug>.md` (PR-only, embedded.gen 절대
+- emit 경로: `archive/atlas_candidates/<slug>.md` (PR-only, embedded.gen 절대
   미수정)
 - LLM 호출 0 건 — 모두 hexa-native lens
 
@@ -116,8 +116,8 @@ DFS → Convergence → Quantum → Perfect → Verify → Grow → Paper → Re
 - `state/loop/llm_drops.jsonl` (verify 에서 drop 된 출력 — debug)
 
 ### 축 8 — Inbox layout
-- 8a flat `inbox/atlas_candidates/<slug>.md` (현행 · collision risk)
-- 8b **nested** `inbox/atlas_candidates/dfs_<parent>/<child>.md` (DFS tree → FS tree)
+- 8a flat `archive/atlas_candidates/<slug>.md` (현행 · collision risk)
+- 8b **nested** `archive/atlas_candidates/dfs_<parent>/<child>.md` (DFS tree → FS tree)
 - 8c flat + prefix `dfs_d<depth>_<parent>__<child>.md`
 - **결정**: 8b — PR review 시 sub-tree 단위로 묶임
 
@@ -212,7 +212,7 @@ DFS → Convergence → Quantum → Perfect → Verify → Grow → Paper → Re
 | R8 | exec_argv 미배선 | `exec_capture` 만 사용 ([[reference_hexa_exec_argv_not_codegen_wired]]) |
 | R9 | 출력 schema 위반 | drop+log, retry 금지 |
 | R10 | 자율 무한 cycle | cooldown + EXHAUST 통과 의무 |
-| R11 | embedded.gen 자동 수정 유혹 | governance gate + write_text 경로 inbox/* 외 금지 (코드 enforce) |
+| R11 | embedded.gen 자동 수정 유혹 | governance gate + write_text 경로 archive/atlas_candidates/ 외 금지 (코드 enforce) |
 | R12 | shell injection | prompt 는 stdin/file 로만, argv 비전달 |
 | R13 | 32k+ prompt → 모델 거부 | parent+cite 합 16k char cap, cite raw 우선 자름 |
 
@@ -221,7 +221,7 @@ DFS → Convergence → Quantum → Perfect → Verify → Grow → Paper → Re
 ## 5. Plan — Phase A → J
 
 브랜치: `rfc-080-hexa-loop-dfs` (현 `dfflibmap-sky130-reset-flop-variants-2026-05-22` 위 stacked)
-SSOT: `inbox/rfc_drafts_2026_05_22/rfc_080_hexa_loop_dfs.md`
+SSOT: `docs/rfc/rfc_drafts_2026_05_22/rfc_080_hexa_loop_dfs.md`
 바이너리 promote: 모든 Phase pass 후 자체빌드 + ceremony, 단일 commit
 
 | Phase | 작업 | 산출 | Gate |
@@ -234,7 +234,7 @@ SSOT: `inbox/rfc_drafts_2026_05_22/rfc_080_hexa_loop_dfs.md`
 | **F** State + resume | `state/loop/dfs_frontier.jsonl` r/w · `--resume` 배선 · chain.jsonl 확장 | state I/O fn in `stdlib/loop/state.hexa` | run1 (--llm-calls 1) → run2 (--resume) → frontier 0 |
 | **G** HXC cache | `dist/llm_cache.hxc` sidecar · SHA256 key · `--no-cache` | cache fn + RFC 066 포맷 | 동일 prompt 2 회 → 2 번째 cache hit ($0) |
 | **H** Test infra | `tests/loop/dfs_*.hexa` 자체완결 (stub LLM cmd = `bash -c 'cat fixture'`) · 5 시나리오 | tests + `tool/run_dfs_tests.sh` | 5/5 PASS · `hexa parse` clean · 자체빌드 clean |
-| **I** RFC + governance | `inbox/rfc_drafts_2026_05_22/rfc_080_hexa_loop_dfs.md` · AGENTS.tape `@D g_llm_pluggable` · `cmd_loop_help()` 최종판 · `compiler/PLAN.md` entry | docs | PR set (skill `gh-stack`) |
+| **I** RFC + governance | `docs/rfc/rfc_drafts_2026_05_22/rfc_080_hexa_loop_dfs.md` · AGENTS.tape `@D g_llm_pluggable` · `cmd_loop_help()` 최종판 · `compiler/PLAN.md` entry | docs | PR set (skill `gh-stack`) |
 | **J** Real-LLM oracle | `--allow-llm` gate → 진짜 claude CLI 1 회 호출 · cost 측정 · drop ratio | 결과 표 `compiler/PLAN.md` | cost ≤ $0.05 · ≥1 child verify 통과 · rerun cache hit |
 
 ---
@@ -284,7 +284,7 @@ SSOT: `inbox/rfc_drafts_2026_05_22/rfc_080_hexa_loop_dfs.md`
 | F | chain/telemetry ✅ · `--resume`+frontier persist | 부분(resume follow-up) | — |
 | G | sha256 content cache | ✅ | `d8257dd6` |
 | H | `tests/loop/dfs_test.hexa` (parse+verify+run+budget) | ✅ | `a4a7cd9c` |
-| I | RFC `inbox/rfc_drafts_2026_05_22/rfc_080_hexa_loop_dfs.md` + governance proposal | ✅ | `a4a7cd9c` |
+| I | RFC `docs/rfc/rfc_drafts_2026_05_22/rfc_080_hexa_loop_dfs.md` + governance proposal | ✅ | `a4a7cd9c` |
 | J | **behavioral validation (compiled) — 14/14 PASS** | ✅ | `3264dcdd` |
 
 검증: `hexa parse` (로컬 OOM-free) → 3개 파일 PASS. **behavioral CLOSED (local Mac arm64):**

@@ -6,7 +6,7 @@
 // P0 = parse-clean scaffold + shape constants + falsifier-bound function
 // signature. P1+ = harness flesh-out, P2+ = silicon fire.
 //
-// RFC: inbox/rfc_drafts_2026_05_20/rfc_072_flame_d4096_benchmark.md
+// RFC: docs/rfc/rfc_drafts_2026_05_20/rfc_072_flame_d4096_benchmark.md
 // Branch: rfc072-flame-d4096-scaffold (P0); multi-session campaign B.
 // Closure: GPU.md §10 row "flame d=4096 GPT-3 class beats PyTorch eager".
 //

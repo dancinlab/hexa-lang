@@ -2,7 +2,7 @@
 
 > 루트 UPPERCASE.md 작업 로그. RFC 062 = ROADMAP self-host child 65 의 잔여분
 > (`hexa_set_args` argv[0] 중복 삽입 제거).
-> SSOT: `inbox/rfc_drafts_2026_05_12/rfc_062_argv0_dedup_args_contract.md`
+> SSOT: `docs/rfc/rfc_drafts_2026_05_12/rfc_062_argv0_dedup_args_contract.md`
 
 ## 상태 (2026-05-19) — ✅ LANDED · commit `26a785af` · origin/rfc043 푸시 완료
 

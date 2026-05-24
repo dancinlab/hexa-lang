@@ -18,7 +18,7 @@
 > the project's "실험·검증 후 결정" rule, the paradigm is adopted only
 > by measured falsifier, never by this document. Decision SSOT after
 > measurement = a `PARADIGM_C.md` sibling (to be written post-fire).
-> RFC scaffold = `inbox/rfc_drafts_2026_05_12/rfc_060_forge_new_compute_paradigm.md`.
+> RFC scaffold = `docs/rfc/rfc_drafts_2026_05_12/rfc_060_forge_new_compute_paradigm.md`.
 
 ---
 
@@ -334,7 +334,7 @@ the search; it does not end it.
 - `PARADIGM.md` — measured CUDA-paradigm SSOT (A/B/C/D dispatch/fusion).
   Direction C does NOT supersede it — forge ships on the C/CUDA
   substrate today; the mega-kernel paradigm is the *exploration* layer.
-- `inbox/rfc_drafts_2026_05_12/rfc_060_forge_new_compute_paradigm.md` —
+- `docs/rfc/rfc_drafts_2026_05_12/rfc_060_forge_new_compute_paradigm.md` —
   RFC scaffold with the 3 pre-registered falsifiers from §9.
 - `PLAN.md` §Phase 6 — endgame (RFC 055 hexa-native NVPTX). Direction C
   (RFC 060) is orthogonal: RFC 055 = "forge in hexa, still NVIDIA"; RFC

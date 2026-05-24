@@ -202,7 +202,7 @@ fn cmd_help() {
     println("    e.g. hexa lattice verify              → __N6_AXIS_VERIFY__ PASS (σ·φ=n·τ=24, |S₄|=24)")
     println("         hexa atlas-audit anchor          → NIST/CRC/ASM citation audit over overlay corpus")
     println("    atlas-audit reads ~/.hx/data/atlas.overlay.n6 (~109 nodes, ~3s). Full 7,278-node")
-    println("    rodata coverage pending compiler/atlas/static_index lazy-load (see inbox/notes/).")
+    println("    rodata coverage pending compiler/atlas/static_index lazy-load (see docs/notes/).")
     println("")
     println("  Sister-project tools (rsc / bayes / n6 discover/mine / hexa-principle annotator etc.)")
     println("  분리됨 — 각 sister repo 의 자체 도구로 위치. invoke via `hexa run <sister>/path/main.hexa <verb>`.")
@@ -1021,7 +1021,7 @@ fn shq(s) {
 // either cmd_run (for .hexa modules) or exec (for tool/hexa_annot/ bash
 // scripts).
 //
-// Surface inventory (matches inbox/notes 60+ verbs):
+// Surface inventory (matches docs/notes 60+ verbs):
 //   29 annotation analyzers   (tool/hexa_annot/hexa-<name>, bash)
 //   3  Phase 2 verifiers      (honesty/absolute/meta-closure)
 //   3  Phase 2 generators     (smash/free/hyperarithmetic)
@@ -1098,7 +1098,7 @@ fn _absorbed_script(verb) {
     // the prior HW-probe stubs into stdlib; the dispatch lives in main() above as
     // explicit `else if sub == "qrng"/"qmirror"` branches (the stdlib path). The
     // legacy hw_probes/qrng + hw_probes/qmirror registry entries were RETIRED
-    // 2026-05-20 per inbox/patches/absorbed-verb-qrng-qmirror-superseded-by-stdlib.md
+    // 2026-05-20 per archive/patches/absorbed-verb-qrng-qmirror-superseded-by-stdlib.md
     // — they silently shadow-claimed the verb names on partial-merge branches and
     // routed `hexa qmirror` to a misleading 8/8 deterministic-stub.
     if verb == "akida"            { return "compiler/hw_probes/akida.hexa" }
@@ -1970,7 +1970,7 @@ fn _build_nvptx_emit_driver(src_path, sm_arch) {
 // agents each probe at once, N clang's storm.  Token-ring of mkdir
 // permits (mkdir is atomic on POSIX fs) caps concurrent clang to
 // `cap_n`; excess invocations spin on the lock with 50ms backoff.
-// Per inbox/patches/fork-storm-source-block-design.md (PR #375) +
+// Per archive/patches/fork-storm-source-block-design.md (PR #375) +
 // commons g30 (no opt-out env override — guards ship without an
 // off switch).
 fn _hexa_clang_capped(cmd) {
@@ -4779,7 +4779,7 @@ if len(av) < 3 {
         }
     } else if sub == "atlas" {
         // hexa-native atlas surface (see project.tape :: @D h_atlas_single_export +
-        // inbox/notes/2026-05-22-atlas-n6-ssot-recovery.md).
+        // docs/notes/2026-05-22-atlas-n6-ssot-recovery.md).
         // tool/atlas_cli.hexa reads the embedded static_atlas() — zero fs I/O,
         // zero nexus dependency. Supersedes the prior nexus-cli proxy path
         // for "atlas" (the other subs — smash/free/etc — still proxy).
@@ -4935,7 +4935,7 @@ if len(av) < 3 {
         // by `hexa build stdlib/cloud/cloud_cli.hexa`. Falls back to
         // cmd_run() (compile-then-exec after R7) when the binary is absent.
         //
-        // Help-scoping invariant (resolves inbox/patches/subcommand-
+        // Help-scoping invariant (resolves archive/patches/subcommand-
         // help-scoping-and-cloud-binary-promote.md Part B): catch
         // `hexa cloud` / `hexa cloud --help` / `-h` / `help` BEFORE any
         // spawn, so the cloud manual prints even when both bin/hexa-cloud
@@ -5194,10 +5194,10 @@ if len(av) < 3 {
         // 8-stage self-growing atlas cycle (SCAN · LENS · DEDUP · GATE ·
         // FIRE · DRAFT · AUDIT · EXHAUST?) with binary built-in lens table
         // sibling to atlas (compiler/lenses/embedded.gen.hexa). Output goes
-        // to inbox/{atlas,lens}_candidates/ — PR-only, never direct fold.
+        // to archive/{atlas,lens}_candidates/ — PR-only, never direct fold.
         // Phase B-2.1: cycle/end state-file I/O wired.
         // Phase B-3   : this verb dispatch (current commit).
-        // Phase C     : lens bodies + first inbox/atlas_candidates/ PR.
+        // Phase C     : lens bodies + first archive/atlas_candidates/ PR.
         let __inst_lp = install_dir_from_argv0()
         let mut lp_args = []
         let mut lpi = 3

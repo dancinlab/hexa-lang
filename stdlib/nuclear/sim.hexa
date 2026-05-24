@@ -11,7 +11,7 @@
 // The Python file is kept intact at `stdlib/nuclear/wkb_alpha_decay.py`
 // for orchestration + record emission + skip-cascade policy; this hexa
 // module ports ONLY the libm-only closed-form kernels (NC1 + NC2 + NC3
-// per `inbox/notes/2026-05-22-nuclear-9-phase2-stabilization.md` §7).
+// per `docs/notes/2026-05-22-nuclear-9-phase2-stabilization.md` §7).
 //
 // Surface (pure functions, no syscall):
 //   pub fn viola_seaborg_log10_t(Z, Q_alpha_MeV) -> float          // NC1

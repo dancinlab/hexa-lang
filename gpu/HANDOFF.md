@@ -119,7 +119,7 @@ implementation*.
 
 - `gpu/README.md` · `gpu/design.md` — what this is + decision ledger
 - `gpu/SPEC.md` — the `@gpu` subset SSOT (Decision 3)
-- `inbox/rfc_drafts_2026_05_12/rfc_055_hexa_nvptx_codegen_backend.md` —
+- `docs/rfc/rfc_drafts_2026_05_12/rfc_055_hexa_nvptx_codegen_backend.md` —
   the NVPTX codegen implementation (consumes `gpu/SPEC.md`); 055-P0
   landed, 055-P1/P2 = steps 2–4 above
 - `self/native/gpu_codegen_stub.c` — rt#45 `@gpu` codegen skeleton

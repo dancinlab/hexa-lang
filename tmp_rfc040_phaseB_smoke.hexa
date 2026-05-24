@@ -8,7 +8,7 @@
 //   farr_softmax_rows_gpu / farr_rmsnorm_rows_gpu / farr_add_gpu /
 //   farr_scale_gpu
 //
-// Reference: inbox/rfc_drafts_2026_05_12/rfc_040_farr_gpu_cuda_backend.md
+// Reference: docs/rfc/rfc_drafts_2026_05_12/rfc_040_farr_gpu_cuda_backend.md
 //            §"Phase B — remaining ops (elementwise / softmax /
 //            reduction / AdamW)"
 // Oracle:    Small new in-runtime CPU helpers (_hx_farr_softmax_rows_cpu

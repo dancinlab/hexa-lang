@@ -133,7 +133,7 @@
 ## 7. gap 돌파 경로
 
 ### 7.1 현재 자동화된 경로
-- **go/roi/drill preflight** (keyword) — hook 출력으로 inbox/evolution 노출
+- **go/roi/drill preflight** (keyword) — hook 출력으로 archive/patches/evolution 노출
 - **AG15 cross_repo_blocker 자동** — keyword 무관, 매 prompt 출력
 - **cron / launchd** — hx_continuous_scan 주기적 실행 (disabled by default)
 - **gap_proposer** — git log 기반 새 scanner 제안

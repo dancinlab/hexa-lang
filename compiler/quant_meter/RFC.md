@@ -6,7 +6,7 @@
   `proposals/` copy drifted to a sibling branch and was stranded; this
   doc travels with `compiler/quant_meter/*.hexa` so it survives shared-tree
   churn (8-session worktree — see memory `compiler-selfbuild-blockers`).
-- **RFC number**: unassigned (proposals/ ↔ inbox/rfc_drafts numbering
+- **RFC number**: unassigned (proposals/ ↔ docs/rfc/rfc_drafts numbering
   contention). Assign on promotion.
 
 ---

@@ -6,7 +6,7 @@ use "self/stdlib/hxc_composite_chain_v2"
 // ════════════════════════════════════════════════════════════════════
 //
 // PURPOSE
-//   Resolves inbox/patches/hxc-v2-no-downstream-library-api.md by
+//   Resolves archive/patches/hxc-v2-no-downstream-library-api.md by
 //   exposing a minimum stable, library-callable surface for the HXC v2
 //   composite codec (`cc2_encode`/`cc2_decode` lifted from CLI-only
 //   `fn` to `pub fn`, plus a records-pair built on top of the same

@@ -186,7 +186,7 @@ fn _types_t_i64()    -> Type { return _prim("i64",    "integer") }
 // Type through to the binop case in `compiler/lower/hir_to_mir.hexa`,
 // which then sets the dst Local's precision tag. Codegen-side bank
 // routing landed in PR #148 (RFC 068 P1); body-instruction emit is
-// deferred to P3. See `inbox/rfc_drafts_2026_05_20/rfc_068_mixed_precision_mir_layer.md` §3 P2.
+// deferred to P3. See `docs/rfc/rfc_drafts_2026_05_20/rfc_068_mixed_precision_mir_layer.md` §3 P2.
 fn _types_t_f16()    -> Type { return _prim("f16",    "real") }
 fn _types_t_bf16()   -> Type { return _prim("bf16",   "real") }
 fn _types_t_f32()    -> Type { return _prim("f32",    "real") }

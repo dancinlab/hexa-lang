@@ -1,7 +1,7 @@
 #!/bin/bash
 # tool/build_hexa_cloud.sh — build the standalone `hexa cloud` sub-binary.
 #
-# Resolves inbox/patches/subcommand-help-scoping-and-cloud-binary-promote.md
+# Resolves archive/patches/subcommand-help-scoping-and-cloud-binary-promote.md
 # Part (A) cloud binary promote: stdlib/cloud/cloud_cli.hexa is the SSOT for
 # the `hexa cloud {run|nohup|poll|copy-to|copy-from}` dispatcher (cycle A,
 # PRs #81/#84/#86/#88). self/main.hexa:4599 already routes `sub == "cloud"`

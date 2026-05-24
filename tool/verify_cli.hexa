@@ -817,7 +817,7 @@ fn _qdrift_error_bound(lambda_times_time: float, big_n_steps: int) -> float {
 // LaPlace · Stokes-Einstein) + Phase 3 (Higuchi · Tafel · Hagen-Poiseuille)
 // close the inbox patch list (Higuchi simple-form + Tafel 3-arg + 4-arg
 // Hagen-Poiseuille via the a3 dispatch lane).
-// ref: inbox/patches/bio-verify-kernel-extension-2026-05-25.md
+// ref: archive/patches/bio-verify-kernel-extension-2026-05-25.md
 //
 // All three are 🟢 NUMERICAL tier (libm-class `exp` recompute, ε=1e-9
 // tolerance) — they ARE closed-form algebraic identities, but use

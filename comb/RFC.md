@@ -2,11 +2,11 @@
 
 > Status: **DRAFT** · 2026-05-18 · branch `rfc043-hexa-torch`
 > RFC number: **057** — assigned above the active flame/forge chain
-> (`inbox/rfc_drafts_2026_05_12/` reaches rfc_056) to guarantee zero
+> (`docs/rfc/rfc_drafts_2026_05_12/` reaches rfc_056) to guarantee zero
 > collision with either the flame/forge chain or the `proposals/`
 > absorption chain (which separately reuses 044–048). Canonical copy lives
 > in `comb/` as its own SSOT (flame/forge precedent); discoverable via
-> `comb/COMB.tape` index — not duplicated into `inbox/` (g3 drift-avoidance).
+> `comb/COMB.tape` index — not duplicated into `docs/rfc/` (g3 drift-avoidance).
 > Evidence: `research/SURVEY.md`. Axis docs: `axis_{a,b,c}_*.md`.
 
 ---

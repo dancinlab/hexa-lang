@@ -86,5 +86,5 @@ every modern AD library by decades:
   `d_pow_int(x, 0) = [1, 0]`, `(sin x)²` via `d_mul(sin, sin)` ==
   via `d_pow_int(sin x, 2)`, linearity of `α·sin + β·cos`.
 
-See `inbox/notes/hexa-native-port-pattern-pilot.md` "Pilot #11" for
+See `docs/notes/hexa-native-port-pattern-pilot.md` "Pilot #11" for
 the full algorithm-choice rationale and lessons-learned.

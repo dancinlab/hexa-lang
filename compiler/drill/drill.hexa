@@ -50,7 +50,7 @@ pub struct DrillOpts {
     speculate: i64,            // N-way speculative branches (1 = none)
     problem: string,           // "" or one of riemann|bsd|hodge|...
     quiet: bool,               // suppress per-round println (smoke uses true)
-    // ── Pluggable verifier hook (resolves inbox/patches/
+    // ── Pluggable verifier hook (resolves archive/patches/
     //    phanes-pluggable-verifier-oracle-for-drill-loop.md) ────────
     // Opt-in: when `verifier_cmd` is empty, behavior is byte-identical
     // to pre-hook drill (back-compat). When set, the command is invoked

@@ -4,7 +4,7 @@
 // or training step. No external LLM, no pod-spinup, no network egress —
 // pure arithmetic on the workload spec (params, dtype, optimizer, batch).
 //
-// Origin: inbox/patches/hexa-cloud-preflight-stub-and-provisioning-gap-
+// Origin: archive/patches/hexa-cloud-preflight-stub-and-provisioning-gap-
 // 2026-05-24.md (gap#1 = preflight stub returned a fixed model recommendation
 // regardless of input). Closed-form schema follows RFC 088 §2.3.
 //

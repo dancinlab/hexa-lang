@@ -165,7 +165,7 @@ feature**.
 > A + B 둘 다.
 
 - **A** = RFC 044 design draft (paradigm spec) —
-  `inbox/rfc_drafts_2026_05_12/rfc_044_forge_aot_train_step.md`.
+  `docs/rfc/rfc_drafts_2026_05_12/rfc_044_forge_aot_train_step.md`.
   paradigm A+C+D 명세 + falsifier 사전등록 + 위 §1-§4 literature
   anchor 그대로 인용. 코드 0, design only.
 - **B** = FlashFuser-style DSM fusion **prototype experiment** —
@@ -176,7 +176,7 @@ feature**.
 ## 7. 다음 단계 (이 문서 commit 후)
 
 1. **A 진입 — RFC 044 draft 작성**:
-   `inbox/rfc_drafts_2026_05_12/rfc_044_forge_aot_train_step.md`. design
+   `docs/rfc/rfc_drafts_2026_05_12/rfc_044_forge_aot_train_step.md`. design
    only, hexa-lang 코드 0. 본 문서 §3 의 arxiv anchor + §1 의 한국
    alternatives 비교 + §4 의 gap matrix 를 그대로 reference.
 2. **A 의존 — `self/forge/PARADIGM.md` SSOT 작성**:
