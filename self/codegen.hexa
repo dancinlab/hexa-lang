@@ -7850,6 +7850,8 @@ fn gen2_let_else(node, depth) {
 }
 
 fn gen2_match_stmt(node, depth) {
+    // PROBE r16-T4: warn on non-exhaustive enum match (statement form).
+    _gen2_warn_nonexhaustive_match(node)
     let pad = gen2_indent(depth)
     let scrutinee = gen2_expr(node.left)
 
@@ -8081,6 +8083,9 @@ fn gen2_match_cond(pat, scrutinee_var) {
 // ═══════════════════════════════════════════════════════════
 
 fn gen2_match_expr(node) {
+    // PROBE r16-T4: warn on non-exhaustive enum match (expression / ternary
+    // form — this is the path that silently falls through to hexa_void()).
+    _gen2_warn_nonexhaustive_match(node)
     let scrutinee = gen2_expr(node.left)
     // Build a nested ternary: (cond1 ? val1 : (cond2 ? val2 : default))
     // For simplicity, wrap in a compound expression using GCC ({...})
@@ -8967,6 +8972,99 @@ fn _enum_variant_lookup_owner(name) {
         i = i + 1
     }
     return ""
+}
+
+// PROBE r16-T4: non-exhaustive enum-match warning (deployed path).
+// The r15 #453/#585 exhaustiveness check lives in type_checker.hexa but only
+// runs under the opt-in HEXA_TYPECHECK env, so it never fires in normal
+// transpiles — a `match c { Color::Red -> ... }` missing Blue silently falls
+// through to hexa_void() ("prints void"). This emits a stderr WARNING (non-
+// fatal — the match still compiles, the fallthrough is preserved) when:
+//   (1) the match has NO wildcard / irrefutable-binder catch-all arm, AND
+//   (2) every refutable arm is an EnumPath for the SAME user enum, AND
+//   (3) at least one variant of that enum is not covered.
+// Conservative by construction: int/string/bool/Option/Result/guarded matches
+// never reach (2) (their arms are not registered EnumPath variants), and an
+// arm whose enum can't be determined disables the warning for that match.
+fn _gen2_warn_nonexhaustive_match(node) {
+    if type_of(node.arms) == "string" { return 0 }
+    let arms = node.arms
+    let mut owner = ""
+    let mut owner_set = false
+    let mut bail = false
+    let mut covered = []
+    let mut ai = 0
+    while ai < len(arms) {
+        let pat = arms[ai].left
+        if type_of(pat) == "string" {
+            bail = true
+        } else if pat.kind == "Wildcard" {
+            // Catch-all present — exhaustive by construction; nothing to warn.
+            return 0
+        } else if pat.kind == "Ident" {
+            let _pn = pat.name
+            // A bare lowercase Ident (not None) is an irrefutable binder — it
+            // catches everything, so the match is exhaustive. `None` is an
+            // Option tag, not a user enum variant — treat as a non-enum arm
+            // that disables the check (bail).
+            if type_of(_pn) == "string" && _pn != "None" {
+                return 0
+            }
+            bail = true
+        } else if pat.kind == "EnumPath" {
+            let _en = pat.name
+            let _vn = pat.value
+            // Determine the owning enum. Prefer the registry (handles ambiguous
+            // / unknown variants → "" → bail); fall back to the pattern's own
+            // enum-name qualifier only when the registry agrees it is an enum.
+            let _reg_owner = _enum_variant_lookup_owner(_vn)
+            if _reg_owner == "" {
+                bail = true
+            } else {
+                if !owner_set {
+                    owner = _reg_owner
+                    owner_set = true
+                } else if owner != _reg_owner {
+                    bail = true
+                }
+                covered.push(_vn)
+            }
+        } else {
+            // Some other refutable pattern (IntLit, Call/Some, Range, ...) —
+            // not a plain enum match; disable the warning.
+            bail = true
+        }
+        ai = ai + 1
+    }
+    if bail { return 0 }
+    if !owner_set { return 0 }
+    // Collect all declared variants of `owner` from the registry.
+    let mut missing = []
+    let mut vi = 0
+    while vi < len(_enum_variant_names) {
+        if _enum_variant_owners[vi] == owner && !_enum_variant_ambig[vi] {
+            let _vname = _enum_variant_names[vi]
+            let mut found = false
+            let mut ci = 0
+            while ci < len(covered) {
+                if covered[ci] == _vname { found = true }
+                ci = ci + 1
+            }
+            if !found { missing.push(_vname) }
+        }
+        vi = vi + 1
+    }
+    if len(missing) > 0 {
+        let mut miss_str = ""
+        let mut mi = 0
+        while mi < len(missing) {
+            if mi > 0 { miss_str = miss_str + ", " }
+            miss_str = miss_str + owner + "::" + missing[mi]
+            mi = mi + 1
+        }
+        eprintln("[warn] non-exhaustive match on enum `" + owner + "` — missing variant(s): " + miss_str + " (add a '_ ->' arm or the missing variant(s))")
+    }
+    return 0
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -9972,6 +10070,19 @@ fn codegen_full(ast) {
         } else if gk == "EnumDecl" {
             _known_nonlocal_names.push(ast[gi].name)
             _known_nonlocal_add(ast[gi].name)
+            // PROBE r16-T4: pre-register enum variants → owner BEFORE any fn
+            // body (and therefore any match) is codegen'd, so the
+            // non-exhaustive-match warning works regardless of whether the
+            // enum is declared before or after the match in source order.
+            // (gen2_enum_decl also registers during emit; _enum_variant_register
+            // is idempotent / first-wins so the double call is harmless.)
+            if type_of(ast[gi].variants) == "array" {
+                let mut _evi = 0
+                while _evi < len(ast[gi].variants) {
+                    _enum_variant_register(ast[gi].variants[_evi].name, ast[gi].name)
+                    _evi = _evi + 1
+                }
+            }
         } else if gk == "ComptimeConst" || gk == "ConstStmt" {
             // Comptime constants fold at codegen — treat as non-capturable name
             _known_nonlocal_names.push(ast[gi].name)
