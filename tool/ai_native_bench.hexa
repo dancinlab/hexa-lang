@@ -1,5 +1,14 @@
 // ai_native_bench — standardized benchmark runner (S-0-2 foundation)
 //
+// !! DEPRECATED — interp retired (R7, [[feedback_no_interp_use_compiled]]).
+// !! This harness invokes `build/hexa_interp`, which is no longer built
+// !! (`self/main.hexa` comment block "so there is no `build/hexa_interp`
+// !! binary"). All run_one_timed() calls therefore silently SKIP / return 0.
+// !! Selftest path still works (pure-helper exercise). For real timing use
+// !! `/usr/bin/time` on compiled artifacts (see `bench_time_cmd` in
+// !! `self/main.hexa` R7 block). Rewrite or retire — tracked in
+// !! INBOX.log.md 2026-05-25T22:30Z.
+//
 // Convention:
 //   a bench fixture `.hexa` defines `fn bench_entry(iter: int)` and ends with
 //   no top-level execution. This runner times N iterations + K warmup and
