@@ -3,19 +3,23 @@
 // @version 0.1.0
 // @capabilities [pure]
 //
-// log2(x) via libm log + reciprocal-of-ln(2) factor.
+// log2(x) via libm log + divide-by-ln(2).
 //
 // Surface:
 //   pub fn log2(x: float) -> float    // log base 2
 //
-// Reuses LN2_INV constant style from stdlib/iit_ei.hexa.
-// Reference: anima/HEXAD/LIFE/lib/phi_native.hexa § phi_entropy
-// used log(x)/log(2.0) inline — this module standardises the
-// pattern so 247+ duplicate sites across anima can sweep to a
-// single canonical impl (.STDLIB survey 2026-05-24).
-
-let LN2_INV = 1.4426950408889634   // 1 / ln(2)
+// Implementation chosen for byte-equal match with anima's existing
+// phi_native.hexa § phi_entropy (`log(x) / log(2.0)` inline pattern).
+// PR #717 v1 used `log(x) * LN2_INV` (multiply) which produced 1-2 ulp
+// drift vs anima — STDLIB regression M4 (2026-05-25) confirmed the
+// drift propagating into shannon_entropy + mutual_info_pair. Switching
+// to divide preserves the anima PR #394 (MERGED) baseline exactly.
+//
+// LN2_INV multiply variant is faster on most archs (~1 cycle) but
+// breaks the byte-equal guarantee anima callers depend on. Re-add
+// as `log2_fast` (separate fn) when a caller explicitly opts out
+// of byte-equal (spec § L6 carve-out path).
 
 pub fn log2(x: float) -> float {
-    return log(x) * LN2_INV
+    return log(x) / log(2.0)
 }
