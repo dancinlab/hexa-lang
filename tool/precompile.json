@@ -1,0 +1,8 @@
+{
+  "version": 1,
+  "comment": "GO M3 — declarative precompile manifest. Each listed .hexa script is compiled by tool/build_precompile.hexa into release/precompile/hexa_run.<key> where <key> = sha256(source).substring(0,16) + '_' + version_str() (must match self/main.hexa cmd_run cache key format). On `hexa run <script>` cmd_run probes release/precompile/ first → cache HIT skips clang fork (cold-cache fork-storm mitigation, internal axis). MINIMUM DEMO: 2 entries. Expansion = separate phase.",
+  "scripts": [
+    "tool/build_hexa_cli.hexa",
+    "tool/atlas_cli.hexa"
+  ]
+}

@@ -2948,6 +2948,29 @@ fn _hexa_cache_ttl_days() {
     return _v
 }
 
+// GO M2 — release/precompile/ lookup (cold-cache fork-storm mitigation,
+// internal axis; pool-route 0.6.5/0.6.6 handle the external axis).
+// Probes release/precompile/hexa_run.<key> at 2 anchors (in order):
+//   1) $HEXA_LANG/release/precompile/   (dev / repo root)
+//   2) install_dir/release/precompile/  (release-tarball install)
+// Returns the first existing path, or "" on miss. Caller falls back to
+// the ~/.hexa-cache compile-then-cache path on miss. Key MUST match
+// tool/build_precompile.hexa (sha256(source).substring(0,16) + "_" + version_str()).
+fn _precompile_lookup(key) {
+    let fname = "/release/precompile/hexa_run." + key
+    let h = env_var("HEXA_LANG")
+    if len(h) > 0 {
+        let p = h + fname
+        if file_exists(p) { return p }
+    }
+    let inst = install_dir_from_argv0()
+    if len(inst) > 0 {
+        let p = inst + fname
+        if file_exists(p) { return p }
+    }
+    return ""
+}
+
 // `hexa run <file>` and the `hexa://run` URL action are user-direct
 // invocations; cmd_run_user_direct compiles then executes (the
 // tree-walking interpreter is retired — g_interp_deprecated). The
@@ -2981,9 +3004,15 @@ fn cmd_run_user_direct(file, extra_args) {
     // be wiped manually (`rm ~/.hexa-cache/hexa_run.*`); regeneratable.
     let _src_hash = sha256_file(file)
     let _key = _src_hash.substring(0, 16) + "_" + version_str()
-    let tmpbin = _cache_dir + "/hexa_run." + _key
+    let mut tmpbin = _cache_dir + "/hexa_run." + _key
     let mut bout = ""
     let mut brc = 0
+    // GO M2 — release/precompile/ probe (shipped binaries skip clang fork).
+    let _pre = _precompile_lookup(_key)
+    if len(_pre) > 0 {
+        tmpbin = _pre
+        if env_var("HEXA_PRECOMPILE_TRACE") == "1" { eprintln("[precompile] HIT " + _pre) }
+    }
     if !file_exists(tmpbin) {
         let _tmp_inflight = tmpbin + ".tmp." + to_string(mono_ns())
         let bcmd = shq(hexa_bin) + " build " + shq(file) + " -o " + shq(_tmp_inflight) + " 2>&1; echo \"__HEXA_BRC__=$?\""
@@ -3078,9 +3107,15 @@ fn cmd_run(file, extra_args) {
     // Content-addressed cache key — see cmd_run_user_direct above.
     let _src_hash = sha256_file(file)
     let _key = _src_hash.substring(0, 16) + "_" + version_str()
-    let tmpbin = _cache_dir + "/hexa_run." + _key
+    let mut tmpbin = _cache_dir + "/hexa_run." + _key
     let mut bout = ""
     let mut brc = 0
+    // GO M2 — release/precompile/ probe (see cmd_run_user_direct site).
+    let _pre = _precompile_lookup(_key)
+    if len(_pre) > 0 {
+        tmpbin = _pre
+        if env_var("HEXA_PRECOMPILE_TRACE") == "1" { eprintln("[precompile] HIT " + _pre) }
+    }
     if !file_exists(tmpbin) {
         let _tmp_inflight = tmpbin + ".tmp." + to_string(mono_ns())
         let bcmd = shq(hexa_bin) + " build " + shq(file) + " -o " + shq(_tmp_inflight) + " 2>&1; echo \"__HEXA_BRC__=$?\""
@@ -3193,9 +3228,15 @@ fn _batch_run_one(file) {
     // benefits from prior `hexa run` builds of the same source).
     let _src_hash = sha256_file(file)
     let _key = _src_hash.substring(0, 16) + "_" + version_str()
-    let tmpbin = _cache_dir + "/hexa_run." + _key
+    let mut tmpbin = _cache_dir + "/hexa_run." + _key
     let mut bout = ""
     let mut brc = 0
+    // GO M2 — release/precompile/ probe (see cmd_run_user_direct site).
+    let _pre = _precompile_lookup(_key)
+    if len(_pre) > 0 {
+        tmpbin = _pre
+        if env_var("HEXA_PRECOMPILE_TRACE") == "1" { eprintln("[precompile] HIT " + _pre) }
+    }
     if !file_exists(tmpbin) {
         let _tmp_inflight = tmpbin + ".tmp." + to_string(mono_ns())
         let bcmd = shq(hexa_bin) + " build " + shq(file) + " -o " + shq(_tmp_inflight) + " 2>&1; echo \"__HEXA_BRC__=$?\""
