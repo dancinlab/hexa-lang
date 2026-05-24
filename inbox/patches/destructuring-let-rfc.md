@@ -1,5 +1,6 @@
 # destructuring `let { x, y }` / `let [a, b]` design RFC
 
+**Status**: rfc-draft-deferred-2026-05-25 — design-only patch (not a fix). Promote via /inbox skill if RFC track wanted.
 **Status**: design-level (PROBE r14 cycle 7, 2026-05-23)
 **Priority**: P2 (편의 + ergonomic — Some/None/tuple/struct과 cross-cutting)
 **SSOT**: 본 RFC · r14-LL tuple type RFC (PR #506) · r14-KK Option prelude (PR #505) · r14-SS if-let/while-let (PR #513)

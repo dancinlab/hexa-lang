@@ -1,5 +1,6 @@
 # tuple type `(T, U)` + literal `(1, "a")` design RFC
 
+**Status**: rfc-draft-deferred-2026-05-25 — design-only patch (not a fix). Promote via /inbox skill if RFC track wanted.
 **Status**: design-level (r14 cycle 6, 2026-05-23)
 **Priority**: P2 (no PROBE.log r3 entry — cycle 5-6 surface audit discovery)
 **SSOT**: 본 RFC · 캐노니컬 비교
