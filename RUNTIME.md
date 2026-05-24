@@ -967,6 +967,20 @@ opt-in via `git config core.hooksPath .githooks`) + project.tape @D
   pthread/socket/exec/pty (cycle 60-61) ✓ · 5 residuals consist of 3
   compiler-rt + 2 clang artifacts (not libc per se)
 
+### 2026-05-25 — cycle 66: __chkstk_darwin investigation — DEFERRED (build chain blocked)
+
+- cycle 66 — `___chkstk_darwin` removal attempt DEFERRED. aprime_cc rebuild blocked at stage-4 clang on main HEAD (`8b4159c5`) due to pre-existing build chain regression — NOT a chkstk-attempt artifact
+- Symptom: `tool/build_aprime.sh` stage-4 clang fails with `error: use of undeclared identifier '__arr_alloc_items_zero'` (and `__arr_alloc_items_zero_int`) at ap_post.c lines 34449 / 34456 — emitted as bare identifiers in transpiler output
+- Root cause: `stdlib/runtime/numeric.hexa` cycle-105 ports (`rt_array_zeros_float` line 710 + `rt_array_alloc` line 715) call `__arr_alloc_items_zero{,_int}(n)` as codegen-inline builtins, but the local `self/native/hexa_v2` (stale arm64 Mach-O) has no lowering for these names — verified via `strings hexa_v2 | grep arr_alloc` → 0 matches. Transpiler emits the call as a bare identifier; clang then sees no declaration
+- Affected commits since cycle 65 (2026-05-21 → 2026-05-25): 24+ codegen + runtime + stdlib touches (r16 series #810–#871 et al). Bootstrap hexa_v2 was never re-promoted with the cycle-105 builtin lowering
+- Existing aprime_cc binary at `~/core/hexa-lang/build/aprime_cc` (May 22 00:41:32 2026, 1,218,616 B, 24 externs) predates cycle 64+65 syscall direct-trapping — confirms last successful local aprime_cc build ended before cycle 64. Externs in that stale binary: 24, including `___chkstk_darwin` `___darwin_check_fd_set_overflow` `_backtrace` `_backtrace_symbols_fd` `_close` `_dup2` `_environ` `_execve` `_execvp` `_fork` `_gmtime_r` `_longjmp` `_malloc` `_memcpy` `_mkdir` `_pipe` `_posix_spawn_file_actions_{addclose,adddup2,destroy,init}` `_posix_spawnp` `_read` `_waitpid` `_write`
+- Approaches inspected (NOT executed — can't validate without build):
+  (a) `-mstack-arg-probe-size=0` / `-fno-stack-clash-protection`: latter is GCC/Linux specific; former does NOT disable `___chkstk_darwin` on Mach-O arm64 (Apple-specific stack probe)
+  (b) Empty `static void ___chkstk_darwin(void) {}` stub above `runtime_core.c` include in `self/runtime.c`: most reliable symbol-level interception; needs `__attribute__((used))` or `-Wl,-u,___chkstk_darwin` so dead-strip doesn't remove the stub before linker satisfies the unresolved reference. Pure-stub validity hinges on no actual stack probing being needed (small-frame compiler binary OK)
+  (c) `@asm` noop interceptor: arm64 `ret` literal — also viable but same dead-strip concern; Mach-O symbol weakening more delicate
+- Prerequisite for cycle 66 retry: rebuild + promote `self/native/hexa_v2` so the `__arr_alloc_items_zero{,_int}` builtins lower to runtime calls (or land a codegen branch in hexa_v2 source that maps the identifier to `hexa_array_zeros_float` / `hexa_array_alloc` direct C calls). Separate work, not in cycle 66 scope
+- Acceptance line: `cycle 66: __chkstk_darwin DEFERRED · externs N/A → N/A · smoke N/A · PR none` — bail-out clause invoked per task spec
+
 ## Phase 2 — Tier-B stdlib primitives (step 2)
 
 ### 2026-05-21 — 🛸 step 2 POC: hxlcl_isalnum + isalpha → stdlib/runtime/ctype.hexa (cycle 1)
