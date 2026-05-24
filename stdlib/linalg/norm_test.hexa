@@ -1,0 +1,164 @@
+// stdlib/linalg/norm_test.hexa
+//
+// Self-contained smoke test for stdlib/linalg/norm.hexa. `hexa build`
+// does not flatten cross-module `import` for a single test file — so
+// the 4 norm bodies are inlined verbatim, same pattern as
+// stdlib/cluster/core_kmeans_test.hexa.
+//
+// Coverage (8 tests):
+//   1. l2_norm 3-4-5 triangle              → 5.0
+//   2. l2_norm zero vector                 → 0.0
+//   3. l2_normalize unit-length            → |out| ≈ 1.0 (within 1e-12)
+//   4. l2_normalize zero vector            → returns v unchanged
+//   5. cosine_distance self                → 0.0 (identical)
+//   6. cosine_distance orthogonal pair     → 1.0 ([1,0] vs [0,1])
+//   7. frobenius_norm [[3,4],[0,0]]        → 5.0
+//   8. determinism (repeat → same output)
+
+// ─── INLINED FROM stdlib/linalg/norm.hexa ───
+fn l2_norm(v: array, d: int) -> float {
+    let mut s = 0.0
+    let mut i = 0
+    while i < d {
+        s = s + v[i] * v[i]
+        i = i + 1
+    }
+    return sqrt(s)
+}
+
+fn frobenius_norm(A: array, rows: int, cols: int) -> float {
+    let n = rows * cols
+    let mut s = 0.0
+    let mut i = 0
+    while i < n {
+        s = s + A[i] * A[i]
+        i = i + 1
+    }
+    return sqrt(s)
+}
+
+fn l2_normalize(v: array, d: int) -> array {
+    let n = l2_norm(v, d)
+    if n < 0.000000000001 { return v }
+    let mut out = []
+    let mut i = 0
+    while i < d {
+        out = out.push(v[i] / n)
+        i = i + 1
+    }
+    return out
+}
+
+fn cosine_distance(a: array, b: array, d: int) -> float {
+    let na = l2_norm(a, d)
+    let nb = l2_norm(b, d)
+    let denom = na * nb
+    if denom < 0.000000000001 { return 1.0 }
+    let mut dot = 0.0
+    let mut i = 0
+    while i < d {
+        dot = dot + a[i] * b[i]
+        i = i + 1
+    }
+    return 1.0 - dot / denom
+}
+// ─── END norm INLINE ───
+
+fn fabs(x: float) -> float {
+    if x < 0.0 { return 0.0 - x }
+    return x
+}
+
+fn check(name: string, ok: bool, pass: int, fail: int) -> [int] {
+    if ok {
+        print("PASS  " + name)
+        return [pass + 1, fail]
+    } else {
+        print("FAIL  " + name)
+        return [pass, fail + 1]
+    }
+}
+
+fn main() {
+    let mut pass = 0
+    let mut fail = 0
+    let eps = 0.000000000001
+
+    // ── TEST 1: l2_norm 3-4-5 triangle ──
+    let v345 = [3.0, 4.0]
+    let n345 = l2_norm(v345, 2)
+    let r1 = check("l2_norm([3,4], 2) == 5.0",
+                   fabs(n345 - 5.0) < eps, pass, fail)
+    pass = r1[0]; fail = r1[1]
+
+    // ── TEST 2: l2_norm zero vector ──
+    let vz = [0.0, 0.0, 0.0]
+    let nz = l2_norm(vz, 3)
+    let r2 = check("l2_norm zero-vector == 0.0",
+                   nz == 0.0, pass, fail)
+    pass = r2[0]; fail = r2[1]
+
+    // ── TEST 3: l2_normalize → unit length ──
+    let v = [1.0, 2.0, 3.0, 4.0]
+    let u = l2_normalize(v, 4)
+    let nu = l2_norm(u, 4)
+    let r3 = check("l2_normalize → |out| ≈ 1.0 within 1e-12",
+                   fabs(nu - 1.0) < eps, pass, fail)
+    pass = r3[0]; fail = r3[1]
+
+    // ── TEST 4: l2_normalize zero-vector → returns v unchanged ──
+    let vz2 = [0.0, 0.0]
+    let uz = l2_normalize(vz2, 2)
+    let r4 = check("l2_normalize zero-vector → returns v unchanged",
+                   len(uz) == 2 && uz[0] == 0.0 && uz[1] == 0.0,
+                   pass, fail)
+    pass = r4[0]; fail = r4[1]
+
+    // ── TEST 5: cosine_distance self == 0.0 ──
+    let a5 = [1.0, 2.0, 3.0]
+    let cd_self = cosine_distance(a5, a5, 3)
+    let r5 = check("cosine_distance(v, v) == 0.0",
+                   fabs(cd_self) < eps, pass, fail)
+    pass = r5[0]; fail = r5[1]
+
+    // ── TEST 6: cosine_distance orthogonal pair == 1.0 ──
+    let ex = [1.0, 0.0]
+    let ey = [0.0, 1.0]
+    let cd_orth = cosine_distance(ex, ey, 2)
+    let r6 = check("cosine_distance([1,0], [0,1]) == 1.0",
+                   fabs(cd_orth - 1.0) < eps, pass, fail)
+    pass = r6[0]; fail = r6[1]
+
+    // ── TEST 7: frobenius_norm [[3,4],[0,0]] == 5.0 (row-major flat) ──
+    let M = [3.0, 4.0, 0.0, 0.0]
+    let fn_val = frobenius_norm(M, 2, 2)
+    let r7 = check("frobenius_norm([[3,4],[0,0]], 2, 2) == 5.0",
+                   fabs(fn_val - 5.0) < eps, pass, fail)
+    pass = r7[0]; fail = r7[1]
+
+    // ── TEST 8: Determinism (same input → same output) ──
+    let v8 = [1.1, 2.2, 3.3, 4.4, 5.5]
+    let a_run = l2_norm(v8, 5)
+    let b_run = l2_norm(v8, 5)
+    let u_a = l2_normalize(v8, 5)
+    let u_b = l2_normalize(v8, 5)
+    let mut det_ok = a_run == b_run && len(u_a) == len(u_b)
+    let mut di = 0
+    while di < len(u_a) && det_ok {
+        if u_a[di] != u_b[di] { det_ok = false }
+        di = di + 1
+    }
+    let r8 = check("determinism: repeated invocation identical",
+                   det_ok, pass, fail)
+    pass = r8[0]; fail = r8[1]
+
+    print("")
+    print("stdlib/linalg/norm: " + to_string(pass) + "/" + to_string(pass + fail) + " passed")
+    if fail == 0 {
+        print("PASS " + to_string(pass) + "/" + to_string(pass + fail))
+        print("ALL PASS — stdlib/linalg/norm")
+    } else {
+        print("FAILURES present")
+        exit(1)
+    }
+}
