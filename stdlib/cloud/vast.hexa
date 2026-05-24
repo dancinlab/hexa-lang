@@ -90,6 +90,42 @@ fn _shq_local(s: str) -> str {
     return out + "'"
 }
 
+// ── vastai JSON noise strip (robustness, fix-at-source) ───────────────
+// Real bug: `hexa cloud list --provider vast` →
+//   "[cloud] vast: list: non-array JSON — DEPRECATED: ... []".
+// Cause: every vastai path here runs the CLI with `2>&1` (stderr merged
+// into stdout, intentionally — we post-check stdout for markers like
+// "Aborted"). Recent vastai emits NON-JSON noise BEFORE the `--raw`
+// payload: (a) a `DEPRECATED:` notice on stderr, and (b) macOS python
+// urllib3's `NotOpenSSLWarning` (LibreSSL) on stderr. The merged stream
+// is then `<noise>\n[ {…} ]`, and json_parse chokes on the leading text.
+//
+// _vast_strip_to_json — drop everything before the first `[` or `{` so
+// the JSON payload parses cleanly regardless of the leading noise. This
+// is command-agnostic (works for any vastai subcommand's `--raw` output)
+// and noise-only: if NO `[`/`{` is present (truly empty output / a pure
+// API-failure message), the original string is returned unchanged so the
+// existing fail path (non-array / non-object JSON) still fires — real
+// errors are preserved, only leading noise is removed. One shared helper
+// (g20) for all 5 vastai JSON parse sites.
+fn _vast_strip_to_json(s: str) -> str {
+    let n = len(s)
+    let mut i = 0
+    while i < n {
+        let c = s.substring(i, i + 1)
+        if c == "[" {
+            return s.substring(i, n)
+        }
+        if c == "{" {
+            return s.substring(i, n)
+        }
+        i = i + 1
+    }
+    // No JSON opener found — return as-is so the caller's non-JSON fail
+    // path still detects a genuine empty / error output.
+    return s
+}
+
 // ── offer search (inbox: vast-offer-pool-verified-filter-default.md) ──
 
 // _vast_default_filters — the demiurge-empirical default predicates that
@@ -130,7 +166,7 @@ fn _vast_build_query(query: str, verified_only: int) -> str {
 // _vast_collect_offer_ids — parse a `vastai search offers --raw` JSON
 // array into the list of offer ids (the `id` field of each element).
 fn _vast_collect_offer_ids(out: str) -> [str] {
-    let parsed = json_parse(out)
+    let parsed = json_parse(_vast_strip_to_json(out))
     let mut ids = []
     if type_of(parsed) != "array" {
         return ids
@@ -401,7 +437,7 @@ fn vast_create(offer_id: str, image: str, disk_gb: int) -> VastInstance {
         + " --ssh --direct"
         + " --raw 2>&1"
     let out = exec(cmd)
-    let parsed = json_parse(out)
+    let parsed = json_parse(_vast_strip_to_json(out))
     // success=true + new_contract=<iid> is the canonical create response.
     let nc = json_object_get(parsed, "new_contract")
     if type_of(nc) == "int" {
@@ -522,6 +558,13 @@ fn vast_build_query_TEST(query: str, verified_only: int) -> str {
     return _vast_build_query(query, verified_only)
 }
 
+// vast_strip_to_json_TEST — public alias for the leading-noise stripper so
+// the DEPRECATED / urllib3-warning robustness can be unit-tested without a
+// live vastai.
+fn vast_strip_to_json_TEST(s: str) -> str {
+    return _vast_strip_to_json(s)
+}
+
 // vast_destroy_cmd_TEST — return the exact shell command vast_destroy
 // builds for `vc destroy instance <iid>` so a unit test can assert the
 // yes-flag + stdin-pipe are present without shelling out.
@@ -542,7 +585,7 @@ fn _vast_instance_still_live(iid: str) -> int {
     let _settle = exec("sleep 3 2>/dev/null || sleep 1")
     let cmd = _shq_local(vc) + " show instance " + _shq_local(iid) + " --raw 2>&1"
     let out = exec(cmd)
-    let parsed = json_parse(out)
+    let parsed = json_parse(_vast_strip_to_json(out))
     if type_of(parsed) != "map" {
         return 0
     }
@@ -575,7 +618,7 @@ fn vast_list_instances() -> VastList {
     }
     let cmd = _shq_local(vc) + " show instances --raw 2>&1"
     let out = exec(cmd)
-    let parsed = json_parse(out)
+    let parsed = json_parse(_vast_strip_to_json(out))
     if type_of(parsed) != "array" {
         return _vast_fail_list("list: non-array JSON — " + out.substring(0, 200))
     }
@@ -634,7 +677,7 @@ fn vast_ssh_endpoint(iid: str) -> VastSsh {
     }
     let cmd = _shq_local(vc) + " show instance " + _shq_local(iid) + " --raw 2>&1"
     let out = exec(cmd)
-    let parsed = json_parse(out)
+    let parsed = json_parse(_vast_strip_to_json(out))
     if type_of(parsed) != "map" {
         return _vast_fail_ssh("ssh_endpoint: non-object JSON — " + out.substring(0, 160))
     }

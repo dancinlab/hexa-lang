@@ -345,7 +345,7 @@ fn main() {
         return
     }
     if sub == "version" || sub == "--version" || sub == "-v" {
-        println("hexa cloud 0.2.0 — provisioning wired (rent/down/list + structured-argv dispatch)")
+        println("hexa cloud 0.2.1 — provisioning wired (rent/down/list + structured-argv dispatch) · vast JSON noise-strip")
         return
     }
     if sub == "rent" || sub == "up" {
