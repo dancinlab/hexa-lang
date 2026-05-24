@@ -1,5 +1,12 @@
 // ai_native — unified dashboard CLI (orchestrates all ai-native tools)
 //
+// !! DEPRECATED — interp retired (R7, [[feedback_no_interp_use_compiled]]).
+// !! analyze_file() dispatches each sub-tool via `build/hexa_interp`, which
+// !! is no longer built. run_capture() returns "" → grades degrade to A+ on
+// !! all inputs (false-clean). Selftest path still works (pure helpers).
+// !! Rewrite to use compiled CLI or retire. Tracked in INBOX.log.md
+// !! 2026-05-25T22:30Z.
+//
 // Runs the relevant subset of ai-native tooling on one or more .hexa files
 // and emits a compact grade per file plus a repo summary.
 //
