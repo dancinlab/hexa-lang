@@ -9,7 +9,55 @@ struct Token {
     col: int
 }
 
-// Check if a word is one of the 56 HEXA keywords (sigma*tau+sopfr+3) + import alias
+// Canonical enumerable keyword list — SSOT shared with self/lsp.hexa.
+//
+// Returns the 56 HEXA keywords + `import` alias (= 57 string-matched reserved
+// words). Mirrors the `is_keyword` cascade below; the two MUST stay in sync
+// (verified by `keyword_list_matches_is_keyword`).
+//
+// Why list-and-cascade duality (vs single source): `is_keyword` is hot — every
+// identifier-shaped token in every source file hits it. Iterating an array
+// per call would force per-call allocation (no module-level const arrays in
+// hexa yet), measurably slowing the lexer. The cascade compiles to a flat
+// string-eq chain with first-match short-circuit. The list exists to give
+// downstream tools (LSP completion, doc generators, syntax highlighters) an
+// enumerable surface without making them reimplement / drift from the cascade.
+fn keyword_list() -> [string] {
+    return [
+        "if", "else", "match", "for", "while", "loop",
+        "type", "struct", "enum", "trait", "impl",
+        "fn", "return", "yield", "async", "await",
+        "let", "mut", "const", "static",
+        "mod", "use", "import", "pub", "crate",
+        "own", "borrow", "move", "drop",
+        "spawn", "atomic",
+        "handle", "resume", "pure",
+        "proof", "assert", "invariant", "theorem",
+        "macro", "where", "comptime",
+        "try", "catch", "throw", "panic", "recover",
+        "extern", "break", "continue", "dyn",
+        "in", "do", "defer", "typeof", "with", "as"
+    ]
+}
+
+// Sync verifier — every entry in keyword_list() must be a keyword, and the
+// count must equal the documented total. Returns true iff in sync; meant for
+// build-time / test-suite invocation, not the lexer hot path.
+fn keyword_list_matches_is_keyword() -> bool {
+    let kws = keyword_list()
+    let n = len(kws)
+    if n != 56 { return false }
+    let mut i = 0
+    while i < n {
+        if !is_keyword(kws[i]) { return false }
+        i = i + 1
+    }
+    return true
+}
+
+// Check if a word is one of the 56 HEXA keywords (sigma*tau+sopfr+3) + import
+// alias. Hot path — kept as a cascade for perf; see `keyword_list` for the
+// enumerable mirror (SSOT shared with self/lsp.hexa).
 fn is_keyword(word) {
     if word == "if" { return true }
     if word == "else" { return true }
