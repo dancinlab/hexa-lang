@@ -4079,6 +4079,44 @@ fn gen2_method_builtin(obj_expr, method, args) {
     if method == "unique" {
         return "hexa_array_unique(" + obj_expr + ")"
     }
+    // PROBE r16 Q5: additional iterator adapters (runtime.c new symbols) +
+    // trivial 1-line aliases. Callback args route through gen2_expr, which
+    // auto-wraps a bare fn-ref Ident into a TAG_FN (see _gen2_should_autowrap_
+    // fnref at L4892), matching the any/filter/fold convention above.
+    if method == "take_while" {
+        return "hexa_array_take_while(" + obj_expr + ", " + gen2_expr(args[0]) + ")"
+    }
+    if method == "skip_while" {
+        return "hexa_array_skip_while(" + obj_expr + ", " + gen2_expr(args[0]) + ")"
+    }
+    if method == "min_by" {
+        return "hexa_array_min_by(" + obj_expr + ", " + gen2_expr(args[0]) + ")"
+    }
+    if method == "max_by" {
+        return "hexa_array_max_by(" + obj_expr + ", " + gen2_expr(args[0]) + ")"
+    }
+    if method == "position" {
+        return "hexa_array_position(" + obj_expr + ", " + gen2_expr(args[0]) + ")"
+    }
+    if method == "reduce" {
+        return "hexa_array_reduce(" + obj_expr + ", " + gen2_expr(args[0]) + ")"
+    }
+    if method == "dedup" {
+        return "hexa_array_dedup(" + obj_expr + ")"
+    }
+    if method == "step_by" {
+        return "hexa_array_step_by(" + obj_expr + ", " + gen2_expr(args[0]) + ")"
+    }
+    // Trivial aliases for canonical Rust iterator names → existing runtime fns.
+    if method == "sorted" {
+        return "hexa_array_sort(" + obj_expr + ")"
+    }
+    if method == "windows" {
+        return "hexa_array_window(" + obj_expr + ", " + gen2_expr(args[0]) + ")"
+    }
+    if method == "chunks" {
+        return "hexa_array_chunk(" + obj_expr + ", " + gen2_expr(args[0]) + ")"
+    }
     // More combinators — runtime.c ports of interpreter methods at
     // self/hexa_full.hexa:15426-15512.
     if method == "rotate" {
