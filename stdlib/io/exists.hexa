@@ -1,0 +1,26 @@
+// HEXA Standard Library — io/exists
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// File existence check — canonical aliases over `stdlib/portable_fs::
+// pfs_file_exists`. Standardises the 190+ anima inline definitions
+// (118 `_file_exists` + 72 `fexists`, STDLIB Phase 1b survey 2026-05-25)
+// under a single canonical home with two synonymous names matching
+// the prevalent anima conventions.
+//
+// Surface:
+//   pub fn file_exists(path: string) -> bool
+//   pub fn fexists(path: string) -> bool      // alias
+//
+// Both delegate to `stdlib/portable_fs::pfs_file_exists`.
+
+import "stdlib/portable_fs.hexa"
+
+pub fn file_exists(path: string) -> bool {
+    return pfs_file_exists(path)
+}
+
+pub fn fexists(path: string) -> bool {
+    return pfs_file_exists(path)
+}
