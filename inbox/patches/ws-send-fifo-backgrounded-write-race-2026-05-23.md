@@ -1,5 +1,13 @@
 # `stdlib/websocket.hexa` `ws_send` — FIFO backgrounded-write 침묵 드롭 race
 
+**Status (2026-05-25)**: RESOLVED — fix (a) (`&` 제거) 를 정공으로 구현. `ws_send`
+의 FIFO write 가 이제 foreground 로 실행되고 `exec_with_status` 의 exit code 를 검사해
+`return res[1] == 0` — dead reader 의 EPIPE 가 silent-swallow 대신 `false` 로 surface.
+`timeout` 가용 시 `timeout 5 sh -c '…'` 로 wrap (사라진 reader 의 FIFO open() 무한
+block 방지). 검증: hexa_v2 transpile OK (emit = `hexa_exec_with_status` + `res[1]==0`);
+shell-level 증명 — reader 생존 → exit 0 (true) · reader 사망 → exit 124 (false, 기존엔
+silent true). `stdlib/websocket.hexa` ws_send 단일 함수 패치.
+
 **Reporter**: anima (`dancinlab/anima` downstream consumer)
 **Date**: 2026-05-23
 **Severity**: HIGH — 장시간 WS forwarder 가 healthy-looking counter 와 함께 데이터 silent loss
