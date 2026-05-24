@@ -34,7 +34,7 @@ Tier-1 — thin REST adapter (★ priority, ~200-300 LOC each, TTR M3 즉시 사
 Tier-2 — cheminformatics subset (★★★ priority, ~2-3 kloc subset, TTR M3 docking input prep):
 
 - [x] rdkit-subset stdlib — SMILES parser + MW ※ logP/TPSA/HBA/HBD deferred → `stdlib/chem/rdkit_subset/`
-- [ ] open-babel-subset stdlib — DEFERRED (GPL-2 라이선스 검토 필요) — 분자 format IO (MOL · SDF · PDB) → `stdlib/chem/babel_subset/`
+- [x] open-babel-subset stdlib — GPL-2 회피 결정 (사용자 B-2): scratch 구현 → `stdlib/chem/babel_free/` ※ PR #686 · MOL V2000 + SDF + PDB ATOM/HETATM/CONECT · 7 cases PASS · open-babel 자료 참조 0, CTfile + PDB v3.3 공개 spec 만
 
 Tier-3 — docking (★★★ priority, ~5 kloc full port, TTR M3 docking):
 
