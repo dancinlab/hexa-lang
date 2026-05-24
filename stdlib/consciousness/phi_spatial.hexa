@@ -28,8 +28,15 @@
 // byte-equal target (RFC 036 phi_spatial builtin) is preserved. The downstream
 // byte-equal-vs-builtin comparison is deferred to integration.
 //
+// NAME — exported as `phi_spatial_native` (NOT `phi_spatial`): `phi_spatial` is
+// already a builtin (codegen → hexa_phi_spatial, runtime.c:7941); a stdlib fn of
+// that name collides (redefinition) when imported + flattened. This pure-hexa
+// replica is the byte-equal-FROZEN reference — the C-replica builtin has since
+// drifted from it (rfc_036_c_replica_drift), so callers wanting the frozen
+// values must use this module, not the builtin.
+//
 // Surface:
-//   pub fn phi_spatial(state: int, n_cells: int, dim: int, n_bins: int) -> float
+//   pub fn phi_spatial_native(state: int, n_cells: int, dim: int, n_bins: int) -> float
 //     state  = flat farr handle, length >= n_cells * dim (row-major; cell i
 //              row = state[i*dim .. i*dim+dim]).
 //     n_cells = number of IIT cells (<= 20 for exact bipartition; > 20 panics).
@@ -39,7 +46,7 @@
 import "stdlib/info/mutual_info.hexa"
 import "stdlib/math/bitops.hexa"
 
-pub fn phi_spatial(state: int, n_cells: int, dim: int, n_bins: int) -> float {
+pub fn phi_spatial_native(state: int, n_cells: int, dim: int, n_bins: int) -> float {
     // Degenerate guards (runtime.c:7949-7951).
     if n_cells <= 0 { return 0.0 }
     if dim <= 0 { return 0.0 }
@@ -50,7 +57,7 @@ pub fn phi_spatial(state: int, n_cells: int, dim: int, n_bins: int) -> float {
     // C replica returns min_part = 0 silently; we panic so callers cannot
     // mistake a placeholder for a real Φ. Greedy path = future cycle.
     if n_cells > 20 {
-        panic("phi_spatial: n_cells > 20 not yet supported (greedy path TODO; spec § L3)")
+        panic("phi_spatial_native: n_cells > 20 not yet supported (greedy path TODO; spec § L3)")
     }
 
     // ── step 3a + 3b — pairwise MI matrix + total (upper triangle sum) ─────
