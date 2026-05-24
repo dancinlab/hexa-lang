@@ -1,6 +1,6 @@
 # `hexa cloud copy-from` exit 0 false-success — F6 extends #646 F2 (file-transfer verb · 2026-05-24)
 
-> **Status (LANDED 2026-05-24):** `stdlib/cloud/cloud.hexa` 의 `cloud_copy_from_opts` 에 scp 후 `file_exists(local) && file_size(local) > 0` verify 1-step 추가. 자매 `cloud_copy_to_opts` 에는 local source pre-check 추가. exit_code marker 100 (`remote_file_missing_or_scp_silent_fail`) · 101 (`zero_byte_transfer`) · 102 (`local_source_missing`) 할당. 103-104 (remote-size verify) reserved. 호출자 (anima Monitor, dispatcher 등) 는 이제 `r.ok == 1` 만 신뢰하면 됨 — defensive `stat $LR` 후속 체크 불필요.
+> **Status**: resolved-PR#714-2026-05-24 — cloud_copy_from local file_exists+size>0 verify with exit markers 100/101/102 landed in stdlib/cloud/cloud.hexa
 
 **Reporter**: anima (`dancinlab/anima` downstream consumer · HEXAD/PURE Phase D v2b corpus-axis fire)
 **Severity**: medium (false-success → silent data loss; train 결과 손실이 운영자에게 "성공" 으로 보고됨)
