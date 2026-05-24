@@ -2,6 +2,28 @@
 
 Append-only history sister of `INBOX.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
+## 2026-05-25T20:50Z — pool 호스트 hexa CLI stale — atlas-loop/drill 발사 불가 (from: this-session atlas-loop 100 시도)
+
+목표: 100 atoms 발견까지 `hexa drill` 사이클 (atlas SSOT = compiler/atlas/embedded.gen.hexa, 베이스라인 16,088 nodes). pool-route 가 절대경로 없는 heavy verb (kick/drill/loop/cc)를 ubu 로 자동 라우팅하는 건 정상 작동(mac sign 게이트 무관). 발사 자체가 ubu CLI stale 로 막힘.
+
+**측정 (2026-05-25, 새로 ship 된 pool-route 0.6.4 직후)**:
+- `cd ~/core/hexa-lang && hexa drill --help` → pool-route 가 ubu-1 로 라우팅 → `error: interp interpreter not found ... searched: /home/aiden/.hx/bin/build/hexa_interp ...`
+- `cd ~/core/hexa-lang && hexa kick --help` → 동일 ubu 라우팅 → 같은 interp 부재 에러
+- ubu-2 는 별 시도에서 transpile 단계 SIGSEGV ([[reference_linux_transpiler_stale_build_recipe]] 와 동일 증상)
+
+**진단**: `hexa drill` verb 가 ubu 호스트에서 옛 interp dispatch 잔재를 따라가는데, ubu-1 의 `~/.hx/bin/build/hexa_interp` 가 부재. ubu-2 는 [[reference_linux_transpiler_stale_build_recipe]] PR #789 fix 가 로컬 stale 일 가능성. 두 호스트 모두 hexa CLI 가 origin/main 대비 뒤처져 있음.
+
+- [ ] **ubu-1 hexa CLI 재빌드** — `pool on ubu-1 'cd ~/core/hexa-lang && git pull origin main && hexa cc --regen'` + drill verb 컴파일 바이너리 재생성. [[feedback_no_interp_use_compiled]] 정책상 interp 의존 자체가 잘못 — drill 이 컴파일 경로로 갈 수 있어야
+- [ ] **ubu-2 transpile SIGSEGV 잔존 검증** — [[reference_linux_transpiler_stale_build_recipe]] PR #789 fix 가 ubu-2 로컬에 반영됐는지 확인 + 안 됐으면 amalgam swap 재적용
+- [ ] **drill verb 자체 interp 의존 검토** — `hexa drill --help` 가 interp 를 찾는 이유 = drill 이 옛 dispatch 경로 사용 중. 컴파일 경로로 마이그레이션 필요 (related: [[feedback_no_interp_use_compiled]])
+
+**not-blocker (확인됨)**:
+- mac sign 게이트(pool-route 0.6.4) → drill 호출은 절대경로 없어서 게이트 비통과 — atlas-loop 차단 요인 아님
+- pool routing → 정상 작동 (ubu-1/ubu-2 로 round-robin)
+- atlas SSOT/embedded.gen.hexa → 정상 (16,088 nodes 정상 load)
+
+**ack**: 본 session 은 sidecar/pool-route 0.6.4 sign 게이트 ship + hexa-lang env-var 잔재 PR #865 머지만 완료. atlas-loop 사이클은 ubu 정상화 다음 세션으로 미룸 (g59 upstream INBOX reflex).
+
 ## 2026-05-25T05:10Z — demiurge 7-verb production 갭: 10+2 도메인 cellrun per-verb 스크립트 부재 (from: demiurge CLI+COCKPIT 전 도메인 캠페인)
 
 demiurge cockpit/CLI 에서 **21 도메인 × 7-verb 전수 실측** 결과. dispatch 는 21/21 보편 작동(0 crash) — production(측정 record 생산)은 hexa-lang `stdlib/<도메인>/` per-verb 스크립트 배선도에 정확히 비례. demiurge surface 는 완성(dispatch·관찰·정직기록); 남은 건 stdlib 스크립트 (@D d3 — impl home = hexa-lang).
