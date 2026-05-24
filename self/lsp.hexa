@@ -5,6 +5,13 @@
 // Supports: initialize/shutdown/exit, textDocument/didOpen, didChange,
 // completion, definition, hover, rename, semanticTokens/full.
 
+// Pull the canonical keyword set from the lexer SSOT so completion /
+// semantic-token classification automatically tracks language additions —
+// every new reserved word added to self/lexer.hexa flows through
+// keyword_list() into the LSP without a manual second edit. tool/
+// build_hexa_lsp.hexa flattens the use-chain via the compiled module_loader.
+use "self/lexer"
+
 // ── JSON Value type ──────────────────────────────────────────
 
 struct JsonValue {
@@ -81,20 +88,13 @@ fn get_n6_constants() -> [string] {
     ]
 }
 
+// Delegates to the lexer's keyword_list() SSOT (see self/lexer.hexa).
+// The previously-hardcoded 45-entry array was missing 11 reserved words
+// (`import`/`extern`/`break`/`continue`/`dyn`/`in`/`do`/`defer`/`typeof`/
+// `with`/`as`) — this delegation eliminates that drift and any future drift
+// by construction.
 fn get_keywords() -> [string] {
-    return [
-        "if", "else", "match", "for", "while", "loop",
-        "type", "struct", "enum", "trait", "impl",
-        "fn", "return", "yield", "async", "await",
-        "let", "mut", "const", "static",
-        "mod", "use", "pub", "crate",
-        "own", "borrow", "move", "drop",
-        "spawn", "atomic",
-        "handle", "resume", "pure",
-        "proof", "assert", "invariant", "theorem",
-        "macro", "where", "comptime",
-        "try", "catch", "throw", "panic", "recover"
-    ]
+    return keyword_list()
 }
 
 fn get_builtins() -> [string] {
