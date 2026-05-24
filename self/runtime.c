@@ -4190,6 +4190,114 @@ HexaVal hexa_array_unique(HexaVal arr) {
 }
 #endif
 
+// ── PROBE r16 Q5: additional iterator adapters ──────────────────────────────
+// Direct-C implementations (compiled in ALL build modes — these are new
+// symbols with no rt_* counterpart, so no #ifdef HEXA_HAS_HEXA_RT_STDLIB pair
+// is needed). Each mirrors the established higher-order idiom (hexa_call1/2 for
+// callback dispatch, hexa_array_push to build the result, hexa_truthy/hexa_cmp_*
+// for comparison). Wired into codegen dispatch at self/codegen.hexa.
+
+// take_while(pred): leading run where pred(x) is truthy; stops at first false.
+HexaVal hexa_array_take_while(HexaVal arr, HexaVal fn) {
+    HexaVal out = hexa_array_new();
+    if (!HX_IS_ARRAY(arr)) return out;
+    int64_t len = HX_ARR_LEN(arr);
+    for (int64_t i = 0; i < len; i++) {
+        if (!hexa_truthy(hexa_call1(fn, HX_ARR_ITEMS(arr)[i]))) break;
+        out = hexa_array_push(out, HX_ARR_ITEMS(arr)[i]);
+    }
+    return out;
+}
+
+// skip_while(pred): drop the leading run where pred(x) is truthy; keep the rest.
+HexaVal hexa_array_skip_while(HexaVal arr, HexaVal fn) {
+    HexaVal out = hexa_array_new();
+    if (!HX_IS_ARRAY(arr)) return out;
+    int64_t len = HX_ARR_LEN(arr);
+    int64_t i = 0;
+    while (i < len && hexa_truthy(hexa_call1(fn, HX_ARR_ITEMS(arr)[i]))) i++;
+    for (; i < len; i++) out = hexa_array_push(out, HX_ARR_ITEMS(arr)[i]);
+    return out;
+}
+
+// min_by(key_fn): element with the smallest key_fn(x) value. Empty → void.
+HexaVal hexa_array_min_by(HexaVal arr, HexaVal fn) {
+    if (!HX_IS_ARRAY(arr) || HX_ARR_LEN(arr) == 0) return hexa_void();
+    int64_t len = HX_ARR_LEN(arr);
+    HexaVal best = HX_ARR_ITEMS(arr)[0];
+    HexaVal best_key = hexa_call1(fn, best);
+    for (int64_t i = 1; i < len; i++) {
+        HexaVal it = HX_ARR_ITEMS(arr)[i];
+        HexaVal k = hexa_call1(fn, it);
+        if (hexa_truthy(hexa_cmp_lt(k, best_key))) { best = it; best_key = k; }
+    }
+    return best;
+}
+
+// max_by(key_fn): element with the largest key_fn(x) value. Empty → void.
+HexaVal hexa_array_max_by(HexaVal arr, HexaVal fn) {
+    if (!HX_IS_ARRAY(arr) || HX_ARR_LEN(arr) == 0) return hexa_void();
+    int64_t len = HX_ARR_LEN(arr);
+    HexaVal best = HX_ARR_ITEMS(arr)[0];
+    HexaVal best_key = hexa_call1(fn, best);
+    for (int64_t i = 1; i < len; i++) {
+        HexaVal it = HX_ARR_ITEMS(arr)[i];
+        HexaVal k = hexa_call1(fn, it);
+        if (hexa_truthy(hexa_cmp_gt(k, best_key))) { best = it; best_key = k; }
+    }
+    return best;
+}
+
+// position(pred): index of the first element where pred(x) is truthy, else -1.
+HexaVal hexa_array_position(HexaVal arr, HexaVal fn) {
+    if (!HX_IS_ARRAY(arr)) return hexa_int(-1);
+    int64_t len = HX_ARR_LEN(arr);
+    for (int64_t i = 0; i < len; i++) {
+        if (hexa_truthy(hexa_call1(fn, HX_ARR_ITEMS(arr)[i]))) return hexa_int(i);
+    }
+    return hexa_int(-1);
+}
+
+// reduce(fn): init-less left fold — seeds with element 0, folds the rest.
+// Empty array throws (no initial value, like Rust Iterator::reduce → None but
+// hexa has no Option here; a clear throw beats a silent void miscompile).
+HexaVal hexa_array_reduce(HexaVal arr, HexaVal fn) {
+    if (!HX_IS_ARRAY(arr) || HX_ARR_LEN(arr) == 0) {
+        hexa_throw(hexa_str("reduce of empty array (no initial value)"));
+        return hexa_void();
+    }
+    int64_t len = HX_ARR_LEN(arr);
+    HexaVal acc = HX_ARR_ITEMS(arr)[0];
+    for (int64_t i = 1; i < len; i++) acc = hexa_call2(fn, acc, HX_ARR_ITEMS(arr)[i]);
+    return acc;
+}
+
+// dedup(): collapse runs of ADJACENT equal elements (Rust Vec::dedup). Distinct
+// from unique() which removes ALL duplicates. Equality via hexa_eq.
+HexaVal hexa_array_dedup(HexaVal arr) {
+    HexaVal out = hexa_array_new();
+    if (!HX_IS_ARRAY(arr)) return out;
+    int64_t len = HX_ARR_LEN(arr);
+    for (int64_t i = 0; i < len; i++) {
+        HexaVal it = HX_ARR_ITEMS(arr)[i];
+        if (i == 0 || !hexa_truthy(hexa_eq(HX_ARR_ITEMS(arr)[i - 1], it))) {
+            out = hexa_array_push(out, it);
+        }
+    }
+    return out;
+}
+
+// step_by(n): every n-th element starting at index 0. n<=0 → empty.
+HexaVal hexa_array_step_by(HexaVal arr, HexaVal nv) {
+    HexaVal out = hexa_array_new();
+    if (!HX_IS_ARRAY(arr)) return out;
+    int64_t n = HX_IS_INT(nv) ? HX_INT(nv) : (int64_t)__hx_to_double(nv);
+    if (n <= 0) return out;
+    int64_t len = HX_ARR_LEN(arr);
+    for (int64_t i = 0; i < len; i += n) out = hexa_array_push(out, HX_ARR_ITEMS(arr)[i]);
+    return out;
+}
+
 // rotate(k): k>0 shifts left (items[k] becomes new head); k<0 shifts right.
 // k normalized mod len. Step-3 cycle 30 port.
 #ifndef HEXA_HAS_HEXA_RT_STDLIB

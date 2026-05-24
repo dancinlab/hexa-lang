@@ -1319,6 +1319,15 @@ HexaVal hexa_array_shift(HexaVal arr); /* runtime_core.c:4722 */
 HexaVal hexa_array_take(HexaVal arr, HexaVal nv); /* runtime.c:3863 */
 HexaVal hexa_array_unique(HexaVal arr); /* runtime.c:4034 */
 HexaVal hexa_array_window(HexaVal arr, HexaVal nv); /* runtime.c:3996 */
+/* PROBE r16 Q5: additional iterator adapters (runtime.c) */
+HexaVal hexa_array_take_while(HexaVal arr, HexaVal fn);
+HexaVal hexa_array_skip_while(HexaVal arr, HexaVal fn);
+HexaVal hexa_array_min_by(HexaVal arr, HexaVal fn);
+HexaVal hexa_array_max_by(HexaVal arr, HexaVal fn);
+HexaVal hexa_array_position(HexaVal arr, HexaVal fn);
+HexaVal hexa_array_reduce(HexaVal arr, HexaVal fn);
+HexaVal hexa_array_dedup(HexaVal arr);
+HexaVal hexa_array_step_by(HexaVal arr, HexaVal nv);
 HexaVal hexa_array_zeros_float(HexaVal nv); /* runtime.c:3789 */
 HexaVal hexa_array_zip(HexaVal a, HexaVal b); /* runtime.c:3918 */
 HexaVal hexa_array_concat(HexaVal a, HexaVal b); /* runtime.c — PROBE r14-JJJJ (.chain) */
