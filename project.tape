@@ -18,3 +18,7 @@
 
 @D atlas_fold := "atlas fold — embedded.gen.hexa via branch → commit → PR" :: governance [required active]
   dont = "fold atlas nodes anywhere but compiler/atlas/embedded.gen.hexa via branch → commit → PR"
+
+@D stdlib_trig_libm := "stdlib trig = libm builtins, not hand-rolled Taylor" :: governance [required active]
+  do   = "stdlib signal/math modules use native libm trig (`cos`/`sin`/…) — IEEE-correct · codegen-stable"
+  dont = "hand-rolled Taylor sin/cos — fragile (float→int narrowing the codegen dropped → collapses)"
