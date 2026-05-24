@@ -1,5 +1,12 @@
 // ai_native_profile — source-transform profiler (S-1b safe track)
 //
+// !! DEPRECATED — interp retired (R7, [[feedback_no_interp_use_compiled]]).
+// !! cmd_run() (main, ~line 200) invokes `build/hexa_interp`, which is no
+// !! longer built. The exec is wrapped in try/catch so the run silently
+// !! produces elapsed=0; tally() still walks the transformed source. For
+// !! real profiling, rewrite against the compiled path. Selftest still
+// !! exercises pure helpers. Tracked in INBOX.log.md 2026-05-25T22:30Z.
+//
 // Adds per-function call-count instrumentation to a .hexa source file
 // WITHOUT modifying hexa_full.hexa or the interpreter. Works by text
 // transformation: for each `fn name(...)`/`pub fn name(...)`, injects a

@@ -4073,10 +4073,12 @@ if len(av) > 0 {
     let av0_base = if slash >= 0 { av0.substring(slash + 1, len(av0)) } else { av0 }
     // self-name 스킵 — hexa 바이너리 본인 이름 계열.
     // 1) "hexa" prefix — hexa, hexa_v2, hexa_new, hexa.bak...
-    // 2) common aliases
+    // 2) common aliases — "main" only ("interp" removed post-R7,
+    //    [[feedback_no_interp_use_compiled]]: build/hexa_interp 미빌드 →
+    //    argv0 basename 가 "interp" 일 수 없음).
     let mut is_self = false
     if len(av0_base) >= 4 && av0_base.substring(0, 4) == "hexa" { is_self = true }
-    if av0_base == "interp" || av0_base == "main" { is_self = true }
+    if av0_base == "main" { is_self = true }
     if !is_self && len(av0_base) > 0 {
         argv0_shim = av0_base
     }

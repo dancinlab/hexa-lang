@@ -2,6 +2,13 @@
 // HEXA-IR performance benchmark harness
 // Runs bench_loop across all available backends + C/Rust ceilings
 // Appends results to docs/hexa-ir-benchmark.md
+//
+// !! PARTIALLY STALE — interp retired (R7, [[feedback_no_interp_use_compiled]]).
+// !! Step 2 "[2/5] Interpreter..." times the `./hexa` driver running
+// !! `bench_loop.hexa`, which now goes through the compile-then-exec path
+// !! (`bin run <file>`) rather than the tree-walker. t_interp therefore
+// !! reflects compile+run wall, not pure interp. Native/HEXA-IR/C steps
+// !! remain meaningful. Tracked in INBOX.log.md 2026-05-25T22:30Z.
 
 let script_dir = exec("cd \"$(dirname \"$0\")\" && pwd").trim()
 let project_dir = exec("cd " + script_dir + "/.. && pwd").trim()
