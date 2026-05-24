@@ -171,6 +171,9 @@ fn cmd_rubric() {
     println("             overlap_vqe_h2_shift_ha() → 0.7151043390810812  (RFC 045 overlap-ADAPT H2 STO-3G shift, 0-arg)")
     println("             rpe_heisenberg_sigma(k_gens,m_per_k) → 1/(2^(K-1)*sqrt(M))  (RFC 045 RPE Heisenberg bound, 2-arg)")
     println("             mirror_bench_hog_asymptote() → (1+ln2)/2  (RFC 045 mirror-bench Porter-Thomas HOG, 0-arg)")
+    println("             exp_release(M_0,k,t)        → M_0*(1-exp(-k*t))   (first-order release, Bateman / Noyes-Whitney, 3-arg)")
+    println("             ldl_pct(baseline,final)     → (final-baseline)/baseline*100  (Δ%, FOURIER/GLAGOV/SELECT, 2-arg)")
+    println("             beer_lambert(I_0,mu,x)      → I_0*exp(-mu*x)      (Bouguer-Lambert-Beer attenuation, 3-arg)")
 }
 
 let NOCALC: int = -999999
@@ -779,11 +782,56 @@ fn _qdrift_error_bound(lambda_times_time: float, big_n_steps: int) -> float {
     return 2.0 * lambda_times_time * lambda_times_time / n_f
 }
 
-// float dispatch — fn_name → recompute. 0-arg fns ignore a0/a1 (constants);
-// 1-arg fns take a0; 2-arg take a0,a1. Returns _NOCALC_F when no float path
-// exists (caller then tries the int path / degrades). The 🟢 NUMERICAL
-// companion to _recompute.
-fn _recompute_float(fn_name: string, a0: float, a1: float, argc: int) -> float {
+// ── bio-physical closed-form identities (Phase 1) ──────────────────────
+//
+// Demiurge cross-domain V2 milestone (🔵 SUPPORTED-FORMAL push): the 3
+// foundational bio identities unblocked across 6 domains (ISR · DAPTPGX ·
+// LPA · NOREFLOW · TTR · HERPES). Phase 2 (Hill · Cheng-Prusoff · Higuchi ·
+// Fick · Tafel · LaPlace · Hagen-Poiseuille) lands in a follow-up stacked PR.
+// ref: inbox/patches/bio-verify-kernel-extension-2026-05-25.md
+//
+// All three are 🟢 NUMERICAL tier (libm-class `exp` recompute, ε=1e-9
+// tolerance) — they ARE closed-form algebraic identities, but use
+// transcendental exp() so we route through the libm-byteeq-safe ε gate
+// (consistent with chsh_tsirelson, hardy_bound et al. that also use sqrt/exp).
+
+// First-order release (Noyes-Whitney / Bateman first-order kinetics):
+//   M_t = M_0 * (1 - exp(-k*t))
+// Drug-delivery payload release at time t given initial mass M_0 and rate k.
+// 3-arg closed-form. Source: FDA SUPAC-IR, Crank "Mathematics of Diffusion".
+fn _exp_release(m_0: float, k_rate: float, t_time: float) -> float {
+    if m_0 < 0.0 { return _NOCALC_F }
+    if k_rate < 0.0 { return _NOCALC_F }
+    if t_time < 0.0 { return _NOCALC_F }
+    return m_0 * (1.0 - exp(0.0 - k_rate * t_time))
+}
+
+// LDL percent change (FOURIER / GLAGOV / SELECT trial endpoint identity):
+//   ΔLDL% = (final - baseline) / baseline * 100
+// 2-arg closed-form. Negative => reduction (the cardiovascular efficacy
+// direction). Source: Sabatine 2017 NEJM (FOURIER), Nicholls 2016 JAMA (GLAGOV).
+fn _ldl_pct(baseline: float, final_v: float) -> float {
+    if baseline <= 0.0 { return _NOCALC_F }
+    return (final_v - baseline) / baseline * 100.0
+}
+
+// Beer-Lambert attenuation (Bouguer-Lambert-Beer law):
+//   I = I_0 * exp(-mu * x)
+// Photon / particle intensity after path length x through medium with
+// absorption coefficient mu. 3-arg closed-form. Source: Bouguer 1729,
+// Beer 1852; canonical OCT signal-depth model.
+fn _beer_lambert(i_0: float, mu_abs: float, x_depth: float) -> float {
+    if i_0 < 0.0 { return _NOCALC_F }
+    if mu_abs < 0.0 { return _NOCALC_F }
+    if x_depth < 0.0 { return _NOCALC_F }
+    return i_0 * exp(0.0 - mu_abs * x_depth)
+}
+
+// float dispatch — fn_name → recompute. 0-arg fns ignore a0/a1/a2 (constants);
+// 1-arg fns take a0; 2-arg take a0,a1; 3-arg take a0,a1,a2. Returns _NOCALC_F
+// when no float path exists (caller then tries the int path / degrades). The
+// 🟢 NUMERICAL companion to _recompute.
+fn _recompute_float(fn_name: string, a0: float, a1: float, a2: float, argc: int) -> float {
     if fn_name == "welch_t_crit" { return _welch_t_crit(a0) }
     if fn_name == "wilson_hilferty_p" {
         if argc < 2 { return _NOCALC_F }
@@ -872,6 +920,22 @@ fn _recompute_float(fn_name: string, a0: float, a1: float, argc: int) -> float {
         return _rpe_heisenberg_sigma(k_gens, m_per_k)
     }
     if fn_name == "mirror_bench_hog_asymptote" { return _mirror_bench_hog_asymptote() }
+    // ── Bio-physical Phase 1 (demiurge cross-domain V2 unlock) ─────────
+    //   exp_release(M_0, k, t)    3-arg: M_0 * (1 - exp(-k*t))
+    //   ldl_pct(baseline, final)  2-arg: (final - baseline)/baseline * 100
+    //   beer_lambert(I_0, mu, x)  3-arg: I_0 * exp(-mu*x)
+    if fn_name == "exp_release" {
+        if argc < 3 { return _NOCALC_F }
+        return _exp_release(a0, a1, a2)
+    }
+    if fn_name == "ldl_pct" {
+        if argc < 2 { return _NOCALC_F }
+        return _ldl_pct(a0, a1)
+    }
+    if fn_name == "beer_lambert" {
+        if argc < 3 { return _NOCALC_F }
+        return _beer_lambert(a0, a1, a2)
+    }
     return _NOCALC_F
 }
 
@@ -891,6 +955,8 @@ fn _is_float_fn(fn_name: string) -> bool {
         || fn_name == "overlap_vqe_h2_shift_ha"
         || fn_name == "rpe_heisenberg_sigma"
         || fn_name == "mirror_bench_hog_asymptote"
+        // Bio-physical Phase 1 (demiurge cross-domain V2 unlock):
+        || fn_name == "exp_release" || fn_name == "ldl_pct" || fn_name == "beer_lambert"
 }
 
 // is fn_name a 0-arg closed-form constant? (--expr <fn> <v>, no operands).
@@ -1018,18 +1084,22 @@ fn cmd_verify_id(rest) {
 }
 
 // cmd_expr_float — the 🟢 NUMERICAL path. fn_name is a registered float
-// transform (welch_t_crit · wilson_hilferty_p · chsh_tsirelson · hardy_bound).
+// transform (welch_t_crit · wilson_hilferty_p · chsh_tsirelson · hardy_bound
+// · exp_release · ldl_pct · beer_lambert).
 // Args + claimed value are parsed as floats; the recompute is compared with
 // tolerance ε (NOT exact-eq, the honest libm-class gate). Within ε →
 // 🟢 SUPPORTED-NUMERICAL; deterministic out-of-ε → 🔴 FALSIFIED.
-//   0-arg:  --expr <fn> <v>               (rest len 3; closed-form constant)
-//   1-arg:  --expr <fn> <a0> <v>          (rest len 4)
-//   2-arg:  --expr <fn> <a0> <a1> <v>     (rest len 5)
+//   0-arg:  --expr <fn> <v>                    (rest len 3; closed-form constant)
+//   1-arg:  --expr <fn> <a0> <v>               (rest len 4)
+//   2-arg:  --expr <fn> <a0> <a1> <v>          (rest len 5)
+//   3-arg:  --expr <fn> <a0> <a1> <a2> <v>     (rest len 6; bio Phase 1)
 fn cmd_expr_float(rest, fnm: string) {
     let zero_arg = _is_zero_arg_float_fn(fnm)
+    let has6 = len(rest) >= 6 && to_string(rest[5]) != "--absorb"
     let has5 = len(rest) >= 5 && to_string(rest[4]) != "--absorb"
     let mut a0 = 0.0
     let mut a1 = 0.0
+    let mut a2 = 0.0
     let mut v = 0.0
     let mut argc = 1
     let mut label = ""
@@ -1037,6 +1107,13 @@ fn cmd_expr_float(rest, fnm: string) {
         v = _parse_float(to_string(rest[2]))
         argc = 0
         label = fnm + "()=" + _fstr(v)
+    } else if has6 {
+        a0 = _parse_float(to_string(rest[2]))
+        a1 = _parse_float(to_string(rest[3]))
+        a2 = _parse_float(to_string(rest[4]))
+        v = _parse_float(to_string(rest[5]))
+        argc = 3
+        label = fnm + "(" + _fstr(a0) + "," + _fstr(a1) + "," + _fstr(a2) + ")=" + _fstr(v)
     } else if has5 {
         a0 = _parse_float(to_string(rest[2]))
         a1 = _parse_float(to_string(rest[3]))
@@ -1049,7 +1126,7 @@ fn cmd_expr_float(rest, fnm: string) {
         argc = 1
         label = fnm + "(" + _fstr(a0) + ")=" + _fstr(v)
     }
-    let got = _recompute_float(fnm, a0, a1, argc)
+    let got = _recompute_float(fnm, a0, a1, a2, argc)
     println("verify --expr " + label)
     if got == _NOCALC_F {
         println("  tier   = 🟠 INSUFFICIENT")
