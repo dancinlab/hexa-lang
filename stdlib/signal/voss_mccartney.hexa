@@ -1,0 +1,121 @@
+// HEXA Standard Library — signal/voss_mccartney
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Voss-McCartney style deterministic 1/f^β (pink / fractional) noise generator.
+//
+// Generates a length-n signal whose power spectrum approximates 1/f^β by
+// octave summation: each octave row holds a pseudo-random value for 2^j
+// consecutive samples, weighted by w_j(β) = (2^j)^(β/2).
+//
+//   signal[i] = (1/N_OCT) * Σ_{j=0..N_OCT-1} w_j(β) * u_j(floor(i / 2^j))
+//   w_j(β)    = (2^j)^(β/2)
+//
+//   β = 0  → all weights 1            → white noise   (flat spectrum)
+//   β = 1  → pink-like (1/f)          → EEG/thalamus signature
+//   β = 2  → brown-like (1/f^2)       → low frequencies dominate
+//
+// This is the classic Voss-McCartney approximation — a known, NOT exact, 1/f
+// spectrum. Deterministic (seed-driven, no global RNG): the same (β, seed, n)
+// always yields a byte-equal farr.
+//
+// Surface:
+//   pub fn gen_1fbeta(beta: float, seed: int, n: int) -> int
+//       // returns a length-n farr handle; values centered near 0, roughly
+//       // in [-1, 1] for β=0 (caller may normalize). farr ownership is the
+//       // caller's — free it with farr_free when done.
+//
+// Provenance:
+//   byte-equal port of anima HEXAD/LIFE/state/h209_eeg_1f_spectrum_2026_05_23/
+//   run_h209.hexa::_gen_1fbeta (H_209 EEG 1/f spectrum hypothesis, raw#12).
+//   The pseudo-random base (_drand) and the rational-power helper (_pow_f via
+//   _exp_f / _ln_pos Taylor series) are reproduced verbatim to preserve the
+//   frozen H_209 baseline output bit-for-bit. They are intentionally NOT
+//   replaced by stdlib/core/math/rng.hexa::lcg_next nor the native pow/exp/log
+//   builtins, which use different constants / libm and would shift the bytes.
+
+let VM_N_OCT = 6   // octaves — covers 2^0..2^5 = 32 (block held lengths)
+
+// ── tiny helpers (byte-equal port) ─────────────────────────────────────────
+
+fn _vm_pow2i(k: int) -> int {
+    let mut p = 1
+    let mut i = 0
+    while i < k { p = p * 2; i = i + 1 }
+    return p
+}
+
+fn _vm_to_float(x: int) -> float { return x * 1.0 }
+
+// ln for positive x via atanh expansion:
+//   ln(x) = 2 * Σ_{k=0}^∞ (1/(2k+1)) * ((x-1)/(x+1))^(2k+1)
+fn _vm_ln_pos(x: float) -> float {
+    let y = (x - 1.0) / (x + 1.0)
+    let y2 = y * y
+    let mut term = y
+    let mut acc = 0.0
+    let mut k = 0
+    while k < 24 {
+        let denom = _vm_to_float(2 * k + 1)
+        acc = acc + term / denom
+        term = term * y2
+        k = k + 1
+    }
+    return 2.0 * acc
+}
+
+// exp via Taylor (bounded args: e = β/2 · ln(32) ≤ 3.47).
+fn _vm_exp_f(x: float) -> float {
+    let mut term = 1.0
+    let mut acc = 1.0
+    let mut k = 1
+    while k < 40 {
+        term = term * x / _vm_to_float(k)
+        acc = acc + term
+        k = k + 1
+    }
+    return acc
+}
+
+// rational power for positive base: pow(b, e) = exp(e · ln(b)).
+fn _vm_pow_f(b: float, e: float) -> float {
+    if e == 0.0 { return 1.0 }
+    if b == 1.0 { return 1.0 }
+    return _vm_exp_f(e * _vm_ln_pos(b))
+}
+
+// Deterministic byte-mix → uniform in [-1, 1]. (seed, idx) → reproducible float.
+// 3-stage LCG seeded by (seed, idx); ops stay in safe int range.
+fn _vm_drand(seed: int, idx: int) -> float {
+    let s1 = (seed + idx * 2654435761) % 2147483647
+    let s2 = (s1 * 1103515245 + 12345) % 2147483647
+    let s3 = (s2 * 1664525 + 1013904223) % 2147483647
+    let raw = _vm_to_float(s3) / 2147483646.0
+    return 2.0 * raw - 1.0
+}
+
+// ── Voss-McCartney 1/f^β generator ─────────────────────────────────────────
+// row j: random value held for 2^j consecutive samples.
+// signal[i] = (1/N_OCT) * Σ_j w_j * u_j(floor(i / 2^j)),  w_j = (2^j)^(β/2).
+pub fn gen_1fbeta(beta: float, seed: int, n: int) -> int {
+    let n_oct = VM_N_OCT
+    let buf = farr_zeros(n)
+    let mut i = 0
+    while i < n {
+        let mut acc = 0.0
+        let mut j = 0
+        while j < n_oct {
+            let blk = _vm_pow2i(j)
+            let idx_j = i / blk
+            let u = _vm_drand(seed + j * 7919, idx_j)
+            let w = _vm_pow_f(_vm_to_float(blk), beta * 0.5)
+            acc = acc + w * u
+            j = j + 1
+        }
+        let val = acc / _vm_to_float(n_oct)
+        let _ = farr_set(buf, i, val)
+        i = i + 1
+    }
+    return buf
+}
