@@ -6403,6 +6403,20 @@ int hexa_truthy(HexaVal v) {
         case TAG_FLOAT: return HX_FLOAT(v) != 0.0;
         case TAG_STR: return HX_STR(v) != NULL && HX_STR(v)[0] != 0;
         case TAG_VOID: return 0;
+        // RFC r16 (PROBE r16): empty collection is FALSY, consistent with
+        // `if 0` / `if 0.0` / `if ""`. Non-empty stays truthy. Closes the
+        // last `default: return 1` fall-through gap (same class of bug as the
+        // 2026-04-20 TAG_FLOAT 0.0 audit above).
+        case TAG_ARRAY: return HX_ARR_LEN(v) > 0;
+        // TAG_MAP: empty anonymous map `#{}` is falsy. A struct instance is a
+        // TAG_MAP carrying a "__type__" carrier field (hexa_struct_pack_map),
+        // so it always has len >= 1 and stays truthy — RFC §4/Q2: struct
+        // existence != empty collection. The explicit __type__ guard keeps
+        // structs truthy regardless of user field count.
+        case TAG_MAP:
+            if (HX_MAP_TBL(v) == NULL) return 0;
+            if (hmap_find(HX_MAP_TBL(v), "__type__", hexa_fnv1a_str("__type__")) >= 0) return 1;
+            return HX_MAP_LEN(v) > 0;
         // rt 32-G: TAG_VALSTRUCT truthy iff .vs pointer non-null.
         case TAG_VALSTRUCT: return HX_VS(v) != NULL;
         default: return 1;
@@ -7701,6 +7715,31 @@ static inline int _hexa_enum_pair_idx(HexaVal a, HexaVal b,
     return 1;
 }
 
+// RFC r16 (PROBE r16): once the enum / str-str / numeric branches are
+// exhausted, the only operands that may legitimately read through the
+// `HX_INT(a) < HX_INT(b)` fall-through are those whose value lives in the
+// int slot — TAG_INT, TAG_BOOL, TAG_CHAR (and legacy cross-type TAG_ENUM,
+// whose meaningless-but-defined fallback the r14-TTTT contract preserves).
+// Any other tag (TAG_STR mismatched against a non-str, TAG_ARRAY, TAG_MAP,
+// TAG_FN, TAG_CLOSURE, TAG_VOID) would have its heap pointer read as int64
+// → silent meaningless ordering (`1 < "a"` TRUE, `"a" < 1` FALSE — not even
+// antisymmetric; `[] < []` TRUE). Such incomparable pairs are a TYPE ERROR,
+// mirroring the `-` `/` `%` non-numeric throw (#807 sibling) and Python3's
+// cross-type-order TypeError. Same-type ordering, numeric int/float promotion,
+// and `==`/`!=` are all unaffected (handled by the branches above this guard).
+static inline int _hx_int_slot_ordered(HexaVal v) {
+    int t = (int)HX_TAG(v);
+    return t == TAG_INT || t == TAG_BOOL || t == TAG_CHAR || t == TAG_ENUM;
+}
+static inline void _hx_cmp_guard(HexaVal a, HexaVal b, const char* op) {
+    if (!_hx_int_slot_ordered(a) || !_hx_int_slot_ordered(b)) {
+        char _buf[96];
+        snprintf(_buf, sizeof(_buf), "cannot compare tag %d with tag %d (operator %s)",
+                 (int)HX_TAG(a), (int)HX_TAG(b), op);
+        hexa_throw(hexa_str(_buf));
+    }
+}
+
 HexaVal hexa_cmp_lt(HexaVal a, HexaVal b) {
     int64_t ia, ib;
     if (_hexa_enum_pair_idx(a, b, &ia, &ib)) return hexa_bool(ia < ib);
@@ -7708,6 +7747,7 @@ HexaVal hexa_cmp_lt(HexaVal a, HexaVal b) {
         return hexa_bool(hxlcl_strcmp(HX_STR(a), HX_STR(b)) < 0);
     if (HX_IS_FLOAT(a) || HX_IS_FLOAT(b) || HX_IS_VALSTRUCT(a) || HX_IS_VALSTRUCT(b))
         return hexa_bool(__hx_to_double(a) < __hx_to_double(b));
+    _hx_cmp_guard(a, b, "<");
     return hexa_bool(HX_INT(a) < HX_INT(b));
 }
 HexaVal hexa_cmp_gt(HexaVal a, HexaVal b) {
@@ -7717,6 +7757,7 @@ HexaVal hexa_cmp_gt(HexaVal a, HexaVal b) {
         return hexa_bool(hxlcl_strcmp(HX_STR(a), HX_STR(b)) > 0);
     if (HX_IS_FLOAT(a) || HX_IS_FLOAT(b) || HX_IS_VALSTRUCT(a) || HX_IS_VALSTRUCT(b))
         return hexa_bool(__hx_to_double(a) > __hx_to_double(b));
+    _hx_cmp_guard(a, b, ">");
     return hexa_bool(HX_INT(a) > HX_INT(b));
 }
 HexaVal hexa_cmp_le(HexaVal a, HexaVal b) {
@@ -7726,6 +7767,7 @@ HexaVal hexa_cmp_le(HexaVal a, HexaVal b) {
         return hexa_bool(hxlcl_strcmp(HX_STR(a), HX_STR(b)) <= 0);
     if (HX_IS_FLOAT(a) || HX_IS_FLOAT(b) || HX_IS_VALSTRUCT(a) || HX_IS_VALSTRUCT(b))
         return hexa_bool(__hx_to_double(a) <= __hx_to_double(b));
+    _hx_cmp_guard(a, b, "<=");
     return hexa_bool(HX_INT(a) <= HX_INT(b));
 }
 HexaVal hexa_cmp_ge(HexaVal a, HexaVal b) {
@@ -7735,6 +7777,7 @@ HexaVal hexa_cmp_ge(HexaVal a, HexaVal b) {
         return hexa_bool(hxlcl_strcmp(HX_STR(a), HX_STR(b)) >= 0);
     if (HX_IS_FLOAT(a) || HX_IS_FLOAT(b) || HX_IS_VALSTRUCT(a) || HX_IS_VALSTRUCT(b))
         return hexa_bool(__hx_to_double(a) >= __hx_to_double(b));
+    _hx_cmp_guard(a, b, ">=");
     return hexa_bool(HX_INT(a) >= HX_INT(b));
 }
 
