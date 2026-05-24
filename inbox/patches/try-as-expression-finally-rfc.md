@@ -1,5 +1,6 @@
 # try-as-expression + finally 절 design RFC
 
+**Status**: rfc-draft-deferred-2026-05-25 — design-only patch (not a fix). Promote via /inbox skill if RFC track wanted.
 **Status**: design-level (PROBE round 3 INBOX line 37, r14 cycle 5 carry, 2026-05-23)
 **Priority**: P3 (현재 `try`/`catch` 문은 작동; expression form + `finally` 은 enhancement)
 **SSOT**: PROBE.log.md round 3 line 37 (Option/Result) · r14-X postfix `?` RFC (commit `2cf3e166`, `inbox/patches/postfix-question-result-abi-rfc.md`) · r14-EE panic 채널 RFC (sister, forward-ref)

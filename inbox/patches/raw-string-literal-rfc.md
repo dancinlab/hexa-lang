@@ -1,5 +1,6 @@
 # raw string `r"..."` literal design RFC
 
+**Status**: rfc-draft-deferred-2026-05-25 — design-only patch (not a fix). Promote via /inbox skill if RFC track wanted.
 **Status**: design-level (r14 cycle 7, 2026-05-23)
 **Priority**: P3 (편의 기능 — regex/path/JSON 리터럴 작성 ergonomics)
 **SSOT**: 본 RFC · 캐노니컬 비교

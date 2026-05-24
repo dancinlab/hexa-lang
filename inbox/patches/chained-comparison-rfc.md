@@ -1,5 +1,6 @@
 # chained comparison `a < b < c` (Python) design RFC
 
+**Status**: rfc-draft-deferred-2026-05-25 — design-only patch (not a fix). Promote via /inbox skill if RFC track wanted.
 **Status**: design-level (PROBE r14 cycle 6, 2026-05-23)
 **Priority**: P2 (편의 기능이라기보다 **silent miscompile 함정 제거** — 현재 C-스타일 결과를 silent 로 반환)
 **SSOT**: 본 RFC · 캐노니컬 비교 + verified probe

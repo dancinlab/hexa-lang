@@ -1,5 +1,6 @@
 # set 리터럴 design RFC
 
+**Status**: rfc-draft-deferred-2026-05-25 — design-only patch (not a fix). Promote via /inbox skill if RFC track wanted.
 **Status**: design-level (r14 cycle 8, 2026-05-23)
 **Priority**: P3 (편의 — Python 사용자 expectation)
 **SSOT**: 본 RFC · 캐노니컬 비교
