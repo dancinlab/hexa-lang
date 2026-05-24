@@ -230,6 +230,102 @@ pub fn gl_parameter_kappa(lambda_L: float, xi: float) -> float {
     return lambda_L / xi
 }
 
+// ── 4f. London magnetic penetration depth from superfluid density ──────
+//
+// @cite London & London 1935, Proc. R. Soc. A 149 71; Tinkham 1996,
+//       "Introduction to Superconductivity" 2nd ed., Eq. 3.10.
+//
+// λ_L = sqrt( m_e / (μ₀ · n_s · e²) )
+//
+// The London penetration depth λ_L (metres): the length over which a
+// magnetic field decays inside a superconductor (Meissner screening). n_s
+// is the superfluid carrier density (m⁻³). Constants are CODATA 2018:
+// m_e (electron mass), μ₀ (vacuum permeability), e (elementary charge).
+// For a typical metal n_s ≈ 1e28 m⁻³ → λ_L ≈ 53 nm. Pairs with
+// `coherence_length` to feed `gl_parameter_kappa` (κ = λ_L/ξ).
+pub fn london_penetration_depth(n_s: float) -> float {
+    if n_s <= 0.0 { return 0.0 }
+    let m_e = 9.1093837015e-31        // electron mass (kg), CODATA 2018
+    let mu0 = 1.25663706212e-6        // vacuum permeability (N/A²), CODATA 2018
+    let e_q = 1.602176634e-19         // elementary charge (C), CODATA 2018
+    return sqrt(m_e / (mu0 * n_s * e_q * e_q))
+}
+
+// ── 4g. Thermodynamic critical field Hc(T) — Tuyn parabolic law ────────
+//
+// @cite Tuyn 1929 (parabolic law); Tinkham 1996, "Introduction to
+//       Superconductivity" 2nd ed., Eq. 1.1.
+//
+// Hc(T) = Hc(0) · (1 - (T/Tc)²)
+//
+// The thermodynamic critical field at temperature T, from its zero-T value
+// Hc(0) and the critical temperature Tc (same temperature units). The
+// two-fluid / Tuyn parabolic approximation; exact at T→0 and T→Tc, ~4%
+// high mid-range vs the BCS curve. Returns 0 for T ≥ Tc (normal state).
+pub fn thermo_critical_field(hc_zero: float, temp_K: float, tc_K: float) -> float {
+    if tc_K <= 0.0 { return 0.0 }
+    if temp_K >= tc_K { return 0.0 }
+    if temp_K < 0.0 { return 0.0 }
+    let r = temp_K / tc_K
+    return hc_zero * (1.0 - r * r)
+}
+
+// ── 4h. Superconducting condensation energy density ────────────────────
+//
+// @cite Tinkham 1996, "Introduction to Superconductivity" 2nd ed.,
+//       Eq. 3.4 — f_n - f_s(0) = Bc²/(2μ₀)  (SI flux-density form).
+//
+// U = Bc(0)² / (2 · μ₀)
+//
+// Condensation energy density (J/m³): the free-energy gain per unit volume
+// of the superconducting state relative to the normal state, expressed via
+// the zero-T thermodynamic critical flux density Bc(0) (tesla). μ₀ is the
+// vacuum permeability (CODATA 2018). Bc=1 T → U ≈ 3.98e5 J/m³.
+pub fn condensation_energy(bc_zero_T: float) -> float {
+    let mu0 = 1.25663706212e-6        // vacuum permeability (N/A²), CODATA 2018
+    return bc_zero_T * bc_zero_T / (2.0 * mu0)
+}
+
+// ── 4i. BCS zero-temperature energy gap Δ(0) ───────────────────────────
+//
+// @cite Bardeen, Cooper, Schrieffer 1957, PR 108 1175 — universal
+//       weak-coupling gap Δ(0) = (π/e^γ)·k_B·Tc = 1.764·k_B·Tc.
+//
+// Δ(0) = 1.764 · k_B · Tc
+//
+// The zero-temperature superconducting energy gap (joules) in the BCS
+// weak-coupling limit, where 2Δ(0)/(k_B·Tc) = 3.528 = 2π/e^γ (see
+// `bcs_gap_ratio`). k_B is Boltzmann's constant (CODATA 2018). The 1.764
+// prefactor is half the universal ratio. Strong-coupling materials exceed
+// this (H₃S ≈ 2.4); the deviation diagnoses coupling strength.
+pub fn bcs_gap_zero(tc_K: float) -> float {
+    if tc_K <= 0.0 { return 0.0 }
+    let k_b = 1.380649e-23            // Boltzmann constant (J/K), CODATA 2018
+    return 1.764 * k_b * tc_K
+}
+
+// ── 4j. Pippard / BCS intrinsic coherence length ξ₀ ────────────────────
+//
+// @cite Pippard 1953, Proc. R. Soc. A 216 547; BCS 1957, PR 108 1175;
+//       Tinkham 1996 Eq. 1.7 — ξ₀ = ħ·v_F / (π·Δ(0)).
+//
+// ξ₀ = ħ · v_F / (π · Δ(0)),   Δ(0) = 1.764 · k_B · Tc
+//
+// The intrinsic (clean-limit) coherence length ξ₀ (metres): the spatial
+// extent of a Cooper pair, set by the Fermi velocity v_F (m/s) and the
+// zero-T gap. Constants are CODATA 2018 (ħ reduced Planck, k_B Boltzmann).
+// Distinct from the GL `coherence_length` (Hc2-derived); ξ₀ is the
+// microscopic BCS pair size. v_F=1e6 m/s, Tc=10 K → ξ₀ ≈ 138 nm.
+pub fn pippard_coherence(v_fermi: float, tc_K: float) -> float {
+    if v_fermi <= 0.0 { return 0.0 }
+    if tc_K <= 0.0 { return 0.0 }
+    let hbar = 1.054571817e-34        // reduced Planck (J·s), CODATA 2018
+    let k_b = 1.380649e-23            // Boltzmann constant (J/K), CODATA 2018
+    let pi_p = 3.14159265358979323846
+    let gap0 = 1.764 * k_b * tc_K
+    return hbar * v_fermi / (pi_p * gap0)
+}
+
 // ── 5. inverse-variance consensus + σ-from-spread ──────────────────────
 //
 // Ported from cross_code_dft.py `_compute_consensus` (Phase 4 cohort #1,
