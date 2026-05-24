@@ -2335,6 +2335,15 @@ fn parse_params() {
     } else {
         name = p_expect_ident()
     }
+    // RFC r16 (varargs): `fn f(xs...)` — Go-style trailing `...` right after
+    // the param name marks a variadic param (collects the rest of the call
+    // args into a single array). Only the last param may be variadic; codegen
+    // enforces this. Detected before the type / default so `xs...` parses.
+    let mut pvariadic = false
+    if p_peek_kind() == "DotDotDot" {
+        p_advance()
+        pvariadic = true
+    }
     let mut typ = ""
     if p_peek_kind() == "Colon" {
         p_advance()
@@ -2358,7 +2367,7 @@ fn parse_params() {
         "params": "", "body": "", "args": "", "fields": "", "items": "",
         "variants": "", "arms": "", "iter_expr": "", "ret_type": "",
         "target": "", "trait_name": "", "methods": "",
-        "default_expr": pdefault
+        "default_expr": pdefault, "is_variadic": pvariadic
     })
     while p_peek_kind() == "Comma" {
         p_advance()
@@ -2370,6 +2379,12 @@ fn parse_params() {
             pname = ""
         } else {
             pname = p_expect_ident()
+        }
+        // RFC r16 (varargs) — trailing `...` on a comma-tail param.
+        let mut pvar2 = false
+        if p_peek_kind() == "DotDotDot" {
+            p_advance()
+            pvar2 = true
         }
         let mut ptyp = ""
         if p_peek_kind() == "Colon" {
@@ -2388,7 +2403,7 @@ fn parse_params() {
             "params": "", "body": "", "args": "", "fields": "", "items": "",
             "variants": "", "arms": "", "iter_expr": "", "ret_type": "",
             "target": "", "trait_name": "", "methods": "",
-            "default_expr": pdef2
+            "default_expr": pdef2, "is_variadic": pvar2
         })
     }
     return params

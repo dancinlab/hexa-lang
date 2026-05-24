@@ -6329,6 +6329,63 @@ fn gen2_expr(node) {
                 }
                 return _hexa_mangle_ident(name) + "(" + _slots.join(", ") + ")"
             }
+            // RFC r16 (varargs): a variadic fn `fn f(a, b, xs...)` has a C
+            // callee of fixed arity (arity = variadic_idx + 1): the leading
+            // params plus ONE array param collecting the rest. The call emits
+            // the leading positional args directly, then packs args[vidx..]
+            // into a HexaVal array (built via hexa_array_push chain). A single
+            // `Spread` argument in the variadic position (`f(a, b, ...arr)`)
+            // passes the spread array directly instead of packing.
+            let _vidx_c = -1
+            if _is_known_fn_global(name) { _vidx_c = _fn_variadic_lookup(name) }
+            if _vidx_c >= 0 {
+                let _v_arity = _fn_arity_lookup(name)
+                // Leading (pre-variadic) params are mandatory.
+                if len(node.args) < _vidx_c {
+                    eprintln("error: function `" + name + "` expects at least " + to_string(_vidx_c) + " argument(s) before the variadic, got " + to_string(len(node.args)))
+                    exit(1)
+                }
+                let mut _vparts = []
+                let mut _vi = 0
+                while _vi < _vidx_c {
+                    let _va = node.args[_vi]
+                    if type_of(_va) != "string" && _va.kind == "Spread" {
+                        eprintln("error: spread `...` argument is only allowed in the variadic position of `" + name + "`")
+                        exit(1)
+                    }
+                    if type_of(_va) != "string" && _va.kind == "Ident" && _gen2_should_autowrap_fnref(_va.name) {
+                        _vparts.push("hexa_fn_new((void*)" + _hexa_mangle_ident(_va.name) + ", 0)")
+                    } else {
+                        _vparts.push(gen2_expr(_va))
+                    }
+                    _vi = _vi + 1
+                }
+                // Build the variadic array from args[_vidx_c..].
+                let _rest_n = len(node.args) - _vidx_c
+                if _rest_n == 1 && type_of(node.args[_vidx_c]) != "string" && node.args[_vidx_c].kind == "Spread" {
+                    // `f(..., ...arr)` — pass the spread array directly.
+                    _vparts.push(gen2_expr(node.args[_vidx_c].left))
+                } else {
+                    let mut _arrc = "hexa_array_new()"
+                    let mut _ri = _vidx_c
+                    while _ri < len(node.args) {
+                        let _ra = node.args[_ri]
+                        if type_of(_ra) != "string" && _ra.kind == "Spread" {
+                            eprintln("error: spread `...` may only be the sole variadic argument in call to `" + name + "`")
+                            exit(1)
+                        }
+                        _arrc = "hexa_array_push(" + _arrc + ", " + gen2_expr(_ra) + ")"
+                        _ri = _ri + 1
+                    }
+                    _vparts.push(_arrc)
+                }
+                if len(_vparts) != _v_arity {
+                    // Defensive: leading + 1 array must equal declared arity.
+                    eprintln("error: variadic call lowering arity mismatch for `" + name + "`")
+                    exit(1)
+                }
+                return _hexa_mangle_ident(name) + "(" + _vparts.join(", ") + ")"
+            }
             // User function call — direct C call if it's a known top-level
             // function, otherwise dispatch through hexa_callN (the name must
             // refer to a local/global closure-typed HexaVal).
@@ -9023,6 +9080,10 @@ let mut _fn_required = []
 // reorder keyword arguments (`f(y: 5, x: 1)`) into the callee's declared
 // positional order at the call site.
 let mut _fn_param_names = []
+// RFC r16 (varargs): per-fn variadic-param index, or -1 if the fn has no
+// variadic param. A variadic fn's last param collects all trailing call args
+// into a single array; the C callee takes that array as one HexaVal param.
+let mut _fn_variadic_idx = []
 
 fn _fn_arity_register(name, count) {
     // First-wins: skip if already registered.
@@ -9036,7 +9097,32 @@ fn _fn_arity_register(name, count) {
     _fn_default_exprs.push([])
     _fn_required.push(count)
     _fn_param_names.push([])
+    _fn_variadic_idx.push(-1)
     return 0
+}
+
+// RFC r16 (varargs): record the variadic param index for `name` (first-wins).
+fn _fn_variadic_register(name, vidx) {
+    let mut i = 0
+    while i < len(_fn_arity_names) {
+        if _fn_arity_names[i] == name {
+            if _fn_variadic_idx[i] < 0 { _fn_variadic_idx[i] = vidx }
+            return 0
+        }
+        i = i + 1
+    }
+    return 0
+}
+
+// RFC r16 (varargs): variadic param index for `name`, or -1 (not variadic /
+// unregistered).
+fn _fn_variadic_lookup(name) {
+    let mut i = 0
+    while i < len(_fn_arity_names) {
+        if _fn_arity_names[i] == name { return _fn_variadic_idx[i] }
+        i = i + 1
+    }
+    return -1
 }
 
 // RFC r16 (named args): register `name`'s ordered param-name list. First-wins;
@@ -10294,6 +10380,7 @@ fn codegen_full(ast) {
     _fn_default_exprs = []
     _fn_required = []
     _fn_param_names = []
+    _fn_variadic_idx = []
     // ── Pass 0: collect known global names for closure free-var analysis ──
     let mut gi = 0
     while gi < len(ast) {
@@ -10340,6 +10427,22 @@ fn codegen_full(ast) {
                     _pk = _pk + 1
                 }
                 _fn_param_names_register(ast[gi].name, _pnames)
+                // RFC r16 (varargs): find the variadic param index (if any).
+                // Only the last param may be variadic — error otherwise.
+                let mut _vidx = -1
+                let mut _vk = 0
+                while _vk < len(ast[gi].params) {
+                    let _vpp = ast[gi].params[_vk]
+                    if type_of(_vpp) != "string" && _vpp.is_variadic {
+                        if _vk != len(ast[gi].params) - 1 {
+                            eprintln("error: variadic parameter `" + _vpp.name + "` in `" + ast[gi].name + "` must be the last parameter")
+                            exit(1)
+                        }
+                        _vidx = _vk
+                    }
+                    _vk = _vk + 1
+                }
+                if _vidx >= 0 { _fn_variadic_register(ast[gi].name, _vidx) }
             }
         } else if gk == "StructDecl" {
             _known_fn_globals.push(ast[gi].name)
