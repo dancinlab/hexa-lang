@@ -341,3 +341,56 @@
 ## 2026-05-24 M5 closure — OPEN PR 정리 완주
 
 - [x] 2026-05-24 M5 closure — OPEN PR ~36 정리 완주 (#420 admin-merge `37b6740d` · #702 g54 보호 user-review-only-comment · PROBE.md milestone 4/6 → 5/6 flip)
+
+## 2026-05-24 r15 sweep cycle 1 — 8-axis 전수 (22 deviations · M6 closure)
+
+3rd-try sub-agent 완료 (~12분 · 15분 cap 안). reference baselines: Rust(option/range/shadow/oob) · Swift(interp/unicode) · Python(float). source code 미수정. triage 산출물 `/tmp/probe-r15/cycle1_triage.md`.
+
+### Option/Result (5 deviations · CRITICAL)
+- [ ] r15-D1 [SURGICAL] `Option[i64]` annotation parse error — 20 LoC
+- [ ] r15-D2 [RFC] `?` operator unimplemented — desugar + flow type
+- [ ] r15-D3 [SURGICAL · HIGHEST] `Some(v) match` pattern-bind codegen scope, `v` undeclared — 30 LoC, blocks 전 Option/Result 축
+- [ ] r15-D4 [SURGICAL] `.unwrap/.unwrap_or/.map` unknown builtin — 40 LoC
+- [ ] r15-D5 [RFC] `Option[i64] = None` 어노테이션+할당 parse fail (D1 자매)
+
+### string_interp (3 deviations)
+- [ ] r15-D6 [RFC] `format!()` macro — [#451] follow-up
+- [ ] r15-D7 [SURGICAL] f-string `{x:.2}` spec wiring — 50 LoC
+- [ ] r15-D8 [RFC] printf-style stdlib helper 부재
+
+### unicode (3 deviations)
+- [ ] r15-D9 [RFC] `.len()` returns BYTES not graphemes — 3-tier policy 필요
+- [ ] r15-D10 [SURGICAL] `.graphemes()` ZWJ family을 codepoint으로 셈 — 80 LoC (or RFC if libunicode)
+- [ ] r15-D11 [RFC] NFC normalization 미수행
+
+### oob (2 deviations)
+- [ ] r15-D12 [SURGICAL] negative index `xs[-1]` Python-style wrap (canonical=panic) — 10 LoC, **policy call**
+- [ ] r15-D13 [SURGICAL] `s.byte_at(99)` sentinel `-1` 반환 (#467 array OOB 와 불일치) — 10 LoC
+
+### enum (3 deviations)
+- [ ] r15-D14 [SURGICAL] bare enum constructor codegen `Red/Green/Blue undeclared` — 30 LoC
+- [ ] r15-D15 [RFC] single-field payload `Square(...)` codegen — REGRESSION 의심 ([[project_hexa_lang_enum_payload_works]] 검증)
+- [ ] r15-D16 [BLOCKED] multi-field payload — memory known-limit
+
+### shadowing (3 deviations · CRITICAL)
+- [ ] r15-D17 [SURGICAL · CRITICAL] `{}` block scope 미생성 (silent correctness) — 40 LoC
+- [ ] r15-D18 [SURGICAL] type-changing shadow `let x="hello"; let x=42` resolver 누락 — 20 LoC, D17 자매
+- [ ] r15-D19 [RFC] for-loop binding semantics — `let i=100; for i in 0..3` 외부 i 유지
+
+### range (1 deviation)
+- [ ] r15-D20 [SURGICAL] `(0..5).rev()` 첫 원소만 — 30 LoC
+
+### float (2 deviations)
+- [ ] r15-D21 [SURGICAL] `nan/inf` 식별자 shadow error 메시지 폴리시 — 5 LoC
+- [ ] r15-D22 [SURGICAL] `NaN/nan` 케이싱 정책 — 3 LoC
+
+### cycle 1 PASS axes (canonical)
+- float NaN/Inf IEEE 의미 PASS
+- range 0..5 / 0..=5 forward PASS · sum 10/15
+- to_lower German ß 보존 PASS
+- pool routing 안 걸림 · BLOCKED-INFRA 없음
+
+### top-8 next-batch (next /cycle 시드)
+1. D3 → 2. D17 → 3. D1 → 4. D4 → 5. D20 → 6. D14 → 7. D7 → 8. D10
+
+- [x] 2026-05-24 M6 closure — r15 sweep 진입 (cycle 1 완주 · 22 dev · 8 SURG + 6 RFC · PROBE 5/6 → 6/6 100% 🛸)
