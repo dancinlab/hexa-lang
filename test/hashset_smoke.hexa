@@ -1,6 +1,6 @@
 // test/hashset_smoke.hexa — smoke for stdlib/hashset.hexa
 //
-// @version 0.1.0
+// @version 0.2.0
 // @capabilities [pure]
 //
 // Run:  hexa build test/hashset_smoke.hexa -o /tmp/hashset_smoke.bin
@@ -118,6 +118,45 @@ while i < len(xs) {
 check("iteration yields a", saw_a)
 check("iteration yields b", saw_b)
 check("iteration yields c", saw_c)
+
+// ── T11 : union (RFC r16 P1) ─────────────────────────────────────────────
+let u = hashset_union(hashset_from_array([1, 2]), hashset_from_array([2, 3]))
+check("union len == 3", hashset_len(u) == 3)
+check("union has 1", hashset_contains(u, 1))
+check("union has 3", hashset_contains(u, 3))
+
+// ── T12 : intersect ──────────────────────────────────────────────────────
+let inter = hashset_intersect(hashset_from_array([1, 2, 3]), hashset_from_array([2, 3, 4]))
+check("intersect len == 2", hashset_len(inter) == 2)
+check("intersect has 2", hashset_contains(inter, 2))
+check("intersect has 3", hashset_contains(inter, 3))
+check("intersect lacks 1", !hashset_contains(inter, 1))
+check("intersect lacks 4", !hashset_contains(inter, 4))
+
+// ── T13 : difference ─────────────────────────────────────────────────────
+let diff = hashset_difference(hashset_from_array([1, 2, 3]), hashset_from_array([2, 3]))
+check("difference len == 1", hashset_len(diff) == 1)
+check("difference has 1", hashset_contains(diff, 1))
+check("difference lacks 2", !hashset_contains(diff, 2))
+
+// ── T14 : symmetric_difference ───────────────────────────────────────────
+let sym = hashset_symmetric_difference(hashset_from_array([1, 2, 3]), hashset_from_array([2, 3, 4]))
+check("symdiff len == 2", hashset_len(sym) == 2)
+check("symdiff has 1", hashset_contains(sym, 1))
+check("symdiff has 4", hashset_contains(sym, 4))
+check("symdiff lacks 2", !hashset_contains(sym, 2))
+
+// ── T15 : is_subset / is_superset ────────────────────────────────────────
+check("subset true", hashset_is_subset(hashset_from_array([1, 2]), hashset_from_array([1, 2, 3])))
+check("subset false", !hashset_is_subset(hashset_from_array([1, 4]), hashset_from_array([1, 2, 3])))
+check("superset true", hashset_is_superset(hashset_from_array([1, 2, 3]), hashset_from_array([1, 2])))
+check("superset false", !hashset_is_superset(hashset_from_array([1, 2]), hashset_from_array([1, 2, 3])))
+// empty-set edge cases
+check("empty subset of anything", hashset_is_subset(hashset_new(), hashset_from_array([1])))
+check("union with empty preserves", hashset_len(hashset_union(hashset_from_array([1, 2]), hashset_new())) == 2)
+
+// ── T16 : stringified collision (documented P1 limitation, not a bug) ─────
+check("P1 stringified: set([1]) contains \"1\"", hashset_contains(hashset_from_array([1]), "1"))
 
 // ── summary ──────────────────────────────────────────────────────────────
 println("")
