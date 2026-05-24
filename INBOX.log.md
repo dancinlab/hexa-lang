@@ -2,6 +2,75 @@
 
 Append-only history sister of `INBOX.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
+## 2026-05-25T22:35Z — stdlib 확장 요청: PK + optics fn 가족 (from: demiurge TTR-ORAL / TTR-LAC atlas-register 게이트)
+
+demiurge 의 TTR-ORAL V2 (oral PK) · TTR-LAC V2 (laser-optics) closed-form 들이 `hexa atlas register --from-verify` 로 등록 불가 — 현재 dispatcher 가 number-theoretic + 일부 float fn (sigma/phi/welch_t_crit/chsh_tsirelson) 만 지원하기 때문. atlas SSOT (`compiler/atlas/embedded.gen.hexa`) 에 dermatologic/topical PK + laser-optics 도메인 누락.
+
+**필요한 fn 가족 (1차)**:
+- **PK / topical pharmacokinetics**:
+  - `higuchi_flux(C0, Dm, t)` — Higuchi 평면 확산: J(t) = √(2·C0·Dm·t/π) (또는 √(D·C·t) form)
+  - `fick_steady_flux(P, dC)` — Fick steady-state: J = P·ΔC
+  - `partition_coeff(C_oct, C_water)` — log P = log10(C_oct/C_water)
+  - `permeability_skin(D, K, h)` — P = D·K/h (skin permeability)
+  - `auc_first_order(C0, ke)` — AUC = C0/ke (1차 elimination)
+  - `clearance(dose, auc)` — CL = Dose/AUC
+- **Laser-optics**:
+  - `beer_lambert(I0, eps, c, L)` — I = I0·10^(−ε·c·L)
+  - `fluence(power, area, t)` — F = P·t/A (J/cm²)
+  - `beam_waist(lambda, f, w0)` — w(z) gaussian beam (f = lens focal, w0 = input waist)
+  - `rayleigh_range(w0, lambda)` — zR = π·w0²/λ
+  - `absorption_depth(alpha)` — δ = 1/α
+
+**작업 단위**:
+1. demiurge 측 TTR-ORAL/TTR-LAC 코드에서 실제 closed-form 사용처 grep → fn 우선순위 확정 (~/core/demiurge)
+2. hexa-lang stdlib 에 모듈 신규:
+   - `stdlib/bio/topical_pk.hexa` (또는 기존 `stdlib/bio/` 에 추가)
+   - `stdlib/physics/laser_optics.hexa` (또는 기존 `stdlib/physics/` 에 추가)
+3. `tool/atlas_cli.hexa` 의 register dispatcher 확장 — 새 fn 들을 `--from-verify` 가 호출할 수 있게 dispatch table 등록
+4. 각 fn `hexa verify --expr <fn> <args> <expected>` 🟢 SUPPORTED-NUMERICAL 5/5 검증
+5. PR + entry close
+
+**기반 메모리/규칙**:
+- [[g61]] stdlib SSOT in hexa-lang (primitives, not domain응용)
+- [[stdlib_trig_libm]] — libm builtin trig 사용 (cos/sin/log/exp) — hand-rolled 금지
+- g5 tier rubric — 🟢 SUPPORTED-NUMERICAL (libm/Newton 수치재계산 일치)
+
+- [ ] **fn 가족 spec 확정** — demiurge 측 정확한 signature/arg list (closed-form 형태) 확보
+- [ ] **stdlib/bio/topical_pk.hexa** — PK 6개 fn 1차 구현 + libm 의존 (log10/sqrt)
+- [ ] **stdlib/physics/laser_optics.hexa** — optics 5개 fn 1차 구현 + libm 의존 (pow/PI)
+- [ ] **tool/atlas_cli.hexa register dispatcher 확장** — 11 fn 추가 register hook
+- [ ] **`hexa verify --expr` 11 fn 전부 🟢 SUPPORTED-NUMERICAL 입증** + paste 검증 출력
+- [ ] **PR 1건 (가족 단위 < 200 lines 가능하면, 아니면 stdlib 2개 + dispatcher 2 stacked PR)**
+
+## 2026-05-25T22:30Z — interp 잔재 audit — bench/PoC 가 비존재 `build/hexa_interp` 직접 호출 (from: this-session 사용자 발견)
+
+R7 interp-retire ([[feedback_no_interp_use_compiled]]) 가 머지된 후에도 다음 production-adjacent 경로에 stale interp 호출이 잔존. `build/hexa_interp` 바이너리는 더 이상 빌드되지 않으므로 (`self/main.hexa:3079` 명시 "so there is no `build/hexa_interp` binary"), 이들 호출은 실패 / NO-OP / SKIP 으로 silent degrade.
+
+**bench/profile 직접 호출 (4건)** — 측정값 0/SKIP:
+- `tool/ai_native_bench.hexa:37` — `let bin = env_var("HEXA_LANG") + "/build/hexa_interp"`
+- `tool/ai_native_profile.hexa:200` — 동일 패턴
+- `tool/ai_native.hexa:51` — 동일 패턴
+- `tool/bench_hexa_ir.hexa:64` — interp time 측정 (t_interp = "N/A")
+
+**dead PoC (1건)** — 호출자 없음, 안전 제거 가능:
+- `self/native_compile_poc.hexa:411` — `"build/hexa_interp tool/flatten_imports.hexa ..."` exec
+- main.hexa 가 이미 module_loader compiled 만 사용 ([[reference_install_dir_argv0_basename_cwd_shadow]] PR #866 컨텍스트)
+
+**defensive skip / 문서 잔재 (남겨도 무방)**:
+- `self/stdlib/argv_skip.hexa:71-72` — argv 패턴 매칭에 `/hexa_interp` 끝 skip
+- `self/forge/README.md`, `self/native/exec_argv_sha256.c` 주석
+- `self/ai_native/ai_native_enforcement_progress.json` (enforcement 추적용)
+
+**av0_base 분기 (legacy compat)**:
+- `self/main.hexa:4067` — `if av0_base == "interp" || av0_base == "main"` — argv0 이 "interp" 면 self-source 로 판단. R7 후 deprecated 경로. 안전 제거 가능?
+
+**관련 ubu-1 incident**:
+직전 cycle pool-ubu-stale agent 가 처리 중인 ubu-1 drill `interp not found` 가 별 source (ubu 측 stale CLI binary 옛 dispatch 경로)이지만, root family 동일 = R7-retire 가 완전히 sweep 되지 않음.
+
+- [ ] **bench 4건** — interp 의존 측정 fn 들을 compiled-path 로 재작성 (또는 옛 ai_native bench 자체 retire 결정)
+- [ ] **PoC 1건** — `self/native_compile_poc.hexa` 전체 삭제 검토 (R7 이후 의미 없음)
+- [ ] **legacy av0_base "interp" 분기** — `self/main.hexa:4067` 의 `if av0_base == "interp"` 제거 후 회귀 검증
+
 ## 2026-05-25T20:50Z — pool 호스트 hexa CLI stale — atlas-loop/drill 발사 불가 (from: this-session atlas-loop 100 시도)
 
 목표: 100 atoms 발견까지 `hexa drill` 사이클 (atlas SSOT = compiler/atlas/embedded.gen.hexa, 베이스라인 16,088 nodes). pool-route 가 절대경로 없는 heavy verb (kick/drill/loop/cc)를 ubu 로 자동 라우팅하는 건 정상 작동(mac sign 게이트 무관). 발사 자체가 ubu CLI stale 로 막힘.
