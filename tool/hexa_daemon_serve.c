@@ -305,8 +305,6 @@ static int run_hexa_real(const char* cwd, char** child_argv, int child_argc, int
         dup2(pipefd[1], STDOUT_FILENO);
         dup2(pipefd[1], STDERR_FILENO);
         close(pipefd[1]);
-        /* mirror legacy shim env from scripts/hexa_daemon_handler.sh */
-        setenv("HEXA_SHIM_NO_DARWIN_LANDING", "1", 1);
         execv(g_hexa_real, argv);
         /* execv failed */
         const char* msg = "hexa_daemon_serve: execv failed: ";
