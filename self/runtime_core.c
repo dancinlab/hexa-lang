@@ -3139,6 +3139,15 @@ HexaVal hexa_index_get(HexaVal container, HexaVal key) {
     if (HX_IS_MAP(container) && HX_IS_STR(key)) {
         return hexa_map_get(container, HX_STR(key));
     }
+    // PROBE r16 Q4: maps are fundamentally string→value (keys are interned
+    // c-strings). A non-string key on a map (e.g. `m[5]`) previously fell to the
+    // array path and aborted "container is not an array (tag=6)". Stringify the
+    // key consistently (mirrors hexa_index_set + the int-key map-literal codegen)
+    // so `m[5]` and `m["5"]` agree. hexa_to_cstring returns a short-lived static
+    // buffer; hexa_map_get only reads it, so the lifetime is safe here.
+    if (HX_IS_MAP(container)) {
+        return hexa_map_get(container, hexa_to_cstring(key));
+    }
     // 2026-04-17: unwrap interpreter Val wrapper (TAG_VALSTRUCT) so HX_INT
     // doesn't read .vs as a pointer-as-int garbage index. Same root as the
     // hexa_cmp_* fix — without this, val_int's `__VAL_INT_CACHE[n]` lookup
@@ -3180,6 +3189,14 @@ HexaVal hexa_iter_get(HexaVal v, int64_t idx) {
 HexaVal hexa_index_set(HexaVal container, HexaVal key, HexaVal val) {
     if (HX_IS_MAP(container) && HX_IS_STR(key)) {
         return hexa_map_set(container, HX_STR(key), val);
+    }
+    // PROBE r16 Q4: a non-string key on a map (e.g. `m[5] = 100`) previously
+    // fell to the array path and aborted "container is not an array (tag=6)".
+    // Stringify the key (mirrors hexa_index_get + the int-key map-literal codegen)
+    // so `m[5]=v` and `m["5"]` agree. hexa_map_set_impl strdup's the key, so the
+    // short-lived hexa_to_cstring static buffer is safe.
+    if (HX_IS_MAP(container)) {
+        return hexa_map_set(container, hexa_to_cstring(key), val);
     }
     // 2026-04-17: unwrap VALSTRUCT same as hexa_index_get — without this,
     // HX_INT reads raw .vs pointer as index → "index 105553... out of bounds"
