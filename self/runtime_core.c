@@ -7547,6 +7547,18 @@ HexaVal hexa_mul(HexaVal a, HexaVal b) {
     _HX_COERCE_BOOL(a, b);
     if (HX_IS_INT(a) && HX_IS_INT(b)) return hexa_int(HX_INT(a) * HX_INT(b));
     if (HX_IS_FLOAT(a) && HX_IS_FLOAT(b)) return hexa_float(HX_FLOAT(a) * HX_FLOAT(b));
+    // PROBE r16 (2026-05-25): a non-numeric operand (e.g. string) is a TYPE
+    // ERROR, not a silent 0.0. Before this guard `"ab" * 3` quietly returned
+    // 0.0 because __hx_to_double() coerces a string to 0.0. Go/Rust canonical —
+    // `str * int` does not compile; Python's string-repeat is intentionally NOT
+    // adopted (hexa has no operator-overload prelude for it). Mixed int/float
+    // still promotes through the fallback below.
+    if (!(HX_IS_INT(a) || HX_IS_FLOAT(a)) || !(HX_IS_INT(b) || HX_IS_FLOAT(b))) {
+        char _buf[96];
+        snprintf(_buf, sizeof(_buf), "cannot multiply non-numeric operand (tag %d * tag %d)", (int)HX_TAG(a), (int)HX_TAG(b));
+        hexa_throw(hexa_str(_buf));
+        return hexa_float(0.0);
+    }
     return hexa_float(__hx_to_double(a) * __hx_to_double(b));
 }
 // FMA: fused multiply-add — fma(a,b,c) = a*b + c
