@@ -1,5 +1,6 @@
 # macro expander Phase 2 — user-defined macros design RFC
 
+**Status**: rfc-draft-deferred-2026-05-25 — design-only patch (not a fix). Promote via /inbox skill if RFC track wanted.
 **Status**: design-level (PR #462 Phase 1 follow-up, 2026-05-23)
 **Priority**: P3 (Phase 1 covers ~80% practical use; Phase 2 = power-user feature)
 **SSOT**: `inbox/patches/macro-expander-pass-design.md` (Phase 1 baseline)
