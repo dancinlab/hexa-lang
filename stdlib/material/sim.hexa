@@ -116,6 +116,120 @@ pub fn whh_hc2_zero(tc_K: float, slope_T_per_K: float) -> float {
     return 0.69 * tc_K * slope_mag
 }
 
+// ── 4a. Allen-Dynes strong-coupling Tc (full f1·f2 form) ───────────────
+//
+// @cite Allen & Dynes 1975, PRB 12 905 — Eqs. 33–34 (f1·f2 corrected).
+//
+// Tc = f1 · f2 · (ω_log/1.2) · exp[ -1.04(1+λ) / (λ - μ*(1+0.62λ)) ]
+//
+// f1 = (1 + (λ/Λ1)^(3/2))^(1/3),          Λ1 = 2.46 (1 + 3.8 μ*)
+// f2 = 1 + λ²(ω̄₂/ω_log - 1) / (λ² + Λ2²),  Λ2 = 1.82 (1 + 6.3 μ*)(ω̄₂/ω_log)
+//
+// This is the strong-coupling (λ ≳ 1.5) form. f1 lifts the McMillan
+// underestimate that plagues high-λ hydrides (CaH₆ λ≈4.4, h3o λ≈2.7);
+// f2 is the spectral-shape correction (ω̄₂ = mean-square α²F frequency).
+// Differs from `allen_dynes_tc` above ONLY in naming intent — this is the
+// canonical 4-arg "full" entry the verify catalog registers (RTSC #1).
+// Caller may pass omega2_K = omega_log_K → f2 = 1 (f1-only correction).
+pub fn allen_dynes_full(lam: float, omega_log_K: float, omega2_K: float,
+                        mu_star: float) -> float {
+    let base = mcmillan_tc(omega_log_K, lam, mu_star)
+    if base <= 0.0 { return 0.0 }
+    if omega_log_K <= 0.0 { return 0.0 }
+    // mcmillan_tc uses ω_log/1.45; Allen-Dynes kernel uses ω_log/1.2.
+    // Rescale the base prefactor 1.45/1.2 to recover the AD kernel.
+    let ad_base = base * (1.45 / 1.2)
+
+    let r = omega2_K / omega_log_K
+    let lambda1 = 2.46 * (1.0 + 3.8 * mu_star)
+    let lambda2 = 1.82 * (1.0 + 6.3 * mu_star) * r
+
+    let f1 = pow(1.0 + pow(lam / lambda1, 1.5), 1.0 / 3.0)
+    let f2_num = (lam * lam) * (r - 1.0)
+    let f2_den = (lam * lam) + (lambda2 * lambda2)
+    let f2 = 1.0 + f2_num / f2_den
+
+    return f1 * f2 * ad_base
+}
+
+// ── 4b. Morel-Anderson Coulomb pseudopotential μ* ──────────────────────
+//
+// @cite Morel & Anderson 1962, PR 125 1263 — logarithmic Coulomb
+//       renormalisation of the screened repulsion.
+//
+// μ* = μ / (1 + μ · ln(E_F / ω_ph))
+//
+// Derives the retarded Coulomb pseudopotential μ* from the bare screened
+// Coulomb parameter μ. The log factor is the Tolmachev-Morel-Anderson
+// frequency-window renormalisation: phonon-mediated attraction acts only
+// up to ω_ph while the Coulomb repulsion extends to E_F, so high-energy
+// repulsion is logarithmically suppressed. Returns the canonical 0.10–0.16
+// range for s/p/d metals (μ≈0.3, E_F/ω_ph≈100 → μ*≈0.126).
+pub fn morel_anderson_mustar(mu_bare: float, e_fermi: float,
+                             omega_ph: float) -> float {
+    if mu_bare < 0.0 { return 0.0 }
+    if e_fermi <= 0.0 { return 0.0 }
+    if omega_ph <= 0.0 { return 0.0 }
+    return mu_bare / (1.0 + mu_bare * log(e_fermi / omega_ph))
+}
+
+// ── 4c. Ginzburg-Landau coherence length from Hc2(0) ───────────────────
+//
+// @cite Tinkham 1996, "Introduction to Superconductivity" 2nd ed.,
+//       Eq. 4.61 — Hc2(0) = Φ₀ / (2π ξ²)  inverted for ξ.
+//
+// ξ = sqrt( Φ₀ / (2π · Hc2(0)) ),   Φ₀ = h/2e = 2.067833848e-15 Wb
+//
+// The GL coherence length ξ (in metres) extracted from the measured (or
+// WHH-predicted, see `whh_hc2_zero`) zero-temperature upper critical
+// field Hc2(0) in tesla. Φ₀ is the superconducting flux quantum (2018
+// CODATA). Closes RTSC §8 device-side ξ gap (whh gave only Hc2).
+pub fn coherence_length(hc2_zero_T: float) -> float {
+    if hc2_zero_T <= 0.0 { return 0.0 }
+    let phi0 = 2.067833848e-15        // flux quantum h/2e (Wb), CODATA 2018
+    let two_pi = 6.28318530717958647692
+    return sqrt(phi0 / (two_pi * hc2_zero_T))
+}
+
+// ── 4d. BCS isotope-effect exponent α ──────────────────────────────────
+//
+// @cite Maxwell 1950, PR 78 477 + Reynolds et al. 1950, PR 78 487
+//       (isotope effect); BCS 1957, PR 108 1175 predicts α = 1/2.
+//
+// α = - ln(Tc₂ / Tc₁) / ln(M₂ / M₁)     (Tc ∝ M^(-α))
+//
+// Two-point power-law fit of the isotope exponent from a pair of
+// (mass, Tc) measurements on isotopically substituted samples. BCS
+// weak-coupling predicts α = 0.5 (Tc ∝ ω_D ∝ M^(-1/2)); deviations
+// diagnose μ* renormalisation or anharmonicity. Returns the exponent α.
+pub fn isotope_exponent(mass1: float, tc1: float,
+                        mass2: float, tc2: float) -> float {
+    if mass1 <= 0.0 { return 0.0 }
+    if mass2 <= 0.0 { return 0.0 }
+    if tc1 <= 0.0 { return 0.0 }
+    if tc2 <= 0.0 { return 0.0 }
+    let dln_m = log(mass2 / mass1)
+    if dln_m == 0.0 { return 0.0 }   // equal masses → exponent undefined
+    return -(log(tc2 / tc1)) / dln_m
+}
+
+// ── 4e. Ginzburg-Landau parameter κ (Type-I/II discriminant) ───────────
+//
+// @cite Ginzburg & Landau 1950, ZhETF 20 1064; Abrikosov 1957,
+//       ZhETF 32 1442 — κ = 1/√2 separates Type-I from Type-II.
+//
+// κ = λ_L / ξ
+//
+// The dimensionless GL parameter: ratio of magnetic penetration depth
+// λ_L to coherence length ξ (same length units; ratio is unit-invariant).
+// κ < 1/√2 ≈ 0.707 → Type-I (positive wall energy, full Meissner);
+// κ > 1/√2 → Type-II (negative wall energy, Abrikosov vortex lattice).
+pub fn gl_parameter_kappa(lambda_L: float, xi: float) -> float {
+    if xi <= 0.0 { return 0.0 }
+    if lambda_L < 0.0 { return 0.0 }
+    return lambda_L / xi
+}
+
 // ── 5. inverse-variance consensus + σ-from-spread ──────────────────────
 //
 // Ported from cross_code_dft.py `_compute_consensus` (Phase 4 cohort #1,

@@ -191,6 +191,11 @@ fn cmd_rubric() {
     println("             lambda_eliashberg(M0)       → 2·M0                (Eliashberg λ from α²F ω⁻¹-moment, 1-arg)")
     println("             beenet_grid_bins(ω_max,Δω)  → floor(ω_max/Δω)+1   (RTSC d7 α²F grid bin count, 2-arg)")
     println("             migdal_ratio(ω_phon,E_F)    → ω/E_F               (Migdal adiabaticity, vertex-correction smallness, 2-arg)")
+    println("             allen_dynes_full(λ,ω_log,ω̄₂,μ*) → f1·f2·(ω_log/1.2)·exp(...)  (Allen-Dynes strong-coupling Tc, RTSC #1, 4-arg)")
+    println("             morel_anderson_mustar(μ,E_F,ω_ph) → μ/(1+μ·ln(E_F/ω_ph))     (Morel-Anderson Coulomb pseudopotential, RTSC #5, 3-arg)")
+    println("             coherence_length(Hc2)       → sqrt(Φ₀/(2π·Hc2))   (GL coherence length ξ from Hc2(0), Φ₀=2.0678e-15 Wb, RTSC #15, 1-arg)")
+    println("             isotope_exponent(M1,Tc1,M2,Tc2) → -ln(Tc2/Tc1)/ln(M2/M1)   (BCS isotope-effect exponent α, RTSC #13, 4-arg)")
+    println("             gl_parameter_kappa(λ_L,ξ)   → λ_L/ξ               (Ginzburg-Landau κ, Type-I/II at 1/√2, RTSC #15, 2-arg)")
 }
 
 let NOCALC: int = -999999
@@ -1025,6 +1030,82 @@ fn _migdal_ratio(omega_phonon: float, e_fermi: float) -> float {
     return omega_phonon / e_fermi
 }
 
+// ── Superconductivity tranche 1 (RTSC #1/#5/#13/#15 · 2026-05-25) ───────
+// Five additional closed-form supercon identities (stdlib/material/sim.hexa
+// canonical home). All libm-class (exp/log/pow/sqrt + scalar); ε=1e-9 gate.
+// @cite Allen-Dynes 1975 PRB 12:905 (full f1·f2) · Morel-Anderson 1962 PR
+// 125:1263 (μ*) · Tinkham 1996 Eq.4.61 (ξ) · BCS 1957 PR 108:1175 +
+// Maxwell/Reynolds 1950 (isotope α) · Ginzburg-Landau 1950 / Abrikosov 1957
+// (κ Type-I/II). Mirrors stdlib/material/sim.hexa arithmetic verbatim.
+
+// Allen-Dynes strong-coupling Tc (full f1·f2 form, λ ≳ 1.5):
+//   Tc = f1·f2·(ω_log/1.2)·exp(-1.04(1+λ)/(λ-μ*(1+0.62λ)))
+//   f1 = (1+(λ/Λ1)^1.5)^(1/3),  Λ1 = 2.46(1+3.8μ*)
+//   f2 = 1 + λ²(r-1)/(λ²+Λ2²),  Λ2 = 1.82(1+6.3μ*)r,  r = ω̄₂/ω_log
+// 4-arg (λ, ω_log, ω̄₂, μ*). Allen-Dynes 1975 PRB 12:905 Eq.33-34. Source:
+// λ=2.5, ω_log=ω̄₂=1100K, μ*=0.10 → 213.284K (f1 lifts McMillan's 181.16K
+// strong-coupling underestimate — the RTSC #1 high-λ hydride fix).
+fn _allen_dynes_full(lam: float, omega_log_k: float, omega2_k: float, mustar: float) -> float {
+    if omega_log_k <= 0.0 { return _NOCALC_F }
+    let denom = lam - mustar * (1.0 + 0.62 * lam)
+    if denom <= 0.0 { return _NOCALC_F }
+    let ad_base = (omega_log_k / 1.2) * exp(0.0 - 1.04 * (1.0 + lam) / denom)
+    let r = omega2_k / omega_log_k
+    let lambda1 = 2.46 * (1.0 + 3.8 * mustar)
+    let lambda2 = 1.82 * (1.0 + 6.3 * mustar) * r
+    let f1 = pow(1.0 + pow(lam / lambda1, 1.5), 1.0 / 3.0)
+    let f2 = 1.0 + (lam * lam) * (r - 1.0) / ((lam * lam) + (lambda2 * lambda2))
+    return f1 * f2 * ad_base
+}
+
+// Morel-Anderson Coulomb pseudopotential μ*:
+//   μ* = μ / (1 + μ·ln(E_F/ω_ph))
+// 3-arg (μ, E_F, ω_ph). Morel & Anderson 1962 PR 125:1263. Tolmachev log
+// renormalisation. Source: μ=0.3, E_F=10000, ω_ph=100 → 0.125968 (canonical
+// 0.10-0.16 range). E_F and ω_ph share energy units (ratio unit-invariant).
+fn _morel_anderson_mustar(mu_bare: float, e_fermi: float, omega_ph: float) -> float {
+    if mu_bare < 0.0 { return _NOCALC_F }
+    if e_fermi <= 0.0 { return _NOCALC_F }
+    if omega_ph <= 0.0 { return _NOCALC_F }
+    return mu_bare / (1.0 + mu_bare * log(e_fermi / omega_ph))
+}
+
+// Ginzburg-Landau coherence length from Hc2(0):
+//   ξ = sqrt(Φ₀ / (2π·Hc2)),  Φ₀ = h/2e = 2.067833848e-15 Wb (CODATA 2018)
+// 1-arg (Hc2 in tesla → ξ in metres). Tinkham 1996 Eq.4.61. Source:
+// Hc2=10T → 5.736776e-9 m (5.74 nm). Closes RTSC §8 device-side ξ gap.
+fn _coherence_length(hc2_zero_t: float) -> float {
+    if hc2_zero_t <= 0.0 { return _NOCALC_F }
+    let phi0 = 2.067833848e-15
+    let two_pi = 6.28318530717958647692
+    return sqrt(phi0 / (two_pi * hc2_zero_t))
+}
+
+// BCS isotope-effect exponent α (Tc ∝ M^(-α)):
+//   α = -ln(Tc₂/Tc₁) / ln(M₂/M₁)
+// 4-arg (M₁, Tc₁, M₂, Tc₂). Maxwell 1950 PR 78:477 + Reynolds 1950 PR
+// 78:487; BCS 1957 predicts α=1/2. Source: (1,1,4,0.5) → 0.5 (BCS limit).
+fn _isotope_exponent(mass1: float, tc1: float, mass2: float, tc2: float) -> float {
+    if mass1 <= 0.0 { return _NOCALC_F }
+    if mass2 <= 0.0 { return _NOCALC_F }
+    if tc1 <= 0.0 { return _NOCALC_F }
+    if tc2 <= 0.0 { return _NOCALC_F }
+    let dln_m = log(mass2 / mass1)
+    if dln_m == 0.0 { return _NOCALC_F }
+    return (0.0 - log(tc2 / tc1)) / dln_m
+}
+
+// Ginzburg-Landau parameter κ (Type-I/II discriminant):
+//   κ = λ_L / ξ      (κ < 1/√2 → Type-I; κ > 1/√2 → Type-II)
+// 2-arg (λ_L, ξ; same length units → unit-invariant). Ginzburg-Landau 1950
+// ZhETF 20:1064; Abrikosov 1957 ZhETF 32:1442. Source: (200,100) → 2.0
+// (Type-II, since > 0.7071).
+fn _gl_parameter_kappa(lambda_l: float, xi: float) -> float {
+    if xi <= 0.0 { return _NOCALC_F }
+    if lambda_l < 0.0 { return _NOCALC_F }
+    return lambda_l / xi
+}
+
 // ── Bio-physical Phase 3 (demiurge cross-domain V2 closure) ─────────
 // Three remaining identities from the inbox patch — Higuchi sustained
 // release (2-arg, simple form) · Tafel overpotential (3-arg, log10 path)
@@ -1249,6 +1330,31 @@ fn _recompute_float(fn_name: string, a0: float, a1: float, a2: float, a3: float,
         if argc < 2 { return _NOCALC_F }
         return _migdal_ratio(a0, a1)
     }
+    // ── Superconductivity tranche 1 (RTSC #1/#5/#13/#15 · 2026-05-25) ───
+    //   allen_dynes_full(λ, ω_log, ω̄₂, μ*)  4-arg: f1·f2·(ω_log/1.2)·exp(...)
+    //   morel_anderson_mustar(μ, E_F, ω_ph)  3-arg: μ/(1+μ·ln(E_F/ω_ph))
+    //   coherence_length(Hc2)                1-arg: sqrt(Φ₀/(2π·Hc2))
+    //   isotope_exponent(M₁, Tc₁, M₂, Tc₂)   4-arg: -ln(Tc₂/Tc₁)/ln(M₂/M₁)
+    //   gl_parameter_kappa(λ_L, ξ)           2-arg: λ_L/ξ
+    if fn_name == "allen_dynes_full" {
+        if argc < 4 { return _NOCALC_F }
+        return _allen_dynes_full(a0, a1, a2, a3)
+    }
+    if fn_name == "morel_anderson_mustar" {
+        if argc < 3 { return _NOCALC_F }
+        return _morel_anderson_mustar(a0, a1, a2)
+    }
+    if fn_name == "coherence_length" {
+        return _coherence_length(a0)
+    }
+    if fn_name == "isotope_exponent" {
+        if argc < 4 { return _NOCALC_F }
+        return _isotope_exponent(a0, a1, a2, a3)
+    }
+    if fn_name == "gl_parameter_kappa" {
+        if argc < 2 { return _NOCALC_F }
+        return _gl_parameter_kappa(a0, a1)
+    }
     // ── Bio-physical Phase 3 (demiurge cross-domain V2 closure) ─────────
     //   higuchi(k_H, t)                   2-arg: k_H * sqrt(t)
     //   tafel(a, b, j)                    3-arg: a + b * log10(j)
@@ -1295,6 +1401,10 @@ fn _is_float_fn(fn_name: string) -> bool {
         || fn_name == "allen_dynes_tc" || fn_name == "mcmillan_tc"
         || fn_name == "bcs_gap_ratio" || fn_name == "lambda_eliashberg"
         || fn_name == "beenet_grid_bins" || fn_name == "migdal_ratio"
+        // Superconductivity tranche 1 (RTSC #1/#5/#13/#15 · 2026-05-25):
+        || fn_name == "allen_dynes_full" || fn_name == "morel_anderson_mustar"
+        || fn_name == "coherence_length" || fn_name == "isotope_exponent"
+        || fn_name == "gl_parameter_kappa"
         // Bio-physical Phase 3 (demiurge cross-domain V2 closure):
         || fn_name == "higuchi" || fn_name == "tafel" || fn_name == "hagen_poiseuille"
 }
