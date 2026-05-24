@@ -12,7 +12,12 @@
 #
 # Path resolved relative to wrapper location (g13 portable paths) — works
 # whether installed at ~/.hx/bin/hexa (symlink) or invoked from the repo.
-__hexa_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+# Resolve BASH_SOURCE through any symlink chain BEFORE dirname, so a stray
+# /tmp/.../hexa shim (or argv0-basename-cwd-shadow sibling, ref #866) can't
+# trick the dispatcher into looking up `hxv2` from the wrong directory.
+# Fallback chain: realpath → readlink -f → raw BASH_SOURCE (legacy behavior).
+__hexa_src="$(realpath "${BASH_SOURCE[0]}" 2>/dev/null || readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || printf '%s' "${BASH_SOURCE[0]}")"
+__hexa_dir="$(cd "$(dirname "$__hexa_src")" && pwd -P)"
 __hexa_bin="$__hexa_dir/hxv2"
 if [ ! -x "$__hexa_bin" ]; then
     # Transition fallback for boxes that haven't renamed hexa.real → hxv2.
