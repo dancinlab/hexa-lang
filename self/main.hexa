@@ -1624,7 +1624,19 @@ fn install_dir_from_argv0() {
         // Resolve symlinks on the exe itself (not just the directory), then dirname.
         // realpath: macOS (BSD) + GNU coreutils. readlink -f: GNU fallback.
         // If neither resolves, fall back to the original dirname + pwd -P path.
-        let resolve_cmd = "EXE='" + exe + "'; REAL=\"$(realpath \"$EXE\" 2>/dev/null || readlink -f \"$EXE\" 2>/dev/null)\"; if [ -n \"$REAL\" ] && [ -f \"$REAL\" ]; then D=\"$(cd \"$(dirname \"$REAL\")\" 2>/dev/null && pwd -P)\"; elif [ -f \"$EXE\" ]; then D=\"$(cd \"$(dirname \"$EXE\")\" 2>/dev/null && pwd -P)\"; else P=\"$(command -v \"$EXE\" 2>/dev/null)\"; if [ -n \"$P\" ] && [ -f \"$P\" ]; then REAL2=\"$(realpath \"$P\" 2>/dev/null || readlink -f \"$P\" 2>/dev/null || echo \"$P\")\"; D=\"$(cd \"$(dirname \"$REAL2\")\" 2>/dev/null && pwd -P)\"; else D=\"\"; fi; fi; printf '%s' \"$D\""
+        // Bug (INBOX 2026-05-25T00:50Z): when argv[0] is a bare basename
+        // (no slash — e.g. exec -a hexa from ~/.hx/bin/hexa shim), POSIX
+        // realpath of a bare name probes CWD FIRST. A user running `hexa
+        // build foo.hexa` from a /tmp git worktree that happens to ship the
+        // same `hexa` shim file (committed into the repo) → realpath resolves
+        // to the worktree's stray ./hexa, install_dir = worktree dir, no
+        // build/hexa_module_loader → module_loader skipped → multi-module
+        // builds link-fail. Fix: when EXE has NO slash, go through `command
+        // -v` FIRST (PATH-resolved), and only fall back to the bare-name
+        // realpath if PATH lookup fails. EXE with a slash (absolute or
+        // relative path) keeps the realpath-first behaviour — that's the
+        // canonical exec path and was never ambiguous.
+        let resolve_cmd = "EXE='" + exe + "'; case \"$EXE\" in */*) USE_PATH=0;; *) USE_PATH=1;; esac; if [ \"$USE_PATH\" = 1 ]; then P=\"$(command -v \"$EXE\" 2>/dev/null)\"; if [ -n \"$P\" ] && [ -f \"$P\" ]; then REAL=\"$(realpath \"$P\" 2>/dev/null || readlink -f \"$P\" 2>/dev/null || echo \"$P\")\"; D=\"$(cd \"$(dirname \"$REAL\")\" 2>/dev/null && pwd -P)\"; else REAL=\"$(realpath \"$EXE\" 2>/dev/null || readlink -f \"$EXE\" 2>/dev/null)\"; if [ -n \"$REAL\" ] && [ -f \"$REAL\" ]; then D=\"$(cd \"$(dirname \"$REAL\")\" 2>/dev/null && pwd -P)\"; elif [ -f \"$EXE\" ]; then D=\"$(cd \"$(dirname \"$EXE\")\" 2>/dev/null && pwd -P)\"; else D=\"\"; fi; fi; else REAL=\"$(realpath \"$EXE\" 2>/dev/null || readlink -f \"$EXE\" 2>/dev/null)\"; if [ -n \"$REAL\" ] && [ -f \"$REAL\" ]; then D=\"$(cd \"$(dirname \"$REAL\")\" 2>/dev/null && pwd -P)\"; elif [ -f \"$EXE\" ]; then D=\"$(cd \"$(dirname \"$EXE\")\" 2>/dev/null && pwd -P)\"; else D=\"\"; fi; fi; printf '%s' \"$D\""
         let d = exec(resolve_cmd)
         if len(d) > 0 {
             return d
