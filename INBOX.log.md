@@ -2,6 +2,30 @@
 
 Append-only history sister of `INBOX.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
+## 2026-05-25T17:20Z — codegen: cross-scope const-fold collision (silent wrong-answer) + anima M6 deferral 갭 (from: anima MODERNIZE M6)
+
+anima의 interp-era `.hexa` build-modernize (M6) 중 발견. 6-agent 병렬 sweep + 회수로 58/72 build-fix 완료, 잔여 13개가 아래 upstream 원인에 막힘.
+
+### ⚠ 핵심 codegen 버그 — cross-scope const-fold collision (silent 오답)
+서로 다른 함수의 **동명 immutable `let`** 바인딩이 const-fold 단계에서 충돌. 한 함수의 리터럴-바운드 `let`이 다른 함수의 동명 `let`으로 접혀 들어감. **빌드 에러가 아니라 조용한 오답** — 가장 위험한 class.
+
+- [ ] minimal repro (`hexa run` → `2147483648`, 기대 `10.0`):
+  ```
+  fn lcg_m() -> int { let m = 2147483648; return m }
+  fn compute(h: float) -> float { let m = h * 2.0; return m }
+  fn main() { print(compute(5.0)) }
+  ```
+  `compute`의 `m = h*2.0`이 `lcg_m`의 `m = 2147483648` 리터럴로 const-fold됨. 실측: anima `training/train_clm_emergent.hexa`에서 `m = vec_mean(h)`가 LCG modulus `2147483648`로 mis-fold (실데이터 silent 오류). 짧은 이름(`a`/`c`/`m`)일수록 빈발. anima측 임시 우회 = source 변수 rename(`lcg_a`/`lcg_c`/`lcg_m`) — **proper fix는 codegen scope 분리** (g11/g21: 우회는 anima에 잔존, 본 fix는 upstream).
+
+### 부수 진단갭 — immutable `let` 재대입 → invalid C
+- [ ] `let i = 0` 후 `i = i + 1` (interp-era 허용 패턴)이 hexa-strict에서 immutable `let`을 리터럴로 const-fold → `0 = 0 + 1` invalid C 생성 ("expression is not assignable"). **clear한 "cannot assign to immutable binding" 진단** 대신 C-codegen 단계 깨짐. anima측 proper fix = `let mut`로 마이그레이션 (M6 대다수 케이스, ~50 file). 진단을 parser/typecheck 단계로 올리면 마이그레이션 UX 개선.
+
+### anima M6 deferral 13-file (upstream 원인별 — anima 자력 proper-fix 불가)
+- [ ] **missing/removed builtin (현재 대체 불가)**: `tensor_randn(size,seed)` arity (native는 `(r,c)`) — `models/lm_head_uv.hexa` · `bytes_encode`/`bytes_decode` 제거 — `serving/kr_quality_{gate,score}.hexa` · `hex_byte`/`bytes_to_hex` 제거(소스 주석도 확인) — `tool/drill_self_ref_noise_probe.hexa` · `dir_exists` 제거(`file_exists`=S_ISREG) — `training/clm_r5_bundler.hexa` · `deref_i64` 제거(read-side i64 ptr-deref) — `training/nn_core.hexa` · `xavier_init`/`cosine_sim` 미존재 — `experiments/consciousness/consciousness_bridge.hexa`
+- [ ] **runtime.h staleness** (`.o`엔 심볼 있으나 prototype 부재 → clang `-Werror=implicit-function-declaration`): `rt_read_bytes_at` — `training/alm_bf16_decode_probe.hexa` · `rt_read_lines` — `training/quadruple_cross_sweep.hexa`
+- [ ] **parse feature gap (dead/미지원 syntax)**: `effect { fn … }` 대수효과 블록(repo 6-file 동일 FAIL) — `serving/consciousness_aware_refusal.hexa` · 이종 tuple return `-> [bool, float]` + `null` — `serving/consciousness_gate.hexa`
+- [ ] **cross-module 미해결**: `xavier_init`/`zeros`가 in-file 미정의(자매 anima-core 파일에 정의) — `anima-core/trinity.hexa` (interp-era cross-module ref, import 배선 = 도메인 wiring 위험으로 anima측 deferred)
+
 ## 2026-05-25T00:50Z — [정정] 위 "빌드 회귀" 보고 RETRACT — worktree 아티팩트였음 (from: demiurge TTR-MN)
 
 직전 엔트리(00:25Z)의 "빌드 회귀" 진단은 **오진**이었음 — origin/main 은 정상. 실제 원인: `hexa build` 의 use-확장(module-loader)이 **정식 repo 루트 `~/core/hexa-lang` 에서만** 작동하고, `/tmp` 의 detached git worktree 에선 건너뜀.
