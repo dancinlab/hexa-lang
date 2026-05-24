@@ -1,0 +1,23 @@
+// HEXA Standard Library — string/byte_at
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Single-char access — thin wrapper over the runtime `s[i]` builtin
+// providing a named fn for the prevalent 44+ anima inline `byte_at`
+// pattern (STDLIB Phase 1b 잔여 survey 2026-05-25).
+//
+// Surface:
+//   pub fn byte_at(s: string, i: int) -> string
+//     Returns the single-char substring at index `i`. Returns "" if
+//     `i` is out of bounds (caller-friendly · no panic).
+//
+// Naming note: anima's `byte_at` is misnamed slightly (hexa strings are
+// UTF-8 · `s[i]` returns chars not bytes for ASCII fast path). Module
+// keeps the anima name for sweep-compat.
+
+pub fn byte_at(s: string, i: int) -> string {
+    if i < 0 { return "" }
+    if i >= len(s) { return "" }
+    return s[i]
+}
