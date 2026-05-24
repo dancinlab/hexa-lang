@@ -346,11 +346,34 @@ fn cloud_poll(host: str, pid: int) -> int {
 }
 
 // ── file transfer ────────────────────────────────────────────────────
+//
+// Local-side post-transfer verify (F6, inbox 2026-05-24):
+// scp's raw exit code is necessary but not sufficient for success — scp
+// can return 0 on the local side while the actual transfer silently
+// dropped (remote source missing under some scp protocol modes, pod
+// terminated mid-handshake, zero-byte truncation, etc.). The wrapper
+// therefore probes `file_exists(local) && file_size(local) > 0` after
+// the scp call and demotes ok=1 to ok=0 with a distinct exit_code marker
+// when the local side fails to materialise.
+//
+// Reserved exit_code markers (caller-discriminated, additive on top of
+// scp's native 1-99 range so legacy callers still see "nonzero == fail"):
+//   100  remote_file_missing      (scp exit 0 but local not present)
+//   101  zero_byte_transfer       (local exists but size == 0)
+//   102  local_source_missing     (copy-to pre-check: local source absent)
+// 103-104 reserved for optional remote-size verify (not yet wired).
+// See inbox/patches/hexa-cloud-copy-from-verify-local-2026-05-24.md.
 
 // cloud_copy_to_opts — upload `local_path` to `host:remote_path` over scp
 // with extra ssh flags `ssh_opts` (translated to scp's `-P` for port).
-// Returns CloudResult.ok==1 iff scp exited 0.
+// Returns CloudResult.ok==1 iff scp exited 0 AND local source existed.
+// Pre-checks local source presence so the caller gets a distinct exit
+// code (102) instead of an opaque scp "No such file or directory".
 fn cloud_copy_to_opts(host: str, ssh_opts: [str], local_path: str, remote_path: str) -> CloudResult {
+    if !file_exists(local_path) {
+        return CloudResult { ok: 0, exit_code: 102, pid: 0, stdout_: "",
+            message: "local_source_missing · " + local_path }
+    }
     return _scp_capture(_scp_opts(ssh_opts), local_path, host + ":" + remote_path)
 }
 
@@ -360,8 +383,27 @@ fn cloud_copy_to(host: str, local_path: str, remote_path: str) -> CloudResult {
 }
 
 // cloud_copy_from_opts — download `host:remote_path` to local `local_path`.
+// Returns CloudResult.ok==1 iff scp exited 0 AND the local file
+// materialised with size > 0. F6 fix (2026-05-24): scp's exit-0 alone
+// is not enough — verify the local file actually arrived.
 fn cloud_copy_from_opts(host: str, ssh_opts: [str], remote_path: str, local_path: str) -> CloudResult {
-    return _scp_capture(_scp_opts(ssh_opts), host + ":" + remote_path, local_path)
+    let r = _scp_capture(_scp_opts(ssh_opts), host + ":" + remote_path, local_path)
+    if r.ok != 1 {
+        // scp itself failed (transport / auth / refused) — surface as-is.
+        return r
+    }
+    // scp returned 0; verify the local file actually exists and is non-empty.
+    if !file_exists(local_path) {
+        return CloudResult { ok: 0, exit_code: 100, pid: 0, stdout_: r.stdout_,
+            message: "remote_file_missing_or_scp_silent_fail · " + local_path }
+    }
+    let sz = file_size(local_path)
+    if sz <= 0 {
+        return CloudResult { ok: 0, exit_code: 101, pid: 0, stdout_: r.stdout_,
+            message: "zero_byte_transfer · " + local_path }
+    }
+    return CloudResult { ok: 1, exit_code: 0, pid: 0, stdout_: r.stdout_,
+        message: "scp exit 0 · verified " + to_string(sz) + " bytes" }
 }
 
 // cloud_copy_from — cloud_copy_from_opts with no extra ssh flags.

@@ -1,6 +1,6 @@
 # `hexa cloud copy-from` exit 0 false-success — F6 extends #646 F2 (file-transfer verb · 2026-05-24)
 
-> **Status (open):** 오늘 anima HEXAD/PURE Phase D v2b fire saga 중 Monitor `bbsrt11v9` 에서 `hexa cloud copy-from` 이 pod terminated + remote file 부재 상황에서 exit 0 반환, 로컬에 파일이 실제로 도착하지 않았음에도 false-success 가 propagate. 직전 patch `hexa-cloud-guard-ux-and-pod-lock-2026-05-24.md` (#646) F2 가 `cloud_run` 의 동일 class — "transport 실패가 단일 catch-all 문자열" — 를 다뤘으나, file-transfer verb (`copy-from` / `copy-to`) 는 같은 패턴이 별도 표면. 본 patch 는 F2 의 heartbeat-probe 패턴을 file-transfer verb 로 확장하고, 정상 path 에 local-file verify 1-step 을 추가하는 small change 를 제안.
+> **Status (LANDED 2026-05-24):** `stdlib/cloud/cloud.hexa` 의 `cloud_copy_from_opts` 에 scp 후 `file_exists(local) && file_size(local) > 0` verify 1-step 추가. 자매 `cloud_copy_to_opts` 에는 local source pre-check 추가. exit_code marker 100 (`remote_file_missing_or_scp_silent_fail`) · 101 (`zero_byte_transfer`) · 102 (`local_source_missing`) 할당. 103-104 (remote-size verify) reserved. 호출자 (anima Monitor, dispatcher 등) 는 이제 `r.ok == 1` 만 신뢰하면 됨 — defensive `stat $LR` 후속 체크 불필요.
 
 **Reporter**: anima (`dancinlab/anima` downstream consumer · HEXAD/PURE Phase D v2b corpus-axis fire)
 **Severity**: medium (false-success → silent data loss; train 결과 손실이 운영자에게 "성공" 으로 보고됨)
