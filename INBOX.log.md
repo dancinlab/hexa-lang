@@ -2,6 +2,19 @@
 
 Append-only history sister of `INBOX.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
+## 2026-05-25T23:40Z — sim_universe selftest substrate 복구 (split from T23:10Z (e))
+
+T23:10Z (e) 의 6 FAIL 진단 결과 (위 entry 참조) 에서 파생. selftest 자체는 정직하게 FAIL 보고 중 (gauge OK) — fix 는 substrate 6개 + dispatcher 1개. 각각 독립 PR 권장 (g60 reflex: 한 PR 1 substrate).
+
+- [ ] **(e1) `qpu_bridge/qpu_bridge.hexa` 생성** — 디렉터리에 `anu_noise_model.hexa`/`vqe_h2_demo.hexa` 두 파일만 존재. (a) dispatcher 가 `vqe_h2_demo.hexa` 호출하도록 selftest 수정, 또는 (b) `qpu_bridge.hexa` 새로 작성 (status-only stub 도 가능). cmd_qpu (sim_universe.hexa:182) 도 같은 잘못된 path 사용 — `vqe_h2_demo.hexa` 로 통일.
+- [ ] **(e2) substrate 6개 PASS 센티넬 emit** — 현재 0/6 이 `"PASS"` 문자열 출력. selftest grep (sim_universe.hexa:219) 와 합의 필요. 최소 `__SIM_UNIVERSE_SUBSTRATE_OK__` 류 ASCII 라인 추가. mini_world 가 가장 쉬움 (실제 정상 실행, 1줄 추가만).
+- [ ] **(e3) `multiverse/interferometer` selftest 호출 시그니처** — selftest 가 `_run_module(path, [])` 호출 (sim_universe.hexa:218) 이지만 interferometer 는 6 args 강제. (a) selftest 가 default args 전달, (b) interferometer 가 `--selftest` 모드 추가하여 in-memory deterministic seed 사용, (c) interferometer 의 self-test 별도 thin wrapper. 옵션 (b) 권장 — `--selftest` flag 면 fixture seed + 작은 M/T/dim 사용.
+- [ ] **(e4) `baseline_run.hexa` `hexa_bin` 식별자 collision** — `let hexa_bin = nexus_root + "/bin/hexa"` (line 35) 가 builtin `hexa_bin(n)` 와 redefinition. `qrng_perturbation.hexa:37` 도 같은 버그. rename → `hexa_path` 또는 `hx_bin`. 동일 패턴 sim_universe 전체 grep 권장.
+- [ ] **(e5) ANU API offline fallback — `HEXA_FORCE_FALLBACK=1` 인식** — `bostrom_test/anu_collector.hexa` + `godel_q/bootstrap.hexa` + `qrng_perturbation.hexa` 가 ANU QRNG HTTP 라이브 호출. fallback path 로 `urandom` 또는 fixture hex blob 사용하도록. `anu_collector.hexa` 는 이미 `fetch_urandom()` 함수 있음 (line 94) — `HEXA_FORCE_FALLBACK=1` 시 ANU skip 하고 바로 urandom 호출하면 됨. bootstrap.hexa 도 비슷한 wiring.
+- [ ] **(e6) `_run_module` interp 사용 폐기** — `sim_universe.hexa:51` `_run_module` 가 `hexa run <path>` (interp) 사용. `feedback_no_interp_use_compiled` 위반. compiled-path (`hexa build` → exec binary, 또는 직접 `exec_capture` 로 hexa-build 결과 .out 호출) 로 전환. cache 키 작성 (~/.hexa-cache 누적 [[project_hexa_run_cache]] 주의).
+
+**선택**: 위 6개 전부 완료 안 해도 selftest 가 의미있어지려면 (e1) + (e2) + (e3) 만 처치하면 anu_time / multiverse / qpu 3/6 PASS. ANU/network 의존 3개 (bostrom/godel/qrng) 는 (e5) 필요.
+
 ## 2026-05-25T23:10Z — hexa CLI verb sweep audit — 102 verb · 85.3% PASS · 5 결함 발견 (from: this-session full-sweep agent)
 
 `hexa --help` 의 ~120+ verb 중 102개 호출 smoke. mac user 워킹트리, `HEXA_FORCE_FALLBACK=1`, 30s timeout/verb. raw 결과 `/tmp/hexa-verb-sweep/results.jsonl`. (옛 `inbox/notes/hexa_cli_verb_sweep_audit_2026_05_25.md` 도 이번 commit 으로 정식 INBOX entry 로 rehome — g11 폐기 폴더에서 이동.)
@@ -13,7 +26,7 @@ Append-only history sister of `INBOX.md`. Each entry starts with `## <ISO timest
 - [ ] **(b) `hexa lsp --help` — LSP daemon 진입, stdin 대기 TIMEOUT 30s**. flag 라우팅 누락 — daemon 진입 전에 `--help` 인터셉트.
 - [x] **(c) `hexa init` — RESOLVED**: scaffolder 인라인 land (self/main.hexa::cmd_init) + sister tool/init_project.hexa (future standalone-bin source). `hexa init <dir> [--name N]` → `<dir>/project.hexa` + `main.hexa` + `.gitignore` 생성, 기존 프로젝트는 rc=2 거부. e2e: scaffold → `hexa build` → 실행 "hello from testproj" PASS. cmd_run interp dep 회피 (feedback_no_interp_use_compiled).
 - [ ] **(d) `hexa convergence` usage 출력 시 rc=1 — 다른 verb 는 rc=2** (tape/hxc/repo-audit-taxonomy/gpu disasm/lint). POSIX 관행상 rc=2 표준. convergence 만 outlier 통일.
-- [ ] **(e) `hexa sim-universe selftest` 6/6 sub-test FAIL** — anu_time/multiverse/qpu/qrng/bostrom/godel 전부 substrate FAIL. 다른 sim-universe sub-verb 는 PASS. substrate dep 별도 조사.
+- [~] **(e) `hexa sim-universe selftest` 6/6 sub-test FAIL — PARTIAL (diagnostic only)** — 진단 완료, substrate 복구는 별도 entry (T23:40Z). 6 FAIL 의 정확한 카테고리: (1) `anu_time/mini_world` = **NO-SENTINEL** (실행은 정상, "PASS" 문자열 미출력 — selftest 의 `raw.contains("PASS")` grep 미스매치). (2) `multiverse/interferometer` = **SIG-MISMATCH** (6 args 필요 `<tag> <seed_file> <M> <T> <dim> <out_dir>` 인데 `[]` 로 호출 → arg-count fail) + NO-SENTINEL. (3) `qpu_bridge/qpu_bridge` = **MISSING-FILE** (`qpu_bridge.hexa` git 히스토리 전체에 부재. 실제 디렉터리 = `anu_noise_model.hexa`/`vqe_h2_demo.hexa`). (4) `ouroboros_qrng/baseline_run` = **COMPILE-ERROR** (`let hexa_bin = ...` line 35 가 builtin `hexa_bin(n)` 와 심볼 충돌 → `redefinition of 'hexa_bin' as different kind of symbol`). (5) `bostrom_test/anu_collector` = **EXTERNAL-DEP** (curl `qrng.anu.edu.au/API/jsonI.php` 라이브 HTTP). (6) `godel_q/bootstrap` = **EXTERNAL-DEP** (ANU API; 로그상 20/20 iter `ANU fetch failed; skip`). 추가 발견: (i) `_run_module` (stdlib/sim_universe/sim_universe.hexa:51) 가 `hexa run <path>` (interp) 사용 — `feedback_no_interp_use_compiled` 위반, compiled-path 전환 필요. (ii) `HEXA_FORCE_FALLBACK=1` 환경변수 인식 substrate 0/6 (offline-mode 디자인 부재). (iii) 다른 sub-verb (`anu`/`godel`/`qrng` 등) 가 "PASS" 인 이유 = sweep 의 PASS 기준이 "exit 0 + 출력 있음" 일 뿐, 실제로는 같은 substrate dep 공유 (예: godel = 같은 ANU API 사용). substrate 복구는 T23:40Z entry 참조.
 
 **추가 권장 (소소)**:
 - atlas lookup 잘못된 id 에 `# not found:` + rc=1 — `--list` 또는 fuzzy hint 시 DX 개선.
