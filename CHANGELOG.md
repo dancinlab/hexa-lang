@@ -6,6 +6,12 @@ For the full audit trail, see `git log`.
 
 ---
 
+## 2026-05-25
+
+- **`stdlib/cloud/vast.hexa` — vastai `--raw` JSON 파싱 robustness (fix-at-source)** (cloud 0.2.0→0.2.1) — `hexa cloud list --provider vast` 가 `[cloud] vast: list: non-array JSON — DEPRECATED: …` 로 깨지던 실측 버그 수정. 원인: vast.hexa 의 모든 vastai 경로가 `2>&1`(stderr 병합, `Aborted` 마커 post-check 때문에 의도적)인데, 최신 vastai 가 (a) `show instances` 에 `DEPRECATED:` 알림, (b) macOS python urllib3 가 `NotOpenSSLWarning`(LibreSSL) 을 stderr 로 먼저 찍어 → 선행 비-JSON 텍스트가 `json_parse` 를 깨뜨림. 공통 헬퍼 `_vast_strip_to_json(s)`(첫 `[`/`{` 이전 노이즈 전부 strip, opener 없으면 원본 유지) 1개를 도입해 5개 vastai JSON 파싱 경로 전부(`_vast_collect_offer_ids`·`vast_create`·`_vast_instance_still_live`·`vast_list_instances`·`vast_ssh_endpoint`)에 적용(g20). `show instances`→`show instances-v1`(paginated, 다른 스키마) 전환은 **안 함** — 기존 명령 유지 + 노이즈만 제거. 진짜 에러(빈 출력·API 실패)는 strip 후에도 JSON 없으면 기존 fail 경로가 보존되어 그대로 감지. 결정적 stub 테스트 `stdlib/cloud/vast_json_strip_test.hexa`(11 cases — 순수 strip 유닛 9 + 가짜 vastai shim e2e list 1 + noise-only 음성대조 1) 추가. 라이브 1회: 원시 venv vastai(노이즈 emit) 로 `vast_list_instances` → "0 instances" clean 확인.
+
+---
+
 ## 2026-05-24
 
 내부 `inbox/` staging 폴더 **폐기** (user-authorized, pre-sunset). phi_rs inbox closure + `/cycle` 1-6 라운드 머지 배치. 코드 변경(codegen/runtime)은 enum 스택 일부, 나머지는 RFC promote · inbox housekeeping.
