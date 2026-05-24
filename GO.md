@@ -9,6 +9,7 @@
 - [ ] M1 — `~/.hexa-cache/` 자동 GC (LRU + TTL + tmp orphan sweep). default cap 2 GiB / TTL 30 일 / env override (`HEXA_CACHE_CAP_MB`, `HEXA_CACHE_TTL_DAYS`).
 - [ ] M2 — `hexa run` 첫-호출 warm cost 측정 + 캐시 hit 경로 zero-fork 가시화 (TBD)
 - [ ] M3 — TBD (사용자 결정 대기)
+- [x] M5 — hexa daemon RFC draft (fork-storm internal axis · design-only) → `docs/rfc/rfc_drafts_2026_05_25/rfc_093_hexa_daemon.md`. 권장 = Option A stand-alone daemon (`hexa-daemon` verb · unix socket · opt-in autospawn · fork-mode fallback).
 
 ## cross-link
 
