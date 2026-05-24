@@ -443,6 +443,144 @@ fn cmd_status() {
     println("  artifacts:   " + art_cnt + " files")
 }
 
+// ─────────────────────────────────────────────────────────────────────
+//  cmd_init — `hexa init <dir> [--name N]`
+//
+//  Minimal canonical project scaffolder (cf. `go mod init` / `cargo init`).
+//  Creates <dir>/ if absent and writes 3 files:
+//    - project.hexa  (minimal @I identity declaration)
+//    - main.hexa     (hello-world entry)
+//    - .gitignore    (build/, .hexa-cache/, *.o, etc.)
+//
+//  Refuses (rc=2) if <dir> already contains main.hexa or project.hexa to
+//  avoid clobbering existing work. Use a fresh / empty directory.
+//
+//  Inlined here (NOT cmd_run dispatched to tool/init_project.hexa) — the
+//  R7 track B preferred path is a standalone bin/hexa-init binary, but
+//  this inline avoids the cmd_run interp dependency entirely (per
+//  feedback_no_interp_use_compiled). The sister tool/init_project.hexa
+//  is provided as a future-build target — it mirrors this logic 1:1.
+//
+//  INBOX 2026-05-25T23:10Z (c) RESOLVED — was "not implemented" stub.
+// ─────────────────────────────────────────────────────────────────────
+fn _init_basename(path: string) -> string {
+    let n = len(path)
+    if n == 0 { return "project" }
+    // strip trailing slashes
+    let mut end = n
+    while end > 0 && path.substring(end - 1, end) == "/" {
+        end = end - 1
+    }
+    if end == 0 { return "project" }
+    let mut start = end
+    while start > 0 && path.substring(start - 1, start) != "/" {
+        start = start - 1
+    }
+    let bn = path.substring(start, end)
+    if len(bn) == 0 { return "project" }
+    return bn
+}
+
+fn _init_shell_quote(s: string) -> string {
+    // wrap in single quotes; escape embedded single quotes via '\''
+    let n = len(s)
+    let parts = []
+    parts.push("'")
+    let mut i = 0
+    while i < n {
+        let c = s.substring(i, i + 1)
+        if c == "'" {
+            parts.push("'\\''")
+        } else {
+            parts.push(c)
+        }
+        i = i + 1
+    }
+    parts.push("'")
+    return parts.join("")
+}
+
+fn cmd_init(av_init: array) {
+    // av_init is the post-`init` argv slice (e.g. ["<dir>", "--name", "myapp"]).
+    if len(av_init) < 1 {
+        println("error: `hexa init` requires <dir> argument")
+        println("usage: hexa init <dir> [--name N]")
+        exit(2)
+    }
+    let dir = av_init[0]
+    let mut name = ""
+    let mut k = 1
+    while k < len(av_init) {
+        let a = av_init[k]
+        if a == "--name" && k + 1 < len(av_init) {
+            name = av_init[k + 1]
+            k = k + 2
+        } else {
+            println("error: unknown init arg: " + a)
+            println("usage: hexa init <dir> [--name N]")
+            exit(2)
+        }
+    }
+    if len(name) == 0 {
+        name = _init_basename(dir)
+    }
+
+    // refuse if would clobber existing project/main
+    let dq = _init_shell_quote(dir)
+    let pj_path = dir + "/project.hexa"
+    let mn_path = dir + "/main.hexa"
+    if file_exists(pj_path) || file_exists(mn_path) {
+        println("error: refusing to clobber existing project — " + dir + " already has project.hexa or main.hexa")
+        exit(2)
+    }
+
+    // mkdir -p
+    let _mk = exec("mkdir -p " + dq + " 2>&1")
+
+    // write project.hexa
+    let pj_parts = []
+    pj_parts.push("// ")
+    pj_parts.push(name)
+    pj_parts.push(" — hexa project (scaffolded by `hexa init`)\n\n")
+    pj_parts.push("@I := \"")
+    pj_parts.push(name)
+    pj_parts.push("\" :: identity [active]\n")
+    pj_parts.push("  kind  = \"native binary\"\n")
+    pj_parts.push("  entry = \"main.hexa\"\n")
+    write_file(pj_path, pj_parts.join(""))
+
+    // write main.hexa
+    let mn_parts = []
+    mn_parts.push("// ")
+    mn_parts.push(name)
+    mn_parts.push(" — entry point\n\n")
+    mn_parts.push("fn main() {\n")
+    mn_parts.push("    println(\"hello from ")
+    mn_parts.push(name)
+    mn_parts.push("\")\n")
+    mn_parts.push("}\n")
+    write_file(mn_path, mn_parts.join(""))
+
+    // write .gitignore
+    let gi_parts = []
+    gi_parts.push("# hexa scaffold defaults\n")
+    gi_parts.push("build/\n")
+    gi_parts.push(".hexa-cache/\n")
+    gi_parts.push("*.o\n")
+    gi_parts.push("*.dSYM/\n")
+    gi_parts.push(".DS_Store\n")
+    write_file(dir + "/.gitignore", gi_parts.join(""))
+
+    println("scaffolded: " + dir + " (name=" + name + ")")
+    println("  - " + pj_path)
+    println("  - " + mn_path)
+    println("  - " + dir + "/.gitignore")
+    println("")
+    println("next:")
+    println("  hexa build " + dir + "/main.hexa -o " + dir + "/" + name)
+    println("  " + dir + "/" + name)
+}
+
 // ═══════════════════════════════════════════════════════════════════
 //  L2 absorption — native .tape v1.2 reader + generic HXC v2 decoder
 //
@@ -4632,18 +4770,18 @@ if len(av) < 3 {
             exit(hxc_dump(av[3]))
         }
     } else if sub == "init" {
-        // R7 track B (2026-05-18): the scaffolder tool/init_project.hexa
-        // does NOT exist in-tree — the prior `cmd_run(init_script, …)`
-        // dereferenced a missing file, so `hexa init` never functioned via
-        // interp either. Removing the cmd_run call site (R7 interp-dep
-        // drain) and emitting an honest "not implemented" instead of a
-        // cryptic loader failure. If a project scaffolder lands later it
-        // should be a standalone bin/hexa-init binary (track B pattern),
-        // not a cmd_run target.
-        println("error: `hexa init` is not implemented in this build")
-        println("  (the project scaffolder tool/init_project.hexa is absent;")
-        println("   scaffold a project.hexa manually, or file an inbox patch)")
-        exit(1)
+        // INBOX 2026-05-25T23:10Z (c) RESOLVED: scaffolder is now inlined
+        // (cmd_init above). cmd_run dispatch to tool/init_project.hexa
+        // would re-introduce the interp dep (feedback_no_interp_use_compiled);
+        // the inline path is byte-equivalent to the sister tool/init_project.hexa
+        // (kept as a future standalone-bin source).
+        let mut init_args: [string] = []
+        let mut ai = 3
+        while ai < len(av) {
+            init_args.push(av[ai])
+            ai = ai + 1
+        }
+        cmd_init(init_args)
     } else if sub == "url" {
         if len(av) < 4 {
             println("error: hexa url requires URL argument (e.g. 'hexa://run?file=/path/script.hexa')")
