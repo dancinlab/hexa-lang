@@ -259,6 +259,13 @@ axis 의 첫 설계서.
 - [x] M11 — `tests/m_daemon_r2_test.hexa` 신규 e2e (3 falsifier): F-DAEMON-R2-1 (같은 source 2회 compile → 1st `BUILT`, 2nd in-memory `HIT` 동일 path · no rebuild) · F-DAEMON-R2-2 (daemon down → `compile` "not running" rc=1 + `hexa run` fork-mode 정상) · F-DAEMON-R2-3 (daemon-built binary ≡ fork-mode `hexa build` byte-identical · `cmp -s`). `nc`/`socat` 무의존.
 - [x] M11 — `docs/rfc/rfc_drafts_2026_05_25/rfc_093_hexa_daemon.md` §12 implementation status 표 신규 (R1 ✅ #904 · R2 ✅ this · R3/R4 todo) + R2 honest carve-out.
 
+### 검증 결과 (mini arm64 Mac 측정 · fresh /tmp clone)
+
+- **3 falsifier 전부 PASS**: `[F-DAEMON-R2-2a] not-running rc=1 PASS · [F-DAEMON-R2-2b] fork-mode run PASS · [F-DAEMON-R2-1a] 1st BUILT PASS · [F-DAEMON-R2-1b] 2nd in-memory HIT same path PASS · [F-DAEMON-R2-3] daemon HIT byte-identical fork-mode slot PASS · ALL 3 FALSIFIERS PASS`.
+- **R1 회귀 무**: `tests/m_daemon_r1_test.hexa` 여전히 4/4 PASS (COMPILE 인라인 추가 + cache array 도입에도 PING/ECHO/SHUTDOWN backward-compat).
+- **gate**: `hexa parse self/main.hexa` + `hexa parse tests/m_daemon_r2_test.hexa` clean. `HEXA_MAC_BUILD_OK=1 hexa build self/main.hexa` clang green.
+- **determinism 발견**: F-DAEMON-R2-3 의 초안 (daemon-built ≡ fresh fork-build byte-eq) 은 **falsified** — `hexa build` 가 호출마다 LC_UUID/출력경로 임베드로 같은 source 두 독립 build 가 이미 byte-diff (첫 divergence ~char 1449). 진짜 보증 = content-addressed slot identity (양쪽 같은 `~/.hexa-cache/hexa_run.<key>` → 먼저 빌드한 쪽 win → 나머지 byte-identical HIT). falsifier 재작성 후 측정 PASS (daemon HIT sha ≡ fork-mode slot sha).
+
 ### 디자인 결정 (R2)
 
 - **cache key byte-identical 제약** — `_daemon_compute_key` 가 cmd_run / cmd_build / _batch_run_one 의 `sha256(source)[0:16] + "_" + version_str()` 와 정확히 일치해야 함. drift 시 daemon-built 와 fork-built 가 다른 슬롯 → M7 `version_str` drift-check + F-DAEMON-R2-3 determinism falsifier 가 잡음.

@@ -434,5 +434,15 @@ in-memory code. 권장 = daemon 시작 시 자기 binary mtime 캐시 → 주기
 - **autospawn 미배선** — `hexa run` 은 R2 에서도 항상 fork-mode (행동 변화 0건).
   daemon 사용은 명시적 `hexa daemon compile` 만. R3 가 `HEXA_DAEMON_AUTOSPAWN`
   probe 를 `hexa run` 에 배선.
+- **determinism = content-addressed slot identity (NOT rebuild byte-eq)** —
+  R2 검증 중 발견: `hexa build` 는 호출마다 per-build LC_UUID / 임베드된 출력
+  경로 때문에 **같은 source 의 두 독립 build 가 이미 byte-diff** (macOS arm64
+  측정: 첫 divergence ~char 1449). 따라서 daemon vs fork-mode 동등성의 실제
+  보증은 "rebuild 가 byte-identical" 이 아니라 "양쪽이 같은
+  `~/.hexa-cache/hexa_run.<key>` 슬롯을 content-address → 먼저 build 한 쪽이
+  이김 → 나머지는 그 동일 파일에 byte-identical HIT" 다. F-DAEMON-R2-3 가 바로
+  이걸 측정 (mini arm64: daemon HIT sha ≡ fork-mode slot sha). gen1.s ≡ gen2.s
+  fixpoint (`[[project_s3_fixpoint_full_closure_2026_05_20]]`) 는 별개 축 —
+  compiler self-host 출력 determinism 이지 user-program build determinism 아님.
 
 (끝.)
