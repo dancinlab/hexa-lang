@@ -7541,6 +7541,16 @@ HexaVal hexa_sub(HexaVal a, HexaVal b) {
     _HX_COERCE_BOOL(a, b);
     if (HX_IS_INT(a) && HX_IS_INT(b)) return hexa_int(HX_INT(a) - HX_INT(b));
     if (HX_IS_FLOAT(a) && HX_IS_FLOAT(b)) return hexa_float(HX_FLOAT(a) - HX_FLOAT(b));
+    // PROBE r16 (#807 sibling): a non-numeric operand (e.g. string) is a TYPE
+    // ERROR, not a silent number. Before this guard `"ab" - 3` quietly returned
+    // -3.0 because __hx_to_double() coerces a string to 0.0. Go/Rust canonical.
+    // Mixed int/float still promotes through the __hx_to_double fallback below.
+    if (!(HX_IS_INT(a) || HX_IS_FLOAT(a)) || !(HX_IS_INT(b) || HX_IS_FLOAT(b))) {
+        char _buf[96];
+        snprintf(_buf, sizeof(_buf), "cannot subtract non-numeric operand (tag %d - tag %d)", (int)HX_TAG(a), (int)HX_TAG(b));
+        hexa_throw(hexa_str(_buf));
+        return hexa_float(0.0);
+    }
     return hexa_float(__hx_to_double(a) - __hx_to_double(b));
 }
 HexaVal hexa_mul(HexaVal a, HexaVal b) {
@@ -7605,6 +7615,16 @@ HexaVal hexa_div(HexaVal a, HexaVal b) {
     if (HX_IS_FLOAT(a) && HX_IS_INT(b)) {
         return hexa_float(HX_FLOAT(a) / (double)HX_INT(b));
     }
+    // PROBE r16 (#807 sibling): a non-numeric operand (e.g. string) is a TYPE
+    // ERROR, not a silent 0.0. Before this guard `"ab" / 3` quietly returned 0.0
+    // because __hx_to_double() coerces a string to 0.0. All four numeric pairings
+    // (int/int, float/float, mixed) are handled above; only non-numeric reaches here.
+    if (!(HX_IS_INT(a) || HX_IS_FLOAT(a)) || !(HX_IS_INT(b) || HX_IS_FLOAT(b))) {
+        char _buf[96];
+        snprintf(_buf, sizeof(_buf), "cannot divide non-numeric operand (tag %d / tag %d)", (int)HX_TAG(a), (int)HX_TAG(b));
+        hexa_throw(hexa_str(_buf));
+        return hexa_float(0.0);
+    }
     double fb = __hx_to_double(b);
     if (fb == 0.0) { hexa_throw(hexa_str("division by zero")); return hexa_float(0.0); }
     return hexa_float(__hx_to_double(a) / fb);
@@ -7614,6 +7634,16 @@ HexaVal hexa_mod(HexaVal a, HexaVal b) {
     if (HX_IS_INT(a) && HX_IS_INT(b)) {
         if (HX_INT(b) == 0) { hexa_throw(hexa_str("modulo by zero")); return hexa_int(0); }
         return hexa_int(HX_INT(a) % HX_INT(b));
+    }
+    // PROBE r16 (#807 sibling): a non-numeric operand (e.g. string) is a TYPE
+    // ERROR, not a silent 0.0. Before this guard `"ab" % 3` quietly returned 0.0
+    // because __hx_to_double() coerces a string to 0.0. Mixed int/float still
+    // promotes to fmod below; only non-numeric operands reach this guard.
+    if (!(HX_IS_INT(a) || HX_IS_FLOAT(a)) || !(HX_IS_INT(b) || HX_IS_FLOAT(b))) {
+        char _buf[96];
+        snprintf(_buf, sizeof(_buf), "cannot compute modulo of non-numeric operand (tag %d %% tag %d)", (int)HX_TAG(a), (int)HX_TAG(b));
+        hexa_throw(hexa_str(_buf));
+        return hexa_float(0.0);
     }
     double fb = __hx_to_double(b);
     if (fb == 0.0) { hexa_throw(hexa_str("modulo by zero")); return hexa_float(0.0); }
