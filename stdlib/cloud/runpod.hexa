@@ -285,6 +285,23 @@ fn runpod_terminate(api_key: str, pod_id: str) -> int {
     return _runpod_terminate_api(api_key, pod_id)
 }
 
+// runpod_terminate_unless — conditional teardown. Terminate the pod unless
+// `skip` is true, in which case the pod is left running and 1 is returned
+// (no-op success). Closes the one surface gap the PURE dispatcher's
+// `pod_terminate(pod_id, save_pod)` stub needed: `runpod_terminate` itself
+// is unconditional, so a `save_pod="yes"` path that must KEEP the pod alive
+// had no first-class helper. Folding the branch into stdlib keeps every
+// dispatcher callsite a single call (no `if save_pod { } else { terminate }`
+// boilerplate duplicated per launcher) and keeps the "kept-alive == success"
+// semantics in one place. Returns 1 when skipped, else delegates to
+// runpod_terminate (1 success / 0 failure).
+fn runpod_terminate_unless(api_key: str, pod_id: str, skip: bool) -> int {
+    if skip {
+        return 1
+    }
+    return runpod_terminate(api_key, pod_id)
+}
+
 // ── pod list ─────────────────────────────────────────────────────────
 
 struct RunPodList {
