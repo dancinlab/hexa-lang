@@ -13,7 +13,7 @@ inbox 패치로 제출.
 - [x] PROBE.log r14 next-list `- [ ]` 23개 → `- [x]` 모두 flip (LANDED PR# 또는 RFC# 표기, [#620])
 - [x] PROBE.md coverage table 최종 업데이트 (r14 cycle 7-11 + cycle 13 행 추가, 🔵 inflight → r15-sweep 후보 교체)
 - [x] OPEN PR ~36 머지 정리 (~34건 ceremony 머지 완료 · 잔여 #420 admin merge `37b6740d` · #702 g54 보호로 user-review-only)
-- [ ] r15 sweep 진입 (depletion criterion · 새 deviation 모두 surface, count 무관)
+- [x] r15 sweep 진입 — cycle 1 완료 (8-axis 전수 · 22 deviation 발견 · 8 SURGICAL + 6 RFC backlog · triage `/tmp/probe-r15/cycle1_triage.md`)
 
 ## 방법
 
@@ -40,7 +40,9 @@ inbox 패치로 제출.
 | 🟠 filed (inbox PR) | round 5/7/8/9/10 consolidated [#377, #395, #400, #418, #435] · `let` 불변 미강제 + match exhaustiveness [#347] (warn-path landed [#453]) · macro expander pass design RFC [#451] · RFC 087 macro-expander pass design promote [#556] · RFC 090 firmware/rtl codegen lanes [#608] |
 | 🟠 filed RFC (round 14) | enum to_string codegen-emit [#489] · macro Phase 2 [#493] · postfix `?` + Result ABI [#494] · shadowing scope codegen 재설계 [#496] · Range repr design [#500] · panic 채널 의미론 [#501] · try-expr + finally [#502] · Some/None prelude 정책 [#505] · tuple type [#506] · raw string [#511] · if-let / while-let [#513] · async/await [#514] · destructure let-decl [#515] · channel + spawn [#517] · multi-line string [#518] · set literal [#519] · pipe operator [#520] · regex literal [#521] · compound assign 완성 [#523] · numeric literal underscore [#524] · struct field defaults [#526] · match-arm guard [#528] · trait dyn dispatch [#532] · iterator alias bundle [#533] · defer 패턴 [#534] · smart pointer [#535] · lifetime `'a` [#536] · enum ordering [#571] · `.pop()` Option [#572] · runtime defer stack [#570] |
 | ⛔ STOP / superseded | r14-F enum to_string (architectural, RFC [#489]) · r14-K `-1.0/0.0` (이미 codegen.hexa:4417 landed) · r14-CC multi-arg payload ([#366] already-landed) · r14-OOOO defer hoist ([#570] superset) · r14-PPPP PROBE docs ([#597] sync 이미 land) · r14 regex RFC ([#518] multi-line으로 land) |
-| 🔵 inflight (r15 sweep — TBD) | r14 closure 후 진입. 8-axis 전수조사 재실행: Option/Result · interpolation · unicode · OOB · enum · shadowing · range · float — 새 deviation 모두 surface (depletion criterion) |
+| 🟠 filed RFC (r15 cycle 1) | Option/Result `?` operator (D2) · Option/Result `Option[T]=None` assign (D5) · format!() macro expander (D6, [#451] follow-up) · printf-style helper (D8) · unicode byte/codepoint/grapheme len policy (D9) · unicode NFC normalize (D11) · enum single/multi-payload codegen (D15/D16) · shadowing for-loop binding (D19) — RFC backlog 6건 |
+| 🔵 r15 cycle 1 발견 SURGICAL (next-batch) | Option/Result D3 pattern-bind `Some(v)` codegen scope (HIGHEST · 30 LoC) · shadowing D17 `{}` block scope (CRITICAL · 40 LoC) · Option/Result D1 `Option[T]` annotation parse (20 LoC) · Option/Result D4 `.unwrap/.unwrap_or/.map` builtin (40 LoC) · range D20 `.rev()` only first (30 LoC) · enum D14 variant identifier codegen (30 LoC) · string_interp D7 f-string `{x:.2}` spec (50 LoC) · unicode D10 `.graphemes()` ZWJ family (80 LoC or RFC) |
+| 🔵 inflight (r15 cycle 2 — TBD) | float `0.1+0.2` IEEE 정확도 별도 probe · enum single-payload regression 재확인 ([[project_hexa_lang_enum_payload_works]] 검증) · OOB negative-index policy call · NaN/nan casing 통일 |
 
 ## 원칙
 
