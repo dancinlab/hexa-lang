@@ -177,6 +177,11 @@ fn cmd_rubric() {
     println("             nnt(arr_pp)                 → 100/arr_pp          (Number Needed to Treat, ARR in pct points, 1-arg)")
     println("             arr(p_control,p_treat)      → p_control-p_treat   (Absolute Risk Reduction, percentage points, 2-arg)")
     println("             ln_hr_to_hr(ln_hr)          → exp(ln_hr)          (log-HR → HR, Cox-PH back-transform, 1-arg)")
+    println("             hill(L,Kd,n)                → L^n/(Kd^n+L^n)      (Hill receptor binding, M3 IC50, 3-arg)")
+    println("             cheng_prusoff(IC50,S,Km)    → IC50/(1+S/Km)       (Cheng-Prusoff Ki conversion, 3-arg)")
+    println("             fick1(D,dC,dx)              → -D*dC/dx            (Fick's first law of diffusion, 3-arg)")
+    println("             laplace(P,r,t_wall)         → P*r/t_wall          (Young-Laplace vessel wall stress, 3-arg)")
+    println("             stokes_einstein(T,eta,r)    → kB*T/(6π·η·r)       (Stokes-Einstein diffusion D, kB=1.380649e-23, 3-arg)")
 }
 
 let NOCALC: int = -999999
@@ -858,6 +863,77 @@ fn _ln_hr_to_hr(ln_hr: float) -> float {
     return exp(ln_hr)
 }
 
+// ── Bio-physical Phase 2 (demiurge cross-domain V2 unlock) ─────────
+// Five 3-arg identities — receptor-binding · Ki conversion · diffusion ·
+// vessel-wall mechanics. All libm-class (pow/divide); ε=1e-9 gate inherited.
+
+// Hill equation (receptor / cooperative binding, M3 IC50 fits):
+//   theta = L^n / (Kd^n + L^n)
+// Fractional occupancy of receptors at ligand concentration L, dissociation
+// constant Kd, Hill coefficient n. 3-arg closed-form. Source: Hill 1910
+// J Physiol 40:iv-vii; canonical pharmacological binding identity.
+fn _hill(l_conc: float, k_d: float, n_hill: float) -> float {
+    if l_conc < 0.0 { return _NOCALC_F }
+    if k_d <= 0.0 { return _NOCALC_F }
+    if n_hill <= 0.0 { return _NOCALC_F }
+    let ln_p = pow(l_conc, n_hill)
+    let kn_p = pow(k_d, n_hill)
+    let denom = kn_p + ln_p
+    if denom <= 0.0 { return _NOCALC_F }
+    return ln_p / denom
+}
+
+// Cheng-Prusoff equation (competitive-inhibitor Ki from IC50):
+//   K_i = IC50 / (1 + S/Km)
+// Converts an apparent IC50 measured at substrate concentration S into the
+// substrate-independent inhibition constant Ki given Km. 3-arg closed-form.
+// Source: Cheng & Prusoff 1973 Biochem Pharmacol 22:3099-3108.
+fn _cheng_prusoff(ic50: float, s_conc: float, k_m: float) -> float {
+    if ic50 < 0.0 { return _NOCALC_F }
+    if s_conc < 0.0 { return _NOCALC_F }
+    if k_m <= 0.0 { return _NOCALC_F }
+    return ic50 / (1.0 + s_conc / k_m)
+}
+
+// Fick's first law of diffusion (steady-state flux):
+//   J = -D * dC/dx
+// Diffusive flux J [mol·m⁻²·s⁻¹] given diffusivity D and concentration
+// gradient dC/dx. Negative sign = flux flows down the gradient. 3-arg
+// closed-form. Source: Fick 1855 Ann Phys 170:59-86; transdermal-delivery
+// canonical (microneedle dermis deposition kinetics).
+fn _fick1(d_diff: float, d_c: float, d_x: float) -> float {
+    if d_diff < 0.0 { return _NOCALC_F }
+    if d_x == 0.0 { return _NOCALC_F }
+    return 0.0 - d_diff * d_c / d_x
+}
+
+// Young-Laplace vessel wall stress (thin-wall pressure-vessel approximation):
+//   sigma = P * r / t_wall
+// Circumferential stress sigma in a thin-walled cylinder of internal pressure
+// P, radius r, wall thickness t_wall. 3-arg closed-form. Source: Young 1805
+// Phil Trans R Soc; Laplace 1806; canonical cardiovascular / aneurysm model.
+fn _laplace_wall(p_press: float, r_rad: float, t_wall: float) -> float {
+    if p_press < 0.0 { return _NOCALC_F }
+    if r_rad < 0.0 { return _NOCALC_F }
+    if t_wall <= 0.0 { return _NOCALC_F }
+    return p_press * r_rad / t_wall
+}
+
+// Stokes-Einstein diffusion coefficient (spherical-particle, low-Re):
+//   D = kB * T / (6 * pi * eta * r)
+// Translational diffusion D [m²/s] of a sphere of radius r in a fluid of
+// dynamic viscosity eta at absolute temperature T; kB = 1.380649e-23 J/K
+// (CODATA-2019 exact). 3-arg closed-form. Source: Einstein 1905 Ann Phys
+// 17:549, Stokes drag F=6πηrv; canonical drug-permeability dermis model.
+fn _stokes_einstein(t_kelvin: float, eta_visc: float, r_rad: float) -> float {
+    if t_kelvin <= 0.0 { return _NOCALC_F }
+    if eta_visc <= 0.0 { return _NOCALC_F }
+    if r_rad <= 0.0 { return _NOCALC_F }
+    let kB_se = 0.00000000000000000000001380649     // 1.380649e-23 J/K, CODATA-2019 exact
+    let pi_se = 3.14159265358979323846
+    return kB_se * t_kelvin / (6.0 * pi_se * eta_visc * r_rad)
+}
+
 // float dispatch — fn_name → recompute. 0-arg fns ignore a0/a1/a2 (constants);
 // 1-arg fns take a0; 2-arg take a0,a1; 3-arg take a0,a1,a2. Returns _NOCALC_F
 // when no float path exists (caller then tries the int path / degrades). The
@@ -981,6 +1057,32 @@ fn _recompute_float(fn_name: string, a0: float, a1: float, a2: float, argc: int)
     if fn_name == "ln_hr_to_hr" {
         return _ln_hr_to_hr(a0)
     }
+    // ── Bio-physical Phase 2 (demiurge cross-domain V2 unlock) ─────────
+    //   hill(L, Kd, n)              3-arg: L^n / (Kd^n + L^n)
+    //   cheng_prusoff(IC50, S, Km)  3-arg: IC50 / (1 + S/Km)
+    //   fick1(D, dC, dx)            3-arg: -D * dC/dx
+    //   laplace(P, r, t_wall)       3-arg: P * r / t_wall
+    //   stokes_einstein(T, eta, r)  3-arg: kB * T / (6 * pi * eta * r)
+    if fn_name == "hill" {
+        if argc < 3 { return _NOCALC_F }
+        return _hill(a0, a1, a2)
+    }
+    if fn_name == "cheng_prusoff" {
+        if argc < 3 { return _NOCALC_F }
+        return _cheng_prusoff(a0, a1, a2)
+    }
+    if fn_name == "fick1" {
+        if argc < 3 { return _NOCALC_F }
+        return _fick1(a0, a1, a2)
+    }
+    if fn_name == "laplace" {
+        if argc < 3 { return _NOCALC_F }
+        return _laplace_wall(a0, a1, a2)
+    }
+    if fn_name == "stokes_einstein" {
+        if argc < 3 { return _NOCALC_F }
+        return _stokes_einstein(a0, a1, a2)
+    }
     return _NOCALC_F
 }
 
@@ -1004,6 +1106,9 @@ fn _is_float_fn(fn_name: string) -> bool {
         || fn_name == "exp_release" || fn_name == "ldl_pct" || fn_name == "beer_lambert"
         // Bio-statistics (LPA cycle 4 V2 unlock · NNT/ARR/HR trial readout):
         || fn_name == "nnt" || fn_name == "arr" || fn_name == "ln_hr_to_hr"
+        // Bio-physical Phase 2 (demiurge cross-domain V2 unlock):
+        || fn_name == "hill" || fn_name == "cheng_prusoff" || fn_name == "fick1"
+        || fn_name == "laplace" || fn_name == "stokes_einstein"
 }
 
 // is fn_name a 0-arg closed-form constant? (--expr <fn> <v>, no operands).
@@ -1132,7 +1237,8 @@ fn cmd_verify_id(rest) {
 
 // cmd_expr_float — the 🟢 NUMERICAL path. fn_name is a registered float
 // transform (welch_t_crit · wilson_hilferty_p · chsh_tsirelson · hardy_bound
-// · exp_release · ldl_pct · beer_lambert · nnt · arr · ln_hr_to_hr).
+// · exp_release · ldl_pct · beer_lambert · nnt · arr · ln_hr_to_hr
+// · hill · cheng_prusoff · fick1 · laplace · stokes_einstein).
 // Args + claimed value are parsed as floats; the recompute is compared with
 // tolerance ε (NOT exact-eq, the honest libm-class gate). Within ε →
 // 🟢 SUPPORTED-NUMERICAL; deterministic out-of-ε → 🔴 FALSIFIED.
