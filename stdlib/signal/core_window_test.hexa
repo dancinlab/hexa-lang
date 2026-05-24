@@ -88,6 +88,73 @@ fn main() {
     let _ = farr_free(ham)
     let _ = farr_free(bla)
 
+    // ── Periodic Hann(4): denom=N=4, not N-1=3 ──
+    // Periodic(0,4) = 0.5*(1-cos(0))    = 0
+    // Periodic(1,4) = 0.5*(1-cos(pi/2)) = 0.5
+    // Periodic(2,4) = 0.5*(1-cos(pi))   = 1.0
+    // Periodic(3,4) = 0.5*(1-cos(3pi/2))= 0.5
+    fails = fails + _check_flag("periodic_hann4_w0==0",   _close(hann_window_periodic(0, 4), 0.0))
+    fails = fails + _check_flag("periodic_hann4_w1==0.5", _close(hann_window_periodic(1, 4), 0.5))
+    fails = fails + _check_flag("periodic_hann4_w2==1.0", _close(hann_window_periodic(2, 4), 1.0))
+    fails = fails + _check_flag("periodic_hann4_w3==0.5", _close(hann_window_periodic(3, 4), 0.5))
+
+    // ── Periodic differs from symmetric: at w(N-1) symmetric=0, periodic≠0 ──
+    let n_pdiff = 8
+    let sym_last = hann_window(n_pdiff - 1, n_pdiff)
+    let per_last = hann_window_periodic(n_pdiff - 1, n_pdiff)
+    fails = fails + _check_flag("periodic_neq_symmetric_at_last",
+        if _abs_f(sym_last - per_last) > 0.1 { 1 } else { 0 })
+
+    // ── Periodic Hann N<=0 guard ──
+    fails = fails + _check_flag("periodic_hann_N0_guard", _close(hann_window_periodic(0, 0), 1.0))
+
+    // ── Periodic full-window generator parity ──
+    let parr = hann_window_periodic_arr(4)
+    let mut parr_ok = 1
+    if farr_len(parr) != 4 { parr_ok = 0 }
+    let mut pi_idx = 0
+    while pi_idx < 4 {
+        if _close(farr_get(parr, pi_idx), hann_window_periodic(pi_idx, 4)) == 0 { parr_ok = 0 }
+        pi_idx = pi_idx + 1
+    }
+    fails = fails + _check_flag("hann_periodic_arr_matches", parr_ok)
+    let _ = farr_free(parr)
+
+    // ── Half-Hann taper(4): denom=k-1=3, pi (not 2pi). Ascending 0 → 1 ──
+    // Taper(0,4) = 0.5*(1-cos(0))     = 0
+    // Taper(1,4) = 0.5*(1-cos(pi/3))  = 0.25
+    // Taper(2,4) = 0.5*(1-cos(2pi/3)) = 0.75
+    // Taper(3,4) = 0.5*(1-cos(pi))    = 1.0
+    fails = fails + _check_flag("half_hann_taper4_i0==0",   _close(half_hann_taper(0, 4), 0.0))
+    fails = fails + _check_flag("half_hann_taper4_i1==0.25", _close(half_hann_taper(1, 4), 0.25))
+    fails = fails + _check_flag("half_hann_taper4_i2==0.75", _close(half_hann_taper(2, 4), 0.75))
+    fails = fails + _check_flag("half_hann_taper4_i3==1.0", _close(half_hann_taper(3, 4), 1.0))
+
+    // ── Taper monotone-ascending on [0, k-1] ──
+    let k_mono = 8
+    let mut mono_ok = 1
+    let mut mi = 1
+    while mi < k_mono {
+        if half_hann_taper(mi, k_mono) <= half_hann_taper(mi - 1, k_mono) { mono_ok = 0 }
+        mi = mi + 1
+    }
+    fails = fails + _check_flag("half_hann_taper_monotone_ascending", mono_ok)
+
+    // ── Taper k<=1 guard ──
+    fails = fails + _check_flag("half_hann_taper_k1_guard", _close(half_hann_taper(0, 1), 1.0))
+
+    // ── Taper-arr parity ──
+    let tarr = half_hann_taper_arr(4)
+    let mut tarr_ok = 1
+    if farr_len(tarr) != 4 { tarr_ok = 0 }
+    let mut ti = 0
+    while ti < 4 {
+        if _close(farr_get(tarr, ti), half_hann_taper(ti, 4)) == 0 { tarr_ok = 0 }
+        ti = ti + 1
+    }
+    fails = fails + _check_flag("half_hann_taper_arr_matches", tarr_ok)
+    let _ = farr_free(tarr)
+
     if fails == 0 {
         println("ALL PASS — stdlib/signal/core_window")
     } else {

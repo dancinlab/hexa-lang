@@ -42,8 +42,29 @@
 //   pub fn hann_window_arr(N: int) -> int
 //   pub fn hamming_window_arr(N: int) -> int
 //   pub fn blackman_window_arr(N: int) -> int
+//
+// ── Variants (added 2026-05-25, anima 26-dup sweep deferred-sites pass) ─────
+//
+// hann_window_periodic(n, N) — PERIODIC Hann (denominator N, not N-1).
+//   Periodic(n, N) = 0.5 * (1 - cos(2*pi*n / N))
+//   Used by CUDA STFT kernels and any contract that requires the periodic
+//   convention (w[N] would loop back to w[0] = 0). Differs from the
+//   symmetric form only by the denominator.
+//
+// half_hann_taper(i, k) — HALF-period Hann ramp (ascending 0 → 1).
+//   Taper(i, k) = 0.5 * (1 - cos(pi*i / (k-1)))      for i in [0, k-1]
+//   Half the symmetric Hann period, used as a fade-in / fade-out ramp
+//   over the first / last k samples of a buffer. For the descending
+//   ramp (fade-out), the caller passes `k - 1 - i` (or uses the
+//   symmetric property half_hann_taper(k-1-i, k) = half_hann_taper(i, k)
+//   mirrored; in practice the table form below is the common idiom).
+//
+// half_hann_taper_arr(k) — precompute a length-k taper table.
+//   table[i] = half_hann_taper(i, k); ascending ramp. For the descending
+//   ramp (fade-out at the buffer tail) read table[k-1-i].
 
 let CW_TWO_PI = 6.28318530717958647692
+let CW_PI     = 3.14159265358979323846
 
 // ── per-sample window values (symmetric, denominator N-1) ───────────────────
 
@@ -93,6 +114,56 @@ pub fn blackman_window_arr(N: int) -> int {
     let mut i = 0
     while i < N {
         let _ = farr_set(buf, i, blackman_window(i, N))
+        i = i + 1
+    }
+    return buf
+}
+
+// ── Periodic Hann (denominator N, not N-1) ─────────────────────────────────
+//
+// Periodic(n, N) = 0.5 * (1 - cos(2*pi*n / N))
+//
+// Differs from the symmetric form only in the denominator. The periodic
+// Hann satisfies the COLA (Constant Overlap-Add) property at hop = N/2
+// without an off-by-one and is the convention used by CUDA STFT kernels
+// (and by numpy's np.hanning vs scipy's signal.windows.hann with
+// sym=False). Endpoint: w[0] = 0; w[N] would wrap back to 0.
+pub fn hann_window_periodic(n: int, N: int) -> float {
+    if N <= 0 { return 1.0 }
+    return 0.5 * (1.0 - cos(CW_TWO_PI * n / N))
+}
+
+pub fn hann_window_periodic_arr(N: int) -> int {
+    let buf = farr_zeros(N)
+    let mut i = 0
+    while i < N {
+        let _ = farr_set(buf, i, hann_window_periodic(i, N))
+        i = i + 1
+    }
+    return buf
+}
+
+// ── Half-Hann taper (ascending fade ramp) ──────────────────────────────────
+//
+// Taper(i, k) = 0.5 * (1 - cos(pi * i / (k-1)))   for i in [0, k-1]
+//
+// Half the symmetric Hann period (note: pi, not 2*pi). Returns 0 at i=0
+// and 1 at i=k-1, with a smooth cos-shaped ramp in between. The canonical
+// fade-in / fade-out ramp over the first / last k samples of a buffer
+// (the descending ramp is read as table[k-1-i]).
+//
+// This is NOT a full window: hann_window(i, k) covers a full period
+// (0 → 1 → 0); half_hann_taper(i, k) covers half the period (0 → 1).
+pub fn half_hann_taper(i: int, k: int) -> float {
+    if k <= 1 { return 1.0 }
+    return 0.5 * (1.0 - cos(CW_PI * i / (k - 1)))
+}
+
+pub fn half_hann_taper_arr(k: int) -> int {
+    let buf = farr_zeros(k)
+    let mut i = 0
+    while i < k {
+        let _ = farr_set(buf, i, half_hann_taper(i, k))
         i = i + 1
     }
     return buf
