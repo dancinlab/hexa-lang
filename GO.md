@@ -6,7 +6,7 @@
 
 ## 진행 milestone
 
-- [ ] M1 — `~/.hexa-cache/` 자동 GC (LRU + TTL + tmp orphan sweep). default cap 2 GiB / TTL 30 일 / env override (`HEXA_CACHE_CAP_MB`, `HEXA_CACHE_TTL_DAYS`).
+- [x] M1 — `~/.hexa-cache/` 자동 GC (LRU + TTL + tmp orphan sweep). default cap 2 GiB / TTL 30 일 / env override (`HEXA_CACHE_CAP_MB`, `HEXA_CACHE_TTL_DAYS`). (PR #887 머지)
 - [x] M2 — `tool/build_precompile.hexa` 파이프라인 + `self/main.hexa` cmd_run lookup precompile dir 우선 probe + `tests/m_precompile_hit_test.hexa` e2e. cold-cache fork-storm 의 *내부* axis (release 시점 precompile → 사용자 첫 호출 즉시 cache HIT).
 - [x] M3 — `tool/precompile.json` declarative manifest (어떤 script 가 precompile 대상). Go 의 `go install <pkg>` 패턴 mirror. demo: 2 entry (atlas_cli · build_hexa_cli).
 - [x] M4 — release tarball CI 통합 (`tool/build_precompile.hexa` 자동 호출 + tar 에 `release/precompile/` 동봉) → `.github/workflows/release.yml` Stage 3 추가 (3 job), Package 에 staging+smoke assert 추가.

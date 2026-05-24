@@ -247,3 +247,64 @@ axis 의 첫 설계서.
 - [ ] R3 — multi-session test (N=100 latency · crash-respawn · multi-uid reject + getuid 배선). F-DAEMON-2/3.
 - [ ] R4 — prod ship (`hexa daemon kill` · `HEXA_DAEMON_AUTOSPAWN` opt-in · fork-fallback wire · 문서). 10/10 falsifier closure.
 
+## 2026-05-25 · M9 — precompile HIT perf 실측 (M2 deferred measurement closure)
+
+> M2 (PR #889) 가 release-time precompile → cmd_run 의 `_precompile_lookup(key)` HIT 으로
+> cold-cache clang fork 를 회피하는 메커니즘을 ship 했으나, 실제 perf 이득은 측정을 deferred
+> 했다. M9 가 그 측정을 closure — 같은 .hexa script 의 cold-cache vs precompile-HIT 실행
+> wall time 을 N=5 로 직접 측정.
+
+- [x] M9 — `tools/perf/m9_precompile_bench.hexa` 신규 (~320 line): target script 의
+  cache key (`sha256(source)[0:16] + "_" + version_str()`) 계산 → **COLD** phase
+  (매 샘플마다 `~/.hexa-cache` keyed entry + `release/precompile/` entry 제거 후
+  `hexa run` timing) → **HIT** phase (precompile entry 1회 staging = release-time step,
+  이후 N 샘플 동안 유지; `~/.hexa-cache` warm entry 는 매번 제거하여 *유일한* fast-path 가
+  precompile HIT 가 되도록) → avg/p50/min/max + speedup 보고. `mono_ns()` wall delta.
+  HIT phase 는 매 샘플 stderr 에 `[precompile] HIT` trace 가 실재함을 assert (probe 가
+  실제로 fired 임을 증명; trace 없으면 loud-fail).
+- [x] gate — `hexa parse tools/perf/m9_precompile_bench.hexa` clean (local + fresh driver 양쪽).
+
+### 측정 결과 (mac arm64 · pool mini · fresh-built driver @ origin/main 4b32a9b · N=5)
+
+| target | `tool/atlas_cli.hexa` (2161 line · 91 kB source · `--help` op) |
+|---|---|
+| cache_key | `f7a8a46fdcd1a812_0.1.0-dispatch` |
+| host | Darwin arm64 (pool mini) |
+
+| phase | avg (ms) | p50 (ms) | min (ms) | max (ms) |
+|---|---|---|---|---|
+| **COLD** (full clang fork) | 2986.8 | 2952.1 | 2926.8 | 3106.6 |
+| **HIT** (precompile, fork skip) | 106.4 | 33.0 | 27.2 | 398.1 |
+
+- **speedup (avg) = 28.05× · wall saved = 2880.4 ms/call**.
+- HIT 의 max(398.1ms) = hit[0] 의 cold-FS first-touch 비용 (이후 hit[1..4] = 42/33/32/27 ms).
+  steady-state 는 p50(33ms) 가 대표 → **p50 speedup ≈ 89×** (2952/33). 첫 호출조차
+  398ms → 7.5× 빠름.
+- 결론: M2 precompile 은 91 kB-class hot script 의 사용자 첫 호출 비용을 **~3.0s → ~0.03-0.4s**
+  로 압축. cold-cache fork-storm 의 internal axis 가 실측으로 입증됨 (g3 over-claim 0).
+
+### 측정 protocol / 환경 결정
+
+- **mac local 발사 = sign-gate refuse** ("local-bound heavy invocation … needs a fresh sign-off")
+  — 의도된 fork-storm 차단. → **pool mini (mac arm64) 라우팅**.
+- **stale-binary 함정**: pool 호스트들의 설치된 `hexa` 바이너리는 origin/main 보다 훨씬 stale
+  (mini=PR#492, M2 precompile 로직 미포함 — `grep -c "release/precompile" = 0`). 따라서
+  mini 에 origin/main fresh-clone (`/tmp/m9-bench`) → `LOCAL_BUILD=1 hexa run
+  tool/build_hexa_cli.hexa` 로 **fresh driver 빌드** (5/5 smoke PASS · precompile 로직
+  포함 확인) → 그 driver 로 측정. ubu (x86_64) 는 [[reference_linux_transpiler_stale_build_recipe]]
+  로 self-host stale → 미사용.
+- **HIT trace 검증**: cmd_run 의 `HEXA_PRECOMPILE_TRACE=1` → stderr `[precompile] HIT <path>`.
+  bench 가 stderr 를 `2>&1` 로 merge 캡처해 매 HIT 샘플마다 trace 실재 assert (초기 버전은
+  `/tmp/m9_stderr.$$` temp-file 을 별도 exec 에서 read → `$$` mismatch 로 trace miss
+  false-fail; merge-capture 로 수정).
+
+### 부수 작업
+
+- [x] **GO.md M1 flip** — `- [ ] M1` → `- [x] M1` (PR #887 이미 머지 · snapshot drift 해소).
+
+### 다음 (M9 후속 후보)
+
+- [ ] CI 에서 m9 bench 회귀 게이트 (speedup < 5× 시 fail) — release.yml Stage 3 동봉 precompile
+  의 effectiveness 자동 감시.
+- [ ] multi-target sweep (manifest 10 entry 전수 cold vs HIT) — per-script speedup 분포.
+
