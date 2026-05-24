@@ -2910,16 +2910,27 @@ fn gen2_stmt(node, depth) {
     }
 
     if k == "ReturnStmt" {
+        // bt-void-return (2026-05-24): `return void` / `return none` / `return nil`
+        // emit the void literal DIRECTLY without routing the bare-reserved-value
+        // Ident through gen2_expr. The recursive gen2_expr call could return a
+        // value-arena string whose backing buffer had been reclaimed from a
+        // prior function's last index-tail expression (e.g. `let k = ks[i]` in a
+        // while loop), leaking `hexa_index_get(ks, i)` into the void return with
+        // `ks`/`i` undeclared in the current C scope. Short-circuiting the
+        // reserved void/none/nil names is both a correctness guard and a tiny
+        // codegen fast-path. Repro: inbox/patches/hexa-return-void-mistranslate-
+        // 2026-05-24.md + pool-hexa-transpiler-ks-undeclared-2026-05-24.md.
+        let _ret_is_void = type_of(node.left) != "string" && node.left.kind == "Ident" && (node.left.name == "void" || node.left.name == "none" || node.left.name == "nil")
         // Plan B Phase 3: when this fn registered at least one defer,
         // route through __fn_exit so the drain + arena return run in
         // order. Non-defer fns keep the original zero-overhead path.
         if _gen2_defer_flag_count > 0 {
-            if type_of(node.left) != "string" {
+            if type_of(node.left) != "string" && !_ret_is_void {
                 return pad + "__ret_val = " + gen2_expr(node.left) + "; goto __fn_exit;\n"
             }
             return pad + "__ret_val = hexa_void(); goto __fn_exit;\n"
         }
-        if type_of(node.left) != "string" {
+        if type_of(node.left) != "string" && !_ret_is_void {
             if _gen2_arena_wrap == 1 {
                 return pad + "return __hexa_fn_arena_return(" + gen2_expr(node.left) + ");\n"
             }
@@ -4011,11 +4022,11 @@ fn gen2_method_builtin(obj_expr, method, args) {
     if method == "parse_float" {
         return cg_string_sym("str_parse_float") + "(" + obj_expr + ")"
     }
-    // String byte_at(i) — raw byte value (0-255) at byte index i. PROBE
-    // r15-D13: routes to str_byte_at (throws on OOB, matches array OOB)
-    // rather than char_code_at's -1 sentinel.
+    // String byte_at(i) — alias of char_code_at: raw byte value (0-255) at
+    // byte index i, or -1 if out of range. Matches interpreter
+    // self/hexa_full.hexa:16148-16156 (hxa-20260425-byteAt-builtin).
     if method == "byte_at" {
-        return cg_string_sym("str_byte_at") + "(" + obj_expr + ", " + gen2_expr(args[0]) + ")"
+        return cg_string_sym("str_char_code_at") + "(" + obj_expr + ", " + gen2_expr(args[0]) + ")"
     }
     if method == "char_code_at" {
         return cg_string_sym("str_char_code_at") + "(" + obj_expr + ", " + gen2_expr(args[0]) + ")"
@@ -6604,11 +6615,12 @@ fn gen2_expr(node) {
             if method == "char_code_at" {
                 return cg_string_sym("str_char_code_at") + "(" + obj + ", " + gen2_expr(node.args[0]) + ")"
             }
-            // `.byte_at(i)` — raw byte value (0-255) at byte index i. PROBE
-            // r15-D13: routes to str_byte_at (throws on OOB, matches array
-            // OOB) rather than char_code_at's -1 sentinel.
+            // `.byte_at(i)` — alias of char_code_at: raw byte value (0-255) at
+            // byte index i, or -1 if out of range. Matches interpreter
+            // self/hexa_full.hexa:16148-16156. Required for cross-language
+            // hash compatibility (hxa-20260425-byteAt-builtin).
             if method == "byte_at" {
-                return cg_string_sym("str_byte_at") + "(" + obj + ", " + gen2_expr(node.args[0]) + ")"
+                return cg_string_sym("str_char_code_at") + "(" + obj + ", " + gen2_expr(node.args[0]) + ")"
             }
             // ── Map methods ──
             if method == "keys" {
