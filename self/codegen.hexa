@@ -4026,6 +4026,26 @@ fn gen2_method_builtin(obj_expr, method, args) {
     if method == "pad_left" {
         return "hexa_pad_left(" + obj_expr + ", " + gen2_expr(args[0]) + ")"
     }
+    // ── PROBE r15-D4 (2026-05-24): Option .unwrap/.unwrap_or/.map builtins ──
+    // Option payload-bearing variants are emitted as HexaVal array
+    // [tag, payload] by the EnumPath arm (codegen.hexa:6819). Unit variants
+    // (None) emit the bare tag macro (hexa_int(1)). The three methods inspect
+    // HX_IS_ARRAY to discriminate Some vs None at runtime — no separate
+    // hexa_option_* runtime helpers needed; the dispatch is closed-form C.
+    if method == "unwrap" {
+        // Some([_, x]) → x; None → fatal exit. Mirrors Rust panic.
+        return "(HX_IS_ARRAY(" + obj_expr + ") ? hexa_index_get(" + obj_expr + ", hexa_int(1)) : (fprintf(stderr, \"hexa: called .unwrap() on None\\n\"), exit(1), hexa_void()))"
+    }
+    if method == "unwrap_or" {
+        // Some([_, x]) → x; None → default.
+        return "(HX_IS_ARRAY(" + obj_expr + ") ? hexa_index_get(" + obj_expr + ", hexa_int(1)) : " + gen2_expr(args[0]) + ")"
+    }
+    if method == "map" {
+        // Some([t, x]) → [t, f(x)]; None → None (pass-through).  Use a GCC
+        // statement-expression to bind the receiver + closure once each.
+        let _fexpr = gen2_expr(args[0])
+        return "({ HexaVal __opt_self = " + obj_expr + "; HexaVal __opt_fn = " + _fexpr + "; HX_IS_ARRAY(__opt_self) ? hexa_array_push(hexa_array_push(hexa_array_new(), hexa_index_get(__opt_self, hexa_int(0))), hexa_call1(__opt_fn, hexa_index_get(__opt_self, hexa_int(1)))) : __opt_self; })"
+    }
     eprintln("[codegen_c2] ERROR: unknown builtin method: " + method)
     return "(fprintf(stderr, \"CODEGEN ERROR: unknown builtin method: " + method + "\\n\"), exit(1), hexa_void())"
 }
