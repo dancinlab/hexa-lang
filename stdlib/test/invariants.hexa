@@ -1,0 +1,44 @@
+// HEXA Standard Library — test/invariants
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Selftest invariants helper — pattern across 84+ anima inline
+// `_selftest_invariants` definitions (STDLIB Phase 1b survey
+// 2026-05-25). Used by tools that maintain internal invariants and
+// want a standard "all invariants hold" gate before main logic runs.
+//
+// Surface:
+//   pub fn check_invariants(name: string, invariants: array) -> bool
+//     `invariants` : array of #{ "label": string, "ok": bool }
+//     Returns true iff all PASS. Prints structured report. Distinguishes
+//     from `cli/selftest::run_selftest` by being internal-only (no exit
+//     · returns bool · caller decides what to do on failure).
+
+pub fn check_invariants(name: string, invariants: array) -> bool {
+    println("--- " + name + " invariants ---")
+    let n = len(invariants)
+    let mut pass = 0
+    let mut fail = 0
+    let mut i = 0
+    while i < n {
+        let inv = invariants[i]
+        let label = inv["label"]
+        let ok = inv["ok"]
+        if ok {
+            println("  inv: " + label + " : OK")
+            pass = pass + 1
+        } else {
+            println("  inv: " + label + " : VIOLATED")
+            fail = fail + 1
+        }
+        i = i + 1
+    }
+    if fail == 0 {
+        println("  all " + to_string(pass) + " invariants hold")
+        return true
+    } else {
+        println("  " + to_string(fail) + "/" + to_string(n) + " invariants violated")
+        return false
+    }
+}
