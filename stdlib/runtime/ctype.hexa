@@ -681,16 +681,40 @@ pub fn rt_str_replace(s: string, old: string, new_s: string) -> string {
 // hexa_to_string() to coerce mixed-type elements; this hexa-source
 // variant skips that and assumes every element is already a string
 // (caller-side typing or dispatch guard).
+//
+// RUNTIME cycle 68 (2026-05-25) — O(n) byte-collect instead of chained
+// `out = out + sep + arr[i]`. The chained `+` form was O(n²): each `+`
+// reallocates and copies the entire accumulated string, so joining the
+// ~32K parts of atlas embedded.gen.hexa (#846 _extract_raw_blocks → 9.7 MB)
+// ballooned to 2.3 GB and appeared to hang at startup (smoke regression
+// after r16 enabled HEXA_HAS_HEXA_RT_STDLIB → hexa_str_join now dispatches
+// here for all-string arrays instead of the single-pass C body). Mirror the
+// rt_str_to_upper / rt_pad_* idiom: gather every byte once, one-shot
+// `bytes_to_str_raw` (single hexa_strbuf_alloc + single fill loop).
 pub fn rt_str_join_str(arr: [string], sep: string) -> string {
     let n = len(arr)
     if n == 0 { return "" }
-    let mut out = arr[0]
-    let mut i = 1
+    let sl = byte_len(sep)
+    let mut bytes: [int] = []
+    let mut i = 0
     while i < n {
-        out = out + sep + arr[i]
+        if i > 0 {
+            let mut s = 0
+            while s < sl {
+                bytes = bytes.push(sep.byte_at(s))
+                s = s + 1
+            }
+        }
+        let el = arr[i]
+        let el_len = byte_len(el)
+        let mut j = 0
+        while j < el_len {
+            bytes = bytes.push(el.byte_at(j))
+            j = j + 1
+        }
         i = i + 1
     }
-    return out
+    return bytes_to_str_raw(bytes)
 }
 
 // Step 3 cycle 42 — string substring with length-style semantics.
