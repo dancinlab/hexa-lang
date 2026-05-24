@@ -4524,6 +4524,109 @@ fn _daemon_send_line(sock_path, line) {
     return resp
 }
 
+// ─── R2 (RFC 093 § Phase plan) — compile method + in-memory cache ──────
+//
+// The daemon's whole point (fork-storm internal axis) is to NOT fork the
+// compiler on every call. R2 wires the first real method: `compile`. A
+// client sends the source path, the daemon consults an in-process cache
+// (path → built binary), and on miss builds ONCE then memoizes — so the
+// 2nd+ request for the same source returns the cached binary path without
+// re-running `hexa build`.
+//
+// Cache key is byte-IDENTICAL to cmd_run / cmd_build / _batch_run_one
+// (sha256(source)[0:16] + "_" + version_str()) so daemon-built and
+// fork-built binaries share the same ~/.hexa-cache/hexa_run.<key> slot
+// (F-DAEMON-R2-3 determinism). M7's version_str-drift check guards this.
+//
+// Wire format: R2 keeps R1's newline-terminated text frame. RFC §4.1's
+// binary u32-LE length-prefix is deferred to R3: the current runtime's
+// net_read uses strlen(), so a length prefix whose high bytes are NUL
+// (true for any small payload) would be truncated on the receive side —
+// it needs a NUL-preserving net_read_raw builtin first. The `compile`
+// verb is itself the framing upgrade for R2:
+//
+//   COMPILE <source_path>   → HIT <bin>    (in-memory cache hit, no build)
+//                           → BUILT <bin>  (compiled this call + memoized)
+//                           → ERR <reason> (build failed / bad request)
+
+fn _daemon_cache_dir() {
+    // Mirror cmd_run: compiled output lives under $HOME/.hexa-cache.
+    let mut d = env_var("HOME") + "/.hexa-cache"
+    if len(env_var("HOME")) == 0 { d = "./.hexa-cache" }
+    return d
+}
+
+fn _daemon_compute_key(file) {
+    // Byte-identical to cmd_run (self/main.hexa cmd_run site) — DO NOT
+    // drift. sha256(source)[0:16] + "_" + version_str().
+    let _src_hash = sha256_file(file)
+    return _src_hash.substring(0, 16) + "_" + version_str()
+}
+
+fn _daemon_key_index(keys, key) {
+    // Linear scan of the in-memory key array. Returns the matching index
+    // or -1. Parallel arrays (keys/bins) over a runtime map: hexa_v2
+    // codegen doesn't reliably support map literals (see L3459), and the
+    // cache is small (one entry per distinct source seen this session).
+    let mut i = 0
+    let n = len(keys)
+    while i < n {
+        if keys[i] == key { return i }
+        i = i + 1
+    }
+    return -1
+}
+
+fn _daemon_build_binary(file, tmpbin) {
+    // Compile <file> → tmpbin via `hexa build` (mirrors cmd_run's bcmd).
+    // Returns 0 on success (binary present at tmpbin), non-zero rc on
+    // failure. Uses the same install-dir-resolved hexa binary + inflight
+    // rename so a concurrent peer build doesn't see a half-written file.
+    let __inst_r = install_dir_from_argv0()
+    let mut hexa_bin = ""
+    if len(__inst_r) > 0 {
+        let cand = __inst_r + "/hexa"
+        if file_exists(cand) { hexa_bin = cand }
+    }
+    if len(hexa_bin) == 0 { hexa_bin = av[0] }
+    let _tmp_inflight = tmpbin + ".tmp." + to_string(mono_ns())
+    let bcmd = shq(hexa_bin) + " build " + shq(file) + " -o " + shq(_tmp_inflight) + " 2>&1; echo \"__HEXA_BRC__=$?\""
+    let bout = exec(bcmd)
+    let bmark = "__HEXA_BRC__="
+    let bml = len(bmark)
+    let mut bmi = -1
+    let mut bsj = len(bout) - bml
+    while bsj >= 0 {
+        if bout.substring(bsj, bsj + bml) == bmark { bmi = bsj; bsj = -1 } else { bsj = bsj - 1 }
+    }
+    let mut brc = 1
+    if bmi >= 0 {
+        let mut rs = bout.substring(bmi + bml, len(bout))
+        let rsl = len(rs)
+        if rsl > 0 && rs.substring(rsl - 1, rsl) == "\n" { rs = rs.substring(0, rsl - 1) }
+        brc = parse_int_str(rs)
+    }
+    if brc == 0 && file_exists(_tmp_inflight) {
+        let _rn = exec("mv -f " + shq(_tmp_inflight) + " " + shq(tmpbin) + " 2>/dev/null")
+    } else {
+        let _cl = exec("rm -f " + shq(_tmp_inflight) + " 2>/dev/null")
+    }
+    if file_exists(tmpbin) { return 0 }
+    return brc
+}
+
+fn cmd_daemon_compile(sock_path, file) {
+    // Client side of the compile method — connect, send `COMPILE <file>`,
+    // print the daemon's reply (HIT/BUILT/ERR + binary path). The path is
+    // emitted verbatim so a harness can `exec` it.
+    if !_daemon_socket_exists(sock_path) {
+        println("hexa daemon: not running (socket missing: " + sock_path + ")")
+        exit(1)
+    }
+    let resp = _daemon_send_line(sock_path, "COMPILE " + file)
+    println(resp)
+}
+
 fn cmd_daemon_status(sock_path) {
     if !_daemon_socket_exists(sock_path) {
         println("hexa daemon: not running (socket missing: " + sock_path + ")")
@@ -4618,6 +4721,13 @@ fn cmd_daemon_start(sock_path, idle_ttl_str) {
     let mut shutdown = false
     let mut last_activity_ns = mono_ns()
     let ns_per_sec = 1000000000
+    // R2 in-memory compile cache — parallel arrays (key → binary path)
+    // living for the daemon's whole lifetime. This is the fork-storm
+    // payoff: COMPILE for a source seen earlier this session returns the
+    // memoized binary path with NO `hexa build` fork.
+    let mut cache_keys = []
+    let mut cache_bins = []
+    let _mkc = exec("mkdir -p " + shq(_daemon_cache_dir()) + " 2>/dev/null")
     while !shutdown {
         // Wait up to 1 second for an incoming connection.
         let ready = net_select([listen_fd], 1000)
@@ -4634,11 +4744,54 @@ fn cmd_daemon_start(sock_path, idle_ttl_str) {
                 let client = net_accept(listen_fd)
                 if client >= 0 {
                     let line = _daemon_read_line(client)
-                    let h = _daemon_handle_line(line)
-                    let _w = net_write(client, h[0] + "\n")
+                    let mut reply = ""
+                    let mut did_shutdown = 0
+                    // R2 compile method — handled inline so it can mutate
+                    // the in-memory cache arrays. All other verbs route to
+                    // the pure R1 dispatcher.
+                    let ln = len(line)
+                    if ln >= 8 && line.substring(0, 8) == "COMPILE " {
+                        let cfile = line.substring(8, ln)
+                        if !file_exists(cfile) {
+                            reply = "ERR no such source: " + cfile
+                        } else {
+                            let key = _daemon_compute_key(cfile)
+                            let tmpbin = _daemon_cache_dir() + "/hexa_run." + key
+                            let idx = _daemon_key_index(cache_keys, key)
+                            if idx >= 0 && file_exists(cache_bins[idx]) {
+                                // In-memory HIT — no fork.
+                                reply = "HIT " + cache_bins[idx]
+                            } else if file_exists(tmpbin) {
+                                // Disk HIT (warm ~/.hexa-cache from a prior
+                                // process / call) — memoize in-memory, no fork.
+                                if idx < 0 {
+                                    cache_keys.push(key)
+                                    cache_bins.push(tmpbin)
+                                }
+                                reply = "HIT " + tmpbin
+                            } else {
+                                // MISS — build once, then memoize + mirror.
+                                let brc = _daemon_build_binary(cfile, tmpbin)
+                                if brc == 0 && file_exists(tmpbin) {
+                                    if idx < 0 {
+                                        cache_keys.push(key)
+                                        cache_bins.push(tmpbin)
+                                    }
+                                    reply = "BUILT " + tmpbin
+                                } else {
+                                    reply = "ERR build failed (rc=" + to_string(brc) + ") for " + cfile
+                                }
+                            }
+                        }
+                    } else {
+                        let h = _daemon_handle_line(line)
+                        reply = h[0]
+                        did_shutdown = h[1]
+                    }
+                    let _w = net_write(client, reply + "\n")
                     let _c = net_close(client)
                     last_activity_ns = mono_ns()
-                    if h[1] == 1 { shutdown = true }
+                    if did_shutdown == 1 { shutdown = true }
                 }
             }
         }
@@ -4660,22 +4813,24 @@ fn cmd_daemon(args) {
     let sub = if len(args) >= 1 { args[0] } else { "help" }
 
     if sub == "help" || sub == "-h" || sub == "--help" {
-        println("hexa daemon — long-running compile server (RFC 093 · R1 prototype)")
+        println("hexa daemon — long-running compile server (RFC 093 · R2)")
         println("")
         println("USAGE")
         println("  hexa daemon start    [--socket <path>] [--idle-ttl <sec>]")
         println("  hexa daemon start-bg [--socket <path>] [--idle-ttl <sec>]")
         println("  hexa daemon stop     [--socket <path>]")
         println("  hexa daemon status   [--socket <path>]")
-        println("  hexa daemon echo <text> [--socket <path>]")
+        println("  hexa daemon echo <text>      [--socket <path>]")
+        println("  hexa daemon compile <file.hexa> [--socket <path>]")
         println("")
         println("  Default socket path: /tmp/hexa-daemon-$USER.sock")
         println("  Default idle TTL:    0  (no auto-exit)")
         println("")
-        println("R1 SCOPE  (RFC 093 § Phase plan)")
-        println("  socket bind / accept loop / verb dispatch / lifecycle only.")
-        println("  Wire protocol = newline-terminated text (PING · ECHO · SHUTDOWN).")
-        println("  NO compile / cache / atlas logic — that lands in R2+.")
+        println("R2 SCOPE  (RFC 093 § Phase plan)")
+        println("  compile method + in-memory cache (path → built binary).")
+        println("  COMPILE <src> → HIT <bin> (memoized) | BUILT <bin> | ERR <reason>.")
+        println("  Cache key byte-identical to `hexa run` (~/.hexa-cache mirror).")
+        println("  Wire = newline text; binary length-prefix + atlas flush land in R3.")
         return
     }
 
@@ -4735,9 +4890,30 @@ fn cmd_daemon(args) {
         cmd_daemon_echo(pa[0], text)
         return
     }
+    if sub == "compile" {
+        // First non-flag arg = source file. Flags eaten by _daemon_parse_args.
+        let mut cfile = ""
+        let mut cj = 0
+        while cj < len(rest) {
+            let a = rest[cj]
+            if a == "--socket" || a == "--idle-ttl" {
+                cj = cj + 2
+                continue
+            }
+            cfile = a
+            break
+        }
+        if len(cfile) == 0 {
+            println("error: `hexa daemon compile` needs a source file")
+            exit(2)
+        }
+        let pa = _daemon_parse_args(rest, default_sock, "0")
+        cmd_daemon_compile(pa[0], cfile)
+        return
+    }
 
     println("error: unknown 'daemon' subverb: " + sub)
-    println("usage: hexa daemon start|start-bg|stop|status|echo [...]")
+    println("usage: hexa daemon start|start-bg|stop|status|echo|compile [...]")
     exit(2)
 }
 
@@ -6060,12 +6236,13 @@ if len(av) < 3 {
         }
         cmd_cache(ca_args)
     } else if sub == "daemon" {
-        // GO M10 (2026-05-25) — rfc_093 R1 prototype. `hexa daemon
-        // {start,start-bg,stop,status,echo}` over a per-user unix socket
-        // (default /tmp/hexa-daemon-$USER.sock). R1 is socket + verb +
-        // lifecycle skeleton ONLY — no compile logic. See cmd_daemon
-        // above and rfc_093_hexa_daemon.md § Phase plan for the R2-R4
-        // continuation (in-memory cache → multi-session test → prod ship).
+        // GO M10/M11 (2026-05-25) — rfc_093 R1+R2. `hexa daemon
+        // {start,start-bg,stop,status,echo,compile}` over a per-user unix
+        // socket (default /tmp/hexa-daemon-$USER.sock). R1 = socket + verb
+        // + lifecycle skeleton; R2 = `compile` method + in-memory cache
+        // (path → built binary, byte-identical ~/.hexa-cache key). See
+        // cmd_daemon above and rfc_093_hexa_daemon.md § Phase plan for the
+        // R3-R4 continuation (multi-session latency → prod ship).
         let mut dm_args = []
         let mut dmi = 3
         while dmi < len(av) {

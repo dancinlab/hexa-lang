@@ -413,4 +413,26 @@ in-memory code. 권장 = daemon 시작 시 자기 binary mtime 캐시 → 주기
 - 본 RFC 는 **draft only — 코드 변경 0건**
 - 머지 후 별도 PR 체인 (R1–R4) 으로 실제 wiring
 
+## §12 implementation status (구현 진행)
+
+| 라운드 | PR | status | 비고 |
+|---|---|---|---|
+| **R1** | #904 (GO M10) | ✅ landed | socket skeleton · `{start,start-bg,stop,status,echo}` 버브 · newline-text wire (PING/ECHO/SHUTDOWN) · idle-TTL self-exit · stale-socket cleanup · runtime.c socket primitive 복원. 4-step e2e (`tests/m_daemon_r1_test.hexa`). |
+| **R2** | (this) GO M11 | ✅ landed | `compile` 메서드 + in-memory cache. `COMPILE <src>` → `HIT <bin>` (memoized) / `BUILT <bin>` / `ERR <reason>`. 캐시 키 = `sha256(source)[0:16] + "_" + version_str()` — **`hexa run` / `hexa build` 과 byte-identical** → `~/.hexa-cache/hexa_run.<key>` 슬롯 공유. 3 falsifier (`tests/m_daemon_r2_test.hexa`): R2-1 cache hit · R2-2 fork-mode fallback · R2-3 determinism. |
+| **R3** | (next) | ⛔ todo | F-DAEMON-2 (N=100 latency speedup) · F-DAEMON-3 (crash-respawn) · multi-uid reject. 추가: (a) `hexa run` autospawn wiring (`HEXA_DAEMON_AUTOSPAWN` probe → daemon `compile` → exec) · (b) **binary u32-LE length-prefix wire** (현 `net_read` 가 strlen 기반이라 embedded NUL 미보존 → NUL-preserving `net_read_raw` 빌트인 선행 필요) · (c) AST/lexer/lower in-memory 유지 (R2 는 binary-path 매핑까지만) · (d) atlas SSOT hash flush (F-DAEMON-4). |
+| **R4** | (later) | ⛔ todo | prod ship — verb 안정화 · 문서 · `hexa init` 안내 · 10/10 falsifier closure. |
+
+### R2 honest carve-out
+
+- **R2 의 "in-memory cache" 는 binary-path 매핑까지만** — §5.1 의 full
+  계층(atlas/lexer/parse/lower 까지 in-process 유지)은 R3. R2 가 증명하는 것은
+  "daemon 이 같은 source 를 두 번째 호출부터 `hexa build` fork 없이 즉시 캐시
+  히트 반환" — fork-storm internal axis 의 1차 closure.
+- **wire 는 여전히 newline-text** — RFC §4.1 의 binary u32-LE length-prefix 는
+  현 runtime 의 `net_read`(strlen 기반, NUL 미보존) 제약으로 R3 로 연기.
+  `compile` 버브 자체가 R2 의 framing 업그레이드.
+- **autospawn 미배선** — `hexa run` 은 R2 에서도 항상 fork-mode (행동 변화 0건).
+  daemon 사용은 명시적 `hexa daemon compile` 만. R3 가 `HEXA_DAEMON_AUTOSPAWN`
+  probe 를 `hexa run` 에 배선.
+
 (끝.)

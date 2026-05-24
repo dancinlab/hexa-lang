@@ -308,3 +308,27 @@ axis 의 첫 설계서.
   의 effectiveness 자동 감시.
 - [ ] multi-target sweep (manifest 10 entry 전수 cold vs HIT) — per-script speedup 분포.
 
+## 2026-05-25 · M11 — hexa daemon R2 (compile method + in-memory cache, RFC 093 Phase 2)
+
+> M10 (PR #904) 가 R1 (socket + verb + lifecycle) 을 ship — wire 는 newline-text echo 만, 실제 compile 없음. M11 이 RFC § Phase plan **R2** ("in-memory cache + content-hash 키 + `~/.hexa-cache` 미러 + 실제 compile method") 를 구현. fork-storm *internal* axis 의 1차 closure — daemon 이 같은 source 를 **두 번째 호출부터 `hexa build` fork 없이** 즉시 캐시 히트 반환.
+
+- [x] M11 — `self/main.hexa` daemon `compile` 메서드 + in-memory cache:
+  - 신규 helper: `_daemon_cache_dir()` (cmd_run 의 `$HOME/.hexa-cache` 미러) · `_daemon_compute_key(file)` (**cmd_run 과 byte-identical** = `sha256_file(file).substring(0,16) + "_" + version_str()`) · `_daemon_key_index(keys, key)` (parallel-array 선형 스캔 — hexa_v2 codegen 의 map-literal 미지원 회피, L3459) · `_daemon_build_binary(file, tmpbin)` (cmd_run 의 `hexa build -o` + inflight rename 로직 추출).
+  - accept loop 에 in-memory cache 두 parallel array (`cache_keys` / `cache_bins`) — daemon 수명 동안 유지. `COMPILE <src>` 인라인 처리 (state mutation 필요 → 순수 `_daemon_handle_line` 대신): in-memory HIT (`idx>=0 && file_exists`) → `HIT <bin>` · disk HIT (`file_exists(tmpbin)`, warm `~/.hexa-cache`) → memoize + `HIT <bin>` · MISS → `_daemon_build_binary` 1회 + memoize + `BUILT <bin>` · build fail → `ERR ...`. 중복 push 가드 (`if idx < 0`).
+  - 기존 PING/ECHO/SHUTDOWN 은 `_daemon_handle_line` 순수 디스패처 유지 (R1 backward-compat — m_daemon_r1_test 무영향).
+  - client: `cmd_daemon_compile(sock, file)` + `} else if sub == "compile"` 디스패치 + help/usage 갱신.
+- [x] M11 — `tests/m_daemon_r2_test.hexa` 신규 e2e (3 falsifier): F-DAEMON-R2-1 (같은 source 2회 compile → 1st `BUILT`, 2nd in-memory `HIT` 동일 path · no rebuild) · F-DAEMON-R2-2 (daemon down → `compile` "not running" rc=1 + `hexa run` fork-mode 정상) · F-DAEMON-R2-3 (daemon-built binary ≡ fork-mode `hexa build` byte-identical · `cmp -s`). `nc`/`socat` 무의존.
+- [x] M11 — `docs/rfc/rfc_drafts_2026_05_25/rfc_093_hexa_daemon.md` §12 implementation status 표 신규 (R1 ✅ #904 · R2 ✅ this · R3/R4 todo) + R2 honest carve-out.
+
+### 디자인 결정 (R2)
+
+- **cache key byte-identical 제약** — `_daemon_compute_key` 가 cmd_run / cmd_build / _batch_run_one 의 `sha256(source)[0:16] + "_" + version_str()` 와 정확히 일치해야 함. drift 시 daemon-built 와 fork-built 가 다른 슬롯 → M7 `version_str` drift-check + F-DAEMON-R2-3 determinism falsifier 가 잡음.
+- **in-memory cache = binary-path 매핑까지만** (RFC §5.1 의 full atlas/lexer/parse/lower 계층 in-process 유지는 R3). R2 가 증명하는 것 = "2번째 호출부터 fork 없이 캐시 히트".
+- **wire 는 여전히 newline-text** (binary u32-LE length-prefix 아님). 현 `net_read` 가 strlen 기반 → embedded NUL 미보존 → binary LE prefix 의 high zero-byte 가 truncate. NUL-preserving `net_read_raw` 빌트인 선행 필요 → R3 로 연기. `compile` 버브 자체가 R2 의 framing 업그레이드.
+- **autospawn 미배선** — `hexa run` 은 R2 에서도 항상 fork-mode (행동 변화 0건). `HEXA_DAEMON_AUTOSPAWN` probe → daemon compile → exec 배선은 R3.
+- **map 회피** — parallel array (`cache_keys`/`cache_bins`). hexa_v2 transpiler 가 map 리터럴 미지원 (L3459) + R1 이 같은 이유로 map 회피. 캐시는 작음 (세션당 distinct source 1 entry).
+
+### 다음 (R3)
+
+- [ ] R3 — (a) `hexa run` autospawn wiring (`HEXA_DAEMON_AUTOSPAWN`/socket 존재 시 daemon `compile` → 받은 binary path exec · daemon down 시 fork fallback) · (b) binary u32-LE length-prefix wire (선행: NUL-preserving `net_read_raw` 빌트인) · (c) AST/lexer/lower in-memory 유지 · (d) atlas SSOT hash flush (F-DAEMON-4) · (e) N=100 latency (F-DAEMON-2) + crash-respawn (F-DAEMON-3) + multi-uid reject.
+
