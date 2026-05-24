@@ -5,10 +5,13 @@
 //  @usage(use "stdlib/hashset"; let s = hashset_new(); hashset_insert(s, x))
 //
 //  ── module governance metadata ─────────────────────────────────────────────
-//  @version 0.1.0
+//  @version 0.2.0
 //  @capabilities [hashset_new, hashset_from_array, hashset_insert,
 //                 hashset_contains, hashset_remove, hashset_len,
-//                 hashset_is_empty, hashset_clear, hashset_to_array]
+//                 hashset_is_empty, hashset_clear, hashset_to_array,
+//                 hashset_union, hashset_intersect, hashset_difference,
+//                 hashset_symmetric_difference, hashset_is_subset,
+//                 hashset_is_superset]
 //  @stability preview
 //  @since 2026-05-24
 //  @maintainer hexa-core
@@ -154,4 +157,102 @@ pub fn hashset_is_empty(s: HashSet) -> bool {
 // pipe through stdlib/alloc/collections.sort().
 pub fn hashset_to_array(s: HashSet) {
     return dict_keys(s.items)
+}
+
+// ── set algebra (RFC r16 P1) ───────────────────────────────────────────────
+//
+// union / intersect / difference / symmetric_difference / is_subset /
+// is_superset. Each set-returning op produces a NEW HashSet (Python `|` vs
+// `|=` distinction — ops are non-mutating; add/remove mutate). Built on the
+// existing primitives so the stringified-element model (`1`/`"1"` collide,
+// the documented P1 limitation) is consistent across all ops. O(n) over the
+// operands' element snapshots; each membership probe is O(1) amortised.
+//
+// NOTE: hashset_to_array yields the normalised (stringified) keys, so
+// re-inserting them is idempotent under to_string — the algebra is coherent.
+
+// a ∪ b — every element of a and b.
+pub fn hashset_union(a: HashSet, b: HashSet) -> HashSet {
+    let out = hashset_new()
+    let ka = hashset_to_array(a)
+    let mut i = 0
+    while i < len(ka) {
+        hashset_insert(out, ka[i])
+        i = i + 1
+    }
+    let kb = hashset_to_array(b)
+    let mut j = 0
+    while j < len(kb) {
+        hashset_insert(out, kb[j])
+        j = j + 1
+    }
+    return out
+}
+
+// a ∩ b — elements present in BOTH a and b.
+pub fn hashset_intersect(a: HashSet, b: HashSet) -> HashSet {
+    let out = hashset_new()
+    let ka = hashset_to_array(a)
+    let mut i = 0
+    while i < len(ka) {
+        if hashset_contains(b, ka[i]) {
+            hashset_insert(out, ka[i])
+        }
+        i = i + 1
+    }
+    return out
+}
+
+// a \ b — elements in a but NOT in b.
+pub fn hashset_difference(a: HashSet, b: HashSet) -> HashSet {
+    let out = hashset_new()
+    let ka = hashset_to_array(a)
+    let mut i = 0
+    while i < len(ka) {
+        if !hashset_contains(b, ka[i]) {
+            hashset_insert(out, ka[i])
+        }
+        i = i + 1
+    }
+    return out
+}
+
+// a △ b — elements in exactly one of a or b ((a\b) ∪ (b\a)).
+pub fn hashset_symmetric_difference(a: HashSet, b: HashSet) -> HashSet {
+    let out = hashset_new()
+    let ka = hashset_to_array(a)
+    let mut i = 0
+    while i < len(ka) {
+        if !hashset_contains(b, ka[i]) {
+            hashset_insert(out, ka[i])
+        }
+        i = i + 1
+    }
+    let kb = hashset_to_array(b)
+    let mut j = 0
+    while j < len(kb) {
+        if !hashset_contains(a, kb[j]) {
+            hashset_insert(out, kb[j])
+        }
+        j = j + 1
+    }
+    return out
+}
+
+// a ⊆ b — true iff every element of a is also in b.
+pub fn hashset_is_subset(a: HashSet, b: HashSet) -> bool {
+    let ka = hashset_to_array(a)
+    let mut i = 0
+    while i < len(ka) {
+        if !hashset_contains(b, ka[i]) {
+            return false
+        }
+        i = i + 1
+    }
+    return true
+}
+
+// a ⊇ b — true iff a contains every element of b (b ⊆ a).
+pub fn hashset_is_superset(a: HashSet, b: HashSet) -> bool {
+    return hashset_is_subset(b, a)
 }
