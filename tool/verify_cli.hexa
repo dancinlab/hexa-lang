@@ -155,6 +155,8 @@ fn cmd_rubric() {
     println("             3-op: tknn_chern (RFC 046 TKNN Chern/Hall integer · Diophantine gap label)")
     println("  float fns: welch_t_crit(df)  wilson_hilferty_p(t,df)   → 🟢 NUMERICAL (ε=1e-9")
     println("             tolerance; libm-class, NOT closed-form; extend _recompute_float on gap)")
+    println("             compound_coverage(x,N) → 1-(1-x)^N  (geometric cumulative-removal, 2-arg)")
+    println("             cycles_to_target(x,tgt) → min N s.t. (1-x)^N≤tgt  (TTR-MN ink-clearance timeline, 2-arg)")
     println("             chsh_tsirelson()   → 2*sqrt(2)  (RFC 045 CHSH Tsirelson bound, 0-arg)")
     println("             hardy_bound(N)     → p_N^max    (RFC 045 multipartite Hardy, Adhikary-Mandal Eq.5)")
     println("             cdr_perfect_mitigation(p) → 1/(1-p)  (RFC 045 CDR Claim 2, Czarnik 2021)")
@@ -1223,6 +1225,46 @@ fn _hagen_poiseuille(r_rad: float, d_p: float, mu_visc: float, l_len: float) -> 
     return pi_hp * r4 * d_p / (8.0 * mu_visc * l_len)
 }
 
+// Compound-removal recurrence (geometric decay of a residual fraction).
+// Each cycle removes fraction x of the REMAINING quantity, so after N
+// cycles the cumulative coverage is cov(N) = 1 - (1-x)^N. Computed by a
+// deterministic cumulative-product loop (no transcendental builtin) →
+// libm-class 🟢 Tier2. Models TTR-MN tattoo-ink removal: per-cycle removal
+// x, N microneedle-patch applications, target 90%+ cumulative clearance.
+fn _compound_coverage(x: float, big_n: int) -> float {
+    if x <= 0.0 { return 0.0 }
+    if x >= 1.0 { return 1.0 }
+    let r = 1.0 - x
+    let mut prod = 1.0
+    let mut i = 0
+    while i < big_n {
+        prod = prod * r
+        i = i + 1
+    }
+    return 1.0 - prod
+}
+
+// Inverse of _compound_coverage: smallest cycle count N such that the
+// residual fraction (1-x)^N drops to ≤ target (i.e. cumulative coverage
+// ≥ 1-target). Same cumulative-product loop, crossing the threshold —
+// returns an exact integer count as float. cycles_to_target(x, 0.1) is
+// the load-bearing TTR-MN timeline value (N → weeks/months at 90%).
+fn _cycles_to_target(x: float, target: float) -> float {
+    if x <= 0.0 { return _NOCALC_F }
+    if target <= 0.0 { return _NOCALC_F }
+    if x >= 1.0 { return 1.0 }
+    if target >= 1.0 { return 0.0 }
+    let r = 1.0 - x
+    let mut prod = 1.0
+    let mut n = 0
+    while prod > target {
+        prod = prod * r
+        n = n + 1
+        if n > 1000000 { return _NOCALC_F }
+    }
+    return to_float(n)
+}
+
 // float dispatch — fn_name → recompute. 0-arg fns ignore a0/a1/a2/a3
 // (constants); 1-arg fns take a0; 2-arg take a0,a1; 3-arg take a0,a1,a2;
 // 4-arg take a0,a1,a2,a3 (Phase 3 — hagen_poiseuille). Returns _NOCALC_F
@@ -1233,6 +1275,15 @@ fn _recompute_float(fn_name: string, a0: float, a1: float, a2: float, a3: float,
     if fn_name == "wilson_hilferty_p" {
         if argc < 2 { return _NOCALC_F }
         return _wilson_hilferty_p(a0, a1)
+    }
+    // compound-removal recurrence (TTR-MN ink-clearance timeline)
+    if fn_name == "compound_coverage" {
+        if argc < 2 { return _NOCALC_F }
+        return _compound_coverage(a0, to_int(a1))
+    }
+    if fn_name == "cycles_to_target" {
+        if argc < 2 { return _NOCALC_F }
+        return _cycles_to_target(a0, a1)
     }
     // RFC 045 qmirror anchors:
     //   chsh_tsirelson()       0-arg closed-form: 2*sqrt(2)
@@ -1471,6 +1522,7 @@ fn _recompute_float(fn_name: string, a0: float, a1: float, a2: float, a3: float,
 // cmd_expr can route float args before to_int truncation).
 fn _is_float_fn(fn_name: string) -> bool {
     return fn_name == "welch_t_crit" || fn_name == "wilson_hilferty_p"
+        || fn_name == "compound_coverage" || fn_name == "cycles_to_target"
         || fn_name == "chsh_tsirelson" || fn_name == "hardy_bound"
         || fn_name == "cdr_perfect_mitigation" || fn_name == "wigner_stabilizer_sn"
         || fn_name == "mabk_quantum_max"
