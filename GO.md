@@ -11,7 +11,7 @@
 - [x] M3 — `tool/precompile.json` declarative manifest (어떤 script 가 precompile 대상). Go 의 `go install <pkg>` 패턴 mirror. demo: 2 entry (atlas_cli · build_hexa_cli).
 - [ ] M4 — release tarball CI 통합 (`tool/build_precompile.hexa` 자동 호출 + tar 에 `release/precompile/` 동봉)
 - [x] M5 — hexa daemon RFC draft (fork-storm internal axis · design-only · *직교* — run-time persistent process vs M2/M3 release-time precompile) → `docs/rfc/rfc_drafts_2026_05_25/rfc_093_hexa_daemon.md`. 권장 = Option A stand-alone daemon (`hexa-daemon` verb · unix socket · opt-in autospawn · fork-mode fallback).
-- [ ] M6 — manifest 확장 (demo 2 entry → 실제 hot scripts 전수)
+- [x] M6 — manifest 확장 (demo 2 entry → 10 production-hot scripts) + schema 확장 (descriptions/categories sister keys, additive)
 - [ ] M7 — `version_str()` 자동 drift 검사 (M2/M3 builder ↔ cmd_run 동일 version 보장)
 
 ## cross-link
