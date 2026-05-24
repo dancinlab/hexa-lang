@@ -253,7 +253,7 @@ fn main() {
                 let mut rs = out.substring(mi + ml, len(out))
                 let rsl = len(rs)
                 if rsl > 0 && rs.substring(rsl - 1, rsl) == "\n" { rs = rs.substring(0, rsl - 1) }
-                rc = parse_int_str(rs)
+                rc = rs.parse_int()
             }
             if rc == 0 && file_exists(staging) {
                 let _rn = exec("mv -f " + _shq(staging) + " " + _shq(target) + " 2>/dev/null")

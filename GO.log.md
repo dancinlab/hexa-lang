@@ -199,3 +199,12 @@ axis 의 첫 설계서.
 - [ ] M8 — `scripts` ↔ `descriptions` ↔ `categories` key consistency lint (CI / pre-commit).
 - [ ] M9 — manifest 객체 형식 migration (스키마 v2) — 파서 동시 수정.
 
+## 2026-05-25T11:00Z — M8: `parse_int_str` undefined → `.parse_int()` swap (M6 follow-up unblock)
+
+> M6 (PR #895) 가 manifest 10 entry 확장 시 `tool/build_precompile.hexa --list` e2e 가 `parse_int_str` undefined builtin 으로 막힘. 분석 결과 `parse_int_str` 은 builtin 이 아니라 `self/main.hexa:3575` / `tests/m_cache_gc_test.hexa:34` 의 **local helper** (awk-based 우회). M2/M3 author 가 helper 정의 없이 호출. 코덱젠에는 진짜 builtin `s.parse_int()` (← `str_parse_int` → `hexa_str_parse_int`) 이 이미 존재 — trim/sign/hex 지원, 순수 digit input 에서는 byte-eq 동작.
+
+- [x] M8 — `tool/build_precompile.hexa:256` `parse_int_str(rs)` → `rs.parse_int()` 1-line swap. occam g0 (call-site 교체 = builtin 추가/runtime 재생성 회피).
+- [x] gate — `hexa.real parse tool/build_precompile.hexa` clean.
+- [x] e2e — `HEXA_LANG=$(pwd) hexa-run tool/build_precompile.hexa --list` PASS (manifest=10 + 10 entry + computed key 출력, exit 0).
+- [x] M6 unblock — `--list` e2e 살아남 → PR #895 의 deferred 후속 closure.
+
