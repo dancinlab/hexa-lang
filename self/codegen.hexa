@@ -406,6 +406,8 @@ fn cg_string_sym(name) {
     if name == "str_char_at"     { return "hexa_str_char_at" }
     if name == "str_char_code_at"{ return "hexa_str_char_code_at" }
     if name == "str_char_count"    { return "hexa_str_char_count" }
+    if name == "str_graphemes"     { return "hexa_str_graphemes" }
+    if name == "str_grapheme_count"{ return "hexa_str_grapheme_count" }
     if name == "str_nth_char"      { return "hexa_str_nth_char" }
     if name == "str_char_substring"{ return "hexa_str_char_substring" }
     if name == "str_byte_at"       { return "hexa_str_byte_at" }
@@ -3740,13 +3742,17 @@ fn gen2_method_builtin(obj_expr, method, args) {
     if method == "codepoints" {
         return cg_string_sym("str_chars") + "(" + obj_expr + ")"
     }
-    // PROBE r14-U (2026-05-23) — `.graphemes()` UAX-29 minimal stub.
-    // DEGRADED: aliases to `.chars()` (codepoint walk). Correct for ASCII
-    // and non-combining text; for ZWJ/RI/marks/Hangul L+V+T it returns
-    // codepoint count, NOT canonical UAX-29 cluster count. Full UAX-29
-    // requires a GraphemeBreak property table — deferred to follow-up RFC.
+    // PROBE r15-D10 (2026-05-24) — `.graphemes()` real UAX-29 extended
+    // grapheme cluster segmentation (replaces the r14-U `.chars()`-alias
+    // stub). hexa_str_graphemes (runtime_core.c) applies UAX-29 GB rules
+    // (Extend/ZWJ-pictographic/RI/Hangul L·V·T) via a pure-C GraphemeBreak
+    // classifier. `.grapheme_count()` is the count-only fast-path (symmetric
+    // with `.char_count()` ↔ `.chars()`).
     if method == "graphemes" {
-        return cg_string_sym("str_chars") + "(" + obj_expr + ")"
+        return cg_string_sym("str_graphemes") + "(" + obj_expr + ")"
+    }
+    if method == "grapheme_count" {
+        return cg_string_sym("str_grapheme_count") + "(" + obj_expr + ")"
     }
     // 2026-05-19 parity-gate t45b — UTF-8 char-aware string methods.
     // hexa strings are byte-sequenced UTF-8; these are codepoint-indexed
@@ -6703,13 +6709,16 @@ fn gen2_expr(node) {
             if method == "codepoints" {
                 return cg_string_sym("str_chars") + "(" + obj + ")"
             }
-            // PROBE r14-U (2026-05-23) — `.graphemes()` UAX-29 minimal stub.
-            // DEGRADED: aliases to `.chars()` (codepoint walk). Correct for
-            // ASCII and non-combining text; ZWJ/RI/marks/Hangul L+V+T return
-            // codepoint count, NOT canonical UAX-29 cluster count. Full
-            // UAX-29 requires a GraphemeBreak property table — deferred.
+            // PROBE r15-D10 (2026-05-24) — `.graphemes()` real UAX-29
+            // extended grapheme cluster segmentation (replaces r14-U
+            // `.chars()`-alias stub). Mirror in gen2_method_builtin.
+            // `.grapheme_count()` (count-only fast-path) routes through the
+            // gen2_method_builtin fallback at the bottom of this branch.
             if method == "graphemes" {
-                return cg_string_sym("str_chars") + "(" + obj + ")"
+                return cg_string_sym("str_graphemes") + "(" + obj + ")"
+            }
+            if method == "grapheme_count" {
+                return cg_string_sym("str_grapheme_count") + "(" + obj + ")"
             }
             if method == "contains" {
                 return "hexa_contains_poly(" + obj + ", " + gen2_expr(node.args[0]) + ")"

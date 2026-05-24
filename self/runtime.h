@@ -573,6 +573,8 @@ HexaVal hexa_array_get(HexaVal arr, int64_t idx);                               
 HexaVal hexa_array_last(HexaVal arr);                                              /* runtime_core.c — .last() codegen, single-eval */
 HexaVal hexa_str_char_at(HexaVal s, HexaVal idx);                                  /* runtime.c:4156 */
 HexaVal hexa_str_char_count(HexaVal s);                                            /* runtime.c — UTF-8 codepoint count */
+HexaVal hexa_str_graphemes(HexaVal s);                                             /* runtime_core.c — UAX-29 grapheme cluster substrings (r15-D10) */
+HexaVal hexa_str_grapheme_count(HexaVal s);                                        /* runtime_core.c — UAX-29 grapheme cluster count (r15-D10) */
 HexaVal hexa_str_nth_char(HexaVal s, HexaVal n);                                   /* runtime.c — nth codepoint as 1-cp str */
 HexaVal hexa_str_char_substring(HexaVal s, HexaVal start, HexaVal end);            /* runtime.c — codepoint-indexed [start..end) substring */
 HexaVal hexa_str_byte_at(HexaVal s, HexaVal idx);                                  /* runtime.c — byte at offset (0..255) or -1 OOB */

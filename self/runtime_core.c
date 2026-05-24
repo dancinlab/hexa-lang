@@ -4575,6 +4575,296 @@ HexaVal hexa_str_chars(HexaVal s) {
 }
 #endif
 
+// ── UAX-29 extended grapheme cluster segmentation (PROBE r15-D10) ──────
+// `.graphemes()` / `.grapheme_count()`.  Prior to r15-D10 `.graphemes()`
+// was a DEGRADED stub aliased to `.chars()` (codepoint walk) — wrong for
+// combining marks, ZWJ emoji families, regional-indicator flags, and
+// conjoining Hangul.  This implements the Unicode Text Segmentation
+// (UAX-29) extended grapheme cluster boundary rules via a pure-C
+// GraphemeBreak property classifier — no external dependency, matching
+// hexa's no-LLVM / generated-table identity (RFC §5 option 5-A).
+//
+// Covered GB rules:  GB1/GB2 (sot/eot), GB3 (CR × LF), GB4/GB5
+// (Control/CR/LF break), GB6/GB7/GB8 (Hangul L/V/T/LV/LVT), GB9
+// (× Extend, × ZWJ), GB9a (× SpacingMark), GB11 (Extended_Pictographic
+// Extend* ZWJ × Extended_Pictographic — emoji families), GB12/GB13
+// (regional-indicator pairs), GB999 (otherwise break).
+// Deferred (rare; not in the r15-D9 acceptance set):  GB9b (Prepend ×).
+//
+// The property tables are range-compressed and cover the classes that
+// drive real boundaries (Extend / SpacingMark / ZWJ / Regional_Indicator
+// / Extended_Pictographic / Hangul L·V·T·LV·LVT / Control / CR / LF).
+// Unlisted codepoints classify as "Other" → boundary on both sides
+// (GB999), which is the correct default for the vast majority of text.
+
+// GraphemeBreak property classes (internal enum).
+#define HXGB_OTHER   0
+#define HXGB_CR      1
+#define HXGB_LF      2
+#define HXGB_CONTROL 3
+#define HXGB_EXTEND  4
+#define HXGB_ZWJ     5
+#define HXGB_RI      6   /* Regional_Indicator */
+#define HXGB_PREPEND 7
+#define HXGB_SPMARK  8   /* SpacingMark */
+#define HXGB_L       9
+#define HXGB_V       10
+#define HXGB_T       11
+#define HXGB_LV      12
+#define HXGB_LVT     13
+#define HXGB_EXTPICT 14  /* Extended_Pictographic */
+
+// Decode the UTF-8 codepoint starting at p[i] (n = total bytes). Writes
+// the byte length of the sequence into *outlen. Invalid lead bytes decode
+// as the raw byte with length 1 (never infinite-loop). Mirrors the
+// _hx_utf8_cp_len length table used elsewhere in this file.
+static int32_t _hx_utf8_decode(const char* p, int64_t n, int64_t i, int* outlen) {
+    unsigned char b0 = (unsigned char)p[i];
+    if (b0 < 0x80) { *outlen = 1; return b0; }
+    if ((b0 & 0xE0) == 0xC0) {
+        if (i + 1 < n) {
+            *outlen = 2;
+            return ((b0 & 0x1F) << 6) | ((unsigned char)p[i + 1] & 0x3F);
+        }
+        *outlen = 1; return b0;
+    }
+    if ((b0 & 0xF0) == 0xE0) {
+        if (i + 2 < n) {
+            *outlen = 3;
+            return ((b0 & 0x0F) << 12) | (((unsigned char)p[i + 1] & 0x3F) << 6)
+                 | ((unsigned char)p[i + 2] & 0x3F);
+        }
+        *outlen = 1; return b0;
+    }
+    if ((b0 & 0xF8) == 0xF0) {
+        if (i + 3 < n) {
+            *outlen = 4;
+            return ((b0 & 0x07) << 18) | (((unsigned char)p[i + 1] & 0x3F) << 12)
+                 | (((unsigned char)p[i + 2] & 0x3F) << 6)
+                 | ((unsigned char)p[i + 3] & 0x3F);
+        }
+        *outlen = 1; return b0;
+    }
+    *outlen = 1; return b0;  // invalid lead byte
+}
+
+// Classify a codepoint into its GraphemeBreak property. Range-compressed;
+// reasonably-scoped coverage (full UCD not required — the unlisted
+// majority is HXGB_OTHER, the correct default).
+static int _hx_gb_class(int32_t c) {
+    // CR / LF / Control (GB3/GB4/GB5)
+    if (c == 0x0D) return HXGB_CR;
+    if (c == 0x0A) return HXGB_LF;
+    if (c == 0x200D) return HXGB_ZWJ;                       // ZERO WIDTH JOINER
+    if (c < 0x20 || (c >= 0x7F && c <= 0x9F)) return HXGB_CONTROL;
+    if (c == 0x00AD) return HXGB_CONTROL;                   // SOFT HYPHEN
+    if (c == 0x200B || c == 0x200C) return HXGB_CONTROL;    // ZWSP / ZWNJ
+    if (c >= 0x2028 && c <= 0x202E) return HXGB_CONTROL;    // line/para sep + bidi
+    if (c == 0xFEFF) return HXGB_CONTROL;                   // BOM / ZWNBSP
+
+    // Regional_Indicator (GB12/GB13)
+    if (c >= 0x1F1E6 && c <= 0x1F1FF) return HXGB_RI;
+
+    // Hangul conjoining jamo + precomposed syllables (GB6/GB7/GB8)
+    if (c >= 0x1100 && c <= 0x115F) return HXGB_L;          // L (leading)
+    if (c >= 0xA960 && c <= 0xA97C) return HXGB_L;          // L (extended-A)
+    if (c >= 0x1160 && c <= 0x11A7) return HXGB_V;          // V (vowel)
+    if (c >= 0xD7B0 && c <= 0xD7C6) return HXGB_V;          // V (extended-B)
+    if (c >= 0x11A8 && c <= 0x11FF) return HXGB_T;          // T (trailing)
+    if (c >= 0xD7CB && c <= 0xD7FB) return HXGB_T;          // T (extended-B)
+    if (c >= 0xAC00 && c <= 0xD7A3) {                       // precomposed syllable
+        return ((c - 0xAC00) % 28 == 0) ? HXGB_LV : HXGB_LVT;
+    }
+
+    // Extend — combining marks / variation selectors (GB9). Range-compressed
+    // major blocks; covers the common scripts plus emoji modifiers.
+    if (c >= 0x0300 && c <= 0x036F) return HXGB_EXTEND;     // combining diacritical
+    if (c >= 0x0483 && c <= 0x0489) return HXGB_EXTEND;     // Cyrillic combining
+    if (c >= 0x0591 && c <= 0x05BD) return HXGB_EXTEND;     // Hebrew points
+    if (c == 0x05BF || c == 0x05C1 || c == 0x05C2 || c == 0x05C4 || c == 0x05C5 || c == 0x05C7)
+        return HXGB_EXTEND;                                 // Hebrew points
+    if (c >= 0x0610 && c <= 0x061A) return HXGB_EXTEND;     // Arabic
+    if (c >= 0x064B && c <= 0x065F) return HXGB_EXTEND;     // Arabic diacritics
+    if (c == 0x0670) return HXGB_EXTEND;                    // Arabic superscript alef
+    if (c >= 0x06D6 && c <= 0x06DC) return HXGB_EXTEND;     // Arabic small high
+    if (c >= 0x06DF && c <= 0x06E4) return HXGB_EXTEND;
+    if (c == 0x06E7 || c == 0x06E8) return HXGB_EXTEND;
+    if (c >= 0x06EA && c <= 0x06ED) return HXGB_EXTEND;
+    if (c >= 0x0900 && c <= 0x0903) return HXGB_EXTEND;     // Devanagari (approx)
+    if (c >= 0x093A && c <= 0x094F) return HXGB_EXTEND;
+    if (c >= 0x0951 && c <= 0x0957) return HXGB_EXTEND;
+    if (c >= 0x0E31 && c <= 0x0E3A) return HXGB_EXTEND;     // Thai (approx)
+    if (c >= 0x0E47 && c <= 0x0E4E) return HXGB_EXTEND;
+    if (c >= 0x0F71 && c <= 0x0F84) return HXGB_EXTEND;     // Tibetan (approx)
+    if (c >= 0x135D && c <= 0x135F) return HXGB_EXTEND;     // Ethiopic combining
+    if (c >= 0x1AB0 && c <= 0x1AFF) return HXGB_EXTEND;     // combining diacritical ext
+    if (c >= 0x1DC0 && c <= 0x1DFF) return HXGB_EXTEND;     // combining diacritical supp
+    if (c >= 0x20D0 && c <= 0x20FF) return HXGB_EXTEND;     // combining for symbols
+    if (c >= 0xFE00 && c <= 0xFE0F) return HXGB_EXTEND;     // variation selectors
+    if (c >= 0xFE20 && c <= 0xFE2F) return HXGB_EXTEND;     // combining half marks
+    if (c >= 0xE0100 && c <= 0xE01EF) return HXGB_EXTEND;   // variation selectors supp
+    if (c >= 0x1F3FB && c <= 0x1F3FF) return HXGB_EXTEND;   // emoji skin-tone modifiers
+
+    // Extended_Pictographic (GB11) — emoji. Range-compressed broad blocks.
+    if (c >= 0x1F000 && c <= 0x1FAFF) {
+        if (c >= 0x1F1E6 && c <= 0x1F1FF) return HXGB_RI;   // (RI handled above; guard)
+        return HXGB_EXTPICT;
+    }
+    if (c >= 0x2600 && c <= 0x26FF) return HXGB_EXTPICT;    // misc symbols
+    if (c >= 0x2700 && c <= 0x27BF) return HXGB_EXTPICT;    // dingbats
+    if (c == 0x2049 || c == 0x203C) return HXGB_EXTPICT;
+    if (c >= 0x2194 && c <= 0x21AA) return HXGB_EXTPICT;
+    if (c >= 0x231A && c <= 0x231B) return HXGB_EXTPICT;
+    if (c == 0x2328 || c == 0x23CF) return HXGB_EXTPICT;
+    if (c >= 0x23E9 && c <= 0x23FA) return HXGB_EXTPICT;
+    if (c == 0x24C2) return HXGB_EXTPICT;
+    if (c >= 0x25AA && c <= 0x25FE) return HXGB_EXTPICT;
+    if (c == 0x2B50 || c == 0x2B55 || c == 0x2B1B || c == 0x2B1C) return HXGB_EXTPICT;
+    if (c == 0x3030 || c == 0x303D || c == 0x3297 || c == 0x3299) return HXGB_EXTPICT;
+
+    return HXGB_OTHER;
+}
+
+// Determine whether there is a grapheme cluster boundary BETWEEN the
+// codepoint with class `prev` and the codepoint with class `cur`.
+// `ri_odd` = number of consecutive Regional_Indicators so far before
+// `cur` is odd (GB12/GB13 — break only between RI pairs, not within).
+// `after_zwj_pict` = the previous codepoint was a ZWJ that was itself
+// preceded by an Extended_Pictographic (Extend*) run (GB11).
+// Returns 1 if a boundary exists (cluster break), 0 if no break (join).
+static int _hx_gb_is_boundary(int prev, int cur, int ri_odd, int after_zwj_pict) {
+    // GB3: CR × LF — no break inside a CRLF pair.
+    if (prev == HXGB_CR && cur == HXGB_LF) return 0;
+    // GB4: (Control | CR | LF) ÷  — break after.
+    if (prev == HXGB_CONTROL || prev == HXGB_CR || prev == HXGB_LF) return 1;
+    // GB5: ÷ (Control | CR | LF) — break before.
+    if (cur == HXGB_CONTROL || cur == HXGB_CR || cur == HXGB_LF) return 1;
+
+    // GB6: L × (L | V | LV | LVT)
+    if (prev == HXGB_L && (cur == HXGB_L || cur == HXGB_V || cur == HXGB_LV || cur == HXGB_LVT))
+        return 0;
+    // GB7: (LV | V) × (V | T)
+    if ((prev == HXGB_LV || prev == HXGB_V) && (cur == HXGB_V || cur == HXGB_T))
+        return 0;
+    // GB8: (LVT | T) × T
+    if ((prev == HXGB_LVT || prev == HXGB_T) && cur == HXGB_T)
+        return 0;
+
+    // GB9: × (Extend | ZWJ) — never break before Extend or ZWJ.
+    if (cur == HXGB_EXTEND || cur == HXGB_ZWJ) return 0;
+    // GB9a: × SpacingMark
+    if (cur == HXGB_SPMARK) return 0;
+    // GB9b: Prepend ×  (no break after Prepend) — deferred/partial.
+    if (prev == HXGB_PREPEND) return 0;
+
+    // GB11: Extended_Pictographic Extend* ZWJ × Extended_Pictographic
+    if (after_zwj_pict && cur == HXGB_EXTPICT) return 0;
+
+    // GB12/GB13: RI × RI only between an even-then-odd RI (i.e. join the
+    // first of a pair). `ri_odd` true means `cur` (an RI) is the 2nd of a
+    // pair → no break; else break.
+    if (prev == HXGB_RI && cur == HXGB_RI) {
+        return ri_odd ? 0 : 1;
+    }
+
+    // GB999: otherwise, break.
+    return 1;
+}
+
+// Core walker: invokes a callback at each cluster boundary. Shared by
+// hexa_str_graphemes (collect substrings) and hexa_str_grapheme_count.
+// Counts clusters in [p, p+n). Returns the cluster count; if `out_arr` is
+// non-NULL, pushes each cluster substring onto it.
+static int64_t _hx_grapheme_walk(const char* p, int64_t n, HexaVal* out_arr) {
+    int64_t count = 0;
+    int64_t i = 0;
+    int64_t cluster_start = 0;
+    int prev_class = -1;
+    int ri_count = 0;            // consecutive RI run length (for GB12/13 parity)
+    int pict_pending = 0;        // saw Extended_Pictographic then only Extend* since
+    int after_zwj_pict = 0;      // previous cp was ZWJ closing a pictographic run
+    while (i < n) {
+        int cplen = 0;
+        int32_t cp = _hx_utf8_decode(p, n, i, &cplen);
+        int cls = _hx_gb_class(cp);
+        if (prev_class < 0) {
+            // sot — first codepoint opens the first cluster (GB1).
+            cluster_start = i;
+        } else {
+            int ri_odd = (ri_count % 2 == 1);
+            if (_hx_gb_is_boundary(prev_class, cls, ri_odd, after_zwj_pict)) {
+                // Emit the cluster [cluster_start, i).
+                if (out_arr) {
+                    int64_t clen = i - cluster_start;
+                    char* cbuf = (char*)malloc((size_t)clen + 1);
+                    if (cbuf) {
+                        memcpy(cbuf, p + cluster_start, (size_t)clen);
+                        cbuf[clen] = 0;
+                        *out_arr = hexa_array_push(*out_arr, hexa_str(cbuf));
+                        free(cbuf);
+                    }
+                }
+                count++;
+                cluster_start = i;
+            }
+        }
+        // Update GB11 pictographic-ZWJ state.
+        if (cls == HXGB_EXTPICT) {
+            pict_pending = 1;
+            after_zwj_pict = 0;
+        } else if (cls == HXGB_EXTEND) {
+            // Extend* keeps the pictographic run alive (GB11 allows Extend*).
+            after_zwj_pict = 0;
+        } else if (cls == HXGB_ZWJ) {
+            after_zwj_pict = pict_pending;   // ZWJ closes a pictographic run iff one was pending
+        } else {
+            pict_pending = 0;
+            after_zwj_pict = 0;
+        }
+        // Update RI parity run (GB12/13): consecutive RIs.
+        if (cls == HXGB_RI) {
+            ri_count++;
+        } else {
+            ri_count = 0;
+        }
+        prev_class = cls;
+        i += cplen;
+    }
+    if (prev_class >= 0) {
+        // Emit the final cluster (eot, GB2).
+        if (out_arr) {
+            int64_t clen = n - cluster_start;
+            char* cbuf = (char*)malloc((size_t)clen + 1);
+            if (cbuf) {
+                memcpy(cbuf, p + cluster_start, (size_t)clen);
+                cbuf[clen] = 0;
+                *out_arr = hexa_array_push(*out_arr, hexa_str(cbuf));
+                free(cbuf);
+            }
+        }
+        count++;
+    }
+    return count;
+}
+
+// `.graphemes()` — array of UAX-29 extended grapheme cluster substrings.
+HexaVal hexa_str_graphemes(HexaVal s) {
+    HexaVal arr = hexa_array_new();
+    if (!HX_IS_STR(s)) return arr;
+    const char* p = HX_STR(s);
+    int64_t n = (int64_t)HX_STRLEN(s);
+    _hx_grapheme_walk(p, n, &arr);
+    return arr;
+}
+
+// `.grapheme_count()` — count-only fast-path (no array allocation).
+HexaVal hexa_str_grapheme_count(HexaVal s) {
+    if (!HX_IS_STR(s)) return hexa_int(0);
+    const char* p = HX_STR(s);
+    int64_t n = (int64_t)HX_STRLEN(s);
+    return hexa_int(_hx_grapheme_walk(p, n, NULL));
+}
+
 // Step-3 cycle 57 port — int-return bridge through rt_str_contains_b.
 #ifndef HEXA_HAS_HEXA_RT_STDLIB
 int hexa_str_contains(HexaVal s, HexaVal sub) {
