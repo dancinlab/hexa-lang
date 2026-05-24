@@ -14,7 +14,9 @@
 // stale ones. Provider provisioning (rent/destroy) is DEFERRED to RFC 088
 // P-series — this registry only tracks pods that get launched/used, it does
 // not create them. runpod_list_pods() cross-reconcile is a documented BONUS,
-// not part of this slice.
+// landed below (reconcile/adopt/forget) as the PR #761 follow-up.
+
+use "stdlib/cloud/runpod"
 
 // ── paths ────────────────────────────────────────────────────────────
 
@@ -290,4 +292,169 @@ fn _reg_pad(s: str, width: int) -> str {
         i = i + 1
     }
     return out
+}
+
+// ── adopt / forget (write verbs) ──────────────────────────────────────
+
+// pod_registry_adopt — register a previously-untracked pod into the
+// registry so it regains a poll/pull/lifecycle handle. This is the
+// recovery path for an ORPHAN found by reconcile (provider-RUNNING but
+// absent from pods.jsonl). `label` carries the free-form purpose. Reuses
+// pod_registry_record so the same-id de-dup + created_at preservation
+// behaviour applies (re-adopting an id just refreshes last_seen). Returns
+// 1 on success, 0 when the id is empty.
+fn pod_registry_adopt(pod_id: str, label: str) -> int {
+    if len(pod_id) == 0 {
+        return 0
+    }
+    pod_registry_record(pod_id, label, "running")
+    return 1
+}
+
+// pod_registry_forget — mark a tracked pod's record status=closed (the
+// GHOST recovery path: registry-tracked but provider-gone). The record is
+// kept (closed rows are excluded from staleness flagging) rather than
+// deleted so the launch history survives. Returns 1 if the id was found
+// and flipped, 0 if the id is absent / registry empty.
+fn pod_registry_forget(pod_id: str) -> int {
+    if len(pod_id) == 0 {
+        return 0
+    }
+    let path = _reg_file()
+    if !file_exists(path) {
+        return 0
+    }
+    let body = read_file(path)
+    let lines = body.split("\n")
+    let mut found = 0
+    let mut i = 0
+    while i < len(lines) {
+        let line = lines[i]
+        if len(line) > 0 && _reg_field(line, "pod_id") == pod_id {
+            found = 1
+            i = len(lines)
+        } else {
+            i = i + 1
+        }
+    }
+    if found == 0 {
+        return 0
+    }
+    // Re-emit the matched record with status=closed, preserving label and
+    // created_at; pod_registry_record does the rewrite-minus-id + append.
+    let mut label = ""
+    let mut j = 0
+    while j < len(lines) {
+        let line = lines[j]
+        if len(line) > 0 && _reg_field(line, "pod_id") == pod_id {
+            label = _reg_field(line, "label")
+            j = len(lines)
+        } else {
+            j = j + 1
+        }
+    }
+    pod_registry_record(pod_id, label, "closed")
+    return 1
+}
+
+// ── reconcile (ORPHAN / GHOST / OK classification) ────────────────────
+
+// ReconRow — one classified pod after cross-referencing the registry
+// against the provider's live pod list.
+struct ReconRow {
+    pod_id: str,
+    label:  str,        // registry label, or "(unknown)" for an ORPHAN
+    status: str,        // registry status, or "running" for a live ORPHAN
+    klass:  str         // "ORPHAN" | "GHOST" | "OK"
+}
+
+// _recon_id_in — membership test for a pod id in a [str] list.
+fn _recon_id_in(ids: [str], pod_id: str) -> int {
+    let mut i = 0
+    while i < len(ids) {
+        if ids[i] == pod_id {
+            return 1
+        }
+        i = i + 1
+    }
+    return 0
+}
+
+// pod_registry_reconcile_rows — classify every pod across the registry and
+// the supplied provider id list. `provider_ids` is the set of pod ids the
+// provider reports as live (from runpod_list_pods().pod_ids). A non-closed
+// registry row whose id is absent from provider_ids is a GHOST; a registry
+// row present in provider_ids is OK; a provider id absent from the registry
+// is an ORPHAN. Closed registry rows that the provider no longer reports are
+// skipped (already-reconciled history, not a ghost). Pure over its inputs —
+// the caller fetches the provider list, so this is deterministically
+// testable with a canned id list (no live runpodctl).
+fn pod_registry_reconcile_rows(provider_ids: [str]) -> [ReconRow] {
+    let mut out = []
+    let rows = pod_registry_rows(0)   // 0h threshold: no staleness math needed here
+    // Pass 1: every registry row → OK (in provider list) or GHOST (gone).
+    let mut i = 0
+    while i < len(rows) {
+        let r = rows[i]
+        if _recon_id_in(provider_ids, r.pod_id) == 1 {
+            out.push(ReconRow { pod_id: r.pod_id, label: r.label, status: r.status, klass: "OK" })
+        } else if r.status != "closed" {
+            out.push(ReconRow { pod_id: r.pod_id, label: r.label, status: r.status, klass: "GHOST" })
+        }
+        i = i + 1
+    }
+    // Pass 2: every provider id not in the registry → ORPHAN.
+    let mut p = 0
+    while p < len(provider_ids) {
+        let pid = provider_ids[p]
+        let mut tracked = 0
+        let mut k = 0
+        while k < len(rows) {
+            if rows[k].pod_id == pid {
+                tracked = 1
+                k = len(rows)
+            } else {
+                k = k + 1
+            }
+        }
+        if tracked == 0 {
+            out.push(ReconRow { pod_id: pid, label: "(unknown)", status: "running", klass: "ORPHAN" })
+        }
+        p = p + 1
+    }
+    return out
+}
+
+// cloud_reconcile_print — fetch the provider pod list and print the
+// ORPHAN/GHOST/OK reconcile table. Returns the count of ORPHAN+GHOST rows so
+// the verb can exit nonzero when the registry and provider disagree. When
+// runpodctl is unavailable the provider list is treated as empty (every
+// non-closed tracked pod then classifies GHOST — the honest "I can't see the
+// provider" degrade, distinct from a confirmed teardown).
+fn cloud_reconcile_print() -> int {
+    let lst = runpod_list_pods()
+    let provider_ids = lst.pod_ids
+    if lst.ok == 0 {
+        println("[cloud] provider list unavailable (" + lst.message + ") — reconciling against empty set")
+    }
+    let rows = pod_registry_reconcile_rows(provider_ids)
+    if len(rows) == 0 {
+        println("[cloud] reconcile clean — no tracked pods and no live provider pods (" + _reg_file() + ")")
+        return 0
+    }
+    println("POD/HOST                 STATUS    LABEL          CLASS")
+    let mut drift = 0
+    let mut i = 0
+    while i < len(rows) {
+        let r = rows[i]
+        if r.klass != "OK" {
+            drift = drift + 1
+        }
+        println(_reg_pad(r.pod_id, 24) + " " + _reg_pad(r.status, 9) + " "
+            + _reg_pad(r.label, 14) + " " + r.klass)
+        i = i + 1
+    }
+    println("[cloud] " + str(len(rows)) + " reconciled · " + str(drift)
+        + " drift (ORPHAN=adopt|stop · GHOST=forget) · " + _reg_file())
+    return drift
 }

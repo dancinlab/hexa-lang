@@ -23,6 +23,9 @@ fn _cloud_help() {
     println("  cloud copy-to   <host> <local> <remote> [conn]         upload local file to host:remote (scp)")
     println("  cloud copy-from <host> <remote> <local> [conn]         download host:remote file to local (scp)")
     println("  cloud orphans   [--hours N]                            list tracked pods, flag stale (>N h, default 6)")
+    println("  cloud reconcile                                        cross-ref registry vs provider: ORPHAN/GHOST/OK")
+    println("  cloud adopt     <pod_id> [--purpose TEXT]              track an untracked (ORPHAN) pod")
+    println("  cloud forget    <pod_id>                               mark a tracked (GHOST) pod status=closed")
     println("  cloud watchdog  [--threshold-min N] [--util-cap-pct N] [--kill]  idle-pod autokill sweep (DRY-RUN default)")
     println("  cloud help | version")
     println("")
@@ -148,7 +151,7 @@ fn main() {
     while i < len(av) {
         let t = av[i]
         if si < 0 {
-            if t == "preflight" || t == "watchdog" || t == "run" || t == "exec" || t == "nohup" || t == "poll" || t == "copy-to" || t == "copy-from" || t == "orphans" || t == "help" || t == "--help" || t == "-h" || t == "version" || t == "--version" || t == "-v" {
+            if t == "preflight" || t == "watchdog" || t == "run" || t == "exec" || t == "nohup" || t == "poll" || t == "copy-to" || t == "copy-from" || t == "orphans" || t == "reconcile" || t == "adopt" || t == "forget" || t == "help" || t == "--help" || t == "-h" || t == "version" || t == "--version" || t == "-v" {
                 si = i
                 sub = t
             }
@@ -296,6 +299,63 @@ fn main() {
             exit(1)
         }
         exit(0)
+    }
+    if sub == "reconcile" {
+        // Cross-reference the registry (pods.jsonl) against the provider's
+        // live pod list (runpod_list_pods) and print the ORPHAN/GHOST/OK
+        // table. Exit 1 when registry and provider disagree (any ORPHAN /
+        // GHOST), else 0. No ssh / pod-spinup — the only outbound call is the
+        // wrapped provider list (runpodctl); absent runpodctl reconciles
+        // against an empty provider set (every tracked pod → GHOST).
+        let drift = cloud_reconcile_print()
+        if drift > 0 {
+            exit(1)
+        }
+        exit(0)
+    }
+    if sub == "adopt" {
+        // Track a previously-untracked (ORPHAN) pod so it regains a
+        // poll/pull/lifecycle handle. `--purpose TEXT` sets the registry
+        // label; defaults to "(adopted)".
+        if si + 1 >= len(av) {
+            println("[cloud] adopt: missing <pod_id> — usage: cloud adopt <pod_id> [--purpose TEXT]")
+            exit(2)
+        }
+        let pod_id = av[si + 1]
+        let mut purpose = "(adopted)"
+        let mut ai = si + 2
+        while ai < len(av) {
+            if av[ai] == "--purpose" && ai + 1 < len(av) {
+                purpose = av[ai + 1]
+                ai = ai + 2
+            } else {
+                ai = ai + 1
+            }
+        }
+        let ok = pod_registry_adopt(pod_id, purpose)
+        if ok == 1 {
+            println("[cloud] adopted " + pod_id + " (label=" + purpose + ", status=running)")
+            exit(0)
+        }
+        println("[cloud] adopt: empty pod_id")
+        exit(2)
+    }
+    if sub == "forget" {
+        // Mark a tracked (GHOST) pod's record status=closed. The record is
+        // retained (closed rows are excluded from staleness flagging) so the
+        // launch history survives.
+        if si + 1 >= len(av) {
+            println("[cloud] forget: missing <pod_id> — usage: cloud forget <pod_id>")
+            exit(2)
+        }
+        let pod_id = av[si + 1]
+        let ok = pod_registry_forget(pod_id)
+        if ok == 1 {
+            println("[cloud] forgot " + pod_id + " (status=closed)")
+            exit(0)
+        }
+        println("[cloud] forget: " + pod_id + " not found in registry")
+        exit(1)
     }
     if sub == "copy-to" {
         if si + 3 >= len(av) {
