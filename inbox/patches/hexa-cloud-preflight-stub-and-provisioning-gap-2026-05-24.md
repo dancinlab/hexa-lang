@@ -1,5 +1,7 @@
 # hexa cloud preflight stub + provisioning verb 부재 — RTSC BEE-NET fine-tune 발견
 
+**Status**: gap#1 resolved-PR#703-2026-05-24 (stdlib/cloud/preflight.hexa · 9 optimizers × 9 dtypes × 19 GPU tiers) · gap#2 (provisioning rent/destroy) deferred to RFC 088 P-series
+
 ## 상태 (2026-05-24 updated)
 
 - **gap 1 (preflight 미수용 스텁) — 해소 (PR pending)**: closed-form GPU 메모리
