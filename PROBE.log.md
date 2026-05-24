@@ -348,41 +348,42 @@
 
 ### Option/Result (5 deviations · CRITICAL)
 - [x] r15-D1 [SURGICAL] `Option[i64]` annotation parse error — 20 LoC — MERGED #719
-- [ ] r15-D2 [RFC] `?` operator unimplemented — desugar + flow type
+- [x] r15-D2 `?` operator — RFC #765 + IMPL #775 (c43812c6) FULL 3-layer. 10/10 probe PASS · fixpoint · 회귀0
 - [x] r15-D3 [SURGICAL · HIGHEST] `Some(v) match` pattern-bind codegen scope, `v` undeclared — 30 LoC, blocks 전 Option/Result 축 — MERGED #756 (+ tail void-match guard)
 - [x] r15-D4 [SURGICAL] `.unwrap/.unwrap_or/.map` unknown builtin — 40 LoC — MERGED #725
-- [ ] r15-D5 [RFC] `Option[i64] = None` 어노테이션+할당 parse fail (D1 자매)
+- [x] r15-D5 [FALSIFY] `Option[i64] = None` 어노테이션+할당 — WORKS now (2026-05-24 측정: `let x: Option[i64]=None`→"ok decl", `=Some(42)`+match→"some 42"). D1#719+D2#775+D3#756 누적 효과. 더 이상 deviation 아님
 
 ### string_interp (3 deviations)
-- [ ] r15-D6 [RFC] `format!()` macro — [#451] follow-up
+- [~] r15-D6 [DEFERRED] `format!()` macro — 큰 기능, macro-expander pass(RFC #451 design 존재)로 DEFERRED. 현재 진단 양호: "macro invocation not yet implemented — file inbox patch (macro-expander-pass-design.md)". quick fix 아님
 - [x] r15-D7 [SURGICAL] f-string `{x:.2}` spec wiring — 50 LoC — MERGED #749 (`{x:.N}` precision)
-- [ ] r15-D8 [RFC] printf-style stdlib helper 부재
+- [x] r15-D8 [RESOLVED-hint] printf-style helper 부재 — 진단으로 처리됨 (#484): `'printf' is not a hexa builtin — use println(...) or format("...{}", x)`. canonical 경로(println/format) 안내. 별도 helper 불필요
 
 ### unicode (3 deviations)
-- [ ] r15-D9 [RFC] `.len()` returns BYTES not graphemes — 3-tier policy 필요
-- [ ] r15-D10 [SURGICAL] `.graphemes()` ZWJ family을 codepoint으로 셈 — 80 LoC (or RFC if libunicode)
-- [ ] r15-D11 [RFC] NFC normalization 미수행
+- [x] r15-D9 [RFC] `.len()` byte/codepoint/grapheme 정책 — RFC FILED #768. `.len()`=bytes 유지 권고, 진짜 footgun=`.graphemes()` stub(→D10에서 수정)
+- [x] r15-D10 [SURGICAL] `.graphemes()` UAX-29 cluster segmentation — MERGED #794 (4c4ac4ca). stub→real (pure-C GraphemeBreak table GB1-13 ex GB9b) +`.grapheme_count()`. 9/9 probe PASS (ZWJ가족 5→1·결합 2→1·LVT 3→1·RI 2→1) · fixpoint gen2≡gen3 · test_string_unicode 43/43 · 회귀 WORSE=0
+- [x] r15-F-FOLD [SURGICAL] for-loop 루프변수 fold-stale silent miscompile — MERGED #797 (0300af5f). RFC보다 광범위: fold 테이블 module-global이라 한 함수의 `i→100`이 모듈 전체 동명 `for i` 오염. 3 binding site에 `_invalidate_comptime_const`(D18)+`_comptime_const_scope_mark/restore`(D17) 28줄. A1 `0/1/2/after 100` + 중첩/inclusive/arith/accum probe PASS · fixpoint byte-id · 회귀 WORSE=0. D17/D18/F-FOLD 동일뿌리 3부작 완결
+- [x] r15-D11 [RFC] Unicode normalization (NFC/NFD) 정책 — RFC FILED docs/rfc/rfc_drafts/r15-d11-unicode-normalization-policy.md (PR #796, 63a6b5ba). 측정: `==`/hash/char_count는 codepoint-exact(precomposed≠decomposed)이나 `.graphemes()`(#794)는 강건. 권고: `==` exact 유지(5/6 canonical) + `.nfc/.nfd/.nfkc/.nfkd` 메서드 + phased 구현(P1 Hangul산술→P2 full decomp→P3 NFKx). D9/D10 unicode 3번째 다리
 
 ### oob (2 deviations)
-- [ ] r15-D12 [SURGICAL] negative index `xs[-1]` Python-style wrap (canonical=panic) — 10 LoC, **policy call**
+- [x] r15-D12 [SURGICAL] negative index `xs[-1]` panic — MERGED #799 (b1b597f3). 사용자 결정=Go/Rust canonical(panic). runtime_core.c hexa_array_get/set wrap 제거 → idx<0 곧장 OOB throw. probe `xs[-1]`→"index -1 out of bounds" · 회귀 WORSE=0 (음수wrap 의존 테스트 0건). #467 string-OOB와 일관
 - [x] r15-D13 [SURGICAL] `s.byte_at(99)` sentinel `-1` 반환 (#467 array OOB 와 불일치) — 10 LoC — MERGED #748 (OOB throws)
 
 ### enum (3 deviations)
 - [x] r15-D14 [SURGICAL] bare enum constructor codegen `Red/Green/Blue undeclared` — 30 LoC — MERGED #720
-- [ ] r15-D15 [RFC] single-field payload `Square(...)` codegen — REGRESSION 의심 ([[project_hexa_lang_enum_payload_works]] 검증)
+- [x] r15-D15 [FALSIFY] single-field payload WORKS — no regression (probe 8/8 + test_enum_payload_full 15/15 PASS, blob d2bd0ca8). 의심은 stale-binary artifact
 - [ ] r15-D16 [BLOCKED] multi-field payload — memory known-limit
 
 ### shadowing (3 deviations · CRITICAL)
 - [x] r15-D17 [SURGICAL · CRITICAL] `{}` block scope 미생성 (silent correctness) — 40 LoC — MERGED #724
-- [ ] r15-D18 [SURGICAL] type-changing shadow `let x="hello"; let x=42` resolver 누락 — 20 LoC, D17 자매
-- [ ] r15-D19 [RFC] for-loop binding semantics — `let i=100; for i in 0..3` 외부 i 유지
+- [x] r15-D18 [SURGICAL] type-changing shadow — MERGED #766 (eabe3895). root=comptime-const fold 첫-리터럴. `_invalidate_comptime_const` on rebind. fixpoint·회귀0
+- [x] r15-D19 [RFC] for-loop binding semantics — RFC FILED #793. 구조는 canonical, fold-stale 버그(F-FOLD) 발견→#797 수정 완료
 
 ### range (1 deviation)
 - [x] r15-D20 [SURGICAL] `(0..5).rev()` 첫 원소만 — 30 LoC — MERGED #737
 
 ### float (2 deviations)
-- [ ] r15-D21 [SURGICAL] `nan/inf` 식별자 shadow error 메시지 폴리시 — 5 LoC
-- [ ] r15-D22 [SURGICAL] `NaN/nan` 케이싱 정책 — 3 LoC
+- [x] r15-D21 [RESOLVED] `nan/inf` 식별자 shadow 진단 — 이미 처리됨 (#507, 2026-05-24 측정): `let nan=5`→`Parse error: cannot shadow reserved value 'nan' — pick a different name` + caret. canonical
+- [x] r15-D22 [RESOLVED] `NaN/nan` 케이싱 — 이미 canonical (#475, 측정): to_string→`NaN`/`inf`/`-inf` = Rust 일치. nan/inf 상수도 작동(#488)
 
 ### cycle 1 PASS axes (canonical)
 - float NaN/Inf IEEE 의미 PASS
