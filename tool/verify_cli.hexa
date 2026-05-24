@@ -182,6 +182,12 @@ fn cmd_rubric() {
     println("             fick1(D,dC,dx)              → -D*dC/dx            (Fick's first law of diffusion, 3-arg)")
     println("             laplace(P,r,t_wall)         → P*r/t_wall          (Young-Laplace vessel wall stress, 3-arg)")
     println("             stokes_einstein(T,eta,r)    → kB*T/(6π·η·r)       (Stokes-Einstein diffusion D, kB=1.380649e-23, 3-arg)")
+    println("             allen_dynes_tc(λ,ω_log,μ*)  → (ω_log/1.2)·exp(-1.04(1+λ)/(λ-μ*(1+0.62λ)))  (Allen-Dynes Tc, RTSC V2, 3-arg)")
+    println("             mcmillan_tc(λ,ω_D,μ*)       → (ω_D/1.45)·exp(-1.04(1+λ)/(λ-μ*(1+0.62λ)))   (McMillan Tc, RTSC V2, 3-arg)")
+    println("             bcs_gap_ratio()             → 2π/e^γ ≈ 3.527754   (BCS weak-coupling universal gap ratio, 0-arg)")
+    println("             lambda_eliashberg(M0)       → 2·M0                (Eliashberg λ from α²F ω⁻¹-moment, 1-arg)")
+    println("             beenet_grid_bins(ω_max,Δω)  → floor(ω_max/Δω)+1   (RTSC d7 α²F grid bin count, 2-arg)")
+    println("             migdal_ratio(ω_phon,E_F)    → ω/E_F               (Migdal adiabaticity, vertex-correction smallness, 2-arg)")
 }
 
 let NOCALC: int = -999999
@@ -934,6 +940,86 @@ fn _stokes_einstein(t_kelvin: float, eta_visc: float, r_rad: float) -> float {
     return kB_se * t_kelvin / (6.0 * pi_se * eta_visc * r_rad)
 }
 
+// ── Superconductivity (RTSC V2 closed-form push · 2026-05-24) ────────────
+// Seven RTSC-domain closed-form identities. All libm-class (exp · scalar
+// arithmetic); ε=1e-9 numerical gate inherited via cmd_expr_float.
+// Source: Allen-Dynes 1975 PRB 12:905 · McMillan 1968 PR 167:331 · BCS 1957
+// PR 108:1175 · Migdal 1958 JETP 7:996 · BEE-NET grid step (RTSC d7 wall).
+
+// Allen-Dynes critical temperature (Eliashberg-corrected McMillan, λ ≲ 1.5):
+//   T_c = (ω_log / 1.2) · exp(-1.04(1+λ) / (λ - μ*(1+0.62λ)))
+// 3-arg closed-form. Allen-Dynes 1975 PRB 12:905 Eq.6. Source: λ=2.5,
+// ω_log=1100K, μ*=0.10 → 181.16K (RTSC h3o reference, 185K within 2%).
+fn _allen_dynes_tc(lam: float, omega_log_k: float, mustar: float) -> float {
+    if omega_log_k <= 0.0 { return _NOCALC_F }
+    let denom = lam - mustar * (1.0 + 0.62 * lam)
+    if denom <= 0.0 { return _NOCALC_F }
+    let exp_arg = 0.0 - 1.04 * (1.0 + lam) / denom
+    return (omega_log_k / 1.2) * exp(exp_arg)
+}
+
+// McMillan critical temperature (original 1968 formula, λ ≲ 1):
+//   T_c = (ω_D / 1.45) · exp(-1.04(1+λ) / (λ - μ*(1+0.62λ)))
+// 3-arg closed-form. McMillan 1968 PR 167:331 Eq.4. Same exponential as
+// Allen-Dynes; prefactor uses Debye temperature ω_D / 1.45 instead of
+// ω_log / 1.2 (predicts ~21% lower Tc, characteristic conservative bias).
+fn _mcmillan_tc(lam: float, omega_d_k: float, mustar: float) -> float {
+    if omega_d_k <= 0.0 { return _NOCALC_F }
+    let denom = lam - mustar * (1.0 + 0.62 * lam)
+    if denom <= 0.0 { return _NOCALC_F }
+    let exp_arg = 0.0 - 1.04 * (1.0 + lam) / denom
+    return (omega_d_k / 1.45) * exp(exp_arg)
+}
+
+// BCS gap-to-Tc ratio (weak-coupling universal limit):
+//   2Δ(0) / (k_B T_c) = 2π / e^γ ≈ 3.527754
+// 0-arg closed-form. BCS 1957 PR 108:1175. γ = Euler-Mascheroni; universal
+// for any phonon-mediated weak-coupling superconductor (independent of
+// material parameters in the BCS limit).
+fn _bcs_gap_ratio() -> float {
+    // 2π / exp(γ_Euler) — γ_Euler ≈ 0.5772156649015329
+    let pi_bcs = 3.14159265358979323846
+    let euler_gamma = 0.5772156649015329
+    return 2.0 * pi_bcs / exp(euler_gamma)
+}
+
+// Eliashberg electron-phonon coupling λ from a precomputed moment:
+//   λ = 2 · M₀     where  M₀ = ∫₀^∞ α²F(ω)/ω dω
+// 1-arg closed-form (input is the M₀ moment of the Eliashberg spectral
+// function α²F, ω⁻¹-weighted). Caller supplies the integrated moment;
+// the calculator gates the closed-form scalar identity. Source: Eliashberg
+// 1960 JETP 11:696; Carbotte 1990 RMP 62:1027 Eq.2.8.
+fn _lambda_eliashberg(moment_m0: float) -> float {
+    if moment_m0 < 0.0 { return _NOCALC_F }
+    return 2.0 * moment_m0
+}
+
+// BEE-NET energy grid bin count (uniform discretisation of α²F support):
+//   bins = floor(ω_max / Δω) + 1
+// 2-arg closed-form. Source: RTSC d7 wall step0 — ω_max=140 meV, Δω=1 meV
+// → 141 bins (canonical α²F resolution). Returns float for ε-gate
+// uniformity; the caller compares against an integer-equal claim.
+fn _beenet_grid_bins(omega_max_mev: float, step_mev: float) -> float {
+    if omega_max_mev < 0.0 { return _NOCALC_F }
+    if step_mev <= 0.0 { return _NOCALC_F }
+    let bins = omega_max_mev / step_mev
+    // floor(bins) + 1, expressed without a libm floor() dep
+    let bins_int = to_int(bins)
+    return to_float(bins_int + 1)
+}
+
+// Migdal adiabaticity ratio (vertex-correction smallness parameter):
+//   r_M = ω_phonon / E_Fermi
+// 2-arg closed-form. Source: Migdal 1958 JETP 7:996. r_M < ~0.05 keeps
+// Migdal-Eliashberg vertex corrections O(r_M) negligible (validity gate
+// for the Allen-Dynes / McMillan derivations above). Inputs share units
+// (both meV or both eV); the ratio is unit-invariant.
+fn _migdal_ratio(omega_phonon: float, e_fermi: float) -> float {
+    if omega_phonon < 0.0 { return _NOCALC_F }
+    if e_fermi <= 0.0 { return _NOCALC_F }
+    return omega_phonon / e_fermi
+}
+
 // float dispatch — fn_name → recompute. 0-arg fns ignore a0/a1/a2 (constants);
 // 1-arg fns take a0; 2-arg take a0,a1; 3-arg take a0,a1,a2. Returns _NOCALC_F
 // when no float path exists (caller then tries the int path / degrades). The
@@ -1083,6 +1169,33 @@ fn _recompute_float(fn_name: string, a0: float, a1: float, a2: float, argc: int)
         if argc < 3 { return _NOCALC_F }
         return _stokes_einstein(a0, a1, a2)
     }
+    // ── Superconductivity (RTSC V2 closed-form push · 2026-05-24) ──────
+    //   allen_dynes_tc(λ, ω_log, μ*)   3-arg: (ω_log/1.2) · exp(-1.04(1+λ)/(λ-μ*(1+0.62λ)))
+    //   mcmillan_tc(λ, ω_D, μ*)        3-arg: (ω_D/1.45) · same exp
+    //   bcs_gap_ratio()                0-arg: 2π / e^γ ≈ 3.527754
+    //   lambda_eliashberg(M₀)          1-arg: 2 · M₀
+    //   beenet_grid_bins(ω_max, Δω)    2-arg: floor(ω_max/Δω) + 1
+    //   migdal_ratio(ω_phonon, E_F)    2-arg: ω / E_F
+    if fn_name == "allen_dynes_tc" {
+        if argc < 3 { return _NOCALC_F }
+        return _allen_dynes_tc(a0, a1, a2)
+    }
+    if fn_name == "mcmillan_tc" {
+        if argc < 3 { return _NOCALC_F }
+        return _mcmillan_tc(a0, a1, a2)
+    }
+    if fn_name == "bcs_gap_ratio" { return _bcs_gap_ratio() }
+    if fn_name == "lambda_eliashberg" {
+        return _lambda_eliashberg(a0)
+    }
+    if fn_name == "beenet_grid_bins" {
+        if argc < 2 { return _NOCALC_F }
+        return _beenet_grid_bins(a0, a1)
+    }
+    if fn_name == "migdal_ratio" {
+        if argc < 2 { return _NOCALC_F }
+        return _migdal_ratio(a0, a1)
+    }
     return _NOCALC_F
 }
 
@@ -1109,6 +1222,10 @@ fn _is_float_fn(fn_name: string) -> bool {
         // Bio-physical Phase 2 (demiurge cross-domain V2 unlock):
         || fn_name == "hill" || fn_name == "cheng_prusoff" || fn_name == "fick1"
         || fn_name == "laplace" || fn_name == "stokes_einstein"
+        // Superconductivity (RTSC V2 closed-form push · 2026-05-24):
+        || fn_name == "allen_dynes_tc" || fn_name == "mcmillan_tc"
+        || fn_name == "bcs_gap_ratio" || fn_name == "lambda_eliashberg"
+        || fn_name == "beenet_grid_bins" || fn_name == "migdal_ratio"
 }
 
 // is fn_name a 0-arg closed-form constant? (--expr <fn> <v>, no operands).
@@ -1119,6 +1236,7 @@ fn _is_zero_arg_float_fn(fn_name: string) -> bool {
         || fn_name == "vqe_h2_fci_sto3g"
         || fn_name == "overlap_vqe_h2_shift_ha"
         || fn_name == "mirror_bench_hog_asymptote"
+        || fn_name == "bcs_gap_ratio"
 }
 
 // trim trailing zeros of a float→string for tidy verdict echo.
