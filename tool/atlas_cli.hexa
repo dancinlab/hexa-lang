@@ -1,6 +1,6 @@
 // tool/atlas_cli.hexa — `hexa atlas {hash|stats|lookup|dump|register|export}`
 //
-// @version 0.7.0
+// @version 0.8.0
 // @capabilities [fs_read, fs_write, exec]
 //
 // Atlas surface — compiler/atlas/embedded.gen.hexa is THE single SSOT (the
@@ -1668,12 +1668,65 @@ fn _adapt_drill_candidate(c: DiscoveryCandidate, seed: string, engine: string,
     }
 }
 
+// _adapt_verify_generic — single, generic verify-delegation adapter (replaces
+// the legacy per-fn _adapt_verify_1op/2op/3op/float + _is_float_fn_register +
+// the per-fn _<fn>_register recompute tables). Shells out to
+// `hexa verify --expr <fn> <args> <v>` — single calc home = tool/verify_cli.hexa
+// per @D g20 — parses the tier line, and on 🔵/🟢 builds the .n6 raw block. No
+// per-fn knowledge in atlas_cli: adding a new verify-able fn now requires ONLY
+// a verify_cli dispatch entry, never an atlas_cli edit. The legacy per-fn fns
+// (_recompute_*_register, _<fn>_register, _adapt_verify_1op/2op/3op/float,
+// _is_*_fn_register) are now uncalled — left as harmless dead code for now;
+// safe to delete in a follow-up cleanup PR.
+fn _adapt_verify_generic(fn_name: string, args: array, v_str: string, id_override: string) -> DiscoveryEvent {
+    let mut args_str_arr = []
+    let mut i = 0
+    while i < len(args) {
+        args_str_arr.push(to_string(args[i]))
+        i = i + 1
+    }
+    let arg_str_comma = args_str_arr.join(",")
+    let arg_str_space = args_str_arr.join(" ")
+    let invoke = "hexa verify --expr " + fn_name + " " + arg_str_space + " " + v_str
+    let prov = "hexa atlas register --from-verify (generic verify-delegation) · " + invoke
+    let name = fn_name + "(" + arg_str_comma + ")=" + v_str
+
+    // Shell out to verify; tier line is the canonical verdict source (g5).
+    let out = to_string(exec(invoke + " 2>&1"))
+
+    let mut verdict = "🟠 INSUFFICIENT"
+    if out.contains("🟢 SUPPORTED-NUMERICAL") { verdict = "🟢 SUPPORTED-NUMERICAL" }
+    else if out.contains("🔵 SUPPORTED-FORMAL") { verdict = "🔵 SUPPORTED-FORMAL" }
+    else if out.contains("🔴 FALSIFIED") { verdict = "🔴 FALSIFIED" }
+
+    if verdict == "🟠 INSUFFICIENT" || verdict == "🔴 FALSIFIED" {
+        return DiscoveryEvent { kind: "F", id: "", name: name, raw: "",
+            verdict: verdict, source_verb: "verify", provenance: prov }
+    }
+
+    let today = _today_compact()
+    let mut id = id_override
+    if verdict == "🟢 SUPPORTED-NUMERICAL" {
+        if len(id) == 0 { id = "verified-" + _slug_register(fn_name) + "-num" }
+        let raw = _build_raw_F_numerical(id, fn_name, arg_str_comma, v_str, today)
+        return DiscoveryEvent { kind: "F", id: id, name: name, raw: raw,
+            verdict: verdict, source_verb: "verify", provenance: prov }
+    }
+    // 🔵 SUPPORTED-FORMAL — int closed-form; id includes args dash-joined.
+    if len(id) == 0 {
+        id = "verified-" + _slug_register(fn_name) + "-" + args_str_arr.join("-")
+    }
+    let v_int = to_int(v_str)
+    let raw = _build_raw_F(id, fn_name, arg_str_comma, v_int, today)
+    return DiscoveryEvent { kind: "F", id: id, name: name, raw: raw,
+        verdict: verdict, source_verb: "verify", provenance: prov }
+}
+
 // cmd_register — the absorption verb. Each `--from-<verb>` arm produces a
-// DiscoveryEvent and hands it to register_from_event, which appends the node's
-// .n6 block DIRECTLY to the live n6/atlas.n6 SSOT (visible to next lookup, no
-// rebuild). Supported arms:
-//   --from-verify <fn> <n> <v>          (1-op closed-form / 🟢 numerical)
-//   --from-verify <fn> <a> <b> <v>      (2-op)
+// DiscoveryEvent and hands it to register_from_event, which folds the node's
+// .n6 block DIRECTLY into compiler/atlas/embedded.gen.hexa (the binary-builtin
+// SSOT; visible to next lookup, no rebuild). Supported arms:
+//   --from-verify <fn> <args...> <v>    (any arity; delegated to `hexa verify`)
 //   --from-drill  --seed "<text>" [--rounds N] [--engine mk9|mk10]
 // Options: --id (verify only; drill mints per-candidate ids).
 fn cmd_register(rest: array) {
@@ -1713,135 +1766,32 @@ fn cmd_register(rest: array) {
 
     // ── dispatch ────────────────────────────────────────────────
     if from_verb == "verify" {
-        // 0-arg float closed-form (chsh_tsirelson · bcs_gap_ratio · ...) needs
-        // len(positional)==2 (just <fn> <v>). All other forms need ≥3. Probe
-        // zero-arg via _is_zero_arg_float_fn_register BEFORE the length gate.
-        let fn_pre = if len(positional) >= 1 { to_string(positional[0]) } else { "" }
-        let zero_arg_pre = _is_zero_arg_float_fn_register(fn_pre)
-        if zero_arg_pre {
-            if len(positional) < 2 {
-                println("error: --from-verify " + fn_pre + " needs <v> (0-arg float closed-form)")
-                exit(2)
-            }
-        } else if len(positional) < 3 {
-            println("error: --from-verify needs <fn> <n> <v> (1-op) or <fn> <a> <b> <v> (2-op)")
+        if len(positional) < 2 {
+            println("error: --from-verify needs <fn> <args...> <v>")
             println("       see: hexa atlas register --help")
             exit(2)
         }
         let fn_name = to_string(positional[0])
-        let mut ev = DiscoveryEvent { kind: "F", id: "", name: "", raw: "",
-            verdict: "error", source_verb: "verify", provenance: "" }
-        // float-NUMERICAL forms (welch_t_crit · wilson_hilferty_p · RFC 047
-        // atoms) route to the 🟢 path BEFORE the int parser truncates the
-        // real-valued args. Mirrors verify_cli::cmd_expr's _is_float_fn gate.
-        if _is_float_fn_register(fn_name) {
-            // 0-arg float dispatch (RFC 045 PR-A — chsh_tsirelson ·
-            // pt_doily_quantum_win · pt_doily_classical_bound): positional
-            // shape is <fn> <v> (len 2, no operands). Mirrors verify_cli
-            // cmd_expr_float's zero_arg branch.
-            let zero_arg = _is_zero_arg_float_fn_register(fn_name)
-            let mut a0s = ""
-            let mut a1s = ""
-            let mut a2s = ""
-            let mut a3s = ""
-            let mut vs = ""
-            let mut fargc = 1
-            if zero_arg {
-                if len(positional) < 2 {
-                    println("error: --from-verify " + fn_name + " needs <v> (0-arg float closed-form)")
-                    exit(2)
-                }
-                a0s = "0"
-                vs = to_string(positional[1])
-                fargc = 0
-            } else {
-                // positional layout (excludes the leading <fn_name> at index 0):
-                //   1-arg → [fn, a0, v]                    len 3
-                //   2-arg → [fn, a0, a1, v]                len 4
-                //   3-arg → [fn, a0, a1, a2, v]            len 5  (bio Phase 1/2 + supercon)
-                //   4-arg → [fn, a0, a1, a2, a3, v]        len 6  (bio Phase 3 hagen_poiseuille)
-                a0s = to_string(positional[1])
-                vs = to_string(positional[2])
-                if len(positional) >= 6 {
-                    a1s = to_string(positional[2])
-                    a2s = to_string(positional[3])
-                    a3s = to_string(positional[4])
-                    vs = to_string(positional[5])
-                    fargc = 4
-                } else if len(positional) >= 5 {
-                    a1s = to_string(positional[2])
-                    a2s = to_string(positional[3])
-                    vs = to_string(positional[4])
-                    fargc = 3
-                } else if len(positional) >= 4 {
-                    a1s = to_string(positional[2])
-                    vs = to_string(positional[3])
-                    fargc = 2
-                }
-            }
-            let fev = _adapt_verify_float(fn_name, a0s, a1s, a2s, a3s, vs, fargc, id_override)
-            println("hexa atlas register --from-verify " + fev.name)
-            if fev.verdict == "🟠 INSUFFICIENT" {
-                println("  tier   = 🟠 INSUFFICIENT")
-                println("  reason = float calculator system has NO path for '" + fn_name + "'")
-                println("  gap    = extend tool/atlas_cli.hexa::_recompute_float_register (계산기시스템 개선)")
-                exit(3)
-            }
-            if fev.verdict == "🔴 FALSIFIED" {
-                println("  tier   = 🔴 FALSIFIED — refusing to register a falsified claim (|Δ| > ε=1e-9)")
-                exit(4)
-            }
-            // g5 VERBATIM: the 🟢 tier line is byte-identical to the verify-arm.
-            println("  tier   = 🟢 SUPPORTED-NUMERICAL  (hexa-native libm-class recompute, TECS-L n6-rep Tier2)")
-            let frerr = register_from_event(fev)
-            if len(frerr) > 0 {
-                println("error: " + frerr)
-                exit(5)
-            }
-            return
+        let v_str = to_string(positional[len(positional) - 1])
+        let mut args_arr = []
+        let mut pi = 1
+        while pi < len(positional) - 1 {
+            args_arr.push(to_string(positional[pi]))
+            pi = pi + 1
         }
-        let mut arg_str = ""
-        let mut expected: int = 0
-        let mut got_display: int = 0
-        if len(positional) >= 5 {
-            // 3-op (RFC 046 tknn_chern p q r → Chern t)
-            let a = to_int(to_string(positional[1]))
-            let b = to_int(to_string(positional[2]))
-            let c = to_int(to_string(positional[3]))
-            expected = to_int(to_string(positional[4]))
-            arg_str = to_string(a) + "," + to_string(b) + "," + to_string(c)
-            got_display = _recompute3_register(fn_name, a, b, c)
-            ev = _adapt_verify_3op(fn_name, a, b, c, expected, id_override)
-        } else if len(positional) >= 4 {
-            // 2-op
-            let a = to_int(to_string(positional[1]))
-            let b = to_int(to_string(positional[2]))
-            expected = to_int(to_string(positional[3]))
-            arg_str = to_string(a) + "," + to_string(b)
-            got_display = _recompute2_register(fn_name, a, b)
-            ev = _adapt_verify_2op(fn_name, a, b, expected, id_override)
-        } else {
-            // 1-op
-            let nn = to_int(to_string(positional[1]))
-            expected = to_int(to_string(positional[2]))
-            arg_str = to_string(nn)
-            got_display = _recompute_register(fn_name, nn)
-            ev = _adapt_verify_1op(fn_name, nn, expected, id_override)
-        }
-        println("hexa atlas register --from-verify " + fn_name + "(" + arg_str + ") = " + to_string(expected))
+        let ev = _adapt_verify_generic(fn_name, args_arr, v_str, id_override)
+        println("hexa atlas register --from-verify " + ev.name)
         if ev.verdict == "🟠 INSUFFICIENT" {
             println("  tier   = 🟠 INSUFFICIENT")
-            println("  reason = calculator system has NO path for '" + fn_name + "'")
-            println("  gap    = extend tool/atlas_cli.hexa::_recompute_register (계산기시스템 개선)")
+            println("  reason = `hexa verify --expr " + fn_name + "` has no calculator path")
+            println("  gap    = add " + fn_name + " to tool/verify_cli.hexa (single calc home per @D g20)")
             exit(3)
         }
         if ev.verdict == "🔴 FALSIFIED" {
-            println("  calc   = " + to_string(got_display) + "  != expected " + to_string(expected))
             println("  tier   = 🔴 FALSIFIED — refusing to register a falsified claim")
             exit(4)
         }
-        println("  calc   = " + to_string(got_display) + "  == expected " + to_string(expected))
-        println("  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form; @D g_self_verify · TECS-L Tier1)")
+        println("  tier   = " + ev.verdict + "  (delegated via `hexa verify --expr`)")
         let rerr = register_from_event(ev)
         if len(rerr) > 0 {
             println("error: " + rerr)
