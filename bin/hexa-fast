@@ -78,14 +78,90 @@ if [ ! -f "$RT_O" ]; then
     clang $CFLAGS -c "$RUNTIME_C" -o "$RT_O"
 fi
 
+# Resolve the compiled module_loader binary. Mirrors
+# self/main.hexa::resolve_module_loader_compiled — probes (in order):
+# $HEXA_MODULE_LOADER, <repo>/build/hexa_module_loader, cwd, $HEXA_LANG.
+# Echoes the path on success, empty string otherwise.
+resolve_module_loader_bin() {
+    if [ -n "${HEXA_MODULE_LOADER:-}" ] && [ -x "$HEXA_MODULE_LOADER" ]; then
+        printf '%s' "$HEXA_MODULE_LOADER"
+        return
+    fi
+    if [ -x "$REPO_ROOT/build/hexa_module_loader" ]; then
+        printf '%s' "$REPO_ROOT/build/hexa_module_loader"
+        return
+    fi
+    if [ -x "./build/hexa_module_loader" ]; then
+        printf '%s' "./build/hexa_module_loader"
+        return
+    fi
+    if [ -n "${HEXA_LANG:-}" ] && [ -x "$HEXA_LANG/build/hexa_module_loader" ]; then
+        printf '%s' "$HEXA_LANG/build/hexa_module_loader"
+        return
+    fi
+    printf ''
+}
+
+# inbox/patches/import-link-fail-mitosis-hook-mini-arm64-2026-05-24 fix:
+# `hexa-fast` previously fed SRC straight into hexa_v2, so `import "X.hexa"`
+# directives produced extern decls for imported symbols without the bodies —
+# linker then failed with `Undefined symbols`. Mirror cmd_build's flatten
+# pre-step: if SRC contains any `use "…"` / `import "…"` / `from "…"` /
+# `pub use "…"` / `pub import "…"` directive AND a compiled module_loader is
+# available, run it first and substitute the flattened tmpfile as SRC.
+#
+# No directives → SKIP the flatten step entirely (preserves the original
+# fast-path measured 4.4–7.9× speedup, which is the whole point of -fast).
+flatten_if_needed() {
+    local SRC=$1
+    if ! grep -qE '^[[:space:]]*(pub[[:space:]]+)?(use|import|from)[[:space:]]+"' "$SRC" 2>/dev/null; then
+        # No import directives — nothing to flatten.
+        printf '%s' "$SRC"
+        return
+    fi
+    local ML
+    ML=$(resolve_module_loader_bin)
+    if [ -z "$ML" ]; then
+        echo "hexa-fast: warn: SRC has import/use directives but compiled module_loader not found — falling back to raw src (link may fail)" >&2
+        printf '%s' "$SRC"
+        return
+    fi
+    local FLAT="${TMPDIR:-/tmp}/hexa-fast-flat-$$-$RANDOM.hexa"
+    # Mirror module_loader_env_prefix() in self/main.hexa — propagate
+    # HEXA_INSTALL_DIR (for stdlib/* resolution) and raise the runtime
+    # mem-cap to 4096 MB so bundle flatten completes on larger projects.
+    local INSTALL_DIR="${HEXA_INSTALL_DIR:-$REPO_ROOT}"
+    local MEM_CAP="${HEXA_MEM_CAP_MB:-4096}"
+    if ! HEXA_INSTALL_DIR="$INSTALL_DIR" HEXA_MEM_CAP_MB="$MEM_CAP" \
+            "$ML" "$SRC" "$FLAT" >&2; then
+        echo "hexa-fast: warn: module_loader flatten failed — falling back to raw src" >&2
+        rm -f "$FLAT"
+        printf '%s' "$SRC"
+        return
+    fi
+    if [ ! -f "$FLAT" ]; then
+        echo "hexa-fast: warn: module_loader produced no output — falling back to raw src" >&2
+        printf '%s' "$SRC"
+        return
+    fi
+    printf '%s' "$FLAT"
+}
+
 # Build a binary for SRC into OUT. Sets BIN=OUT on success.
 build() {
     local SRC=$1 OUT=$2
+    local FLAT_SRC
+    FLAT_SRC=$(flatten_if_needed "$SRC")
     local TMP_C="${TMPDIR:-/tmp}/hexa-fast-$$-$RANDOM.c"
-    "$HEXA_V2" "$SRC" "$TMP_C" >/dev/null
+    "$HEXA_V2" "$FLAT_SRC" "$TMP_C" >/dev/null
     sed -i.bak 's|#include "runtime.c"|#include "runtime.h"|' "$TMP_C"
     clang $CFLAGS -o "$OUT" "$TMP_C" "$RT_O" -I"$REPO_ROOT/self"
     rm -f "$TMP_C" "$TMP_C.bak"
+    # Clean the flatten tmpfile only if we actually created one
+    # (FLAT_SRC == SRC means flatten was skipped).
+    if [ "$FLAT_SRC" != "$SRC" ]; then
+        rm -f "$FLAT_SRC"
+    fi
 }
 
 # Transitive sha256 over SRC + all reachable imports.
