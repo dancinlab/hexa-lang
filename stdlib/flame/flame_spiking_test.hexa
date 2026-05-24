@@ -2,7 +2,7 @@
 // ════════════════════════════════════════════════════════════════════════
 // stdlib/flame/flame_spiking_test.hexa — flame spiking_lib selftest
 //
-// 4 pre-registered falsifiers (inbox/patches/flame-spiking-substrate-
+// 4 pre-registered falsifiers (archive/patches/flame-spiking-substrate-
 // primitives.md F-SPIKE-1..4):
 //   F-SPIKE-1  THRESHOLD-BOOLEAN     mask ∈ {0,1}; monotone in v; v=v_th → 1.0
 //   F-SPIKE-2  REFRACTORY-CLAMP      floor held; spiked→refrac; decrement by 1

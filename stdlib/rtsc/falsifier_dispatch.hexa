@@ -102,7 +102,7 @@
 //     final Codable record.
 //
 // AUTHORITY
-//   audit note  inbox/notes/2026-05-21-d114-phaseb-material-falsifier-audit.md
+//   audit note  docs/notes/2026-05-21-d114-phaseb-material-falsifier-audit.md
 //   D114 Phase B closure · D116 destination
 //   PR #281 (sibling 4 calc_*.hexa migration to stdlib/rtsc/verify/)
 

@@ -1,7 +1,7 @@
 // @raw117_exempt
 // ════════════════════════════════════════════════════════════════════════
 // stdlib/flame/ag_extract.hexa — flame autograd-auto Sub-Deliverable 5
-// (RFC 043, scoping note inbox/notes/2026-05-20-flame-autograd-auto-scoping.md
+// (RFC 043, scoping note docs/notes/2026-05-20-flame-autograd-auto-scoping.md
 //  §4 "SD5 (open question, NOT pre-committed): true AST-driven derivation
 //  from a hexa-lang `fn`'s source — requires compiler hook")
 //

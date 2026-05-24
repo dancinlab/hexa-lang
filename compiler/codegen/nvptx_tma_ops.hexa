@@ -26,7 +26,7 @@
 // The `_a` ("architecture-specific") suffix is mandatory.
 //
 // N200 SMOKE (`c5840f19` on origin/main, artifact
-// `inbox/fires/rfc067_ptma_named_bar_hilbert_2026_05_22/`): first hexa-
+// `archive/fires/rfc067_ptma_named_bar_hilbert_2026_05_22/`): first hexa-
 // shaped TMA+SGEMM kernel bit-exact on sm_120. 11 TMA opcode sites in
 // `sgemm_tma_smoke.ptx`:
 //   * `cp.async.bulk.tensor.2d.shared::cluster.global.tile.mbarrier::complete_tx::bytes`
@@ -46,7 +46,7 @@
 //         `@gpu_tma_*` builtin is parsed. No descriptor is generated.
 //         `cuTensorMapEncodeTiled` host-side encoding is a separate
 //         runtime builtin (see
-//         `inbox/notes/2026-05-22-tma-runtime-builtin-requirements.md`).
+//         `docs/notes/2026-05-22-tma-runtime-builtin-requirements.md`).
 //
 // PTX mnemonics, opcode suffixes, and proxy/state-space qualifiers below
 // are NVIDIA hardware facts cited from the PTX ISA 8.7 documentation —
@@ -226,7 +226,7 @@ pub fn ptx_tma_ops() -> [PtxTmaOpEntry] {
 //   * unset / empty / "0" → OFF (default — byte-identical existing emit)
 //
 // The env var IS the flag mechanism per the N202 requirements doc
-// (`inbox/notes/2026-05-22-tma-runtime-builtin-requirements.md` §
+// (`docs/notes/2026-05-22-tma-runtime-builtin-requirements.md` §
 // "Per-shape TMA descriptor generation"). Default OFF preserves the
 // F-RFC067-NVPTX-TMA-CODEGEN-SCAFFOLD guarantee (32/32 lower_test PASS
 // without env) and keeps the existing nvptx_target.hexa emit path

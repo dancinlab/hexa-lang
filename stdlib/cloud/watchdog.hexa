@@ -1,6 +1,6 @@
 // stdlib/cloud/watchdog.hexa — idle-pod autokill helper.
 //
-// 출처: inbox/patches/hexa-cloud-idle-autokill-missing-2026-05-24.md
+// 출처: archive/patches/hexa-cloud-idle-autokill-missing-2026-05-24.md
 // (RTSC 캠페인 중 5 pods 가 18-27h idle 으로 ≈ $25 burn — `hexa cloud` 에
 // idle 감지 + auto-destroy 메커니즘 부재. 본 모듈은 Fix A — watchdog —
 // 의 closed-form 부분: 결정 로직 + scan/poll 한 사이클 + dry-run 모드).

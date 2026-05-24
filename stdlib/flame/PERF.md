@@ -392,8 +392,8 @@ flame's standing on it is currently UNMEASURED (prior 2.95× retracted).
 
 ## Cross-references
 
-- RFC 045 (Phase 3 closure, source #4 analysis) — `inbox/rfc_drafts_2026_05_12/rfc_045_*.md`
-- RFC 046 (Phase 4 compiler fusion design) — `inbox/rfc_drafts_2026_05_12/rfc_046_*.md`
+- RFC 045 (Phase 3 closure, source #4 analysis) — `docs/rfc/rfc_drafts_2026_05_12/rfc_045_*.md`
+- RFC 046 (Phase 4 compiler fusion design) — `docs/rfc/rfc_drafts_2026_05_12/rfc_046_*.md`
 - FLAME.tape `## Log` — full 34-commit session timeline
 - `flame_perf_breakdown_test.hexa` — the per-step measurement harness
 - `flame_d32_corpus_test.hexa` — the 80-step corpus benchmark

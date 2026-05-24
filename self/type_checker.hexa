@@ -85,7 +85,7 @@ let mut tc_strict_let = false
 let mut scope_names = []
 let mut scope_types = []
 let mut scope_depths = []
-// let-immutability (canonical-gap: inbox/patches/let-immutability-and-match-
+// let-immutability (canonical-gap: archive/patches/let-immutability-and-match-
 // exhaustiveness-unenforced.md). Parallel to scope_names: true = binding may be
 // reassigned (`let mut`, params, loop vars, builtins, etc.), false = immutable
 // (plain `let`). Assignment to a `false` binding emits a WARNING (Rust models

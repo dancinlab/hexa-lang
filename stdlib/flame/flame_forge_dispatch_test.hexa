@@ -14,7 +14,7 @@
 //
 // $0 — CPU farr only, no GPU fire. Parse-gated with hexa_real parse.
 //
-// SSOT: inbox/rfc_drafts_2026_05_12/rfc_050_flame_forge_integration.md
+// SSOT: docs/rfc/rfc_drafts_2026_05_12/rfc_050_flame_forge_integration.md
 // ════════════════════════════════════════════════════════════════════════
 
 fn _fd_abs(x: float) -> float {

@@ -216,7 +216,7 @@ not a silent miscompile.
 - `gpu/design.md` — Decision 1 (format) · 2 (dir) · 3 (this file = SSOT)
   · 4 (055-P2 scope)
 - `gpu/HANDOFF.md` — next-steps brief + honest performance framing
-- **RFC 055** (`inbox/rfc_drafts_2026_05_12/rfc_055_hexa_nvptx_codegen_backend.md`)
+- **RFC 055** (`docs/rfc/rfc_drafts_2026_05_12/rfc_055_hexa_nvptx_codegen_backend.md`)
   — the NVPTX codegen *implementation* that consumes this spec; §6
   references this file. Phasing: 055-P0 (PTX text emit, landed) →
   055-P1 (vec-add) + 055-P2 (naive FP64 GEMM) — **both LANDED + the

@@ -335,7 +335,7 @@ consciousness.hexa ─┼─ target esp32  → no_std Rust → flash      ✅ co
 > 거버넌스: `project.tape :: @D h_atlas_single_export`.
 > 삭제 예정: `dist/atlas.hxc`, `tool/atlas_build_hxc.hexa`,
 > `compiler/atlas/hxc_loader.hexa` (deploy 후 sequenced delete —
-> 자세한 내용은 `inbox/notes/2026-05-22-atlas-n6-ssot-recovery.md`).
+> 자세한 내용은 `docs/notes/2026-05-22-atlas-n6-ssot-recovery.md`).
 
 (historical) `tool/atlas_build_hxc.hexa` 한 번 생성 → `dist/atlas.hxc` 런타임 로드. feasibility 결과 도착 시 17.Y-N 항목으로 채움.
 

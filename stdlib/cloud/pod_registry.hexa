@@ -5,7 +5,7 @@
 // of the launching shell (dispatch.log + an attached Monitor). A reboot / new
 // session / different machine lost that handle entirely → the pod became an
 // ORPHAN: still billing, results unrecoverable, no poll/pull handle. See
-// inbox/patches/hexa-cloud-pod-registry-tracking-2026-05-24.md for the
+// archive/patches/hexa-cloud-pod-registry-tracking-2026-05-24.md for the
 // incident (7× A100 @ $10.43/h with zero local trace after a reboot).
 //
 // This MVP is the minimal SSOT it asks for: an append-only JSONL file at

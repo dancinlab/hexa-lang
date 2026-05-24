@@ -50,7 +50,7 @@
 // construct = one new fn, one new self-test, fail-loud on unsupported).
 //
 // RFC 073 — read_verilog procedural-mux scope expansion (Shape-B,
-// OPENER landed 2026-05-20 — see inbox/rfc_drafts_2026_05_20/
+// OPENER landed 2026-05-20 — see docs/rfc/rfc_drafts_2026_05_20/
 // rfc_073_read_verilog_proc_mux.md). Three-phase plan for §5
 // absorption-gate closure: phase-1 `pass_proc_mux` skeleton for
 // if/else cond-mux + nested chains; phase-1.5 `case` statement
@@ -839,7 +839,7 @@ fn _rv_fresh_wire(m: Module) -> str {
 // ─── width-aware combinational emit (rfc_006 §5 Tier-1 (e) Option II) ────
 //
 // CLEAN-ROOM: Source 2 closure for the multi-bit width-truncation note —
-// `inbox/notes/2026-05-21-rfc006-§5-multibit-width-truncation.md`. Before
+// `docs/notes/2026-05-21-rfc006-§5-multibit-width-truncation.md`. Before
 // Option II every fresh `$rvexpr$N` Y-wire created in `_rv_elab_expr`,
 // `_rv_elab_primary` and the 2-D LHS demux was registered with width=1,
 // even when the operand wires were multi-bit. The generic RTLIL cells

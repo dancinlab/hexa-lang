@@ -17,7 +17,7 @@
 > **범위 밖 (별도 SSOT)**:
 >   - `stdlib/flame/PLAN.md` — NN training stdlib
 >   - `self/forge/PLAN.md` — GPU compute substrate (RFC 040/041/049)
->   - `inbox/rfc_drafts_*` — RFC drafts
+>   - `docs/rfc/rfc_drafts_*` — RFC drafts
 >   - 기존 `PLAN-interp-retirement.md` · `PLAN-stage3-*.md` — closure 까지 유지, 신규 entry 만 본 파일로 redirect
 
 ## 0. 현재 상태 (2026-05-17)
@@ -31,7 +31,7 @@
 > (HEXA_ATLAS_N6 env 또는 `~/core/hexa-lang/n6/` fallback). 거버넌스 =
 > `project.tape :: @D h_atlas_single_export`. dist/atlas.hxc /
 > tool/atlas_build_hxc.hexa / compiler/atlas/hxc_loader.hexa 는 deploy 후
-> sequenced delete. 자세한 내용 = `inbox/notes/2026-05-22-atlas-n6-ssot-recovery.md`.
+> sequenced delete. 자세한 내용 = `docs/notes/2026-05-22-atlas-n6-ssot-recovery.md`.
 
 **interp-retirement R3-R6 substantially LANDED** (PLAN-interp-retirement.md 가 1차 SSOT, 본 파일이 신규 cycle log SSOT).
 
@@ -75,7 +75,7 @@
 - `/Users/ghost/.hx/bin/hexa_real parse compiler/emit/asm.hexa` → `OK: ... parses cleanly`.
 - `grep -cF "<<<<<<<" compiler/emit/asm.hexa` → `0` (conflict marker 0).
 - binary promote 금지 (g_inbox_processing_loop step 7 — 별도 deploy cycle).
-- inbox/PATCHES.yaml 미터치.
+- archive/patches/PATCHES.yaml 미터치.
 
 **g3 honest scope**: scaffold + emit 가 land. byte-eq falsifier(F-RFC070-VIS-EMIT / F-RFC070-CAP-EMIT) 는 본 cycle 에서 측정하지 않음 (next cycle: rebuild + 1 fixture 의 stage-1 asm 에 `.private_extern` 라인 + `__HEXA,__cap`/`__HEXA,__abi` 섹션 출현 확인 + 기존 fixture 의 .text/.rodata 부분 byte-identical 확인). RFC 070 §4 G7-A.visibility · G7-D.codegen 행 진척 = "emit-side scaffold LANDED, falsifier deferred".
 
@@ -97,7 +97,7 @@
 **Files (5 edits)**:
 - edit `compiler/codegen/metal_target.hexa` (~190→~340 lines, +~150) — P1 syntax-fragment constants (METAL_OP_KERNEL_DECL, METAL_OP_PARAM_DEVICE_{CONST_,}FLOAT_PTR, METAL_OP_THREAD_POS_GRID, METAL_OP_{ADD,SUB,MUL,DIV,ASSIGN,RETURN_NONE,STMT_TERM,LOAD/STORE_F32_TEMPLATE,PREAMBLE_INCLUDE,PREAMBLE_USING,BUFFER_BINDING_{PREFIX,SUFFIX}}, METAL_AS_{DEVICE,THREADGROUP,CONSTANT,THREAD}, METAL_PRECISION_{F32,F16,F64,I32,U32,BOOL}, METAL_TYPE_{UINT,INT,BOOL}) + 11-row `metal_fp32_slice_ops()` table + P2 classifier helpers `_metal_local_precision(local)` / `_metal_local_address_space(local)` + P3 emit helpers `_metal_emit_preamble` / `_metal_emit_kernel_signature(name)` / `_metal_emit_vec_add_body` / `_metal_mfunc_is_vec_add_shape(mfn)` + real `codegen_emit_metal_msl(module)` MSL emitter for vec-add MIR shape (STMT_LOAD + STMT_LOAD + STMT_BINOP_ADD + STMT_STORE in entry block).
 - edit `compiler/codegen/metal_lower_test.hexa` (~104→~270 lines, +~166) — Case 1 P0 empty-emit preserved (fixed `text.length` → `len(text)` for runtime correctness) · Case 2 extended with new P1 constants (METAL_OP_KERNEL_DECL · METAL_OP_PARAM_DEVICE_{CONST_,}FLOAT_PTR · METAL_OP_THREAD_POS_GRID · METAL_AS_DEVICE) · **Case 3** F-RFC075-METAL-EMIT-VEC-ADD: build vec-add MIR fixture (`_build_vec_add_module` — 3 kernel-buffer params + 3 priv Locals + STMT_LOAD/LOAD/BINOP_ADD/STORE/RETURN in entry block), invoke `codegen_emit_metal_msl`, assert 15 substring patterns · **Case 4** P2 classifier helpers — `_metal_local_address_space` returns METAL_AS_DEVICE for arena_id=0 (kernel buffer) and METAL_AS_THREAD otherwise · `_metal_local_precision` honours `.f32` tag and defaults FP32.
-- edit `inbox/rfc_drafts_2026_05_20/rfc_075_multi_vendor_codegen.md` — status header updated · §4 P0/P1/P2/P3/P4 rows annotated with Metal LANDED + ROCm DEFERRED state · honest g3 callout on P3 vec-add MIR shape hardcoding.
+- edit `docs/rfc/rfc_drafts_2026_05_20/rfc_075_multi_vendor_codegen.md` — status header updated · §4 P0/P1/P2/P3/P4 rows annotated with Metal LANDED + ROCm DEFERRED state · honest g3 callout on P3 vec-add MIR shape hardcoding.
 - edit `GPU.md` §3f Metal entry — annotated "RFC 075 P1+P2+P3 codegen-only LANDED 2026-05-20 Campaign C ... P4 silicon-fire = follow-on USER-LOCAL Mac cycle"; ROCm entry annotated "P1+ multi-session BLOCKED — no AMD GPU in pool".
 - edit `GPU.md` §10 multi-vendor closure box — annotated Metal P1-P3 codegen LANDED + Metal P4 USER-LOCAL Mac + ROCm AMD-GPU pool procurement gate.
 - edit `compiler/PLAN.md` — this entry.
@@ -480,7 +480,7 @@ aprime_cc-direct (tier-1) 에서 `return nil` 이 TAG_INT 0 으로 emit 되던 �
 
 **다운스트림 영향**: wilson 의 plugins/guard-readme-format/test_*.hexa 가 `hexa run` 으로 다시 정상 (chr-prefix split-synthesis 우회 더 이상 불필요). atlas n6 absorption Phase 4-8 의 multi-line shard parser drift 도 동시 종결 (interp drift note 의 root cause).
 
-**다음 step (downstream)**: wilson 측에서 rfc043-hexa-torch 에 main merge 후 inbox/PATCHES.yaml chr-byte-vs-codepoint-asymmetry status `partial` → `applied` flip.
+**다음 step (downstream)**: wilson 측에서 rfc043-hexa-torch 에 main merge 후 archive/patches/PATCHES.yaml chr-byte-vs-codepoint-asymmetry status `partial` → `applied` flip.
 
 ### 2026-05-17 — wilson downstream P0+P1 triage (struct-field LHS confirmed + 12 interp-regen protos + PATCHES.yaml chr update)
 Wilson agent (downstream consumer) flagged 3 items needing closure for plugin selftest unblock + atlas absorption Phase 4-8.
@@ -491,7 +491,7 @@ Wilson agent (downstream consumer) flagged 3 items needing closure for plugin se
   - `bit_or` identifier used as fn-pointer (`hexa_call2(bit_or, x, y)` at hexa_full_regen.c:38470) — only `bit_or_pure` is exported, not `bit_or`. interp source uses `bit_or` directly as function reference.
   - `farr_*` helpers (`farr_pauli_exp_inplace`, `farr_vec_blend`, `farr_vertex_copy`, `farr_simplex_centroid` etc.) are `static inline` in runtime.c (line 7146+) — file-scope only, linker invisible across the runtime.o TU boundary. Either de-staticize OR switch build to `#include "runtime.c"` inline. Separate runtime.c cycle.
 
-**P1 #3 — inbox/PATCHES.yaml chr entry**: ✅ updated on rfc043-hexa-torch (commit `f07a2f6b`). source_commit `pending` → `53190b26`. Note appended documenting which prototype gaps closed and which remain.
+**P1 #3 — archive/patches/PATCHES.yaml chr entry**: ✅ updated on rfc043-hexa-torch (commit `f07a2f6b`). source_commit `pending` → `53190b26`. Note appended documenting which prototype gaps closed and which remain.
 
 ### 2026-05-17 — Field-rooted nested-index lvalue fix (`obj.field[i] = v`)
 **Bug**: `_gen2_nested_index_assign_stmt` (self/codegen_c2.hexa:2187) 에서 Index spine root 가 Field 노드일 때 `root_c = expr` 를 그대로 emit → `hexa_map_get_ic(obj, "field", &ic) = hexa_index_set(...)` → C "expression is not assignable" (함수 반환값에 assign 불가).
@@ -1944,10 +1944,10 @@ wake) now runs its real engine, no segfault. interp-source deletion's
 last functional barriers removed. origin/main `eedc46b4`.
 
 ### 2026-05-19 — drill hx_data_dir() helper + HX_DATA_DIR env knob (phanes patch)
-Resolved `inbox/patches/phanes-hx-data-dir-per-tenant-isolation.md` (resolution (a)) — added `pub fn hx_data_dir()` in `compiler/atlas/overlay.hexa` with precedence `HX_DATA_DIR > $HOME/.hx/data > ".hx/data"`; routed `overlay_path()` / `overlay_ensure_dir()` / `checkpoint_path()` / `_ensure_dir()` through the single helper. `checkpoint.hexa` now `use "compiler/atlas/overlay"` (dep was already transitive). Multi-tenant SaaS (phanes) can now set `HX_DATA_DIR` per-job for overlay/checkpoint isolation without `$HOME`-hijack. Local `hexa_real parse` clean on all three files; binary promote = standard separate deploy step per the 22c27a05 pattern. Scope (g3): SSOT fix only — no CLI flag, no per-job sub-jail logic added.
+Resolved `archive/patches/phanes-hx-data-dir-per-tenant-isolation.md` (resolution (a)) — added `pub fn hx_data_dir()` in `compiler/atlas/overlay.hexa` with precedence `HX_DATA_DIR > $HOME/.hx/data > ".hx/data"`; routed `overlay_path()` / `overlay_ensure_dir()` / `checkpoint_path()` / `_ensure_dir()` through the single helper. `checkpoint.hexa` now `use "compiler/atlas/overlay"` (dep was already transitive). Multi-tenant SaaS (phanes) can now set `HX_DATA_DIR` per-job for overlay/checkpoint isolation without `$HOME`-hijack. Local `hexa_real parse` clean on all three files; binary promote = standard separate deploy step per the 22c27a05 pattern. Scope (g3): SSOT fix only — no CLI flag, no per-job sub-jail logic added.
 
-### 2026-05-19 — inbox/patches resolution: HXC v2 downstream library API landed (`self/stdlib/hxc_v2_lib.hexa`)
-Resolves `inbox/patches/hxc-v2-no-downstream-library-api.md` (wisp Decision 8 option A blocker on `@D g_hxc`). New thin re-export wrapper exposes `pub fn hxc_v2_encode / hxc_v2_decode / hxc_v2_encode_records / hxc_v2_decode_records` over the existing `self/stdlib/hxc_composite_chain_v2.hexa::cc2_encode/cc2_decode` chain — zero duplicated codec logic, no `fn main()`, callable from any `hexa build`-produced downstream (interp-free per `@D g_interp_deprecated`). Records pair uses pipe+backslash escape mirroring `compiler/atlas/hxc_loader.hexa::_unesc_pipe`/`_split_pipes` so the wire is canonical relative to the in-repo HXC v2 example. Smoke = `tmp_hxc_v2_lib_smoke.hexa` (6 falsifiers: str round-trip, tiny passthrough, encode-idempotency, records deep-eq, empty input, pipe/backslash escape). Parse-gate clean both files (`/Users/ghost/.hx/bin/hexa_real parse`). Compiled execution + binary promote = standard separate deploy step per the `22c27a05` pattern.
+### 2026-05-19 — archive/patches resolution: HXC v2 downstream library API landed (`self/stdlib/hxc_v2_lib.hexa`)
+Resolves `archive/patches/hxc-v2-no-downstream-library-api.md` (wisp Decision 8 option A blocker on `@D g_hxc`). New thin re-export wrapper exposes `pub fn hxc_v2_encode / hxc_v2_decode / hxc_v2_encode_records / hxc_v2_decode_records` over the existing `self/stdlib/hxc_composite_chain_v2.hexa::cc2_encode/cc2_decode` chain — zero duplicated codec logic, no `fn main()`, callable from any `hexa build`-produced downstream (interp-free per `@D g_interp_deprecated`). Records pair uses pipe+backslash escape mirroring `compiler/atlas/hxc_loader.hexa::_unesc_pipe`/`_split_pipes` so the wire is canonical relative to the in-repo HXC v2 example. Smoke = `tmp_hxc_v2_lib_smoke.hexa` (6 falsifiers: str round-trip, tiny passthrough, encode-idempotency, records deep-eq, empty input, pipe/backslash escape). Parse-gate clean both files (`/Users/ghost/.hx/bin/hexa_real parse`). Compiled execution + binary promote = standard separate deploy step per the `22c27a05` pattern.
 
 ### 2026-05-19 — stdlib/net non-blocking accept primitive landed (phanes roadmap-62 note resolution (a))
 
@@ -1963,7 +1963,7 @@ parse-gate clean (socket.hexa · http_server.hexa · concurrent_serve.hexa
 compiled-path 가 SSOT). 옵션 (b) OS-thread workers · (c)
 fork-after-accept 헬퍼는 follow-up scope. inbox note status →
 **resolved-ssot**. files: `stdlib/net/socket.hexa` (signature 추가) +
-`inbox/notes/phanes-stdlib-net-os-thread-concurrency-roadmap-62.md`
+`docs/notes/phanes-stdlib-net-os-thread-concurrency-roadmap-62.md`
 (status + Resolution).
 ### 2026-05-18 — R7 measured cutover A.1/A.2 + parity gate (Cycle B) — HONEST FAIL
 
@@ -2601,14 +2601,14 @@ single-session work. Per `@D g_inbox_processing_loop` Shape-B ("multi-cycle
 work's honest deliverable = RFC drafted + scaffold landed, NOT implementation
 complete"), each is now at its honest current-cycle closure:
 
-- **ROADMAP 69 → RFC 061** (`inbox/rfc_drafts_2026_05_12/rfc_061_runtime_two_layer_split.md`)
+- **ROADMAP 69 → RFC 061** (`docs/rfc/rfc_drafts_2026_05_12/rfc_061_runtime_two_layer_split.md`)
   — runtime 2-layer split scoped: boundary criterion (core iff it touches
   HexaVal bits / allocator hot path / universal codegen calls), the
   bootstrap-circularity constraint (`runtime_hi.hexa` ships as pre-generated
   C, not a loaded module), 4-phase plan (P0 boundary ledger → P1 core extract
   → P2/P3 hi-tier), 5-falsifier battery. Honest: the ≤500-line core target is
   aspirational, measured in P0.
-- **ROADMAP 65 → RFC 062** (`inbox/rfc_drafts_2026_05_12/rfc_062_argv0_dedup_args_contract.md`)
+- **ROADMAP 65 → RFC 062** (`docs/rfc/rfc_drafts_2026_05_12/rfc_062_argv0_dedup_args_contract.md`)
   — the contract-separation half (`script_path()`/`real_args()`) already
   shipped; RFC 062 scopes the remaining argv[0]-dedup migration as P0 audit →
   P1 migrate user-arg readers to `real_args()` (zero layout change) → P2 flip.
@@ -2742,7 +2742,7 @@ as historical record.
 
 ### 2026-05-19 — stdlib: AWS SigV4 signer + byte-level HMAC-SHA256 LANDED (inbox phanes-aws-sigv4-signer)
 
-inbox/patches/phanes-aws-sigv4-signer-for-stdlib.md (downstream phanes,
+archive/patches/phanes-aws-sigv4-signer-for-stdlib.md (downstream phanes,
 @D g7) processed Shape A. 4 files added:
 - `stdlib/core/hash/hmac.hexa` — byte-level `hmac_sha256_bytes(key:[int],
   data:[int])->[int]` (raw bytes in/out — the §3 gap; the legacy
@@ -2873,7 +2873,7 @@ where an identical `origins/hexa-rtl/` master already lives — selected, and
 the local copy is just a frozen Option-A absorption snapshot from 2026-05-10;
 (C) stub-parse `rtl module {}` as opaque — rejected as silent over-claim (g3).
 
-Landed: `inbox/notes/2026-05-19-rtl-dsl-scope-decision.md` (full decision
+Landed: `docs/notes/2026-05-19-rtl-dsl-scope-decision.md` (full decision
 record, status `resolved-ssot`), `firmware/boards/chip/origins/hexa-rtl/RTL_DSL_NOT_HEXA.md`
 (in-place marker so re-parsers get the same answer without re-investigation),
 and an annotation in `firmware/README.md` calling out the convention
@@ -3305,7 +3305,7 @@ Toolchain build-smoke clean after each. Remaining interp-era residue is
 documentation only (`PLAN-interp-retirement.md`, `docs/interp_*.md`) — kept
 as historical record.
 ### 2026-05-19 — stdlib: AWS SigV4 signer + byte-level HMAC-SHA256 LANDED (inbox phanes-aws-sigv4-signer)
-inbox/patches/phanes-aws-sigv4-signer-for-stdlib.md (downstream phanes,
+archive/patches/phanes-aws-sigv4-signer-for-stdlib.md (downstream phanes,
 @D g7) processed Shape A. 4 files added:
 - `stdlib/core/hash/hmac.hexa` — byte-level `hmac_sha256_bytes(key:[int],
   data:[int])->[int]` (raw bytes in/out — the §3 gap; the legacy
@@ -3327,7 +3327,7 @@ Punted: SigV4 `UriEncode()` percent-encoder + query-param sorting (caller
 passes pre-encoded path/query; AWS JSON APIs use `/` + empty query, so the
 live path is fully covered — S3 object-key signing needs the encoder).
 ### 2026-05-19 — stdlib: SigV4 UriEncode + CanonicalQueryString LANDED (inbox phanes-sigv4-uriencode-query-canonicalization)
-inbox/patches/phanes-sigv4-uriencode-query-canonicalization-for-s3-list.md
+archive/patches/phanes-sigv4-uriencode-query-canonicalization-for-s3-list.md
 (downstream phanes, @D g7 / @D g_stdlib_ownership) processed Shape A — the
 explicitly-deferred follow-up from the SigV4 signer above. 2 files edited:
 - `stdlib/aws/sigv4.hexa` — added `sigv4_uri_encode(s, is_path)` (RFC 3986
@@ -3396,7 +3396,7 @@ EnumPath rework deliberately not done (larger, more-principled option).
 
 ### 진행 로그 — 8 stale-open inbox patches VERIFIED-CLOSED via SSOT grep (close-only, no fix cycle · 2026-05-19)
 
-- 2026-05-19 — 8 stale-open `inbox/patches/` 항목을 SSOT grep cross-verification 으로 VERIFIED-CLOSED 마킹 (close-only sweep, NO source change, NO fix re-run — fix 가 이미 SSOT 에 live; dup-race precheck 적용). 각 패치 헤더 블록 직후에 `> **VERIFIED-CLOSED 2026-05-19**: ...` 감사-증거 라인 추가, 기존 본문 무삭제. 대상 + 증거: (1) `net-nonblock-multiplex` — `self/native/net.c` `hexa_net_set_nonblock`+`hexa_net_select` grep ×5; (2) `net-unix-domain-socket` — `self/native/net.c` `AF_UNIX`/`_hexa_net_parse_any` grep ×12; (3) `builtin-vs-stdlib-symbol-collision` — `self/native/thread.c` `thread_channel_` rename grep ×9, §7 interp-side residual 은 @D g_interp_deprecated (R7 CLOSED) 로 dissolved; (4) `codegen-struct-fwddecl-vs-fn-arena` — `self/main.hexa` `module_loader_env_prefix`/`HEXA_MEM_CAP_MB` grep ×8 (근본원인 = module_loader 768MB RSS cap, codegen 아님); (5) `modifyotherkeys-non-ascii-decoder-gap` — `self/tui/input.hexa` 0x110000 ceiling grep ×2, commit `bf943479` (deeper `chr()` followup = `input-decoder-chr-vs-from_char_code` 별도 추적, OPEN 유지); (6) `phanes-hx-data-dir-per-tenant-isolation` — `HX_DATA_DIR` in `compiler/drill/{checkpoint,drill}.hexa` grep ×3 (binary promote = 별도 표준 deploy step); (7) `phanes-pluggable-verifier-oracle-for-drill-loop` — verifier callback in `compiler/drill/drill.hexa` grep ×73; (8) `chr-byte-vs-codepoint-asymmetry` — interp-vs-compiled ASYMMETRY 전제가 interp 은퇴(@D g_interp_deprecated, R7 CLOSED)로 소멸 → DISSOLVED-BY-INTERP-RETIREMENT (superseded, not fixed; compiled raw-byte N&0xFF 가 단일 정답). g3-honest: 본 sweep 은 이미 랜딩된 작업의 CLOSE + 감사 증거 추가일 뿐, 신규 fix 아님. inbox/PATCHES.yaml 미터치.
+- 2026-05-19 — 8 stale-open `archive/patches/` 항목을 SSOT grep cross-verification 으로 VERIFIED-CLOSED 마킹 (close-only sweep, NO source change, NO fix re-run — fix 가 이미 SSOT 에 live; dup-race precheck 적용). 각 패치 헤더 블록 직후에 `> **VERIFIED-CLOSED 2026-05-19**: ...` 감사-증거 라인 추가, 기존 본문 무삭제. 대상 + 증거: (1) `net-nonblock-multiplex` — `self/native/net.c` `hexa_net_set_nonblock`+`hexa_net_select` grep ×5; (2) `net-unix-domain-socket` — `self/native/net.c` `AF_UNIX`/`_hexa_net_parse_any` grep ×12; (3) `builtin-vs-stdlib-symbol-collision` — `self/native/thread.c` `thread_channel_` rename grep ×9, §7 interp-side residual 은 @D g_interp_deprecated (R7 CLOSED) 로 dissolved; (4) `codegen-struct-fwddecl-vs-fn-arena` — `self/main.hexa` `module_loader_env_prefix`/`HEXA_MEM_CAP_MB` grep ×8 (근본원인 = module_loader 768MB RSS cap, codegen 아님); (5) `modifyotherkeys-non-ascii-decoder-gap` — `self/tui/input.hexa` 0x110000 ceiling grep ×2, commit `bf943479` (deeper `chr()` followup = `input-decoder-chr-vs-from_char_code` 별도 추적, OPEN 유지); (6) `phanes-hx-data-dir-per-tenant-isolation` — `HX_DATA_DIR` in `compiler/drill/{checkpoint,drill}.hexa` grep ×3 (binary promote = 별도 표준 deploy step); (7) `phanes-pluggable-verifier-oracle-for-drill-loop` — verifier callback in `compiler/drill/drill.hexa` grep ×73; (8) `chr-byte-vs-codepoint-asymmetry` — interp-vs-compiled ASYMMETRY 전제가 interp 은퇴(@D g_interp_deprecated, R7 CLOSED)로 소멸 → DISSOLVED-BY-INTERP-RETIREMENT (superseded, not fixed; compiled raw-byte N&0xFF 가 단일 정답). g3-honest: 본 sweep 은 이미 랜딩된 작업의 CLOSE + 감사 증거 추가일 뿐, 신규 fix 아님. archive/patches/PATCHES.yaml 미터치.
 
 - 2026-05-19 — decoder cluster B (self/tui/input.hexa):
   input-decoder-chr-vs-from_char_code (chr→from_char_code at raw-UTF8 +
@@ -3440,7 +3440,7 @@ EnumPath rework deliberately not done (larger, more-principled option).
 
 ### 2026-05-19 — install.sh: fresh-install `hexa build` + PATH 견고화
 
-- inbox/patches/hexa-oneliner-install-should-link-source-repo.md 해소.
+- archive/patches/hexa-oneliner-install-should-link-source-repo.md 해소.
   문제 1: 릴리스 tarball 은 `{hexa 바이너리, build/}` 만 담아 `stdlib/`·
   `self/` 미포함 → fresh install 에서 `use "stdlib/..."` 빌드 전부 실패.
   컴파일러는 install-relative stdlib 탐색 (df9e7f6b: `<inst>/stdlib`·
@@ -7555,7 +7555,7 @@ cycle 41 S3 closure 직후, north-star ② 의 strict reading 대응:
 **runtime 도 hexa-native** (current C runtime ~16,809 LoC + 45 .c
 files in self/native/ 를 hexa source 로 재작성).
 
-**RFC draft**: `inbox/rfc_drafts_2026_05_20/rfc_runtime_hexa_native_
+**RFC draft**: `docs/rfc/rfc_drafts_2026_05_20/rfc_runtime_hexa_native_
 rewrite.md` — 3-tier scope decomposition (compiler-essential /
 stdlib / application), 3-phase strategy, acceptance gate.
 
@@ -7574,7 +7574,7 @@ externs, 0 hexa runtime externs (runtime statically linked):
 | misc (dlsym, pty, posix_spawn 등) | ~46 |
 | **total** | **173** |
 
-Catalog raw: `inbox/rfc_drafts_2026_05_20/aprime_c41_externs_catalog.txt`
+Catalog raw: `docs/rfc/rfc_drafts_2026_05_20/aprime_c41_externs_catalog.txt`
 
 **Phase 1 scope** (Tier-A, compiler-essential, ~30 fns ~3K LoC):
 
@@ -7764,14 +7764,14 @@ cond-mux helper). Est. ~150 LoC in `_rv_parse_always` +
 
 ```
  stdlib/kernels/logic_synth/read_verilog.hexa               | +40 -1
- inbox/notes/2026-05-20-rfc006-§5-phase-3d-relanded-t69.md  | + (new)
+ docs/notes/2026-05-20-rfc006-§5-phase-3d-relanded-t69.md  | + (new)
  compiler/PLAN.md                                           | + (this entry)
 ```
 
 @cite IEEE 1364-2005 §9.5 sequential block + §10.4.2 procedural
 assign + Yosys `passes/proc/proc_mux.cc` demux.
 
-cross-link: inbox/notes/2026-05-20-rfc006-§5-phase-3d-relanded-t69.md
+cross-link: docs/notes/2026-05-20-rfc006-§5-phase-3d-relanded-t69.md
 (this branch's status note · re-confirms Phase 3e opener plan after
 PR #233 closed PIECE 1).
 
@@ -7833,9 +7833,9 @@ PR #233 closed PIECE 1).
 - §4.6 신규 (≈120 줄) = 4.6.1 design choice + 4.6.2 두 레코드 layout + 4.6.3 scope/out-of-scope + 4.6.4 F-D1/F-D2 reaffirmation + 4.6.5 files.
 - §6 punted decision 1 → RESOLVED, §4.6.1 로 cross-link.
 
-**Out of scope (`@D g3` honest)**: parser 변경 0건 — `@plugin(...)` 는 오늘 여전히 parse error. codegen 변경 0건 — `.so` artifacts 는 여전히 `__cap`/`__abi` 미보유. runtime 변경 0건 — `hexa_dlopen` (G7-C scope, 미존재) 은 gate 미호출. `stdlib/dynlink.hexa` (G7-C) 생성 X. host grant-table 정의 X. F-D1/F-D2 measured 0건. `hexa_v2` regen 0 (`@D g_commit_push_deploy` 는 G7-D.impl 대기). `inbox/PATCHES.yaml` untouched.
+**Out of scope (`@D g3` honest)**: parser 변경 0건 — `@plugin(...)` 는 오늘 여전히 parse error. codegen 변경 0건 — `.so` artifacts 는 여전히 `__cap`/`__abi` 미보유. runtime 변경 0건 — `hexa_dlopen` (G7-C scope, 미존재) 은 gate 미호출. `stdlib/dynlink.hexa` (G7-C) 생성 X. host grant-table 정의 X. F-D1/F-D2 measured 0건. `hexa_v2` regen 0 (`@D g_commit_push_deploy` 는 G7-D.impl 대기). `archive/patches/PATCHES.yaml` untouched.
 
-**Files**: `inbox/rfc_drafts_2026_05_20/rfc_070_hexa_ld_dlopen_shared.md` (status+§4 table+§4.6 추가+§6 1 항목 RESOLVED) · `stdlib/dynlink_caps.hexa` (신규 skeleton) · `compiler/codegen/plugin_attr_scaffold.hexa` (신규 scaffold marker) · `compiler/PLAN.md` (이 entry).
+**Files**: `docs/rfc/rfc_drafts_2026_05_20/rfc_070_hexa_ld_dlopen_shared.md` (status+§4 table+§4.6 추가+§6 1 항목 RESOLVED) · `stdlib/dynlink_caps.hexa` (신규 skeleton) · `compiler/codegen/plugin_attr_scaffold.hexa` (신규 scaffold marker) · `compiler/PLAN.md` (이 entry).
 
 **Cross-link**: RFC 070 §4.6 · §3.C capability gate · §3.D ABI stamp · §4.4 G7-A.native scaffold (동일 Shape-B "marker before impl" 패턴) · `@D g_inbox_processing_loop` Shape B · `@D g3`/`g5`/`g6`/`g_hxc`.
 
@@ -8015,9 +8015,9 @@ K2 ABORT (`1287cf6e`) 의 root-cause 진단 정정 + 다음 transitive blocker �
 **Branch** : `rfc-073-phase-3e-closure`
 
 **Inputs** :
-- `inbox/notes/2026-05-20-rfc006-§5-phase-3d-relanded-t69.md` — Phase 3d
+- `docs/notes/2026-05-20-rfc006-§5-phase-3d-relanded-t69.md` — Phase 3d
   status note identifying the THREE shared-helper-path blockers.
-- `inbox/notes/2026-05-20-rfc006-§5-phase-3d-status.md` — line-anchored
+- `docs/notes/2026-05-20-rfc006-§5-phase-3d-status.md` — line-anchored
   fix sketches per blocker.
 - baseline `[gate] router_d{4,6} area=0.0 µm² Δ=100%` on `origin/main`
   `5ddd72bc`.
@@ -8125,7 +8125,7 @@ the next clock edge.
  stdlib/kernels/logic_synth/read_verilog.hexa               | +503 -65
  stdlib/yosys/abc_map.hexa                                  |  +24  -1
  stdlib/kernels/logic_synth/abc_map.hexa                    |  +38  -1
- inbox/notes/2026-05-20-rfc006-§5-phase-3e-result.md        | + (new)
+ docs/notes/2026-05-20-rfc006-§5-phase-3e-result.md        | + (new)
  compiler/PLAN.md                                           | + (this entry)
 ```
 
@@ -8134,7 +8134,7 @@ procedural assignment) + §10.4.2 (procedural assign) + §10.3.5 (for-loop
 unroll) + §3.5.1 (sized literals) + Yosys `passes/proc/proc_mux.cc`
 (priority-mux chain) + BLIF spec §3.4 (`.latch` directive).
 
-cross-link: inbox/notes/2026-05-20-rfc006-§5-phase-3e-result.md (full
+cross-link: docs/notes/2026-05-20-rfc006-§5-phase-3e-result.md (full
 g3-honest writeup with the exact ABC trace + Phase 3f fix scope).
 
 ### 2026-05-20 — RUNTIME.md cycle 52 — Tier-A.3 printf-family minimal impl (137→108, -29 cumulative)
@@ -8499,7 +8499,7 @@ Driver `hexa.real` rebuilt (md5 `48caef89d4095fcdaa109c1aef8d1d5f`,
 .hx/bin/hexa.real` replaced with new binary; backups at `*.bak-2026-05-21`.
 
 Cross-links:
-- `inbox/notes/2026-05-21-rfc006-§5-deploy-status.md` — full measurement
+- `docs/notes/2026-05-21-rfc006-§5-deploy-status.md` — full measurement
 - @D g_commit_push_deploy — source + binary atomic deploy
 - PR #251 — runtime exec fix (merged this cycle)
 - PR #247 / `cdfa8d46` — prior `any_grant` SSA fix (still alive)
@@ -8523,8 +8523,8 @@ RCA: Phase 3f's pre-loop alias `connect(s__ssa0, s)` combined with post-publish 
 **§5 verdict**: OPEN — comb-loop class CLOSED, area-oracle still OPEN. Next blocker is Tier-1 (e) `fifo_mem` 2-D packed-array memwr (40 non-driven nets in d4, ~80 in d6 per ABC's `Constant-0 drivers added` warning). NO `Yosys absorbed` claim made.
 
 Cross-links:
-- inbox/notes/2026-05-21-rfc006-§5-phase3g-rrptr-closed.md — full RCA + measurement
-- inbox/patches/yosys-rr-ptr-cross-iteration-comb-loop.md (commit `f4283ac2`) — status → resolved-ssot
+- docs/notes/2026-05-21-rfc006-§5-phase3g-rrptr-closed.md — full RCA + measurement
+- archive/patches/yosys-rr-ptr-cross-iteration-comb-loop.md (commit `f4283ac2`) — status → resolved-ssot
 - PR #247 (`cdfa8d46`) — Phase 3f intra-iter SSA this generalises
 - PR #250 (`d698e61a`) — T74 minimum-shape falsifier (assertions updated for 3g)
 

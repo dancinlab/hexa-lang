@@ -6,7 +6,7 @@
 // write JSON pretty-printed) using stdlib/alloc/json.hexa +
 // stdlib/alloc/json_object.hexa.
 //
-// Resolves inbox/patches/port-pool-cli-to-hexa.md (option a: document
+// Resolves archive/patches/port-pool-cli-to-hexa.md (option a: document
 // the existing surface — smallest delta). After landing, dancinlab/pool's
 // `bin/pool.hexa` port mirrors this pattern verbatim (the 6 verbs:
 // add · list · on · rm · off · status — all of which are simple

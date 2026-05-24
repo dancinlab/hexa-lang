@@ -67,7 +67,7 @@ let mut _g_overlay_warned_conflict: bool = false
 // Resolve the hx data directory. Single helper consulted by every
 // overlay/checkpoint path-construction site so the rule lives in ONE
 // place. Precedence (downstream multi-tenant requirement, filed via
-// inbox/patches/phanes-hx-data-dir-per-tenant-isolation.md):
+// archive/patches/phanes-hx-data-dir-per-tenant-isolation.md):
 //
 //   1. HX_DATA_DIR — explicit override; preferred for per-tenant
 //      isolation (a hosted SaaS can point each job at its own dir

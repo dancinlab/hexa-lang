@@ -1,7 +1,7 @@
 // @raw117_exempt
 // ════════════════════════════════════════════════════════════════════════
 // stdlib/flame/ag_derive.hexa — flame autograd-auto Sub-Deliverable 1
-// (RFC 043, scoping note inbox/notes/2026-05-20-flame-autograd-auto-scoping.md)
+// (RFC 043, scoping note docs/notes/2026-05-20-flame-autograd-auto-scoping.md)
 //
 // PURPOSE — Source-to-source reverse-mode AD via a vjp-rule registry
 // (Option B in the scoping note). SD1 lands the registry data structure

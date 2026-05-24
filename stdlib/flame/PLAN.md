@@ -10,7 +10,7 @@
 > hexa→PTX) · (3) GPU 에서 — forge cuBLAS substrate + Phase 4-D dispatch ·
 > (4) 검증된 채로 — 모든 단계 byte-eq falsifier (가짜 진전 0, g3).
 >
-> Design SSOT = `inbox/rfc_drafts_2026_05_12/rfc_043_hexa_torch_compiler_only_nn_stdlib.md`.
+> Design SSOT = `docs/rfc/rfc_drafts_2026_05_12/rfc_043_hexa_torch_compiler_only_nn_stdlib.md`.
 > This file = the flame-local operational roadmap (mirrors HEXAD/PLAN.md
 > discipline: editable architecture head + append-only `## 진행 로그`).
 > **All phases 📋 PLANNED. Nothing runs without explicit user go.**
@@ -40,7 +40,7 @@ mirror, hexa CPU-equiv anchored).
   독립 push (이중 안전망). 캠페인 체인 = 이미 GitHub 보존.
 - **Anchor (not move) cross-repo evidence**: anima campaign state/docs
   + the verified oracles stay in anima; recorded as references only
-  (drift-avoidance g3). RFCs stay in `inbox/` (intake convention).
+  (drift-avoidance g3). RFCs live in `docs/rfc/` (intake convention).
 - **Acceptance: MET** — every campaign artifact resolvable from
   `FLAME.tape` §X + 검증완료(origin==local); no load-bearing orphan
   branch. 잔여 = main-divergence only (로컬 main stale; `origin/main`
@@ -317,12 +317,12 @@ Phase 3 누적 falsifier: 8 PASS. flame 전체 (Phase 1+2+3): **29 PASS**.
 
 | RFC | Status | Scope | Path |
 |---|---|---|---|
-| **043** | active (design SSOT) | hexa-torch consolidating design — RFC 040/041/042/034 → flame stdlib | `inbox/rfc_drafts_2026_05_12/rfc_043_hexa_torch_compiler_only_nn_stdlib.md` |
-| **044** | parallel session | forge regime (GPU substrate sibling) | `inbox/rfc_drafts_2026_05_12/rfc_044_forge_regime_tiered_substrate.md` |
-| **045** | closed-evidence | Phase 3 algorithm-byte-eq with anima oracle (40 falsifier PASS · F-RFC043-STEP-EQ tier reached) | `inbox/rfc_drafts_2026_05_12/rfc_045_flame_phase3_algorithmic_byte_eq_with_anima_oracle.md` |
-| **046** | draft | Phase 4 compiler fusion framework (3-stage pipeline · F-RFC046-EAGER-PYTORCH-MATCH ≤1.3× of 336.85s on A100) | `inbox/rfc_drafts_2026_05_12/rfc_046_flame_phase4_compiler_fusion.md` |
-| **047** | draft | Phase 4-B per-block IR pass (Stage 2 specialization · target ≥3× wall) | `inbox/rfc_drafts_2026_05_12/rfc_047_flame_phase4b_block_fusion_ir_pass.md` |
-| **048** | draft | Phase 4-C fwd+bwd graph fusion (Stage 3 register-resident cache · HIGHEST IMPACT · target ≥2× over 4-B) | `inbox/rfc_drafts_2026_05_12/rfc_048_flame_phase4c_fwd_bwd_graph_fusion.md` |
+| **043** | active (design SSOT) | hexa-torch consolidating design — RFC 040/041/042/034 → flame stdlib | `docs/rfc/rfc_drafts_2026_05_12/rfc_043_hexa_torch_compiler_only_nn_stdlib.md` |
+| **044** | parallel session | forge regime (GPU substrate sibling) | `docs/rfc/rfc_drafts_2026_05_12/rfc_044_forge_regime_tiered_substrate.md` |
+| **045** | closed-evidence | Phase 3 algorithm-byte-eq with anima oracle (40 falsifier PASS · F-RFC043-STEP-EQ tier reached) | `docs/rfc/rfc_drafts_2026_05_12/rfc_045_flame_phase3_algorithmic_byte_eq_with_anima_oracle.md` |
+| **046** | draft | Phase 4 compiler fusion framework (3-stage pipeline · F-RFC046-EAGER-PYTORCH-MATCH ≤1.3× of 336.85s on A100) | `docs/rfc/rfc_drafts_2026_05_12/rfc_046_flame_phase4_compiler_fusion.md` |
+| **047** | draft | Phase 4-B per-block IR pass (Stage 2 specialization · target ≥3× wall) | `docs/rfc/rfc_drafts_2026_05_12/rfc_047_flame_phase4b_block_fusion_ir_pass.md` |
+| **048** | draft | Phase 4-C fwd+bwd graph fusion (Stage 3 register-resident cache · HIGHEST IMPACT · target ≥2× over 4-B) | `docs/rfc/rfc_drafts_2026_05_12/rfc_048_flame_phase4c_fwd_bwd_graph_fusion.md` |
 
 flame Phase 4 의 design layer 가 RFC 046+047+048 로 완료. Phase 4-A
 (epilogue fusion + bwd projection routing) 은 partial impl 완료
@@ -473,7 +473,7 @@ in inbox (forge session, same rfc043-hexa-torch branch — concurrent safe):
 - RFC 050 flame↔forge integration API (7 falsifier pre-registered)
 
 flame ↔ forge concurrent safety verified: 양 세션 file scope disjoint
-(forge: self/forge/* + self/cuda/experiments/* + inbox/.../rfc_044/049/050;
+(forge: self/forge/* + self/cuda/experiments/* + docs/rfc/.../rfc_044/049/050;
 flame: stdlib/flame/* + tool/flame_*), AGENTS.tape 다른 section 공존,
 모두 rfc043-hexa-torch branch, origin sync 됨.
 
@@ -594,13 +594,13 @@ actual F-RFC046 wall measurement.
 
 ## 2026-05-19 — RFC 059 drafted (anima Path-A dual-head + multi-term grad + PureFieldFFN, multi-cycle scoping)
 
-Inbox patch `inbox/patches/flame-path-a-dual-head-and-multiterm-grad.md`
+Inbox patch `archive/patches/flame-path-a-dual-head-and-multiterm-grad.md`
 (anima §71, 2026-05-19) — anima downstream blocked from adopting flame
 Path-A for its canonical ConsciousDecoderV2 training because three
 physics-overlay extensions need shape-changes to Path-A's parameter
 layout / grad path that anima can't make downstream (`@F f3`).
 
-**RFC 059** drafted: `inbox/rfc_drafts_2026_05_12/rfc_059_flame_path_a_dual_head_multiterm_grad_purefieldffn.md`.
+**RFC 059** drafted: `docs/rfc/rfc_drafts_2026_05_12/rfc_059_flame_path_a_dual_head_multiterm_grad_purefieldffn.md`.
 3 independent cycles, each with default-off byte-eq invariant:
 
 - **Cycle 1** — dual logits head. New `m_off_head_g` / `mc_off_logits_g`
@@ -666,7 +666,7 @@ memory [[flame-phase4d9-closure]] · GOAL ① north-star
   bound** 임을 측정 확정 (decisive).
 
 **RFC 056 (device-sub-view residence API) — 측정 anchored 작성+구현**:
-- spec: `inbox/rfc_drafts_2026_05_12/rfc_056_forge_device_subview_residence_api.md`
+- spec: `docs/rfc/rfc_drafts_2026_05_12/rfc_056_forge_device_subview_residence_api.md`
   (7 falsifier, F-RFC056-BYTEEQ-PRESERVE 가 12-kernel oracle max|Δ|=0.0
   강제). fire #9 가 측정으로 justify (design-first 아님 — 사용자 directive).
 - **Phase 1 LANDED** (`1f077af1`): §6.1 state machine + §6.2
@@ -720,7 +720,7 @@ follow-up 필요. campaign ~$9.8/11 fires.
 분석: `state/flame_phase4d7_gpu_fire_2026_05_17/PHASE4D7_FIRE11_ANALYSIS.md`.
 
 **RFC 057 (Bc device-authoritative matmul primitive)** — fire #11
-H100 교차검증 anchor. spec `inbox/rfc_drafts_2026_05_12/rfc_057_*.md`.
+H100 교차검증 anchor. spec `docs/rfc/rfc_drafts_2026_05_12/rfc_057_*.md`.
 
 **RFC 057 §6.1 구현 LANDED (PARTIAL)** (`f15b6325`, cherry-pick of
 `bf9dc222`): cuBLAS matmul 출력 farr 를 `loc=DEVICE` 유지 (eager
@@ -1972,7 +1972,7 @@ forge-route 확인 — 미측정 over-claim 0).
 
 SD1–SD4 (PR #129/#152/#153/#154) landed the **manually-keyed** vjp rule
 registry: a human encodes each bwd by hand and the registry stores only
-op-kind presence. The scoping note (`inbox/notes/2026-05-20-flame-
+op-kind presence. The scoping note (`docs/notes/2026-05-20-flame-
 autograd-auto-scoping.md` §4) explicitly carved out **SD5** as the
 genuine source-to-source transform — "true AST-driven derivation from a
 hexa-lang `fn`'s source — requires compiler hook". This cycle lands
@@ -2646,7 +2646,7 @@ sequentially:
 (RFC + scaffold; zero behavior change). **TaskList #37 Campaign B P0**.
 
 **Landed**:
-- `inbox/rfc_drafts_2026_05_20/rfc_072_flame_d4096_benchmark.md` —
+- `docs/rfc/rfc_drafts_2026_05_20/rfc_072_flame_d4096_benchmark.md` —
   Shape-B RFC; spec (d=4096 · n_layer=24 · seq_len=2048 · batch=8 —
   GPT-3 6.7B d_model axis per Brown 2020 Table 2.1); 4 falsifiers
   (F-RFC072-WALL-PT · F-RFC072-WALL-FLAME · F-RFC072-RATIO <1.0 ·
@@ -3013,13 +3013,13 @@ follows the same `*` then `+` order — identical IEEE-754 trajectory.
   `synchronize()`. Per @D f1/f2: PyTorch is BASELINE reference (g3 honest
   comparator), NOT hexa codegen — hexa-native-only rule does not apply
   to the reference arm.
-- `inbox/fires/rfc072_p1_torch_d2048_proxy_2026_05_20/{result.json,fire.log}`
+- `archive/fires/rfc072_p1_torch_d2048_proxy_2026_05_20/{result.json,fire.log}`
   — fire artifacts. Chosen rung **L4: d=1024 n_layer=12 batch=2 seq=512**.
   Measured median 1-step wall **116.286 ms** (std 0.104 ms = **0.089 %**
   of median — well under 5 % F-RFC072-VARIANCE gate). Peak VRAM
   5,059.8 MiB. Host: `summer-B650M-K` · RTX 5070 sm_120 · torch
   2.11.0+cu130 · CUDA 13.0.
-- `inbox/rfc_drafts_2026_05_20/rfc_072_flame_d4096_benchmark.md` — §3.P1
+- `docs/rfc/rfc_drafts_2026_05_20/rfc_072_flame_d4096_benchmark.md` — §3.P1
   section added with full measurement table + per-falsifier status. §7
   phasing table updated (P1 ✅ PROXY measured · P1-full deferred to H100
   cycle). §1 status line updated.

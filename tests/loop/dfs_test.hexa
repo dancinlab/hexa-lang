@@ -147,7 +147,7 @@ fn main() {
 
     // ---- 3. dfs_run stub integration ----
     let _ = write_text("/tmp/dfs_test_fixture.md", FIXTURE)
-    let _ = exec("rm -rf inbox/atlas_candidates/dfs_seed_root")
+    let _ = exec("rm -rf archive/atlas_candidates/dfs_seed_root")
     let mut seeds: array = []
     seeds.push(_mkcand("seed_root", "empty_space",
         "Seed hypothesis exploring the sigma tau relationship at n equals six.",
@@ -159,12 +159,12 @@ fn main() {
     if emitted == 2 { println("  ok: dfs_run emitted 2 children") }
     else { println("  FAIL: dfs_run emitted " + to_string(emitted)); fail = fail + 1 }
 
-    let f1 = exec("test -e inbox/atlas_candidates/dfs_seed_root/sigma_tau_ratio_descent.md && echo Y || echo N").trim()
+    let f1 = exec("test -e archive/atlas_candidates/dfs_seed_root/sigma_tau_ratio_descent.md && echo Y || echo N").trim()
     if f1 == "Y" { println("  ok: child inbox file written") }
     else { println("  FAIL: child inbox file missing"); fail = fail + 1 }
 
     // ---- 4. budget guard: --llm-calls 1 caps at one parent ----
-    let _ = exec("rm -rf inbox/atlas_candidates/dfs_b1 inbox/atlas_candidates/dfs_b2")
+    let _ = exec("rm -rf archive/atlas_candidates/dfs_b1 archive/atlas_candidates/dfs_b2")
     let mut two: array = []
     two.push(_mkcand("b1", "empty_space",
         "First budget seed exploring divisor structure at n equals six in depth.",

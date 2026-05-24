@@ -20,7 +20,7 @@
 > initial commit of this scaffold was silently dropped when a parallel
 > session's history rewrite (commit `f880c425` → `a6e5ac95` re-SHA)
 > excluded these files. Re-created in a separate commit to preserve the
-> work cleanly. See `inbox/notes/2026-05-19-shared-worktree-hazard-yosys-drop.md`.
+> work cleanly. See `docs/notes/2026-05-19-shared-worktree-hazard-yosys-drop.md`.
 
 This module re-derives the public surface of
 [Yosys](https://github.com/YosysHQ/yosys) (ISC license; YosysHQ;
@@ -33,7 +33,7 @@ exception, same idiom as `AGENTS.tape` g5).
 
 Implementation plan source: `~/core/hexa-arch/proposals/
 rfc_006_yosys_absorption.md` §4 (module list) + §5 (measurement gate).
-Filed handoff: `inbox/notes/2026-05-19-hexa-arch-rfc006-yosys-handoff.md`.
+Filed handoff: `docs/notes/2026-05-19-hexa-arch-rfc006-yosys-handoff.md`.
 
 ## Module index (rfc_006 §4)
 
@@ -105,7 +105,7 @@ synth without PDK; this gate requires the PDK-bound number).
   exclusively (same pattern as `stdlib/booksim/`). hexa-arch
   *references*; does not carry its own `stdlib/` copy.
 - **Inbox flow (g7):** downstream consumers (e.g. hexa-arch chip
-  domain) file gaps to `inbox/patches/` — never inline-edit this
+  domain) file gaps to `archive/patches/` — never inline-edit this
   tree.
 
 ## cited sources
@@ -119,7 +119,7 @@ synth without PDK; this gate requires the PDK-bound number).
 - rfc_006 (hexa-arch) — `~/core/hexa-arch/proposals/
   rfc_006_yosys_absorption.md` (referenced via handoff note;
   hexa-arch repo not present locally as of 2026-05-19)
-- Handoff note — `inbox/notes/2026-05-19-hexa-arch-rfc006-yosys-handoff.md`
+- Handoff note — `docs/notes/2026-05-19-hexa-arch-rfc006-yosys-handoff.md`
 - booksim sibling pattern — `stdlib/booksim/README.md` (rfc_001/rfc_003)
 
 ## Toolchain limits to expect (rfc_003 finding, carried forward)

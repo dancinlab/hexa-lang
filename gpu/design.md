@@ -120,7 +120,7 @@ standalone full spec, RFC 055 §6 reduced to a reference; (C) retire
 - `gpu/` is already the *design* home (Decisions 1–2 live here); the
   surface spec belongs with the design ledger, not buried in a
   codegen-implementation RFC. A reader asking "what can I write in a
-  `@gpu fn`?" looks in `gpu/`, not in an `inbox/rfc_drafts/` file.
+  `@gpu fn`?" looks in `gpu/`, not in an `docs/rfc/rfc_drafts/` file.
 - RFC 055 explicitly scopes itself **compiler-domain, codegen only**
   ("forge and flame are consumers, not the subject"); a user-facing
   language-surface spec sitting inside it is a scope smell. Option B
@@ -201,7 +201,7 @@ Candidate A is rejected; kept above as the audit trail. Consequence:
 
 - `gpu/SPEC.md` — the `@gpu` subset SSOT (Decision 3)
 - `self/native/gpu_codegen_stub.c` — existing `@gpu` codegen skeleton
-- `inbox/rfc_drafts_2026_05_12/rfc_055_hexa_nvptx_codegen_backend.md` —
+- `docs/rfc/rfc_drafts_2026_05_12/rfc_055_hexa_nvptx_codegen_backend.md` —
   the NVPTX codegen implementation that consumes `gpu/SPEC.md`
 - `self/forge/PLAN.md` — GPU substrate roadmap (match → exceed cuBLAS)
 - `HEXA-NATIVE-ONLY.md` — the policy this closes the carve-out for

@@ -28,7 +28,7 @@
 
 @X x_handoff := "wilson AGENTS.tape g7 hexa-lang-handoff-protocol" :: principle [d=2026-05-14 active]
   url = "https://github.com/dancinlab/wilson/blob/main/AGENTS.tape"
-  scope = "downstream-to-upstream patch flow — wilson, echoes, anima file at inbox/patches/"
+  scope = "downstream-to-upstream patch flow — wilson, echoes, anima file at archive/patches/"
 
   scope = "honest-caveat origin · forbidden lattice-fit on external entities"
 

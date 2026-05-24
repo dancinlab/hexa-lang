@@ -188,7 +188,7 @@ runtime, wilson plugins that bind to GPU substrates):
   (the catcher of all 3 catches).
 - `tool/flame_phase4d9_orin_clobber_oracle.{c,sh}` — in-process
   substrate model (the predictor of GPU oRin=0.17).
-- `inbox/rfc_drafts_2026_05_12/rfc_056_forge_device_subview_residence_api.md` — RFC 056 (the surface
+- `docs/rfc/rfc_drafts_2026_05_12/rfc_056_forge_device_subview_residence_api.md` — RFC 056 (the surface
   whose §6.3 Bc-pin × §6.1 H2D-skip combination created the trap).
 - `state/flame_phase4d7_d768_fire1{6,7,8}_dispatch.log` — the three
   closure fires (#16 first step, #17 wall PASS, #18 precision +

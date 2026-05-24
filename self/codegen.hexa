@@ -927,7 +927,7 @@ fn codegen(ast) {
     // header doesn't yet re-export the runtime_hi_gen.c `static` rt_* stdlib
     // helpers. Set HEXA_USE_RUNTIME_C=1 to revert to the legacy include and
     // keep building until the header migration is complete.
-    // (Patch issue: inbox/patches/runtime-h-incomplete-after-phase-1-3-b.md)
+    // (Patch issue: archive/patches/runtime-h-incomplete-after-phase-1-3-b.md)
     let runtime_inc = if env("HEXA_USE_RUNTIME_C") != "" { "runtime.c" } else { "runtime.h" }
     parts.push("#include \"" + runtime_inc + "\"\n\n")
 
@@ -3029,7 +3029,7 @@ fn _gen2_stmt_inner(node, depth) {
         // while loop), leaking `hexa_index_get(ks, i)` into the void return with
         // `ks`/`i` undeclared in the current C scope. Short-circuiting the
         // reserved void/none/nil names is both a correctness guard and a tiny
-        // codegen fast-path. Repro: inbox/patches/hexa-return-void-mistranslate-
+        // codegen fast-path. Repro: archive/patches/hexa-return-void-mistranslate-
         // 2026-05-24.md + pool-hexa-transpiler-ks-undeclared-2026-05-24.md.
         let _ret_is_void = type_of(node.left) != "string" && node.left.kind == "Ident" && (node.left.name == "void" || node.left.name == "none" || node.left.name == "nil")
         // Plan B Phase 3: when this fn registered at least one defer,
@@ -3643,7 +3643,7 @@ fn _gen2_stmt_inner(node, depth) {
     //   ZERO C code. Users wanting struct-printing should rely on the
     //   runtime's existing _hexa_to_string_rec TAG_VALSTRUCT field-by-field
     //   path (println(struct_value) works today via that path). A real
-    //   Path B Display emitter is sketched in inbox/patches/derive-meta-
+    //   Path B Display emitter is sketched in archive/patches/derive-meta-
     //   vs-derive-real-impl.md (deferred — needs runtime tag→fn table).
     if k == "VerifyStmt" { return "" }
     if k == "IntentStmt" { return "" }
@@ -4487,7 +4487,7 @@ let mut _gen2_pending_hoist = []
 // defer/arena/plain path the enclosing fn uses (_gen2_emit_tail_return_expr).
 // Evaluation order is preserved because gen2_expr recurses inner-first,
 // so chained `a()?.b()?` emits the inner `?` preamble before the outer.
-// See RFC inbox/rfc_drafts/r15-d2-question-operator.md §3.5 (Case A/B/C).
+// See RFC docs/rfc/rfc_drafts/r15-d2-question-operator.md §3.5 (Case A/B/C).
 let mut _gen2_try_preamble = ""
 let mut _gen2_try_counter = 0
 
@@ -5213,7 +5213,7 @@ fn gen2_expr(node) {
             // `Dispatcher { handler: my_fn, ... }` emits `Dispatcher(my_fn, ...)`
             // where my_fn is C fn-pointer typed `HexaVal (HexaVal)`, not the
             // `HexaVal` the constructor expects → clang error. Filed at
-            // inbox/patches/struct-fn-field-wrap.md (2026-05-14).
+            // archive/patches/struct-fn-field-wrap.md (2026-05-14).
             let _sfv = node.fields[si].left
             let mut _sfv_expr = gen2_expr(_sfv)
             if type_of(_sfv) != "string" && _sfv.kind == "Ident" && _gen2_should_autowrap_fnref(_sfv.name) {
@@ -5451,7 +5451,7 @@ fn gen2_expr(node) {
             }
             // RUNTIME.md Step 5 codegen-inline builtins (4th re-land after
             // wipes: 724c38b3 + c4c721bc + e8c2dc1c). See governance proposal
-            // inbox/notes/2026-05-22-wipe-governance-proposal.md.
+            // docs/notes/2026-05-22-wipe-governance-proposal.md.
             if name == "__str_raw_len" {
                 return "hexa_int((int64_t)HX_STRLEN(" + gen2_expr(node.args[0]) + "))"
             }
@@ -5646,7 +5646,7 @@ fn gen2_expr(node) {
             // accepts it, but the compiled path emitted no shim -> clang
             // "use of undeclared identifier 'print_err'". Share the eprintln
             // emission path so the compiled SSOT matches the interp builtin
-            // (GOAL (2) interp/compiled parity). inbox/patches/
+            // (GOAL (2) interp/compiled parity). archive/patches/
             // print-err-builtin-interp-compiled-parity.md (wisp).
             // Re-applied 2026-05-19 after e5c4c0ef deploy regen wiped 3abf9f8e.
             if name == "eprintln" || name == "print_err" {
@@ -5748,7 +5748,7 @@ fn gen2_expr(node) {
             // (hexa_exec_stream_open / _write / _close_stdin). Same shape as
             // _kill above: explicit emit so user-side `exec_stream_open(cmd)` etc.
             // resolves without hexa_call1 indirection. Filed at
-            // inbox/patches/wilson-mcp-needs-bidi-stdio.md.
+            // archive/patches/wilson-mcp-needs-bidi-stdio.md.
             if name == "exec_stream_open" {
                 return "hexa_exec_stream_open(" + gen2_expr(node.args[0]) + ")"
             }
@@ -6124,7 +6124,7 @@ fn gen2_expr(node) {
                 // timestamp` shim is safe.
                 if name == "timestamp" || name == "now" || name == "time_now" || name == "__builtin_time_now" { return "hexa_timestamp()" }
                 // Wilson 2026-05-13 — expose hexa_time_ms (monotonic ms wall clock)
-                // to user-side hexa. Filed at inbox/patches/wilson-needs-time-now-ms-builtin.md.
+                // to user-side hexa. Filed at archive/patches/wilson-needs-time-now-ms-builtin.md.
                 // Also intercept `__builtin_time_now_ms` so self/std_time.hexa's wrapper
                 // body resolves (it expects the unmapped __builtin_ name).
                 if name == "time_now_ms" || name == "now_ms" || name == "timestamp_ms" || name == "__builtin_time_now_ms" { return "hexa_time_ms()" }
@@ -6555,7 +6555,7 @@ fn gen2_expr(node) {
             }
             if len(node.args) == 8 {
                 // flame spiking RFC — STDP pair-based GPU dispatch
-                // (inbox/patches/flame-stdp-pair-gpu-kernel.md).
+                // (archive/patches/flame-stdp-pair-gpu-kernel.md).
                 // forge_dispatch_stdp_pair(W, tr_pre, tr_post, spike, out,
                 //                          A_plus, A_minus, w_max) -> int rc
                 // CUDA build → __global__ stdp_pair kernel (2D grid, one
@@ -7178,9 +7178,9 @@ fn gen2_expr(node) {
     // file was transpiled despite the recorded parse error — that is a
     // compiler-internal contract bug. Exit before clang runs so the gap
     // surfaces to the developer, not the user. Future: replace with the
-    // expander pass per inbox/patches/macro-expander-pass-design.md.
+    // expander pass per archive/patches/macro-expander-pass-design.md.
     if k == "MacroCall" {
-        eprintln("[codegen] ERROR: MacroCall reached codegen — parser should have rejected upstream (PROBE r9-6). This is a compiler bug; see inbox/patches/macro-expander-pass-design.md")
+        eprintln("[codegen] ERROR: MacroCall reached codegen — parser should have rejected upstream (PROBE r9-6). This is a compiler bug; see archive/patches/macro-expander-pass-design.md")
         exit(1)
     }
     if k == "" { return "hexa_map_new()" }

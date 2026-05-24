@@ -979,7 +979,7 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
     // dispatcher and P2 (`F-RFC068-OPCODE-SUFFIX`) rewrites the emitted
     // STMT_BINOP op from `add` to `add_f16` / `add_bf16` / `add_f32`
     // when the dst Local has an explicit precision annotation. See
-    // `inbox/rfc_drafts_2026_05_20/rfc_068_mixed_precision_mir_layer.md`
+    // `docs/rfc/rfc_drafts_2026_05_20/rfc_068_mixed_precision_mir_layer.md`
     // §3 P1/P2.
     //
     // ── binop → STMT_BINOP ──────────────────────────────────

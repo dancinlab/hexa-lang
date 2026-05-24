@@ -79,7 +79,7 @@
 
 use "stdlib/proc"
 // Native ws:// streaming client (RFC 6455 over raw TCP, no websocat).
-// Closes the bulk of inbox/patches/websocket-streaming-client-websocat-
+// Closes the bulk of archive/patches/websocket-streaming-client-websocat-
 // dependency.md: ws_connect/ws_recv now hold a stream open natively for
 // ws:// even when websocat is absent. wss:// still routes to websocat.
 use "stdlib/net/websocket_native"
@@ -424,7 +424,7 @@ pub fn ws_send(h, message: string) -> bool {
     // exit-status surfaces the failure so the caller can reconnect / fail-fast.
     // Wrapped in `timeout` when available so a vanished reader (a FIFO open()
     // blocks until a reader attaches) can't hang ws_send indefinitely.
-    // Repro + root cause: inbox/patches/ws-send-fifo-backgrounded-write-race-2026-05-23.md.
+    // Repro + root cause: archive/patches/ws-send-fifo-backgrounded-write-race-2026-05-23.md.
     let escaped = _ws_shell_escape(message + "\n")
     let write_cmd = "printf %s " + escaped + " > " + _ws_shell_escape(in_path)
     let has_timeout = to_string(exec("command -v timeout >/dev/null 2>&1 && echo y || echo n")).trim()

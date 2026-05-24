@@ -158,7 +158,7 @@ clear the F-RFC046 wall gate.
 - Phase 4-D-5 design (sub-phase parent): `stdlib/flame/PHASE4D5_CUBLAS_WIRE_DESIGN.md`
 - Phase 4-D-4 FAIL RCA: `state/flame_phase4d_20260517_102511/RESULTS.md`
 - RFC 040 substrate landed: `self/cuda/runtime_cuda.c`
-- RFC 041 (future .cu kernels): `inbox/rfc_drafts_2026_05_12/rfc_041_*.md`
-- RFC 050 forge↔flame integration: `inbox/rfc_drafts_2026_05_12/rfc_050_flame_forge_integration.md`
+- RFC 041 (future .cu kernels): `docs/rfc/rfc_drafts_2026_05_12/rfc_041_*.md`
+- RFC 050 forge↔flame integration: `docs/rfc/rfc_drafts_2026_05_12/rfc_050_flame_forge_integration.md`
 - AGENTS.tape §0 nn_stack (flame:forge :: torch:ATen)
 - Verify_all script: `tool/flame_phase4b3_verify_all.sh` (24 artifact battery)

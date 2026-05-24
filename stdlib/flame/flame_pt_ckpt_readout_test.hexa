@@ -2,7 +2,7 @@
 // ════════════════════════════════════════════════════════════════════════
 // flame_pt_ckpt_readout_test.hexa — patch landing smoke
 //
-// Covers inbox/patches/pt-ckpt-cross-substrate-residual-readout.md:
+// Covers archive/patches/pt-ckpt-cross-substrate-residual-readout.md:
 //   Clause A: pt_loader shape oracle (file-free, alloc-only).
 //   Clause B: nn_decoder_fwd_with_readout returns a fresh d-len farr
 //             at both "final" and per-layer indices, with handles

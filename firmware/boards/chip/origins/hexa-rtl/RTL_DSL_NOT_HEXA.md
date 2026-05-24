@@ -37,7 +37,7 @@ hexa-lang compiler or any other in-tree tool.
 Per @I id001 (hexa-lang = "native compiler with atlas-bound theorems"),
 @F f2 (no third-party-codegen backend), and @D g7 (downstream owns its
 own domain), **RTL DSL is not a hexa-lang feature and will not become
-one**. Three options were considered (`inbox/notes/2026-05-19-rtl-dsl-scope-decision.md`):
+one**. Three options were considered (`docs/notes/2026-05-19-rtl-dsl-scope-decision.md`):
 
 | Option | Verdict |
 |---|---|
@@ -58,6 +58,6 @@ one**. Three options were considered (`inbox/notes/2026-05-19-rtl-dsl-scope-deci
 
 ## Cross-refs
 
-- `inbox/notes/2026-05-19-rtl-dsl-scope-decision.md` — full decision record
+- `docs/notes/2026-05-19-rtl-dsl-scope-decision.md` — full decision record
 - `compiler/PLAN.md` — single-line cycle log entry
 - `~/core/hexa-chip/origins/hexa-rtl/` — canonical upstream of this content

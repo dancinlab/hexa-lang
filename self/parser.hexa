@@ -998,7 +998,7 @@ fn parse_stmt() {
         // `@derive(...)` working for compatibility while printing a one-line
         // deprecation hint pointing at @derive_meta. (Path B — real Display
         // emitter — is feasible but >100 LoC for codegen + runtime tag→fn
-        // table + name-mangling; deferred. See inbox/patches/derive-meta-
+        // table + name-mangling; deferred. See archive/patches/derive-meta-
         // vs-derive-real-impl.md for the future sketch.)
         if attr_name == "derive_meta" && p_peek_kind() == "LParen" {
             return parse_derive_decl()
@@ -1008,7 +1008,7 @@ fn parse_stmt() {
             // greps for the literal "Parse error" prefix, so this does not
             // fail `hexa parse` and does not push to p_errors).
             let _dep_tok = p_peek()
-            println("[deprecation] @derive(...) at " + to_string(_dep_tok.line) + ":" + to_string(_dep_tok.col) + " is a no-op (parses but emits no trait impl). Use @derive_meta(...) for the honest declarative-meta-only form. See inbox/patches/derive-meta-vs-derive-real-impl.md")
+            println("[deprecation] @derive(...) at " + to_string(_dep_tok.line) + ":" + to_string(_dep_tok.col) + " is a no-op (parses but emits no trait impl). Use @derive_meta(...) for the honest declarative-meta-only form. See archive/patches/derive-meta-vs-derive-real-impl.md")
             return parse_derive_decl()
         }
         // ── @contract — parse requires/ensures clauses ──────
@@ -2349,7 +2349,7 @@ fn parse_struct_decl() {
     while p_peek_kind() != "RBrace" && p_peek_kind() != "Eof" {
         // Optional `pub` (or `pub(scope)`) on the field — absorbed; the
         // value is discarded until the AST gains a `vis` slot (see
-        // inbox/patches/canonical-audit-round-4-design-level.md
+        // archive/patches/canonical-audit-round-4-design-level.md
         // § visibility).  Without this the canonical Rust `pub struct
         // P { pub x: i64 }` failed at `parse_struct_fields`.
         parse_visibility()
@@ -3397,7 +3397,7 @@ fn parse_postfix() {
             // for every other `name!(...)` at link time). Per g11/g21,
             // reject at the call site with a clear, locationed diagnostic
             // so the user is not chasing clang + link errors downstream.
-            // See `inbox/patches/macro-expander-pass-design.md` for the
+            // See `archive/patches/macro-expander-pass-design.md` for the
             // expander design proposal (token-tree splicing + hygiene).
             let next_k = p_peek_ahead(1).kind
             if next_k == "LParen" || next_k == "LBracket" {
@@ -3409,7 +3409,7 @@ fn parse_postfix() {
                     mac_name = to_string(expr.name)
                 }
                 // Macro expander Phase 1 — intrinsic-only allowlist (per
-                // inbox/patches/macro-expander-pass-design-detailed.md PR #451).
+                // archive/patches/macro-expander-pass-design-detailed.md PR #451).
                 // Expands directly to the underlying AST shape without going
                 // through the MacroCall fail-loud path.  Three intrinsics
                 // ship in v1; full user-defined expander = Phase 2+.
@@ -3455,7 +3455,7 @@ fn parse_postfix() {
                     }
                 } else {
                 let bang_tok = p_peek()
-                let err_msg = "macro invocation '" + mac_name + "!(...)' is not yet implemented — file an inbox patch for the expander pass (see inbox/patches/macro-expander-pass-design.md)"
+                let err_msg = "macro invocation '" + mac_name + "!(...)' is not yet implemented — file an inbox patch for the expander pass (see archive/patches/macro-expander-pass-design.md)"
                 p_record_error(bang_tok.line, bang_tok.col, err_msg)
                 p_emit_parse_error(bang_tok, err_msg)
                 // Consume the macro-call tokens so the parser can continue
@@ -3535,7 +3535,7 @@ fn parse_postfix() {
             // unwraps the payload; on failure (Err/None) the enclosing fn
             // returns the value unchanged (identity re-wrap — hexa is
             // dynamically typed, no Rust `From` conversion). See RFC
-            // inbox/rfc_drafts/r15-d2-question-operator.md §3.
+            // docs/rfc/rfc_drafts/r15-d2-question-operator.md §3.
             //
             // Disambiguation (RFC §3.6): this is the SOLE `Question` consumer
             // in expression position. The `T?` type-suffix lives in the

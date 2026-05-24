@@ -11,7 +11,7 @@
 // out — useful for unit-testing the command-string / marker logic
 // without a real vastai install or credentials).
 //
-// THE DESTROY BUG (inbox/patches/vastai-destroy-needs-y-flag-or-silent-abort.md):
+// THE DESTROY BUG (archive/patches/vastai-destroy-needs-y-flag-or-silent-abort.md):
 //   `vastai destroy instance <iid>` opens an interactive `[y/N]` prompt.
 //   In a non-interactive context the prompt sees EOF, vastai prints
 //   `Aborted.` to stdout, exits rc=0, and the instance keeps billing.
@@ -179,7 +179,7 @@ fn vast_search_offers(query: str, verified_only: int) -> VastOffer {
     }
     // Claim-lock: walk the candidate ids and pick the first one not
     // already claimed by a sibling rent on this host (best-effort, see
-    // inbox/patches/vast-offer-machine-claim-lock-for-parallel-tracks.md).
+    // archive/patches/vast-offer-machine-claim-lock-for-parallel-tracks.md).
     let claimed = vast_offer_claim(ids)
     if claimed.ok == 1 {
         return claimed
@@ -190,7 +190,7 @@ fn vast_search_offers(query: str, verified_only: int) -> VastOffer {
 }
 
 // ── parallel-track claim lock ─────────────────────────────────────────
-// (inbox/patches/vast-offer-machine-claim-lock-for-parallel-tracks.md)
+// (archive/patches/vast-offer-machine-claim-lock-for-parallel-tracks.md)
 //
 // Best-effort, file-backed claim ledger so two sibling `hexa cloud rent`
 // processes on the same host ($USER) do not pick the same offer id. The
@@ -420,7 +420,7 @@ fn vast_create(offer_id: str, image: str, disk_gb: int) -> VastInstance {
 }
 
 // ── teardown — THE CRITICAL FIX ───────────────────────────────────────
-// (inbox/patches/vastai-destroy-needs-y-flag-or-silent-abort.md)
+// (archive/patches/vastai-destroy-needs-y-flag-or-silent-abort.md)
 
 // _vast_destroy_aborted — does the destroy output carry an abort marker?
 // vastai prints "Aborted." on EOF-to-confirm; match case-insensitively so

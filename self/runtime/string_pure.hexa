@@ -674,7 +674,7 @@ pub fn from_char_code_pure(code) {
 // which is strbuf-based AND adds {:.N} precision handling. So this dedup
 // preserves both main's debt fix and stage2's strbuf-migration outcome.
 //
-// See inbox/patches/format-n-pure-dup-and-ge-le-in-format-pure.md.
+// See archive/patches/format-n-pure-dup-and-ge-le-in-format-pure.md.
 
 // ── str_capitalize_pure ──────────────────────────────────────────
 // Capitalizes the first character of the string (a..z -> A..Z).

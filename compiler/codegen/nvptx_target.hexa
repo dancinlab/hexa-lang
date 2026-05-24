@@ -591,7 +591,7 @@ fn _nvptx_gpu_intrinsic_sreg(op: string) -> string {
 // RFC 067 marker — Real WMMA emit. The mnemonic table below is the
 // SEAM that RFC 067 P3 re-keys by (op, role, dtype, layout) so non-
 // canonical families (bf16×bf16→f32, f16×f16→f16, tf32) become
-// reachable. See `inbox/rfc_drafts_2026_05_20/rfc_067_wmma_real_emit.md`
+// reachable. See `docs/rfc/rfc_drafts_2026_05_20/rfc_067_wmma_real_emit.md`
 // §3 P3 for the re-key plan and §4 F3 (F-RFC067-DTYPE-FAMILY) for the
 // substring falsifier that closes that phase.
 //
@@ -785,7 +785,7 @@ fn _nvptx_lower_stmt(buf: [LInstr], s: Stmt, kinds: [PReg], shared_idx_off: [i64
     // %fh<a>, %fh<b>;` (and bf16/f32 variants) emit when source-level
     // `let t: f16 = a + b` lowers through P1 (precision tag) → P2
     // (op-name suffix) → P3 (body mnemonic). See
-    // `inbox/rfc_drafts_2026_05_20/rfc_068_mixed_precision_mir_layer.md`
+    // `docs/rfc/rfc_drafts_2026_05_20/rfc_068_mixed_precision_mir_layer.md`
     // §3 P3 + §4 F3 (`F-RFC068-BODY-MNEMONIC`).
     // Still pending: P4 (`F-RFC068-NUMERIC-EQ`) — real-silicon fire.
     if s.kind == STMT_BINOP {
@@ -1273,7 +1273,7 @@ pub let NVPTX_RKIND_F8_E5M2: string = "fpr8e5m2"   // %fe5<id>  .reg .b8 (e5m2 i
 // .f32) carry the same fragment-width of 8 PTX regs per thread.
 // SCAFFOLD-PHASE: the width is hard-coded for the f16×f16→f32 family;
 // P3 introduces per-fragment dtype tags + role (A/B/C/D) so the width
-// can vary. See `inbox/rfc_drafts_2026_05_20/rfc_067_wmma_real_emit.md`
+// can vary. See `docs/rfc/rfc_drafts_2026_05_20/rfc_067_wmma_real_emit.md`
 // §3 P1 / §4 F1 (`F-RFC067-FRAG-WIDTH`).
 pub let _nvptx_frag_width: i64 = 8
 
@@ -1363,7 +1363,7 @@ fn _nvptx_classify_local_for_stmt(s: Stmt) -> string {
     // fixture), it overrides the op-name rules below. Empty string (the
     // default) means "no explicit annotation" and we fall through to the
     // op-name / intrinsic rules. See
-    // `inbox/rfc_drafts_2026_05_20/rfc_068_mixed_precision_mir_layer.md`
+    // `docs/rfc/rfc_drafts_2026_05_20/rfc_068_mixed_precision_mir_layer.md`
     // §3 P1.
     if s.dst.precision == ".f16" { return NVPTX_RKIND_F16 }
     if s.dst.precision == ".bf16" { return NVPTX_RKIND_BF16 }
@@ -4156,7 +4156,7 @@ fn _nvptx_unroll_clone_stmt(s: Stmt, dsts: [i64], offset: i64) -> Stmt {
 // The PR #117 passthrough guarantee (Case 11) is a STRICT regression
 // gate (F7) — every RFC 069 commit MUST keep non-matching CFG output
 // byte-identical. See
-// `inbox/rfc_drafts_2026_05_20/rfc_069_unroll_advanced.md` §3 for
+// `docs/rfc/rfc_drafts_2026_05_20/rfc_069_unroll_advanced.md` §3 for
 // the per-phase plan and §4 for the falsifier battery.
 //
 // _nvptx_unroll_pass — the public entry point. RFC 055 §12 P4+ MVP.
@@ -4859,7 +4859,7 @@ fn _nvptx_emit_matmul_module(name: string, op_kind: string, target: string, ptx_
 // `_nvptx_emit_matmul_tma_module` — codegen-emit the SMOKE-level TMA
 // matmul module text for the sm_120a + PTX 8.7 gate (N196 finding).
 // The body mirrors the proven N200 SMOKE artifact
-// (`inbox/fires/rfc067_ptma_named_bar_hilbert_2026_05_22/sgemm_tma_smoke.ptx`)
+// (`archive/fires/rfc067_ptma_named_bar_hilbert_2026_05_22/sgemm_tma_smoke.ptx`)
 // byte-for-byte for the kernel core; only the kernel entry name is
 // parameterised so the upstream MFunc-name dispatch threads through.
 //
@@ -4875,7 +4875,7 @@ fn _nvptx_emit_matmul_module(name: string, op_kind: string, target: string, ptx_
 //     load/mma/store loop. The N128 WMMA dispatch is still used for the
 //     non-sm_120a / flag-off paths.
 //   * Runtime-builtin gap (per
-//     `inbox/notes/2026-05-22-tma-runtime-builtin-requirements.md`):
+//     `docs/notes/2026-05-22-tma-runtime-builtin-requirements.md`):
 //     `gpu_tma_encode_tiled_2d` is NOT yet implemented; the host driver
 //     for the source-to-silicon fire calls `cuTensorMapEncodeTiled`
 //     directly (see N200 SMOKE host.c). Codegen only emits the kernel

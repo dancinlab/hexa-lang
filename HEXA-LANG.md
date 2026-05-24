@@ -6,7 +6,7 @@
 
 ## 진행 milestone
 
-- [x] inbox/patches origin/main 0 truly-open — 모든 mechanical/agent-tractable 항목 해소
+- [x] archive/patches origin/main 0 truly-open — 모든 mechanical/agent-tractable 항목 해소
 - [x] transpiler regen #454 기반 cycle-3 batch 활성화
 - [x] RFC 081/082/083 design draft + D1-D7 결정 (Option/Result · trait · TLS)
 - [x] atlas n6/atlas.n6 단일 SSOT — hxc 완전 퇴역 (PR #312/#314/#315/#316/#576)
@@ -26,14 +26,14 @@ native compiler with atlas-bound theorems · 8 strict-lint stages · no LLVM · 
 
 | 영역 | 상태 |
 |---|---|
-| inbox/patches (origin/main) | **0 truly-open** — 모든 mechanical/agent-tractable 항목 해소 |
+| archive/patches (origin/main) | **0 truly-open** — 모든 mechanical/agent-tractable 항목 해소 |
 | transpiler (`self/native/hexa_v2`) | regen #454 기반 (cycle-3 batch 활성화) |
 | local toolchain | HEAD 동기화 + 설치 완료 |
 | 핵심 게이트 | atlas-bound lint · diff-guard subagent · wipe-guard hook (opt-in) · external-LLM gate (`hexa loop --dfs` only) |
 
 ## 활성 게이트 / 거버넌스
 
-- `g11` upstream gap → `inbox/patches/<slug>.md` 즉시 filing · workaround 금지
+- `g11` upstream gap → `archive/patches/<slug>.md` 즉시 filing · workaround 금지
 - `g4` stacked PR <200줄 · 1 logical thing
 - `g5` 검증은 `hexa verify` (LLM self-judge 금지)
 - `g8` rented-GPU pod → `hexa cloud {run|nohup|poll|copy-*|preflight}` canonical
@@ -64,7 +64,7 @@ native compiler with atlas-bound theorems · 8 strict-lint stages · no LLVM · 
 ### RFC 후보 3 — TLS primitive (wss:// · HTTPS · secure runpod control plane)
 
 - **range**: 런타임 / C primitive (~multi-week)
-- **trigger**: `inbox/patches/websocket-streaming-client-websocat-dependency` wss:// 분기 · 일반 HTTPS 호출 · 보안 control plane
+- **trigger**: `archive/patches/websocket-streaming-client-websocat-dependency` wss:// 분기 · 일반 HTTPS 호출 · 보안 control plane
 - **scope**: hexa-native TLS 1.3 client (handshake · certificate validation · session resume) — libsodium 기반 또는 OpenSSL/BoringSSL 바인딩
 - **canonical ref**: BoringSSL / rustls API 형태
 - **blocker**: 외부 의존성 결정 (vendored sub-runtime 추가 vs system OpenSSL 링크) · 인증서 store 정책 · CA bundle 배포 방식

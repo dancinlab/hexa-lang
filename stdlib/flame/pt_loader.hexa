@@ -2,7 +2,7 @@
 // ════════════════════════════════════════════════════════════════════════
 // stdlib/flame/pt_loader.hexa — flame Path-A cross-substrate ckpt loader
 //
-// inbox/patches/pt-ckpt-cross-substrate-residual-readout.md Clause A.
+// archive/patches/pt-ckpt-cross-substrate-residual-readout.md Clause A.
 // anima §168-PHI-THRESHOLD-POSTHOC consumer (downstream-filed, upstream-
 // resolved per @D g7 inbox-pipeline + @D g_stdlib_ownership).
 //

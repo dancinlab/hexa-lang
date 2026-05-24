@@ -281,7 +281,7 @@
 ## 2026-05-24 라운드 14 cycle 12 — closed
 
 - [x] CHANGELOG + PROBE.log r14 cycle 7-11 batch sync (r14-PPPP) — LANDED [#597]
-- [ ] RFC 087 macro-expander pass design promote (inbox/rfc_drafts) — OPEN [#556]
+- [ ] RFC 087 macro-expander pass design promote (docs/rfc/rfc_drafts) — OPEN [#556]
 
 ## 2026-05-24 라운드 14 cycle 13 — surgical RFC closure + stdlib MVP
 

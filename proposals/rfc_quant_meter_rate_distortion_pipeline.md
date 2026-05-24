@@ -2,7 +2,7 @@
 
 - **상태**: **Draft** (미착수 promote; P1 MVP 코드는 랜딩·검증됨)
 - **작성일**: 2026-05-18
-- **RFC 번호**: 미할당 — `proposals/`와 `inbox/rfc_drafts_*`가 독립 numbering으로
+- **RFC 번호**: 미할당 — `proposals/`와 `docs/rfc/rfc_drafts_*`가 독립 numbering으로
   경합 중(공유 repo). promote 시 충돌 없는 번호 배정. 파일명은 서술형 고정.
 - **트리거**: Google TurboQuant (2026-03, KV-cache post-training quantization,
   arXiv:2504.19874) — "표현을 의미 보존한 채 압축" 발상의 컴파일러 전이.

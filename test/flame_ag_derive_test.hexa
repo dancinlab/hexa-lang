@@ -22,7 +22,7 @@
 //     `dt_exp`-based sigmoid as `flame_math::dt_exp` to guarantee
 //     identical IEEE-754 trajectories.                            (SD3)
 //
-// Scope (matches inbox/notes/2026-05-20-flame-autograd-auto-scoping.md):
+// Scope (matches docs/notes/2026-05-20-flame-autograd-auto-scoping.md):
 //   - Pure-CPU, $0, three oracles in one binary.
 //   - SD1 compares ag_derive's matmul_bwd_auto OUTPUT against
 //     nn_linear_bwd's {dW, dx} (matmul vjp pair).

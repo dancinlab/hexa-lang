@@ -776,7 +776,7 @@ fn _test_atomic_add() -> bool {
 // SCAFFOLD ONLY — no MIR is lowered through this path, no LModule is
 // emitted with TMA opcodes. The integration point with N128 WMMA
 // matmul is documented in
-// `inbox/notes/2026-05-22-tma-runtime-builtin-requirements.md`.
+// `docs/notes/2026-05-22-tma-runtime-builtin-requirements.md`.
 
 fn _test_tma_codegen_scaffold() -> bool {
     let mut ok = true
@@ -872,7 +872,7 @@ fn _test_tma_codegen_scaffold() -> bool {
 //
 // This is the F-RFC067-NVPTX-TMA-CODEGEN-EMIT falsifier — the codegen
 // half of the source-to-silicon E2E. The silicon-fire half lives in
-// inbox/fires/ + the host-side cuTensorMapEncodeTiled driver.
+// archive/fires/ + the host-side cuTensorMapEncodeTiled driver.
 
 fn _test_tma_matmul_emit() -> bool {
     let mut ok = true

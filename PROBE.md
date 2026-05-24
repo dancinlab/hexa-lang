@@ -24,7 +24,7 @@ inbox 패치로 제출.
                 ├─ surgical fix (header decl · parser tweak · codegen entry)
                 │  → worktree from origin/main → 수정 → regen 필요시 + 검증 → PR
                 └─ breaking / design-level (전체 마이그레이션 필요)
-                   → inbox/patches/<slug>.md 제출 → PR
+                   → archive/patches/<slug>.md 제출 → PR
 ```
 
 ## 커버리지

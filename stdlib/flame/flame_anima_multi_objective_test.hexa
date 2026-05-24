@@ -4,7 +4,7 @@
 //
 // CANONICAL TEMPLATE — anima multi-objective (Ψ-physics) trainer spine
 //
-// Resolves Ask 2 of inbox/patches/flame-anima-multi-objective-3b-pytorch-
+// Resolves Ask 2 of archive/patches/flame-anima-multi-objective-3b-pytorch-
 // benchmark-and-stdlib-template.md (filed by anima 2026-05-21):
 //   - dual output heads (head_a, head_g) sharing the final embedding
 //   - composite loss recipe L = L_ce + λ_ψ·L_psi + λ_phi·L_phi
@@ -58,10 +58,10 @@
 //        (Ψ-grid via dancinlab/anima HEXAD/UNCLASSIFIED dispatch).
 //
 // CROSS-LINK:
-//   - inbox/patches/flame-anima-multi-objective-3b-pytorch-benchmark-
+//   - archive/patches/flame-anima-multi-objective-3b-pytorch-benchmark-
 //     and-stdlib-template.md  (this patch)
-//   - inbox/patches/flame-anima-dual-head-multiobjective.md  (sibling)
-//   - inbox/patches/stdlib-print-float-emits-type-tag-not-value.md
+//   - archive/patches/flame-anima-dual-head-multiobjective.md  (sibling)
+//   - archive/patches/stdlib-print-float-emits-type-tag-not-value.md
 //     (CLOSED 2026-05-21 — println(float) now emits actual values via
 //      runtime.c cycle 56 hxlcl_vsnprintf %g/%f/%e real impl)
 //   - dancinlab/anima conscious_decoder.py (reference for L_ce + L_psi +

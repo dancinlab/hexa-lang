@@ -9,9 +9,9 @@
 
 ## Deferred RFC 사이클 (architect 결정 대기)
 
-- [x] RFC 081 — Option / Result lane — design draft (`inbox/rfc_drafts_2026_05_23/rfc_081_option_result_lane.md`, D1-D6 decision points)
-- [x] RFC 082 — trait operator overload — design draft (`inbox/rfc_drafts_2026_05_23/rfc_082_trait_operator_overload.md`, D1-D7)
-- [x] RFC 083 — TLS primitive — design draft (`inbox/rfc_drafts_2026_05_23/rfc_083_tls_primitive.md`, D1-D7)
+- [x] RFC 081 — Option / Result lane — design draft (`docs/rfc/rfc_drafts_2026_05_23/rfc_081_option_result_lane.md`, D1-D6 decision points)
+- [x] RFC 082 — trait operator overload — design draft (`docs/rfc/rfc_drafts_2026_05_23/rfc_082_trait_operator_overload.md`, D1-D7)
+- [x] RFC 083 — TLS primitive — design draft (`docs/rfc/rfc_drafts_2026_05_23/rfc_083_tls_primitive.md`, D1-D7)
 - [~] follow-up: type_checker `type_check` pass wiring — source-level wiring INFLIGHT (PR #503 · `type_check_and_emit` + `hexa typecheck` verb · regen-gated activation)
 
 ## architect decision (RFC 081/082/083)

@@ -7,7 +7,7 @@ aura/bot/energy domain recovery.
 | file | role |
 |---|---|
 | `pvlib_kernel.py` | `run_clearsky_modelchain(site, system, sim, csv_path)` · `pvlib_version` — given a site + PV-system spec + time window, run the Ineichen clear-sky model + CEC SAPM ModelChain and reduce to energy facts. |
-| `solar_kernel.hexa` | D80 g_hexa_only pilot — clean-room hexa-native port of pvlib `solarposition.ephemeris` (Hughes 1985) + `clearsky.haurwitz` (1945). Substrate parity vs pvlib 0.13.0 to ≤1e-13 relative across 6 timestamps (test below). Heavier substrates (SPA / CEC-SAPM / ModelChain) still live in `pvlib_kernel.py` until follow-on ports land. See `inbox/notes/hexa-native-port-pattern-pilot.md` for the port pattern. |
+| `solar_kernel.hexa` | D80 g_hexa_only pilot — clean-room hexa-native port of pvlib `solarposition.ephemeris` (Hughes 1985) + `clearsky.haurwitz` (1945). Substrate parity vs pvlib 0.13.0 to ≤1e-13 relative across 6 timestamps (test below). Heavier substrates (SPA / CEC-SAPM / ModelChain) still live in `pvlib_kernel.py` until follow-on ports land. See `docs/notes/hexa-native-port-pattern-pilot.md` for the port pattern. |
 | `solar_kernel_test.hexa` | Substrate parity check for `solar_kernel.hexa` — 21 assertions across 6 Phoenix-AZ timestamps spanning low/high/horizon/below-horizon sun. Run: `hexa run stdlib/kernels/solar/solar_kernel_test.hexa`. |
 
 ## 2-layer (ABSORPTION.md ①)

@@ -23,7 +23,7 @@ ref:
 - [x] mirna-target stdlib — miRBase mature-miRNA registry + TargetScan seed-match scoring → `stdlib/bio/mirna/target.hexa`
 - [x] ode-bifurcation stdlib — Runge-Kutta (RK4 · RK45 adaptive) + stiff (BDF) ODE solver + saddle-node bifurcation 탐지 → `stdlib/math/ode.hexa`
 
-### TTR — in-silico track (M3 docking · M5 MD/QM, source: `inbox/notes/2026-05-24-ttr-external-port-candidates.md`)
+### TTR — in-silico track (M3 docking · M5 MD/QM, source: `docs/notes/2026-05-24-ttr-external-port-candidates.md`)
 
 Tier-1 — thin REST adapter (★ priority, ~200-300 LOC each, TTR M3 즉시 사용):
 

@@ -69,7 +69,7 @@ let mut _paste_active = 0
 // instead of arriving as a single ["paste", payload] event). Now we accumulate
 // raw bytes into an int array (push is O(1)) and call bytes_to_str_raw once at
 // the close marker. (Local hotfix for wilson; same change proposed upstream as
-// inbox/patches/tui-input-paste-buf-quadratic.md.)
+// archive/patches/tui-input-paste-buf-quadratic.md.)
 let mut _paste_bytes: [int] = []
 // Bytes injected from outside the L1 stdin pipeline (e.g. T1.C Surface 4
 // JSON-RPC `key` method) — drained before falling through to
@@ -83,7 +83,7 @@ pub fn input_init() -> int {
     if _input_initialized == 1 { return 0 }
     let r = term_raw_enter()
     if r != 0 { return -1 }
-    let _bp = term_write_str(chr(27) + "[?2004h")    // DECSET 2004 — bracketed paste ON (inbox/patches/tui-input-needs-decset-2004-bracketed-paste.md)
+    let _bp = term_write_str(chr(27) + "[?2004h")    // DECSET 2004 — bracketed paste ON (archive/patches/tui-input-needs-decset-2004-bracketed-paste.md)
     let _sw = term_install_sigwinch()
     let _si = term_install_sigint()
     _input_initialized = 1
@@ -161,7 +161,7 @@ fn _poll_stdin(ms: int) -> int {
 // Restore: leave raw mode. Idempotent.
 pub fn input_close() -> int {
     if _input_initialized == 0 { return 0 }
-    let _bp = term_write_str(chr(27) + "[?2004l")    // DECRST 2004 — bracketed paste OFF (inbox/patches/tui-input-needs-decset-2004-bracketed-paste.md)
+    let _bp = term_write_str(chr(27) + "[?2004l")    // DECRST 2004 — bracketed paste OFF (archive/patches/tui-input-needs-decset-2004-bracketed-paste.md)
     let r = term_raw_restore()
     _input_initialized = 0
     _paste_active = 0
@@ -258,7 +258,7 @@ fn _decode_one() -> array {
         // forwards Shift+Enter as ESC+CR to the app). We collapse both ESC+CR
         // and ESC+LF into ["key", -1, 0, 1, 0, ""] (enter with alt=1) so the
         // editor branches on alt to insert a newline instead of submitting.
-        // (wilson 2026-05-13, see inbox/patches/wilson-shift-enter-newline.md.)
+        // (wilson 2026-05-13, see archive/patches/wilson-shift-enter-newline.md.)
         if b2 == 13 || b2 == 10 {
             return ["key", -1, 0, 1, 0, ""]
         }
@@ -420,7 +420,7 @@ fn _csi_final_to_event(params: string, final_byte: int) -> array {
     if final_byte == 70 { return ["key", -21, 0, 0, 0, ""] }   // F end
     if final_byte == 73 { return ["focus", 1] }                 // I focus-in
     if final_byte == 79 { return ["focus", 0] }                 // O focus-out
-    if final_byte == 90 { return ["key", -2, 0, 0, 1, ""] }     // Z shift+tab (CBT / BackTab) — wilson 2026-05-13, see inbox/patches/wilson-shift-tab-csi-Z-decode.md
+    if final_byte == 90 { return ["key", -2, 0, 0, 1, ""] }     // Z shift+tab (CBT / BackTab) — wilson 2026-05-13, see archive/patches/wilson-shift-tab-csi-Z-decode.md
     if final_byte == 117 {
         // CSI u — kitty keyboard protocol: ESC[<codepoint>;<modifier>u
         // (e.g. ESC[13;2u = Shift+Enter). Modifier bitmap follows xterm
@@ -434,8 +434,8 @@ fn _csi_final_to_event(params: string, final_byte: int) -> array {
         // so downstream matches the raw `b + 96` encoding. The protocol is
         // push-only (terminals send EVERY key as CSI u once ESC[>1u is set),
         // so an Enter-only stub silently dropped Ctrl+C / Ctrl+D / Esc / etc.
-        // (wilson 2026-05-13 inbox/patches/wilson-shift-enter-newline.md +
-        //  2026-05-19 inbox/patches/csi-u-modifier-keys-decoder-gap.md.)
+        // (wilson 2026-05-13 archive/patches/wilson-shift-enter-newline.md +
+        //  2026-05-19 archive/patches/csi-u-modifier-keys-decoder-gap.md.)
         let _u_parts = _split_semi(params)
         let _u_cp = if len(_u_parts) > 0 { _atoi(to_string(_u_parts[0])) } else { _atoi(params) }
         let _u_mod = if len(_u_parts) >= 2 { _atoi(to_string(_u_parts[1])) } else { 1 }
@@ -512,8 +512,8 @@ fn _csi_final_to_event(params: string, final_byte: int) -> array {
             // codepoint-asymmetry; see L296 for the full discussion). 1114112
             // = U+110000, one past the highest valid Unicode scalar. Capping
             // at 127 here silently dropped all non-Latin input.
-            // (inbox/patches/modifyotherkeys-non-ascii-decoder-gap.md +
-            //  inbox/patches/input-decoder-chr-vs-from_char_code.md)
+            // (archive/patches/modifyotherkeys-non-ascii-decoder-gap.md +
+            //  archive/patches/input-decoder-chr-vs-from_char_code.md)
             if _mok_code >= 32 && _mok_code < 1114112 { return ["key", _mok_code, _mok_ctrl, _mok_alt, _mok_shift, from_char_code(_mok_code)] }
             return ["err", "csi-modifyotherkeys-unsupported-code"]
         }

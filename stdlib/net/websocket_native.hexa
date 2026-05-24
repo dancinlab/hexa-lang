@@ -10,7 +10,7 @@
 // @maintainer anima-core
 // @priority P1
 //
-// PROBLEM (inbox/patches/websocket-streaming-client-websocat-dependency.md)
+// PROBLEM (archive/patches/websocket-streaming-client-websocat-dependency.md)
 //   stdlib/websocket.hexa's STREAMING client (ws_connect/ws_recv) shells out
 //   to the external `websocat` binary; the python3 fallback is one-shot only.
 //   On a host with neither, a persistent WS *subscriber* (connect once, hold

@@ -88,7 +88,7 @@ wait_ssh → echo → copy-to → sha-verify → copy-from → terminate.
 ### Wiring a downstream dispatcher (anima PURE / HEXAD)
 
 This section answers the four integration asks raised by
-`inbox/patches/runpod-graphql-builtin-for-pure-dispatcher.md`. The verdict
+`archive/patches/runpod-graphql-builtin-for-pure-dispatcher.md`. The verdict
 there was that no new builtin was needed — the surface is complete — only a
 canonical usage contract plus one small teardown-gating helper.
 

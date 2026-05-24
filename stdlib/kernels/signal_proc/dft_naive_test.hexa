@@ -15,7 +15,7 @@
 // reproduces the same float arithmetic and the same per-bin values
 // to ~1e-15 relative when compared off-the-record. The companion is
 // not invoked by the test itself — that comparison lives in the
-// pattern note `inbox/notes/hexa-native-port-pattern-pilot.md` (DFT
+// pattern note `docs/notes/hexa-native-port-pattern-pilot.md` (DFT
 // row).
 
 use "stdlib/kernels/signal_proc/dft_naive"

@@ -4,7 +4,7 @@
 // @capabilities [exec]
 // @authority  FIRMWARE.md §1 (forbidden source classes) + §4 G-T0
 //
-// Walks tracked files under `self/` `stdlib/` `compiler/` `tool/` `inbox/`
+// Walks tracked files under `self/` `stdlib/` `compiler/` `tool/`
 // (and root) via `git ls-files`, classifies each match of the banned
 // extension list into one of:
 //

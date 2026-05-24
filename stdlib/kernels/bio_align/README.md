@@ -86,7 +86,7 @@ library by decades:
 
 D80 spec ceiling: rel_err ≤ 1e-10. Actual: integer arithmetic
 throughout, so rel_err = 0 exactly. See
-`inbox/notes/hexa-native-port-pattern-pilot.md` "Pilot #12" for the
+`docs/notes/hexa-native-port-pattern-pilot.md` "Pilot #12" for the
 full algorithm-choice rationale and lessons-learned.
 
 ## Why bio is the right domain

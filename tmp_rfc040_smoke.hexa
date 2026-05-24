@@ -7,7 +7,7 @@
 //   cuda_available / cuda_device_count / farr_to_device / farr_to_host
 //   / farr_pin / farr_device_free / farr_matmul_gpu
 //
-// Reference: inbox/rfc_drafts_2026_05_12/rfc_040_farr_gpu_cuda_backend.md
+// Reference: docs/rfc/rfc_drafts_2026_05_12/rfc_040_farr_gpu_cuda_backend.md
 //            §"Phase A — farr_matmul GPU + equivalence harness"
 // Oracle:    RFC 032 farr_matmul (CPU `ikj` triple-loop; bit-exact).
 //

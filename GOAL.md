@@ -83,7 +83,7 @@ ag_linear forge fwd/bwd + driver-local init). 단조 진행, 매 fire 가
 - `stdlib/flame/{PLAN.md,FLAME.tape}` — flame roadmap + 진행 로그 SSOT (RFC 043)
 - `self/forge/{PLAN.md,FORGE.tape,PARADIGM.md}` — forge substrate + paradigm 결정 SSOT (RFC 040/041/044)
 - `state/flame_phase4d7_gpu_fire_2026_05_17/PHASE4D7_FIRE{7,8}_ANALYSIS.md` — fire 실측·정직 분석 (gitignored local trail)
-- `inbox/PATCHES.yaml` — RFC 043~055 spec ledger
+- `archive/patches/PATCHES.yaml` — RFC 043~055 spec ledger
 - `LATTICE_POLICY.md` — g3 real-limits-first · over-claim 금지 authority
 
 > GOAL 한 문장은 stable (north-star). 진척·측정값은 `stdlib/flame/PLAN.md` + fire ANALYSIS 가 SSOT — 본 파일은 "왜" 의 SSOT.

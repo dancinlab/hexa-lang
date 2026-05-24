@@ -5,7 +5,7 @@
 // Candidate is treated as a DFS seed; an external LLM (pluggable via
 // --llm-cmd) proposes child hypotheses one level deeper; verified children
 // become the next-depth frontier (beam-capped). Every child lands in
-// inbox/atlas_candidates/dfs_<parent>/ for human PR review — never mutates
+// archive/atlas_candidates/dfs_<parent>/ for human PR review — never mutates
 // the binary built-in atlas (@D g_atlas_binary_builtin, PR-only).
 //
 // PHASE MAP (TECS-L.md §5):
@@ -218,7 +218,7 @@ fn _dfs_lookup_raw(node_id: string, view: AtlasView) -> string {
 }
 
 // Build the DFS expansion prompt for one parent Candidate (axis 9a/b/d/e).
-// Output contract mirrors inbox/atlas_candidates/<slug>.md (axis 3b) so the
+// Output contract mirrors archive/atlas_candidates/<slug>.md (axis 3b) so the
 // LLM emits the same markdown front-matter the lens system already speaks.
 pub fn dfs_build_prompt(parent: Candidate, view: AtlasView, beam: int) -> string {
     let mut cites_raw = ""
@@ -732,7 +732,7 @@ pub fn dfs_frontier_clear() {
 // ── Phase C: emit child to nested inbox path (axis 8b) ──────────────
 
 fn _dfs_emit_child(parent_slug: string, child: Candidate, depth: int) {
-    let dir = "inbox/atlas_candidates/dfs_" + _dfs_safe_slug(parent_slug)
+    let dir = "archive/atlas_candidates/dfs_" + _dfs_safe_slug(parent_slug)
     let _ = exec("mkdir -p " + _dfs_shq(dir))
     let mut cite_str = ""
     let cn = len(child.cite)

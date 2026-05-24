@@ -114,24 +114,24 @@
   what = "RFC 040→043 캠페인 전 산출물 (branch · SHA · path · RFC#) + verified oracles. forge artifacts 는 그 부분집합 — 중복 보존 금지 (g3)"
 
 @X x_rfc040 := "RFC 040 — device-farr + cuBLAS design SSOT" :: rfc [d=2026-05-16 active]
-  path = "hexa-lang inbox/rfc_drafts_2026_05_12/rfc_040_*"
+  path = "hexa-lang docs/rfc/rfc_drafts_2026_05_12/rfc_040_*"
   branch = "rfc/farr-gpu-cuda-backend (design 95c208f6)"
   scope = "device-farr ext + hexa_farr_*_gpu dispatchers + cuBLAS Dgemm wiring + TOL_MATMUL spec"
 
 @X x_rfc041 := "RFC 041 — real .cu kernels for non-matmul ops" :: rfc [d=2026-05-16 active]
-  path = "hexa-lang inbox/rfc_drafts_2026_05_12/rfc_041_*"
+  path = "hexa-lang docs/rfc/rfc_drafts_2026_05_12/rfc_041_*"
   branch = "rfc041-042-upstream-needs dae35fee"
   scope = "softmax_rows/rmsnorm_rows/add/scale/mul/silu/silu_grad/rmsnorm_bwd/adamw/outer/matmul_t 11-op real kernels (currently TODO[cuda] -1 stubs)"
 
 @X x_rfc055 := "RFC 055 — hexa-src → NVPTX codegen backend (forge endgame)" :: rfc [d=2026-05-19 active]
-  path = "hexa-lang inbox/rfc_drafts_2026_05_12/rfc_055_hexa_nvptx_codegen_backend.md"
+  path = "hexa-lang docs/rfc/rfc_drafts_2026_05_12/rfc_055_hexa_nvptx_codegen_backend.md"
   status = "design-draft (2026-05-17, 미구현). P2 — 현재 critical chain 과 독립."
   domain = "compiler (deliverable = compiler/codegen/nvptx_*.hexa, arm64_darwin/x86_64_linux 의 sibling target). forge 는 이 capability 의 *소비자*, RFC 의 subject 아님."
   scope = "forge 의 endgame seam — RFC 055 land 시 self/cuda/*.cu 가 .hexa 로 재유도되어 AGENTS.tape @D g5 (hexa-native-only) 의 GPU lane 을 닫음. honest: hexa-emitted 커널은 correct (Phase R C-Stage2-Phase3 hand-WMMA 41-43% TC peak anchor) 하나 cuBLAS raw-GEMM throughput 추월 비목표."
   consumers = "[@g_forge_endgame_hexa_native] · PLAN §Phase 6 (endgame, long-arc)"
 
 @X x_rfc060 := "RFC 060 — forge new compute paradigm (verified mega-kernel, CUDA kernel-per-op 돌파)" :: rfc [d=2026-05-19 active]
-  path = "hexa-lang inbox/rfc_drafts_2026_05_12/rfc_060_forge_new_compute_paradigm.md"
+  path = "hexa-lang docs/rfc/rfc_drafts_2026_05_12/rfc_060_forge_new_compute_paradigm.md"
   status = "design-draft (2026-05-19, 미구현). P1 — user goal 2026-05-19 'new paradigm 으로 CUDA 성능·자원·속도 돌파 100% closure' 운반."
   paradigm = "mega-kernel 실행 모델 — train step 전체를 단일 persistent GPU kernel + in-kernel scheduler 로 컴파일 (per-op launch + per-op HBM round-trip 둘 다 제거). Mirage MPK arXiv:2512.22219 + Stanford megakernels 측정 1.5-2.5× anchor. method = verified rewrite-chain codegen (Exo-style, atlas/strict-lint 직결)."
   scope = "Phase R (CUDA-paradigm) 가 닫지 못한 directive 절반 — kernel-per-op 모델 자체를 벗어나는 실행 모델. 3 falsifier 사전등록 (MEGAKERNEL-WALL ≥1.3× · VERIFIED-CHAIN ≤8 cited rewrites · POLY-FEASIBLE 장기게이트), cheap first measurement $0 paper×2 + $0.40 fire×1. g3: paradigm 선언 0 — 측정 통과시에만 채택."
@@ -241,7 +241,7 @@ F-FORGE-A-STAGE2-LARGE PASS 모든 config (사전등록 ≥1.1× 의 1.69-3.69×
 Phase R 누적 cost: $1.65 (5 fires). 산출: state/forge_phaseR_a_stage2_2026_05_17/{result.json, pytorch_result.json, A_STAGE2_ANALYSIS.md}.
 
 ### 2026-05-17 — RFC 044 DRAFT + PLAN §Phase 2-4 재정의 land
-**RFC 044** (`inbox/rfc_drafts_2026_05_12/rfc_044_forge_regime_tiered_substrate.md`): 측정-anchored forge architectural pivot. dual-mechanism × regime-tiered substrate 명세 + 14 falsifier 사전 등록 (5 Stage 1 PASS · 9 Stage 2 pre-reg). RFC 040/041 superseded X — RFC 041 의 11-op TODO 채우기는 Phase 2.B substrate 로 흡수 (SMEM-aware 구현으로 진화).
+**RFC 044** (`docs/rfc/rfc_drafts_2026_05_12/rfc_044_forge_regime_tiered_substrate.md`): 측정-anchored forge architectural pivot. dual-mechanism × regime-tiered substrate 명세 + 14 falsifier 사전 등록 (5 Stage 1 PASS · 9 Stage 2 pre-reg). RFC 040/041 superseded X — RFC 041 의 11-op TODO 채우기는 Phase 2.B substrate 로 흡수 (SMEM-aware 구현으로 진화).
 
 **PLAN §Phase 2-4 재정의**:
 - Phase 2 → 3 sub-tier (2.A CUDA Graphs · 2.B SMEM-fused FFN · 2.C fused fwd+bwd linear)

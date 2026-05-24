@@ -153,7 +153,7 @@ S6  optimization passes — the basic passes (const_fold, dce, inline)
     G-0..G-11 axis ladder (typed scalar lane A1/A2 first, then loop /
     SIMD / tiling) — that ladder is the substantive gap.
 S7  own assembler + hexa_ld — drop `as` / `ld` / `clang`. Design
-    contract: RFC 063 (`inbox/rfc_drafts_2026_05_12/rfc_063_s7_
+    contract: RFC 063 (`docs/rfc/rfc_drafts_2026_05_12/rfc_063_s7_
     native_assembler_linker.md`), 4 phases with falsifiers (F-P0-
     OBJEQ / F-P1-RUNEQ / F-P3-ZERO-EXTERN), ~12-18 cycles total.
     P0 scaffold landed 2026-05-20 (`compiler/emit/macho_arm64.hexa`
@@ -455,7 +455,7 @@ ultimately removes.
   limit-reset. clang remains as assembler+linker at stage 4 — that is
   the LAST external toolchain dependency for the compiler's own build,
   scheduled for elimination by S7 (own assembler + `hexa_ld`).
-- 2026-05-20 — **S7 RFC 063 DRAFTED.** `inbox/rfc_drafts_2026_05_12/
+- 2026-05-20 — **S7 RFC 063 DRAFTED.** `docs/rfc/rfc_drafts_2026_05_12/
   rfc_063_s7_native_assembler_linker.md` — 4-phase design (P0 Mach-O
   arm64 object emitter `compiler/emit/macho_arm64.hexa` / P1 native
   Mach-O linker `tool/hexa_ld.hexa` / P2 ELF x86_64 / P3 flip

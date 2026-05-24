@@ -96,7 +96,7 @@ tool/flame_phase4d_dispatch.sh         — Phase 4-D-2 GPU dispatch script templ
 tool/flame_phase4c_pair_detect.hexa    — Phase 4-C-1a paired-call detector
 ```
 
-## RFC index (cross-link to `inbox/rfc_drafts_2026_05_12/`)
+## RFC index (cross-link to `docs/rfc/rfc_drafts_2026_05_12/`)
 
 ```
 RFC 040 — device-farr + cuBLAS Dgemm (LANDED — runtime substrate)
