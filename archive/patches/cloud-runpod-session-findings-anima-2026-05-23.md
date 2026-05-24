@@ -1,6 +1,6 @@
 # `hexa cloud` / runpod — anima 2026-05-23 session findings (4 items)
 
-**Status**: meta-bundle-partial-2026-05-25 — 4-item anima cycle bundle. R1 fixed in main · R2 (auto-terminate watchdog) CLOSED via PR #715 cloud_idle_autokill_watchdog · R3 (--resume / --via-hf) + R4 (structured --env) still open → 각 별도 inbox slug 화 권장.
+**Status**: CLOSED-2026-05-25 — 4-item anima cycle bundle 전부 처리됨. R1 fixed in main · R2 CLOSED via PR #715 (cloud_idle_autokill_watchdog) · **R3 (`copy-from --resume` = rsync `--partial --append-verify`) + R4 (`run`/`nohup --env K=V` + `--env-file`) CLOSED via cloud CLI ergonomics 번들 (stdlib/cloud, cloud 0.2.2).** `--via-hf` 는 anima-side HF-via-pod 패턴이라 hexa-lang core 범위 밖 — anima가 자체 유지.
 
 > **Status (2026-05-24 sync):**
 > - **R1 — CLOSED** by PR #388 (`490b05ab` `feat(stdlib/cloud/runpod): runpod_list_pods — runpodctl 2.x/1.x bridge`). Downstream sees a stable interface independent of runpodctl version.
@@ -9,12 +9,12 @@
 >   - PR #614 `cloud(diag): orphans + owner-tag verb` (orphan detection L2)
 >   - PR #615 `cloud(diag): diag verb (nvidia-smi+ps+tail) + HEXA_LANG log` (L3 introspection)
 >   - Diag verbs give the watchdog its inputs but the **`result.json`-triggered auto-teardown loop itself is not yet wired**. Sibling patch `hexa cloud guard UX + pod-lock` (PR #646, F5) proposes a tag-based `owner_lock + protected_until` extension to `cloud_create_pod_opts` — orthogonal mechanism (lifecycle-side, not completion-side) but converges on the same operator-time saving.
-> - **R3 (`--resume` / `--via-hf` copy-from) — OPEN**. Existing `cloud_copy_from_opts` in `stdlib/cloud/cloud.hexa:331` is single-shot scp. No `rsync --partial --append-verify` wrapper. The HF-via-pod pattern (R3 option 2) remains the only evidence-backed mitigation; anima continues to use it ad-hoc per fire.
-> - **R4 (`hexa cloud run --env K=V` structured env) — OPEN**. `cloud_run_opts(host, ssh_opts, argv)` already takes a structured `argv: [str]` (so values with spaces survive once they enter the CLI layer), but `bin/cloud_cli.hexa` exposes no `--env` flag — anima-side `dispatch_*.sh` still composes `env K=v ...` as a shell string and word-splits remotely. Needs `--env K=V` (repeatable) or `--env-file <path>` in `cloud_cli.hexa::main` + prepend to `argv` before `cloud_run_opts`.
+> - **R3 (`--resume` copy-from) — CLOSED.** `cloud_copy_from_resume_opts` (rsync `--partial --append-verify -e ssh`) + `copy-from --resume` flag in `cloud_cli.hexa`. Same local-side verify (file materialised non-empty) as the scp path. `--via-hf` 는 anima-side HF-via-pod 패턴 — hexa core 미포함.
+> - **R4 (`--env K=V` structured env) — CLOSED.** `run`/`nohup --env K=V` (repeatable) + `--env-file <path>` in `cloud_cli.hexa`; each K=V is prepended to `argv` as `env K=V ...` so it stays ONE POSIX-quoted token end-to-end (value-with-spaces survives remote word-split — the original dispatch bug). Verified: `_join_argv(["env","FOO=bar baz",...]) == "'env' 'FOO=bar baz' ..."`.
 >
 > **Related merged work (not closing R2/R3/R4 directly):** PR #429 (vast.ai backend mirror) · PR #429 retain-on-fail guard · PR #629 dispatcher bootstrap + wait + ssh-endpoint surface · PR #646 cloud-guard UX + pod-lock filing.
 >
-> Net: **1 of 4 CLOSED, 3 OPEN (R2/R3/R4 carry forward as feature work, not regressions).**
+> Net: **4 of 4 CLOSED** (R1 main · R2 #715 · R3+R4 cloud CLI ergonomics 번들 2026-05-25). `--via-hf` 만 anima-side 로 남김.
 
 **Reporter**: anima (`dancinlab/anima` downstream consumer)
 **Severity**: low-medium (each item independently workaroundable; consolidation reduces operator wall-time)

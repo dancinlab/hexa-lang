@@ -1,8 +1,8 @@
 # `stdlib/cloud` operational improvements — anima 2026-05-20 cycle pain points
 
-**Status**: meta-bundle-partial-2026-05-25 — 11-item anima cycle bundle. P1/P4-list/P7-orphan/P9 CLOSED via cycle 3-7 batches (#704/#715/#714 등). Remaining 6 OPEN → 각 별도 inbox/patch slug 화 권장 (single-item granularity per @D g0).
+**Status**: meta-bundle-partial-2026-05-25 — 11-item anima cycle bundle. P1/P2/P4-list/P7-orphan/P9 CLOSED via cycle batches (#704/#715/#714/#764 등). **P5 (copy-to `-r`/`--recursive`) + P10 (run/exec 비정상종료 fail-tail) CLOSED via cloud CLI ergonomics 번들 2026-05-25.** Remaining: P3/P6/P8/P11 OPEN + P4 create-cascade/ssh-port/terminate OPEN → 각 별도 slug 권장.
 
-> **Status (2026-05-24 sync):** P1 CLOSED · P4 partial (list CLOSED, create-cascade/ssh-port/terminate OPEN) · P7 partial (orphan detection CLOSED, util-watchdog OPEN) · P9 superseded by P1 fix · P2/P3/P5/P6/P8/P10/P11 OPEN. **Net: 2 of 11 fully CLOSED, 2 partial, 6 OPEN, 1 superseded.**
+> **Status (2026-05-25 sync):** P1 CLOSED · P2 (`--max-wall`) CLOSED #764 · P4 partial (list CLOSED, create-cascade/ssh-port/terminate OPEN) · **P5 (recursive copy-to) CLOSED** · P7 partial (orphan detection CLOSED, util-watchdog OPEN) · P9 superseded by P1 fix · **P10 (fail-tail) CLOSED** · P3/P6/P8/P11 OPEN. **Net: 5 of 11 CLOSED, 1 partial, 4 OPEN, 1 superseded.**
 >
 > - **P1 (run hang) — CLOSED** by PR #423 `7b8e15b3` `fix(runtime): exec_capture select()-multiplexed drain — kill pipe deadlock`. Root cause was in `hexa_exec_capture` (`self/runtime.c`), not `cloud_cli.hexa`. Sibling patch `cloud-cli-run-hang.md` already marked FIXED.
 > - **P2 (`--max-wall`) — OPEN.** No max-wall flag on `cloud run`. Now lower urgency since P1 hang is gone, but still useful for bounded predictable jobs. Out-of-scope for this sync.
@@ -12,14 +12,14 @@
 >   - `cloud runpod create-cascade` — **OPEN.** Still hand-rolled GraphQL in anima dispatch scripts. Partially overlaps PR #629 (`cloud_bootstrap_sources` + `cloud_poll_until` + `cloud_run_with_wait`) which covers post-create orchestration but not create itself.
 >   - `cloud runpod ssh-port <pod_id>` — **OPEN.** Endpoint-surface gap captured in PR #629 (`hexa-cloud-dispatcher-bootstrap-wait-endpoint`).
 >   - `cloud runpod terminate <pod_id>` — **OPEN.** No idempotent terminate verb in cloud_cli.
-> - **P5 (batch / recursive copy-to) — OPEN.** Each `cloud copy-to` still spawns a fresh scp. No `--batch` or `--recursive` flag.
+> - **P5 (recursive copy-to) — CLOSED.** `copy-to -r`/`--recursive` → `cloud_copy_to_recursive_opts` (`scp -r` directory tree, same local-source pre-check / exit-102). `--batch` (multi-file one-shot) 은 미구현 — 디렉터리 트리로 대체 가능, 필요시 별도 slug.
 > - **P6 (`--verify-sha`) — OPEN.** No post-transfer sha256 verify flag.
 > - **P7 (`cloud monitor`) — PARTIAL:**
 >   - Orphan detection (`::owner=<tag>` marker) — **CLOSED** by PR #614 (`cloud orphans` + `cloud owner-tag` read-only L2).
 >   - GPU-util threshold watchdog with `--on-idle terminate` — **OPEN.** Diag verbs surface util data (PR #615) but no auto-action loop yet. Convergent with sibling PR #646 F5 (`owner_lock + protected_until`).
 > - **P8 (`--auto-nohup-over`) — OPEN.** Run/nohup are still distinct verbs; no auto-promote heuristic.
 > - **P9 (`--fallback=ssh-direct`) — SUPERSEDED.** Designed as a workaround for P1. Since P1 (PR #423) closed the hang at the transport layer, this flag is no longer load-bearing. Not pursuing.
-> - **P10 (stderr propagation on non-zero) — OPEN.** Remote exit-code surfaces but no automatic last-50-lines stash. `cloud diag --log <path>` (PR #615) is an after-the-fact substitute, not the inline auto-tail proposed here.
+> - **P10 (stderr propagation on non-zero) — CLOSED.** `run`/`exec` 가 비정상 종료 시 `_print_fail_tail` 로 마지막 30줄을 `[cloud] ── exit C · last N line(s) ──` 배너와 함께 화면 맨 아래에 재출력 (terminal 은 바닥으로 스크롤 → 실패가 바로 보임). 성공/빈 출력 시 no-op.
 > - **P11 (tar provenance warning noise) — OPEN.** Cosmetic; no current filter or workaround doc.
 >
 > **Related merged work (not closing P-items directly):** PR #650 (`cloud help` text sync with diag verbs L1-L3) · PR #563 (RFC 088 hexa-cloud preflight + typed env-var, separate axis) · PR #653 (RFC 091 hexa-cloud preflight v2 DFT/HPC axis) · PR #429 (vast.ai backend mirror) · PR #629 (dispatcher bootstrap + wait + ssh-endpoint surface) · PR #646 (cloud-guard UX + pod-lock).

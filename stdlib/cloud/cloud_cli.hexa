@@ -23,12 +23,12 @@ fn _cloud_help() {
     println("  cloud list [--provider P]                              list live pods (vast + runpod, or one via --provider)")
     println("  cloud status [--provider P]                            alias of list")
     println("  cloud preflight --params N [--gpu KEY] [opts...]        closed-form GPU mem-budget check (no pod/ssh)")
-    println("  cloud run       <host> [conn] [--max-wall S] -- <argv...> run argv, wait, exit with its code")
+    println("  cloud run       <host> [conn] [--max-wall S] [--env K=V] -- <argv...> run argv, wait, exit with its code")
     println("  cloud exec      <host> [conn] -- <shell-cmd>           run shell command via ssh (DEFAULT SHELL PARSES IT)")
-    println("  cloud nohup     <host> <logfile> [conn] -- <argv...>   background argv, print remote pid")
+    println("  cloud nohup     <host> <logfile> [conn] [--env K=V] -- <argv...>   background argv, print remote pid")
     println("  cloud poll      <host> <pid> [conn]                    exit 0 if remote pid alive, else 1")
-    println("  cloud copy-to   <host> <local> <remote> [conn]         upload local file to host:remote (scp)")
-    println("  cloud copy-from <host> <remote> <local> [conn]         download host:remote file to local (scp)")
+    println("  cloud copy-to   <host> <local> <remote> [conn] [-r]   upload local file/dir to host:remote (scp; -r = tree)")
+    println("  cloud copy-from <host> <remote> <local> [conn] [--resume] download host:remote to local (scp; --resume = rsync)")
     println("  cloud orphans   [--hours N]                            list tracked pods, flag stale (>N h, default 6)")
     println("  cloud reconcile                                        cross-ref registry vs provider: ORPHAN/GHOST/OK")
     println("  cloud adopt     <pod_id> [--purpose TEXT]              track an untracked (ORPHAN) pod")
@@ -42,6 +42,14 @@ fn _cloud_help() {
     println("  --max-wall <s>  (run only) cap remote wall-clock at <s> seconds;")
     println("                  on expiry the remote command is killed and run")
     println("                  exits 124 (max-wall exceeded)")
+    println("  --env <K=V>     (run/nohup) set a remote env var; repeatable.")
+    println("                  K=V stays one argv token, so a value with spaces")
+    println("                  survives remote word-splitting.")
+    println("  --env-file <p>  (run/nohup) read K=V lines from <p> (blank and")
+    println("                  #-comment lines skipped); each line acts as --env.")
+    println("  --resume        (copy-from) rsync --partial --append-verify; resume")
+    println("                  an interrupted large-file pull (needs rsync >= 3.0).")
+    println("  --recursive,-r  (copy-to) copy a directory tree (scp -r).")
     println("")
     println("`run` uses structured argv — every token POSIX-quoted before ssh, so")
     println("no remote shell parsing / glob / /* */ comment mis-parse can corrupt")
@@ -150,6 +158,91 @@ fn _collect_after(av: [str], start: int) -> [str] {
     return out
 }
 
+// _env_file_kvs — read a KEY=VALUE-per-line env file into a [str] of
+// "KEY=VALUE" tokens. Blank lines and `#`-comment lines are skipped; a
+// line is kept only if it carries a `=` past column 0. A missing file
+// emits one warning and yields no tokens (the dispatch still proceeds).
+fn _env_file_kvs(path: str) -> [str] {
+    let mut out = []
+    if !file_exists(path) {
+        println("[cloud] warn: --env-file not found, ignoring: " + path)
+        return out
+    }
+    let lines = read_file(path).split("\n")
+    let mut i = 0
+    while i < len(lines) {
+        let line = lines[i].trim()
+        if len(line) > 0 && line.substring(0, 1) != "#" && line.index_of("=") > 0 {
+            out.push(line)
+        }
+        i = i + 1
+    }
+    return out
+}
+
+// _env_args_cli — scan av[start..] (up to a "--" separator) for repeatable
+// `--env KEY=VALUE` flags and `--env-file <path>` flags, returning the
+// collected "KEY=VALUE" tokens in order. Stops at "--" so an --env token
+// inside the remote argv is never consumed. Each KEY=VALUE stays a SINGLE
+// argv element end-to-end, so a value with spaces survives remote word-
+// splitting — the anima dispatch bug (shell `env K=v` word-split) these
+// flags close.
+fn _env_args_cli(av: [str], start: int) -> [str] {
+    let mut out = []
+    let mut i = start
+    while i < len(av) {
+        let t = av[i]
+        if t == "--" {
+            return out
+        } else if t == "--env" {
+            if i + 1 < len(av) {
+                out.push(av[i + 1])
+                i = i + 2
+            } else {
+                i = i + 1
+            }
+        } else if t == "--env-file" {
+            if i + 1 < len(av) {
+                let fkvs = _env_file_kvs(av[i + 1])
+                let mut k = 0
+                while k < len(fkvs) {
+                    out.push(fkvs[k])
+                    k = k + 1
+                }
+                i = i + 2
+            } else {
+                i = i + 1
+            }
+        } else {
+            i = i + 1
+        }
+    }
+    return out
+}
+
+// _with_env — prepend `env KEY=VALUE ...` to a structured argv so the
+// remote command runs under the requested environment. Returns argv
+// unchanged when there are no env tokens (the bare command, no `env`
+// wrapper). `env` is POSIX-standard and present on every Linux pod image.
+fn _with_env(env_kvs: [str], argv: [str]) -> [str] {
+    if len(env_kvs) == 0 {
+        return argv
+    }
+    let mut out = []
+    out.push("env")
+    let mut i = 0
+    while i < len(env_kvs) {
+        out.push(env_kvs[i])
+        i = i + 1
+    }
+    let mut j = 0
+    while j < len(argv) {
+        out.push(argv[j])
+        j = j + 1
+    }
+    return out
+}
+
 // _flag_val — scan av[start..] for `<key> <value>` and return the value;
 // `dflt` when the flag is absent or has no following token.
 fn _flag_val(av: [str], start: int, key: str, dflt: str) -> str {
@@ -161,6 +254,62 @@ fn _flag_val(av: [str], start: int, key: str, dflt: str) -> str {
         i = i + 1
     }
     return dflt
+}
+
+// _has_flag — 1 iff `flag` appears anywhere in av[start..], else 0.
+fn _has_flag(av: [str], start: int, flag: str) -> int {
+    let mut i = start
+    while i < len(av) {
+        if av[i] == flag {
+            return 1
+        }
+        i = i + 1
+    }
+    return 0
+}
+
+// _copy_from_run — pick the download path: rsync resume (R3) when
+// `--resume` was given, else the plain scp+verify path. Branching here
+// (not at the call site) keeps a single network op — resume never first
+// scp's the whole file and then rsyncs it.
+fn _copy_from_run(host: str, ssh_opts: [str], remote_path: str, local_path: str, want_resume: int) -> CloudResult {
+    if want_resume == 1 {
+        return cloud_copy_from_resume_opts(host, ssh_opts, remote_path, local_path)
+    }
+    return cloud_copy_from_opts(host, ssh_opts, remote_path, local_path)
+}
+
+// _copy_to_run — pick the upload path: `scp -r` directory tree (P5) when
+// `--recursive`/`-r` was given, else single-file scp.
+fn _copy_to_run(host: str, ssh_opts: [str], local_path: str, remote_path: str, want_recursive: int) -> CloudResult {
+    if want_recursive == 1 {
+        return cloud_copy_to_recursive_opts(host, ssh_opts, local_path, remote_path)
+    }
+    return cloud_copy_to_opts(host, ssh_opts, local_path, remote_path)
+}
+
+// _print_fail_tail — on a non-zero remote exit, re-surface the last `n`
+// lines of captured output under a clear banner (P10) so the failure is
+// visible at the bottom of a long log. No-op on success or empty output.
+fn _print_fail_tail(out: str, exit_code: int, n: int) {
+    if exit_code == 0 {
+        return
+    }
+    if len(out) == 0 {
+        return
+    }
+    let lines = out.split("\n")
+    let total = len(lines)
+    let mut from = total - n
+    if from < 0 {
+        from = 0
+    }
+    println("[cloud] ── exit " + str(exit_code) + " · last " + str(total - from) + " line(s) ──")
+    let mut i = from
+    while i < total {
+        println(lines[i])
+        i = i + 1
+    }
 }
 
 // ── provisioning verbs (rent / down / list) ───────────────────────────
@@ -345,7 +494,7 @@ fn main() {
         return
     }
     if sub == "version" || sub == "--version" || sub == "-v" {
-        println("hexa cloud 0.2.1 — provisioning wired (rent/down/list + structured-argv dispatch) · vast JSON noise-strip")
+        println("hexa cloud 0.2.2 — env passthrough (--env/--env-file) · resumable copy-from (--resume) · recursive copy-to (-r) · run/exec fail-tail")
         return
     }
     if sub == "rent" || sub == "up" {
@@ -413,17 +562,23 @@ fn main() {
         let host = av[si + 1]
         let ssh_opts = _ssh_opts_cli(av, si + 2)
         let max_wall = _max_wall_cli(av, si + 2)
-        let argv = _collect_after(av, si + 2)
+        let env_kvs = _env_args_cli(av, si + 2)
+        let mut argv = _collect_after(av, si + 2)
         if len(argv) == 0 {
-            println("[cloud] run: empty argv — usage: cloud run <host> [--port N] [--insecure] [--max-wall S] -- <argv...>")
+            println("[cloud] run: empty argv — usage: cloud run <host> [--port N] [--insecure] [--max-wall S] [--env K=V] -- <argv...>")
             exit(2)
         }
+        // Record the real program (argv[0]) BEFORE the env wrapper turns
+        // argv[0] into "env" — the registry label should be the workload.
+        let prog = argv[0]
+        argv = _with_env(env_kvs, argv)
         let r = cloud_run_wall_opts(host, ssh_opts, argv, max_wall)
-        pod_registry_record(host, argv[0], "running")
+        pod_registry_record(host, prog, "running")
         if len(r.stdout_) > 0 {
             println(r.stdout_)
         }
         println("[cloud] " + r.message)
+        _print_fail_tail(r.stdout_, r.exit_code, 30)
         exit(r.exit_code)
     }
     if sub == "exec" {
@@ -452,6 +607,7 @@ fn main() {
             println(r.stdout_)
         }
         println("[cloud] " + r.message)
+        _print_fail_tail(r.stdout_, r.exit_code, 30)
         exit(r.exit_code)
     }
     if sub == "nohup" {
@@ -462,13 +618,16 @@ fn main() {
         let host = av[si + 1]
         let logfile = av[si + 2]
         let ssh_opts = _ssh_opts_cli(av, si + 3)
-        let argv = _collect_after(av, si + 3)
+        let env_kvs = _env_args_cli(av, si + 3)
+        let mut argv = _collect_after(av, si + 3)
         if len(argv) == 0 {
-            println("[cloud] nohup: empty argv — usage: cloud nohup <host> <logfile> [--port N] [--insecure] -- <argv...>")
+            println("[cloud] nohup: empty argv — usage: cloud nohup <host> <logfile> [--port N] [--insecure] [--env K=V] -- <argv...>")
             exit(2)
         }
+        let prog = argv[0]
+        argv = _with_env(env_kvs, argv)
         let r = cloud_nohup_opts(host, ssh_opts, argv, logfile)
-        pod_registry_record(host, argv[0], "running")
+        pod_registry_record(host, prog, "running")
         if len(r.stdout_) > 0 {
             println(r.stdout_)
         }
@@ -582,7 +741,11 @@ fn main() {
         let local_path = av[si + 2]
         let remote_path = av[si + 3]
         let ssh_opts = _ssh_opts_cli(av, si + 4)
-        let r = cloud_copy_to_opts(host, ssh_opts, local_path, remote_path)
+        let mut want_recursive = _has_flag(av, si + 4, "--recursive")
+        if _has_flag(av, si + 4, "-r") == 1 {
+            want_recursive = 1
+        }
+        let r = _copy_to_run(host, ssh_opts, local_path, remote_path, want_recursive)
         println("[cloud] " + r.message + " · " + local_path + " -> " + host + ":" + remote_path)
         exit(r.exit_code)
     }
@@ -595,7 +758,8 @@ fn main() {
         let remote_path = av[si + 2]
         let local_path = av[si + 3]
         let ssh_opts = _ssh_opts_cli(av, si + 4)
-        let r = cloud_copy_from_opts(host, ssh_opts, remote_path, local_path)
+        let want_resume = _has_flag(av, si + 4, "--resume")
+        let r = _copy_from_run(host, ssh_opts, remote_path, local_path, want_resume)
         println("[cloud] " + r.message + " · " + host + ":" + remote_path + " -> " + local_path)
         exit(r.exit_code)
     }
