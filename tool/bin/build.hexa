@@ -137,11 +137,9 @@ fn install_binary(src) {
     // tool can re-install if this gets clobbered by external tooling).
     let wrapper_body = "#!/bin/bash\n"
                      + "# 2026-05-06 macOS docker bypass cleanup — direct hexa.real exec.\n"
-                     + "# HEXA_SHIM_NO_DARWIN_LANDING=1 — hexa.real 자체의 darwin landing refusal 우회.\n"
                      + "# Resolver/routing/verbose 메시지 모두 제거. docker fallback 미사용.\n"
                      + "# SSOT: hexa-lang/tool/cli_wrappers.hexa — re-install via:\n"
                      + "#   hexa run tool/cli_wrappers.hexa --install\n"
-                     + "export HEXA_SHIM_NO_DARWIN_LANDING=1\n"
                      + "exec \"" + bin_dir + "/../packages/hexa/hexa.real\" \"$@\"\n"
     write_file(bin_dir + "/hexa", wrapper_body)
     exec("chmod 0755 '" + bin_dir + "/hexa'")

@@ -17,8 +17,8 @@
 #   first 100 lines, 1 otherwise. No side effects (just `head`+`grep`).
 #
 #   Callers wrap this with their own platform / env-var gating
-#   (Darwin-only, HEXA_RESOLVER_NO_DARWIN_BYPASS, HEXA_SHIM_NO_DARWIN_LANDING,
-#   etc.). This SSOT only owns the marker-scan, not the routing decision.
+#   (Darwin-only, HEXA_RESOLVER_NO_DARWIN_BYPASS, etc.). This SSOT only
+#   owns the marker-scan, not the routing decision.
 #
 # WHEN YOU EDIT THIS FILE
 #   * Re-run: hexa tool/install_interp_shim.hexa  (regenerates the shim)
