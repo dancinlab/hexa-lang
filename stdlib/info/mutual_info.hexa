@@ -1,0 +1,58 @@
+// HEXA Standard Library — info/mutual_info
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Pairwise mutual information via histogram binning + Shannon entropy.
+// Promoted from anima HEXAD/LIFE phi_native.hexa (`phi_native_mi_pair`) per
+// RFC stdlib_scaffold §3. Byte-equal to the RFC 036 phi_mi_pair builtin.
+//
+//   MI(A; B) = max(H(A) + H(B) − H(A,B), 0)
+//
+// Counts are kept in f64 farrs (hexa's canonical numeric array); i64 is wider
+// than the C replica's uint32_t so no overflow for n_bins <= 256, n <= 1e6.
+// Temp farrs are freed explicitly to mirror the C replica's free() block and
+// bound peak RSS in tight O(n_cells^2) caller loops.
+//
+// Surface:
+//   pub fn mutual_info_pair(a: int, b: int, n: int, n_bins: int) -> float
+//     a, b = flat farr handles (length >= n).
+
+import "stdlib/info/binning.hexa"
+import "stdlib/info/entropy.hexa"
+
+pub fn mutual_info_pair(a: int, b: int, n: int, n_bins: int) -> float {
+    if n <= 0 { return 0.0 }
+    if n_bins <= 0 { return 0.0 }
+
+    let ba = bin_values_minmax(a, n, n_bins)
+    let bb = bin_values_minmax(b, n, n_bins)
+    let ca = farr_zeros(n_bins)
+    let cb = farr_zeros(n_bins)
+    let jo = farr_zeros(n_bins * n_bins)
+
+    let mut i = 0
+    while i < n {
+        let ai = farr_get(ba, i).to_int()
+        let bi = farr_get(bb, i).to_int()
+        let _ = farr_set(ca, ai, farr_get(ca, ai) + 1.0)
+        let _ = farr_set(cb, bi, farr_get(cb, bi) + 1.0)
+        let ji = ai * n_bins + bi
+        let _ = farr_set(jo, ji, farr_get(jo, ji) + 1.0)
+        i = i + 1
+    }
+
+    let hA  = shannon_entropy(ca, n_bins,          n)
+    let hB  = shannon_entropy(cb, n_bins,          n)
+    let hAB = shannon_entropy(jo, n_bins * n_bins, n)
+    let mi = hA + hB - hAB
+
+    let _ = farr_free(ba)
+    let _ = farr_free(bb)
+    let _ = farr_free(ca)
+    let _ = farr_free(cb)
+    let _ = farr_free(jo)
+
+    if mi < 0.0 { return 0.0 }
+    return mi
+}
