@@ -1537,6 +1537,22 @@ fn _gen2_emit_tail_return_expr(expr, pad) {
     return pad + "return " + gen2_expr(expr) + ";\n"
 }
 
+// PROBE r15-D2: same as _gen2_emit_tail_return_expr but takes an
+// ALREADY-EMITTED C expression string (not an AST node). Used by the
+// postfix `?` (Try) hoist, whose failure-branch re-returns a C temp
+// (`__tryN`) that has no AST form. Routes through the same three
+// emission paths so the early-return stays byte-identical to a normal
+// `return <recv>;` under defer / arena / plain regimes.
+fn _gen2_emit_tail_return_expr_raw(cexpr, pad) {
+    if _gen2_defer_flag_count > 0 {
+        return pad + "__ret_val = " + cexpr + "; goto __fn_exit;\n"
+    }
+    if _gen2_arena_wrap == 1 {
+        return pad + "return __hexa_fn_arena_return(" + cexpr + ");\n"
+    }
+    return pad + "return " + cexpr + ";\n"
+}
+
 // 2026-05-18 (tier-2 trailing-if-expr void-return fix):
 // Render a branch body (array of stmts) so its TAIL value flows out as a
 // `return <expr>;` instead of being emitted as a bare `<expr>;` expression
@@ -2722,7 +2738,28 @@ fn _gen2_nested_index_assign_stmt(lhs, val_c, pad) {
 }
 
 // decreases node — structural
+// PROBE r15-D2 (2026-05-24): gen2_stmt wrapper for postfix `?` hoisting.
+// Saves + clears the Try-preamble buffer, emits the statement via the
+// inner worker (gen2_expr appends any `?` early-return preamble while it
+// runs), then PREPENDS the accumulated preamble so the success-check +
+// early-return run before the statement uses the unwrapped payload. The
+// buffer is per-statement (save/restore) so nested statements (loop /
+// branch bodies, lambda bodies — each a separate gen2_stmt call) keep
+// independent hoist scopes. No `?` in a statement → buffer stays "",
+// emission is byte-identical to the pre-D2 path.
 fn gen2_stmt(node, depth) {
+    let _saved_pre = _gen2_try_preamble
+    _gen2_try_preamble = ""
+    let _body = _gen2_stmt_inner(node, depth)
+    let _pre = _gen2_try_preamble
+    _gen2_try_preamble = _saved_pre
+    if _pre == "" {
+        return _body
+    }
+    return _pre + _body
+}
+
+fn _gen2_stmt_inner(node, depth) {
     let pad = gen2_indent(depth)
     let k = node.kind
 
@@ -4438,6 +4475,22 @@ fn _gen2_compute_boxed_cells(body) {
 // item for a later cycle.
 let mut _gen2_pending_hoist = []
 
+// ── PROBE r15-D2 (2026-05-24): postfix `?` try-propagation state ──
+// gen2_expr cannot early-return the enclosing C fn (GCC statement-
+// expressions only yield a value), so each `Try` node found while
+// emitting a statement's expression is HOISTED: gen2_expr appends the
+// success-check + early-return + payload-bind C lines to this buffer and
+// returns the unwrapped-payload temp identifier in its place. gen2_stmt
+// flushes the buffer (prepending it to the statement's own C) once the
+// statement's expressions are fully emitted — so the receiver is
+// evaluated exactly once and early-returns route through the same
+// defer/arena/plain path the enclosing fn uses (_gen2_emit_tail_return_expr).
+// Evaluation order is preserved because gen2_expr recurses inner-first,
+// so chained `a()?.b()?` emits the inner `?` preamble before the outer.
+// See RFC inbox/rfc_drafts/r15-d2-question-operator.md §3.5 (Case A/B/C).
+let mut _gen2_try_preamble = ""
+let mut _gen2_try_counter = 0
+
 // Params of the current fn being codegen'd. Used to suppress
 // `_known_int_set` / `_known_float_set` false-positives when a
 // previous fn's local `let X = 0` registers "X" as known-int and
@@ -4627,6 +4680,42 @@ fn gen2_expr(node) {
         // Runtime uses TAG_STR for chars (hexa_str_chars returns single-char strings)
         // so char literals must also be TAG_STR for hexa_eq to work
         return _strlit_dedup(c_escape(node.value))
+    }
+    // ── PROBE r15-D2 (2026-05-24): postfix `?` try-propagation ──
+    // `expr?` (Try node) on a tagged-array `[tag, payload]`:
+    //   - success tag at index 0 is "Ok" or "Some" → yield the payload.
+    //   - any other tag (Err / None / bare "None") → early-return the
+    //     receiver UNCHANGED from the enclosing fn (identity re-wrap, §3.4).
+    // gen2_expr can't return the enclosing C fn, so the check + early-return
+    // are HOISTED into _gen2_try_preamble (flushed by gen2_stmt before the
+    // statement) and this site evaluates to the unwrapped-payload temp.
+    // node.left is itself emitted via gen2_expr → nested `?` (chains) hoist
+    // their own preamble first (inner-before-outer evaluation order). The
+    // success discriminant mirrors r15-D4 `.unwrap` (HX_IS_ARRAY + tag@0).
+    if k == "Try" {
+        let _try_recv = gen2_expr(node.left)
+        let _tid = "__try" + to_string(_gen2_try_counter)
+        _gen2_try_counter = _gen2_try_counter + 1
+        // pad: align with the enclosing statement (gen2_stmt prepends the
+        // preamble at the statement's own indent; depth 1 matches the common
+        // fn-body level — extra leading spaces are harmless in C).
+        let _tpad = "    "
+        let mut _tp = _gen2_try_preamble
+        _tp = _tp + _tpad + "HexaVal " + _tid + " = " + _try_recv + ";\n"
+        // success := HX_IS_ARRAY && (tag=="Ok" || tag=="Some")
+        let _t0 = "hexa_index_get(" + _tid + ", hexa_int(0))"
+        _tp = _tp + _tpad + "int " + _tid + "_ok = HX_IS_ARRAY(" + _tid + ") && ("
+        _tp = _tp + "hexa_truthy(hexa_eq(" + _t0 + ", hexa_str(\"Ok\"))) || "
+        _tp = _tp + "hexa_truthy(hexa_eq(" + _t0 + ", hexa_str(\"Some\"))));\n"
+        _tp = _tp + _tpad + "if (!" + _tid + "_ok) {\n"
+        // Identity re-wrap: return the receiver value unchanged, routed
+        // through the enclosing fn's defer/arena/plain return path.
+        _tp = _tp + _gen2_emit_tail_return_expr_raw(_tid, _tpad + "    ")
+        _tp = _tp + _tpad + "}\n"
+        // Bind the unwrapped payload.
+        _tp = _tp + _tpad + "HexaVal " + _tid + "_v = hexa_index_get(" + _tid + ", hexa_int(1));\n"
+        _gen2_try_preamble = _tp
+        return _tid + "_v"
     }
     // bt-53: mangle reserved runtime names (TAG_INT etc.) so references match
     // the mangled global declarations emitted at LetStmt/FnDecl sites.
