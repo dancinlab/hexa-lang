@@ -1,0 +1,110 @@
+// HEXA Standard Library — wolfram/ca
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Elementary (Wolfram) cellular-automaton generator. A length-N periodic
+// 1-D binary CA evolved under one of the 256 elementary rules (0..255),
+// recording each site's trajectory over `dim` steps after a `warm` warmup
+// into a flat (n × dim) float-array (farr) handle.
+//
+// Why this exists:
+//   The CA → IIT Φ substrate pipeline (anima HEXAD/LIFE H_007 lineage and
+//   ~16 sibling hypotheses) re-derives the SAME `wolfram_init_row` +
+//   `wolfram_run_ca` pair in every experiment file (32 / 17 dups). They are
+//   the canonical generator for the LIFE substrate. Promoting them here gives
+//   a single byte-equal source so Φ measurements stay comparable across all
+//   downstream consumers.
+//
+// Algorithm (byte-equal to anima HEXAD/LIFE/state/h007_ca_phi_2026_05_23):
+//   - next-state of neighborhood (l,c,r) = bit `(l*4 + c*2 + r)` of `rule`.
+//   - deterministic initial row for a given `rep`: site i is ON iff
+//       ((i + rep) % 3) != 0   — overflow-free, gives every rule the SAME
+//       non-trivial substrate (no RNG, fully reproducible).
+//   - periodic (wrap-around) boundary: left of 0 = N-1, right of N-1 = 0.
+//   - states[ site*dim + t ] holds the value of `site` at recorded step `t`.
+//
+// Surface:
+//   pub fn wolfram_init_row(row: int, n: int, rep: int) -> int
+//       // fill farr handle `row` (length n) with the deterministic rep-seeded
+//       // initial pattern; returns 1.
+//   pub fn wolfram_run_ca(rule: int, n: int, dim: int, warm: int, rep: int) -> int
+//       // evolve and return a fresh farr handle of length (n * dim) holding
+//       // each site's `dim`-step trajectory after `warm` warmup steps.
+//       // Caller owns the returned handle (farr_free when done).
+//
+// Notes:
+//   - Pure + deterministic: same (rule, n, dim, warm, rep) → byte-identical
+//     output, no RNG, no I/O.
+//   - farr_* builtins are available without import.
+//   - `_pow2` is kept as an integer repeated-multiply helper (exact, no float)
+//     rather than the float `pow` builtin, to preserve integer-exact bit
+//     extraction of the rule.
+
+// ── small int helpers (kept tiny — exact integer arithmetic) ──────────────
+fn _pow2(k: int) -> int {
+    let mut p = 1
+    let mut i = 0
+    while i < k { p = p * 2; i = i + 1 }
+    return p
+}
+fn _ftoi(x: float) -> int { if x > 0.5 { return 1 }; return 0 }
+fn _itof(b: int) -> float { if b == 1 { return 1.0 }; return 0.0 }
+
+// elementary CA next-state: neighborhood (l,c,r) → bit `idx` of `rule`.
+fn _ca_next(l: int, c: int, r: int, rule: int) -> int {
+    let idx = l * 4 + c * 2 + r          // pattern index 0..7
+    return (rule / _pow2(idx)) % 2        // extract bit idx of rule
+}
+
+// deterministic initial row for a given rep: site i set iff (i + rep) % 3 != 0.
+// (fixed, overflow-free, gives every rule the SAME non-trivial substrate.)
+pub fn wolfram_init_row(row: int, n: int, rep: int) -> int {
+    let mut i = 0
+    while i < n {
+        let on = ((i + rep) % 3) != 0
+        if on { let _ = farr_set(row, i, 1.0) }
+        else  { let _ = farr_set(row, i, 0.0) }
+        i = i + 1
+    }
+    return 1
+}
+
+// evolve length-N periodic elementary CA; record each site's trajectory of
+// `dim` steps (after `warm` warmup) into states[ site*dim + t ]. returns farr.
+pub fn wolfram_run_ca(rule: int, n: int, dim: int, warm: int, rep: int) -> int {
+    let row = farr_zeros(n)
+    let _ = wolfram_init_row(row, n, rep)
+
+    let states = farr_zeros(n * dim)
+    let total = warm + dim
+    let mut step = 0
+    while step < total {
+        if step >= warm {
+            let t = step - warm
+            let mut s = 0
+            while s < n {
+                let _ = farr_set(states, s * dim + t, farr_get(row, s))
+                s = s + 1
+            }
+        }
+        // compute next row (periodic boundary)
+        let nxt = farr_zeros(n)
+        let mut j = 0
+        while j < n {
+            let lj = (j + n - 1) % n
+            let rj = (j + 1) % n
+            let lv = _ftoi(farr_get(row, lj))
+            let cv = _ftoi(farr_get(row, j))
+            let rv = _ftoi(farr_get(row, rj))
+            let _ = farr_set(nxt, j, _itof(_ca_next(lv, cv, rv, rule)))
+            j = j + 1
+        }
+        let mut k = 0
+        while k < n { let _ = farr_set(row, k, farr_get(nxt, k)); k = k + 1 }
+        let _ = farr_free(nxt)
+        step = step + 1
+    }
+    let _ = farr_free(row)
+    return states
+}
