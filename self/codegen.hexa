@@ -3199,11 +3199,24 @@ fn _gen2_stmt_inner(node, depth) {
             // iteration — register it so BinOp/CmpOp inside the body emit
             // HX_INT() fast-path instead of hexa_as_num() tag dispatch.
             _known_int_add(node.name)
+            // PROBE r15-F-FOLD: the loop var is a fresh loop-scope binding that
+            // shadows any enclosing same-name `let i = <lit>`. That enclosing
+            // immutable let registered a comptime-const fold (PROBE r11 B3), so
+            // every read of `i` in the body would inline the STALE literal
+            // instead of the live counter `hexa_int(__hx_ni_i)`
+            // (`let i=100; for i in 0..3 { to_string(i) }` printed 100/100/100).
+            // Kill the stale fold (D18 re-`let` invalidate pattern) before
+            // emitting the body, and scope-mark/restore around the body so any
+            // fold introduced inside the loop doesn't leak out and the enclosing
+            // state is rebuilt after the loop (D17 block-scope pattern).
+            _invalidate_comptime_const(node.name)
+            let _cc_mark = _comptime_const_scope_mark()
             let mut fi = 0
             while fi < len(node.body) {
                 chunks.push(gen2_stmt(node.body[fi], depth + 2))
                 fi = fi + 1
             }
+            _comptime_const_scope_restore(_cc_mark)
             chunks.push(pad2 + "}\n")
             chunks.push(pad + "}\n")
             return chunks.join("")
@@ -3219,11 +3232,17 @@ fn _gen2_stmt_inner(node, depth) {
         chunks.push(pad2 + "for (int __fi = 0; __fi < __iter_len; __fi++) {\n")
         let pad3 = gen2_indent(depth + 2)
         chunks.push(pad3 + "HexaVal " + node.name + " = hexa_iter_get(__iter_arr, __fi);\n")
+        // PROBE r15-F-FOLD: same loop-var-shadow fold invalidation as the range
+        // fast-path above — the element binding shadows any enclosing same-name
+        // comptime-const `let`, so kill the stale fold and scope the body.
+        _invalidate_comptime_const(node.name)
+        let _cc_mark = _comptime_const_scope_mark()
         let mut fi = 0
         while fi < len(node.body) {
             chunks.push(gen2_stmt(node.body[fi], depth + 2))
             fi = fi + 1
         }
+        _comptime_const_scope_restore(_cc_mark)
         chunks.push(pad2 + "}\n")
         chunks.push(pad + "}\n")
         return chunks.join("")
@@ -3247,13 +3266,22 @@ fn _gen2_stmt_inner(node, depth) {
         while di < num_names {
             let vname = _hexa_mangle_ident(destruct_names[di])
             chunks.push(pad3 + "HexaVal " + vname + " = hexa_index_get(__iter_elem, hexa_int(" + to_string(di) + "));\n")
+            // PROBE r15-F-FOLD: each destructured loop-var shadows any enclosing
+            // same-name comptime-const `let` — invalidate per bound name. Uses
+            // the raw destructure name (the fold table is keyed by the source
+            // name, not the mangled C identifier).
+            _invalidate_comptime_const(destruct_names[di])
             di = di + 1
         }
+        // PROBE r15-F-FOLD: scope the body so folds introduced inside the loop
+        // don't leak past it (D17 block-scope pattern).
+        let _cc_mark = _comptime_const_scope_mark()
         let mut fi = 0
         while fi < len(node.body) {
             chunks.push(gen2_stmt(node.body[fi], depth + 2))
             fi = fi + 1
         }
+        _comptime_const_scope_restore(_cc_mark)
         chunks.push(pad2 + "}\n")
         chunks.push(pad + "}\n")
         return chunks.join("")
