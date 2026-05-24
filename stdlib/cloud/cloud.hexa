@@ -230,12 +230,16 @@ fn cloud_lint_argv(argv: [str]) -> [str] {
 
 // ── dispatch ─────────────────────────────────────────────────────────
 
-// cloud_run_opts — run `argv` on remote `host` over ssh with extra ssh
-// flags `ssh_opts`, wait for it, and return its captured output + exit
-// code. `host` is an ssh destination (`user@host`, or a ~/.ssh/config
-// Host alias). Use `ssh_opts` for a non-22 port or a changing host key —
-// an ephemeral RunPod / vast.ai pod cannot rely on a static config alias.
-fn cloud_run_opts(host: str, ssh_opts: [str], argv: [str]) -> CloudResult {
+// cloud_run_wall_opts — like cloud_run_opts but caps the remote command's
+// wall-clock time. When `max_wall` > 0 the joined argv is wrapped with the
+// POSIX `timeout <max_wall> ...` utility on the remote side, so a hung or
+// over-long remote process is killed instead of blocking the dispatcher
+// forever. `timeout` exits 124 on expiry; the existing `__CLOUD_RC__=$?`
+// marker captures that naturally, so a wall-exceeded run surfaces as
+// exit_code == 124 with a "max-wall N exceeded" message. A `max_wall` of 0
+// (or negative) applies no cap and is identical to cloud_run_opts.
+// See inbox/patches/cloud-cli-operational-improvements-anima-2026-05-20.md P2.
+fn cloud_run_wall_opts(host: str, ssh_opts: [str], argv: [str], max_wall: int) -> CloudResult {
     if len(argv) == 0 {
         return _cloud_fail("cloud_run: empty argv")
     }
@@ -243,7 +247,12 @@ fn cloud_run_opts(host: str, ssh_opts: [str], argv: [str]) -> CloudResult {
     if len(warns) > 0 {
         return _cloud_fail("cloud_run: refused — " + warns[0])
     }
-    let remote = _join_argv(argv) + " 2>&1; echo __CLOUD_RC__=$?"
+    let mut prefix = ""
+    if max_wall > 0 {
+        // `timeout <sec> <argv...>` — SIGTERM at <sec>, exit 124 on expiry.
+        prefix = "timeout " + str(max_wall) + " "
+    }
+    let remote = prefix + _join_argv(argv) + " 2>&1; echo __CLOUD_RC__=$?"
     let out = _ssh_capture(host, ssh_opts, remote)
     let rc = _parse_uint_after(out, "__CLOUD_RC__=")
     let body = _strip_marker(out, "__CLOUD_RC__=")
@@ -251,12 +260,25 @@ fn cloud_run_opts(host: str, ssh_opts: [str], argv: [str]) -> CloudResult {
         return CloudResult { ok: 0, exit_code: -1, pid: 0, stdout_: body,
             message: "cloud_run: no exit-code marker — ssh transport failure or remote shell died" }
     }
+    if max_wall > 0 && rc == 124 {
+        return CloudResult { ok: 0, exit_code: 124, pid: 0, stdout_: body,
+            message: "max-wall " + str(max_wall) + "s exceeded — remote command killed (exit 124)" }
+    }
     let mut ok = 0
     if rc == 0 {
         ok = 1
     }
     return CloudResult { ok: ok, exit_code: rc, pid: 0, stdout_: body,
         message: "remote exit " + str(rc) }
+}
+
+// cloud_run_opts — run `argv` on remote `host` over ssh with extra ssh
+// flags `ssh_opts`, wait for it, and return its captured output + exit
+// code. `host` is an ssh destination (`user@host`, or a ~/.ssh/config
+// Host alias). Use `ssh_opts` for a non-22 port or a changing host key —
+// an ephemeral RunPod / vast.ai pod cannot rely on a static config alias.
+fn cloud_run_opts(host: str, ssh_opts: [str], argv: [str]) -> CloudResult {
+    return cloud_run_wall_opts(host, ssh_opts, argv, 0)
 }
 
 // cloud_run — cloud_run_opts with no extra ssh flags (host reachable on
