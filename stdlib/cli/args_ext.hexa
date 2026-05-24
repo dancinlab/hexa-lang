@@ -1,0 +1,46 @@
+// HEXA Standard Library — cli/args_ext
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Extended argv parsing — companion to stdlib/cli/argv::arg_present.
+// Standardises the 261+ anima inline definitions (59 _flag + 58
+// _arg_value + 53 _opt + 50 _user_argv + 41 print_usage, STDLIB Phase 1b
+// 잔여 survey 2026-05-25).
+//
+// Surface:
+//   pub fn arg_value(args: array, name: string) -> string
+//     Returns the next token after `name` (the `--key value` pattern).
+//     Returns "" if `name` not found or `name` is the last token.
+//
+//   pub fn arg_opt(args: array, name: string, default: string) -> string
+//     Same as arg_value but with caller-provided default for missing.
+//
+//   pub fn print_usage(prog: string, usage: string)
+//     Standard `Usage: <prog> <usage>` print to stdout. CLI convention.
+
+import "stdlib/cli/argv.hexa"
+
+pub fn arg_value(args: array, name: string) -> string {
+    let n = len(args)
+    let mut i = 0
+    while i < n - 1 {
+        if args[i] == name {
+            return args[i + 1]
+        }
+        i = i + 1
+    }
+    return ""
+}
+
+pub fn arg_opt(args: array, name: string, default: string) -> string {
+    let v = arg_value(args, name)
+    if v == "" {
+        return default
+    }
+    return v
+}
+
+pub fn print_usage(prog: string, usage: string) {
+    println("Usage: " + prog + " " + usage)
+}
