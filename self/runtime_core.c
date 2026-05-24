@@ -2133,7 +2133,12 @@ HexaVal hexa_array_get(HexaVal arr, int64_t idx) {
         return hexa_void();
     }
     int64_t _orig_idx_g = idx;
-    if (idx < 0) idx += HX_ARR_LEN(arr);
+    // PROBE r15-D12 (2026-05-24): negative array index is OUT OF BOUNDS, not a
+    // Python-style wrap. Go/Rust/Swift canonical — `xs[-1]` panics rather than
+    // aliasing the last element. Consistent with the positive OOB throw below
+    // and #467 (string OOB throws). Use `.last()` for the last element. The
+    // wrap (`idx += len`) was removed so any idx<0 falls straight to the throw,
+    // surfacing the ORIGINAL negative index in the message (_orig_idx_g).
     if (idx < 0 || idx >= HX_ARR_LEN(arr)) {
         char _buf[128];
         snprintf(_buf, sizeof(_buf), "index %lld out of bounds (len %d)", (long long)_orig_idx_g, HX_ARR_LEN(arr));
@@ -2186,7 +2191,8 @@ HexaVal hexa_array_set(HexaVal arr, int64_t idx, HexaVal val) {
         return arr;
     }
     int64_t _orig_idx_s = idx;
-    if (idx < 0) idx += HX_ARR_LEN(arr);
+    // PROBE r15-D12: negative array index = OOB (Go/Rust canonical), not wrap.
+    // Mirror of the get path above — `xs[-1] = v` panics.
     if (idx < 0 || idx >= HX_ARR_LEN(arr)) {
         char _buf[128];
         snprintf(_buf, sizeof(_buf), "index %lld out of bounds (len %d)", (long long)_orig_idx_s, HX_ARR_LEN(arr));
