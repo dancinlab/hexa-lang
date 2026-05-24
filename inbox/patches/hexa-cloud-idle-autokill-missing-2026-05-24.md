@@ -122,6 +122,10 @@ hexa cloud nohup vast-foo log.out --port 16984 --insecure --max-idle 30m -- pyth
 ## Status
 
 - [x] Discovered + reproduced (5 pods 18-27h idle on 2026-05-24)
-- [ ] Fix A 또는 C 구현 (`stdlib/cloud/watchdog.hexa` 또는 `sidecar/pod-monitor/0.2.0` 확장)
-- [ ] CHANGELOG + commons g60 (idle-autokill 의무화) 추가 후보
-- [ ] 본 patch 의 sample skeleton 을 PoC 로 발전
+- [x] Fix A 구현 (`stdlib/cloud/watchdog.hexa` — PR stdlib-cloud-idle-autokill-2026-05-24)
+  - `_should_autokill(uptime_min, util_pct, threshold_min, util_cap)` = pure closed-form decision (network-free)
+  - `runpod_get_idle_snapshot(pod_id)` = `runpodctl pod get -o json` 의 uptime + max(gpu_util) 추출
+  - `runpod_idle_autokill_sweep(api_key, threshold_min, util_cap_pct, dry_run)` = 1-cycle scan + decide + (dry-run/terminate) · 데몬화 = follow-up
+  - `watchdog_test.hexa` 15-case 단위 falsifier (live pod 0회 · dry_run=1 gate)
+- [ ] CHANGELOG + commons g60 (idle-autokill 의무화) 추가 후보 (별개 사이클)
+- [ ] 데몬화 (LaunchAgent / systemd) · Fix B/C (max-idle flag / session-end reap) (follow-up)
