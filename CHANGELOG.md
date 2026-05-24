@@ -6,6 +6,12 @@ For the full audit trail, see `git log`.
 
 ---
 
+## 2026-05-25
+
+`hexa atlas` 흡수 경로를 **단일 직접경로로 정리** (atlas_cli 0.5.0 → 0.6.0). `register --from-verify`/`--from-drill`가 검증 노드를 **라이브 `n6/atlas.n6` SSOT에 직접 append** → `lookup`에 재빌드·중간파일 없이 즉시 반영. 기존엔 `embedded.gen.hexa`(텍스트 SSOT)에만 써서 런타임 lookup(`n6/atlas.n6`)에 안 보이던 회귀를 해소. 혼란 유발하던 `append-witness`(staging shard) · `pr`/`--auto-pr`(PR-only 우회) · `register <file>` STUB · `--from-check` STUB **폐기**(602줄 제거). supercon witness 6종(allen_dynes_tc·mcmillan_tc·bcs_gap_ratio·lambda_eliashberg·migdal_ratio·beenet_grid_bins)을 embedded → n6로 마이그레이션.
+
+발견: 파라미터명 `raw`가 호출부 `ev.raw` 필드접근과 codegen aliasing 충돌로 `"x"`로 미스컴파일되는 컴파일러 버그 — `node_raw`로 회피, `INBOX.log.md` 기록.
+
 ## 2026-05-24
 
 내부 `inbox/` staging 폴더 **폐기** (user-authorized, pre-sunset). phi_rs inbox closure + `/cycle` 1-6 라운드 머지 배치. 코드 변경(codegen/runtime)은 enum 스택 일부, 나머지는 RFC promote · inbox housekeeping.
