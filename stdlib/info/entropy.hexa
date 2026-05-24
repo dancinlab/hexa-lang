@@ -1,0 +1,34 @@
+// HEXA Standard Library — info/entropy
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Shannon entropy in bits — H = Σ -p · log2(p + ε) over ALL k bins.
+// ε = 1e-10 (KL singularity smoothing), total += 1e-8 (avoid /0).
+//
+// Surface:
+//   pub fn shannon_entropy(counts: int, k: int, total: int) -> float
+//     counts : flat farr handle of length k (per-bin count, f64 OK)
+//     k      : bin count
+//     total  : total sample count (Σ counts; passed as i64)
+//
+// Used by info/mutual_info::mutual_info_pair, and 7+ duplicate
+// `phi_entropy` sites across anima (.STDLIB survey 2026-05-24).
+//
+// Reference impl: anima/HEXAD/LIFE/lib/phi_native.hexa § phi_entropy
+// (line-cited to runtime.c:7874-7885, port-byte-equal target).
+
+import "stdlib/math/log.hexa"
+
+pub fn shannon_entropy(counts: int, k: int, total: int) -> float {
+    if total == 0 { return 0.0 }
+    let t = total + 1.0e-8
+    let mut s = 0.0
+    let mut i = 0
+    while i < k {
+        let p = farr_get(counts, i) / t
+        s = s + (0.0 - p) * log2(p + 1.0e-10)
+        i = i + 1
+    }
+    return s
+}

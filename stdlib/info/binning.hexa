@@ -1,0 +1,49 @@
+// HEXA Standard Library — info/binning
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Min-max histogram binning. Each v ∈ [min, max] → bin index ∈ [0, n_bins-1].
+// All-identical guard: range < 1.19209290e-7 (Rust f32::EPSILON) → all bin 0.
+// Boundary truncation clamped to n_bins-1; negative bin (impossible after min
+// scan) defensively clamped to 0.
+//
+// Surface:
+//   pub fn bin_values_minmax(values: int, n: int, n_bins: int) -> int
+//     values : flat farr handle of length ≥ n
+//     n      : number of values to bin
+//     n_bins : histogram bin count
+//     returns: farr handle of length n with bin indices [0, n_bins-1]
+//
+// Caller frees the returned farr via farr_free when done.
+//
+// Used by info/mutual_info, IIT spatial-Φ pipelines, EEG signal
+// pre-processing (planned phase 3). Reference impl: anima/HEXAD/LIFE/lib/
+// phi_native.hexa § phi_bin_values (line-cited to runtime.c:7849-7872).
+
+pub fn bin_values_minmax(values: int, n: int, n_bins: int) -> int {
+    let bins = farr_zeros(n)
+    if n <= 0 { return bins }
+    let mut mn = farr_get(values, 0)
+    let mut mx = mn
+    let mut i = 1
+    while i < n {
+        let v = farr_get(values, i)
+        if v < mn { mn = v }
+        if v > mx { mx = v }
+        i = i + 1
+    }
+    let range = mx - mn
+    if range < 1.19209290e-7 { return bins }
+    let bw = range / n_bins
+    let mut j = 0
+    while j < n {
+        let r = (farr_get(values, j) - mn) / bw
+        let mut b = floor(r).to_int()
+        if b > n_bins - 1 { b = n_bins - 1 }
+        if b < 0 { b = 0 }
+        let _ = farr_set(bins, j, b)
+        j = j + 1
+    }
+    return bins
+}
