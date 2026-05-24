@@ -203,6 +203,8 @@ fn cmd_rubric() {
     println("             condensation_energy(Bc0)    → Bc0²/(2μ₀)           (SC condensation energy density, RTSC #15, 1-arg)")
     println("             bcs_gap_zero(Tc)            → 1.764·k_B·Tc         (BCS zero-T energy gap Δ(0), RTSC, 1-arg)")
     println("             pippard_coherence(v_F,Tc)   → ħ·v_F/(π·1.764·k_B·Tc)  (Pippard intrinsic coherence ξ₀, RTSC #15, 2-arg)")
+    println("             viola_seaborg_log10_t(Z,Qα) → (aZ+b)/√Qα+(cZ+d)     (Viola-Seaborg α-decay log10 T₁/₂[s], NUCLEAR N7/N11, 2-arg)")
+    println("             royer_log10_t(Z,A,Qα)       → a+bA^{1/6}√Z+cZ/√Qα   (Royer 2000 α-decay log10 T₁/₂[s], NUCLEAR N7/N11, 3-arg)")
 }
 
 let NOCALC: int = -999999
@@ -1178,6 +1180,40 @@ fn _pippard_coherence(v_fermi: float, tc_k: float) -> float {
     return hbar * v_fermi / (pi_p * gap0)
 }
 
+// ── Nuclear α-decay half-life (NUCLEAR.md N7/N11 · sibling of RTSC SC) ──
+// Two Geiger-Nuttall-family closed-form log10 T₁/₂ [s] predictors,
+// VERBATIM mirror of stdlib/nuclear/sim.hexa v0.2.0 (NC1+NC2 kernels)
+// — same coefficients, same arithmetic. The NUCLEAR N11 funnel cohort
+// (NUCLEAR.md §6.2) ranks SHE (Z,N) cells by these; this verify entry
+// gates the closed-form identity itself (🟢 NUMERICAL, ε=1e-9).
+// Source: Viola & Seaborg 1966 J Inorg Nucl Chem 28:741 ·
+// Sobiczewski/Parkhomenko 2005 PRC 72:044316 (VS refit coefficients) ·
+// Royer 2000 J Phys G 26:1149 · arxiv:nucl-th/0510074 (Royer e-e coeff).
+
+// Viola-Seaborg (NC1): log10 T = (a·Z + b)/√Q_α + (c·Z + d)
+//   a=1.66175 b=-8.5166 c=-0.20228 d=-33.9069
+// 2-arg (Z, Q_α). Reference: Z=118, Q=11.65 → -2.82183 (Og-294 anchor).
+fn _viola_seaborg_log10_t(zf: float, q_alpha_mev: float) -> float {
+    if q_alpha_mev <= 0.0 { return _NOCALC_F }
+    let a_vs = 1.66175
+    let b_vs = 0.0 - 8.5166
+    let c_vs = 0.0 - 0.20228
+    let d_vs = 0.0 - 33.9069
+    return (a_vs * zf + b_vs) / sqrt(q_alpha_mev) + (c_vs * zf + d_vs)
+}
+
+// Royer 2000 (NC2): log10 T = a + b·A^{1/6}·√Z + c·Z/√Q_α
+//   a=-25.31 b=-1.1629 c=1.5864 (even-even nuclei)
+// 3-arg (Z, A, Q_α). Reference: Z=118, A=294, Q=11.65 → -3.03993.
+fn _royer_log10_t(zf: float, af: float, q_alpha_mev: float) -> float {
+    if q_alpha_mev <= 0.0 { return _NOCALC_F }
+    let a_ro = 0.0 - 25.31
+    let b_ro = 0.0 - 1.1629
+    let c_ro = 1.5864
+    let a_pow_1_6 = pow(af, 1.0 / 6.0)
+    return a_ro + b_ro * a_pow_1_6 * sqrt(zf) + c_ro * zf / sqrt(q_alpha_mev)
+}
+
 // ── Bio-physical Phase 3 (demiurge cross-domain V2 closure) ─────────
 // Three remaining identities from the inbox patch — Higuchi sustained
 // release (2-arg, simple form) · Tafel overpotential (3-arg, log10 path)
@@ -1648,6 +1684,17 @@ fn _recompute_float(fn_name: string, a0: float, a1: float, a2: float, a3: float,
         if argc < 2 { return _NOCALC_F }
         return _pippard_coherence(a0, a1)
     }
+    // ── Nuclear α-decay half-life (NUCLEAR.md N7/N11 funnel cohort) ─────
+    //   viola_seaborg_log10_t(Z, Q_α)     2-arg: (aZ+b)/√Q + (cZ+d)
+    //   royer_log10_t(Z, A, Q_α)          3-arg: a + bA^{1/6}√Z + cZ/√Q
+    if fn_name == "viola_seaborg_log10_t" {
+        if argc < 2 { return _NOCALC_F }
+        return _viola_seaborg_log10_t(a0, a1)
+    }
+    if fn_name == "royer_log10_t" {
+        if argc < 3 { return _NOCALC_F }
+        return _royer_log10_t(a0, a1, a2)
+    }
     // ── Bio-physical Phase 3 (demiurge cross-domain V2 closure) ─────────
     //   higuchi(k_H, t)                   2-arg: k_H * sqrt(t)
     //   tafel(a, b, j)                    3-arg: a + b * log10(j)
@@ -1758,6 +1805,8 @@ fn _is_float_fn(fn_name: string) -> bool {
         || fn_name == "london_penetration_depth" || fn_name == "thermo_critical_field"
         || fn_name == "condensation_energy" || fn_name == "bcs_gap_zero"
         || fn_name == "pippard_coherence"
+        // Nuclear α-decay half-life (NUCLEAR.md N7/N11 funnel · 2026-05-25):
+        || fn_name == "viola_seaborg_log10_t" || fn_name == "royer_log10_t"
         // Bio-physical Phase 3 (demiurge cross-domain V2 closure):
         || fn_name == "higuchi" || fn_name == "tafel" || fn_name == "hagen_poiseuille"
         // TTR-ORAL / TTR-LAC bundle (topical PK + laser optics · INBOX T22:35Z):
