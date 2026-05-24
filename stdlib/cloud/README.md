@@ -85,6 +85,75 @@ wait_ssh → echo → copy-to → sha-verify → copy-from → terminate.
 
 `CloudResult` fields: `ok`, `exit_code`, `pid`, `stdout_`, `message`.
 
+### Wiring a downstream dispatcher (anima PURE / HEXAD)
+
+This section answers the four integration asks raised by
+`inbox/patches/runpod-graphql-builtin-for-pure-dispatcher.md`. The verdict
+there was that no new builtin was needed — the surface is complete — only a
+canonical usage contract plus one small teardown-gating helper.
+
+**1 · import path.** Use `use` (the hexa-lang module keyword), not `import`:
+
+```hexa
+use "stdlib/cloud/cloud"     // cloud_run / cloud_nohup / cloud_copy_from ...
+use "stdlib/cloud/runpod"    // runpod_create_cascade / wait_ssh / terminate ...
+```
+
+A dispatcher copies these two `use` lines verbatim. Module resolution is
+relative to `HEXA_LANG` (the hexa-lang checkout root).
+
+**2 · secret integration — pattern (a) is the SSOT.** `runpod_*` keep
+`api_key: str` as a first-class argument; the caller reads it. There is
+deliberately **no** `runpod_create_from_secret` wrapper — that would
+duplicate the key name (`runpod.api_key`) inside stdlib and fork from
+sidecar `commons.tape` g8. Read it once at the top of `main` and thread it:
+
+```hexa
+let api_key = exec("secret get runpod.api_key 2>/dev/null").trim()
+if len(api_key) == 0 { println("FATAL no runpod api key"); exit(1) }
+let pubkey  = read_file(env_var("HOME") + "/.ssh/id_ed25519.pub").trim()
+let pod = runpod_create_cascade(api_key, ["NVIDIA H100 NVL", "NVIDIA H100 PCIe"],
+                                image, pubkey, "p21h-alpha")
+```
+
+This is exactly the pattern `e2e_smoke.hexa` uses, so it is already proven
+on live silicon.
+
+**3 · checkpoint integrity (`sha256_verify`).** The ckpt-hash check lives
+**caller-side** — the dispatcher owns its `sha256_verify(path, expected)`
+helper (anima already has it). Recommended placement in the orchestration
+flow: verify the **uploaded artifact** right after `cloud_copy_to`
+(before `cloud_nohup`/`train_launch` kicks off), and verify the **pulled
+result** right after `cloud_copy_from` (before declaring success). stdlib
+provides the transport (`cloud_run_opts(host, opts, ["sha256sum", path])`
+for the remote digest); it does not impose a hashing policy.
+
+**4 · conditional teardown (`save_pod`).** `runpod_terminate` is
+unconditional. For the `pod_terminate(pod_id, save_pod)` shape — where
+`save_pod` means *keep the pod alive* — use the gating helper so callsites
+stay a single call:
+
+```hexa
+// save_pod == "yes"  ->  keep pod, return 1 (no-op success)
+let keep = save_pod == "yes"
+runpod_terminate_unless(api_key, pod.pod_id, keep)
+```
+
+`runpod_terminate_unless(api_key, pod_id, skip)` returns 1 immediately when
+`skip` is true (pod left running), else delegates to `runpod_terminate`.
+
+#### Dispatcher stub → stdlib surface map
+
+| dispatcher need              | call this                                   |
+|------------------------------|---------------------------------------------|
+| `pod_create`                 | `runpod_create_cascade(api_key, gpus, …)`   |
+| `pod_ssh_wait`               | `runpod_wait_ssh(api_key, pod_id, tries, s)`|
+| `pod_terminate(_, save_pod)` | `runpod_terminate_unless(api_key, id, skip)`|
+| `corpus_build_*`             | `cloud_run(host, argv)`                      |
+| `train_launch`               | `cloud_nohup(host, argv, logfile)`          |
+| `result_pull`                | `cloud_copy_from(host, remote, local)`      |
+| ssh transport / opts         | `cloud_run_opts` + `runpod_pod_opts(port)`  |
+
 `host` is an ssh destination — a `user@host`, or (preferred) a Host alias
 from `~/.ssh/config` where the key, port and user live. ssh runs with
 `BatchMode=yes`, so it fails fast instead of hanging on an auth prompt.

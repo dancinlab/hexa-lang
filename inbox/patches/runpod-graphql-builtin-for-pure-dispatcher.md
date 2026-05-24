@@ -1,6 +1,29 @@
 # RFC — runpod GraphQL builtin / cloud verb hexa-fn 표면 (PURE dispatcher 8 TODO unblock)
 
-> **Status:** spec only · 구현 결정권 = hexa-lang 측
+> **Status:** RESOLVED (2026-05-25) — 7/8 dispatcher needs were ALREADY
+> covered by `stdlib/cloud/{runpod,cloud}.hexa` (landed via #86 GraphQL
+> provider + #88 CLI-first/API-fallback). The §3 self-finding was correct:
+> no new GraphQL builtin needed. The one genuine surface gap (§4-4 `save_pod`
+> conditional teardown) is now closed by **`runpod_terminate_unless(api_key,
+> pod_id, skip)`** in `stdlib/cloud/runpod.hexa` (compiled smoke PASS,
+> RUNPODCTL_DISABLE path, no live API). The four acceptance items (§8) are
+> documented in `stdlib/cloud/README.md` → "Wiring a downstream dispatcher".
+> Note: canonical module keyword is `use`, NOT `import` (§4-1 reworded).
+> Dispatcher → stdlib mapping:
+>
+> | dispatcher stub (anima)      | call                                        |
+> |------------------------------|---------------------------------------------|
+> | `pod_create`                 | `runpod_create_cascade`                     |
+> | `pod_ssh_wait`               | `runpod_wait_ssh`                           |
+> | `pod_terminate(_, save_pod)` | `runpod_terminate_unless(api_key, id, skip)`|
+> | `corpus_build_*`             | `cloud_run`                                 |
+> | `train_launch`               | `cloud_nohup`                               |
+> | `result_pull`                | `cloud_copy_from`                           |
+> | api_key sourcing             | `exec("secret get runpod.api_key").trim()`  |
+> | sha256 ckpt verify           | caller-side (anima `sha256_verify` already) |
+>
+> anima may now do the stub→real rewiring (§4-4 note: ~30 min, separate PR).
+>
 > **From:** anima (downstream consumer)
 > **Slug rule:** @D a_runpod_inbox — slug 에 `runpod` 명시
 
