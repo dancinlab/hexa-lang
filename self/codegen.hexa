@@ -6255,6 +6255,80 @@ fn gen2_expr(node) {
                 }
                 return "hexa_tensor_from_ptr(" + gen2_expr(node.args[0]) + ", " + gen2_expr(node.args[1]) + ", " + gen2_expr(node.args[2]) + ")"
             }
+            // RFC r16 (named args): detect keyword arguments `f(y: 5, x: 1)`.
+            // If any arg is a KwArg, reorder ALL args into the callee's
+            // declared positional order and fill omitted params with defaults.
+            // Keyword args require a registered plain FnDecl (param-name table);
+            // a closure / unknown callee cannot be reordered → error.
+            let mut _has_kwarg = false
+            let mut _kwi = 0
+            while _kwi < len(node.args) {
+                let _ka = node.args[_kwi]
+                if type_of(_ka) != "string" && _ka.kind == "KwArg" { _has_kwarg = true }
+                _kwi = _kwi + 1
+            }
+            if _has_kwarg {
+                if !_is_known_fn_global(name) || _fn_arity_lookup(name) < 0 {
+                    eprintln("error: keyword arguments require a plain function with named parameters (call to `" + name + "`)")
+                    exit(1)
+                }
+                let _kw_arity = _fn_arity_lookup(name)
+                // slots[i] = emitted C expr for param i, "" = unfilled.
+                let mut _slots = []
+                let mut _si = 0
+                while _si < _kw_arity { _slots.push(""); _si = _si + 1 }
+                // Positional args fill leading slots; once a keyword is seen,
+                // a later positional is a hexa-level error (Python rule).
+                let mut _pos_i = 0
+                let mut _seen_kw = false
+                let mut _ari = 0
+                while _ari < len(node.args) {
+                    let _aa = node.args[_ari]
+                    if type_of(_aa) != "string" && _aa.kind == "KwArg" {
+                        _seen_kw = true
+                        let _pidx = _fn_param_index(name, _aa.name)
+                        if _pidx < 0 {
+                            eprintln("error: function `" + name + "` has no parameter named `" + _aa.name + "`")
+                            exit(1)
+                        }
+                        if _slots[_pidx] != "" {
+                            eprintln("error: function `" + name + "` got multiple values for parameter `" + _aa.name + "`")
+                            exit(1)
+                        }
+                        _slots[_pidx] = gen2_expr(_aa.left)
+                    } else {
+                        if _seen_kw {
+                            eprintln("error: positional argument follows keyword argument in call to `" + name + "`")
+                            exit(1)
+                        }
+                        if _pos_i >= _kw_arity {
+                            eprintln("error: function `" + name + "` got too many positional arguments")
+                            exit(1)
+                        }
+                        if type_of(_aa) != "string" && _aa.kind == "Ident" && _gen2_should_autowrap_fnref(_aa.name) {
+                            _slots[_pos_i] = "hexa_fn_new((void*)" + _hexa_mangle_ident(_aa.name) + ", 0)"
+                        } else {
+                            _slots[_pos_i] = gen2_expr(_aa)
+                        }
+                        _pos_i = _pos_i + 1
+                    }
+                    _ari = _ari + 1
+                }
+                // Fill any still-empty slot with its default expr, else error.
+                let mut _fk = 0
+                while _fk < _kw_arity {
+                    if _slots[_fk] == "" {
+                        let _kdef = _fn_default_at(name, _fk)
+                        if type_of(_kdef) == "string" && _kdef == "" {
+                            eprintln("error: function `" + name + "` missing required argument (parameter index " + to_string(_fk) + ")")
+                            exit(1)
+                        }
+                        _slots[_fk] = gen2_expr(_kdef)
+                    }
+                    _fk = _fk + 1
+                }
+                return _hexa_mangle_ident(name) + "(" + _slots.join(", ") + ")"
+            }
             // User function call — direct C call if it's a known top-level
             // function, otherwise dispatch through hexa_callN (the name must
             // refer to a local/global closure-typed HexaVal).
@@ -8910,6 +8984,10 @@ let mut _fn_arity_counts = []
 // auto-filled with the trailing defaults at the call site (strategy A).
 let mut _fn_default_exprs = []
 let mut _fn_required = []
+// RFC r16 (named args): parallel registry of per-fn param NAME lists, used to
+// reorder keyword arguments (`f(y: 5, x: 1)`) into the callee's declared
+// positional order at the call site.
+let mut _fn_param_names = []
 
 fn _fn_arity_register(name, count) {
     // First-wins: skip if already registered.
@@ -8922,7 +9000,41 @@ fn _fn_arity_register(name, count) {
     _fn_arity_counts.push(count)
     _fn_default_exprs.push([])
     _fn_required.push(count)
+    _fn_param_names.push([])
     return 0
+}
+
+// RFC r16 (named args): register `name`'s ordered param-name list. First-wins;
+// only fills the slot when still empty.
+fn _fn_param_names_register(name, pnames) {
+    let mut i = 0
+    while i < len(_fn_arity_names) {
+        if _fn_arity_names[i] == name {
+            if len(_fn_param_names[i]) == 0 { _fn_param_names[i] = pnames }
+            return 0
+        }
+        i = i + 1
+    }
+    return 0
+}
+
+// RFC r16 (named args): 0-based positional index of param `pname` in `name`'s
+// declaration, or -1 if `name` is unregistered or has no such param.
+fn _fn_param_index(name, pname) {
+    let mut i = 0
+    while i < len(_fn_arity_names) {
+        if _fn_arity_names[i] == name {
+            let _pn = _fn_param_names[i]
+            let mut j = 0
+            while j < len(_pn) {
+                if _pn[j] == pname { return j }
+                j = j + 1
+            }
+            return -1
+        }
+        i = i + 1
+    }
+    return -1
 }
 
 // RFC r16: register `name`'s param default-expr list. `defaults` is an array
@@ -10146,6 +10258,7 @@ fn codegen_full(ast) {
     _fn_arity_counts = []
     _fn_default_exprs = []
     _fn_required = []
+    _fn_param_names = []
     // ── Pass 0: collect known global names for closure free-var analysis ──
     let mut gi = 0
     while gi < len(ast) {
@@ -10181,6 +10294,17 @@ fn codegen_full(ast) {
                     _pj = _pj + 1
                 }
                 _fn_defaults_register(ast[gi].name, _dfs, _req)
+                // RFC r16 (named args): collect ordered param names for
+                // keyword-arg reordering at the call site.
+                let mut _pnames = []
+                let mut _pk = 0
+                while _pk < len(ast[gi].params) {
+                    let _ppk = ast[gi].params[_pk]
+                    if type_of(_ppk) != "string" { _pnames.push(_ppk.name) }
+                    else { _pnames.push("") }
+                    _pk = _pk + 1
+                }
+                _fn_param_names_register(ast[gi].name, _pnames)
             }
         } else if gk == "StructDecl" {
             _known_fn_globals.push(ast[gi].name)

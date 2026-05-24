@@ -3741,6 +3741,29 @@ fn parse_postfix() {
     return expr
 }
 
+// RFC r16 (named args): parse a single call argument, recognizing the
+// keyword form `IDENT : EXPR` (e.g. `f(y: 5, x: 1)`). In call-arg context an
+// `Ident` immediately followed by `Colon` is unambiguously a keyword arg —
+// map literals (`#{k:v}`) and struct-init (`Foo { x: 1 }`) both open with a
+// different token before any `:`. Returns a `KwArg` node (name = key,
+// left = value) or the plain positional expression. The codegen reorders
+// KwArgs into the callee's declared parameter order.
+fn parse_one_call_arg() {
+    if p_peek_kind() == "Ident" && p_peek_ahead(1).kind == "Colon" {
+        let key_tok = p_advance()   // consume IDENT
+        p_advance()                 // consume ':'
+        let kval = parse_expr()
+        return #{
+            "kind": "KwArg", "name": key_tok.value, "value": "", "op": "",
+            "left": kval, "right": "", "cond": "", "then_body": "", "else_body": "",
+            "params": "", "body": "", "args": "", "fields": "", "items": "",
+            "variants": "", "arms": "", "iter_expr": "", "ret_type": "",
+            "target": "", "trait_name": "", "methods": ""
+        }
+    }
+    return parse_expr()
+}
+
 fn parse_args() {
     let mut args = []
     // G12: allow newline-separated multiline call args — skip newlines before/after each arg and commas
@@ -3761,7 +3784,7 @@ fn parse_args() {
             "target": "", "trait_name": "", "methods": ""
         })
     } else {
-        args.push(parse_expr())
+        args.push(parse_one_call_arg())
     }
     p_skip_newlines()
     while p_peek_kind() == "Comma" {
@@ -3784,7 +3807,7 @@ fn parse_args() {
                 "target": "", "trait_name": "", "methods": ""
             })
         } else {
-            args.push(parse_expr())
+            args.push(parse_one_call_arg())
         }
         p_skip_newlines()
     }
