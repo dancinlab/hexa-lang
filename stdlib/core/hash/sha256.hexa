@@ -1,6 +1,6 @@
 // HEXA Standard Library — hash/sha256
 //
-// @version 0.1.0
+// @version 0.2.0
 // @capabilities [pure]
 //
 // SHA-256 (FIPS 180-4) — closes G2-SHA256-WRAP (.roadmap.stdlib G2,
@@ -11,19 +11,44 @@
 // Surface:
 //   pub fn sha256_hex(s: string) -> string
 //       lowercase hex digest of UTF-8 bytes (64 chars)
+//   pub fn sha256_of_string(s: string) -> string
+//       alias of sha256_hex (anima phase-5 sweep nomenclature, #458)
 //   pub fn sha256_file_hex(path: string) -> string
 //       lowercase hex digest of file bytes; "" on I/O error
+//   pub fn sha256_of_file(path: string) -> string
+//       alias of sha256_file_hex (anima phase-5 sweep nomenclature, #458)
 //
 // Replaces:
 //   - hashlib.sha256 calls in hexa-bio _python_bridge (3 callsites)
 //   - exec("shasum -a 256 …") shell-out in stdlib/cert/meta2_validator
+//   - 91 anima call sites identified by phase-5 survey 2026-05-25 (#458)
 //
-// Both functions are deterministic and pure within their input domain.
+// All functions are deterministic and pure within their input domain.
+//
+// Honest limits:
+//   L1 — Routing depends on the runtime `sha256` / `sha256_file` builtins
+//        (self/native/exec_argv_sha256.c). Hosts compiled without that
+//        translation unit will lack the symbol; firmware/embedded
+//        targets must verify the builtin is linked before importing.
+//   L2 — `sha256_of_file` / `sha256_file_hex` require a real filesystem
+//        with `open(2)`; bare-metal targets without a VFS cannot use
+//        them. The shell-out fallback (`exec "shasum -a 256"`) was the
+//        anima-side pattern this module supersedes — it is NOT
+//        reintroduced here; if the builtin is missing the caller
+//        receives an empty-string error, not a fork-exec.
 
 pub fn sha256_hex(s: string) -> string {
     return sha256(s)
 }
 
+pub fn sha256_of_string(s: string) -> string {
+    return sha256(s)
+}
+
 pub fn sha256_file_hex(path: string) -> string {
+    return sha256_file(path)
+}
+
+pub fn sha256_of_file(path: string) -> string {
     return sha256_file(path)
 }

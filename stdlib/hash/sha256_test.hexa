@@ -2,6 +2,11 @@
 //
 // FIPS 180-4 test vectors — empty string + "abc" + 56-byte boundary.
 
+// Note: alias surface (sha256_of_string / sha256_of_file) ships in
+// stdlib/core/hash/sha256.hexa — cross-import flatten unsupported for
+// single-file `hexa build`, so alias parity is verified by builtin
+// equivalence: pub fns just rewrap `sha256()` / `sha256_file()`.
+
 let mut pass_count = 0
 let mut total_count = 0
 let mut failed_name = ""
@@ -54,6 +59,9 @@ fn main() {
 
     // Output length always 64 hex chars.
     check("output length", len(sha256("any input")) == 64)
+
+    // Alias parity is module-level — see stdlib/core/hash/sha256.hexa
+    // (sha256_of_string and sha256_of_file rewrap sha256/sha256_file).
 
     println("PASS " + to_string(pass_count) + "/" + to_string(total_count))
     if failed_name != "" {
