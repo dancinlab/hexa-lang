@@ -2949,6 +2949,18 @@ fn _gen2_stmt_inner(node, depth) {
             let _cn = _hexa_mangle_ident(node.left.name)
             return pad + _cn + " = hexa_array_set(" + _cn + ", 0, " + gen2_expr(node.right) + ");\n"
         }
+        // PROBE r16 immutable-let-reassign: a plain immutable `let x = <int/float
+        // lit>` is const-folded to its literal, so a later `x = …` emits the
+        // folded literal as the lvalue (`<literal> = …;` → "expression is not
+        // assignable" at clang). Reassignment means the binding is mutated, so
+        // the fold is now invalid: drop it before emitting. The local C variable
+        // for `x` was still declared (fold only inlines reads), so `gen2_expr`
+        // now resolves the LHS (and any RHS self-reference) to the live variable.
+        // No-op for non-folded / string-folded names. Mirrors the re-`let`
+        // invalidate at the LetStmt path (D18).
+        if type_of(node.left) != "string" && node.left.kind == "Ident" {
+            _invalidate_comptime_const(node.left.name)
+        }
         return pad + gen2_expr(node.left) + " = " + gen2_expr(node.right) + ";\n"
     }
 
