@@ -1,12 +1,33 @@
 ---
 slug: hexa-codegen-ks-i-undeclared-2026-05-24
-status: open
+status: resolved
 severity: P1
 discovered: 2026-05-24
 discoverer: claude/anima (HEXAD/PURE Phase D v3 fire unblock)
 filed_from: anima (dancinlab/anima · HEXAD/PURE/launchers/dispatch_p21h_v3.hexa)
 related: PR #380 (anima dispatcher smoke), PR #728 class (return-void mistranslate), B14 agent note (pre-existing dispatch compiler regression)
 ---
+
+**Status (2026-05-24)**: RESOLVED — `self/codegen.hexa` `gen2_stmt` ReturnStmt
+now short-circuits bare reserved `return void` / `return none` / `return nil`
+to emit the void literal directly (`bt-void-return` guard), instead of routing
+the reserved Ident through `gen2_expr` (which could return a value-arena string
+whose backing buffer was reclaimed from a prior fn's index-tail expression,
+leaking `hexa_index_get(ks, i)` with `ks`/`i` undeclared in the current C scope).
+
+**Verification** (measured, this session):
+
+| step | pre-fix compiler | fixed compiler |
+|---|---|---|
+| `void_return` emit C | `return __hexa_fn_arena_return(hexa_index_get(ks, hexa_int(0)))` | `return __hexa_fn_arena_return(hexa_void())` |
+| `index_tail` emit C | correct | correct (no regression) |
+| clang the emitted C | `error: use of undeclared identifier 'ks'` | object built ✅ |
+
+Repro `/tmp/voidret_repro.hexa` (the 12-line standalone below) reproduces on the
+pre-fix `self/native/hexa_v2` and lowers correctly after the fix. stdlib
+`stdlib/alloc/json_object.hexa` (`json_object_get`/`json_object_get_path` — five
+`if … { return void }` sites priming off `json_object_entries`'s `ks[i]`) uses the
+identical ReturnStmt form the guard covers, so the anima Phase D v3 fire unblocks.
 
 # codegen: `return void` mistranslated to leaked `hexa_index_get(<prev-fn-var>, ...)` — clang `use of undeclared identifier`
 

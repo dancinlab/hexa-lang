@@ -2910,16 +2910,27 @@ fn gen2_stmt(node, depth) {
     }
 
     if k == "ReturnStmt" {
+        // bt-void-return (2026-05-24): `return void` / `return none` / `return nil`
+        // emit the void literal DIRECTLY without routing the bare-reserved-value
+        // Ident through gen2_expr. The recursive gen2_expr call could return a
+        // value-arena string whose backing buffer had been reclaimed from a
+        // prior function's last index-tail expression (e.g. `let k = ks[i]` in a
+        // while loop), leaking `hexa_index_get(ks, i)` into the void return with
+        // `ks`/`i` undeclared in the current C scope. Short-circuiting the
+        // reserved void/none/nil names is both a correctness guard and a tiny
+        // codegen fast-path. Repro: inbox/patches/hexa-return-void-mistranslate-
+        // 2026-05-24.md + pool-hexa-transpiler-ks-undeclared-2026-05-24.md.
+        let _ret_is_void = type_of(node.left) != "string" && node.left.kind == "Ident" && (node.left.name == "void" || node.left.name == "none" || node.left.name == "nil")
         // Plan B Phase 3: when this fn registered at least one defer,
         // route through __fn_exit so the drain + arena return run in
         // order. Non-defer fns keep the original zero-overhead path.
         if _gen2_defer_flag_count > 0 {
-            if type_of(node.left) != "string" {
+            if type_of(node.left) != "string" && !_ret_is_void {
                 return pad + "__ret_val = " + gen2_expr(node.left) + "; goto __fn_exit;\n"
             }
             return pad + "__ret_val = hexa_void(); goto __fn_exit;\n"
         }
-        if type_of(node.left) != "string" {
+        if type_of(node.left) != "string" && !_ret_is_void {
             if _gen2_arena_wrap == 1 {
                 return pad + "return __hexa_fn_arena_return(" + gen2_expr(node.left) + ");\n"
             }
