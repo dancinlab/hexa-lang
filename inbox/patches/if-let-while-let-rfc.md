@@ -1,5 +1,7 @@
 # `if let` / `while let` pattern binding design RFC
 
+**Status**: rfc-draft-deferred-2026-05-25 — design-only patch (if-let / while-let). Promote via /inbox skill if RFC track wanted.
+
 **Status**: design-level (r14 cycle 7, 2026-05-23)
 **Priority**: P2 (`Option`/`Result` 사용 ergonomics에 직결)
 **SSOT**: 본 RFC · r14-KK Option prelude (PR #505) · r14-X postfix `?` (PR #494) · r14-F enum codegen-emit (PR #489)

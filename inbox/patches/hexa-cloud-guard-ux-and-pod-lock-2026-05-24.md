@@ -1,5 +1,7 @@
 # `hexa cloud` 가드 메시지 UX + pod-lock 보호 — anima Phase D v1→v2 fire saga 사후 (2026-05-24 · 5 findings)
 
+**Status**: cross-repo-sidecar-2026-05-25 — sidecar cloud-guard hook UX + pod-lock features. Cross-repo handoff archive (similar to pool-route-overaggressive PR #698).
+
 > **Status (open):** 오늘 anima HEXAD/PURE Phase D v1 fire (PR #372 + #373 post-merge)에서 pod `7rhh18i1h1klcp` 가 `SAVE_POD=1 RETAINED` 로그를 남겼음에도 user-side carryover sweep 으로 train 완료 전 terminate → result.json 손실 · ~$1-2 burn. 직접 원인은 anima-side 운영 실수이나, 5 개 cross-tool gap 이 saga 를 길게 만들었음 — 가드 메시지 모호성 (F1) · ssh 실패 진단 (F2) · 폐기 verb 안내 (F3) · sidecar pool-route 충돌 (F4) · `SAVE_POD` 외부 보호 부재 (F5).
 
 **Reporter**: anima (`dancinlab/anima` downstream consumer · HEXAD/PURE Phase D corpus-axis fire)

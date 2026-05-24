@@ -1,5 +1,7 @@
 # `hexa cloud` / runpod — dispatcher bootstrap · wait-after-launch · ssh endpoint surface (anima 2026-05-24 · Phase D 3 items)
 
+**Status**: resolved-PR#646+#699-2026-05-25 — dispatcher bootstrap/wait/ssh-endpoint surface landed; F6 false-success extension also closed
+
 > **Status (open):** 3 reusable orchestration primitives missing from `stdlib/cloud/runpod.hexa` — each hand-rolled per project across the 2026-05-23/24 anima Phase D fire saga (PR #372 + #373). Consolidation removes ~150 LoC duplication per future dispatcher and closes a class of silent races.
 
 **Reporter**: anima (`dancinlab/anima` downstream consumer · HEXAD/PURE Phase D corpus-axis fire)

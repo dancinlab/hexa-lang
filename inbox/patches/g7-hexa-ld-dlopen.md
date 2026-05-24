@@ -1,5 +1,7 @@
 # incoming patch: g7-hexa-ld-dlopen — RFC 초안
 
+**Status**: rfc-promoted-PR#580-2026-05-25 — hexa_ld --shared + dlopen design promoted to RFC 089 track
+
 > **id**: `g7-hexa-ld-dlopen` · **opened**: 2026-05-10 · **status**: `rfc-promoted 2026-05-20 (RFC 070)`
 > **promoted-to**: `inbox/rfc_drafts_2026_05_20/rfc_070_hexa_ld_dlopen_shared.md`
 > **trees**: `self/` + `compiler/` (`hexa_ld`, codegen, runtime loader)
