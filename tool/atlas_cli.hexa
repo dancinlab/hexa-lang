@@ -2176,9 +2176,23 @@ fn cmd_pr(rest: array) {
     }
 
     // promote_to_atlas only writes the append shard when something landed.
+    // The append shard path it would have written is reconstructed above
+    // (atlas_root + "/atlas.append." + today + ".n6"). When that file is
+    // absent the staging file's proposals did not land — surface BOTH the
+    // staging file we honored AND the expected output path, so an
+    // ignored-arg false alarm cannot mask a parse miss.
     if !file_exists(append_path) {
-        println("hexa atlas pr: nothing promoted — no append shard at " + append_path)
-        println("  (the staging file produced 0 new/merged nodes; see the promote manifest above).")
+        println("hexa atlas pr: nothing promoted from --staging " + staging)
+        println("  promote_to_atlas read the staging file but emitted 0 new/merged nodes")
+        println("  (would-be append shard: " + append_path + " was not written).")
+        println("  likely causes — (a) staging file's nodes are not L-kind (only L promotes today),")
+        println("                  (b) every L proposal collided on id with an existing atlas L,")
+        println("                  (c) the staging file's header lines do not match the")
+        println("                      `L[<fn_name>] @ <proof_hash>` form expected by")
+        println("                      parse_staging_file (see compiler/discover/promote.hexa)")
+        println("                      — `hexa atlas append-witness` shards use a different")
+        println("                      `@L <id>` header and need a parser update (follow-up).")
+        println("  see the promote manifest above for the per-proposal disposition.")
         if branched {
             let _ = exec("git -C " + _shq(atlas_root) + " switch " + _shq(base) +
                          " >/dev/null 2>&1; git -C " + _shq(atlas_root) +
