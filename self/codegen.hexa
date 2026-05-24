@@ -1118,6 +1118,15 @@ fn codegen(ast) {
                 _fes_i = _fes_i + 1
             }
             if _fes_dup {
+                // PROBE r16-T3: surface the silent first-wins drop. hexa does
+                // NOT support function overloading — a second `fn <name>` with
+                // the same name is dropped here (first-wins) and any call to
+                // the later signature would otherwise fail with an opaque clang
+                // error against the first definition. Warn (stderr, non-fatal —
+                // valid code still compiles) so the drop is visible. Module
+                // splicing can also produce same-name dups across files; the
+                // warning is informational in that case too.
+                eprintln("[warn] function `" + _fn_name + "` redefined — overloading unsupported, later definition ignored")
                 i = i + 1
                 continue
             }
@@ -1159,6 +1168,8 @@ fn codegen(ast) {
                 _pfes_i = _pfes_i + 1
             }
             if _pfes_dup {
+                // PROBE r16-T3: same silent first-wins drop for pure fns.
+                eprintln("[warn] function `" + _pfn_name + "` redefined — overloading unsupported, later definition ignored")
                 i = i + 1
                 continue
             }
@@ -10049,6 +10060,16 @@ fn codegen_full(ast) {
                 _fes_i2 = _fes_i2 + 1
             }
             if _fes_dup2 {
+                // PROBE r16-T3: surface the silent first-wins drop. hexa does
+                // NOT support function overloading — a second `fn <name>` with
+                // the same name is dropped here (first-wins) and any call to
+                // the later signature would otherwise fail with an opaque clang
+                // error against the first definition. Warn (stderr, non-fatal —
+                // valid code still compiles) so the drop is visible. Module
+                // splicing can also produce same-name dups; the warning is
+                // informational in that case too. This is the LIVE transpile
+                // path (codegen_full); the mirror in codegen() warns too.
+                eprintln("[warn] function `" + _fn_name2 + "` redefined — overloading unsupported, later definition ignored")
                 i = i + 1
                 continue
             }
@@ -10087,6 +10108,8 @@ fn codegen_full(ast) {
                 _pfes_i2 = _pfes_i2 + 1
             }
             if _pfes_dup2 {
+                // PROBE r16-T3: same silent first-wins drop for pure fns.
+                eprintln("[warn] function `" + _pfn_name2 + "` redefined — overloading unsupported, later definition ignored")
                 i = i + 1
                 continue
             }
@@ -10104,6 +10127,8 @@ fn codegen_full(ast) {
                 _afes_i2 = _afes_i2 + 1
             }
             if _afes_dup2 {
+                // PROBE r16-T3: same silent first-wins drop for async fns.
+                eprintln("[warn] function `" + _afn_name2 + "` redefined — overloading unsupported, later definition ignored")
                 i = i + 1
                 continue
             }
