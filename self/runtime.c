@@ -10445,18 +10445,24 @@ HexaVal __fd_write_bytes(HexaVal fd, HexaVal s) {
 // read_stdin(): slurp all of stdin into a TAG_STR. Returns "" on EOF-only.
 // Used by cli tools + test harnesses that pipe input.
 HexaVal hexa_read_stdin(void) {
+    // stdin is a fake FILE* ((FILE*)(uintptr_t)1) in this runtime, so libc
+    // stdio (fgetc/getline) crashes inside flockfile when it dereferences the
+    // constant. Slurp fd 0 directly with the raw read(2) wrapper instead — the
+    // same primitive hexa_input() uses — in 4 KiB chunks, with EINTR retry.
     size_t cap = 4096, len = 0;
     char* buf = (char*)malloc(cap);
     if (!buf) return hexa_str("");
-    int c;
-    while ((c = fgetc(stdin)) != EOF) {
-        if (len + 1 >= cap) {
+    for (;;) {
+        if (cap - len < 4097) {            // room for a 4096 read + trailing NUL
             cap *= 2;
             char* nb = (char*)realloc(buf, cap);
             if (!nb) { free(buf); return hexa_str(""); }
             buf = nb;
         }
-        buf[len++] = (char)c;
+        long n = hxlcl_read(0, buf + len, 4096);
+        if (n < 0) { if (errno == EINTR) continue; break; }
+        if (n == 0) break;                 // EOF
+        len += (size_t)n;
     }
     buf[len] = 0;
     return hexa_str_own(buf);
