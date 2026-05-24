@@ -15,9 +15,12 @@
 #   contract; commits landing on `main` directly are out of scope here.
 #
 # DEPENDENCIES
-#   git, gh (preinstalled on GitHub-hosted runners), and the in-tree
-#   self-hosted hexa interpreter (`build/hexa_interp.linux`, already
-#   committed). No external installs.
+#   git, gh (preinstalled on GitHub-hosted runners), clang, and the
+#   committed self-hosted transpiler `build/hexa_v2_linux` (x86_64 ELF).
+#   We transpile tool/check_grace_consent.hexa → C and link against
+#   self/runtime.c to produce a one-shot consent-checker binary. No
+#   external installs. Mirrors bootstrap.yml Stage 0 (single-TU compile;
+#   the script has zero `use` directives so no module_loader is needed).
 
 name: grace-consent
 
@@ -41,19 +44,25 @@ jobs:
           # full history so HEAD..base diff is computable
           fetch-depth: 0
 
-      - name: Locate hexa interpreter
+      - name: Build consent-checker binary (transpile + link)
         id: hexa
         shell: bash
         run: |
           set -euo pipefail
-          if [ -x build/hexa_interp.linux ]; then
-            echo "bin=build/hexa_interp.linux" >> "$GITHUB_OUTPUT"
-          elif command -v hexa >/dev/null 2>&1; then
-            echo "bin=hexa" >> "$GITHUB_OUTPUT"
-          else
-            echo "::error::no hexa interpreter found (expected build/hexa_interp.linux or PATH:hexa)"
-            exit 1
-          fi
+          # Make the committed transpiler executable (some checkout backends
+          # drop the exec bit) and transpile the single-TU consent checker
+          # to C, then link against the committed runtime.
+          chmod +x build/hexa_v2_linux
+          mkdir -p build/grace_consent
+          ./build/hexa_v2_linux tool/check_grace_consent.hexa \
+              build/grace_consent/check_grace_consent.c
+          clang -O2 -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs \
+              -I self \
+              build/grace_consent/check_grace_consent.c self/runtime.c \
+              -ldl -lpthread -lm \
+              -o build/grace_consent/check_grace_consent
+          file build/grace_consent/check_grace_consent
+          echo "bin=build/grace_consent/check_grace_consent" >> "$GITHUB_OUTPUT"
 
       - name: Run consent checker (PR mode)
         if: ${{ github.event.pull_request != null }}
@@ -64,13 +73,23 @@ jobs:
         run: |
           set -euo pipefail
           BIN="${{ steps.hexa.outputs.bin }}"
-          echo "interpreter: $BIN"
+          echo "checker:     $BIN"
           echo "PR:          #${PR_NUMBER}"
+
+          # The compiled binary is the same `tool/check_grace_consent.hexa`
+          # entry point. Its argv parser starts at index 2 and its
+          # _is_main() guard inspects argv[1] for `*/check_grace_consent.hexa`,
+          # mirroring the original `hexa tool/check_grace_consent.hexa ...`
+          # interpreter invocation. We preserve that contract by passing
+          # `tool/check_grace_consent.hexa` as argv[1] when invoking the
+          # compiled checker — purely a positional shim, never read as a
+          # file path.
+          SCRIPT_ARG=tool/check_grace_consent.hexa
 
           # Try --pr mode first (richest: covers PR body + every commit msg).
           # Fall back to the diff-range mode if `gh pr view` fails (e.g. on
           # a fork without token grants).
-          if "$BIN" tool/check_grace_consent.hexa --pr "$PR_NUMBER"; then
+          if "$BIN" "$SCRIPT_ARG" --pr "$PR_NUMBER"; then
             echo "::notice::grace-consent OK (PR mode)"
             exit 0
           fi
@@ -81,11 +100,11 @@ jobs:
             # --pr).  If `gh` itself failed, the checker would have printed
             # a `gh pr view failed` message; in that case retry with
             # the local diff-range mode using GitHub's BASE_SHA.
-            if "$BIN" tool/check_grace_consent.hexa --pr "$PR_NUMBER" 2>&1 \
+            if "$BIN" "$SCRIPT_ARG" --pr "$PR_NUMBER" 2>&1 \
                 | grep -q "gh pr view failed"; then
               echo "::warning::gh pr view unavailable; retrying with --diff"
               BASE_SHA="${{ github.event.pull_request.base.sha }}"
-              "$BIN" tool/check_grace_consent.hexa --diff "$BASE_SHA"
+              "$BIN" "$SCRIPT_ARG" --diff "$BASE_SHA"
               exit $?
             fi
           fi
