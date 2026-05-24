@@ -54,3 +54,6 @@ inbox 패치로 제출.
 ## 진행 로그
 
 체크박스 + 결과 한 줄 — `PROBE.log.md`
+- [x] r15 cycle2+3 CLOSED — 22 deviation 전수처리. codegen/runtime 머지 6건 D3 D18 D10 F-FOLD D2impl D12 + RFC 4건 D2 D9 D19 D11 + falsify 4건 D5 D15 D21 D22 측정-canonical. 매건 fixpoint gen2 equiv gen3 + 회귀 WORSE 0
+- [ ] r15 carry-forward D6 format-bang macro — DEFERRED to macro-expander pass RFC 451. 현재 진단 양호, quick fix 아님. macro-expander 기능 착수 시 처리
+- [ ] r15 carry-forward D16 multi-field enum payload — BLOCKED. memory known-limit 아키텍처 제약. struct-embed 우회 가능. memory 아키텍처 해소 시 처리
