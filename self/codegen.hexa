@@ -1927,6 +1927,22 @@ fn gen2_fn_decl(node) {
     // (b's re-let doesn't _gen2_has_decl-invalidate across fn scope, and h*2
     // doesn't fold), so b's `m` reads inline the stale literal — a silent
     // wrong-answer. Mirrors the block/loop/arm scope-isolation pattern.
+    // PROBE r16 param-fold-leak: each fn param shadows any enclosing same-name
+    // comptime-const (module-level `const X = "x"` etc.). Without this, the body
+    // reads of `param` would hit _lookup_comptime_const("param") and inline the
+    // stale outer literal instead of the actual arg — silent miscompile (e.g.
+    // `const raw = "x"; fn f(raw: string){ … raw … }` saw "x" for any caller).
+    // Invalidate BEFORE the scope_mark so the table is permanently shorter when
+    // the mark snapshots length — _comptime_const_scope_restore only knows how
+    // to truncate (it assumes the table grew under the mark), so invalidating
+    // AFTER mark would leave it reading past the live tail (OOB). Mirrors the
+    // for-loop counter pattern at lines 3262/3288 (D18 + r15-F-FOLD): invalidate
+    // first, then mark, then body emit, then restore.
+    let mut _pix = 0
+    while _pix < len(node.params) {
+        _invalidate_comptime_const(node.params[_pix].name)
+        _pix = _pix + 1
+    }
     let _cc_fn_mark = _comptime_const_scope_mark()
     let mut bi = 0
     while bi < body_len {
