@@ -1618,6 +1618,33 @@ fn parse_let() {
         }
     }
 
+    // RFC r16 (tuple destructure): let (a, b) = expr
+    // Tuples lower to HexaVal arrays (parse_primary "Tuple" node → codegen
+    // Tuple→Array, and the DestructLetStmt codegen reads via hexa_array_get),
+    // so a tuple destructure reuses the array-destructure DestructLetStmt
+    // machinery verbatim — only this parse branch is new. Identifier list
+    // only (no rest `...x` — tuples are fixed-arity); 2+ elements expected.
+    if p_peek_kind() == "LParen" {
+        p_advance() // consume (
+        let mut tpatterns = []
+        while p_peek_kind() != "RParen" && p_peek_kind() != "Eof" {
+            tpatterns.push(p_expect_ident())
+            if p_peek_kind() == "Comma" {
+                p_advance()
+            }
+        }
+        p_expect("RParen")
+        p_expect("Eq")
+        let texpr = parse_expr()
+        return #{
+            "kind": "DestructLetStmt", "name": "", "value": "", "op": "",
+            "left": texpr, "right": "", "cond": "", "then_body": "", "else_body": "",
+            "params": tpatterns, "body": "", "args": "", "fields": "", "items": "",
+            "variants": "", "arms": "", "iter_expr": "", "ret_type": "",
+            "target": "", "trait_name": "", "methods": ""
+        }
+    }
+
     // G9: map/struct destructuring — let {x, y} = expr
     // PROBE r14-PPP: also accept rename form `let {x: px, y: py} = expr`.
     //   patterns[i] = bound name (target — what becomes a local var)
