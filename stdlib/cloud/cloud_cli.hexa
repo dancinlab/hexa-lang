@@ -7,6 +7,7 @@
 // is a later deploy-adjacent step — see design.md Decision 5.
 
 use "stdlib/cloud/cloud"
+use "stdlib/cloud/pod_registry"
 
 fn _cloud_help() {
     println("hexa cloud — structured-argv remote dispatch (cycle A)")
@@ -18,6 +19,7 @@ fn _cloud_help() {
     println("  cloud poll      <host> <pid> [conn]                    exit 0 if remote pid alive, else 1")
     println("  cloud copy-to   <host> <local> <remote> [conn]         upload local file to host:remote (scp)")
     println("  cloud copy-from <host> <remote> <local> [conn]         download host:remote file to local (scp)")
+    println("  cloud orphans   [--hours N]                            list tracked pods, flag stale (>N h, default 6)")
     println("  cloud help | version")
     println("")
     println("connection flags [conn] (before `--`):")
@@ -113,7 +115,7 @@ fn main() {
     while i < len(av) {
         let t = av[i]
         if si < 0 {
-            if t == "run" || t == "exec" || t == "nohup" || t == "poll" || t == "copy-to" || t == "copy-from" || t == "help" || t == "--help" || t == "-h" || t == "version" || t == "--version" || t == "-v" {
+            if t == "run" || t == "exec" || t == "nohup" || t == "poll" || t == "copy-to" || t == "copy-from" || t == "orphans" || t == "help" || t == "--help" || t == "-h" || t == "version" || t == "--version" || t == "-v" {
                 si = i
                 sub = t
             }
@@ -145,6 +147,7 @@ fn main() {
             exit(2)
         }
         let r = cloud_run_opts(host, ssh_opts, argv)
+        pod_registry_record(host, argv[0], "running")
         if len(r.stdout_) > 0 {
             println(r.stdout_)
         }
@@ -193,6 +196,7 @@ fn main() {
             exit(2)
         }
         let r = cloud_nohup_opts(host, ssh_opts, argv, logfile)
+        pod_registry_record(host, argv[0], "running")
         if len(r.stdout_) > 0 {
             println(r.stdout_)
         }
@@ -217,6 +221,28 @@ fn main() {
         }
         println("[cloud] pid " + str(pid) + " DEAD")
         exit(1)
+    }
+    if sub == "orphans" {
+        // List tracked pods, flagging stale ones (created > N hours ago and
+        // not marked closed). Optional `--hours N` overrides the default 6h.
+        let mut hours = 6
+        let mut oi = si + 1
+        while oi < len(av) {
+            if av[oi] == "--hours" && oi + 1 < len(av) {
+                hours = _cli_atoi(av[oi + 1])
+                oi = oi + 2
+            } else {
+                oi = oi + 1
+            }
+        }
+        if hours <= 0 {
+            hours = 6
+        }
+        let stale = cloud_orphans_print(hours)
+        if stale > 0 {
+            exit(1)
+        }
+        exit(0)
     }
     if sub == "copy-to" {
         if si + 3 >= len(av) {
