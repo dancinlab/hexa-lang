@@ -12,7 +12,7 @@ inbox 패치로 제출.
 - [x] r14 INBOX 23 entries 모두 closed (LANDED PR 14건 + filed inbox RFC 9건, PROBE.log r14 next-list mass-flip [#620])
 - [x] PROBE.log r14 next-list `- [ ]` 23개 → `- [x]` 모두 flip (LANDED PR# 또는 RFC# 표기, [#620])
 - [x] PROBE.md coverage table 최종 업데이트 (r14 cycle 7-11 + cycle 13 행 추가, 🔵 inflight → r15-sweep 후보 교체)
-- [ ] OPEN PR ~36 머지 정리 (Phase 1 runtime · Phase 2 file-hotspot 1개씩 rebase · Phase 3 regen batch — admin merge는 user-only 권장)
+- [x] OPEN PR ~36 머지 정리 (~34건 ceremony 머지 완료 · 잔여 #420 admin merge `37b6740d` · #702 g54 보호로 user-review-only)
 - [ ] r15 sweep 진입 (depletion criterion · 새 deviation 모두 surface, count 무관)
 
 ## 방법

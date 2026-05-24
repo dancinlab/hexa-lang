@@ -337,3 +337,7 @@
 - [x] `to_string` nan/inf casing 통일 — LANDED [#475] (r14-E, runtime `__hexa_float_special_repr` Rust canonical)
 - [x] NaN-in-sort 동작 결정 — LANDED [#486] (r14-J, runtime sort comparator NaN-last canonical)
 - [x] macro expander Phase 2 (#462 follow-up) — RFC FILED [#493] (r14-W, declarative macro 5-step plan)
+
+## 2026-05-24 M5 closure — OPEN PR 정리 완주
+
+- [x] 2026-05-24 M5 closure — OPEN PR ~36 정리 완주 (#420 admin-merge `37b6740d` · #702 g54 보호 user-review-only-comment · PROBE.md milestone 4/6 → 5/6 flip)
