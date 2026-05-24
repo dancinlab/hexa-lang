@@ -42,7 +42,7 @@ fn _slice_args() -> array {
     let mut i = 1
     while i < n {
         let a = to_string(av[i])
-        if a == "lookup" || a == "dump" || a == "stats" || a == "hash" || a == "register" || a == "--help" || a == "-h" || a == "help" {
+        if a == "lookup" || a == "dump" || a == "stats" || a == "hash" || a == "register" || a == "export" || a == "--help" || a == "-h" || a == "help" {
             let mut out = []
             let mut j = i
             while j < n {
@@ -277,10 +277,49 @@ fn cmd_dump(rest: array) {
     }
 }
 
+// cmd_export — write the live atlas (binary-builtin, served by static_atlas
+// from embedded.gen.hexa) out as a portable .n6 file. n6/atlas.n6 is NOT the
+// runtime SSOT (that is embedded.gen.hexa) — it is produced ON DEMAND here for
+// sharing / inspection / import elsewhere. Default out = n6/atlas.n6.
+fn cmd_export(rest: array) {
+    let mut out = ""
+    let mut i = 0
+    while i < len(rest) {
+        let a = to_string(rest[i])
+        if a == "--out" && i + 1 < len(rest) { out = to_string(rest[i + 1]); i = i + 2 }
+        else { i = i + 1 }
+    }
+    if len(out) == 0 {
+        let home = env_var("HOME")
+        out = home + "/core/hexa-lang/n6/atlas.n6"
+    }
+    let idx = static_atlas()
+    let kinds = ["P", "C", "L", "E", "F", "R", "S", "X", "Q"]
+    let mut parts = []
+    let mut ki = 0
+    let mut count = 0
+    while ki < len(kinds) {
+        let arr = _arr_for_kind(idx, kinds[ki])
+        let mut ni = 0
+        while ni < len(arr) {
+            let nd = arr[ni]
+            if len(nd.raw) > 0 {
+                parts.push(nd.raw)
+                parts.push("\n\n")
+                count = count + 1
+            }
+            ni = ni + 1
+        }
+        ki = ki + 1
+    }
+    write_file(out, parts.join(""))
+    println("hexa atlas export: wrote " + to_string(count) + " nodes → " + out)
+}
+
 // `hexa atlas register` — the ONE absorption verb. Each `--from-<verb>` arm
 // re-runs the verb IN-PROCESS (same calc fns as `hexa verify --expr`), and on a
 // 🔵 SUPPORTED-FORMAL / 🟢 SUPPORTED-NUMERICAL result constructs the AtlasNode
-// .n6 block IN MEMORY and appends it DIRECTLY to the live n6/atlas.n6 SSOT (see
+// .n6 block IN MEMORY and folds it DIRECTLY into embedded.gen.hexa SSOT (see
 // _append_live_n6) — visible to the next lookup with NO rebuild. Commit
 // n6/atlas.n6 with normal git to share. Arms: --from-verify · --from-drill.
 
@@ -515,6 +554,38 @@ fn _wilson_hilferty_p_register(t_stat: float, df: float) -> float {
 // 0-arg closed-form: S_max^Q = 2*sqrt(2) (Tsirelson 1980 LMP 4 93 / CHSH 1969).
 fn _chsh_tsirelson_register() -> float {
     return 2.0 * sqrt(2.0)
+}
+
+// Compound-removal recurrence — register mirror of verify_cli::_compound_coverage
+// / _cycles_to_target. cov(N)=1-(1-x)^N · cycles_to_target = min N with (1-x)^N≤tgt.
+// Deterministic cumulative-product loop (no transcendental). TTR-MN ink timeline.
+fn _compound_coverage_register(x: float, big_n: int) -> float {
+    if x <= 0.0 { return 0.0 }
+    if x >= 1.0 { return 1.0 }
+    let r = 1.0 - x
+    let mut prod = 1.0
+    let mut i = 0
+    while i < big_n {
+        prod = prod * r
+        i = i + 1
+    }
+    return 1.0 - prod
+}
+
+fn _cycles_to_target_register(x: float, target: float) -> float {
+    if x <= 0.0 { return _NOCALC_F_REGISTER }
+    if target <= 0.0 { return _NOCALC_F_REGISTER }
+    if x >= 1.0 { return 1.0 }
+    if target >= 1.0 { return 0.0 }
+    let r = 1.0 - x
+    let mut prod = 1.0
+    let mut n = 0
+    while prod > target {
+        prod = prod * r
+        n = n + 1
+        if n > 1000000 { return _NOCALC_F_REGISTER }
+    }
+    return to_float(n)
 }
 
 // Hardy multipartite — verbatim port of verify_cli::_hardy_powi / _hardy_abs /
@@ -965,6 +1036,14 @@ fn _recompute_float_register(fn_name: string, a0: float, a1: float, a2: float, a
         if argc < 2 { return _NOCALC_F_REGISTER }
         return _wilson_hilferty_p_register(a0, a1)
     }
+    if fn_name == "compound_coverage" {
+        if argc < 2 { return _NOCALC_F_REGISTER }
+        return _compound_coverage_register(a0, to_int(a1))
+    }
+    if fn_name == "cycles_to_target" {
+        if argc < 2 { return _NOCALC_F_REGISTER }
+        return _cycles_to_target_register(a0, a1)
+    }
     // RFC 045 qmirror PR-A 2nd — register mirror of verify_cli dispatch (#626).
     if fn_name == "chsh_tsirelson" { return _chsh_tsirelson_register() }
     if fn_name == "hardy_bound" {
@@ -1135,6 +1214,7 @@ fn _recompute_float_register(fn_name: string, a0: float, a1: float, a2: float, a
 // is fn_name a registered float-NUMERICAL form? Mirrors verify_cli::_is_float_fn.
 fn _is_float_fn_register(fn_name: string) -> bool {
     return fn_name == "welch_t_crit" || fn_name == "wilson_hilferty_p"
+        || fn_name == "compound_coverage" || fn_name == "cycles_to_target"
         || fn_name == "chsh_tsirelson" || fn_name == "hardy_bound"
         || fn_name == "mabk_quantum_max"
         || fn_name == "pt_doily_quantum_win" || fn_name == "pt_doily_classical_bound"
@@ -1194,7 +1274,7 @@ fn _build_raw_F(id: string, fn_name: string, arg_str: string, value: int, today:
            " :: formula [d=" + today + " active]\n" +
            "  verified-by = \"hexa verify --expr " + fn_name + " " + arg_str + " " + to_string(value) + "\"\n" +
            "  cite = \"@D g_self_verify · TECS-L Tier1 — hexa-native NT closed-form\"\n" +
-           "  provenance = \"tool/atlas_cli.hexa register --from-verify (direct node-gen → n6/atlas.n6 live SSOT)\""
+           "  provenance = \"tool/atlas_cli.hexa register --from-verify (direct node-gen → embedded.gen.hexa SSOT)\""
 }
 
 // _build_raw_F_numerical — hexa-source-form header for a 🟢 SUPPORTED-
@@ -1208,7 +1288,7 @@ fn _build_raw_F_numerical(id: string, fn_name: string, arg_str: string, value_st
            "  tier = \"🟢 SUPPORTED-NUMERICAL\"\n" +
            "  verified-by = \"hexa verify --expr " + fn_name + " " + arg_str + " " + value_str + "\"\n" +
            "  cite = \"TECS-L n6-rep Tier2 — hexa-native libm-class numerical recompute (ε=1e-9)\"\n" +
-           "  provenance = \"tool/atlas_cli.hexa register --from-verify (direct node-gen → n6/atlas.n6 live SSOT; 🟢 numerical)\""
+           "  provenance = \"tool/atlas_cli.hexa register --from-verify (direct node-gen → embedded.gen.hexa SSOT; 🟢 numerical)\""
 }
 
 // ── live n6 write path (the single absorption sink) ──────────────────
@@ -1217,47 +1297,77 @@ fn _build_raw_F_numerical(id: string, fn_name: string, arg_str: string, value_st
 // parse at load time (static_index::static_atlas → merger::load_atlas). No
 // embedded.gen.hexa, no staging shard, no rebuild: the next lookup sees it.
 
-// _resolve_n6_atlas — the live SSOT file path. Mirrors static_index's
-// resolution EXACTLY so register writes the file lookup reads: $HEXA_ATLAS_N6
-// (an absolute dir containing atlas.n6) wins; else the stable repo path.
-fn _resolve_n6_atlas() -> string {
-    let override = env_var("HEXA_ATLAS_N6")
-    if len(override) > 0 { return override + "/atlas.n6" }
+// _resolve_embedded_path — the embedded.gen.hexa SSOT (the binary-builtin atlas
+// that static_index::static_atlas text-parses at load). $HEXA_ATLAS_EMBED (abs
+// dir containing embedded.gen.hexa) wins; else the stable repo path. MUST match
+// static_index::_resolve_embedded_path so register writes the file lookup reads.
+fn _resolve_embedded_path() -> string {
+    let override = env_var("HEXA_ATLAS_EMBED")
+    if len(override) > 0 { return override + "/embedded.gen.hexa" }
     let home = env_var("HOME")
-    return home + "/core/hexa-lang/n6/atlas.n6"
+    return home + "/core/hexa-lang/compiler/atlas/embedded.gen.hexa"
 }
 
-// _n6_has_id — true iff atlas.n6 already declares `@<kind> <id> ` (the .n6
-// header). Cheap textual scan so re-registration is idempotent (refuses to
-// duplicate), matching the embedded path's prior contract.
-fn _n6_has_id(n6_text: string, kind: string, id: string) -> bool {
-    return n6_text.contains("@" + kind + " " + id + " ")
+// _embedded_has_id — true iff embedded.gen.hexa already declares this node id
+// (cheap `id: "<id>"` scan). Re-registration is idempotent (refuses to dup).
+fn _embedded_has_id(embed_text: string, id: string) -> bool {
+    return embed_text.contains("id: \"" + id + "\"")
 }
 
-// _append_live_n6 — fold a verified node into the live atlas. `raw` is the
-// .n6-grammar block (`@<kind> <id> = … :: … [d=… active]\n  tier = …\n …`),
-// exactly the form merger::load_atlas parses. Returns "" on success, else an
-// error message (same contract as the retired _fold_into_embedded).
-fn _append_live_n6(node_kind: string, node_raw: string, node_id: string) -> string {
+// _hxesc — escape a string into a hexa double-quoted string-literal body
+// (\\ → \\\\, " → \", LF → \n, etc.) so the .n6 raw block can be spliced into
+// an AtlasNode struct literal.
+fn _hxesc(s: string) -> string {
+    let n = len(s)
+    let mut chunks = []
+    let mut i = 0
+    while i < n {
+        let c = s.substring(i, i + 1)
+        if      c == "\\" { chunks.push("\\\\") }
+        else if c == "\"" { chunks.push("\\\"") }
+        else if c == "\n" { chunks.push("\\n") }
+        else if c == "\r" { chunks.push("\\r") }
+        else if c == "\t" { chunks.push("\\t") }
+        else { chunks.push(c) }
+        i = i + 1
+    }
+    return chunks.join("")
+}
+
+// _fold_into_embedded — fold a verified node DIRECTLY into embedded.gen.hexa
+// (the binary-builtin SSOT static_atlas text-parses). Builds the AtlasNode
+// struct literal from the .n6 raw block and inserts it on a fresh line right
+// after the matching `ATLAS_<kind>_NODES: [AtlasNode] = [` opener — visible to
+// the next lookup with NO rebuild (static_atlas re-reads embedded.gen.hexa each
+// load). n6/atlas.n6 is NOT touched (that is export-only). Returns "" on
+// success, else an error message.
+fn _fold_into_embedded(node_kind: string, node_raw: string, node_id: string) -> string {
     if len(node_raw) == 0 {
         return "empty .n6 body for id: " + node_id + " (adapter must set ev.raw)"
     }
-    let path = _resolve_n6_atlas()
+    let path = _resolve_embedded_path()
     let body = read_file_safe(path)
     if len(body) == 0 {
-        return "n6/atlas.n6 not readable or empty at: " + path
+        return "embedded.gen.hexa not readable or empty at: " + path
     }
-    if _n6_has_id(body, node_kind, node_id) {
-        return "id already present in atlas.n6: " + node_id + " (refusing to duplicate)"
+    if _embedded_has_id(body, node_id) {
+        return "id already present in embedded.gen.hexa: " + node_id + " (refusing to duplicate)"
     }
-    // Blank-line-separated records: a leading "\n" closes the prior block,
-    // a trailing "\n" terminates ours for the merger's block guard.
-    let content = "\n" + node_raw + "\n"
-    append_file(path, content)
+    let marker = "pub let ATLAS_" + node_kind + "_NODES: [AtlasNode] = ["
+    let mi = body.index_of(marker)
+    if mi < 0 {
+        return "section marker not found in embedded.gen.hexa: " + marker
+    }
+    let ins_at = mi + len(marker)
+    let lit = "\n    AtlasNode { kind: \"" + node_kind + "\", id: \"" + _hxesc(node_id) +
+              "\", raw: \"" + _hxesc(node_raw) +
+              "\", source_file: \"register\", source_line: 0" +
+              ", grade: GradeInfo { value: -1, verified: false, breakthrough: false, hypothesis: false }" +
+              ", edges: EdgeInfo { depends_on: [], derives: [], applications: [], equivalents: [], converges: [], verified_by: [], breakthroughs: [] } },"
+    let new_body = body.substring(0, ins_at) + lit + body.substring(ins_at, len(body))
+    write_file_safe(path, new_body)
     return ""
 }
-
-// _embedded_gen_path — resolve the SSOT path for the binary-built-in atlas.
 
 // _slug_register — id-safe slug for the new atlas-id (kind-prefix style:
 // `verified_<fn>_<arg>` → `verified-divisor_sum-6`). Matches the existing
@@ -1364,16 +1474,16 @@ fn register_from_event(ev: DiscoveryEvent) -> string {
     if len(ev.id) == 0 {
         return "register_from_event: empty id (adapter must mint a stable id)"
     }
-    let n6_path = _resolve_n6_atlas()
-    let err = _append_live_n6(ev.kind, ev.raw, ev.id)
+    let embed_path = _resolve_embedded_path()
+    let err = _fold_into_embedded(ev.kind, ev.raw, ev.id)
     if len(err) > 0 {
-        return "append into n6/atlas.n6 failed — " + err
+        return "fold into embedded.gen.hexa failed — " + err
     }
-    println("  atlas  = appended @" + ev.kind + " " + ev.id + " → " + n6_path + " (live SSOT)")
+    println("  atlas  = folded @" + ev.kind + " " + ev.id + " → " + embed_path + " (binary-builtin SSOT)")
     println("  note   = visible to `hexa atlas lookup` immediately — no rebuild")
     println("")
     println("hexa atlas register: landed in the live atlas. Commit to share it:")
-    println("  git -C ~/core/hexa-lang add n6/atlas.n6 && git commit -m " + _shq("atlas(" + ev.kind + "): register " + ev.id))
+    println("  git -C ~/core/hexa-lang add compiler/atlas/embedded.gen.hexa && git commit -m " + _shq("atlas(" + ev.kind + "): register " + ev.id))
     return ""
 }
 
@@ -1823,25 +1933,25 @@ fn cmd_register(rest: array) {
         let today = _today_compact()
         let mut idx = 0
         let cn = len(cands)
-        // One DiscoveryEvent per candidate; each appends its .n6 block
-        // directly to the live n6/atlas.n6. Commit n6/atlas.n6 once at the end.
-        let n6_path = _resolve_n6_atlas()
+        // One DiscoveryEvent per candidate; each folds into embedded.gen.hexa
+        // (binary-builtin SSOT). Commit embedded.gen.hexa once at the end.
+        let embed_path = _resolve_embedded_path()
         while idx < cn {
             let c = cands[idx]
             // Defensive: skip empty ids (mirrors overlay flush dedup).
             if len(c.id) == 0 { idx = idx + 1; continue }
             let ev = _adapt_drill_candidate(c, drill_seed, drill_engine, last_round, today)
-            let ferr = _append_live_n6(ev.kind, ev.raw, ev.id)
+            let ferr = _fold_into_embedded(ev.kind, ev.raw, ev.id)
             if len(ferr) > 0 {
                 // Duplicate id is benign — drill can re-emit. Other errors abort.
                 if ferr.contains("refusing to duplicate") {
                     println("  skip   = " + ev.id + " (already in atlas)")
                 } else {
-                    println("error: append into n6/atlas.n6 failed — " + ferr)
+                    println("error: fold into embedded.gen.hexa failed — " + ferr)
                     exit(5)
                 }
             } else {
-                println("  atlas  = appended @" + ev.kind + " " + ev.id + " → live")
+                println("  atlas  = folded @" + ev.kind + " " + ev.id + " → live")
                 emitted = emitted + 1
             }
             idx = idx + 1
@@ -1852,8 +1962,8 @@ fn cmd_register(rest: array) {
         }
         println("  tier   = 🔵 SUPPORTED-FORMAL  (" + to_string(emitted) + " new candidate(s); @D g_self_verify · drill verdict != skip)")
         println("")
-        println("hexa atlas register: " + to_string(emitted) + " candidate(s) landed in the live atlas (" + n6_path + ").")
-        println("  commit them with:  git -C ~/core/hexa-lang add n6/atlas.n6 && git commit -m " + _shq("atlas(drill): register " + to_string(emitted) + " candidate(s)"))
+        println("hexa atlas register: " + to_string(emitted) + " candidate(s) landed in the live atlas (" + embed_path + ").")
+        println("  commit them with:  git -C ~/core/hexa-lang add compiler/atlas/embedded.gen.hexa && git commit -m " + _shq("atlas(drill): register " + to_string(emitted) + " candidate(s)"))
         return
     }
 
@@ -1947,6 +2057,7 @@ fn main() {
     else if sub == "lookup" { cmd_lookup(rest) }
     else if sub == "dump" { cmd_dump(rest) }
     else if sub == "register" { cmd_register(rest) }
+    else if sub == "export" { cmd_export(rest) }
     else if sub == "help" || sub == "--help" || sub == "-h" { cmd_help() }
     else {
         println("error: unknown subcommand: " + sub)
