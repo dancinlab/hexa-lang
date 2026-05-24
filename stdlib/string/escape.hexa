@@ -1,0 +1,53 @@
+// HEXA Standard Library — string/escape
+//
+// @version 0.2.0
+// @capabilities [pure]
+//
+// JSON string escape — escape-only (no full serialization wrapper). For
+// callers that build JSON manually (header fragments, log strings, key
+// fragments) and need just the string content escaped, separate from
+// stdlib/alloc/json::json_stringify_value (which serializes a full value).
+//
+// Surface:
+//   pub fn json_escape(s: string) -> string
+//
+// STDLIB Phase 1b survey 2026-05-25: 67 duplicate `json_escape`
+// definitions across anima/* — every log/metrics/cache writer has its
+// own inline escape loop. This module = the canonical home.
+//
+// Impl note (v0.2.0): switched from naive `out = out + c` concat to
+// parts/join pattern — avoids O(n²) over long Korean text (matches
+// anima/serving/likert_eval.hexa § json_escape upstream-canonical
+// impl). byte-by-byte substring loop preserves UTF-8 multibyte
+// sequences intact (non-control bytes 0x80-0xFF flow through else).
+//
+// Escapes per RFC 8259 §7:
+//   "  → \"
+//   \  → \\
+//   \n → \n
+//   \r → \r
+//   \t → \t
+
+pub fn json_escape(s: string) -> string {
+    let n = len(s)
+    let mut parts = []
+    let mut i = 0
+    while i < n {
+        let c = s.substring(i, i + 1)
+        if c == "\\" {
+            parts = parts.push("\\\\")
+        } else if c == "\"" {
+            parts = parts.push("\\\"")
+        } else if c == "\n" {
+            parts = parts.push("\\n")
+        } else if c == "\t" {
+            parts = parts.push("\\t")
+        } else if c == "\r" {
+            parts = parts.push("\\r")
+        } else {
+            parts = parts.push(c)
+        }
+        i = i + 1
+    }
+    return parts.join("")
+}
