@@ -1,0 +1,30 @@
+// HEXA Standard Library — cli/exec
+//
+// @version 0.1.0
+// @capabilities [exec, io]
+//
+// Subprocess execution helpers. Standardises the 78+ anima inline
+// definitions (41 _exec_out + 37 _run_helper, STDLIB Phase 1b 잔여
+// survey 2026-05-25).
+//
+// Surface:
+//   pub fn exec_out(cmd: string) -> string
+//     Run `cmd` (shell-style) · returns stdout as string. Errors
+//     surface via empty string + runtime stderr trace (caller can
+//     guard via empty-string check).
+//
+//   pub fn run_helper(cmd: string) -> int
+//     Run `cmd` for side-effect only · returns exit code. For chained
+//     scripts where output capture is unnecessary.
+//
+// Both delegate to runtime `subprocess` / `system` builtins (varies by
+// runtime version). Single canonical access pattern eliminates 78 dup
+// shell-quoting / output-capture variations.
+
+pub fn exec_out(cmd: string) -> string {
+    return shell_capture(cmd)
+}
+
+pub fn run_helper(cmd: string) -> int {
+    return shell_run(cmd)
+}
