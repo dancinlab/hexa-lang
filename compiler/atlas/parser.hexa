@@ -407,7 +407,13 @@ pub fn empty_edges() -> EdgeInfo {
 // `source_file` is what we record in AtlasNode.source_file — typically
 // the basename, set by the caller (load_atlas).
 pub fn parse_atlas_file(path: string, source_file: string) -> array {
-    let text = read_file(path)
+    return parse_atlas_string(read_file(path), source_file)
+}
+
+// parse_atlas_string — same as parse_atlas_file but on an in-memory .n6 string
+// (no fs read). Lets static_atlas parse the .n6 blocks extracted from
+// embedded.gen.hexa at runtime without staging a temp file.
+pub fn parse_atlas_string(text: string, source_file: string) -> array {
     let out = []
     if len(text) == 0 { return out }
 
