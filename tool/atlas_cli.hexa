@@ -1,37 +1,27 @@
-// tool/atlas_cli.hexa — `hexa atlas {hash|stats|lookup|dump|append-witness|register|pr}`
+// tool/atlas_cli.hexa — `hexa atlas {hash|stats|lookup|dump|register}`
 //
-// @version 0.5.0
+// @version 0.6.0
 // @capabilities [fs_read, fs_write, exec]
-// @allow-bare-exec-file (reason: exec() used for date +%s%3N millis timer in
-//   _now_ms() — wall-clock for unique shard filename; matches the same
-//   pattern in tool/atlas_embed_gen.hexa::_now_ms.)
 //
-// Atlas SSOT surface (PR-only policy — @D g_atlas_binary_builtin):
-//   - 4 READ subcommands (hash/stats/lookup/dump) resolve against the
-//     compile-time embedded static_atlas() — zero fs read, zero parse.
-//   - WRITE subcommands:
-//       append-witness — record a node as `atlas.append.witness-<ts>-<id>.n6`
-//                        staging shard (picked up by merger.hexa::_discover on next regen).
-//       register       — STUB: lex→parse→discover_check→write_staging for a project file's
-//                        `@discover`-annotated fns. Needs the compiler frontend wired into a
-//                        `tool/atlas_register.hexa` companion — spec in
-//                        archive/patches/hexa-cli-atlas-register-update-or-pr.md.
-//       pr             — the sole landing verb under PR-only policy: fold a staging shard
-//                        onto a fresh git branch, commit the append shard, try `gh pr create`
-//                        against origin. Degrades honestly (write-shard + print exact
-//                        commands) when git/gh are missing or unauthenticated — never fakes
-//                        a PR. Equation flow: register → pr (no direct fold-to-live).
+// Atlas surface — n6/atlas.n6 is THE single SSOT (2026-05-22 directive
+// "no hxc — atlas.n6 is the single artifact"):
+//   - READ (hash/stats/lookup/dump) resolve against static_atlas() →
+//     merger::load_atlas, which parses n6/atlas.n6 at load time.
+//   - WRITE (register) is the ONE absorption verb. Each `--from-<verb>` arm
+//     runs the verb IN-PROCESS, constructs the verified AtlasNode IN MEMORY,
+//     and appends its .n6 block DIRECTLY to the live n6/atlas.n6 — the same
+//     file READ parses. No staging shard, no embedded.gen.hexa, no rebuild:
+//     the next lookup sees it. Commit n6/atlas.n6 with normal git to share.
+//     All arms share the canonical DiscoveryEvent → register_from_event sink.
+//       --from-verify <fn> <n|a b> <v>   recompute IN-PROCESS, register on 🔵/🟢
+//       --from-drill  --seed "<text>"    drive the drill engine, register candidates
 //
-//   - The legacy `promote` arm (direct fold-to-live without PR) is RETIRED 2026-05-20 per
-//     archive/patches/hexa-atlas-pr-only-policy.md. promote_to_atlas() is still imported and
-//     used internally by cmd_pr (the PR arm folds onto a branch, then opens the PR), but
-//     no contributor-facing `hexa atlas promote` verb is exposed.
+//   (append-witness staging shards, the embedded.gen.hexa fold, the `pr`
+//    verb + --auto-pr PR-only detour, and the `register <file>` STUB were
+//    abolished 2026-05-25 — they split the SSOT and hid writes from lookup.)
 //
 // Wired from self/main.hexa: `hexa atlas <sub-sub> [args]`.
 // Also runnable directly: `hexa run tool/atlas_cli.hexa <sub-sub> [args]`.
-//
-// Phase 2 (read) + Phase 3 (write) of the atlas.n6 absorption plan
-// (ATLAS_N6_RETIREMENT_PLAN.md §0b). `update || PR` design: SPEC.md §9/§10.
 
 use "compiler/atlas/parser"
 use "compiler/atlas/merger"
@@ -52,7 +42,7 @@ fn _slice_args() -> array {
     let mut i = 1
     while i < n {
         let a = to_string(av[i])
-        if a == "lookup" || a == "dump" || a == "stats" || a == "hash" || a == "append-witness" || a == "register" || a == "pr" || a == "--help" || a == "-h" || a == "help" {
+        if a == "lookup" || a == "dump" || a == "stats" || a == "hash" || a == "register" || a == "--help" || a == "-h" || a == "help" {
             let mut out = []
             let mut j = i
             while j < n {
@@ -287,182 +277,14 @@ fn cmd_dump(rest: array) {
     }
 }
 
-// ── append-witness (Phase 3 write path) ───────────────────
-// nexus 의 ω-cycle ingest 패턴을 hexa-lang 으로 이관한 surface.
-// atlas.n6 직접 append 가 아니라 staging shard (atlas.append.witness-<ts>-<id>.n6)
-// 로 record → 다음 regen 사이클에 embedded.gen.hexa 로 absorb.
+// `hexa atlas register` — the ONE absorption verb. Each `--from-<verb>` arm
+// re-runs the verb IN-PROCESS (same calc fns as `hexa verify --expr`), and on a
+// 🔵 SUPPORTED-FORMAL / 🟢 SUPPORTED-NUMERICAL result constructs the AtlasNode
+// .n6 block IN MEMORY and appends it DIRECTLY to the live n6/atlas.n6 SSOT (see
+// _append_live_n6) — visible to the next lookup with NO rebuild. Commit
+// n6/atlas.n6 with normal git to share. Arms: --from-verify · --from-drill.
 
-fn _now_ms() -> int {
-    let s = exec("date +%s%3N 2>/dev/null").trim()
-    if len(s) > 0 && s.substring(len(s) - 1, len(s)) != "N" {
-        return to_int(s)
-    }
-    let sec = exec("date +%s 2>/dev/null").trim()
-    return to_int(sec) * 1000
-}
-
-fn _safe_id(s: string) -> string {
-    let n = len(s)
-    let mut out = ""
-    let mut i = 0
-    while i < n {
-        let c = s.substring(i, i + 1)
-        let is_lo = c >= "a" && c <= "z"
-        let is_up = c >= "A" && c <= "Z"
-        let is_di = c >= "0" && c <= "9"
-        let safe = is_lo || is_up || is_di || c == "_" || c == "-"
-        if safe { out = out + c } else { out = out + "-" }
-        i = i + 1
-    }
-    if len(out) > 64 { out = out.substring(0, 64) }
-    return out
-}
-
-fn _resolve_staging_dir() -> string {
-    let override = env_var("HEXA_ATLAS_STAGING")
-    if len(override) > 0 { return override }
-    let home = env_var("HOME")
-    return home + "/core/hexa-lang/n6"
-}
-
-fn cmd_append_witness(rest: array) {
-    let mut kind = ""
-    let mut id = ""
-    let mut raw = ""
-    let mut from_stdin = false
-    let mut dir_override = ""
-    let mut emitter = "manual"
-    let mut i = 0
-    let n = len(rest)
-    while i < n {
-        let a = to_string(rest[i])
-        if a == "--kind" && i + 1 < n {
-            kind = to_string(rest[i + 1])
-            i = i + 2
-        } else if a == "--id" && i + 1 < n {
-            id = to_string(rest[i + 1])
-            i = i + 2
-        } else if a == "--raw" && i + 1 < n {
-            raw = to_string(rest[i + 1])
-            i = i + 2
-        } else if a == "--stdin" {
-            from_stdin = true
-            i = i + 1
-        } else if a == "--dir" && i + 1 < n {
-            dir_override = to_string(rest[i + 1])
-            i = i + 2
-        } else if a == "--emitter" && i + 1 < n {
-            emitter = to_string(rest[i + 1])
-            i = i + 2
-        } else {
-            println("error: unknown arg: " + a)
-            exit(2)
-        }
-    }
-    if kind != "P" && kind != "C" && kind != "L" && kind != "E" && kind != "F" && kind != "R" && kind != "S" && kind != "X" && kind != "Q" {
-        println("error: --kind must be one of P|C|L|E|F|R|S|X|Q (got: " + kind + ")")
-        exit(2)
-    }
-    if len(id) == 0 {
-        println("error: --id required")
-        exit(2)
-    }
-    if from_stdin { raw = read_stdin() }
-    if len(raw) == 0 {
-        println("error: --raw <content> or --stdin required")
-        exit(2)
-    }
-
-    // Auto-wrap (2026-05-22): if --raw does not begin with a "@<KIND>" node
-    // header line, wrap it as a proper n6 node block. Without this, the
-    // merger detects ZERO nodes from the shard — parser.hexa::_is_header_sigil
-    // scans for "@<KIND> ..." lines, and a body-only raw produces 0 nodes,
-    // silently losing the absorbed knowledge (observed 2026-05-22: 6/6
-    // recent witness shards were orphan). Detection skips leading whitespace
-    // and checks the "@<KIND>" prefix followed by a separator.
-    let mut _j = 0
-    while _j < len(raw) {
-        let _c = raw.substring(_j, _j + 1)
-        if _c != " " && _c != "\t" && _c != "\n" && _c != "\r" { break }
-        _j = _j + 1
-    }
-    let _trimmed = raw.substring(_j, len(raw))
-    let _sigil = "@" + kind
-    let mut _has_sigil = false
-    if _trimmed.starts_with(_sigil + " ") { _has_sigil = true }
-    if _trimmed.starts_with(_sigil + "\n") { _has_sigil = true }
-    if _trimmed == _sigil { _has_sigil = true }
-    if !_has_sigil {
-        // Quoted single-line body. Escape backslashes first, then quotes,
-        // then newlines (so multi-line raw becomes one quoted line — the
-        // merger's quoted-string rule accepts a single quoted body).
-        let _esc = raw.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", " ").replace("\r", " ")
-        raw = "@" + kind + " " + id + "\n  \"" + _esc + "\""
-    }
-    let mut dir = dir_override
-    if len(dir) == 0 { dir = _resolve_staging_dir() }
-
-    let ts = _now_ms()
-    let safe = _safe_id(id)
-    let fname = "atlas.append.witness-" + to_string(ts) + "-" + safe + ".n6"
-    let path = dir + "/" + fname
-
-    // Header uses `//` line comments to match nexus shard convention
-    // (atlas.append.*.n6 sample stats: 5120 `//` vs 1789 `#` lines).
-    // The blank line between header and body is LOAD-BEARING — without
-    // it the current deployed hexa_interp's parser drift (project memory:
-    // "SH3 phase 2.F interp drift") trips on odd-count leading `//`
-    // comments and swallows the first `@` header. A blank line resets
-    // that state. Once hexa_interp is re-promoted from current source
-    // (compiler/atlas/parser.hexa is itself correct), the blank line is
-    // still harmless. Soft terminator `// EOF — ...` matches existing
-    // shards; @END would pollute the last node's raw (_is_header_sigil
-    // rejects it → falls into continuation branch).
-    let header = "// witness shard — hexa atlas append-witness\n// emitter: " + emitter + "\n// kind: " + kind + "\n// id: " + id + "\n// timestamp_ms: " + to_string(ts) + "\n"
-    let content = header + "\n" + raw + "\n\n// EOF — hexa atlas append-witness\n"
-    write_file(path, content)
-    println(path)
-}
-
-// RETIRED 2026-05-20 — `hexa atlas promote` (direct fold-to-live) removed per
-// archive/patches/hexa-atlas-pr-only-policy.md (wilson governance principle #2 PR-only).
-// The promote_to_atlas() primitive is still imported and called internally by
-// cmd_pr (the PR arm folds onto a branch, then opens the PR). Equation flow:
-//   register → pr  (no direct fold-to-live; every equation lands via reviewable PR.)
-// The former `fn cmd_promote(rest: array)` body has been deleted; the dispatcher
-// arm is gone. Reach out to release-engineering if a post-merge shard-fold helper
-// is needed — that belongs in a CI tool, not in the contributor CLI surface.
-
-// `hexa atlas register` — direct node-generation → embedded.gen.hexa → PR.
-//
-// TWO arms:
-//
-// (1) `hexa atlas register --from-verify <fn> <n> <v> [--auto-pr] [--branch ...] [--base ...]`
-//     `hexa atlas register --from-verify <fn> <a> <b> <v> [--auto-pr] ...`   (2-op)
-//
-//     Re-runs the `hexa verify --expr` recompute IN-PROCESS (same calc fns,
-//     compiler/atlas/symbolic/congruence_chain_engine). On a 🔵 SUPPORTED-FORMAL
-//     result, CONSTRUCTS the AtlasNode struct-literal text IN MEMORY (no `.n6`
-//     intermediate, no converter), folds it directly into the binary-built-in
-//     atlas SSOT (compiler/atlas/embedded.gen.hexa, into the matching kind
-//     section — F for closed-form recomputed identities), and — with --auto-pr —
-//     creates a fresh branch, commits the embedded.gen.hexa edit, and opens a PR
-//     via `gh` then GitHub API fallback (HONEST: a PR is NEVER claimed unless
-//     `gh` rc=0 or HTTP 201). On --auto-pr absent, the edit lands on the
-//     current branch and the user owns the commit (mirrors `update` arm).
-//
-// (2) `hexa atlas register <file.hexa>` — STUB. Same status as before: needs
-//     the compiler frontend (compiler/lex/* + compiler/parse/parser.hexa::parse)
-//     wired into a companion. Tracked at
-//     archive/patches/hexa-cli-atlas-register-update-or-pr.md.
-//
-// Per @D g_atlas_binary_builtin: the atlas is unconditionally binary built-in
-// (compiler/atlas/embedded.gen.hexa is the SSOT). Equations land via PR —
-// direct fold-to-live is forbidden, every equation lands via reviewable PR.
-// Per @D g6: every formula-bearing line @cites the embedded atlas; this verb
-// is how `hexa verify` discoveries reach that embed without a `.n6` shard.
-
-// --- helpers for direct node-construction + embedded fold ---------------
+// --- helpers for direct node-construction + n6 fold ---------------
 
 let _NOCALC_REGISTER: int = -999999
 
@@ -1403,40 +1225,6 @@ fn _fstr_register(x: float) -> string {
 // _hxesc — escape a string for use inside a hexa double-quoted string literal
 // (backslash, then double-quote, then newline). Mirrors what tool/atlas_embed_gen
 // emits when serializing AtlasNode.raw into embedded.gen.hexa.
-fn _hxesc(s: string) -> string {
-    let n = len(s)
-    let mut out = ""
-    let mut i = 0
-    while i < n {
-        let c = s.substring(i, i + 1)
-        if c == "\\" { out = out + "\\\\" }
-        else if c == "\"" { out = out + "\\\"" }
-        else if c == "\n" { out = out + "\\n" }
-        else if c == "\r" { out = out + "\\r" }
-        else if c == "\t" { out = out + "\\t" }
-        else { out = out + c }
-        i = i + 1
-    }
-    return out
-}
-
-// _build_node_struct_text — direct in-memory node-generation. Produces the
-// EXACT struct-literal text `tool/atlas_embed_gen.hexa::embed_atlas` would emit
-// for one AtlasNode, ready to splice into compiler/atlas/embedded.gen.hexa.
-// No `.n6` intermediate; no converter — the node is the hexa-source-form
-// AtlasNode literal that the next compile will fold into the binary built-in
-// atlas (@D g_atlas_binary_builtin).
-fn _build_node_struct_text(kind: string, id: string, raw_body: string, source_file: string, source_line: i64) -> string {
-    let raw_e = _hxesc(raw_body)
-    let id_e = _hxesc(id)
-    let sf_e = _hxesc(source_file)
-    let kind_e = _hxesc(kind)
-    return "    AtlasNode { kind: \"" + kind_e + "\", id: \"" + id_e +
-           "\", raw: \"" + raw_e + "\", source_file: \"" + sf_e +
-           "\", source_line: " + to_string(source_line) +
-           ", grade: GradeInfo { value: -1, verified: false, breakthrough: false, hypothesis: false }" +
-           ", edges: EdgeInfo { depends_on: [], derives: [], applications: [], equivalents: [], converges: [], verified_by: [], breakthroughs: [] } }"
-}
 
 // _build_raw_F — hexa-source-form header for a verified closed-form (kind F).
 // Shape:   @F <id> = <fn>(<arg>) = <value> :: formula [d=<date> active]
@@ -1447,7 +1235,7 @@ fn _build_raw_F(id: string, fn_name: string, arg_str: string, value: int, today:
            " :: formula [d=" + today + " active]\n" +
            "  verified-by = \"hexa verify --expr " + fn_name + " " + arg_str + " " + to_string(value) + "\"\n" +
            "  cite = \"@D g_self_verify · TECS-L Tier1 — hexa-native NT closed-form\"\n" +
-           "  provenance = \"tool/atlas_cli.hexa register --from-verify (direct node-gen, no .n6)\""
+           "  provenance = \"tool/atlas_cli.hexa register --from-verify (direct node-gen → n6/atlas.n6 live SSOT)\""
 }
 
 // _build_raw_F_numerical — hexa-source-form header for a 🟢 SUPPORTED-
@@ -1461,101 +1249,56 @@ fn _build_raw_F_numerical(id: string, fn_name: string, arg_str: string, value_st
            "  tier = \"🟢 SUPPORTED-NUMERICAL\"\n" +
            "  verified-by = \"hexa verify --expr " + fn_name + " " + arg_str + " " + value_str + "\"\n" +
            "  cite = \"TECS-L n6-rep Tier2 — hexa-native libm-class numerical recompute (ε=1e-9)\"\n" +
-           "  provenance = \"tool/atlas_cli.hexa register --from-verify (direct node-gen, no .n6; 🟢 numerical)\""
+           "  provenance = \"tool/atlas_cli.hexa register --from-verify (direct node-gen → n6/atlas.n6 live SSOT; 🟢 numerical)\""
+}
+
+// ── live n6 write path (the single absorption sink) ──────────────────
+// register appends the node's .n6-grammar block (ev.raw) DIRECTLY to the
+// live n6/atlas.n6 SSOT — the very file `hexa atlas lookup/stats/dump/hash`
+// parse at load time (static_index::static_atlas → merger::load_atlas). No
+// embedded.gen.hexa, no staging shard, no rebuild: the next lookup sees it.
+
+// _resolve_n6_atlas — the live SSOT file path. Mirrors static_index's
+// resolution EXACTLY so register writes the file lookup reads: $HEXA_ATLAS_N6
+// (an absolute dir containing atlas.n6) wins; else the stable repo path.
+fn _resolve_n6_atlas() -> string {
+    let override = env_var("HEXA_ATLAS_N6")
+    if len(override) > 0 { return override + "/atlas.n6" }
+    let home = env_var("HOME")
+    return home + "/core/hexa-lang/n6/atlas.n6"
+}
+
+// _n6_has_id — true iff atlas.n6 already declares `@<kind> <id> ` (the .n6
+// header). Cheap textual scan so re-registration is idempotent (refuses to
+// duplicate), matching the embedded path's prior contract.
+fn _n6_has_id(n6_text: string, kind: string, id: string) -> bool {
+    return n6_text.contains("@" + kind + " " + id + " ")
+}
+
+// _append_live_n6 — fold a verified node into the live atlas. `raw` is the
+// .n6-grammar block (`@<kind> <id> = … :: … [d=… active]\n  tier = …\n …`),
+// exactly the form merger::load_atlas parses. Returns "" on success, else an
+// error message (same contract as the retired _fold_into_embedded).
+fn _append_live_n6(node_kind: string, node_raw: string, node_id: string) -> string {
+    if len(node_raw) == 0 {
+        return "empty .n6 body for id: " + node_id + " (adapter must set ev.raw)"
+    }
+    let path = _resolve_n6_atlas()
+    let body = read_file_safe(path)
+    if len(body) == 0 {
+        return "n6/atlas.n6 not readable or empty at: " + path
+    }
+    if _n6_has_id(body, node_kind, node_id) {
+        return "id already present in atlas.n6: " + node_id + " (refusing to duplicate)"
+    }
+    // Blank-line-separated records: a leading "\n" closes the prior block,
+    // a trailing "\n" terminates ours for the merger's block guard.
+    let content = "\n" + node_raw + "\n"
+    append_file(path, content)
+    return ""
 }
 
 // _embedded_gen_path — resolve the SSOT path for the binary-built-in atlas.
-fn _embedded_gen_path(atlas_root: string) -> string {
-    return atlas_root + "/compiler/atlas/embedded.gen.hexa"
-}
-
-// _section_marker — `pub let ATLAS_<K>_NODES: [AtlasNode] = [`
-fn _section_marker(kind: string) -> string {
-    return "pub let ATLAS_" + kind + "_NODES: [AtlasNode] = ["
-}
-
-// _embedded_has_id — true iff embedded.gen.hexa already contains a node with
-// `id: "<id>"`. Cheap textual scan — the embed is one-line-per-node and ids
-// are quoted right after `id: `.
-fn _embedded_has_id(embed_text: string, id: string) -> bool {
-    let needle = "id: \"" + id + "\""
-    return embed_text.contains(needle)
-}
-
-// _fold_into_embedded — direct fold. Reads embedded.gen.hexa, finds the
-// section for `kind`, inserts the new struct-literal line just before the
-// closing `]`. Returns "" on success, otherwise an error message.
-// No `.n6` intermediate; the AtlasNode literal IS the storage form.
-fn _fold_into_embedded(embed_path: string, kind: string, node_text: string, id: string) -> string {
-    let body = read_file_safe(embed_path)
-    if len(body) == 0 {
-        return "embedded.gen.hexa not readable or empty at: " + embed_path
-    }
-    if _embedded_has_id(body, id) {
-        return "id already present in embedded atlas: " + id + " (refusing to duplicate)"
-    }
-    let marker = _section_marker(kind)
-    let mi = body.index_of(marker)
-    if mi < 0 {
-        return "section marker not found in embedded.gen.hexa: " + marker
-    }
-    // Find the closing `]` of THIS section. The section's open bracket is the
-    // `[` at end of marker; the closing `]` is the next line that is exactly `]`
-    // at column 0 (matches the emitter convention; see tool/atlas_embed_gen).
-    let mut scan = mi + len(marker)
-    let mut close_at = -1
-    let blen = len(body)
-    while scan < blen {
-        let nl = body.index_of("\n", scan)
-        if nl < 0 { break }
-        let line_start = scan
-        let line = body.substring(line_start, nl)
-        // The closing line is a bare `]` (no leading whitespace, no `,`).
-        if line == "]" {
-            close_at = line_start
-            break
-        }
-        scan = nl + 1
-    }
-    if close_at < 0 {
-        return "could not locate closing `]` for section " + kind + " in embedded.gen.hexa"
-    }
-    // Decide whether the prior element needs a `,`. Walk backward from
-    // close_at and find the previous non-blank line; if it ends with `}`
-    // (a struct literal), insert `,` before our line. The section opens
-    // empty as `= [\n]`, in which case the immediately-prior line ends with `[`.
-    let mut prev_end = close_at - 1
-    while prev_end > 0 && body.substring(prev_end, prev_end + 1) == "\n" {
-        prev_end = prev_end - 1
-    }
-    // Walk to start of that non-blank line.
-    let mut prev_start = prev_end
-    while prev_start > 0 && body.substring(prev_start - 1, prev_start) != "\n" {
-        prev_start = prev_start - 1
-    }
-    let prev_line = body.substring(prev_start, prev_end + 1)
-    let mut prefix = body.substring(0, close_at)
-    let suffix = body.substring(close_at, blen)
-    // If the prior line is an existing struct literal (ends with `}`), it
-    // needs a trailing comma; we add it by appending `,\n` before our line.
-    // If the section is empty (prev line ends with `[`), no comma.
-    let mut splice = ""
-    if prev_line.ends_with("}") {
-        // Strip any trailing whitespace/newlines we want to preserve.
-        // prefix currently includes prev_line plus the newline(s) before `]`.
-        // We rewrite: drop content from prev_end+1 .. close_at, re-add as `,\n` + node + `\n`.
-        let head = body.substring(0, prev_end + 1)
-        splice = head + ",\n" + node_text + "\n"
-        prefix = splice
-    } else {
-        // Empty section path. prev_line ends with `[`. Insert node_text then newline.
-        splice = prefix + node_text + "\n"
-        prefix = splice
-    }
-    let new_body = prefix + suffix
-    write_file_safe(embed_path, new_body)
-    return ""
-}
 
 // _slug_register — id-safe slug for the new atlas-id (kind-prefix style:
 // `verified_<fn>_<arg>` → `verified-divisor_sum-6`). Matches the existing
@@ -1578,99 +1321,6 @@ fn _slug_register(s: string) -> string {
     return out
 }
 
-// _branch_commit_pr — reuse the same step-4+5 path as cmd_pr: stage the
-// embedded.gen.hexa edit on a fresh branch, commit, and open the PR via
-// gh || api. HONEST DEGRADE: never claims a PR was opened unless gh rc=0
-// or HTTP 201.
-fn _branch_commit_pr(atlas_root: string, embed_path: string, base: string, branch: string, title: string, summary: string) {
-    let have_git = _exec_ok("command -v git")
-    let in_repo = have_git && _exec_ok("git -C " + _shq(atlas_root) + " rev-parse --git-dir")
-    if !in_repo {
-        println("")
-        println("hexa atlas register: embedded.gen.hexa edited at " + embed_path)
-        if !have_git {
-            println("  `git` not found on PATH — cannot branch/commit/PR automatically.")
-        } else {
-            println("  '" + atlas_root + "' is not a git repo — cannot branch/commit/PR automatically.")
-        }
-        println("  ready to PR — from " + atlas_root + " run:")
-        println("    git switch -c " + branch)
-        println("    git add " + embed_path)
-        println("    git commit -m " + _shq(title))
-        println("    gh pr create --base " + base + " --head " + branch +
-                " --title " + _shq(title))
-        return
-    }
-    let branched = _exec_ok("git -C " + _shq(atlas_root) + " switch -c " + _shq(branch))
-    if !branched {
-        println("hexa atlas register: warning — could not create branch '" + branch + "'")
-        println("  (already exists or dirty worktree); commit by hand on current branch.")
-        return
-    }
-    let added = _exec_ok("git -C " + _shq(atlas_root) + " add " + _shq(embed_path))
-    if !added {
-        println("hexa atlas register: warning — `git add` failed for " + embed_path)
-        return
-    }
-    let commit_msg = title + "\n\n" + summary +
-                     "\nCo-Authored-By: hexa atlas register <noreply@hexa-lang>"
-    let committed = _exec_ok("git -C " + _shq(atlas_root) + " commit -m " + _shq(commit_msg))
-    if !committed {
-        println("hexa atlas register: warning — `git commit` failed (no change? hook reject?).")
-        return
-    }
-    println("hexa atlas register: committed " + embed_path + " on branch '" + branch + "'")
-
-    let gh_cmd = "gh pr create --base " + _shq(base) + " --head " + _shq(branch) +
-                 " --title " + _shq(title) +
-                 " --body " + _shq("Direct in-memory atlas-node generation via `hexa atlas register --from-verify`.\n\n" + summary)
-    if _exec_ok("command -v gh") {
-        if _exec_ok("cd " + _shq(atlas_root) + " && " + gh_cmd) {
-            let url = exec("cd " + _shq(atlas_root) + " && gh pr view --json url -q .url 2>/dev/null").trim()
-            println("hexa atlas register: PR opened via gh — " + (if len(url) > 0 { url } else { "(see `gh pr list`)" }))
-            return
-        }
-        println("hexa atlas register: `gh pr create` did not succeed — falling back to GitHub API…")
-    } else {
-        println("hexa atlas register: `gh` not found — falling back to GitHub API…")
-    }
-    let tok = _gh_token()
-    let slug = _origin_slug(atlas_root)
-    let mut why = ""
-    if len(tok) == 0 {
-        why = "no GH_TOKEN / GITHUB_TOKEN set and `gh auth token` unavailable"
-    } else if len(slug) == 0 {
-        why = "could not resolve owner/repo from the `origin` remote"
-    } else if !_exec_ok("cd " + _shq(atlas_root) + " && git push -u origin " + _shq(branch)) {
-        why = "`git push` to origin failed (no write access / offline)"
-    }
-    if len(why) == 0 {
-        let body = "{\"title\":\"" + _jesc(title) + "\",\"head\":\"" + _jesc(branch) +
-                   "\",\"base\":\"" + _jesc(base) +
-                   "\",\"body\":\"Direct in-memory atlas-node generation via hexa atlas register --from-verify.\"}"
-        let api = "curl -sS -o /tmp/_hexa_pr_resp.json -w '%{http_code}' -X POST" +
-                  " -H " + _shq("Authorization: Bearer " + tok) +
-                  " -H " + _shq("Accept: application/vnd.github+json") +
-                  " -H " + _shq("X-GitHub-Api-Version: 2022-11-28") +
-                  " https://api.github.com/repos/" + slug + "/pulls" +
-                  " -d " + _shq(body)
-        let code = exec("cd " + _shq(atlas_root) + " && " + api).trim()
-        if code == "201" {
-            let url = exec("grep -o 'https://github.com/[^\"]*/pull/[0-9]*' /tmp/_hexa_pr_resp.json | head -1").trim()
-            println("hexa atlas register: PR opened via GitHub API — " + (if len(url) > 0 { url } else { "(HTTP 201)" }))
-            return
-        }
-        let msg = exec("grep -o '\"message\"[^,}]*' /tmp/_hexa_pr_resp.json | head -1").trim()
-        why = "GitHub API returned HTTP " + code + (if len(msg) > 0 { " — " + msg } else { "" })
-    }
-    println("")
-    println("hexa atlas register: PR not opened — " + why + ".")
-    println("  branch '" + branch + "' has the commit locally — NO PR was opened.")
-    println("  ready to PR — from " + atlas_root + " run:")
-    println("    git push -u origin " + branch)
-    println("    " + gh_cmd)
-}
-
 // ── DiscoveryEvent — canonical internal envelope for all discovery surfaces.
 //
 // Every internal discovery surface (verify, drill/kick, check, smash,
@@ -1684,15 +1334,13 @@ fn _branch_commit_pr(atlas_root: string, embed_path: string, base: string, branc
 //       // can honestly degrade.
 //   }
 //
-//   register_from_event(ev, auto_pr, atlas_root, base, branch, title)
-//     — single, kind-uniform sink: builds node-text → folds embedded.gen.hexa
-//       → optional `gh ‖ api` PR. NEVER fakes a PR; NEVER lies about a
-//       falsified or skipped verdict.
+//   register_from_event(ev)
+//     — single, kind-uniform sink: appends ev.raw (the .n6 block) directly to
+//       the live n6/atlas.n6 SSOT. NEVER lies about a falsified/skipped verdict.
 //
 // Future verbs plug in by writing ONE `_adapt_<verb>` fn and wiring a
-// `--from-<verb>` arg to `cmd_register`. No code in this pipeline parses
-// `.n6` shards or hits the staging-dir path — the AtlasNode struct-literal
-// IS the storage form (@D g_atlas_binary_builtin).
+// `--from-<verb>` arg to `cmd_register`. The node's .n6 block (ev.raw) IS the
+// storage form — appended straight to the live n6/atlas.n6 SSOT.
 //
 // Field semantics:
 //   kind         — one of "P|C|L|E|F" (matches atlas grammar; F is most
@@ -1721,9 +1369,9 @@ fn _branch_commit_pr(atlas_root: string, embed_path: string, base: string, branc
 //   source_verb  — provenance: "verify" / "drill" / "kick" / "check" /
 //                  "smash" / "atlas-verify" / etc.
 //   provenance   — one-liner with the exact invocation/cmdline (e.g.
-//                  "hexa atlas register --from-verify phi 8 4 --auto-pr").
-//                  Spliced into the body's `provenance =` line so the
-//                  PR reviewer can reproduce.
+//                  "hexa atlas register --from-verify phi 8 4").
+//                  Spliced into the body's `provenance =` line so a
+//                  reader can reproduce.
 pub struct DiscoveryEvent {
     kind: string,
     id: string,
@@ -1734,15 +1382,13 @@ pub struct DiscoveryEvent {
     provenance: string
 }
 
-// register_from_event — the canonical sink. Builds the AtlasNode
-// struct-literal text, folds it into embedded.gen.hexa, and (with
-// auto_pr=true) creates a branch + commit + `gh ‖ api` PR. HONEST
-// DEGRADE: skipped / falsified events never reach this fn (adapters
-// short-circuit); a fold-failure / PR-fail prints the manual command.
+// register_from_event — the canonical sink. Appends ev.raw (the node's .n6
+// block) directly to the live n6/atlas.n6 SSOT — visible to the next lookup
+// with no rebuild. HONEST DEGRADE: skipped / falsified events never reach this
+// fn (adapters short-circuit); an append failure returns the error message.
 //
 // Returns "" on success, otherwise an error message.
-fn register_from_event(ev: DiscoveryEvent, auto_pr: bool, atlas_root: string,
-                       base: string, branch_in: string, title_in: string) -> string {
+fn register_from_event(ev: DiscoveryEvent) -> string {
     // Promotable tiers: 🔵 SUPPORTED-FORMAL (closed-form) and 🟢
     // SUPPORTED-NUMERICAL (libm-class recompute within ε). Both clear the
     // rubric bar; 🟡/🟠/🔴/skip/error must have degraded in the adapter.
@@ -1759,40 +1405,16 @@ fn register_from_event(ev: DiscoveryEvent, auto_pr: bool, atlas_root: string,
     if len(ev.id) == 0 {
         return "register_from_event: empty id (adapter must mint a stable id)"
     }
-    let embed_path = _embedded_gen_path(atlas_root)
-    if !file_exists(embed_path) {
-        return "embedded.gen.hexa not found at " + embed_path
-    }
-    let today = _today_compact()
-    let node_text = _build_node_struct_text(ev.kind, ev.id, ev.raw,
-        "hexa atlas register --from-" + ev.source_verb, to_int(today.replace("-", "")))
-    let err = _fold_into_embedded(embed_path, ev.kind, node_text, ev.id)
+    let n6_path = _resolve_n6_atlas()
+    let err = _append_live_n6(ev.kind, ev.raw, ev.id)
     if len(err) > 0 {
-        return "fold into embedded.gen.hexa failed — " + err
+        return "append into n6/atlas.n6 failed — " + err
     }
-    println("  embed  = appended @" + ev.kind + " " + ev.id + " to " + embed_path + " (ATLAS_" + ev.kind + "_NODES section)")
-    println("  note   = next compile folds this into the binary built-in atlas (@D g_atlas_binary_builtin)")
-
-    if !auto_pr {
-        println("")
-        println("hexa atlas register: edit landed on the CURRENT branch (no --auto-pr).")
-        println("  commit it with:  git -C " + atlas_root + " add " + embed_path + " && git commit -m " + _shq("atlas(" + ev.kind + "): register " + ev.id))
-        return ""
-    }
-    let mut branch = branch_in
-    let mut title = title_in
-    if len(branch) == 0 { branch = "atlas-register-" + _branch_stamp() }
-    if len(title) == 0 { title = "atlas(" + ev.kind + "): register " + ev.id + " (via hexa atlas register --from-" + ev.source_verb + ")" }
-    let summary = "Direct node-generation path — no `.n6` intermediate.\n" +
-                  "  source:   " + ev.source_verb + "\n" +
-                  "  name:     " + ev.name + "\n" +
-                  "  id:       " + ev.id + "\n" +
-                  "  kind:     @" + ev.kind + "\n" +
-                  "  verdict:  " + ev.verdict + "\n" +
-                  "  embed:    compiler/atlas/embedded.gen.hexa (ATLAS_" + ev.kind + "_NODES)\n" +
-                  "  cite:     @D g_self_verify · @D g_atlas_binary_builtin\n" +
-                  "  invoke:   " + ev.provenance
-    _branch_commit_pr(atlas_root, embed_path, base, branch, title, summary)
+    println("  atlas  = appended @" + ev.kind + " " + ev.id + " → " + n6_path + " (live SSOT)")
+    println("  note   = visible to `hexa atlas lookup` immediately — no rebuild")
+    println("")
+    println("hexa atlas register: landed in the live atlas. Commit to share it:")
+    println("  git -C ~/core/hexa-lang add n6/atlas.n6 && git commit -m " + _shq("atlas(" + ev.kind + "): register " + ev.id))
     return ""
 }
 
@@ -1974,48 +1596,16 @@ fn _adapt_drill_candidate(c: DiscoveryCandidate, seed: string, engine: string,
     }
 }
 
-// _adapt_check — STUB. Placeholder for `hexa check` integration. The
-// extension point: parse check-specific args, run check IN-PROCESS, on
-// 🔵 emit DiscoveryEvent and hand to register_from_event. Returns an
-// event with verdict="error" so cmd_register prints the honest
-// "not yet wired" message and exits non-zero.
-//
-// Future surfaces (smash / atlas-verify / verify_adversarial / proposer
-// tools / math discovery) plug in exactly the same way — copy this
-// skeleton, replace the body.
-fn _adapt_check(_args: array) -> DiscoveryEvent {
-    return DiscoveryEvent {
-        kind: "F", id: "", name: "check-stub",
-        raw: "",
-        verdict: "error",
-        source_verb: "check",
-        provenance: "hexa atlas register --from-check (NOT YET WIRED — extension point)"
-    }
-}
-
-// cmd_register — direct in-memory atlas-node generation. Bypasses .n6 entirely.
+// cmd_register — the absorption verb. Each `--from-<verb>` arm produces a
+// DiscoveryEvent and hands it to register_from_event, which appends the node's
+// .n6 block DIRECTLY to the live n6/atlas.n6 SSOT (visible to next lookup, no
+// rebuild). Supported arms:
+//   --from-verify <fn> <n> <v>          (1-op closed-form / 🟢 numerical)
+//   --from-verify <fn> <a> <b> <v>      (2-op)
+//   --from-drill  --seed "<text>" [--rounds N] [--engine mk9|mk10]
+// Options: --id (verify only; drill mints per-candidate ids).
 fn cmd_register(rest: array) {
-    // Multi-verb dispatcher. Every internal discovery surface plugs in as
-    // one `--from-<verb>` arm; each arm produces a `DiscoveryEvent` and
-    // hands it to `register_from_event`. The verify-arm BEHAVIOR IS BYTE-
-    // EQUIVALENT to the previous monolithic cmd_register on 🔵 results
-    // (same id, same raw body, same struct-text, same fold target — just
-    // routed through the canonical sink).
-    //
-    // Supported arms:
-    //   --from-verify <fn> <n> <v>          (1-op closed-form)
-    //   --from-verify <fn> <a> <b> <v>      (2-op closed-form)
-    //   --from-drill  --seed "<text>" [--rounds N] [--engine mk9|mk10]
-    //   --from-check  [args]                (STUB — extension point)
-    //
-    // Common options: --auto-pr, --branch, --base, --atlas-root, --title,
-    //                 --id (verify only; drill mints per-candidate ids).
-    let mut from_verb = ""                  // "verify" | "drill" | "check" | ""
-    let mut auto_pr = false
-    let mut atlas_root = ""
-    let mut base = "main"
-    let mut branch = ""
-    let mut title = ""
+    let mut from_verb = ""                  // "verify" | "drill" | ""
     let mut id_override = ""
     // drill-specific
     let mut drill_seed = ""
@@ -2028,43 +1618,25 @@ fn cmd_register(rest: array) {
         let a = to_string(rest[i])
         if a == "--from-verify" { from_verb = "verify"; i = i + 1 }
         else if a == "--from-drill" || a == "--from-kick" { from_verb = "drill"; i = i + 1 }
-        else if a == "--from-check" { from_verb = "check"; i = i + 1 }
-        else if a == "--auto-pr" { auto_pr = true; i = i + 1 }
-        else if a == "--atlas-root" && i + 1 < n { atlas_root = to_string(rest[i + 1]); i = i + 2 }
-        else if a == "--base" && i + 1 < n { base = to_string(rest[i + 1]); i = i + 2 }
-        else if a == "--branch" && i + 1 < n { branch = to_string(rest[i + 1]); i = i + 2 }
-        else if a == "--title" && i + 1 < n { title = to_string(rest[i + 1]); i = i + 2 }
         else if a == "--id" && i + 1 < n { id_override = to_string(rest[i + 1]); i = i + 2 }
         else if a == "--seed" && i + 1 < n { drill_seed = to_string(rest[i + 1]); i = i + 2 }
         else if a == "--rounds" && i + 1 < n { drill_rounds = to_int(to_string(rest[i + 1])); i = i + 2 }
         else if a == "--engine" && i + 1 < n { drill_engine = to_string(rest[i + 1]); i = i + 2 }
         else if a == "--help" || a == "-h" {
-            println("usage: hexa atlas register --from-verify <fn> <n> <v> [--auto-pr]")
-            println("       hexa atlas register --from-verify <fn> <a> <b> <v> [--auto-pr]   (2-op)")
-            println("       hexa atlas register --from-verify welch_t_crit <df> <v> [--auto-pr]   (🟢 NUMERICAL)")
-            println("       hexa atlas register --from-verify wilson_hilferty_p <t> <df> <v> [--auto-pr]  (🟢)")
-            println("       hexa atlas register --from-drill  --seed \"<text>\" [--rounds N] [--engine mk9|mk10] [--auto-pr]")
-            println("       hexa atlas register --from-check  [args]                                              (STUB)")
-            println("                                  [--atlas-root <repo>] [--base <branch>]")
-            println("                                  [--branch <name>] [--title <text>] [--id <id>]")
+            println("usage: hexa atlas register --from-verify <fn> <n> <v>")
+            println("       hexa atlas register --from-verify <fn> <a> <b> <v>              (2-op)")
+            println("       hexa atlas register --from-verify welch_t_crit <df> <v>          (🟢 NUMERICAL)")
+            println("       hexa atlas register --from-verify wilson_hilferty_p <t> <df> <v> (🟢)")
+            println("       hexa atlas register --from-drill  --seed \"<text>\" [--rounds N] [--engine mk9|mk10] [--id <id>]")
             println("")
-            println("Multi-verb discovery sink: each `--from-<verb>` arm runs the verb IN-PROCESS,")
-            println("constructs an AtlasNode struct-literal IN MEMORY, folds it directly into")
-            println("compiler/atlas/embedded.gen.hexa (binary-built-in atlas SSOT — @D g_atlas_binary_builtin).")
-            println("No `.n6` intermediate, no converter. All arms share the canonical DiscoveryEvent →")
-            println("register_from_event sink (see source comments). Future verbs (smash · atlas-verify ·")
-            println("verify_adversarial · proposer · math) plug in by writing one `_adapt_<verb>` fn.")
-            println("With --auto-pr: branch + commit + `gh || api` PR (HONEST: NEVER claims a PR opened")
-            println("unless `gh` rc=0 or HTTP 201).")
+            println("Each `--from-<verb>` arm runs the verb IN-PROCESS, constructs the verified")
+            println("AtlasNode IN MEMORY, and appends it DIRECTLY to the live n6/atlas.n6 SSOT — the")
+            println("same file `hexa atlas lookup/stats/dump` read. No staging shard, no embedded.gen.hexa,")
+            println("no rebuild: the next lookup sees it. Commit n6/atlas.n6 with normal git to share.")
+            println("All arms share the canonical DiscoveryEvent → register_from_event sink.")
             return
         }
         else { positional.push(a); i = i + 1 }
-    }
-
-    // Resolve atlas-root for the embedded.gen.hexa edit + branch/commit.
-    if len(atlas_root) == 0 {
-        atlas_root = env_var("HEXA_LANG")
-        if len(atlas_root) == 0 { atlas_root = "." }
     }
 
     // ── dispatch ────────────────────────────────────────────────
@@ -2149,7 +1721,7 @@ fn cmd_register(rest: array) {
             }
             // g5 VERBATIM: the 🟢 tier line is byte-identical to the verify-arm.
             println("  tier   = 🟢 SUPPORTED-NUMERICAL  (hexa-native libm-class recompute, TECS-L n6-rep Tier2)")
-            let frerr = register_from_event(fev, auto_pr, atlas_root, base, branch, title)
+            let frerr = register_from_event(fev)
             if len(frerr) > 0 {
                 println("error: " + frerr)
                 exit(5)
@@ -2198,7 +1770,7 @@ fn cmd_register(rest: array) {
         }
         println("  calc   = " + to_string(got_display) + "  == expected " + to_string(expected))
         println("  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form; @D g_self_verify · TECS-L Tier1)")
-        let rerr = register_from_event(ev, auto_pr, atlas_root, base, branch, title)
+        let rerr = register_from_event(ev)
         if len(rerr) > 0 {
             println("error: " + rerr)
             exit(5)
@@ -2292,100 +1864,46 @@ fn cmd_register(rest: array) {
         let today = _today_compact()
         let mut idx = 0
         let cn = len(cands)
-        // Batch policy: one DiscoveryEvent per candidate, but a SINGLE
-        // branch + commit collects all of them into one PR. We achieve
-        // that by folding all events first (each appends to embed file),
-        // then calling _branch_commit_pr ONCE at the end with a combined
-        // title/summary.
-        let embed_path = _embedded_gen_path(atlas_root)
-        if !file_exists(embed_path) {
-            println("error: embedded.gen.hexa not found at " + embed_path)
-            exit(2)
-        }
-        let mut summary_lines: array = []
-        summary_lines.push("Direct node-generation path — no `.n6` intermediate.")
-        summary_lines.push("  source:   drill")
-        summary_lines.push("  seed:     " + drill_seed)
-        summary_lines.push("  rounds:   " + to_string(last_round))
-        summary_lines.push("  engine:   " + drill_engine)
-        summary_lines.push("  embed:    compiler/atlas/embedded.gen.hexa")
-        summary_lines.push("  cite:     @D g_self_verify · @D g_atlas_binary_builtin")
-        summary_lines.push("  candidates:")
+        // One DiscoveryEvent per candidate; each appends its .n6 block
+        // directly to the live n6/atlas.n6. Commit n6/atlas.n6 once at the end.
+        let n6_path = _resolve_n6_atlas()
         while idx < cn {
             let c = cands[idx]
             // Defensive: skip empty ids (mirrors overlay flush dedup).
             if len(c.id) == 0 { idx = idx + 1; continue }
             let ev = _adapt_drill_candidate(c, drill_seed, drill_engine, last_round, today)
-            // Fold WITHOUT _branch_commit_pr (we batch the PR at the end).
-            let node_text = _build_node_struct_text(ev.kind, ev.id, ev.raw,
-                "hexa atlas register --from-drill", to_int(today.replace("-", "")))
-            let ferr = _fold_into_embedded(embed_path, ev.kind, node_text, ev.id)
+            let ferr = _append_live_n6(ev.kind, ev.raw, ev.id)
             if len(ferr) > 0 {
                 // Duplicate id is benign — drill can re-emit. Other errors abort.
                 if ferr.contains("refusing to duplicate") {
                     println("  skip   = " + ev.id + " (already in atlas)")
                 } else {
-                    println("error: fold into embedded.gen.hexa failed — " + ferr)
+                    println("error: append into n6/atlas.n6 failed — " + ferr)
                     exit(5)
                 }
             } else {
-                println("  embed  = appended @" + ev.kind + " " + ev.id)
-                summary_lines.push("    - @" + ev.kind + " " + ev.id)
+                println("  atlas  = appended @" + ev.kind + " " + ev.id + " → live")
                 emitted = emitted + 1
             }
             idx = idx + 1
         }
         if emitted == 0 {
-            println("  tier   = skip — all drill candidates were already in the atlas (no new fold)")
-            println("           NO PR was opened.")
+            println("  tier   = skip — all drill candidates were already in the atlas (no new append)")
             return
         }
         println("  tier   = 🔵 SUPPORTED-FORMAL  (" + to_string(emitted) + " new candidate(s); @D g_self_verify · drill verdict != skip)")
-        if !auto_pr {
-            println("")
-            println("hexa atlas register: " + to_string(emitted) + " edit(s) landed on the CURRENT branch (no --auto-pr).")
-            println("  commit them with:  git -C " + atlas_root + " add " + embed_path + " && git commit -m " + _shq("atlas(drill): register " + to_string(emitted) + " candidate(s)"))
-            return
-        }
-        let mut bname = branch
-        let mut t = title
-        if len(bname) == 0 { bname = "atlas-register-drill-" + _branch_stamp() }
-        if len(t) == 0 { t = "atlas(drill): register " + to_string(emitted) + " candidate(s) — seed=" + drill_seed.substring(0, if len(drill_seed) > 32 { 32 } else { len(drill_seed) }) }
-        let summary = summary_lines.join("\n")
-        _branch_commit_pr(atlas_root, embed_path, base, bname, t, summary)
+        println("")
+        println("hexa atlas register: " + to_string(emitted) + " candidate(s) landed in the live atlas (" + n6_path + ").")
+        println("  commit them with:  git -C ~/core/hexa-lang add n6/atlas.n6 && git commit -m " + _shq("atlas(drill): register " + to_string(emitted) + " candidate(s)"))
         return
     }
 
-    if from_verb == "check" {
-        let ev = _adapt_check(positional)
-        println("hexa atlas register --from-check: " + ev.verdict)
-        if ev.verdict == "error" {
-            println("  NOT YET WIRED — `_adapt_check` is a stub extension point.")
-            println("  intended: run `hexa check` (compiler-frontend check pass) IN-PROCESS, on a 🔵")
-            println("            verdict construct an AtlasNode (kind C for constants, F for closed")
-            println("            forms, L for laws) and hand to register_from_event.")
-            println("  spec:     archive/patches/atlas-cli-multi-verb-discovery-pipeline.md (this file's commit)")
-            println("  see source: tool/atlas_cli.hexa::_adapt_check + DiscoveryEvent + register_from_event")
-            exit(6)
-        }
-        // Future: ev.verdict == "🔵 …" → register_from_event(ev, …).
-        let rerr = register_from_event(ev, auto_pr, atlas_root, base, branch, title)
-        if len(rerr) > 0 { println("error: " + rerr); exit(5) }
-        return
-    }
-
-    // No --from-<verb> selected. Legacy STUB path for `register <file.hexa>`.
-    println("hexa atlas register: NOT YET WIRED for <file.hexa> mode.")
-    println("  intended: lex→parse <file.hexa> → discover_check(Module) → write_staging — needs the")
-    println("  compiler frontend (compiler/lex/* + compiler/parse/parser.hexa::parse) wired into a")
-    println("  `tool/atlas_register.hexa` companion. Spec: archive/patches/hexa-cli-atlas-register-update-or-pr.md")
-    println("")
-    println("  AVAILABLE arms (multi-verb discovery sink):")
-    println("    --from-verify <fn> <n> <v> [--auto-pr]   (direct in-memory node-gen → PR; 2-op form too)")
-    println("    --from-drill  --seed \"<text>\" [--rounds N] [--engine mk9|mk10] [--auto-pr]")
-    println("    --from-check  [args]                       (STUB — extension point)")
-    println("  Future verbs (smash · atlas-verify · verify_adversarial · proposer · math) plug in by")
-    println("  writing one _adapt_<verb> fn → DiscoveryEvent → register_from_event.")
+    // No --from-<verb> selected — there is no bare `register <file>` mode.
+    println("hexa atlas register: no discovery arm selected.")
+    println("  --from-verify <fn> <n> <v>            (direct in-memory node-gen → live n6/atlas.n6)")
+    println("  --from-verify <fn> <a> <b> <v>        (2-op form)")
+    println("  --from-drill  --seed \"<text>\" [--rounds N] [--engine mk9|mk10]")
+    println("  see: hexa atlas register --help")
     exit(3)
 }
 
@@ -2424,254 +1942,6 @@ fn _today_compact() -> string {
 }
 
 // _branch_stamp — date + millis, safe for a git branch name.
-fn _branch_stamp() -> string {
-    let s = exec("date -u +%Y%m%d-%H%M%S 2>/dev/null").trim()
-    if len(s) == 0 { return "unknown" }
-    return s
-}
-
-// _gh_token — resolve a GitHub token for the API fallback: env first
-// (GH_TOKEN / GITHUB_TOKEN), then `gh auth token` if gh is logged in.
-// The token is never printed. Empty string = no token available.
-fn _gh_token() -> string {
-    let e1 = env("GH_TOKEN")
-    if len(e1) > 0 { return e1 }
-    let e2 = env("GITHUB_TOKEN")
-    if len(e2) > 0 { return e2 }
-    return exec("gh auth token 2>/dev/null").trim()
-}
-
-// _origin_slug — "owner/repo" parsed from `origin`'s URL (https or ssh
-// form), trailing ".git" stripped. Empty string = could not resolve.
-fn _origin_slug(root: string) -> string {
-    let url = exec("git -C " + _shq(root) + " remote get-url origin 2>/dev/null").trim()
-    if len(url) == 0 { return "" }
-    return exec("printf '%s' " + _shq(url) +
-        " | sed -E 's#^.*github\\.com[:/]##; s#\\.git$##'").trim()
-}
-
-// _jesc — minimal JSON string escape (backslash, then double-quote).
-fn _jesc(s: string) -> string {
-    return s.replace("\\", "\\\\").replace("\"", "\\\"")
-}
-
-fn cmd_pr(rest: array) {
-    let mut staging = ""
-    let mut atlas_root = ""
-    let mut base = "main"
-    let mut branch = ""
-    let mut title = ""
-    let mut i = 0
-    let n = len(rest)
-    while i < n {
-        let a = to_string(rest[i])
-        if a == "--staging" && i + 1 < n {
-            staging = to_string(rest[i + 1])
-            i = i + 2
-        } else if a == "--atlas-root" && i + 1 < n {
-            atlas_root = to_string(rest[i + 1])
-            i = i + 2
-        } else if a == "--base" && i + 1 < n {
-            base = to_string(rest[i + 1])
-            i = i + 2
-        } else if a == "--branch" && i + 1 < n {
-            branch = to_string(rest[i + 1])
-            i = i + 2
-        } else if a == "--title" && i + 1 < n {
-            title = to_string(rest[i + 1])
-            i = i + 2
-        } else if a == "--help" || a == "-h" {
-            println("usage: hexa atlas pr --staging <file.n6> [--atlas-root <repo-root>]")
-            println("                     [--base <branch>] [--branch <name>] [--title <text>]")
-            println("")
-            println("the `PR` arm of `update || PR`: fold the staging shard into the live atlas")
-            println("on a FRESH branch, commit the append shard, then `gh pr create` against origin.")
-            println("degrades honestly when git/gh are missing — prints the exact commands to run,")
-            println("never claims a PR was opened unless `gh pr create` actually succeeded.")
-            return
-        } else if len(staging) == 0 && a.substring(0, 2) != "--" {
-            staging = a
-            i = i + 1
-        } else {
-            println("error: unknown arg: " + a)
-            exit(2)
-        }
-    }
-    if len(staging) == 0 {
-        println("error: hexa atlas pr needs a staging file — `--staging <file.n6>`")
-        println("       (a discover/append shard; e.g. one written by `hexa atlas append-witness`)")
-        exit(2)
-    }
-    if !file_exists(staging) {
-        println("error: staging file not found: " + staging)
-        exit(2)
-    }
-    if len(atlas_root) == 0 {
-        atlas_root = env_var("HEXA_LANG")
-        if len(atlas_root) == 0 { atlas_root = "." }
-    }
-    if len(branch) == 0 { branch = "atlas-pr-" + _branch_stamp() }
-    if len(title) == 0 { title = "atlas: promote discovered nodes (via hexa atlas pr)" }
-
-    let today = _today_compact()
-    // The append shard `promote_to_atlas` will write — reconstruct the path
-    // it uses (atlas_root + "/atlas.append." + today + ".n6") so we can stage
-    // exactly that file for the commit.
-    let append_path = atlas_root + "/atlas.append." + today + ".n6"
-
-    // ── Step 0 — is `git` usable in this atlas-root? ───────────
-    let have_git = _exec_ok("command -v git")
-    let in_repo = have_git && _exec_ok("git -C " + _shq(atlas_root) + " rev-parse --git-dir")
-
-    // ── Step 1 — create the PR branch (before folding, so the append
-    //   shard lands on the branch, not on whatever was checked out). ──
-    let mut branched = false
-    if in_repo {
-        branched = _exec_ok("git -C " + _shq(atlas_root) + " switch -c " + _shq(branch))
-        if !branched {
-            println("hexa atlas pr: warning — could not create branch '" + branch + "'")
-            println("  (it may already exist, or the worktree is dirty). Folding onto the")
-            println("  current branch instead; you will need to branch + commit by hand.")
-        }
-    }
-
-    // ── Step 2 — fold the shard into the live atlas (reuse `promote`). ──
-    let rc = promote_to_atlas(staging, atlas_root)
-    if rc != 0 {
-        println("hexa atlas pr: promote_to_atlas failed (rc=" + to_string(rc) +
-                ", staging=" + staging + ", atlas-root=" + atlas_root + ")")
-        // Roll the branch back so we do not leave a stray empty branch.
-        if branched {
-            let _ = exec("git -C " + _shq(atlas_root) + " switch " + _shq(base) +
-                         " >/dev/null 2>&1; git -C " + _shq(atlas_root) +
-                         " branch -D " + _shq(branch) + " >/dev/null 2>&1")
-        }
-        exit(2)
-    }
-
-    // promote_to_atlas only writes the append shard when something landed.
-    // The append shard path it would have written is reconstructed above
-    // (atlas_root + "/atlas.append." + today + ".n6"). When that file is
-    // absent the staging file's proposals did not land — surface BOTH the
-    // staging file we honored AND the expected output path, so an
-    // ignored-arg false alarm cannot mask a parse miss.
-    if !file_exists(append_path) {
-        println("hexa atlas pr: nothing promoted from --staging " + staging)
-        println("  promote_to_atlas read the staging file but emitted 0 new/merged nodes")
-        println("  (would-be append shard: " + append_path + " was not written).")
-        println("  likely causes — (a) staging file's nodes are not L-kind (only L promotes today),")
-        println("                  (b) every L proposal collided on id with an existing atlas L,")
-        println("                  (c) the staging file's header lines do not match the")
-        println("                      `L[<fn_name>] @ <proof_hash>` form expected by")
-        println("                      parse_staging_file (see compiler/discover/promote.hexa)")
-        println("                      — `hexa atlas append-witness` shards use a different")
-        println("                      `@L <id>` header and need a parser update (follow-up).")
-        println("  see the promote manifest above for the per-proposal disposition.")
-        if branched {
-            let _ = exec("git -C " + _shq(atlas_root) + " switch " + _shq(base) +
-                         " >/dev/null 2>&1; git -C " + _shq(atlas_root) +
-                         " branch -D " + _shq(branch) + " >/dev/null 2>&1")
-        }
-        exit(3)
-    }
-
-    // ── Step 3 — degraded path: no git → write-only, print manual steps. ──
-    if !in_repo {
-        println("")
-        println("hexa atlas pr: append shard written — " + append_path)
-        if !have_git {
-            println("  `git` not found on PATH — cannot branch/commit/PR automatically.")
-        } else {
-            println("  '" + atlas_root + "' is not a git repo — cannot branch/commit/PR automatically.")
-        }
-        println("  ready to PR — from " + atlas_root + " run:")
-        println("    git switch -c " + branch)
-        println("    git add " + append_path)
-        println("    git commit -m " + _shq(title))
-        println("    gh pr create --base " + base + " --head " + branch +
-                " --title " + _shq(title))
-        return
-    }
-
-    // ── Step 4 — git available: stage + commit the append shard. ──
-    let added = _exec_ok("git -C " + _shq(atlas_root) + " add " + _shq(append_path))
-    if !added {
-        println("hexa atlas pr: warning — `git add` failed for " + append_path)
-        println("  shard is on disk; commit it by hand:")
-        println("    git -C " + atlas_root + " add " + append_path)
-        println("    git -C " + atlas_root + " commit -m " + _shq(title))
-        return
-    }
-    let commit_msg = title + "\n\nFolded staging shard: " + staging +
-                     "\nCo-Authored-By: hexa atlas pr <noreply@hexa-lang>"
-    let committed = _exec_ok("git -C " + _shq(atlas_root) + " commit -m " + _shq(commit_msg))
-    if !committed {
-        println("hexa atlas pr: warning — `git commit` failed (nothing staged? hooks?).")
-        println("  the append shard is staged on branch '" + branch + "'; commit it by hand.")
-        return
-    }
-    println("hexa atlas pr: committed " + append_path + " on branch '" + branch + "'")
-
-    // ── Step 5 — open the PR.  Fallback chain: gh CLI → GitHub API → honest
-    //    degrade (user directive: `gh || api`). A PR is NEVER claimed opened
-    //    unless `gh pr create` returned 0 or the API returned HTTP 201.
-    let gh_cmd = "gh pr create --base " + _shq(base) + " --head " + _shq(branch) +
-                 " --title " + _shq(title) +
-                 " --body 'Automated atlas promotion via `hexa atlas pr`.'"
-
-    // 5a — gh CLI (it pushes the head branch itself).
-    if _exec_ok("command -v gh") {
-        if _exec_ok("cd " + _shq(atlas_root) + " && " + gh_cmd) {
-            let url = exec("cd " + _shq(atlas_root) + " && gh pr view --json url -q .url 2>/dev/null").trim()
-            println("hexa atlas pr: PR opened via gh — " + (if len(url) > 0 { url } else { "(see `gh pr list`)" }))
-            return
-        }
-        println("hexa atlas pr: `gh pr create` did not succeed — falling back to GitHub API…")
-    } else {
-        println("hexa atlas pr: `gh` not found — falling back to GitHub API…")
-    }
-
-    // 5b — GitHub API via curl. Needs a token + the head branch pushed to
-    //      origin (the API opens a PR from an already-existing remote branch).
-    let tok = _gh_token()
-    let slug = _origin_slug(atlas_root)
-    let mut why = ""
-    if len(tok) == 0 {
-        why = "no GH_TOKEN / GITHUB_TOKEN set and `gh auth token` unavailable"
-    } else if len(slug) == 0 {
-        why = "could not resolve owner/repo from the `origin` remote"
-    } else if !_exec_ok("cd " + _shq(atlas_root) + " && git push -u origin " + _shq(branch)) {
-        why = "`git push` to origin failed (no write access / offline)"
-    }
-    if len(why) == 0 {
-        let body = "{\"title\":\"" + _jesc(title) + "\",\"head\":\"" + _jesc(branch) +
-                   "\",\"base\":\"" + _jesc(base) +
-                   "\",\"body\":\"Automated atlas promotion via hexa atlas pr.\"}"
-        let api = "curl -sS -o /tmp/_hexa_pr_resp.json -w '%{http_code}' -X POST" +
-                  " -H " + _shq("Authorization: Bearer " + tok) +
-                  " -H " + _shq("Accept: application/vnd.github+json") +
-                  " -H " + _shq("X-GitHub-Api-Version: 2022-11-28") +
-                  " https://api.github.com/repos/" + slug + "/pulls" +
-                  " -d " + _shq(body)
-        let code = exec("cd " + _shq(atlas_root) + " && " + api).trim()
-        if code == "201" {
-            let url = exec("grep -o 'https://github.com/[^\"]*/pull/[0-9]*' /tmp/_hexa_pr_resp.json | head -1").trim()
-            println("hexa atlas pr: PR opened via GitHub API — " + (if len(url) > 0 { url } else { "(HTTP 201)" }))
-            return
-        }
-        let msg = exec("grep -o '\"message\"[^,}]*' /tmp/_hexa_pr_resp.json | head -1").trim()
-        why = "GitHub API returned HTTP " + code + (if len(msg) > 0 { " — " + msg } else { "" })
-    }
-
-    // 5c — honest degrade: gh and the API are both unavailable. The branch +
-    //      commit are local; print the exact commands, claim NO PR.
-    println("")
-    println("hexa atlas pr: PR not opened — " + why + ".")
-    println("  branch '" + branch + "' has the commit locally — NO PR was opened.")
-    println("  ready to PR — from " + atlas_root + " run:")
-    println("    git push -u origin " + branch)
-    println("    " + gh_cmd)
-}
 
 fn cmd_help() {
     println("hexa atlas — atlas SSOT surface (embedded read + staging write)")
@@ -2686,40 +1956,18 @@ fn cmd_help() {
     println("  lookup --prefix=<p>     list nodes whose id starts with <p>")
     println("  dump [K] [--json]       emit all nodes (text or jsonl)")
     println("")
-    println("write subcommands:")
-    println("  append-witness --kind <P|C|L|E> --id <id> {--raw <body> | --stdin}")
-    println("                          [--emitter <name>] [--dir <staging_dir>]")
-    println("                          stage a node as atlas.append.witness-<ts>-<id>.n6")
-    println("                          default --dir = $HEXA_ATLAS_STAGING or $HOME/core/hexa-lang/n6")
-    println("  register --from-verify <fn> <n> <v> [--auto-pr]   (also: <fn> <a> <b> <v> 2-op)")
-    println("           --from-drill  --seed \"<text>\" [--rounds N] [--engine mk9|mk10] [--auto-pr]")
-    println("           --from-check  [args]                       (STUB — extension point)")
-    println("                          [--atlas-root <repo>] [--base <branch>] [--branch <name>]")
-    println("                          [--title <text>] [--id <id>]")
-    println("                          MULTI-VERB DIRECT in-memory node-gen: every `--from-<verb>`")
-    println("                          arm runs the verb IN-PROCESS, builds an AtlasNode struct-")
-    println("                          literal IN MEMORY, folds it directly into compiler/atlas/")
-    println("                          embedded.gen.hexa (binary-built-in atlas SSOT — @D g_atlas_")
-    println("                          binary_builtin). NO .n6. All arms share the canonical")
-    println("                          DiscoveryEvent → register_from_event sink — future verbs")
-    println("                          (smash · atlas-verify · proposer · math) plug in as ONE")
-    println("                          _adapt_<verb> fn. HONEST DEGRADE: drill with verdict=skip")
-    println("                          (no candidates) opens NO PR; verify FALSIFIED rejects.")
-    println("                          With --auto-pr: branch + commit + `gh || api` PR (HONEST:")
-    println("                          NEVER claims a PR opened unless `gh` rc=0 or HTTP 201).")
-    println("  register <file.hexa>    [STUB] lex→parse→discover_check→write_staging for the file's")
-    println("                          @discover-annotated fns. (needs the compiler frontend — see note)")
-    println("  pr --staging <file.n6>  [--atlas-root <repo>] [--base <branch>] [--branch <name>]")
-    println("                          [--title <text>]")
-    println("                          PR-only landing verb (@D g_atlas_binary_builtin): fold the")
-    println("                          shard onto a fresh branch, commit the append shard, then")
-    println("                          `gh pr create`. Direct fold-to-live is forbidden — every")
-    println("                          equation lands via reviewable PR (even on owner repo).")
-    println("                          degrades honestly when git/gh are absent/unauthed —")
-    println("                          writes the shard + prints the exact commands, never fakes a PR.")
+    println("write subcommand (appends DIRECTLY to the live n6/atlas.n6 — no rebuild):")
+    println("  register --from-verify <fn> <n> <v>          recompute IN-PROCESS; register on 🔵/🟢")
+    println("           --from-verify <fn> <a> <b> <v>      (2-op form)")
+    println("           --from-drill  --seed \"<text>\" [--rounds N] [--engine mk9|mk10] [--id <id>]")
+    println("                          Each --from-<verb> arm runs the verb IN-PROCESS, builds the")
+    println("                          verified AtlasNode IN MEMORY, and appends its .n6 block to the")
+    println("                          live n6/atlas.n6 (the same file READ parses) — visible to the")
+    println("                          next lookup with NO rebuild. HONEST DEGRADE: drill verdict=skip")
+    println("                          registers nothing; verify FALSIFIED is refused.")
+    println("                          Commit n6/atlas.n6 with normal git to share.")
     println("")
-    println("data lives compile-time in compiler/atlas/embedded.gen.hexa")
-    println("(regenerate via:  hexa run tool/atlas_embed_gen.hexa)")
+    println("SSOT: n6/atlas.n6 (set $HEXA_ATLAS_N6=/abs/dir to override; else ~/core/hexa-lang/n6).")
 }
 
 fn main() {
@@ -2739,9 +1987,7 @@ fn main() {
     else if sub == "stats" { cmd_stats(rest) }
     else if sub == "lookup" { cmd_lookup(rest) }
     else if sub == "dump" { cmd_dump(rest) }
-    else if sub == "append-witness" { cmd_append_witness(rest) }
     else if sub == "register" { cmd_register(rest) }
-    else if sub == "pr" { cmd_pr(rest) }
     else if sub == "help" || sub == "--help" || sub == "-h" { cmd_help() }
     else {
         println("error: unknown subcommand: " + sub)

@@ -10,6 +10,10 @@ For the full audit trail, see `git log`.
 
 - **`stdlib/cloud/vast.hexa` — vastai `--raw` JSON 파싱 robustness (fix-at-source)** (cloud 0.2.0→0.2.1) — `hexa cloud list --provider vast` 가 `[cloud] vast: list: non-array JSON — DEPRECATED: …` 로 깨지던 실측 버그 수정. 원인: vast.hexa 의 모든 vastai 경로가 `2>&1`(stderr 병합, `Aborted` 마커 post-check 때문에 의도적)인데, 최신 vastai 가 (a) `show instances` 에 `DEPRECATED:` 알림, (b) macOS python urllib3 가 `NotOpenSSLWarning`(LibreSSL) 을 stderr 로 먼저 찍어 → 선행 비-JSON 텍스트가 `json_parse` 를 깨뜨림. 공통 헬퍼 `_vast_strip_to_json(s)`(첫 `[`/`{` 이전 노이즈 전부 strip, opener 없으면 원본 유지) 1개를 도입해 5개 vastai JSON 파싱 경로 전부(`_vast_collect_offer_ids`·`vast_create`·`_vast_instance_still_live`·`vast_list_instances`·`vast_ssh_endpoint`)에 적용(g20). `show instances`→`show instances-v1`(paginated, 다른 스키마) 전환은 **안 함** — 기존 명령 유지 + 노이즈만 제거. 진짜 에러(빈 출력·API 실패)는 strip 후에도 JSON 없으면 기존 fail 경로가 보존되어 그대로 감지. 결정적 stub 테스트 `stdlib/cloud/vast_json_strip_test.hexa`(11 cases — 순수 strip 유닛 9 + 가짜 vastai shim e2e list 1 + noise-only 음성대조 1) 추가. 라이브 1회: 원시 venv vastai(노이즈 emit) 로 `vast_list_instances` → "0 instances" clean 확인.
 
+`hexa atlas` 흡수 경로를 **단일 직접경로로 정리** (atlas_cli 0.5.0 → 0.6.0). `register --from-verify`/`--from-drill`가 검증 노드를 **라이브 `n6/atlas.n6` SSOT에 직접 append** → `lookup`에 재빌드·중간파일 없이 즉시 반영. 기존엔 `embedded.gen.hexa`(텍스트 SSOT)에만 써서 런타임 lookup(`n6/atlas.n6`)에 안 보이던 회귀를 해소. 혼란 유발하던 `append-witness`(staging shard) · `pr`/`--auto-pr`(PR-only 우회) · `register <file>` STUB · `--from-check` STUB **폐기**(602줄 제거). supercon witness 6종(allen_dynes_tc·mcmillan_tc·bcs_gap_ratio·lambda_eliashberg·migdal_ratio·beenet_grid_bins)을 embedded → n6로 마이그레이션.
+
+발견: 파라미터명 `raw`가 호출부 `ev.raw` 필드접근과 codegen aliasing 충돌로 `"x"`로 미스컴파일되는 컴파일러 버그 — `node_raw`로 회피, `INBOX.log.md` 기록.
+
 ---
 
 ## 2026-05-24

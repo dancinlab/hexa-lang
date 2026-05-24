@@ -61779,3 +61779,39 @@
   verified-by = "hexa verify --expr rpe_heisenberg_sigma 7 8 0.005524271728019902"
   cite = "RFC 045 qmirror — Kimmel-Low-Yoder 2015 PRA 92 062315 (arXiv:1502.02677) Eqs.(10)-(13) / Fig.2; Robust Phase Estimation Heisenberg-limit sigma_theta = 1/(2^(K-1) * sqrt(M)) for K generations, M shots/circuit"
   provenance = "tool/atlas_cli.hexa register --from-verify (direct node-gen, no .n6; 🟢 numerical)"
+
+@F verified-allen_dynes_tc-num = allen_dynes_tc(2.5,1100.0,0.1) = 181.157 :: formula [d=2026-05-24 active]
+  tier = "🟢 SUPPORTED-NUMERICAL"
+  verified-by = "hexa verify --expr allen_dynes_tc 2.5,1100.0,0.1 181.157"
+  cite = "TECS-L n6-rep Tier2 — hexa-native libm-class numerical recompute (ε=1e-9)"
+  provenance = "tool/atlas_cli.hexa register --from-verify (direct node-gen, no .n6; 🟢 numerical)"
+
+@F verified-mcmillan_tc-num = mcmillan_tc(2.5,1100.0,0.1) = 149.923 :: formula [d=2026-05-24 active]
+  tier = "🟢 SUPPORTED-NUMERICAL"
+  verified-by = "hexa verify --expr mcmillan_tc 2.5,1100.0,0.1 149.923"
+  cite = "TECS-L n6-rep Tier2 — hexa-native libm-class numerical recompute (ε=1e-9)"
+  provenance = "tool/atlas_cli.hexa register --from-verify (direct node-gen, no .n6; 🟢 numerical)"
+
+@F verified-bcs_gap_ratio-num = bcs_gap_ratio() = 3.52775 :: formula [d=2026-05-24 active]
+  tier = "🟢 SUPPORTED-NUMERICAL"
+  verified-by = "hexa verify --expr bcs_gap_ratio  3.52775"
+  cite = "TECS-L n6-rep Tier2 — hexa-native libm-class numerical recompute (ε=1e-9)"
+  provenance = "tool/atlas_cli.hexa register --from-verify (direct node-gen, no .n6; 🟢 numerical)"
+
+@F verified-lambda_eliashberg-num = lambda_eliashberg(0.5) = 1.0 :: formula [d=2026-05-24 active]
+  tier = "🟢 SUPPORTED-NUMERICAL"
+  verified-by = "hexa verify --expr lambda_eliashberg 0.5 1.0"
+  cite = "TECS-L n6-rep Tier2 — hexa-native libm-class numerical recompute (ε=1e-9)"
+  provenance = "tool/atlas_cli.hexa register --from-verify (direct node-gen, no .n6; 🟢 numerical)"
+
+@F verified-migdal_ratio-num = migdal_ratio(25.0,10000.0) = 0.0025 :: formula [d=2026-05-24 active]
+  tier = "🟢 SUPPORTED-NUMERICAL"
+  verified-by = "hexa verify --expr migdal_ratio 25.0,10000.0 0.0025"
+  cite = "TECS-L n6-rep Tier2 — hexa-native libm-class numerical recompute (ε=1e-9)"
+  provenance = "tool/atlas_cli.hexa register --from-verify (direct node-gen, no .n6; 🟢 numerical)"
+
+@F verified-beenet_grid_bins-num = beenet_grid_bins(140.0,1.0) = 141.0 :: formula [d=2026-05-24 active]
+  tier = "🟢 SUPPORTED-NUMERICAL"
+  verified-by = "hexa verify --expr beenet_grid_bins 140.0,1.0 141.0"
+  cite = "TECS-L n6-rep Tier2 — hexa-native libm-class numerical recompute (ε=1e-9)"
+  provenance = "tool/atlas_cli.hexa register --from-verify (direct node-gen, no .n6; 🟢 numerical)"
