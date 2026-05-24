@@ -2,6 +2,35 @@
 
 Append-only history sister of `INBOX.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
+## 2026-05-25T20:59Z — stdlib 2건 (combined): FFT O(n²·log n) per-frame + 3+ module 동시 import silent-exit (from: anima STDLIB sweep 2026-05-25)
+
+본 세션(anima `feat/stdlib-sweep-json-escape-likert-eval-2026-05-25` 계열) stdlib 마이그레이션 작업 중 hexa-lang 측 잠재 갭 2건 식별. 양쪽 모두 anima-쪽 우회로 진행 가능했고 실제 진행했음(griffin-lim 은 n_fft cap 으로, synth_probe 는 inline 유지로) — SSOT 기록 및 정식 fix 핸드오프.
+
+### Gap 1 · FFT butterfly 의 O(n) immutable list rebuild
+
+- 발견자: anima `core_griffin` downstream-test agent (PR #456, 2026-05-25).
+- 증상: `stdlib/signal/core_fft.hexa::fft_native` 의 butterfly 가 매 twiddle apply 마다 **immutable list rebuild O(n)** 수행 → single-FFT 가 canonical **O(n log n)** 이 아니라 **O(n²·log n)** 으로 동작.
+- 구체적 영향: griffin-lim downstream 실측에서 **n_fft=32 cap 강제** (paper-grade 512–1024 불가). CI-portable wall budget 안에서 n_fft=64 + 5-pt sweep 가 한계 초과. 절대 floor (rel-err 6.2%) 는 n_fft-limited; convergence ratio + monotone pattern 자체는 보존(즉 알고리즘은 옳음, 단지 비용이 비-canonical).
+- proper fix 후보: butterfly 산술을 **in-place mutation** (혹은 `let mut` 버퍼 재사용) 으로 바꿔서 single-FFT O(n log n), STFT-frame O(frames · n log n) 으로 회복.
+- 우회 (anima-쪽, no upstream 의존): n_fft=32 cap, monotone-pattern 위주 검증.
+
+### Gap 2 · 3+ stdlib module 동시 import 시 toolchain silent-exit
+
+- 발견자: anima window 26-dup sweep + 5-site resolution agents (PR #454/#457, 2026-05-25).
+- 증상: `synth_probe.hexa` 헤더가 **"Self-contained — NO cross-file imports"** 라고 명시적으로 금지 — 직전 세션 식별된 hexa toolchain 측 silent-exit (3+ 모듈 동시 import 시 stderr 없이 종료) 회피용. 본 세션도 재현 재시도하면 동일 침묵 종료 위험 가정하고 inline 유지.
+- 구체적 영향: stdlib refactor 가 inline 강제 패턴으로 흐름. 일부 파일(synth_probe 등)을 `stdlib/signal/core_window` 등으로 깔끔히 재배선 못 함. 결과적으로 dedup 기회 누락 + 중복 코드 잔존.
+- proper fix 후보: `module_loader` 측에서 3+ import 시 동작 추적. 파서/로더 버그가 침묵 실패로 가장하는 형태일 가능성 높음 (silent toolchain exit ≠ honest error). 최소한 정직한 에러 메시지로 변환.
+- 우회 (anima-쪽, no upstream 의존): synth_probe + 그 패밀리는 inline 유지 — `core_window` 로의 마이그레이션 보류.
+
+### ack
+
+- 두 건 모두 **upstream 정식 fix 가 본 source 라인** 이지만 anima-쪽 우회가 가능해 본 세션 진행은 차단되지 않았음. 후속 stdlib 작업의 cost-of-workaround 감소 + paper-grade 측정 unlock 을 위해 정식 fix 권장.
+- per @D g54 (commons): 본 PR 은 INBOX-only doc edit, **review-only**. 코드 변경/auto-merge 없음.
+
+- [ ] FFT in-place butterfly 마이그레이션 (compiler/codegen 또는 stdlib/signal 측)
+- [ ] 3+ module import silent-exit 원인 진단 (module_loader / parser 추적)
+- [ ] (option) 두 갭 RFC 동반 — stdlib perf 가이드라인 + module loader 에러 정직성
+
 ## 2026-05-25T05:10Z — demiurge 7-verb production 갭: 10+2 도메인 cellrun per-verb 스크립트 부재 (from: demiurge CLI+COCKPIT 전 도메인 캠페인)
 
 demiurge cockpit/CLI 에서 **21 도메인 × 7-verb 전수 실측** 결과. dispatch 는 21/21 보편 작동(0 crash) — production(측정 record 생산)은 hexa-lang `stdlib/<도메인>/` per-verb 스크립트 배선도에 정확히 비례. demiurge surface 는 완성(dispatch·관찰·정직기록); 남은 건 stdlib 스크립트 (@D d3 — impl home = hexa-lang).
