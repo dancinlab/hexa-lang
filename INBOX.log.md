@@ -2,6 +2,20 @@
 
 Append-only history sister of `INBOX.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
+## 2026-05-25T08:10Z — RTSC N5/SSCHA 캠페인 발견 2 gap (from: demiurge RTSC micro-exp 세션)
+
+demiurge RTSC h3o micro-exp + SSCHA dispatch 중 발견된 hexa-lang 2 gap. stub-first (g60).
+
+- [ ] **(a) `hexa cloud preflight` worktree-path missing fallback** — pool-route preflight 가 격리 worktree path (로컬에만 존재, ubu/vast 호스트엔 없음) 에서 `workdir missing` 으로 fail. stdlib add/SSCHA 작업이 worktree 에서 dispatch 될 때 preflight 가 막힘.
+  - 발견: PR #897 (elliptic_K_E) agent + h3o SSCHA dispatch.
+  - 제안: preflight 가 worktree path 부재 시 canonical repo root (`~/core/hexa-lang`) 로 fallback, 또는 `--workdir` 명시 override. d8 (Vast finding → INBOX) 정합.
+  - severity: medium (worktree 격리 패턴이 표준이라 자주 발생).
+
+- [ ] **(b) `hexa verify --expr` ε=1e-9 가 low-precision input 에 과도 (round-tolerance 옵션)** — verify_cli 의 고정 ε=1e-9 가 1-decimal 입력 (예: result.txt 의 Tc=179.8K) 대비 너무 tight. hexa full-precision calc (179.779) 와 |Δ|=0.021K 차이가 순전히 입력 반올림인데 🔴 FALSIFIED 판정 (실효는 🟢 SUPPORTED-NUMERICAL).
+  - 발견: RTSC N5 funnel 4 candidate (h3o·h3si·h3f·h3po) allen_dynes_tc cross-check 전부 🔴 (round artifact).
+  - 제안: `--expr` 에 `--tol <ε>` 옵션 또는 expected 의 유효숫자 자동 감지 → 입력 정밀도 기반 ε 스케일. (현재 우회: full-precision expected 주면 🟢.)
+  - severity: low-medium (verdict 오탐 — honest tier 왜곡).
+
 ## 2026-05-25T23:10Z — hexa CLI verb sweep audit — 102 verb · 85.3% PASS · 5 결함 발견 (from: this-session full-sweep agent)
 
 `hexa --help` 의 ~120+ verb 중 102개 호출 smoke. mac user 워킹트리, `HEXA_FORCE_FALLBACK=1`, 30s timeout/verb. raw 결과 `/tmp/hexa-verb-sweep/results.jsonl`. (옛 `inbox/notes/hexa_cli_verb_sweep_audit_2026_05_25.md` 도 이번 commit 으로 정식 INBOX entry 로 rehome — g11 폐기 폴더에서 이동.)
