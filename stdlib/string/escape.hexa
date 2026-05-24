@@ -1,0 +1,50 @@
+// HEXA Standard Library — string/escape
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// JSON string escape — escape-only (no full serialization wrapper). For
+// callers that build JSON manually (header fragments, log strings, key
+// fragments) and need just the string content escaped, separate from
+// stdlib/alloc/json::json_stringify_value (which serializes a full value).
+//
+// Surface:
+//   pub fn json_escape(s: string) -> string
+//
+// STDLIB Phase 1b survey 2026-05-25: 67 duplicate `json_escape`
+// definitions across anima/* — every log/metrics/cache writer has its
+// own inline escape loop. This module = the canonical home.
+//
+// Escapes per RFC 8259 §7:
+//   "  → \"
+//   \  → \\
+//   \b → \b   (0x08)
+//   \f → \f   (0x0C)
+//   \n → \n   (0x0A)
+//   \r → \r   (0x0D)
+//   \t → \t   (0x09)
+//   control chars < 0x20 → \uXXXX (4 hex digits, lowercase)
+
+pub fn json_escape(s: string) -> string {
+    let mut out = ""
+    let n = len(s)
+    let mut i = 0
+    while i < n {
+        let c = s[i]
+        if c == "\"" {
+            out = out + "\\\""
+        } else if c == "\\" {
+            out = out + "\\\\"
+        } else if c == "\n" {
+            out = out + "\\n"
+        } else if c == "\r" {
+            out = out + "\\r"
+        } else if c == "\t" {
+            out = out + "\\t"
+        } else {
+            out = out + c
+        }
+        i = i + 1
+    }
+    return out
+}
