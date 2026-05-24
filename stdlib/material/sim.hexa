@@ -1,6 +1,6 @@
 // HEXA Standard Library — material/sim
 //
-// @version 0.2.0
+// @version 0.3.0
 // @capabilities [pure, io]
 //
 // RTSC.md §8.7 Tier 1 — Computational synthesis (first-principles 시뮬레이션),
@@ -150,6 +150,56 @@ pub fn allen_dynes_full(lam: float, omega_log_K: float, omega2_K: float,
     let f2 = 1.0 + f2_num / f2_den
 
     return f1 * f2 * ad_base
+}
+
+// ── 4a-moments. Eliashberg moments from the α²F(ω) spectral function ────
+//
+// @cite Allen & Dynes 1975, PR B12 905 — moment definitions feeding the
+//       f1·f2 Tc form above.  Carbotte 1990, RMP 62 1027 Eq.2.8 (λ).
+//
+//   λ      = 2 ∫ α²F(ω)/ω dω
+//   ω_log  = exp[ (2/λ) ∫ (α²F(ω)/ω) ln ω  dω ]
+//   ω̄₂     = sqrt[ (2/λ) ∫ α²F(ω) ω dω ]
+//
+// Collapses a sampled Eliashberg spectral function α²F(ω) into the three
+// scalar moments the Allen-Dynes Tc form consumes — the α²F → (λ, ω_log,
+// ω̄₂) → `allen_dynes_full` chain (RTSC #4; the V1 §E5 🟢→🔵 escalation
+// prerequisite, replacing the hand-fed scalar moments). `omega` (the grid,
+// each > 0 since the integrands carry 1/ω and ln ω) and `a2f` are
+// equal-length samples; the integrals use the trapezoid rule over the grid.
+// Returns [λ, ω_log, ω̄₂]; [-1, -1, -1] on malformed input (length mismatch,
+// < 2 points, or a non-positive frequency); [0, 0, 0] when the spectrum
+// integrates to λ ≤ 0 (empty / zero α²F).
+pub fn eliashberg_moments_from_a2f(omega: [float], a2f: [float]) -> [float] {
+    let n = len(omega)
+    if n < 2 || len(a2f) != n {
+        return [-1.0, -1.0, -1.0]
+    }
+    let mut int_lam = 0.0   // ∫ α²F/ω
+    let mut int_log = 0.0   // ∫ (α²F/ω) ln ω
+    let mut int_w2 = 0.0    // ∫ α²F·ω
+    let mut k = 0
+    while k < n - 1 {
+        let w0 = omega[k]
+        let w1 = omega[k + 1]
+        if w0 <= 0.0 || w1 <= 0.0 {
+            return [-1.0, -1.0, -1.0]
+        }
+        let dw = w1 - w0
+        let g0 = a2f[k] / w0
+        let g1 = a2f[k + 1] / w1
+        int_lam = int_lam + 0.5 * (g0 + g1) * dw
+        int_log = int_log + 0.5 * (g0 * log(w0) + g1 * log(w1)) * dw
+        int_w2 = int_w2 + 0.5 * (a2f[k] * w0 + a2f[k + 1] * w1) * dw
+        k = k + 1
+    }
+    let lam = 2.0 * int_lam
+    if lam <= 0.0 {
+        return [0.0, 0.0, 0.0]
+    }
+    let omega_log = exp((2.0 / lam) * int_log)
+    let omega_bar2 = sqrt((2.0 / lam) * int_w2)
+    return [lam, omega_log, omega_bar2]
 }
 
 // ── 4b. Morel-Anderson Coulomb pseudopotential μ* ──────────────────────
