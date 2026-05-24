@@ -208,3 +208,42 @@ axis 의 첫 설계서.
 - [x] e2e — `HEXA_LANG=$(pwd) hexa-run tool/build_precompile.hexa --list` PASS (manifest=10 + 10 entry + computed key 출력, exit 0).
 - [x] M6 unblock — `--list` e2e 살아남 → PR #895 의 deferred 후속 closure.
 
+## 2026-05-25 · M10 — hexa daemon R1 prototype (RFC 093 Phase 1)
+
+> M5 (PR #888) 가 `rfc_093_hexa_daemon.md` 설계서를 ship — 권장 = Option A stand-alone daemon (unix socket · idle TTL · fork-mode fallback). M10 이 그 RFC § Phase plan **R1** ("socket protocol skeleton + verb dispatch, no compile yet") 을 구현. fork-storm 의 *internal* axis (반복 호출 누적 비용) 의 첫 실코드. M2/M3 (release-time precompile) 와 직교 — M10 = run-time persistent process.
+
+- [x] M10 — `self/main.hexa` daemon verb dispatch + `cmd_daemon_*` 함수군 (+387 line):
+  - verb table 에 `} else if sub == "daemon"` 추가 (M8 의 builtin table 변경과 별개 영역 — verb dispatch).
+  - 서브버브 6: `start` (fg) · `start-bg` (nohup detach) · `stop` · `status` · `echo` · `help`.
+  - `cmd_daemon_start(sock, ttl)` — stale-socket unlink → `net_listen("unix:"+sock)` → `net_set_nonblock` + `net_select([fd],1000)` 1초 폴링 accept loop → 요청당 1 conn (R1) → idle TTL stub (무연결 N초 시 self-exit + socket unlink).
+  - `_daemon_handle_line(line)` — R1 verb 디스패처 (순수함수, `[reply, shutdown]` 반환): `PING→PONG` · `ECHO <t>→ECHO <t>` (loopback) · `SHUTDOWN→BYE` (서버 종료) · unknown→`ERR unknown verb: <v>`.
+  - `_daemon_send_line` — client 측 connect → write line+\n → net_read → close.
+  - socket path default = `/tmp/hexa-daemon-$USER.sock` (getuid builtin 미배선 → $USER fallback; uid-hardening = R3). `--socket` / `--idle-ttl` flag override.
+  - `argv0_or_hexa()` — `args()[0]` 실재 바이너리 우선 (worktree/renamed-binary 정확 재spawn) → install-dir/$HEXA_LANG/PATH `hexa` fallback. start-bg 의 self-respawn 용.
+- [x] M10 — `self/runtime.c` 소켓 primitive 복원 (+39/-23):
+  - **근본 발견**: cycle 61 이 `hxlcl_socket/bind/listen/accept/connect/recv/send/recvmsg/sendmsg/inet_pton/setsockopt` 를 전부 stub (return `rt_net_fail`/`rt_net_zero`) — rationale "aprime_cc 는 컴파일 중 네트워크 안 엶". 그러나 `hexa daemon` (및 모든 net-using hexa 프로그램) 은 같은 driver 바이너리에서 작동하는 소켓 필요. **기존 canonical `test/t34_net_listen_smoke.hexa` 도 이 stub 때문에 -22(-EINVAL) 로 FAIL 중이었음 (latent pre-existing 버그).**
+  - cycle-66 close/pipe libc-복원 패턴 mirror — `<sys/socket.h>` + `<arpa/inet.h>` top-include 추가, 11 stub 을 real libc 호출로 교체.
+  - **검증**: t34 smoke 가 이제 `listen_fd=3 close_rc=0 OK` PASS (회귀→수정). 일반 프로그램 compile+exec+println 경로 무영향.
+- [x] M10 — `tests/m_daemon_r1_test.hexa` 신규 e2e (4-step skeleton): start(bg) → status PASS → echo loopback PASS → stop PASS + post-status FAIL(rc=1). `nc`/`socat` 무의존 (client+server 모두 `hexa daemon` CLI 자체로 구동). socket path = `/tmp/...` + `mono_ns()` suffix (sun_path 104B limit 회피 · $TMPDIR/var-folders 회피).
+
+### 검증 결과 (mac arm64 측정)
+
+- **4-step e2e**: `[1] start PASS · [2] status alive PASS · [3] echo loopback PASS · [4] stop+socket-gone+post-status=1 PASS · ALL 4 STEPS PASS`.
+- **수동 lifecycle**: start/start-bg/stop/status/echo 모두 작동. PING/PONG · ECHO loopback · SHUTDOWN-BYE · idle-TTL self-exit (2s TTL → 4s 후 socket-gone rc=1) 확인.
+- **회귀**: `test/t34_net_listen_smoke.hexa` -22 FAIL → `OK` PASS. 일반 compile+exec smoke 무영향.
+- **gate**: `hexa parse self/main.hexa` + `hexa parse tests/m_daemon_r1_test.hexa` clean. `HEXA_MAC_BUILD_OK=1 hexa build` (main + test) 둘 다 clang green.
+
+### 디자인 결정 (R1)
+
+- **wire = newline-terminated text** (length-prefixed JSON-RPC 아님). R1 은 framing + lifecycle 만; R2 가 JSON-RPC 2.0 + `{compile,run,cache_query,invalidate,status}` method set 으로 업그레이드.
+- **요청당 1 conn** (keepalive 없음) — R1 단순화. multi-request 스트림 = R2.
+- **file_exists() 사용 금지** — socket inode (`S_ISSOCK`) 에 false 반환. `_daemon_socket_exists` 가 `test -e` shell-probe 로 대체.
+- **getpid() banner 생략** — reserved POSIX 이름 (codegen 이 `u_getpid` 로 mangle) · hexa builtin 미배선. bg path 는 shell `$!` 로 PID 캡처 가능.
+- **NO compile/cache/atlas logic** — R1 의 핵심. compile 은 R2.
+
+### 다음
+
+- [ ] **R2** — in-memory cache (atlas + lexer + parse + lower + codegen) + `~/.hexa-cache` 미러 + content-hash 키. wire 를 length-prefixed JSON-RPC 로 업그레이드 + 실제 `compile` method. falsifier F-DAEMON-4 (atlas consistency). (RFC 093 § Phase plan R2.)
+- [ ] R3 — multi-session test (N=100 latency · crash-respawn · multi-uid reject + getuid 배선). F-DAEMON-2/3.
+- [ ] R4 — prod ship (`hexa daemon kill` · `HEXA_DAEMON_AUTOSPAWN` opt-in · fork-fallback wire · 문서). 10/10 falsifier closure.
+

@@ -13,6 +13,7 @@
 - [x] M5 — hexa daemon RFC draft (fork-storm internal axis · design-only · *직교* — run-time persistent process vs M2/M3 release-time precompile) → `docs/rfc/rfc_drafts_2026_05_25/rfc_093_hexa_daemon.md`. 권장 = Option A stand-alone daemon (`hexa-daemon` verb · unix socket · opt-in autospawn · fork-mode fallback).
 - [x] M6 — manifest 확장 (demo 2 entry → 10 production-hot scripts) + schema 확장 (descriptions/categories sister keys, additive)
 - [x] M7 — `version_str()` 자동 drift 검사 (M2/M3 builder ↔ cmd_run 동일 version 보장) → `tests/m_version_str_consistency_test.hexa` (static `return "<literal>"` extractor; drift = RC=1 with clear `DRIFT DETECTED` message; PASS = `"0.1.0-dispatch"` on both sides).
+- [x] M10 — hexa daemon R1 prototype (RFC 093 Phase 1). `hexa daemon {start,start-bg,stop,status,echo}` over per-user unix socket (`/tmp/hexa-daemon-$USER.sock`) · newline-text wire (PING/ECHO/SHUTDOWN) · idle-TTL self-exit · `self/runtime.c` 소켓 primitive 복원 (cycle-61 stub → real libc) · `tests/m_daemon_r1_test.hexa` 4-step e2e PASS. NO compile logic (R2). fork-storm *internal* axis 의 첫 실코드 (M2/M3 release-time precompile 와 직교).
 
 ## cross-link
 

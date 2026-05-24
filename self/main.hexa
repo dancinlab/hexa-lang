@@ -4394,6 +4394,379 @@ fn cmd_cache(args) {
     exit(2)
 }
 
+// ─── GO M10 — hexa daemon (RFC 093 Phase 1 / R1 prototype) ─────────────
+//
+// rfc_093_hexa_daemon.md § Phase plan R1: "socket protocol skeleton +
+// verb dispatch (no compile yet)". This block lands the bare minimum:
+//
+//   - `hexa daemon start [--socket <path>] [--idle-ttl <sec>]`
+//   - `hexa daemon start-bg [--socket <path>] [--idle-ttl <sec>]`
+//   - `hexa daemon stop  [--socket <path>]`
+//   - `hexa daemon status [--socket <path>]`
+//   - `hexa daemon echo <text> [--socket <path>]`   (R1 loopback helper)
+//
+// Protocol (R1 skeleton — newline-terminated text · 1 request / conn):
+//   PING            → PONG
+//   ECHO <text>     → ECHO <text>
+//   SHUTDOWN        → BYE   (server exits accept loop + unlinks socket)
+//   <unknown>       → ERR unknown verb: <verb>
+//
+// R2+ upgrades the wire to length-prefixed JSON-RPC and adds the real
+// {compile, run, cache_query, invalidate, status} method set. R1 wires
+// only lifecycle + framing so subsequent rounds can layer logic without
+// touching the verb / socket plumbing.
+
+fn _daemon_default_socket() {
+    // Per RFC §4.1: `/tmp/hexa-daemon-$UID.sock`. We don't have a getuid()
+    // builtin wired to hexa yet, so fall back to $USER (good enough for
+    // single-user dev box; multi-uid hardening lands with R3).
+    let mut who = env_var("USER")
+    if len(who) == 0 { who = "unknown" }
+    return "/tmp/hexa-daemon-" + who + ".sock"
+}
+
+fn _daemon_parse_args(args, default_sock, default_ttl) {
+    // Returns [socket_path, idle_ttl_str]. Recognises `--socket <path>` and
+    // `--idle-ttl <sec>` flags anywhere in args (positional consumed).
+    let mut sock_path = default_sock
+    let mut ttl_str = default_ttl
+    let mut i = 0
+    while i < len(args) {
+        let a = args[i]
+        if a == "--socket" && i + 1 < len(args) {
+            sock_path = args[i + 1]
+            i = i + 2
+            continue
+        }
+        if a == "--idle-ttl" && i + 1 < len(args) {
+            ttl_str = args[i + 1]
+            i = i + 2
+            continue
+        }
+        i = i + 1
+    }
+    return [sock_path, ttl_str]
+}
+
+fn _daemon_socket_exists(sock_path) {
+    // file_exists() (S_ISREG-only) returns false for socket inodes, so
+    // probe via shell `test -e` which matches any inode type. Returns true
+    // iff the socket file is present on disk.
+    let r = exec("test -e " + shq(sock_path) + " && printf yes || printf no")
+    return r == "yes"
+}
+
+fn _daemon_read_line(fd) {
+    // net_read_n with terminator scan would be cleaner, but net_read's
+    // single hxlcl_recv buffer is bounded at 4 KiB and reliably returns
+    // the full client write for short R1 messages (< 100 B). Strip
+    // trailing CR/LF so the caller sees a clean verb token.
+    let raw = net_read(fd)
+    let n = len(raw)
+    if n == 0 { return "" }
+    let mut end = n
+    // trim trailing \n and \r
+    while end > 0 {
+        let c = raw.substring(end - 1, end)
+        if c == "\n" || c == "\r" {
+            end = end - 1
+            continue
+        }
+        break
+    }
+    if end == n { return raw }
+    return raw.substring(0, end)
+}
+
+fn _daemon_handle_line(line) {
+    // R1 verb dispatcher — pure function, returns [reply_text, shutdown_flag]
+    // (caller appends "\n" before write). 2-tuple over a map keeps the hot
+    // path free of map_new / map_set runtime calls.
+    let n = len(line)
+    let mut out = ""
+    let mut shutdown = 0
+    if n == 0 {
+        out = "ERR empty"
+    } else if line == "PING" {
+        out = "PONG"
+    } else if line == "SHUTDOWN" {
+        out = "BYE"
+        shutdown = 1
+    } else if n >= 5 && line.substring(0, 5) == "ECHO " {
+        out = "ECHO " + line.substring(5, n)
+    } else if line == "ECHO" {
+        out = "ECHO "
+    } else {
+        // First token for the error reply — limit at first space.
+        let mut tok_end = n
+        let mut j = 0
+        while j < n {
+            if line.substring(j, j + 1) == " " {
+                tok_end = j
+                break
+            }
+            j = j + 1
+        }
+        out = "ERR unknown verb: " + line.substring(0, tok_end)
+    }
+    return [out, shutdown]
+}
+
+fn _daemon_send_line(sock_path, line) {
+    // Connect → write line+\n → read response (4 KiB cap) → close.
+    // Returns the response with trailing newline stripped, or "" on err.
+    let addr = "unix:" + sock_path
+    let fd = net_connect(addr)
+    if fd < 0 { return "" }
+    let _w = net_write(fd, line + "\n")
+    let resp = _daemon_read_line(fd)
+    let _c = net_close(fd)
+    return resp
+}
+
+fn cmd_daemon_status(sock_path) {
+    if !_daemon_socket_exists(sock_path) {
+        println("hexa daemon: not running (socket missing: " + sock_path + ")")
+        exit(1)
+    }
+    let resp = _daemon_send_line(sock_path, "PING")
+    if resp == "PONG" {
+        println("hexa daemon: alive — " + sock_path)
+        return
+    }
+    println("hexa daemon: socket present but not responding (got: " + resp + ")")
+    exit(1)
+}
+
+fn cmd_daemon_stop(sock_path) {
+    if !_daemon_socket_exists(sock_path) {
+        println("hexa daemon: not running (socket missing: " + sock_path + ")")
+        return
+    }
+    let resp = _daemon_send_line(sock_path, "SHUTDOWN")
+    if resp == "BYE" {
+        println("hexa daemon: shutdown acknowledged — " + sock_path)
+        // Give the server a brief moment to unlink the socket file before
+        // any follow-up status check. 250 ms is enough on local FS.
+        sleep_ms(250)
+        return
+    }
+    println("hexa daemon: stop request sent but no BYE (got: " + resp + ")")
+    exit(1)
+}
+
+fn cmd_daemon_echo(sock_path, text) {
+    if !_daemon_socket_exists(sock_path) {
+        println("hexa daemon: not running (socket missing: " + sock_path + ")")
+        exit(1)
+    }
+    let resp = _daemon_send_line(sock_path, "ECHO " + text)
+    println(resp)
+}
+
+fn cmd_daemon_start(sock_path, idle_ttl_str) {
+    // Foreground server loop — binds the unix socket and serves until
+    // SHUTDOWN or idle TTL expiry. Caller wraps with `&` (or proc_fork)
+    // for background spawn.
+    //
+    // R1 invariants:
+    //   - 1 request per connection (no keepalive)
+    //   - newline-terminated text frames
+    //   - blocking accept with periodic idle-TTL check via net_set_nonblock
+    //     + net_select on the listen fd
+    //
+    // Pre-flight: if a stale socket from a crashed prior daemon is on
+    // disk, unlink it; otherwise bind would EADDRINUSE.
+    let _rm = exec("rm -f " + shq(sock_path) + " 2>/dev/null")
+    let addr = "unix:" + sock_path
+    let listen_fd = net_listen(addr)
+    if listen_fd < 0 {
+        println("hexa daemon: bind failed for " + sock_path + " (errno=" + to_string(0 - listen_fd) + ")")
+        exit(1)
+    }
+    // Parse TTL. 0 / empty / negative → no TTL (wait forever).
+    let mut idle_ttl = 0
+    if len(idle_ttl_str) > 0 {
+        let mut k = 0
+        let nn = len(idle_ttl_str)
+        let mut acc = 0
+        while k < nn {
+            let cc = idle_ttl_str.substring(k, k + 1)
+            let mut d = -1
+            if cc == "0" { d = 0 }
+            if cc == "1" { d = 1 }
+            if cc == "2" { d = 2 }
+            if cc == "3" { d = 3 }
+            if cc == "4" { d = 4 }
+            if cc == "5" { d = 5 }
+            if cc == "6" { d = 6 }
+            if cc == "7" { d = 7 }
+            if cc == "8" { d = 8 }
+            if cc == "9" { d = 9 }
+            if d < 0 { break }
+            acc = acc * 10 + d
+            k = k + 1
+        }
+        idle_ttl = acc
+    }
+    let _nb = net_set_nonblock(listen_fd)
+    // pid omitted from the listening banner — `getpid` lives in the
+    // reserved POSIX name set (mangled to `u_getpid`) and isn't wired as
+    // a hexa builtin yet. Callers can read PID from the spawn log if
+    // needed (the bg path captures it via shell `$!`).
+    println("hexa daemon: listening on " + sock_path + " (idle_ttl=" + to_string(idle_ttl) + "s)")
+    let mut shutdown = false
+    let mut last_activity_ns = mono_ns()
+    let ns_per_sec = 1000000000
+    while !shutdown {
+        // Wait up to 1 second for an incoming connection.
+        let ready = net_select([listen_fd], 1000)
+        let nready = len(ready)
+        if nready > 0 {
+            let first = ready[0]
+            if first < 0 {
+                // -errno surfaced as single-element array. EINTR is benign;
+                // anything else we surface but don't die — keep the loop alive.
+                if first != (0 - 4) {
+                    println("hexa daemon: select error " + to_string(0 - first))
+                }
+            } else {
+                let client = net_accept(listen_fd)
+                if client >= 0 {
+                    let line = _daemon_read_line(client)
+                    let h = _daemon_handle_line(line)
+                    let _w = net_write(client, h[0] + "\n")
+                    let _c = net_close(client)
+                    last_activity_ns = mono_ns()
+                    if h[1] == 1 { shutdown = true }
+                }
+            }
+        }
+        // Idle TTL check (only when TTL > 0).
+        if idle_ttl > 0 {
+            let elapsed_ns = mono_ns() - last_activity_ns
+            if elapsed_ns >= idle_ttl * ns_per_sec {
+                println("hexa daemon: idle TTL reached — exiting")
+                shutdown = true
+            }
+        }
+    }
+    let _close = net_close(listen_fd)
+    let _unlink = exec("rm -f " + shq(sock_path) + " 2>/dev/null")
+    println("hexa daemon: stopped")
+}
+
+fn cmd_daemon(args) {
+    let sub = if len(args) >= 1 { args[0] } else { "help" }
+
+    if sub == "help" || sub == "-h" || sub == "--help" {
+        println("hexa daemon — long-running compile server (RFC 093 · R1 prototype)")
+        println("")
+        println("USAGE")
+        println("  hexa daemon start    [--socket <path>] [--idle-ttl <sec>]")
+        println("  hexa daemon start-bg [--socket <path>] [--idle-ttl <sec>]")
+        println("  hexa daemon stop     [--socket <path>]")
+        println("  hexa daemon status   [--socket <path>]")
+        println("  hexa daemon echo <text> [--socket <path>]")
+        println("")
+        println("  Default socket path: /tmp/hexa-daemon-$USER.sock")
+        println("  Default idle TTL:    0  (no auto-exit)")
+        println("")
+        println("R1 SCOPE  (RFC 093 § Phase plan)")
+        println("  socket bind / accept loop / verb dispatch / lifecycle only.")
+        println("  Wire protocol = newline-terminated text (PING · ECHO · SHUTDOWN).")
+        println("  NO compile / cache / atlas logic — that lands in R2+.")
+        return
+    }
+
+    // Slice off the subverb; remaining args feed _daemon_parse_args.
+    let mut rest = []
+    let mut ri = 1
+    while ri < len(args) {
+        rest.push(args[ri])
+        ri = ri + 1
+    }
+    let default_sock = _daemon_default_socket()
+
+    if sub == "start" {
+        let pa = _daemon_parse_args(rest, default_sock, "0")
+        cmd_daemon_start(pa[0], pa[1])
+        return
+    }
+    if sub == "start-bg" {
+        let pa = _daemon_parse_args(rest, default_sock, "0")
+        // Fork + exec self as `hexa daemon start ...`. We use the shell
+        // backgrounding form rather than proc_fork() so stdout/stderr are
+        // detached (caller would otherwise see daemon log lines mixed in).
+        // The parent returns immediately; the child runs cmd_daemon_start.
+        let log_path = pa[0] + ".log"
+        let cmd = "nohup " + shq(argv0_or_hexa()) + " daemon start --socket " + shq(pa[0]) + " --idle-ttl " + shq(pa[1]) + " > " + shq(log_path) + " 2>&1 &"
+        let _r = exec(cmd)
+        // Brief settle so the child has time to bind before the caller
+        // probes via `hexa daemon status`.
+        sleep_ms(200)
+        println("hexa daemon: spawned (socket=" + pa[0] + " log=" + log_path + ")")
+        return
+    }
+    if sub == "stop" {
+        let pa = _daemon_parse_args(rest, default_sock, "0")
+        cmd_daemon_stop(pa[0])
+        return
+    }
+    if sub == "status" {
+        let pa = _daemon_parse_args(rest, default_sock, "0")
+        cmd_daemon_status(pa[0])
+        return
+    }
+    if sub == "echo" {
+        // First non-flag arg = text. Flags eaten by _daemon_parse_args.
+        let mut text = ""
+        let mut ej = 0
+        while ej < len(rest) {
+            let a = rest[ej]
+            if a == "--socket" || a == "--idle-ttl" {
+                ej = ej + 2
+                continue
+            }
+            text = a
+            break
+        }
+        let pa = _daemon_parse_args(rest, default_sock, "0")
+        cmd_daemon_echo(pa[0], text)
+        return
+    }
+
+    println("error: unknown 'daemon' subverb: " + sub)
+    println("usage: hexa daemon start|start-bg|stop|status|echo [...]")
+    exit(2)
+}
+
+// argv0_or_hexa() returns the running binary's invocation path, with a
+// fallback to bare "hexa" on PATH. Used by `daemon start-bg` to spawn a
+// detached copy of the same driver.
+fn argv0_or_hexa() {
+    // Prefer the actual invocation path (args()[0]) when it points at a
+    // real on-disk binary — this re-spawns the EXACT driver that's running
+    // (correct in dev worktrees, renamed binaries, etc.). Only fall back
+    // to install-dir / $HEXA_LANG / PATH `hexa` when argv[0] is unusable.
+    let av0 = args()
+    if len(av0) > 0 {
+        let exe = av0[0]
+        if len(exe) > 0 && file_exists(exe) { return exe }
+    }
+    let __i = install_dir_from_argv0()
+    if len(__i) > 0 {
+        let candidate = __i + "/hexa"
+        if file_exists(candidate) { return candidate }
+    }
+    let __hxroot = env_var("HEXA_LANG")
+    if len(__hxroot) > 0 {
+        let candidate2 = __hxroot + "/hexa"
+        if file_exists(candidate2) { return candidate2 }
+    }
+    return "hexa"
+}
+
 // PROBE r14 wiring (#453 follow-up): `hexa typecheck <file>` runs hexa_v2 with
 // the HEXA_TYPECHECK env set so the emitted hexa-cc main runs type_check_and_emit
 // between parse and codegen. The .c output is sent to /tmp and discarded — the
@@ -5686,6 +6059,20 @@ if len(av) < 3 {
             cai = cai + 1
         }
         cmd_cache(ca_args)
+    } else if sub == "daemon" {
+        // GO M10 (2026-05-25) — rfc_093 R1 prototype. `hexa daemon
+        // {start,start-bg,stop,status,echo}` over a per-user unix socket
+        // (default /tmp/hexa-daemon-$USER.sock). R1 is socket + verb +
+        // lifecycle skeleton ONLY — no compile logic. See cmd_daemon
+        // above and rfc_093_hexa_daemon.md § Phase plan for the R2-R4
+        // continuation (in-memory cache → multi-session test → prod ship).
+        let mut dm_args = []
+        let mut dmi = 3
+        while dmi < len(av) {
+            dm_args.push(av[dmi])
+            dmi = dmi + 1
+        }
+        cmd_daemon(dm_args)
     } else if sub == "gpu" {
         // GPU.md §7c — toolchain ergonomics. `hexa gpu fire <ptx> <host.c>
         // [target-host]` wraps the recurring remote-fire pattern (scp →

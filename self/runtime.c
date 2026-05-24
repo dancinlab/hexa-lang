@@ -22,6 +22,8 @@
 #include <signal.h>     // 2026-05-06: SIGPIPE SIG_IGN install in stdio init
 #include <regex.h>      // G3-REGEX 2026-05-06: POSIX ERE regcomp/regexec
 #include <sys/mman.h>   // RFC 025 (2026-05-12): mmap-backed safetensors load
+#include <sys/socket.h> // GO M10 (RFC 093): hexa daemon unix-socket primitives
+#include <arpa/inet.h>  // GO M10: inet_pton for AF_INET addr parse
 extern char **environ; // posix_spawnp inherits parent env explicitly
 // execinfo.h: HEXA_OOB_TRACE backtrace path; available on both Apple
 // libSystem and glibc. RFC 063/064 ubu pool fire (FIRMWARE.md G-R0)
@@ -1600,9 +1602,12 @@ static int hxlcl_sigprocmask(int how, const void *set, void *oldset) {
 static int hxlcl_setenv(const char *name, const char *val, int overwrite) {
     (void)name; (void)val; (void)overwrite; return (int)HX_INT(rt_posix_ok());
 }
-static int hxlcl_setsockopt(int sockfd, int level, int optname, const void *optval, unsigned int optlen) {
-    (void)sockfd; (void)level; (void)optname; (void)optval; (void)optlen;
-    return (int)HX_INT(rt_posix_ok());
+// GO M10 — restore real libc setsockopt (paired with the socket()/bind()
+// restore above). The stub returned "ok" so callers didn't notice, but
+// SO_REUSEADDR / SO_RCVTIMEO etc. were no-ops in the compiler binary.
+// Prototype from the top-of-file <sys/socket.h> include.
+static int __attribute__((noinline)) hxlcl_setsockopt(int sockfd, int level, int optname, const void *optval, unsigned int optlen) {
+    return setsockopt(sockfd, level, optname, optval, (socklen_t)optlen);
 }
 static int hxlcl_grantpt(int fd) { (void)fd; return (int)HX_INT(rt_posix_ok()); }
 static int hxlcl_unlockpt(int fd) { (void)fd; return (int)HX_INT(rt_posix_ok()); }
@@ -1665,35 +1670,46 @@ static size_t hxlcl_strftime(char *buf, size_t cap, const char *fmt, void *tm) {
     if (buf && cap > 0) buf[0] = '\0';
     return (size_t)HX_INT(rt_posix_ok());
 }
-static int hxlcl_socket(int d, int t, int p) {
-    (void)d; (void)t; (void)p; return (int)HX_INT(rt_net_fail());
+// GO M10 (RFC 093 R1 prototype, 2026-05-25) — restore real libc socket
+// bodies. Cycle 61 stubbed these out with rationale "aprime_cc doesn't
+// open network connections during compile" — true for the compiler, but
+// `hexa daemon` (and any future net-using `hexa` subverb / stdlib path)
+// needs working sockets in the same driver binary. Prototypes come from
+// the top-of-file <sys/socket.h> / <arpa/inet.h> includes (the cmsg/
+// msghdr structs net.c uses are declared there too). The hxlcl_* names
+// are the indirection net.c calls through. Mirrors the cycle-66 close/
+// pipe libc restore. The (void*)-typed addr/msg params widen the libc
+// `struct sockaddr*` / `struct msghdr*` signatures — the casts at the
+// call sites are exact, so this is ABI-safe.
+static int __attribute__((noinline)) hxlcl_socket(int d, int t, int p) {
+    return socket(d, t, p);
 }
-static int hxlcl_bind(int s, const void *addr, unsigned int len) {
-    (void)s; (void)addr; (void)len; return (int)HX_INT(rt_net_fail());
+static int __attribute__((noinline)) hxlcl_bind(int s, const void *addr, unsigned int len) {
+    return bind(s, (const struct sockaddr *)addr, (socklen_t)len);
 }
-static int hxlcl_listen(int s, int backlog) {
-    (void)s; (void)backlog; return (int)HX_INT(rt_net_fail());
+static int __attribute__((noinline)) hxlcl_listen(int s, int backlog) {
+    return listen(s, backlog);
 }
-static int hxlcl_accept(int s, void *addr, unsigned int *len) {
-    (void)s; (void)addr; (void)len; return (int)HX_INT(rt_net_fail());
+static int __attribute__((noinline)) hxlcl_accept(int s, void *addr, unsigned int *len) {
+    return accept(s, (struct sockaddr *)addr, (socklen_t *)len);
 }
-static int hxlcl_connect(int s, const void *addr, unsigned int len) {
-    (void)s; (void)addr; (void)len; return (int)HX_INT(rt_net_fail());
+static int __attribute__((noinline)) hxlcl_connect(int s, const void *addr, unsigned int len) {
+    return connect(s, (const struct sockaddr *)addr, (socklen_t)len);
 }
-static long hxlcl_recv(int s, void *b, unsigned long n, int f) {
-    (void)s; (void)b; (void)n; (void)f; return (long)HX_INT(rt_net_fail());
+static long __attribute__((noinline)) hxlcl_recv(int s, void *b, unsigned long n, int f) {
+    return recv(s, b, (size_t)n, f);
 }
-static long hxlcl_send(int s, const void *b, unsigned long n, int f) {
-    (void)s; (void)b; (void)n; (void)f; return (long)HX_INT(rt_net_fail());
+static long __attribute__((noinline)) hxlcl_send(int s, const void *b, unsigned long n, int f) {
+    return send(s, b, (size_t)n, f);
 }
-static long hxlcl_recvmsg(int s, void *m, int f) {
-    (void)s; (void)m; (void)f; return (long)HX_INT(rt_net_fail());
+static long __attribute__((noinline)) hxlcl_recvmsg(int s, void *m, int f) {
+    return recvmsg(s, (struct msghdr *)m, f);
 }
-static long hxlcl_sendmsg(int s, const void *m, int f) {
-    (void)s; (void)m; (void)f; return (long)HX_INT(rt_net_fail());
+static long __attribute__((noinline)) hxlcl_sendmsg(int s, const void *m, int f) {
+    return sendmsg(s, (const struct msghdr *)m, f);
 }
-static int hxlcl_inet_pton(int af, const char *src, void *dst) {
-    (void)af; (void)src; (void)dst; return (int)HX_INT(rt_net_zero());
+static int __attribute__((noinline)) hxlcl_inet_pton(int af, const char *src, void *dst) {
+    return inet_pton(af, src, dst);
 }
 // cycle 66 — restore real exec/popen bodies. Cycle 61 dropped these as
 // noop stubs with rationale "aprime_cc never spawns children". But the
