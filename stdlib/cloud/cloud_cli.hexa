@@ -9,6 +9,7 @@
 use "stdlib/cloud/cloud"
 use "stdlib/cloud/pod_registry"
 use "stdlib/cloud/preflight"
+use "stdlib/cloud/watchdog"
 
 fn _cloud_help() {
     println("hexa cloud — structured-argv remote dispatch (cycle A)")
@@ -22,6 +23,7 @@ fn _cloud_help() {
     println("  cloud copy-to   <host> <local> <remote> [conn]         upload local file to host:remote (scp)")
     println("  cloud copy-from <host> <remote> <local> [conn]         download host:remote file to local (scp)")
     println("  cloud orphans   [--hours N]                            list tracked pods, flag stale (>N h, default 6)")
+    println("  cloud watchdog  [--threshold-min N] [--util-cap-pct N] [--kill]  idle-pod autokill sweep (DRY-RUN default)")
     println("  cloud help | version")
     println("")
     println("connection flags [conn] (before `--`):")
@@ -146,7 +148,7 @@ fn main() {
     while i < len(av) {
         let t = av[i]
         if si < 0 {
-            if t == "preflight" || t == "run" || t == "exec" || t == "nohup" || t == "poll" || t == "copy-to" || t == "copy-from" || t == "orphans" || t == "help" || t == "--help" || t == "-h" || t == "version" || t == "--version" || t == "-v" {
+            if t == "preflight" || t == "watchdog" || t == "run" || t == "exec" || t == "nohup" || t == "poll" || t == "copy-to" || t == "copy-from" || t == "orphans" || t == "help" || t == "--help" || t == "-h" || t == "version" || t == "--version" || t == "-v" {
                 si = i
                 sub = t
             }
@@ -172,6 +174,16 @@ fn main() {
         // --params / --gpu / --optimizer / ... and exits 0 (fits) / 1
         // (invalid args / help) / 2 (budget exceeds cap).
         let rc = preflight_run(av, si + 1)
+        exit(rc)
+    }
+    if sub == "watchdog" {
+        // Idle-pod autokill sweep (1 cycle). DRY-RUN by default — only an
+        // explicit `--kill` / `--no-dry-run` (post-verb, needs RUNPOD_API_KEY)
+        // actually terminates. The post-verb argv (av[si+1..]) is forwarded
+        // to watchdog_run, which parses --threshold-min / --util-cap-pct /
+        // --kill and exits 0 (clean sweep) / 1 (invalid args / help) / 2
+        // (sweep failed: no runpodctl / no pods / list error).
+        let rc = watchdog_run(av, si + 1)
         exit(rc)
     }
     if sub == "run" {
