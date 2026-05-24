@@ -6259,19 +6259,42 @@ fn gen2_expr(node) {
                 ai = ai + 1
             }
             if _is_known_fn_global(name) {
-                // PROBE r16-T2: arity check at the direct-call codegen site.
-                // If `name` is a registered plain user FnDecl, the arg count
-                // must equal its declared param count (hexa fns have no
-                // default/variadic params — parse_params makes every formal
-                // mandatory). A mismatch previously surfaced only as an opaque
-                // clang "too few/many arguments to function call". Now emit a
-                // hexa-level diagnostic naming the fn + expected vs got, BEFORE
-                // codegen. Registry holds plain FnDecls only (-1 = skip: extern
-                // fns, struct constructors, imported names are unaffected).
+                // PROBE r16-T2 + RFC r16 (default args): arity check at the
+                // direct-call codegen site. The C callee is fixed-arity (all
+                // declared params), so the call must pass exactly _exp_arity
+                // args. With default args, the legal user-supplied count is the
+                // range [_req_arity, _exp_arity]; omitted trailing params are
+                // auto-filled here with their declared default expressions
+                // (strategy A — full-arity expansion at the call site). Anything
+                // below required or above total is a hexa-level error BEFORE
+                // codegen (clearer than an opaque clang "too few/many args").
+                // Registry holds plain FnDecls only (-1 = skip: extern fns,
+                // struct constructors, imported names are unaffected).
                 let _exp_arity = _fn_arity_lookup(name)
-                if _exp_arity >= 0 && len(node.args) != _exp_arity {
-                    eprintln("error: function `" + name + "` expects " + to_string(_exp_arity) + " argument(s), got " + to_string(len(node.args)))
-                    exit(1)
+                if _exp_arity >= 0 {
+                    let mut _req_arity = _fn_required_lookup(name)
+                    if _req_arity < 0 { _req_arity = _exp_arity }
+                    let _got = len(node.args)
+                    if _got < _req_arity || _got > _exp_arity {
+                        if _req_arity == _exp_arity {
+                            eprintln("error: function `" + name + "` expects " + to_string(_exp_arity) + " argument(s), got " + to_string(_got))
+                        } else {
+                            eprintln("error: function `" + name + "` expects " + to_string(_req_arity) + " to " + to_string(_exp_arity) + " argument(s), got " + to_string(_got))
+                        }
+                        exit(1)
+                    }
+                    // Auto-fill omitted trailing params with their defaults.
+                    let mut _fi = _got
+                    while _fi < _exp_arity {
+                        let _dexpr = _fn_default_at(name, _fi)
+                        if type_of(_dexpr) == "string" && _dexpr == "" {
+                            // Should not happen (range checked above) but guard.
+                            eprintln("error: function `" + name + "` missing argument " + to_string(_fi))
+                            exit(1)
+                        }
+                        arg_strs.push(gen2_expr(_dexpr))
+                        _fi = _fi + 1
+                    }
                 }
                 // bt-53: mangled emission for reserved fn names (e.g. user `fn main`).
                 return _hexa_mangle_ident(name) + "(" + arg_strs.join(", ") + ")"
@@ -8868,6 +8891,14 @@ let mut _known_nonlocal_names = []
 // produce spurious arity errors against a later signature.
 let mut _fn_arity_names = []
 let mut _fn_arity_counts = []
+// RFC r16 (default args): parallel registry of per-fn default-expr lists.
+// _fn_default_exprs[i] is an array of length _fn_arity_counts[i] where each
+// slot is either the param's default-expr AST node or "" (no default). The
+// _fn_required[i] is the count of leading params WITHOUT a default (the
+// minimum legal arg count). A call with len(args) in [required, total] is
+// auto-filled with the trailing defaults at the call site (strategy A).
+let mut _fn_default_exprs = []
+let mut _fn_required = []
 
 fn _fn_arity_register(name, count) {
     // First-wins: skip if already registered.
@@ -8878,6 +8909,27 @@ fn _fn_arity_register(name, count) {
     }
     _fn_arity_names.push(name)
     _fn_arity_counts.push(count)
+    _fn_default_exprs.push([])
+    _fn_required.push(count)
+    return 0
+}
+
+// RFC r16: register `name`'s param default-expr list. `defaults` is an array
+// (one slot per param, "" = no default) and `required` is the count of params
+// without a default. First-wins (mirrors _fn_arity_register); only updates the
+// slot whose name matches and whose default list is still empty.
+fn _fn_defaults_register(name, defaults, required) {
+    let mut i = 0
+    while i < len(_fn_arity_names) {
+        if _fn_arity_names[i] == name {
+            if len(_fn_default_exprs[i]) == 0 {
+                _fn_default_exprs[i] = defaults
+                _fn_required[i] = required
+            }
+            return 0
+        }
+        i = i + 1
+    }
     return 0
 }
 
@@ -8890,6 +8942,33 @@ fn _fn_arity_lookup(name) {
         i = i + 1
     }
     return -1
+}
+
+// RFC r16: minimum legal arg count for `name` (= count of params without a
+// default), or -1 if not registered. When equal to _fn_arity_lookup the fn
+// has no defaults (plain mandatory params).
+fn _fn_required_lookup(name) {
+    let mut i = 0
+    while i < len(_fn_arity_names) {
+        if _fn_arity_names[i] == name { return _fn_required[i] }
+        i = i + 1
+    }
+    return -1
+}
+
+// RFC r16: the default-expr AST node for param index `idx` of `name`, or ""
+// if none / not registered.
+fn _fn_default_at(name, idx) {
+    let mut i = 0
+    while i < len(_fn_arity_names) {
+        if _fn_arity_names[i] == name {
+            let _ds = _fn_default_exprs[i]
+            if idx >= 0 && idx < len(_ds) { return _ds[idx] }
+            return ""
+        }
+        i = i + 1
+    }
+    return ""
 }
 
 // ── ROI-23: 64-bucket hash sets for O(1) avg lookup ─────────
@@ -10054,6 +10133,8 @@ fn codegen_full(ast) {
     // PROBE r16-T2: reset the user-FnDecl arity registry per transpile.
     _fn_arity_names = []
     _fn_arity_counts = []
+    _fn_default_exprs = []
+    _fn_required = []
     // ── Pass 0: collect known global names for closure free-var analysis ──
     let mut gi = 0
     while gi < len(ast) {
@@ -10070,6 +10151,25 @@ fn codegen_full(ast) {
             // node carries a non-array sentinel.
             if gk == "FnDecl" && type_of(ast[gi].params) == "array" {
                 _fn_arity_register(ast[gi].name, len(ast[gi].params))
+                // RFC r16 (default args): collect each param's default-expr
+                // (or "" sentinel) and the count of leading mandatory params.
+                let mut _dfs = []
+                let mut _req = 0
+                let mut _seen_default = false
+                let mut _pj = 0
+                while _pj < len(ast[gi].params) {
+                    let _pp = ast[gi].params[_pj]
+                    let mut _de = ""
+                    if type_of(_pp) != "string" { _de = _pp.default_expr }
+                    _dfs.push(_de)
+                    if type_of(_de) == "string" && _de == "" {
+                        if !_seen_default { _req = _req + 1 }
+                    } else {
+                        _seen_default = true
+                    }
+                    _pj = _pj + 1
+                }
+                _fn_defaults_register(ast[gi].name, _dfs, _req)
             }
         } else if gk == "StructDecl" {
             _known_fn_globals.push(ast[gi].name)
