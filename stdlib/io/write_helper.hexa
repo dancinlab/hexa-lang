@@ -1,0 +1,32 @@
+// HEXA Standard Library — io/write_helper
+//
+// @version 0.1.0
+// @capabilities [io]
+//
+// Atomic write helper — writes string to file. Standardises the 173+
+// anima inline `_write_helper` definitions (STDLIB Phase 1b survey
+// 2026-05-25) under canonical home.
+//
+// Surface:
+//   pub fn write_text(path: string, content: string)
+//     Write `content` to `path`, creating/overwriting. Convenience
+//     wrapper over the runtime `file_write` builtin — single canonical
+//     access pattern.
+//
+//   pub fn write_text_atomic(path: string, content: string)
+//     Same as `write_text` but writes to `path.tmp` first, then renames
+//     to `path` (atomic-rename pattern). Prevents partial-write
+//     corruption on interrupt. For cache / state files that other
+//     processes may read concurrently.
+
+import "stdlib/portable_fs.hexa"
+
+pub fn write_text(path: string, content: string) {
+    pfs_write_text(path, content)
+}
+
+pub fn write_text_atomic(path: string, content: string) {
+    let tmp = path + ".tmp"
+    pfs_write_text(tmp, content)
+    pfs_rename(tmp, path)
+}
