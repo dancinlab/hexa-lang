@@ -12,7 +12,7 @@
 - [x] M4 — release tarball CI 통합 (`tool/build_precompile.hexa` 자동 호출 + tar 에 `release/precompile/` 동봉) → `.github/workflows/release.yml` Stage 3 추가 (3 job), Package 에 staging+smoke assert 추가.
 - [x] M5 — hexa daemon RFC draft (fork-storm internal axis · design-only · *직교* — run-time persistent process vs M2/M3 release-time precompile) → `docs/rfc/rfc_drafts_2026_05_25/rfc_093_hexa_daemon.md`. 권장 = Option A stand-alone daemon (`hexa-daemon` verb · unix socket · opt-in autospawn · fork-mode fallback).
 - [x] M6 — manifest 확장 (demo 2 entry → 10 production-hot scripts) + schema 확장 (descriptions/categories sister keys, additive)
-- [ ] M7 — `version_str()` 자동 drift 검사 (M2/M3 builder ↔ cmd_run 동일 version 보장)
+- [x] M7 — `version_str()` 자동 drift 검사 (M2/M3 builder ↔ cmd_run 동일 version 보장) → `tests/m_version_str_consistency_test.hexa` (static `return "<literal>"` extractor; drift = RC=1 with clear `DRIFT DETECTED` message; PASS = `"0.1.0-dispatch"` on both sides).
 
 ## cross-link
 

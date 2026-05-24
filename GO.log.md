@@ -115,6 +115,33 @@ axis 의 첫 설계서.
 - **strict fail** — precompile bug 시 release pipeline 전체 fail (warn+continue 아님). cold-cache 회피가 M4 의 entire purpose 라 silent skip = M4 deliverable 위배.
 - **manifest 확장** — 본 PR 은 wiring 만; 실제 hot script 전수는 M6 (별 PR). 현재 2 entry (build_hexa_cli + atlas_cli) 로 smoke 충분.
 
+## 2026-05-25 · M7 · `version_str()` drift guard (precompile silent-regression防止)
+
+- **branch**: `go-m7-version-str-drift-check` (base `origin/main`)
+- **risk closed**: M2/M3 cache key = `sha256(source)[0:16] + "_" + version_str()`.
+  builder = `tool/build_precompile.hexa::_version_str()`, reader =
+  `self/main.hexa::version_str()` — two independent literals. Drift = every
+  shipped `release/precompile/hexa_run.<key>` 가 한 키에 저장되고 cmd_run 은
+  다른 키로 lookup → precompile HIT 영구 0% (silent regression,
+  individual-side internal-consistent).
+- **change**: `tests/m_version_str_consistency_test.hexa` 신규 (Option A —
+  static `return "<literal>"` extractor + assert).
+- **measured (this commit)**:
+  - `self/main.hexa            version_str() = "0.1.0-dispatch"`
+  - `tool/build_precompile.hexa _version_str() = "0.1.0-dispatch"`
+  - 일치 → `PASS: version_str consistent across builder + cmd_run`
+  - drift 주입 (`_version_str() → "0.1.0-DRIFT"`) → RC=1 + 명확한 `DRIFT DETECTED` 메시지 + 수정 방법 안내 → 자동 되돌림 후 RC=0 회복
+- **extractor**: function-header anchor (`fn version_str(` / `fn _version_str(`) →
+  body bounded by next `\nfn ` → 첫 `return "<literal>"` 의 quoted payload 추출.
+  순수 정적 string 매칭 (AST 의존 0), 함수 모양이 multi-statement 로 진화하면
+  loud-fail (메시지에 extractor 갱신 안내 포함).
+- **CI 노트**: M1/M4 패턴 따라 stand-alone smoke. `.github/workflows/` wiring 은
+  M-series 전반의 공통 follow-up — 본 PR 의 scope 밖.
+- **Option C (.version 파일) 미채택**: static test 가 silent-regression 의 *모든*
+  머지를 cycle 전 차단하므로 runtime safety net 의 marginal value 가 낮음
+  (test 가 머지를 막으면 .version 도 영원히 drift 안 함). 추후 동적 install/cross-
+  host 시나리오에서 필요해지면 별도 milestone 으로 추가.
+
 ## 다음 후보 (사용자 결정 대기)
 
 - [ ] M2 후보 — `hexa run` warm-cache hit 경로 측정 (fork 회수 / wall ms)
