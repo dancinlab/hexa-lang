@@ -1,0 +1,4 @@
+$ hexa verify --expr aliquot 220 220
+verify --expr aliquot(220)=220
+  calc   = 284  != expected 220
+  tier   = 🔴 FALSIFIED  (calc deterministically disagrees — TECS-L result-agnostic closed negative)

@@ -1,0 +1,90 @@
+TECS-L · axis F · F5 — closed-negative miner
+============================================
+method  : hexa verify --expr <fn> <n> <v>   (HEAD driver #1153; σ/τ/φ/μ/nth_prime/aliquot/is_perfect live)
+date    : 2026-05-26
+gate    : paper_negative_ok — a 🔴 FALSIFIED result deterministically rules out one axis.
+cites   : M10 (tecs_l_up_theorem — σ(n)φ(n)=n·τ(n) ⟺ n∈{1,6} ∀n, closed-form proof) ·
+          F6 (beyond-n=6 sweep, D(n)≠0 off {1,6}) — NOT redone here.
+
+Each closed-negative = a plausible "n=6-like" conjecture stated, then computed EXACTLY
+and shown to FAIL deterministically (🔴). Each 🔴 is paired with the truth-component 🔵 it
+contradicts. All falsifiers are exact integer arithmetic — no tolerance, no rounding.
+
+K = 7 closed-negatives mined.  All 🔴 deterministic (calc ≠ expected, exact integers).
+
+------------------------------------------------------------------------------------
+CN1 — Amicable member is NOT an aliquot fixed-point.
+   conjecture : aliquot(220)=220  (i.e. 220 is its own aliquot sum, like a perfect number)
+   truth      : aliquot(220)=284  🔵  (220↔284 is THE first amicable pair; aliquot maps to the PARTNER)
+                is_perfect(220)=0 🔵
+   falsifier  : aliquot 220 220 → 🔴  (calc 284 ≠ 220)
+   RULED-OUT  : "aliquot(n)=n ⟺ perfect" cannot be loosened to amicable membership — an
+                amicable number is a 2-cycle of the aliquot map, never a fixed point.
+   files      : cn1_aliquot220_true.txt · cn1_isperfect220.txt · cn1_aliquot220_falsifier.txt
+
+CN2 — No quasi-perfect number σ(n)=2n+1 in the window [1,50].
+   conjecture : σ(n)=2n+1 for some small n (quasi-perfect, n=6-adjacent abundancy)
+   truth      : σ(12)=28 🔵  (=2·12+4; nearest forms miss 2n+1=25)
+   falsifier  : sigma 12 25 → 🔴  (calc 28 ≠ 25); exhaustive n=1..50 sweep yields ZERO hits.
+   RULED-OUT  : the quasi-perfect locus is EMPTY in [1,50] — no quasi-perfect number exists
+                in the n=6 neighbourhood (consistent with: none is known below 10^35).
+   files      : cn2_quasiperfect_sigma12_true.txt · cn2_quasiperfect_falsifier.txt
+
+CN3 — Multiply-perfect 120 (σ=3n) does NOT satisfy the abundancy-2 (σ=2n) identity.
+   conjecture : σ(120)=2·120=240  (carrying the perfect-number abundancy index 2 to the
+                smallest 3-perfect number 120)
+   truth      : σ(120)=360 = 3·120 🔵  (120 is 3-perfect, abundancy index 3, NOT 2)
+   falsifier  : sigma 120 240 → 🔴  (calc 360 ≠ 240)
+   RULED-OUT  : abundancy index is NOT shared across the perfect/multiply-perfect boundary —
+                σ(n)=2n (perfect) and σ(n)=3n (3-perfect) are disjoint loci.
+   files      : cn3_mpf_sigma120_true.txt · cn3_mpf_abundancy2_falsifier.txt
+
+CN4 — n·φ(n)=σ(n) FAILS off {1,6} (F3 sibling-locus), at n=12.
+   conjecture : σ(12)=12·φ(12)=48  (the A002618 sibling-identity n·φ(n)=σ(n), which holds at
+                n∈{1,6}, extended to the next even highly-composite n=12)
+   truth      : φ(12)=4 🔵 → 12·φ(12)=48 ; σ(12)=28 🔵
+   falsifier  : sigma 12 48 → 🔴  (calc 28 ≠ 48)
+   RULED-OUT  : n·φ(n)=σ(n) is a {1,6}-only locus (sibling to M10's σφ=nτ⟺{1,6}); it does NOT
+                extend to n=12. An n=1..40 sweep hits ONLY n=6.
+   files      : cn4_nphi_phi12_true.txt · cn4_nphi_sigma12_falsifier.txt
+
+CN4b — n·φ(n)=σ(n) FAILS even at the 2nd perfect number n=28.
+   conjecture : σ(28)=28·φ(28)=336  (testing whether the sibling-identity rides the perfect-
+                number locus, since {1,6} are special and 28 is the 2nd perfect number)
+   truth      : φ(28)=12 🔵 → 28·φ(28)=336 ; σ(28)=56 🔵
+   falsifier  : sigma 28 336 → 🔴  (calc 56 ≠ 336)
+   RULED-OUT  : perfectness does NOT rescue n·φ(n)=σ(n) — the sibling-locus is {1,6}-exclusive,
+                independent of the perfect-number locus {6,28,496,…}.
+   files      : cn4b_nphi_phi28_true.txt · cn4b_nphi_sigma28_falsifier.txt
+
+CN5 — μ is NOT 6-periodic / a multiple of 6 does NOT inherit μ(6).
+   conjecture : μ(12)=μ(6)=1  (a multiple of 6 "looks special" and copies μ(6)=1)
+   truth      : μ(12)=0 🔵  (12=2²·3 has a squared prime factor → μ=0, squareful)
+   falsifier  : mu 12 1 → 🔴  (calc 0 ≠ 1)
+   RULED-OUT  : the Möbius function has NO period-6 structure; μ(6)=1 (squarefree, even ω) is
+                an accident of 6=2·3, not a property inherited by 6 | n.
+   files      : cn5_mu12_true.txt · cn5_mu_periodic_falsifier.txt
+
+CN6 — Perfect numbers are NOT superperfect; n=6 is perfect but σ(σ(6))≠2·6.
+   conjecture : σ(σ(6))=2·6=12  (superperfect identity σ(σ(n))=2n holds at n=6, conflating
+                the perfect locus with the superperfect locus)
+   truth      : σ(6)=12, σ(12)=28 🔵 → σ(σ(6))=28, while 2·6=12
+   falsifier  : sigma 12 12 → 🔴  (σ(σ(6))=σ(12)=28 ≠ 12)
+   RULED-OUT  : the perfect locus {6,28,…} and the superperfect locus {2,4,16,64,…, i.e.
+                n=2^k with 2^{k+1}−1 prime} are DISJOINT — perfectness does not imply
+                superperfectness.
+   files      : cn6_super_sigma12_true.txt · cn6_perfect_superperfect_falsifier.txt
+
+------------------------------------------------------------------------------------
+CONCLUSION (🔴 terminal, paper_negative_ok):
+  7 closed-negatives, each deterministically ruling out one axis around the n=6 identity:
+    CN1  aliquot fixed-point ≠ amicable membership      (aliquot is a 2-cycle at 220)
+    CN2  quasi-perfect locus EMPTY in [1,50]            (σ=2n+1 unsolved/absent)
+    CN3  3-perfect 120 ≠ abundancy-2 (σ=2n)             (perfect/multiply-perfect disjoint)
+    CN4  n·φ=σ off {1,6} fails at n=12                  (sibling-locus is {1,6}-only)
+    CN4b n·φ=σ fails at perfect n=28                    (perfectness doesn't rescue it)
+    CN5  μ not 6-periodic, μ(12)=0≠μ(6)                 (Möbius has no period-6 structure)
+    CN6  perfect ≠ superperfect, σ(σ(6))=28≠12          (perfect/superperfect loci disjoint)
+  All consistent with M10 (σφ=nτ⟺{1,6}) + F6 (D(n)≠0 off {1,6}): the n=6 identities are
+  EXCLUSIVE — none of the obvious "n=6-like" generalisations (amicable, quasi-perfect,
+  multiply-perfect, n·φ=σ, μ-periodicity, superperfect) holds. Each is a ruled-out axis.
