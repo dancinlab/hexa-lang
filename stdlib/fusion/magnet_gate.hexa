@@ -1,0 +1,458 @@
+#!hexa strict
+// stdlib/fusion/magnet_gate.hexa — `fusion + verify`
+// HTS REBCO TF-coil magnet gate (FUSION.md gate (e) · F5 cohort ·
+// RTSC.md §9 substrate delegation · Phase 5 land).
+//
+// FUSION.md §2 gate (e) (자석장 — HTS REBCO TF/PF 코일 B(r) · 응력 ·
+// quench 마진 · RTSC.md substrate (GetDP A-φ · getdp_hts.py) · sim 충분
+// 설계) + §4 gate-table row (e) ("TF 코일 peak-field < HTS J_c·응력 마진
+// → 자석 설계 타당 · RTSC §9 위임") + §6 F5 cohort spec (HTS 자석
+// TF/PF B·응력·quench · RTSC.md substrate 위임) + Phase 5 land target
+// ("F5 RTSC 자석 substrate 연결 — TF 코일 peak-field × HTS J_c 마진
+// 게이트"). Sibling adapter shape — see `f3_grad_shafranov_adapter.hexa`
+// (the just-landed FUSION wrap-as-is adapter pattern: backend probe →
+// install-gated honest-skip = PASS; emits a JSON record with citations +
+// scope_caveats; out-of-process backend driver via exec when present).
+// This adapter MIRRORS that shape on the gate-(e) magnet axis.
+//
+// LANGUAGE NOTE — this project (hexa-lang) is hexa-native: the
+// `project.tape` marker routes new producer source to `.hexa`, so this
+// F5 adapter is authored in hexa. The wrap-as-is semantics are identical
+// to f3: probe the RTSC field-solver substrate (getdp_hts.py +
+// getdp binary); if the high-fidelity backend is absent, fall back to a
+// closed-form 1/R TF peak-field estimate and emit the honest install-
+// gated record; NEVER fabricate a field number.
+//
+// What gate (e) does — the magnet design-feasibility check:
+//   (1) TF coil peak field (closed-form). A tokamak toroidal field
+//       falls off as 1/R (Ampère's law, B_phi(R) = mu0 N I / (2 pi R) =
+//       B0 R0 / R). The field is HIGHEST at the TF inner leg, the
+//       smallest major radius the conductor reaches:
+//          R_inner ≈ R0 − a − gap
+//       (plasma edge R0−a, minus the inboard build `gap` — scrape-off +
+//       first wall + blanket + vacuum vessel + winding-pack standoff).
+//       So the conductor sees
+//          B_peak ≈ B0 · R0 / (R0 − a − gap).
+//       This reuses RTSC's already-verified field formalism (the on-axis
+//       Wheeler / GetDP A-φ solenoid field — RTSC.md §4.2.1 M318
+//       cross-check, `RTSC/magnet/getdp/wheeler_axis_b.hexa` on the
+//       demiurge topical side); the 1/R toroidal relation is the same
+//       magnetostatics, specialized to the toroidal geometry.
+//   (2) HTS REBCO J_c margin. Gate PASS iff B_peak stays under the
+//       conductor's usable field B_max at the operating temperature T_op
+//       (the field above which REBCO J_c·(engineering current density)
+//       drops below the design current — the practical magnet ceiling).
+//       We use a textbook REBCO critical-surface anchor: commercial
+//       REBCO coated conductor at 20 K sustains a usable engineering
+//       field well above 20 T (the SPARC TFMC demonstrated 20 T on a
+//       full-scale REBCO TF model coil — Hartwig et al. 2023). We take a
+//       conservative usable ceiling B_max = 20 T @ 20 K as the design
+//       gate, and report the margin (B_max − B_peak) and the
+//       margin-fraction (B_peak / B_max).
+//   A sim PASS here means "this magnet design point is field-feasible
+//   with HTS REBCO — worth building". It NEVER means "this magnet was
+//   built and ramped to field" — that is downstream wet-lab confirmation
+//   (FUSION.md gate (g) · R4-class invariant). absorbed=false ALWAYS.
+//
+// RTSC SUBSTRATE DELEGATION (FUSION.md gate (e) → RTSC.md §9):
+//   The high-fidelity field solve is owned by the RTSC magnet substrate
+//   (`stdlib/rtsc/getdp_hts.py` — GetDP A-φ axisymmetric magnetostatics,
+//   D72 ①b thin adapter · RTSC.md §4.2.1). This F5 adapter PROBES that
+//   substrate two ways:
+//     · substrate source present?  (`stdlib/rtsc/getdp_hts.py` on disk)
+//     · GetDP backend present?     (`getdp` binary on PATH)
+//   If BOTH present → we may drive the substrate out-of-process for a
+//   higher-fidelity B_peak (RTSC owns the solve; F5 only consumes the
+//   field number). If the GetDP binary is absent → install-gated honest-
+//   skip = PASS, falling back to the closed-form 1/R estimate. The
+//   record states WHICH path was taken (`field_path`). We NEVER fabricate
+//   a field number — closed-form is a labelled design estimate, the
+//   substrate solve is labelled as such, and an absent backend is an
+//   honest skip.
+//
+// D72: classify FIRST — the 1/R TF peak-field relation is a HOT closed
+//      form (like the Bosch-Hale reactivity / on-axis solenoid field),
+//      so we promote it as a `pub fn` hexa-native kernel here. The
+//      higher-fidelity 3-D / axisymmetric coil field belongs to the
+//      mature RTSC GetDP substrate (wrap-as-is, not re-implemented).
+// g3:  honest install-gated. The high-fidelity path needs the GetDP
+//      binary (`brew install getdp` / `apt install getdp`) PLUS the RTSC
+//      substrate. Absent the binary → install-gated honest-skip = PASS,
+//      closed-form fallback. The honest skip IS a PASS verdict
+//      (NUCLEAR.md §3.3 · FUSION.md honest-skip path). Never fabricates.
+// R4 invariant: absorbed = false ALWAYS. A simulated magnet field margin
+//      is a DESIGN-FEASIBILITY witness, NOT a measured magnet ramp. The
+//      only absorbed=true FUSION path remains the JET measured-oracle
+//      (`stdlib/fusion/jet_plasma_measured_oracle.py`, kappa-70 G37).
+//
+// NO VERIFY ATOM THIS ROUND — this adapter does NOT edit
+// `tool/verify_cli.hexa` or `compiler/atlas/calc_dispatch.hexa` (a
+// sibling agent owns those this round). The closed-form TF relation
+// reuses RTSC's already-verified field formalism; we emit the margin as
+// a JSON record. A dedicated `b_tf_peak` verify atom is a clean
+// deferrable follow-up.
+//
+// CLI shape (mirror of f3_grad_shafranov_adapter.hexa's out_dir contract):
+//   hexa run stdlib/fusion/magnet_gate.hexa <out_dir>
+//
+// Output:
+//   <out_dir>/magnet_gate.json   (single JSON record)
+// Default out_dir when omitted: /tmp/fusion_f5_magnet_gate
+//
+// Exit: 0 always on a clean emit (honest install-gated skip = PASS).
+// @no-lock-needed
+
+use "self/runtime/math_pure"
+
+// ── tiny JSON-string helpers (mirror of f3) ──────────────────────────────
+// hexa has no native JSON encoder in this stdlib slice, so we build the
+// record as a string. `_je` escapes a value into a quoted JSON string.
+
+fn _je(s: str) -> str {
+    let mut out = "\""
+    let n = s.len()
+    let mut i = 0
+    while i < n {
+        let c = s.substring(i, i + 1)
+        if c == "\"" { out = out + "\\\"" }
+        else if c == "\\" { out = out + "\\\\" }
+        else if c == "\n" { out = out + "\\n" }
+        else if c == "\r" { out = out + "\\r" }
+        else if c == "\t" { out = out + "\\t" }
+        else { out = out + c }
+        i = i + 1
+    }
+    return out + "\""
+}
+
+// Join an array of already-`_je`-escaped strings into a JSON array body.
+fn _arr(items: [str]) -> str {
+    return "[" + items.join(",") + "]"
+}
+
+// ── HTS TF-coil peak field (HOT closed form — promoted hexa-native) ───────
+// Toroidal field falls off as 1/R (Ampère's law on a tokamak):
+//     B_phi(R) = B0 * R0 / R.
+// The conductor sees the field at its smallest reachable major radius,
+// the TF inner leg:  R_inner = R0 − a − gap.  So the peak conductor field
+// is B_peak = B0 * R0 / (R0 − a − gap).  All radii in metres, B in Tesla.
+//
+// `gap` is the inboard build between the plasma edge (R0−a) and the TF
+// conductor (scrape-off layer + first wall + blanket + vacuum vessel +
+// winding-pack standoff). A guard returns a sentinel (-1.0) for a non-
+// physical inner radius (R_inner ≤ 0) — the caller treats that as FAIL.
+pub fn tf_peak_field(b0_t: float, r0_m: float, a_m: float, gap_m: float) -> float {
+    let r_inner = r0_m - a_m - gap_m
+    if r_inner <= 0.0 { return -1.0 }
+    return b0_t * r0_m / r_inner
+}
+
+// TF inner-leg major radius (the conductor's smallest reachable R).
+pub fn tf_inner_radius(r0_m: float, a_m: float, gap_m: float) -> float {
+    return r0_m - a_m - gap_m
+}
+
+// HTS REBCO J_c margin verdict. Gate PASS iff the conductor peak field
+// stays at-or-below the usable critical-surface ceiling B_max at the
+// operating temperature. Returns true on PASS (B_peak <= B_max, and a
+// physical positive B_peak).
+pub fn hts_margin_pass(b_peak_t: float, b_max_t: float) -> bool {
+    if b_peak_t <= 0.0 { return false }
+    return b_peak_t <= b_max_t
+}
+
+// ── ITER-class default anchor ─────────────────────────────────────────────
+// B0 = 5.3 T on-axis · R0 = 6.2 m · a = 2.0 m · inboard build gap = 1.42 m
+// (scrape-off + first wall + blanket + vacuum vessel + TF winding-pack
+// standoff). This anchor lands B_peak ≈ 11.8 T — the textbook ITER TF
+// peak conductor field order-of-magnitude (sanity-check value). The gap
+// is an idealized lumped inboard build, NOT a sourced engineering radial
+// build (scope_caveat s1).
+let ANCHOR_B0_T: float   = 5.3
+let ANCHOR_R0_M: float   = 6.2
+let ANCHOR_A_M: float    = 2.0
+let ANCHOR_GAP_M: float  = 1.42
+
+// HTS REBCO usable field ceiling @ operating temperature (textbook
+// critical-surface anchor — NOT a measured tape). SPARC TFMC demonstrated
+// 20 T on a full-scale REBCO TF model coil at ~20 K (Hartwig et al. 2023);
+// commercial REBCO coated conductor sustains usable J_c well above 20 T at
+// 20 K. We take a conservative usable ceiling of 20 T @ 20 K as the gate.
+let HTS_BMAX_T: float    = 20.0
+let HTS_TOP_K: float     = 20.0
+
+// ── RTSC substrate probe (FUSION gate (e) → RTSC.md §9 delegation) ────────
+// Two-part probe of the RTSC magnet field-solver substrate:
+//   (1) substrate source present? — `stdlib/rtsc/getdp_hts.py` on disk.
+//   (2) GetDP backend present?    — `getdp` binary on PATH.
+// Returns "ok" iff BOTH are present (the high-fidelity path is drivable),
+// "src" if only the substrate source is present (binary absent), "" if
+// neither. We never drive a solve from a half-present backend — both the
+// substrate adapter AND the GetDP binary are the gate for the hi-fi path.
+
+fn _probe_rtsc_substrate_src() -> str {
+    // The RTSC substrate SSOT lives at stdlib/rtsc/getdp_hts.py
+    // (RTSC.md §9 · D61 substrate home). `test -f … && echo ok`.
+    let cmd = "test -f stdlib/rtsc/getdp_hts.py && echo ok 2>/dev/null"
+    return exec(cmd).trim()
+}
+
+fn _probe_getdp_binary() -> str {
+    // GetDP binary on PATH? (the RTSC A-φ magnetostatics backend).
+    // `command -v getdp` prints the path + exits 0 iff present.
+    let cmd = "command -v getdp >/dev/null 2>&1 && echo ok"
+    return exec(cmd).trim()
+}
+
+// GetDP version string (best-effort; "unknown" if unavailable). Only
+// queried when the binary probe already succeeded.
+fn _getdp_version() -> str {
+    let cmd = "getdp --version 2>&1 | head -1"
+    let v = exec(cmd).trim()
+    if v.len() == 0 { return "unknown" }
+    return v
+}
+
+// ── install hint surfaced in the skip/closed-form record ──────────────────
+let INSTALL_HINT = "GetDP backend not on PATH — the high-fidelity RTSC field-solve path is install-gated; this record reports the closed-form 1/R TF peak-field estimate as the honest fallback (install-gated honest-skip = PASS · FUSION.md honest-skip path). Install the RTSC substrate backend: macOS `brew install getdp`; Linux `apt install getdp` (get-dp.org — Geuzaine/Dular, the Gmsh-pair open FEM). The RTSC substrate adapter `stdlib/rtsc/getdp_hts.py` (GetDP A-φ axisymmetric magnetostatics · RTSC.md §4.2.1 / §9) drives the solenoid_axisym A-φ solve; re-run after install to obtain a higher-fidelity coil-field B_peak instead of the closed-form 1/R estimate."
+
+// ── citations (RTSC.md §9 substrate · getdp/Wheeler · REBCO J_c ·
+//    FUSION.md gate (e)) ─────────────────────────────────────────────────
+fn _citations() -> [str] {
+    return [
+        _je("FUSION.md gate (e) (자석장 — HTS REBCO TF/PF 코일 B(r) · 응력 · quench 마진 · RTSC.md substrate (GetDP A-φ · getdp_hts.py) · sim 충분 설계) + §4 gate-table row (e) (TF 코일 peak-field < HTS J_c·응력 마진 → 자석 설계 타당 · RTSC §9 위임) + §6 F5 cohort + Phase 5 land target."),
+        _je("RTSC.md §9 — 5-gate 시뮬레이션 stack (HTS REBCO 솔레노이드 자석 substrate · FUSION (e)-게이트의 직속 substrate). §4.2.1 GetDP A-φ magnetostatics + §9.5 HTS Modelling Workgroup Jc(B,T,θ) shared files (htsmodelling.com)."),
+        _je("RTSC magnet substrate solver — stdlib/rtsc/getdp_hts.py (GetDP A-φ axisymmetric magnetostatics, D72 ①b thin adapter; arxiv:0811.2883 Pecher/Sirois 3-D FEM HTS magnetization; GetDP — get-dp.org, Geuzaine/Dular U. Liège, Gmsh pair)."),
+        _je("RTSC on-axis B closed-form verifier — Wheeler finite-solenoid B_z(z) (RTSC/magnet/getdp/wheeler_axis_b.hexa, demiurge topical side; RTSC.md §4.2.1 M318 cross-check vs GetDP solenoid_axisym, z=0 |B|≈0.06842 T). The 1/R toroidal TF relation reuses the same magnetostatics formalism, specialized to toroidal geometry (Ampère's law B_phi = mu0 N I / (2 pi R))."),
+        _je("HTS REBCO critical surface — SPARC TFMC 20 T REBCO TF model-coil demonstration (Hartwig et al., 'The SPARC Toroidal Field Model Coil Program', IEEE Trans. Appl. Supercond. 33(5), 2023, doi:10.1109/TASC.2023.3258402); commercial REBCO coated-conductor J_c(B,20K) data (HTS Modelling Workgroup shared Jc(B,T,θ) files, htsmodelling.com). Usable field ceiling B_max ≈ 20 T @ 20 K taken as the conservative design gate."),
+        _je("Wesson, J. — 'Tokamaks' (4th ed., Oxford 2011) · Freidberg, J.P. — 'Plasma Physics and Fusion Energy' (Cambridge 2007): toroidal-field 1/R dependence + TF inner-leg peak-field scaling B_peak = B0·R0/R_inner.")
+    ]
+}
+
+// ── scope caveats (≥3 always; +1 path-specific tail) ──────────────────────
+fn _scope_caveats(extra: str) -> [str] {
+    let mut out = [
+        _je("(s1) The closed-form 1/R peak-field B_peak = B0·R0/(R0−a−gap) is a DESIGN ESTIMATE, not a full 3-D coil FEA. It assumes an ideal axisymmetric toroidal field (B_phi ∝ 1/R) and a lumped inboard-build `gap`; it does NOT capture finite TF-coil discreteness (ripple), the winding-pack current distribution, conductor self-field, mechanical-structure exclusion, or the true engineering radial build. The high-fidelity field belongs to the RTSC GetDP A-φ substrate (RTSC.md §4.2.1)."),
+        _je("(s2) The HTS J_c margin uses a TEXTBOOK critical-surface ceiling (B_max ≈ 20 T @ 20 K, anchored to the SPARC TFMC demonstration + commercial REBCO Jc(B,T,θ) data), NOT a measured tape from the target conductor. A real magnet gate needs the as-procured REBCO tape's measured J_c(B,T,θ), the engineering current density at the operating point, AND the mechanical-stress / quench-protection margins (this adapter checks the FIELD margin only — stress & quench are out of this round's scope, deferrable)."),
+        _je("(s3) sim ≠ built magnet. A simulated TF peak-field × J_c margin PASS is a DESIGN-FEASIBILITY witness — 'this magnet design point is field-feasible with HTS REBCO, worth building'. It NEVER means the magnet was built and ramped to field; that is downstream wet-lab confirmation (FUSION.md gate (g) · R4-class invariant). absorbed=false ALWAYS."),
+        _je("(s4) absorbed = false ALWAYS for this adapter (R4 invariant). The only absorbed=true FUSION path is the JET measured-oracle (stdlib/fusion/jet_plasma_measured_oracle.py, kappa-70 G37). A magnet field-margin sim — even with the high-fidelity RTSC GetDP substrate — cannot promote to absorbed=true; it is a sim-only design record. No verify atom is registered this round (the b_tf_peak verify atom is a clean deferrable follow-up; a sibling agent owns tool/verify_cli.hexa this round).")
+    ]
+    if extra.len() > 0 { out.push(_je(extra)) }
+    return out
+}
+
+fn main() {
+    let argv = args()
+    let mut out_dir = "/tmp/fusion_f5_magnet_gate"
+    // argv[0] is the program; argv[1] is the out_dir if supplied.
+    if argv.len() > 1 {
+        let a = argv[1]
+        if a.len() > 0 { out_dir = a }
+    }
+
+    // mkdir -p the out_dir (matches f3's exec mkdir contract).
+    let _ = exec("mkdir -p '" + out_dir.replace("'", "'\\''") + "' 2>/dev/null")
+
+    // ISO stamp — UTC, filesystem-safe (matches the exports stamp style).
+    let stamp = exec("date -u +%Y-%m-%dT%H-%M-%SZ").trim()
+
+    // ── RTSC substrate probe (FUSION gate (e) delegation) ─────────────────
+    let src_probe = _probe_rtsc_substrate_src()
+    let bin_probe = _probe_getdp_binary()
+    let src_present = src_probe == "ok"
+    let bin_present = bin_probe == "ok"
+    // The high-fidelity path needs BOTH the RTSC substrate source AND the
+    // GetDP binary. Either missing → closed-form fallback (install-gated).
+    let hifi_drivable = src_present && bin_present
+
+    // ── field path selection ──────────────────────────────────────────────
+    // We ALWAYS compute the closed-form 1/R estimate (it is the gate's
+    // hexa-native kernel). If the hi-fi RTSC substrate path is drivable we
+    // may override B_peak with the substrate solve; otherwise the closed-
+    // form is the reported field (honest install-gated skip = PASS).
+    let b0 = ANCHOR_B0_T
+    let r0 = ANCHOR_R0_M
+    let aa = ANCHOR_A_M
+    let gap = ANCHOR_GAP_M
+    let r_inner = tf_inner_radius(r0, aa, gap)
+    let b_peak_cf = tf_peak_field(b0, r0, aa, gap)
+
+    let mut field_path = "closed_form_1overR"
+    let mut b_peak = b_peak_cf
+    let mut backend = "closed-form@hexa-native"
+    let mut producer = "fusion-f5-magnet-gate@hexa-native"
+    let mut gate_type = "install-gated"
+    let mut skipped_reason = ""
+    let mut run_note = ""
+    let mut substrate_note = ""
+
+    if hifi_drivable {
+        // RTSC substrate + GetDP binary BOTH present → drive the substrate
+        // out-of-process for a higher-fidelity coil field. RTSC owns the
+        // solve; F5 only consumes the returned B_peak number. On ANY
+        // failure we fall back to the closed-form estimate (never fabricate).
+        let solved = _drive_rtsc_field_solve(out_dir)
+        if solved > 0.0 {
+            field_path = "rtsc_getdp_substrate"
+            b_peak = solved
+            backend = "getdp@" + _getdp_version()
+            producer = "fusion-f5-magnet-gate via rtsc/getdp_hts.py"
+            gate_type = "fusion-design-feasibility"
+            substrate_note = "RTSC GetDP A-φ substrate (stdlib/rtsc/getdp_hts.py) driven out-of-process for the higher-fidelity coil B_peak; F5 consumed the substrate field number. Closed-form 1/R estimate retained alongside for cross-check."
+            run_note = "RTSC substrate field-solve path taken (GetDP A-φ present). B_peak from the substrate solve; closed-form 1/R kept as b_peak_closed_form_T for cross-check."
+        } else {
+            // Substrate present but solve produced no usable field — honest
+            // fallback to the closed-form estimate (NEVER fabricate).
+            field_path = "closed_form_1overR"
+            b_peak = b_peak_cf
+            backend = "closed-form@hexa-native (getdp present, solve produced no field)"
+            gate_type = "install-gated"
+            skipped_reason = "RTSC substrate + getdp present, but the substrate field-solve produced no usable B_peak. Falling back to the closed-form 1/R estimate (honest — no fabricated field). " + INSTALL_HINT
+            run_note = "RTSC substrate solve failed to return a field; closed-form 1/R estimate used as the honest fallback."
+        }
+    } else {
+        // High-fidelity path not drivable → closed-form fallback. This IS
+        // the PASS verdict (install-gated honest-skip · FUSION honest-skip).
+        field_path = "closed_form_1overR"
+        b_peak = b_peak_cf
+        gate_type = "install-gated"
+        let mut why = "getdp binary absent"
+        if !src_present { why = "RTSC substrate source (stdlib/rtsc/getdp_hts.py) absent" }
+        if !src_present && !bin_present { why = "RTSC substrate source AND getdp binary both absent" }
+        skipped_reason = "High-fidelity RTSC field-solve path not drivable (" + why + "). Reporting the closed-form 1/R TF peak-field estimate as the honest install-gated fallback (install-gated honest-skip = PASS). " + INSTALL_HINT
+        run_note = "Closed-form 1/R TF peak-field path taken (high-fidelity RTSC GetDP substrate not drivable on this host)."
+    }
+
+    // ── HTS REBCO J_c margin verdict ──────────────────────────────────────
+    let b_max = HTS_BMAX_T
+    let pass = hts_margin_pass(b_peak, b_max)
+    let margin_t = b_max - b_peak                 // headroom in Tesla (>0 = PASS)
+    let mut margin_frac = -1.0
+    if b_max > 0.0 { margin_frac = b_peak / b_max }   // fraction of ceiling used
+    let verdict = if pass { "PASS" } else { "FAIL" }
+
+    // ── headline ──────────────────────────────────────────────────────────
+    let mut headline = ""
+    if pass {
+        headline = "PASS: B_peak=" + str(b_peak) + " T < HTS B_max=" + str(b_max) + " T @ " + str(HTS_TOP_K) + " K (margin " + str(margin_t) + " T · " + field_path + " · fusion gate (e) design-feasibility · absorbed=false)"
+    } else {
+        headline = "FAIL: B_peak=" + str(b_peak) + " T exceeds HTS B_max=" + str(b_max) + " T @ " + str(HTS_TOP_K) + " K (margin " + str(margin_t) + " T · " + field_path + " · magnet design point not field-feasible — see @D d2 breakthrough paths: HTS 고자장 컴팩트화 · stress-bucked TF · alt coil topology)"
+    }
+
+    // ── assemble the JSON record ──────────────────────────────────────────
+    let mut rec = "{"
+    rec = rec + "\"domain\":" + _je("fusion") + ","
+    rec = rec + "\"verb\":" + _je("verify") + ","
+    rec = rec + "\"kind\":" + _je("hts_tf_coil_magnet_field_margin_gate") + ","
+    rec = rec + "\"stamp\":" + _je(stamp) + ","
+    rec = rec + "\"measurement_gate\":" + _je("GATE_OPEN") + ","
+    // R4 invariant — a sim magnet field margin is a design-feasibility
+    // witness, NEVER a measured magnet ramp (FUSION.md gate (e)).
+    rec = rec + "\"absorbed\":false,"
+    rec = rec + "\"provisional\":true,"
+    rec = rec + "\"fusion_gate\":" + _je("(e) HTS REBCO TF-coil magnet field margin (RTSC §9 substrate delegation)") + ","
+    rec = rec + "\"gate_type\":" + _je(gate_type) + ","
+    rec = rec + "\"producer\":" + _je(producer) + ","
+    rec = rec + "\"backend\":" + _je(backend) + ","
+    rec = rec + "\"field_path\":" + _je(field_path) + ","
+    // RTSC substrate-delegation probe results (FUSION gate (e) → RTSC §9).
+    rec = rec + "\"rtsc_substrate\":{"
+    rec = rec + "\"substrate_source\":" + _je("stdlib/rtsc/getdp_hts.py") + ","
+    rec = rec + "\"substrate_source_present\":" + (if src_present { "true" } else { "false" }) + ","
+    rec = rec + "\"getdp_binary_present\":" + (if bin_present { "true" } else { "false" }) + ","
+    rec = rec + "\"hifi_drivable\":" + (if hifi_drivable { "true" } else { "false" })
+    rec = rec + "},"
+    // magnet design inputs (ITER-class anchor) + computed field.
+    rec = rec + "\"magnet\":{"
+    rec = rec + "\"anchor\":" + _je("ITER-class (textbook reference, NOT a sourced engineering build)") + ","
+    rec = rec + "\"B0_onaxis_T\":" + str(b0) + ","
+    rec = rec + "\"R0_major_m\":" + str(r0) + ","
+    rec = rec + "\"a_minor_m\":" + str(aa) + ","
+    rec = rec + "\"inboard_gap_m\":" + str(gap) + ","
+    rec = rec + "\"R_inner_leg_m\":" + str(r_inner) + ","
+    rec = rec + "\"B_peak_T\":" + str(b_peak) + ","
+    rec = rec + "\"b_peak_closed_form_T\":" + str(b_peak_cf) + ","
+    rec = rec + "\"field_law\":" + _je("B_peak = B0 * R0 / (R0 - a - gap)  [Ampere's law, toroidal B_phi proportional to 1/R]")
+    rec = rec + "},"
+    // HTS REBCO J_c margin verdict.
+    rec = rec + "\"hts_margin\":{"
+    rec = rec + "\"conductor\":" + _je("REBCO coated conductor (textbook critical surface, NOT a measured tape)") + ","
+    rec = rec + "\"T_op_K\":" + str(HTS_TOP_K) + ","
+    rec = rec + "\"B_max_usable_T\":" + str(b_max) + ","
+    rec = rec + "\"B_peak_T\":" + str(b_peak) + ","
+    rec = rec + "\"margin_T\":" + str(margin_t) + ","
+    rec = rec + "\"margin_fraction_of_ceiling\":" + str(margin_frac) + ","
+    rec = rec + "\"verdict\":" + _je(verdict) + ","
+    rec = rec + "\"pass\":" + (if pass { "true" } else { "false" })
+    rec = rec + "},"
+    if skipped_reason.len() > 0 {
+        rec = rec + "\"skipped_reason\":" + _je(skipped_reason) + ","
+    } else {
+        rec = rec + "\"skipped_reason\":null,"
+    }
+    if substrate_note.len() > 0 {
+        rec = rec + "\"substrate_note\":" + _je(substrate_note) + ","
+    }
+    if run_note.len() > 0 {
+        rec = rec + "\"run_note\":" + _je(run_note) + ","
+    }
+    rec = rec + "\"scope_caveats\":" + _arr(_scope_caveats("")) + ","
+    rec = rec + "\"citations\":" + _arr(_citations())
+    rec = rec + "}"
+
+    // ── write record ──────────────────────────────────────────────────────
+    let rec_path = out_dir + "/magnet_gate.json"
+    let ok = write_file(rec_path, rec)
+    if !ok {
+        println("[fusion+verify · f5_magnet_gate] FAILED to write " + rec_path)
+        exit(1)
+    }
+
+    println("[fusion+verify · f5_magnet_gate] wrote " + rec_path)
+    println("  headline: " + headline)
+    println("  field_path=" + field_path + " gate_type=" + gate_type + " verdict=" + verdict + " absorbed=false")
+    if skipped_reason.len() > 0 {
+        let dot = skipped_reason.find(".")
+        let mut first = skipped_reason
+        if dot >= 0 { first = skipped_reason.substring(0, dot + 1) }
+        println("  skipped_reason: " + first)
+    }
+    println("[fusion+verify · f5_magnet_gate] absorbed=false (R4 invariant; a sim TF peak-field × HTS J_c margin is a DESIGN-FEASIBILITY witness, NEVER a built magnet ramp — gate (e) · FUSION.md · RTSC §9 substrate). JET measured-oracle is the only absorbed=true fusion path.")
+    exit(0)
+}
+
+// ── RTSC substrate field solve (out-of-process delegation driver) ─────────
+// FUSION gate (e) → RTSC.md §9. When the GetDP binary + the RTSC substrate
+// adapter are BOTH present, we drive the RTSC field solver out-of-process
+// and read back a peak field. The RTSC substrate (stdlib/rtsc/getdp_hts.py)
+// owns the GetDP A-φ solve; F5 only CONSUMES the returned field number — we
+// never re-implement the solve and we never fabricate. On ANY failure
+// (non-zero exit, no parseable field) we return -1.0 and the caller falls
+// back to the closed-form estimate. Mirror of f3's _run_freegs_solve
+// out-of-process driver discipline.
+//
+// NOTE: the RTSC getdp_hts.py producer currently lands the GATE (it emits
+// a record-only verify gate; the full A-φ B_peak readback is a multi-week
+// HTS H-/A-φ scope per RTSC.md §9). So on a host WITH getdp this driver
+// invokes the substrate but, until the substrate emits a parseable peak-
+// field token, returns -1.0 → honest closed-form fallback. This keeps F5
+// strictly off the RTSC files: it CONSUMES the substrate, never edits it.
+fn _drive_rtsc_field_solve(out_dir: str) -> float {
+    let sub_out = out_dir + "/_rtsc_substrate"
+    let _ = exec("mkdir -p '" + sub_out.replace("'", "'\\''") + "' 2>/dev/null")
+    // Invoke the RTSC substrate producer (it writes its own verify record
+    // under sub_out). We then look for a peak-field token in its output.
+    let cmd = "python3 stdlib/rtsc/getdp_hts.py '" + sub_out.replace("'", "'\\''") + "' 2>/dev/null; grep -ho '\"B_peak[^,}]*' '" + sub_out.replace("'", "'\\''") + "'/*.json 2>/dev/null | head -1"
+    let res = exec(cmd).trim()
+    // Parse a numeric field from the token, if any. The current RTSC
+    // substrate gate-record emits no B_peak token → res is empty → -1.0.
+    if res.len() == 0 { return -1.0 }
+    // Extract the number after the last ':' (best-effort).
+    let colon = res.find(":")
+    if colon < 0 { return -1.0 }
+    let numstr = res.substring(colon + 1, res.len()).trim()
+    if numstr.len() == 0 { return -1.0 }
+    let v = to_float(numstr)
+    if v <= 0.0 { return -1.0 }
+    return v
+}
