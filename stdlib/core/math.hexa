@@ -68,6 +68,34 @@ pub fn is_prime(n) -> bool {
     true
 }
 
+// mersenne(p) = M_p = 2^p - 1, the p-th Mersenne number.
+pub fn mersenne(p) -> int {
+    pow(2, p) - 1
+}
+
+// lucas_lehmer(p) — Lucas–Lehmer primality test for the Mersenne number
+// M_p = 2^p - 1.  For prime p > 2, M_p is prime ⟺ S_{p-2} ≡ 0 (mod M_p),
+// where S_0 = 4 and S_{k+1} = S_k² − 2.  Edge case: M_2 = 3 is prime, and
+// the test runs zero iterations there, so handle p == 2 explicitly.
+//
+// Pure-integer: S_k is reduced mod M_p every step, so it stays < M_p; for
+// p ≤ 31 the product S_k*S_k fits in i64 (M_13 = 8191 → S_k < 8191,
+// S_k² < 6.7e7).  Returns true iff M_p is prime.  (p < 2 → false; the
+// caller is expected to pass a prime exponent — p composite makes M_p
+// composite trivially, but this routine only attests the LL residue.)
+pub fn lucas_lehmer(p) -> bool {
+    if p < 2 { return false }
+    if p == 2 { return true }
+    let m = pow(2, p) - 1
+    let s = 4
+    let k = 0
+    while k < p - 2 {
+        s = (s * s - 2) % m
+        k = k + 1
+    }
+    s == 0
+}
+
 // n=6 number theory
 pub fn sigma(n) -> int {
     let sum = 0

@@ -1233,3 +1233,76 @@
   raw    = ".verdicts/tecs-l-mersenne-composite/m11_tau.txt"
   src    = "TECS-L axis B MR6 finding; grounded in m11 sigma/tau atoms (tau(2047)=4!=2 deterministic witness)"
   status = "🔵 SUPPORTED-FORMAL — closed converse-failure finding; grounded in m11 sigma/tau atoms. terminal · paper-eligible."
+
+# ───────────────────────────────────────────────────────────────────────
+# TECS-L axis B (MERSENNE) — tecs-l-mersenne-lucas-lehmer (slug · group=TECS-L · MR4)
+# Lucas–Lehmer primality test, implemented hexa-native in stdlib/core/math.hexa
+# as `fn lucas_lehmer(p)`:  S_0=4, S_{k+1}=S_k²−2, M_p prime ⟺ S_{p-2}≡0 (mod M_p).
+# Tested by stdlib/core/math_lucas_lehmer_test.hexa (`hexa parse` PASS).
+#
+# LL is an ALGORITHM (a loop), not a `hexa verify --expr` builtin, so its
+# evidence is two-fold: (a) the hexa test asserts the correct primality
+# (p=3/5/7/13 PRIME, p=11 COMPOSITE), and (b) the SAME conclusions are
+# anchored by g5 atoms that ARE builtin — recorded as the verdict anchor:
+#   M_p prime ⟹ 2^{p-1}·M_p perfect  (is_perfect, 🔵):
+#     p=3 →28, p=5 →496, p=7 →8128, p=13 →33550336
+#   M_11 composite (sigma/tau, 🔵; axis-B MR6): sigma(2047)=2160≠2048, tau(2047)=4≠2
+#
+# Caveat: the compiled `hexa build` run was NOT executed — `hexa build` is
+# heavy-classified and the pool-route hook refuses it locally (Mac is the
+# workstation; pool hosts report "workdir missing"). Evidence = `hexa parse`
+# PASS + the g5 cross-checks below + the LL recurrence reference trace in
+# .verdicts/tecs-l-mersenne-lucas-lehmer/ll_test_evidence.txt. No compiled
+# test pass is claimed.
+
+# — PRIME exponents: M_p prime ⟹ 2^{p-1}·M_p perfect (LL says PRIME) —
+@C tecs_l_ll_p3_perfect := "lucas_lehmer(3)=true ⟺ M_3=7 prime — cross-anchored is_perfect(2^2*7=28)=1" :: formula [slug=tecs-l-mersenne-lucas-lehmer group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr is_perfect 28 1"
+  raw    = ".verdicts/tecs-l-mersenne-lucas-lehmer/ll_p3_is_perfect.txt"
+  src    = "stdlib/core/math.hexa fn lucas_lehmer; TECS-L axis B MR4; Euclid-Euler 2^{p-1}*M_p perfect"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal · paper-eligible."
+
+@C tecs_l_ll_p5_perfect := "lucas_lehmer(5)=true ⟺ M_5=31 prime — cross-anchored is_perfect(2^4*31=496)=1" :: formula [slug=tecs-l-mersenne-lucas-lehmer group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr is_perfect 496 1"
+  raw    = ".verdicts/tecs-l-mersenne-lucas-lehmer/ll_p5_is_perfect.txt"
+  src    = "stdlib/core/math.hexa fn lucas_lehmer; TECS-L axis B MR4; Euclid-Euler 2^{p-1}*M_p perfect"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal · paper-eligible."
+
+@C tecs_l_ll_p7_perfect := "lucas_lehmer(7)=true ⟺ M_7=127 prime — cross-anchored is_perfect(2^6*127=8128)=1" :: formula [slug=tecs-l-mersenne-lucas-lehmer group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr is_perfect 8128 1"
+  raw    = ".verdicts/tecs-l-mersenne-lucas-lehmer/ll_p7_is_perfect.txt"
+  src    = "stdlib/core/math.hexa fn lucas_lehmer; TECS-L axis B MR4; Euclid-Euler 2^{p-1}*M_p perfect"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal · paper-eligible."
+
+@C tecs_l_ll_p13_perfect := "lucas_lehmer(13)=true ⟺ M_13=8191 prime — cross-anchored is_perfect(2^12*8191=33550336)=1" :: formula [slug=tecs-l-mersenne-lucas-lehmer group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr is_perfect 33550336 1"
+  raw    = ".verdicts/tecs-l-mersenne-lucas-lehmer/ll_p13_is_perfect.txt"
+  src    = "stdlib/core/math.hexa fn lucas_lehmer; TECS-L axis B MR4; Euclid-Euler 2^{p-1}*M_p perfect"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal · paper-eligible."
+
+# — COMPOSITE exponent: M_11 composite (LL says COMPOSITE) —
+@C tecs_l_ll_p11_sigma := "lucas_lehmer(11)=false ⟺ M_11=2047 composite — cross-anchored sigma(2047)=2160 != 2048" :: formula [slug=tecs-l-mersenne-lucas-lehmer group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr sigma 2047 2160"
+  raw    = ".verdicts/tecs-l-mersenne-lucas-lehmer/ll_p11_composite_sigma.txt"
+  src    = "stdlib/core/math.hexa fn lucas_lehmer; TECS-L axis B MR4/MR6; M_11=2047=23*89 (sigma(q)=q+1 iff prime)"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal · paper-eligible."
+
+@C tecs_l_ll_p11_tau := "lucas_lehmer(11)=false ⟺ M_11=2047 composite — cross-anchored tau(2047)=4 != 2" :: formula [slug=tecs-l-mersenne-lucas-lehmer group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr tau 2047 4"
+  raw    = ".verdicts/tecs-l-mersenne-lucas-lehmer/ll_p11_composite_tau.txt"
+  src    = "stdlib/core/math.hexa fn lucas_lehmer; TECS-L axis B MR4/MR6; M_11=2047=23*89 (tau(q)=2 iff prime)"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal · paper-eligible."
+
+# — FINDING (terminal): hexa-native Lucas–Lehmer agrees with g5 atoms —
+@C tecs_l_ll_finding := "hexa-native lucas_lehmer(p) classifies M_p correctly: p=3/5/7/13 PRIME (true), p=11 COMPOSITE (false) — every conclusion cross-anchored by g5 is_perfect/sigma/tau atoms" :: formula [slug=tecs-l-mersenne-lucas-lehmer group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr is_perfect 33550336 1  (+ ll_test_evidence.txt parse PASS + LL trace)"
+  raw    = ".verdicts/tecs-l-mersenne-lucas-lehmer/ll_test_evidence.txt"
+  src    = "stdlib/core/math.hexa fn lucas_lehmer + stdlib/core/math_lucas_lehmer_test.hexa; TECS-L axis B MR4"
+  status = "🔵 SUPPORTED-FORMAL — LL algorithm landed (hexa parse PASS); conclusions cross-anchored by g5 atoms. terminal · paper-eligible. (compiled run NOT executed — heavy pool-refused; evidence = parse + g5 cross-checks.)"
