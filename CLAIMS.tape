@@ -1132,6 +1132,41 @@
   src    = "TECS-L axis B MR6; 2047 = 23*89 factor confirmation"
   status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal."
 
+# ── GPU — fusion-axisA-breadth (slug · group=GPU · paper-track · GPU.md §10) ──
+# Whole-program-fusion moat broadened from 1 workload (launch-amort) to the NN
+# elementwise/norm surface. Each: fused 1-kernel vs eager multi-launch baseline,
+# timed on ubu-2 RTX 5070 (20 warmup + 200 median), numeric vs f64 CPU ref with
+# the HONEST per-row-scaled RMS rel metric. g5 BROKEN on ubu — verdicts are
+# the compiled f64-ref harness stdout, persisted verbatim.
+
+@C fusion_axisA_layernorm := "fused 1-launch LayerNorm beats eager 4-launch {reduce-mean,reduce-var,normalize,affine} by 66.2% (4096x4096) / 72.7% (256x512) wall; launch 4x, HBM 6->3" :: measurement [slug=fusion-axisA-layernorm group=GPU]
+  method = "compiled-harness"
+  cmd    = "host_layernorm layernorm_fused.ptx layernorm_eager.ptx {4096 4096 | 256 512} 200 on ubu-2 RTX 5070 (20 warmup + 200 median)"
+  raw    = ".verdicts/fusion-axisA-layernorm/layernorm.txt"
+  src    = "archive/fires/fusion_axisA_breadth_2026_05_25/ (layernorm_fused.ptx + layernorm_eager.ptx + host_layernorm.c + result_layernorm.json) + GPU.md §10"
+  status = "🟢 SUPPORTED-NUMERICAL — both regimes >=30%, numeric rel <=1.5e-7, verdict verbatim. terminal."
+
+@C fusion_axisA_rmsnorm := "fused 1-launch RMSNorm (LLaMA) beats eager 3-launch {reduce-sq,normalize,scale} by 59.5% (4096x4096) / 58.6% (256x512) wall; launch 3x, HBM 5->3" :: measurement [slug=fusion-axisA-rmsnorm group=GPU]
+  method = "compiled-harness"
+  cmd    = "host_rmsnorm rmsnorm_fused.ptx rmsnorm_eager.ptx {4096 4096 | 256 512} 200 on ubu-2 RTX 5070 (20 warmup + 200 median)"
+  raw    = ".verdicts/fusion-axisA-rmsnorm/rmsnorm.txt"
+  src    = "archive/fires/fusion_axisA_breadth_2026_05_25/ (rmsnorm_fused.ptx + rmsnorm_eager.ptx + host_rmsnorm.c + result_rmsnorm.json) + GPU.md §10"
+  status = "🟢 SUPPORTED-NUMERICAL — both regimes >=30%, numeric rel <=1.4e-7, verdict verbatim. terminal."
+
+@C fusion_axisA_softmax := "fused 1-launch row-softmax beats eager 4-launch {row-max,exp,row-sum,div} by 65.9% (4096x4096) / 56.3% (256x512) wall; launch 4x, HBM 6->4" :: measurement [slug=fusion-axisA-softmax group=GPU]
+  method = "compiled-harness"
+  cmd    = "host_softmax softmax_fused.ptx softmax_eager.ptx {4096 4096 | 256 512} 200 on ubu-2 RTX 5070 (20 warmup + 200 median)"
+  raw    = ".verdicts/fusion-axisA-softmax/softmax.txt"
+  src    = "archive/fires/fusion_axisA_breadth_2026_05_25/ (softmax_fused.ptx + softmax_eager.ptx + host_softmax.c + result_softmax.json) + GPU.md §10"
+  status = "🟢 SUPPORTED-NUMERICAL — both regimes >=30%, HONEST per-row RMS (near-zero probs), rel <=1.9e-7, verdict verbatim. terminal."
+
+@C fusion_axisA_swiglu := "fused 1-launch SwiGLU beats eager 3-launch {sigmoid,mul-gate,mul-up} by 63.0% (n=16.78M) / 47.8% (n=131072) wall; launch 3x, HBM 8->3" :: measurement [slug=fusion-axisA-swiglu group=GPU]
+  method = "compiled-harness"
+  cmd    = "host_swiglu swiglu_fused.ptx swiglu_eager.ptx {16777216 | 131072} 200 on ubu-2 RTX 5070 (20 warmup + 200 median)"
+  raw    = ".verdicts/fusion-axisA-swiglu/swiglu.txt"
+  src    = "archive/fires/fusion_axisA_breadth_2026_05_25/ (swiglu_fused.ptx + swiglu_eager.ptx + host_swiglu.c + result_swiglu.json) + GPU.md §10"
+  status = "🟢 SUPPORTED-NUMERICAL — both regimes >=30%, numeric rel <=3.4e-7, verdict verbatim. terminal."
+
 @C tecs_l_mr_f23_tau := "tau(23) = 2 → 23 is PRIME (factor of M_11)" :: formula [slug=tecs-l-mersenne-composite group=TECS-L]
   method = "expr"
   cmd    = "hexa verify --expr tau 23 2"

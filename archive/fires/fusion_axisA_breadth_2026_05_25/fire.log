@@ -1,0 +1,31 @@
+=== F-FUSION-AXISA-BREADTH fire log ===
+host  : ubu-2 RTX 5070 (sm_120 via driver-JIT forward-compat) · CUDA 12.0 V12.0.140
+method: fused 1-kernel vs eager multi-launch; cuLaunchKernel + cuEvent; 20 warmup + 200 timed median
+gate  : numeric (f64 ref, per-row-scaled RMS rel, tol 1e-2) FIRST, then >=30% wall
+contention: nvidia-smi 0% util / 0 compute-apps verified before each serial timed run
+$0 (local pool)
+
+--- ptxas -arch=sm_90 -v (all modules, all entries: 0 spill) ---
+layernorm_fused : 17 regs, 2048 smem
+  k1_reduce_mean 15 regs 1024 smem | k2_reduce_var 15 regs 1024 smem | k3_normalize 14 regs | k4_affine 14 regs
+rmsnorm_fused   : 16 regs, 1024 smem
+  k1_reduce_sq 1024 smem | k2_normalize | k3_scale  (all 0 spill)
+softmax_fused   : 16 regs, 1024 smem
+  k1_row_max 1024 smem | k2_exp | k3_row_sum 1024 smem | k4_div  (all 0 spill)
+swiglu_fused    : 18 regs
+  k1_sigmoid | k2_mul_gate | k3_mul_up  (all 0 spill)
+
+--- TIMED (serial, GPU idle 0%) ---
+LAYERNORM large 4096x4096 : fused 0.23232ms eager 0.68746ms  2.959x  66.2%  PASS  (rel 1.47e-7)
+LAYERNORM small 256x512   : fused 0.00346ms eager 0.01267ms  3.667x  72.7%  PASS  (rel 1.19e-7)
+RMSNORM   large 4096x4096 : fused 0.23222ms eager 0.57270ms  2.466x  59.5%  PASS  (rel 1.31e-7)
+RMSNORM   small 256x512   : fused 0.00355ms eager 0.00858ms  2.414x  58.6%  PASS  (rel 1.15e-7)
+SOFTMAX   large 4096x4096 : fused 0.23808ms eager 0.69837ms  2.933x  65.9%  PASS  (rel 1.84e-7)
+SOFTMAX   small 256x512   : fused 0.00557ms eager 0.01274ms  2.287x  56.3%  PASS  (rel 1.49e-7)
+SWIGLU    large n=16.78M  : fused 0.33437ms eager 0.90262ms  2.699x  63.0%  PASS  (rel 5.28e-8)
+SWIGLU    small n=131072  : fused 0.00349ms eager 0.00669ms  1.917x  47.8%  PASS  (rel 5.28e-8)
+
+--- VERDICT ---
+4/4 workloads PASS >=30% in BOTH regimes (8/8 measurements, 8/8 numeric).
+Moat now N+1=5 workloads (these 4 + launch-amort 73-76%).
+No LLVM (@F f1). No C-transpile change (@F f2). PTX hand-emitted, pure ASCII.

@@ -1,0 +1,42 @@
+F-FUSION-AXISA-SWIGLU — verdict (verbatim, g5 / claim_verify)
+=============================================================
+slug   : fusion-axisA-swiglu
+group  : GPU
+method : compiled f64-ref host harness (cuLaunchKernel + cuEvent, 20 warmup
+         + 200 timed median) — `hexa verify` (g5) BROKEN on both ubu hosts,
+         correctness settled via compiled f64-ref harness per task spec.
+date   : 2026-05-25
+host   : ubu-2 RTX 5070 (sm_120 via driver-JIT forward-compat) · CUDA 12.0
+falsifier: a single fused SwiGLU kernel (1 launch) beats the eager 3-launch
+         {sigmoid, mul-gate, mul-up} stack by >=30% wall. FALSIFIED if it does
+         not reach >=30%.
+
+--------------------------------------------------------------------------------
+ptxas-clean (ptxas -arch=sm_90 -v on ubu-2, CUDA 12.0) — all entries 0 spill:
+  swiglu_fused : Used 18 registers, 0 spill
+  k1_sigmoid   : 0 spill
+  k2_mul_gate  : 0 spill
+  k3_mul_up    : 0 spill
+
+--------------------------------------------------------------------------------
+VERBATIM host stdout (./host_swiglu fused.ptx eager.ptx <n> 200):
+--------------------------------------------------------------------------------
+=== LARGE n=16777216 (4096x4096) (bandwidth-bound) ===
+F-FUSION-AXISA-SWIGLU n=16777216 reps=200
+  STRUCTURAL: launches fused=1 eager=3 (ratio 3.0x)
+  STRUCTURAL: HBM/elem fused=2R+1W=3 eager=5R+3W=8 (traffic ratio 2.67x)
+  NUMERIC PASS: global_rms_rel=5.2788e-08 max_rel(sig)=3.42396e-07 max_abs=4.67059e-07 tol=0.01
+  TIMED: fused_med=0.33437 ms (std 0.00147) eager_med=0.90262 ms (std 0.00151) speedup=2.699x faster=63.0% gate(>=30%) PASS
+
+=== SMALL n=131072 (256x512) (launch-bound) ===
+F-FUSION-AXISA-SWIGLU n=131072 reps=200
+  STRUCTURAL: launches fused=1 eager=3 (ratio 3.0x)
+  STRUCTURAL: HBM/elem fused=2R+1W=3 eager=5R+3W=8 (traffic ratio 2.67x)
+  NUMERIC PASS: global_rms_rel=5.27704e-08 max_rel(sig)=2.80114e-07 max_abs=3.97023e-07 tol=0.01
+  TIMED: fused_med=0.00349 ms (std 0.00172) eager_med=0.00669 ms (std 0.00248) speedup=1.917x faster=47.8% gate(>=30%) PASS
+
+--------------------------------------------------------------------------------
+VERDICT: F-FUSION-AXISA-SWIGLU PASS (numeric + >=30% wall, both regimes)
+  launch 1<3, HBM 3<8; pct_faster large=63.0% small=47.8% (both >=30%)
+  numeric HONEST global RMS rel + significant-magnitude max rel <= 3.4e-7
+  TIER: green (numerical, timed silicon)
