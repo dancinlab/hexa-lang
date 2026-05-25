@@ -1636,6 +1636,20 @@
   status = "🟡 SUPPORTED-BY-CITATION — closed-form theorem, ω derivation by-hand (no direct hexa fn). non-terminal for /paper."
 
 # ───────────────────────────────────────────────────────────────────────
+# TECS-L axis A (MODFORM) — tecs-l-modform-n6-bridge (slug · group=TECS-L · MF6)
+# synthesis: all 4 core invariants of Gamma_0(6) / X_0(6) reduce to n=6
+# arithmetic-function values. No new verify — composes 🔵 atoms from
+# MF1 (index=sigma) + MF2 (cusps=tau) + MF3 (genus=0) + MF7 (weight=tau,
+# |AL|=2^omega). See TECS-L/docs/mf6-n6-modular-bridge.md for the full table.
+
+@C tecs_l_mf_n6_bridge := "Gamma_0(6) invariants: index=12=sigma(6), cusps=4=tau(6), genus=0, first_cusp_weight=4=tau(6), |AL|=4=2^omega(6) — all four modular invariants reduce to n=6 arithmetic-function values" :: synthesis [slug=tecs-l-modform-n6-bridge group=TECS-L]
+  method = "synthesis"
+  cmd    = "compose verbatim verdicts from MF1/MF2/MF3/MF7 (no new hexa verify)"
+  raw    = ".verdicts/tecs-l-modform-n6-bridge/n6_bridge_table.txt"
+  src    = "MF6 — unified n=6 bridge across axis-A MODFORM slugs (TECS-L/docs/mf6-n6-modular-bridge.md). Anchors: .verdicts/tecs-l-modform-index/idx_n6.txt (MF1 🔵), .verdicts/tecs-l-modform-cusps/cusps_n6.txt (MF2 🔵), .verdicts/tecs-l-modform-genus/genus_n6.txt (MF3 🔵), .verdicts/tecs-l-modform-weight-al/weight_n6.txt (MF7 🔵), .verdicts/tecs-l-modform-weight-al/al_2pow_omega.txt (MF7 🟡)."
+  status = "🟢 SYNTHESIS-REASONED — composed entirely from 4 terminal 🔵 atoms (MF1/MF2/MF3/MF7) + 1 🟡 closed-form AL citation. No new measurement. n=6 bridge thesis: every Gamma_0(6) core invariant reduces to a standard n=6 arithmetic-function value."
+
+# ───────────────────────────────────────────────────────────────────────
 # TECS-L axis E — tecs-l-atlas-health (slug · group=TECS-L · E2)
 # atlas health audit. 🟢 audit internal-merged/drift=0 BUT 🟡 finding: binary
 # lookup ≠ source SSOT. installed `hexa atlas lookup` reads binary-builtin
