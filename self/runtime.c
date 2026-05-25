@@ -1539,15 +1539,17 @@ static int __attribute__((noinline)) hxlcl_darwin_check_fd_set_overflow(int fd, 
 static int __attribute__((noinline)) hxlcl_mkdir(const char *path, int mode) {
     return mkdir(path, (mode_t)mode);  // <sys/stat.h> / <sys/types.h> included above
 }
-// __builtin_setjmp/longjmp use a 5-word buffer (<= the 192 B jmp slot the
-// codegen allocates) with no libc jmp_buf-size dependency. setjmp MUST expand
-// at the call site to capture the caller's frame, so hxlcl_setjmp is a macro
-// (a wrapper fn would save a dead frame). __builtin_longjmp always resumes the
-// setjmp as if it returned non-zero (value ignored); hexa_throw passes 1.
-#define hxlcl_setjmp(buf) __builtin_setjmp((void **)(buf))
+// The linux codegen emits libc `jmp_buf __jb; setjmp(__jb)` for try blocks and
+// pushes &__jb onto __hexa_try_stack; hexa_throw then calls hxlcl_longjmp(&__jb,
+// val). So hxlcl_longjmp MUST be a libc longjmp on that very jmp_buf — an earlier
+// __builtin_longjmp attempt segfaulted because it expects a __builtin_setjmp
+// buffer (incompatible layout). hxlcl_setjmp mirrors as a libc-setjmp macro
+// (call-site expansion, not a wrapper fn) for any non-codegen caller; the linux
+// codegen path itself uses libc setjmp directly and does not reference it.
+#include <setjmp.h>
+#define hxlcl_setjmp(buf) setjmp(*(jmp_buf *)(buf))
 static void __attribute__((noinline, noreturn)) hxlcl_longjmp(void *buf, int val) {
-    (void)val;
-    __builtin_longjmp((void **)buf, 1);
+    longjmp(*(jmp_buf *)buf, val ? val : 1);
 }
 // getuid + the OOB-trace backtrace stubs (arm64-darwin defines these via the
 // raw-trap / hexa-native-stub path; mirror on Linux). backtrace is a no-op
