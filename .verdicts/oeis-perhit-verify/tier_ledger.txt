@@ -1,0 +1,154 @@
+# OEIS O3 -- per-hit verify TIER LEDGER (336 K=20 survivors)
+# method: hexa verify --expr <fn> <n> <expected>  (3-arg VERIFY) + V2 value-less COMPUTE
+# tooling: VERIFY-KIT V2-era CLI (tool/verify_cli.hexa::_recompute / _recompute2)
+# source: .verdicts/oeis-full-sweep/ledger.json (k20_survives=yes), candidate_fn_source map
+# date: 2026-05-26
+#
+# TIER RUBRIC (g5):
+#   BLUE   = OEIS seq IS this hexa fn (canonical source); hexa recompute reproduces a(n). sample-verified.
+#   YELLOW = alias/coincident-prefix: hexa fn reproduces first-20 a(n) but OEIS definition differs (catalogue identity / cite).
+#   ORANGE = no verify-CLI recompute path for fn (polynomial/trivial: n/prime/odd/... -> _recompute NOCALC).
+#
+# col: fn  oeis_id  tier  sample-n-checked  note
+
+=== BLUE -- direct hexa-native recompute (canonical source) -- sample-verified PASS ===
+aliquot   A001065  BLUE  [n=8(7)]  calc==a(n) PASS
+mu        A008683  BLUE  [n=6(1)]  calc==a(n) PASS
+phi       A000010  BLUE  [n=9(6)]  calc==a(n) PASS
+sigma     A000203  BLUE  [n=3(4) n=4(7) n=6(12) +COMPUTE n=7(8)]  calc==a(n) PASS
+sigma_0   A000005  BLUE  [== tau A000005 (same hexa fn len(divisors))]  calc==a(n) PASS
+sigma_2   A001157  BLUE  [n=9(91)]  calc==a(n) PASS
+sigma_3   A001158  BLUE  [sigma_k(9,3)=757 [2-op verify route]]  calc==a(n) PASS
+tau       A000005  BLUE  [n=6(4) n=10(4)]  calc==a(n) PASS
+
+=== YELLOW -- alias / coincident-prefix (hexa fn reproduces values; OEIS def differs) ===
+# aliquot aliases of A001065 (3): first-20 terms identical, hexa fn reproduces values
+aliquot   A294888  YELLOW  [prefix==canonical, K=20 survived]  catalogue-identity-cite
+aliquot   A324535  YELLOW  [prefix==canonical, K=20 survived]  catalogue-identity-cite
+aliquot   A364858  YELLOW  [prefix==canonical, K=20 survived]  catalogue-identity-cite
+# mu aliases of A008683 (4): first-20 terms identical, hexa fn reproduces values
+mu        A069158  YELLOW  [prefix==canonical, K=20 survived]  catalogue-identity-cite
+mu        A133639  YELLOW  [prefix==canonical, K=20 survived]  catalogue-identity-cite
+mu        A253206  YELLOW  [prefix==canonical, K=20 survived]  catalogue-identity-cite
+mu        A302050  YELLOW  [prefix==canonical, K=20 survived]  catalogue-identity-cite
+# phi aliases of A000010 (1): first-20 terms identical, hexa fn reproduces values
+phi       A293484  YELLOW  [prefix==canonical, K=20 survived]  catalogue-identity-cite
+# sigma aliases of A000203 (5): first-20 terms identical, hexa fn reproduces values
+sigma     A097012  YELLOW  [prefix==canonical, K=20 survived]  catalogue-identity-cite
+sigma     A097863  YELLOW  [prefix==canonical, K=20 survived]  catalogue-identity-cite
+sigma     A287926  YELLOW  [prefix==canonical, K=20 survived]  catalogue-identity-cite
+sigma     A324545  YELLOW  [prefix==canonical, K=20 survived]  catalogue-identity-cite
+sigma     A365209  YELLOW  [prefix==canonical, K=20 survived]  catalogue-identity-cite
+# sigma_0 aliases of A000005 (14): first-20 terms identical, hexa fn reproduces values
+sigma_0   A073668  YELLOW  [prefix==canonical, K=20 survived]  catalogue-identity-cite
+sigma_0   A122667  YELLOW  [prefix==canonical, K=20 survived]  catalogue-identity-cite
+sigma_0   A122668  YELLOW  [prefix==canonical, K=20 survived]  catalogue-identity-cite
+sigma_0   A134687  YELLOW  [prefix==canonical, K=20 survived]  catalogue-identity-cite
+sigma_0   A167447  YELLOW  [prefix==canonical, K=20 survived]  catalogue-identity-cite
+sigma_0   A179941  YELLOW  [prefix==canonical, K=20 survived]  catalogue-identity-cite
+sigma_0   A179942  YELLOW  [prefix==canonical, K=20 survived]  catalogue-identity-cite
+sigma_0   A184395  YELLOW  [prefix==canonical, K=20 survived]  catalogue-identity-cite
+sigma_0   A302051  YELLOW  [prefix==canonical, K=20 survived]  catalogue-identity-cite
+sigma_0   A318412  YELLOW  [prefix==canonical, K=20 survived]  catalogue-identity-cite
+sigma_0   A322986  YELLOW  [prefix==canonical, K=20 survived]  catalogue-identity-cite
+sigma_0   A325560  YELLOW  [prefix==canonical, K=20 survived]  catalogue-identity-cite
+sigma_0   A335519  YELLOW  [prefix==canonical, K=20 survived]  catalogue-identity-cite
+sigma_0   A365208  YELLOW  [prefix==canonical, K=20 survived]  catalogue-identity-cite
+# tau aliases of A000005 (14): first-20 terms identical, hexa fn reproduces values
+tau       A073668  YELLOW  [prefix==canonical, K=20 survived]  catalogue-identity-cite
+tau       A122667  YELLOW  [prefix==canonical, K=20 survived]  catalogue-identity-cite
+tau       A122668  YELLOW  [prefix==canonical, K=20 survived]  catalogue-identity-cite
+tau       A134687  YELLOW  [prefix==canonical, K=20 survived]  catalogue-identity-cite
+tau       A167447  YELLOW  [prefix==canonical, K=20 survived]  catalogue-identity-cite
+tau       A179941  YELLOW  [prefix==canonical, K=20 survived]  catalogue-identity-cite
+tau       A179942  YELLOW  [prefix==canonical, K=20 survived]  catalogue-identity-cite
+tau       A184395  YELLOW  [prefix==canonical, K=20 survived]  catalogue-identity-cite
+tau       A302051  YELLOW  [prefix==canonical, K=20 survived]  catalogue-identity-cite
+tau       A318412  YELLOW  [prefix==canonical, K=20 survived]  catalogue-identity-cite
+tau       A322986  YELLOW  [prefix==canonical, K=20 survived]  catalogue-identity-cite
+tau       A325560  YELLOW  [prefix==canonical, K=20 survived]  catalogue-identity-cite
+tau       A335519  YELLOW  [prefix==canonical, K=20 survived]  catalogue-identity-cite
+tau       A365208  YELLOW  [prefix==canonical, K=20 survived]  catalogue-identity-cite
+
+=== ORANGE -- no verify-CLI recompute path (polynomial/trivial fn) ===
+# n (190): _recompute("n",n) = NOCALC -> INSUFFICIENT (calculator gap, extend _recompute candidate)
+n         A000027 A004438 A004441 A008684 A034837 A038770  ORANGE
+n         A044921 A044922 A044923 A048242 A048266 A056064  ORANGE
+n         A062996 A064598 A069782 A070915 A076499 A080682  ORANGE
+n         A080683 A080686 A083243 A085735 A085736 A087143  ORANGE
+n         A088480 A090106 A090107 A090108 A090109 A090110  ORANGE
+n         A090111 A092629 A094759 A096105 A107602 A120951  ORANGE
+n         A122079 A124231 A130446 A132016 A132086 A132263  ORANGE
+n         A132264 A135579 A137317 A144972 A153671 A153679  ORANGE
+n         A160546 A160547 A166718 A166719 A167662 A167975  ORANGE
+n         A167976 A174228 A174670 A178157 A178772 A179797  ORANGE
+n         A180925 A188462 A192438 A193989 A194906 A194907  ORANGE
+n         A197640 A212554 A214701 A226537 A227981 A230034  ORANGE
+n         A241673 A243903 A246083 A246087 A246090 A246091  ORANGE
+n         A246094 A246095 A246098 A246099 A246101 A246102  ORANGE
+n         A246103 A247064 A249817 A249818 A250245 A250246  ORANGE
+n         A250247 A250248 A250249 A250250 A250251 A258266  ORANGE
+n         A260423 A260424 A262530 A263028 A263314 A265711  ORANGE
+n         A269331 A269393 A269394 A272215 A273058 A274055  ORANGE
+n         A275164 A281873 A287478 A289555 A295886 A296088  ORANGE
+n         A296089 A296765 A296867 A296870 A296873 A296876  ORANGE
+n         A296879 A296882 A296885 A296888 A296891 A296894  ORANGE
+n         A296897 A296900 A296903 A296906 A303502 A308702  ORANGE
+n         A317945 A318535 A318892 A318893 A321293 A321993  ORANGE
+n         A322554 A323366 A323368 A323404 A324720 A325383  ORANGE
+n         A326200 A328617 A330232 A335280 A335282 A336358  ORANGE
+n         A338331 A338497 A338555 A342591 A346447 A348520  ORANGE
+n         A348553 A349294 A352464 A356944 A357873 A357875  ORANGE
+n         A358121 A358140 A359415 A361374 A362623 A363287  ORANGE
+n         A366187 A366188 A367141 A369259 A369260 A369261  ORANGE
+n         A374012 A375758 A375759 A376668 A378927 A380434  ORANGE
+n         A382546 A382960 A386807 A387051 A387108 A387109  ORANGE
+n         A389483 A389680 A391014 A395630  ORANGE
+# prime (67): _recompute("prime",n) = NOCALC -> INSUFFICIENT (calculator gap, extend _recompute candidate)
+prime     A000040 A030291 A030475 A038616 A038618 A049549  ORANGE
+prime     A049551 A049569 A049573 A049585 A050260 A052085  ORANGE
+prime     A055398 A057448 A058853 A061022 A062353 A069675  ORANGE
+prime     A069676 A069677 A069678 A069679 A069680 A069681  ORANGE
+prime     A069682 A069683 A069684 A070159 A077359 A077390  ORANGE
+prime     A079152 A082646 A095285 A095313 A095316 A095320  ORANGE
+prime     A100725 A100726 A110923 A124590 A124591 A137589  ORANGE
+prime     A163849 A164837 A171041 A176165 A196230 A216883  ORANGE
+prime     A216884 A216885 A216886 A216887 A228296 A231588  ORANGE
+prime     A233360 A238852 A238853 A242541 A295425 A301378  ORANGE
+prime     A322394 A382765 A385492 A386326 A392836 A393798  ORANGE
+prime     A394660  ORANGE
+# odd (12): _recompute("odd",n) = NOCALC -> INSUFFICIENT (calculator gap, extend _recompute candidate)
+odd       A005408 A053229 A089684 A105356 A176271 A247328  ORANGE
+odd       A283002 A294748 A317107 A317439 A326835 A374137  ORANGE
+# triangular (7): _recompute("triangular",n) = NOCALC -> INSUFFICIENT (calculator gap, extend _recompute candidate)
+triangular A000217 A105337 A105338 A105339 A105340 A109811  ORANGE
+triangular A394394  ORANGE
+# two_n (3): _recompute("two_n",n) = NOCALC -> INSUFFICIENT (calculator gap, extend _recompute candidate)
+two_n     A005843 A055966 A386725  ORANGE
+# n_squared (2): _recompute("n_squared",n) = NOCALC -> INSUFFICIENT (calculator gap, extend _recompute candidate)
+n_squared A000290 A174452  ORANGE
+# catalan (1): _recompute("catalan",n) = NOCALC -> INSUFFICIENT (calculator gap, extend _recompute candidate)
+catalan   A000108  ORANGE
+# factorial (1): _recompute("factorial",n) = NOCALC -> INSUFFICIENT (calculator gap, extend _recompute candidate)
+factorial A000142  ORANGE
+# fibonacci (1): _recompute("fibonacci",n) = NOCALC -> INSUFFICIENT (calculator gap, extend _recompute candidate)
+fibonacci A000045  ORANGE
+# n_cubed (1): _recompute("n_cubed",n) = NOCALC -> INSUFFICIENT (calculator gap, extend _recompute candidate)
+n_cubed   A000578  ORANGE
+# pronic (1): _recompute("pronic",n) = NOCALC -> INSUFFICIENT (calculator gap, extend _recompute candidate)
+pronic    A002378  ORANGE
+# two_to_n (1): _recompute("two_to_n",n) = NOCALC -> INSUFFICIENT (calculator gap, extend _recompute candidate)
+two_to_n  A000079  ORANGE
+
+=== AGGREGATE ===
+TOTAL K=20 survivors (distinct fn,oeis pairs)  : 336
+  BLUE   (direct, canonical source)            : 8
+  YELLOW (alias / catalogue-identity cite)     : 41
+  ORANGE (no hexa verify-CLI recompute path)   : 287
+
+# distinct theorems among BLUE: 7
+#   (sigma_0 A000005 and tau A000005 are the SAME hexa fn len(divisors) on the
+#    SAME sequence -> 8 BLUE pairs collapse to 7 distinct (fn-class,oeis) theorems)
+# O4 atlas-fold scope = the 7 distinct BLUE theorems (verified-only fold, dedup vs ~16K atlas nodes)
+# YELLOW = citable but fold-deferred (OEIS attribution, not a new hexa identity)
+# ORANGE = out of fold scope until _recompute extended (prime/n/odd/... are calculator gaps)

@@ -2232,6 +2232,22 @@
   status = "🟢 empirical — 1707 hit / 380K seq, 1334 K=10 coincidences filtered at K=20 (336 survive, 37 na). Reproducible full sweep. NOT terminal arithmetic claim (per-hit verify = O3 milestone)."
 
 # ───────────────────────────────────────────────────────────────────────
+# OEIS — oeis-perhit-verify (slug · group=OEIS · O3)
+# Per-hit hexa verify --expr re-confirm of the 336 O2 K=20 survivors, using
+# the VERIFY-KIT V2-era CLI (3-arg VERIFY `--expr <fn> <n> <expected>` + V2
+# value-less COMPUTE `--expr <fn> <n>`). Group by candidate fn; for each
+# distinct (fn,oeis) confirm hexa recompute == OEIS a(n) at sample indices.
+# tier = 🔵 canonical-source direct recompute / 🟡 alias coincident-prefix
+# (hexa reproduces values, OEIS def differs) / 🟠 no verify-CLI _recompute path.
+
+@C oeis_perhit_verify := "OEIS O3 per-hit verify of the 336 K=20 survivors (VERIFY-KIT V2): 8 🔵 DIRECT (canonical-source NT fn, hexa-native recompute calc==a(n) sample-verified — sigma↔A000203 [n=3,4,6;COMPUTE 7], tau↔A000005 [n=6,10], sigma_0↔A000005 (≡tau, same len(divisors)), phi↔A000010 [n=9], mu↔A008683 [n=6], aliquot↔A001065 [n=8], sigma_2↔A001157 [n=9], sigma_3↔A001158 [sigma_k(9,3)=757]) → 7 DISTINCT theorems (sigma_0/tau on A000005 collapse). 41 🟡 CITATION (alias OEIS ids whose first-20 terms coincide with a hexa NT fn — hexa reproduces values but OEIS definition differs → catalogue-identity cite, fold-deferred). 287 🟠 (no hexa verify-CLI _recompute path: n×190/prime×67/odd×12/triangular×7/… → NOCALC 🟠 INSUFFICIENT, calculator-gap). O4 atlas-fold scope = the 7 distinct 🔵 verified theorems only." :: empirical [slug=oeis-perhit-verify group=OEIS]
+  method = "expr"
+  cmd    = "hexa verify --expr sigma 7  (V2 COMPUTE) · hexa verify --expr sigma 6 12  (3-arg VERIFY)"
+  raw    = ".verdicts/oeis-perhit-verify/tier_ledger.txt + sigma_A000203.txt + tau_A000005.txt + phi_A000010.txt"
+  src    = "tool/verify_cli.hexa::_recompute / _recompute2 (sigma/sigma_0/sigma_2/phi/mu/tau/aliquot 1-arg + sigma_k 2-op). Survivors .verdicts/oeis-full-sweep/ledger.json (k20_survives=yes) + hits.tsv. CC-BY-SA upstream cited per OEIS/OEIS.md §2."
+  status = "🔵/🟢 8 verified-direct (7 distinct) / 🟡 41 citation / 🟠 287 no-path of 336 K=20 survivors. Terminal for the 🔵 set (sample calc==a(n) PASS). 🟠 = honest calculator-gap (extend _recompute); not fold-eligible until path lands."
+
+# ───────────────────────────────────────────────────────────────────────
 # GPU — fusion axis-C / axis-E ROUND-9 TIMED WALLS (2026-05-26)
 # Both closed-negatives: structural launch/HBM moats from R8 do NOT convert
 # to above-library timed wins with the as-merged STRUCTURAL-STUB kernels.
