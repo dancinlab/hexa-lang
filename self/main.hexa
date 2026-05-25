@@ -2974,6 +2974,75 @@ fn _precompile_lookup(key) {
     return ""
 }
 
+// GO M12 (RFC 093 R3) — daemon autospawn probe. Opt-in via
+// `HEXA_DAEMON_AUTOSPAWN=1` (RFC §4.3 — default 0, zero behavior change).
+// 3-tier fallback order in cmd_run_user_direct:
+//   1. precompile lookup (M2, release-shipped binary)   — _precompile_lookup
+//   2. daemon (R3, in-mem warm cache, no fork)          — THIS helper
+//   3. fork-mode (`hexa build`, current default)        — caller's fall-through
+//
+// Returns a ready-to-exec binary path on a daemon HIT/BUILT, or "" to signal
+// the caller should continue to fork-mode (F-DAEMON-R3-3 crash fallback). All
+// failure modes (opt-out, socket missing + spawn fail, ERR reply, connect
+// refused) degrade silently to "" — NEVER abort. The daemon's COMPILE reply
+// is a plain `<TAG> <path>` line; binary path has no NUL so it round-trips
+// over the R2 newline-text wire intact (net_read_raw deferred — occam g0).
+fn _daemon_autospawn_path(file) {
+    if env_var("HEXA_DAEMON_AUTOSPAWN") != "1" { return "" }
+    let trace = env_var("HEXA_DAEMON_TRACE") == "1"
+    let sock = _daemon_default_socket()
+    // Probe → spawn-if-missing → 1 retry (RFC §4.3 client flow).
+    if !_daemon_socket_exists(sock) {
+        // Autospawn a detached daemon with a short idle TTL so it self-reaps
+        // (default 600s = 10 min — long enough to amortize a hot loop, short
+        // enough to not leak across an idle session).
+        let mut ttl = env_var("HEXA_DAEMON_IDLE_TTL")
+        if len(ttl) == 0 { ttl = "600" }
+        let log_path = sock + ".log"
+        let cmd = "nohup " + shq(argv0_or_hexa()) + " daemon start --socket " + shq(sock) + " --idle-ttl " + shq(ttl) + " > " + shq(log_path) + " 2>&1 &"
+        let _r = exec(cmd)
+        // Wait up to ~3s for the socket to appear (bind + listen).
+        let mut waited = 0
+        while waited < 3000 {
+            if _daemon_socket_exists(sock) { break }
+            sleep_ms(50)
+            waited = waited + 50
+        }
+        if !_daemon_socket_exists(sock) {
+            if trace { eprintln("[daemon] autospawn failed (socket never appeared) — fork fallback") }
+            return ""
+        }
+        if trace { eprintln("[daemon] autospawned (socket=" + sock + ")") }
+    }
+    let resp = _daemon_send_line(sock, "COMPILE " + file)
+    let rn = len(resp)
+    if rn == 0 {
+        // Connect/read failed (daemon died between probe and send — crash
+        // window). Degrade to fork-mode.
+        if trace { eprintln("[daemon] no reply (crash window?) — fork fallback") }
+        return ""
+    }
+    // Parse `<TAG> <path>`: accept HIT/BUILT, reject ERR.
+    let mut sp = rn
+    let mut i = 0
+    while i < rn {
+        if resp.substring(i, i + 1) == " " { sp = i; break }
+        i = i + 1
+    }
+    let tag = resp.substring(0, sp)
+    if (tag == "HIT" || tag == "BUILT") && sp < rn {
+        let bin = resp.substring(sp + 1, rn)
+        if file_exists(bin) {
+            if trace { eprintln("[daemon] " + tag + " " + bin) }
+            return bin
+        }
+        if trace { eprintln("[daemon] " + tag + " but binary missing (" + bin + ") — fork fallback") }
+        return ""
+    }
+    if trace { eprintln("[daemon] non-HIT reply '" + resp + "' — fork fallback") }
+    return ""
+}
+
 // `hexa run <file>` and the `hexa://run` URL action are user-direct
 // invocations; cmd_run_user_direct compiles then executes (the
 // tree-walking interpreter is retired — g_interp_deprecated). The
@@ -3015,6 +3084,12 @@ fn cmd_run_user_direct(file, extra_args) {
     if len(_pre) > 0 {
         tmpbin = _pre
         if env_var("HEXA_PRECOMPILE_TRACE") == "1" { eprintln("[precompile] HIT " + _pre) }
+    }
+    // GO M12 (RFC 093 R3) — daemon autospawn tier (between precompile and
+    // fork-mode). Opt-in (HEXA_DAEMON_AUTOSPAWN=1); "" → fork fallback.
+    if !file_exists(tmpbin) {
+        let _dbin = _daemon_autospawn_path(file)
+        if len(_dbin) > 0 { tmpbin = _dbin }
     }
     if !file_exists(tmpbin) {
         let _tmp_inflight = tmpbin + ".tmp." + to_string(mono_ns())
@@ -4420,6 +4495,10 @@ fn _daemon_default_socket() {
     // Per RFC §4.1: `/tmp/hexa-daemon-$UID.sock`. We don't have a getuid()
     // builtin wired to hexa yet, so fall back to $USER (good enough for
     // single-user dev box; multi-uid hardening lands with R3).
+    // GO M12 (R3): `HEXA_DAEMON_SOCKET` override lets the autospawn path +
+    // tests target an isolated socket (mirrors `--socket` for the verb).
+    let _sov = env_var("HEXA_DAEMON_SOCKET")
+    if len(_sov) > 0 { return _sov }
     let mut who = env_var("USER")
     if len(who) == 0 { who = "unknown" }
     return "/tmp/hexa-daemon-" + who + ".sock"

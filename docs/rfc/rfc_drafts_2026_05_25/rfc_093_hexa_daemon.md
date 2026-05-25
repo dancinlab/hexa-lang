@@ -419,8 +419,26 @@ in-memory code. 권장 = daemon 시작 시 자기 binary mtime 캐시 → 주기
 |---|---|---|---|
 | **R1** | #904 (GO M10) | ✅ landed | socket skeleton · `{start,start-bg,stop,status,echo}` 버브 · newline-text wire (PING/ECHO/SHUTDOWN) · idle-TTL self-exit · stale-socket cleanup · runtime.c socket primitive 복원. 4-step e2e (`tests/m_daemon_r1_test.hexa`). |
 | **R2** | (this) GO M11 | ✅ landed | `compile` 메서드 + in-memory cache. `COMPILE <src>` → `HIT <bin>` (memoized) / `BUILT <bin>` / `ERR <reason>`. 캐시 키 = `sha256(source)[0:16] + "_" + version_str()` — **`hexa run` / `hexa build` 과 byte-identical** → `~/.hexa-cache/hexa_run.<key>` 슬롯 공유. 3 falsifier (`tests/m_daemon_r2_test.hexa`): R2-1 cache hit · R2-2 fork-mode fallback · R2-3 determinism. |
-| **R3** | (next) | ⛔ todo | F-DAEMON-2 (N=100 latency speedup) · F-DAEMON-3 (crash-respawn) · multi-uid reject. 추가: (a) `hexa run` autospawn wiring (`HEXA_DAEMON_AUTOSPAWN` probe → daemon `compile` → exec) · (b) **binary u32-LE length-prefix wire** (현 `net_read` 가 strlen 기반이라 embedded NUL 미보존 → NUL-preserving `net_read_raw` 빌트인 선행 필요) · (c) AST/lexer/lower in-memory 유지 (R2 는 binary-path 매핑까지만) · (d) atlas SSOT hash flush (F-DAEMON-4). |
-| **R4** | (later) | ⛔ todo | prod ship — verb 안정화 · 문서 · `hexa init` 안내 · 10/10 falsifier closure. |
+| **R3** | (this) GO M12 | ✅ landed | `hexa run` autospawn wiring (`HEXA_DAEMON_AUTOSPAWN=1` opt-in → socket probe → spawn-if-missing → `COMPILE` → exec returned binary). 3-tier fallback **precompile (M2) → daemon (R3) → fork-mode** in `cmd_run_user_direct`. `HEXA_DAEMON_SOCKET` env override (socket isolation). `tests/m_daemon_r3_test.hexa` 3 falsifier: **F-DAEMON-R3-1 (autospawn)** · **F-DAEMON-R3-2 (latency N=100)** · **F-DAEMON-R3-3 (crash-respawn fallback)**. 측정 (mini arm64 fresh build): **N=100 warm-daemon 9,395 ms vs fork-mode 174,933 ms = 18.6× speedup** (F-DAEMON-2 RFC gate ≤ 1.5× far exceeded). R1/R2 회귀 무 (4/4 + 3/3 PASS). |
+| **R4** | (next) | ⛔ todo | (a) **binary u32-LE length-prefix wire** (현 `net_read` strlen 기반 → NUL-preserving `net_read_raw` 빌트인 선행 — R3 가 occam g0 로 skip: binary path 는 NUL 없어 newline-text 로 round-trip) · (b) AST/lexer/lower in-memory 유지 (R2/R3 는 binary-path 매핑까지만) · (c) atlas SSOT hash flush (F-DAEMON-4) · (d) multi-uid reject + root refuse (F-DAEMON-5) · (e) prod ship — verb 안정화 · 문서 · `hexa init` 안내 · 10/10 falsifier closure. |
+
+### R3 honest carve-out
+
+- **autospawn 은 opt-in** — `HEXA_DAEMON_AUTOSPAWN` 기본 0 (RFC §4.3). 미설정 시
+  `hexa run` 은 종전 fork-mode 그대로 (행동 변화 0건 · CI/one-shot 영향 0). daemon
+  tier 는 precompile lookup (M2) 와 fork-mode 사이에 끼며, 어떤 실패(socket missing +
+  spawn fail · ERR reply · connect refused · 죽은 daemon)든 silent "" 반환 → fork
+  fallback (graceful degrade · F-DAEMON-R3-3).
+- **wire 는 여전히 newline-text** — binary u32-LE length-prefix + `net_read_raw` 는
+  R4 로 연기. R3 의 핵심(autospawn + N=100 latency)은 binary wire 불필요: COMPILE 응답이
+  `<TAG> <path>` 한 줄이고 binary path 는 NUL 을 안 가져 strlen-기반 `net_read` 로도
+  온전히 round-trip (occam g0 — 정말 필요할 때만).
+- **F-DAEMON-R3-2 측정 방법** — warm-daemon loop (socket 상주 · src in-mem cache →
+  매 호출 HIT, fork 없음) vs fork-mode loop (매 호출 고유 src → cold slot → 진짜
+  `hexa build` fork). disk `~/.hexa-cache` HIT 도 build 를 건너뛰므로, daemon 의
+  fork-제거 이득을 격리하려면 fork side 가 실제로 fork 해야 함 (고유 src 로 강제).
+- **multi-uid reject (F-DAEMON-5) 미구현** — `getuid()` builtin 미배선 (R1 부터의
+  carve-out 유지). socket 권한 0600 + per-$USER path 가 현 보안의 전부. R4 로 연기.
 
 ### R2 honest carve-out
 
