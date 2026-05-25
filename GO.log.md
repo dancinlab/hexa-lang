@@ -447,3 +447,29 @@ axis 의 첫 설계서.
 
 - [ ] R5 — (a) binary u32-LE length-prefix wire **실전환** (net_read_raw 사용) · (b) AST/lexer/lower in-memory 유지 · (c) atlas SSOT hash flush (F-DAEMON-4) · (d) per-connection SO_PEERCRED/LOCAL_PEERCRED peer-uid 확인 · (e) prod ship — verb 안정화 · 문서 · `hexa init` 안내 · 10/10 falsifier closure (CI sudo -u multi-uid 시뮬 포함).
 
+## 2026-05-25 · M15 — hexa daemon R3 test 회귀 수정 (cache-collision false-negative)
+
+> M14 agent (PR #941) 가 R3-1b/1c FAIL 을 plain origin/main 에서 재현·보고 (M14 무관). 처음 진단 = "M13 (PR #937) 의 uid-scoped socket (`/tmp/hexa-daemon-<uid>.sock`) 이 R3 test 의 fixed socket-path 기대와 충돌". **실 진단 결과 = 다른 원인** (uid-scoped socket 은 무관 — R3 test 는 `HEXA_DAEMON_SOCKET` env override 를 이미 사용, `_daemon_default_socket()` 은 override 를 1순위로 honor → uid 경로 미도달).
+
+- [x] M15 — **진단**: mini arm64 fresh-build (`hexa_cli_driver`) 로 R3 reproduce. R3-1a PASS (rc=0 + 기대 stdout) 인데 R3-1b (socket absent) + R3-1c (no `[daemon]` trace) FAIL = autospawn 이 안 뜨고 fork-mode 로 silent drop. 격리 repro (동일 `exec_with_status` → `hexa run` autospawn chain, **unique src content**) 는 socket 생성 + `[daemon] autospawned`/`BUILT` trace 정상 PASS → chain 자체는 무결. 차이 = **src CONTENT**.
+- [x] M15 — **실 원인**: `cmd_run_user_direct` 의 3-tier (precompile → daemon → fork) 에서 **tier-2 daemon 은 `if !file_exists(tmpbin)` 조건부** (`self/main.hexa:3090`). `tmpbin` = content-addressed disk slot `~/.hexa-cache/hexa_run.<sha256_file(src)[0:16]>_<version>`. R3 test 의 src body 가 **고정** (`r3-daemon-autospawn-ok`) → 이전 suite 실행이 남긴 **warm disk slot 과 hash 충돌** → daemon tier short-circuit → disk-HIT (fork) → autospawn 미발화. **disk cache wipe 시 3/3 PASS · warm 시 R3-1b/1c FAIL** 로 측정 입증 (false-negative — daemon 코드는 정상).
+- [x] M15 — **fix**: `tests/m_daemon_r3_test.hexa` src body 에 `mono_ns()` nonce 코멘트 (`// r3-autospawn-nonce-<ns>`) 삽입 → content-hash 매 run cold → daemon tier 결정적 발화. **implementation 무변경** (`self/main.hexa` 정상 — Option A/B 모두 불필요, override 이미 작동). test-only fix.
+- [x] M15 — GO.md M15 milestone · 본 로그.
+
+### 검증 결과 (mini arm64 · `/tmp/m15-fresh-*` fresh clone @ origin/main `86e17741` · `hexa_cli_driver`)
+
+- **R3 fix 결정성**: warm disk cache **미-wipe** 상태로 3연속 run 전부 `ALL FALSIFIERS PASS` (R3-1a/1b/1c · R3-2 latency · R3-3 crash-respawn). fix 前에는 warm 시 deterministic FAIL.
+- **회귀 매트릭스 (전부 fresh-build 동일 driver)**:
+  - `m_daemon_r1_test` — **4/4 PASS** (start/status/echo/stop)
+  - `m_daemon_r2_test` — **3/3 PASS** (R2-1 cache hit · R2-2 fork fallback · R2-3 determinism)
+  - `m_daemon_r3_test` — **3/3 PASS** (fixed · 결정적)
+  - `m_daemon_r4_codegen_test` — **3/3 PASS** (net_read_raw NUL · os_getuid==id-u · uid-scoped socket)
+  - `m_daemon_r4_atlas_flush_test` — **3/3 PASS** (atlas 불변 HIT · fold flush re-BUILT · 안정 후 HIT)
+- **parse-gate**: `hexa parse tests/m_daemon_r3_test.hexa` clean.
+
+### 디자인 결정 (M15)
+
+- **test-only fix · implementation 무변경** — daemon autospawn 코드 (`_daemon_autospawn_path` · `_daemon_default_socket` override) 는 정상. 버그는 test 의 fixed-content 가 persistent disk cache 와 비결정적으로 충돌한 것. content nonce 가 정공 (각 run 의 cache slot 을 cold 로 강제 → tier-2 가 항상 실측 경로).
+- **M14 의 uid-scoped 진단은 오진** — `HEXA_DAEMON_SOCKET` override 가 `_daemon_default_socket()` 1순위라 R3 test 의 isolated socket 은 uid 경로를 절대 안 탄다. 증상 (R3-1b/1c FAIL) 은 정확했으나 원인 layer 가 달랐음.
+- **R4 codegen test 일관성 확인** — `m_daemon_r4_codegen_test` 는 자체 fork/loopback 경로라 disk-cache 충돌 면역; R3 만 autospawn-tier 가 disk-HIT 에 가려지는 구조였음.
+

@@ -100,8 +100,19 @@ pub fn main() -> i32 {
 
     let bin = _resolve_hexa_bin()
     let sock = _temp_socket_path()
-    let body = "pub fn main() -> i32 {\n    println(\"r3-daemon-autospawn-ok\")\n    return 0\n}\n"
-    let src = "/tmp/hexa_daemon_r3_src." + to_string(mono_ns()) + ".hexa"
+    // Unique source CONTENT per run (not just a unique filename): the 3-tier
+    // `cmd_run_user_direct` cache key is `sha256_file(src)` — a content hash,
+    // NOT a path hash. The daemon tier (tier 2) only fires when the
+    // ~/.hexa-cache disk slot is COLD (`if !file_exists(tmpbin)` —
+    // self/main.hexa cmd_run_user_direct). A fixed body would collide with a
+    // warm disk slot left by an earlier suite run, short-circuiting the daemon
+    // and silently dropping autospawn to fork-mode (F-R3-1b/1c would FAIL even
+    // though the daemon code is correct — a false negative). Embedding a
+    // mono_ns() nonce in a comment makes every run's content-hash distinct, so
+    // the slot is always cold and the daemon tier is exercised deterministically.
+    let nonce = to_string(mono_ns())
+    let body = "// r3-autospawn-nonce-" + nonce + "\npub fn main() -> i32 {\n    println(\"r3-daemon-autospawn-ok\")\n    return 0\n}\n"
+    let src = "/tmp/hexa_daemon_r3_src." + nonce + ".hexa"
     let _wr = write_file(src, body)
     println("  bin=" + bin)
     println("  sock=" + sock)
