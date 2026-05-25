@@ -14,6 +14,37 @@ R5 #1026이 라이브러리 surface(`compiler/atlas/cascade.hexa` — `cascade_c
 
 **검증**: `hexa parse tool/atlas_cli.hexa` 클린 · bin/hexa-atlas 재빌드 PASS (worktree self-built `build/hexa_module_loader`로 빌드 — stale main-repo 로더는 `acquisition_to_*`/`round_run_with_pool` 미해결로 실패 → worktree fresh 로더가 정답 · `SIDECAR_NO_POOL_ROUTE=1` · hyphenated 셸 우회). 기능: `cascade n`→**26 노드 인용**(R5 측정 일치, P/C/L/F/R/X 혼합) · `--format=json`→python `json.load` PASS(count=26, candidates len=26) · unknown id→exit 1 + 클린 메시지(json found=false) · 0-citer(`xpoll-n-material`·`six_carbon_consciousness`·`n6-bt-1392`)→"no cascade candidates" · no-arg→usage exit 2.
 
+## 2026-05-25 — R6 신규역량 `hexa atlas diff <A> <B>` (atlas 판 git diff · READ-ONLY)
+
+goal(deferred 신규역량): "atlas diff" — 두 atlas 상태를 비교해 added/removed/changed
+노드를 리포트. 용도 = register/drill-fold가 무엇을 바꿨는지 리뷰 · embed↔n6-export 대조 ·
+두 embed 파일 대조.
+
+**조사**: read 경로 = `static_index.hexa::static_atlas`(embedded.gen.hexa를 TEXT-parse →
+`_extract_raw_blocks`로 각 노드의 `raw: "..."` 블록을 .n6 스트림으로 추출 → `parser::
+parse_atlas_string`). 노드 모델 = 단일 `AtlasNode{kind·id·raw·source_file·source_line·
+grade·edges}`. 평문 `.n6` export(`hexa atlas export`)는 `parse_atlas_file`로 직접 파싱.
+즉 두 소스 타입(embed vs 평문 n6)을 로드하는 두 경로가 이미 존재 — diff는 그 위에 keyed 비교만 얹음.
+
+**설계**: `compiler/atlas/atlas_diff.hexa`(신규, 197 LOC) — `load_atlas_source(path)`가
+`raw: "` 마커 유무로 embed/평문을 **자동 감지**(embed=추출 후 parse, 평문=직접 parse).
+`diff_atlas(a,b)`는 (kind,id) 키로 비교: only-A=removed · only-B=added · both-but-raw-differs
+=changed(raw가 header+grade+edge 전부 운반하므로 value/grade/edge 변경을 raw diff가 표면화) ·
+identical=same(카운트). 출력 = `±~` 노드줄 + `removed N · added N · changed N · same N` 푸터;
+`--format=json`은 버킷별 id 리스트 + counts. **파서 미복제** — 정규 `parse_atlas_string` +
+`_extract_raw_blocks`(pub로 노출) 재사용.
+
+**구현**: `compiler/atlas/atlas_diff.hexa`(신규) + `tool/atlas_cli.hexa`에 dispatch 1블록
+(`cmd_diff` + `_slice_args`/`main`/help 배선) + `static_index.hexa::_extract_raw_blocks` pub화.
+
+**검증**: parse-gate 3파일 OK → bin/hexa-atlas 빌드 PASS(borrowed main-repo transpiler ·
+`SIDECAR_NO_POOL_ROUTE=1` · `HEXA_LANG`=worktree · hexa_v2/module_loader=main에서 gitignored
+심링크). 기능: (1) **self-diff = 빈 diff** — A vs A-copy = `removed 0 · added 0 · changed 0 ·
+same 3` ✓ · (2) **modified 감지** — A vs B(C alpha 값+grade 변경 · L conservation 제거 · F
+energy 추가) = `removed 1(@L) · added 1(@F) · changed 1(@C) · same 1` 정확 ✓ · (3) embed
+auto-detect — 실제 embedded.gen.hexa(16101 노드) vs 자기자신 = `0/0/0 · same 16101` ✓ ·
+(4) JSON 출력 + usage-guard(exit 2) ✓ · (5) 회귀 stats/lookup/help 무영향 ✓.
+
 ## 2026-05-25 — R5 drift 보정 (rounded-literal 3노드 full-precision 재등록 · META-SIGNAL ②)
 
 R3 reverify가 실측한 `numerical_seen=36 match=32 drift=3` 의 3 DRIFT 노드를 full-precision 재등록해 drift=0 클로즈. 등록 시 6 sig-fig 반올림 리터럴로 동결되어 in-process full-precision 재계산과 ε=1e-9 초과 불일치했던 registration-hygiene drift.
