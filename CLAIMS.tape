@@ -1509,6 +1509,36 @@
   status = "🟠 ATTRIBUTION — cp.async double-buffer dominant, multi-warp secondary (fades at large N). Residual = intra-warp QK^T->reduce->P.V dependency chain + per-tile __syncthreads barrier + low d=64 arithmetic intensity (4 d-tiles). Next wedge = 2-stage compute pipeline (overlap P.V of tile j with QK^T of tile j+1) or d>=128. NOT another multi-warp-only or shuffle-softmax attempt."
 
 # ───────────────────────────────────────────────────────────────────────
+# GPU — fusion-attention-dsweep-pipe (slug · group=GPU · R11 · paper-track)
+# R11 took R10's two next-wedges: (A) head_dim sweep d∈{64,128,256} and
+# (B) 2-stage compute pipeline (overlap P.V(j) with QK^T(j+1)). BOTH levers
+# FALSIFIED. Baseline-integrity: an early naive one-thread-per-row softmax was
+# a 13x-slower STRAWMAN (caught by a launch-decomposition probe, REJECTED);
+# all ratios use the fair FP16 cuBLAS-TC stack with an OPTIMIZED parallel
+# softmax (0.176 ms @ N=4096 d=64, matching R10's recorded baseline).
+
+@C fusion_attn_dsweep_numeric := "R11 fused attention parameterized over head_dim D (DTILES=D/16) is NUMERIC PASS at all 9 (N,d) shapes d∈{64,128,256} N∈{1024,2048,4096}: per-row-scaled rel 5.6-7.1e-4, naninf=0; d=64 rows bit-identical to R10. ptxas-clean 0-spill sm_80 91/148/247 reg @ d=64/128/256, smem 14336/22528/38912 B all << 49152 B cap. Probe-B triple-buffer compute-pipeline 104 reg / 18432 B also PASS (bit-identical to R10)" :: measurement [slug=fusion-attention-dsweep-pipe group=GPU]
+  method = "silicon-fire"
+  cmd    = "ubu-2 RTX 5070 sm_120 driver-JIT; nvcc -arch=sm_90a -DDVAL={64,128,256}; per-row-scale rel vs f64 CPU ref + NaN/Inf hard-fail; ptxas -v sm_80/sm_90a"
+  raw    = ".verdicts/fusion-attention-dsweep-pipe/F-FUSION-ATTN-DSWEEP-PIPE.txt"
+  src    = "archive/fires/fusion_attn_dsweep_pipe_2026_05_26/{fa_dsweep_oracle.cu,fa_pipe_oracle.cu,result_probeA.json,result_probeB.json}"
+  status = "🟢 SUPPORTED — numeric correctness REAL across the full sweep (verbatim verdict persisted). This is the correctness sub-claim; the WIN claim is the wall claim below (🟠)."
+
+@C fusion_attn_dsweep_wall := "R11 PROBE A (head_dim sweep) FALSIFIES the d-lever IN THE WRONG DIRECTION: fused/cuBLAS-TC ratio WORSENS monotonically with d — d=64 {1.229,1.225,1.234} d=128 {2.149,1.673,1.752} d=256 {2.967,2.290,2.217} @ N={1024,2048,4096}. cuBLAS is dominated by the d-INDEPENDENT N*N S HBM round-trip (0.176/0.233/0.354 ms @ N=4096, barely rises with d); the fused per-warp serial d-tile loop scales LINEARLY with d (0.217/0.409/0.786 ms @ N=4096). Raising head_dim WIDENS the gap. Best ratio 1.225x @ d=64 N=2048 NEVER crosses ≤1.0x. WIN FALSIFIED; d-lever RULED OUT" :: measurement [slug=fusion-attention-dsweep-pipe group=GPU]
+  method = "silicon-fire"
+  cmd    = "ubu-2 RTX 5070; cuEvent 20 warmup + 200 timed median; contention-gated (nvidia-smi 0%); fused vs fair FP16 cuBLAS-TC stack (GemmStridedBatchedEx x2 TENSOR_OP + OPTIMIZED block-per-row parallel softmax)"
+  raw    = ".verdicts/fusion-attention-dsweep-pipe/F-FUSION-ATTN-DSWEEP-PIPE.txt"
+  src    = "archive/fires/fusion_attn_dsweep_pipe_2026_05_26/{fa_dsweep_oracle.cu,fusion_attn_cublas_tc_baseline.cu,cublas_probe.cu,result_probeA.json}"
+  status = "🟠 CLOSED-NEGATIVE — d-lever ruled out (ratio diverges from a ≤1.0x crossover as d rises). No §10 flip. No paper."
+
+@C fusion_attn_pipe_wall := "R11 PROBE B (2-stage compute pipeline at best-d=64) FALSIFIED: overlapping P.V(tile j) with QK^T(tile j+1). v1 (serialize the load to hoist QK^T) = +18.9..27.9% SLOWER (confirms R10's cp.async LOAD-overlap is dominant). v2 (race-free triple-buffer K+V keeping 2-deep load overlap AND hoisting QK^T, numeric bit-identical) = +4.9/+4.2/+2.4% SLOWER than R10 @ N=1024/2048/4096. The intra-warp QK^T->reduce->P.V chain is NOT an exposed pipeline bubble — 4 warps * 20 warps/SM already interleave the wmma streams; the hoist's extra __syncthreads + register pressure (93->104) cost more than any gain. Campaign-best ratio stays R10's 1.149x @ N=4096 d=64" :: measurement [slug=fusion-attention-dsweep-pipe group=GPU]
+  method = "silicon-fire"
+  cmd    = "ubu-2 RTX 5070; cuEvent 20 warmup + 200 timed median, contention-gated; fa_pipe (triple-buffer compute-pipeline) vs R10 fa_d64 re-timed same session vs fair cuBLAS-TC"
+  raw    = ".verdicts/fusion-attention-dsweep-pipe/F-FUSION-ATTN-DSWEEP-PIPE.txt"
+  src    = "archive/fires/fusion_attn_dsweep_pipe_2026_05_26/{fa_pipe_oracle.cu,result_probeB.json}"
+  status = "🟠 NEAR-CEILING CLOSED-NEGATIVE — BOTH d and compute-overlap levers ruled out for fused attention at d∈{64..256}. Fused approaches cuBLAS-TC within ~23% at d=64 but the inner-GEMM TC-utilization gap does NOT close at these shapes. §10 axis-A-attention box stays [ ]. No paper (orange). Next untried lever = wgmma / FP8."
+
+# ───────────────────────────────────────────────────────────────────────
 # ───────────────────────────────────────────────────────────────────────
 # TECS-L axis A (MODFORM) — tecs-l-modform-dim-genus (slug · group=TECS-L · MF4)
 # Classical theorem dim S_2(Γ_0(N)) = genus(X_0(N)) — TESTED vs hexa fns.
