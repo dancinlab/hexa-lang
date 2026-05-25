@@ -92,6 +92,7 @@ int main(int argc, char **argv) {
     if (argc < 2) { fprintf(stderr, "usage: %s flash_attn_wmma.ptx [N]\n", argv[0]); return 2; }
     const char *ptx_path = argv[1];
     int N = (argc > 2) ? atoi(argv[2]) : 2048;
+    const char *kname = (argc > 3) ? argv[3] : "flash_attn_wmma_mcta";
     int d = 64;                       /* PTX is specialized for d=64 */
     if (N % 16 != 0) { fprintf(stderr, "N must be a multiple of 16\n"); return 2; }
 
@@ -109,7 +110,7 @@ int main(int argc, char **argv) {
     CUjit_option jit_opts[1] = { CU_JIT_TARGET_FROM_CUCONTEXT };
     void *jit_vals[1] = { (void *)0 };
     CHECK(cuModuleLoadDataEx(&mod, ptx, 1, jit_opts, jit_vals));
-    CUfunction f; CHECK(cuModuleGetFunction(&f, mod, "flash_attn_wmma"));
+    CUfunction f; CHECK(cuModuleGetFunction(&f, mod, kname));
 
     size_t elems = (size_t)N * d;
     float    *hqf = (float *)malloc(elems * sizeof(float));
