@@ -2801,3 +2801,34 @@
   raw    = ".verdicts/tecs-l-closed-neg-miner/cn6_perfect_superperfect_falsifier.txt"
   src    = "axis 0 M5/M6 (perfect locus) · OEIS A019279 (superperfect)"
   status = "🔴 FALSIFIED — σ(σ(6))=σ(12)=28 ≠ 12. ruled-out axis."
+
+# ───────────────────────────────────────────────────────────────────────
+# TECS-L — tecs-l-modform-n6-nonlift (slug · group=TECS-L · paper-track · TECS-L/TECS-L.md MF8)
+# MODFORM-axis paper aggregating TWO pre-registered closed-negative findings
+# around a verified Γ₀(N) backdrop (index/cusps/genus/dim/AL · MF1-MF7).
+#   (1) MF4: hexa dim_cusp_forms(N,2) ≠ classical dim S₂=genus (fn definition gap, PR #1083).
+#   (2) F7 : σφ=nτ⟺{1,6} is a Γ₀-level identity that does NOT lift to Γ₁/X(N) (index smooth).
+# Both pre-registered + measured + closed-negative → paper_significance MET, paper_negative_ok.
+
+@C tecs_l_modform_n6_nonlift_paper := "MODFORM paper: TWO closed-negatives — (1) hexa dim_cusp_forms(N,2)≠genus=dim S₂ (20/30 mismatch N∈[1,30], fn-gap PR #1083) + (2) σφ=nτ⟺{1,6} does NOT lift to Γ₁/X(N) (index smooth, no n=6 peak). 11-page paper PAPER/tecs-l-modform-n6-nonlift/, g51 (≥10p + fal figure)." :: paper [slug=tecs-l-modform-n6-nonlift group=TECS-L]
+  method = "paper"
+  cmd    = "pdflatex×3 + bibtex (PAPER/tecs-l-modform-n6-nonlift/Makefile) → main.pdf 11 pages"
+  raw    = ".verdicts/tecs-l-modform-dim-genus/dim_vs_genus_sweep.txt"
+  src    = "PAPER/tecs-l-modform-n6-nonlift/main.tex · MF4 (MF8) + F7 · backdrop MF1-MF7"
+  status = "🔴 two closed-negatives: hexa dim_cusp≠genus (fn-gap) + n=6 σφ=nτ non-lift to Γ₁/X(N). Paper PAPER/tecs-l-modform-n6-nonlift/"
+
+# — Finding 1 (MF4): the dim_cusp_forms definition gap (20/30 mismatch) —
+@C tecs_l_modform_dim_genus_falsifier := "MF4 falsifier 🔴: hexa dim_cusp_forms(N,2) does NOT realize dim S₂(Γ₀(N))=genus(X₀(N)) — 20/30 mismatch over N∈[1,30] vs trusted gamma0_genus (N=11 hexa=0/genus=1; N=30 hexa=6/genus=3; match only small-N coincidence). Builtin definition gap, not a math falsehood. INBOX upstream PR #1083." :: empirical [slug=tecs-l-modform-n6-nonlift group=TECS-L]
+  method = "fixpoint"
+  cmd    = "hexa verify --expr dim_cusp_forms(N,2) + gamma0_genus(N) sweep N=1..30 (driver PR #1153)"
+  raw    = ".verdicts/tecs-l-modform-dim-genus/dim_vs_genus_sweep.txt"
+  src    = "TECS-L axis A MF4 · .verdicts/tecs-l-modform-dim-genus/{dim_n11_actual,dim_n30_actual,dim_n6_match,genus_n11}.txt"
+  status = "🔴 FALSIFIED — 20 MISMATCH / 10 MATCH (N∈[1,30]). gamma0_genus trusted (MF3 22/22, 0 mismatch). ruled-out axis = trust in builtin name; fn-gap PR #1083."
+
+# — Finding 2 (F7): the n=6 non-lift to the modular-curve tower —
+@C tecs_l_modform_n6_nonlift_falsifier := "F7 falsifier 🔴: NO {1,6}-type index identity exists at Γ₁(N)/X(N) level — Γ₁ idx=ψφ/2 and X(N) idx=N·Γ₁ are smooth multiplicative in N, n=6 sits at the generic value (12,72), no peak/singularity/collapse. σφ=nτ⟺{1,6} is a Γ₀-level arithmetic-fn phenomenon that does NOT lift up the modular-curve tower." :: empirical [slug=tecs-l-modform-n6-nonlift group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr gamma0_index + phi for N∈{5,6,7,11,12}; assemble Γ₁/X idx (cited closed form)"
+  raw    = ".verdicts/tecs-l-modform-other-curves/gamma1_x_index_assembled.txt"
+  src    = "TECS-L axis F F7 · cites MF1/MF6 (n=6 bridge) + tecs-l-n6-identity (σφ=nτ⟺{1,6}) · .verdicts/tecs-l-modform-other-curves/{components_psi,components_phi,n6_focal}.txt"
+  status = "🔴 FALSIFIED — Γ₁/X index smooth, no n=6 peak (10/10 🔵 integer components, assembled idx 🟡 citation). ruled-out axis = {1,6} specialness lifting to higher modular level."
