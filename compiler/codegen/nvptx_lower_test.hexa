@@ -2646,6 +2646,17 @@ fn _test_dtype_family() -> bool {
         }
     }
 
+    // ─── Sub-case A3 — FP32 division mnemonic ──────────────────────────
+    // `div_f32` (from hir_to_mir `_op_with_precision`) → `div.rn.f32`
+    // (the "future codegen-side div row"). f16/bf16 div has no native PTX
+    // mnemonic → honest "" stub (SAFE, not a wrong-mnemonic miscompile).
+    let div_f32 = _nvptx_binop_mnemonic("div_f32")
+    if div_f32 != "div.rn.f32" { println("  FAIL: div_f32 → `" + div_f32 + "` want `div.rn.f32`"); ok = false }
+    else { println("  ok: fp div_f32 -> div.rn.f32") }
+    let div_f16 = _nvptx_binop_mnemonic("div_f16")
+    if div_f16 != "" { println("  FAIL: div_f16 should be honest-stub (no native PTX f16 div), got `" + div_f16 + "`"); ok = false }
+    else { println("  ok: fp div_f16 -> honest stub (no native mnemonic)") }
+
     // ─── Sub-case B — PReg metadata round-trip via classifier ──────────
 
     // Synthesize an MFunc whose first STMT_CALL is gpu_wmma_load_a so the
