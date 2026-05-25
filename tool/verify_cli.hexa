@@ -75,6 +75,58 @@ fn _has_compute(rest) -> bool {
     return false
 }
 
+// VERIFY-KIT V3 — `--tol <eps>` round-tolerance flag (literature-rounded
+// comparison). OPT-IN only: when absent, the verify path keeps its current
+// STRICT ε=1e-9 gate (a 🔴 beyond ε stays 🔴). When `--tol <eps>` is present
+// and the recompute lands within <eps> of the claimed value (but not within
+// the strict ε), the float path emits 🟢 SUPPORTED-NUMERICAL (round-tolerant)
+// instead of a spurious 🔴 — e.g. literature's 6-digit Tc=14.55 vs the engine's
+// 14.5511. CRITICAL: tolerance is for literature ROUNDING, NOT a way to launder
+// failures — a deterministic disagreement BEYOND the stated <eps> still 🔴.
+// Returns true iff `--tol` appears as a flag token in argv.
+fn _has_tol(rest) -> bool {
+    let mut i = 0
+    while i < len(rest) {
+        if to_string(rest[i]) == "--tol" { return true }
+        i = i + 1
+    }
+    return false
+}
+
+// _get_tol — parse the float operand FOLLOWING the `--tol` flag. Returns 0.0
+// (= no tolerance) when `--tol` is absent or has no trailing value, so an
+// unparsed/missing eps degrades to STRICT behavior (never silently widens).
+fn _get_tol(rest) -> float {
+    let mut i = 0
+    while i < len(rest) {
+        if to_string(rest[i]) == "--tol" && (i + 1) < len(rest) {
+            return _parse_float(to_string(rest[i + 1]))
+        }
+        i = i + 1
+    }
+    return 0.0
+}
+
+// _strip_tol — return a copy of `rest` with the `--tol <eps>` flag PAIR removed,
+// so the downstream arity detection (has5/has6/has7 / operand counting) is not
+// thrown off by the extra two tokens. Mirrors the --absorb/--no-absorb/--compute
+// flag-tolerance already in the dispatch.
+fn _strip_tol(rest) -> array {
+    let mut out: array = []
+    let mut i = 0
+    while i < len(rest) {
+        let tk = to_string(rest[i])
+        if tk == "--tol" {
+            // skip the flag AND its value operand (if present)
+            i = i + 2
+        } else {
+            out.push(rest[i])
+            i = i + 1
+        }
+    }
+    return out
+}
+
 // _auto_absorb_via_atlas — DEFAULT auto-absorb path (commons.tape @D g69).
 // Delegates to `hexa atlas register --from-verify <fn> <args...> <v>` which
 // folds the verified atom DIRECTLY into compiler/atlas/embedded.gen.hexa
@@ -201,6 +253,10 @@ fn cmd_rubric() {
     println("  hexa verify --expr <fn> <n>                  COMPUTE mode (V2): omit <v> → prints fn(n)")
     println("                                               (e.g. `--expr sigma 7` → COMPUTE: sigma(7) = 8)")
     println("  hexa verify --expr <fn> <a> <b> --compute    COMPUTE mode, multi-operand (explicit marker)")
+    println("  hexa verify --expr <fn> ... <v> --tol <eps>  ROUND-TOLERANT (V3): |calc−v|≤eps → 🟢 (opt-in)")
+    println("                                               (e.g. allen_dynes_tc … 14.55 --tol 0.01 → 🟢;")
+    println("                                                literature 6-digit rounding, NOT a launder —")
+    println("                                                beyond <eps> STAYS 🔴; default = strict ε=1e-9)")
     println("  hexa verify --fence <claim>              ⚪ SPECULATION-FENCED (honest)")
     println("  hexa verify --blue-max <DOMAIN>          BLUE-MAX 🔵-pair audit (@D g69)")
     println("  hexa verify rubric | list                this rubric")
@@ -3370,7 +3426,14 @@ fn cmd_expr_float_compute(rest, fnm: string) {
     }
 }
 
-fn cmd_expr_float(rest, fnm: string) {
+fn cmd_expr_float(rest_in, fnm: string) {
+    // VERIFY-KIT V3 — capture the OPT-IN round-tolerance, then strip the
+    // `--tol <eps>` flag pair so the arity detection (has5/has6/has7) below is
+    // not skewed by the two extra tokens. tol == 0.0 ⇒ no tolerance ⇒ the
+    // STRICT ε=1e-9 gate is preserved (current behavior, unchanged).
+    let tol = _get_tol(rest_in)
+    let tol_on = _has_tol(rest_in)
+    let rest = _strip_tol(rest_in)
     let zero_arg = calc_is_zero_arg_float_fn(fnm)
     // VERIFY-KIT V1 — explicit value-less COMPUTE marker routes BEFORE the
     // VERIFY arity parse (which would swallow the last operand as <v>). 0-arg
@@ -3462,9 +3525,29 @@ fn cmd_expr_float(rest, fnm: string) {
             else { v_str = to_string(rest[3]) }
             _auto_absorb_via_atlas(fnm, args_space, v_str)
         }
+    } else if tol_on && diff <= tol {
+        // VERIFY-KIT V3 — OPT-IN round-tolerance band: the claim is OUTSIDE the
+        // strict ε=1e-9 gate but WITHIN the explicitly-stated <eps>. This is the
+        // literature-rounding case (e.g. Tc=14.55 vs the engine's 14.5511) — a
+        // 6-digit-rounded value, NOT a real falsification. Emit 🟢 with an
+        // explicit within-tol note. Tolerance is opt-in for literature-rounded
+        // comparisons, NOT a way to launder failures.
+        println("  calc   = " + _fstr(got) + "  ≈ expected " + _fstr(v) + "  (within tol " + _fstr(tol) + ", calc=" + _fstr(got) + " vs expected=" + _fstr(v) + ", |Δ|=" + _fstr(diff) + ")")
+        println("  tier   = 🟢 SUPPORTED-NUMERICAL  (round-tolerant: literature-rounded value within opt-in --tol " + _fstr(tol) + ", TECS-L n6-rep Tier2)")
+        // NOTE: round-tolerant 🟢 does NOT auto-absorb — the atlas SSOT folds the
+        // ENGINE's full-precision value via its own compute path (VERIFY-KIT V1),
+        // never the literature-rounded operand. So no _absorb / auto-absorb here.
     } else {
-        println("  calc   = " + _fstr(got) + "  ≠ expected " + _fstr(v) + "  (|Δ|=" + _fstr(diff) + " > ε=1e-9)")
-        println("  tier   = 🔴 FALSIFIED  (calc deterministically disagrees beyond ε — TECS-L result-agnostic closed negative)")
+        // STRICT 🔴: deterministic disagreement BEYOND ε (and beyond <tol> when
+        // --tol was given). A 🔴 past the stated eps stays 🔴 — falsification
+        // integrity preserved.
+        if tol_on {
+            println("  calc   = " + _fstr(got) + "  ≠ expected " + _fstr(v) + "  (|Δ|=" + _fstr(diff) + " > tol=" + _fstr(tol) + ")")
+            println("  tier   = 🔴 FALSIFIED  (disagrees beyond the stated --tol " + _fstr(tol) + " — tolerance does NOT launder failures, TECS-L result-agnostic closed negative)")
+        } else {
+            println("  calc   = " + _fstr(got) + "  ≠ expected " + _fstr(v) + "  (|Δ|=" + _fstr(diff) + " > ε=1e-9)")
+            println("  tier   = 🔴 FALSIFIED  (calc deterministically disagrees beyond ε — TECS-L result-agnostic closed negative)")
+        }
     }
 }
 
@@ -3536,7 +3619,7 @@ fn cmd_expr_compute(rest, ops: int) {
     }
 }
 
-fn cmd_expr(rest) {
+fn cmd_expr(rest_in) {
     // 0-operand:  --expr <fn> <v>                    (rest len 3; chsh_tsirelson)
     // 1-operand:  --expr <fn> <n> <v>                (rest len 4)
     // 2-operand:  --expr <fn> <a> <b> <v>            (rest len 5)
@@ -3547,10 +3630,19 @@ fn cmd_expr(rest) {
     // trailing <v>): `--expr <fn> <n>` computes & prints fn(n) instead of
     // re-confirming a known value. See cmd_expr_compute for the disambiguation
     // rule. Routed below AFTER the float path so float fns keep their forms.
+    //
+    // VERIFY-KIT V3 — capture the OPT-IN `--tol <eps>` round-tolerance, then
+    // operate on a STRIPPED copy of argv so the operand-count / arity detection
+    // is not skewed by the two extra `--tol <eps>` tokens. The float path
+    // (cmd_expr_float) strips internally too — pass it the ORIGINAL argv so the
+    // flag survives the call boundary. tol == 0.0 ⇒ STRICT (current behavior).
+    let tol = _get_tol(rest_in)
+    let tol_on = _has_tol(rest_in)
+    let rest = _strip_tol(rest_in)
     let fnm_pre = if len(rest) >= 2 { to_string(rest[1]) } else { "" }
     let zero_arg_pre = calc_is_zero_arg_float_fn(fnm_pre)
     if len(rest) < 3 {
-        println("error: usage: hexa verify --expr <fn> <n> [<v>]  |  <fn> <a> <b> [<v>]  [--absorb]")
+        println("error: usage: hexa verify --expr <fn> <n> [<v>]  |  <fn> <a> <b> [<v>]  [--absorb] [--tol <eps>]")
         println("       (compute mode: omit <v> to COMPUTE; provide <v> to VERIFY)")
         exit(2)
     }
@@ -3561,7 +3653,8 @@ fn cmd_expr(rest) {
     // collision — the 0-arg constants like chsh_tsirelson — so once float fns
     // are routed away, the int compute path below is unambiguous.)
     if calc_is_float_fn(fnm) {
-        cmd_expr_float(rest, fnm)
+        // pass the ORIGINAL argv (with --tol intact) — cmd_expr_float strips it
+        cmd_expr_float(rest_in, fnm)
         return
     }
     // ── VERIFY-KIT V2 (P0b) — value-less COMPUTE routing (int fns) ──────────
@@ -3647,8 +3740,25 @@ fn cmd_expr(rest) {
             _auto_absorb_via_atlas(fnm, args_space, to_string(v))
         }
     } else {
-        println("  calc   = " + to_string(got) + "  != expected " + to_string(v))
-        println("  tier   = 🔴 FALSIFIED  (calc deterministically disagrees — TECS-L result-agnostic closed negative)")
+        // VERIFY-KIT V3 — OPT-IN round-tolerance for the int path too. An exact
+        // int closed-form rarely needs tolerance, but a literature-rounded
+        // INTEGER claim (or a coarse-grained expected value) can land within an
+        // explicit <eps>. |got − v| ≤ tol (and tol was explicitly given) ⇒ 🟢
+        // round-tolerant. Beyond tol stays 🔴 — tolerance never launders a fail.
+        let idiff = if got > v { got - v } else { v - got }
+        let idiff_f = to_float(idiff)
+        if tol_on && idiff_f <= tol {
+            println("  calc   = " + to_string(got) + "  ≈ expected " + to_string(v) + "  (within tol " + _fstr(tol) + ", calc=" + to_string(got) + " vs expected=" + to_string(v) + ", |Δ|=" + to_string(idiff) + ")")
+            println("  tier   = 🟢 SUPPORTED-NUMERICAL  (round-tolerant: claim within opt-in --tol " + _fstr(tol) + ", TECS-L n6-rep Tier2)")
+            // round-tolerant 🟢 does NOT auto-absorb (the atlas folds the
+            // engine's exact value, never the rounded operand).
+        } else if tol_on {
+            println("  calc   = " + to_string(got) + "  != expected " + to_string(v) + "  (|Δ|=" + to_string(idiff) + " > tol=" + _fstr(tol) + ")")
+            println("  tier   = 🔴 FALSIFIED  (disagrees beyond the stated --tol " + _fstr(tol) + " — tolerance does NOT launder failures, TECS-L result-agnostic closed negative)")
+        } else {
+            println("  calc   = " + to_string(got) + "  != expected " + to_string(v))
+            println("  tier   = 🔴 FALSIFIED  (calc deterministically disagrees — TECS-L result-agnostic closed negative)")
+        }
     }
 }
 

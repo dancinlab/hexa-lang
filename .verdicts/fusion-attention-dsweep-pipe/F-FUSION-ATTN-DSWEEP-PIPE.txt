@@ -1,0 +1,119 @@
+F-FUSION-ATTN-DSWEEP-PIPE  —  ROUND 11  (GPU fusable-axis attention campaign)
+==============================================================================
+slug   : fusion-attention-dsweep-pipe        group : GPU
+date   : 2026-05-26
+host   : ubu-2  RTX 5070  sm_120  driver 580  (48 SMs; 0% util / 5 MiB at every fire)
+chain  : nvcc/ptxas 12.0  -arch=sm_90a  (sm_120 via compute_90 PTX + driver JIT)
+base   : R10 fa_mw_cpasync (multi-warp BM=64 + cp.async K/V double-buffer; best-of-
+         campaign 1.149x @ N=4096 d=64, ORANGE)
+
+PRE-REGISTERED FALSIFIER (two coupled probes)
+---------------------------------------------
+(A) head_dim sweep: re-run R10's kernel parameterized over d ∈ {64,128,256},
+    N ∈ {1024,2048,4096}. HYPOTHESIS: at d≥128 the fused inner-GEMM arithmetic
+    intensity rises -> the fused path may CROSS below 1.0x (above cuBLAS-stack).
+    FALSIFIED-for-this-probe if fused stays ≥1.0x at all d.
+(B) 2-stage COMPUTE pipeline: overlap P.V mma of K-tile j with QK^T mma of tile
+    j+1 (break the intra-warp dependency chain R10 found is now the floor —
+    distinct from cp.async which overlapped the LOAD). Apply at best-d.
+    FALSIFIED-for-this-probe if it doesn't improve over R10's 1.149x.
+WIN (either probe): fused_ms < cublas_stack_ms (ratio ≤1.0x) on ≥1 (N,d) -> 🟢.
+
+BASELINE INTEGRITY (instrument-first; g3 zero over-claim)
+--------------------------------------------------------
+The fused kernel is FP16 Tensor-Core. The fair baseline is the FP16 cuBLAS-TC
+3-launch stack (GemmStridedBatchedEx x2 TENSOR_OP + a standalone softmax). An
+early NAIVE one-thread-per-row softmax was a 13x-slower STRAWMAN (softmax kernel
+alone = 2.154 ms @ N=4096 d=64; the two GEMMs only 0.316 ms — a `cublas_probe`
+launch-decomposition surfaced this). Comparing the fast fused kernel against that
+strawman would have FALSELY produced a 🟢. REJECTED. The baseline was fixed to an
+OPTIMIZED block-per-row parallel-reduction softmax. The corrected cuBLAS-TC stack
+measures 0.176 ms @ N=4096 d=64 — matching R10's recorded 0.189 ms baseline
+ballpark, confirming R10 also used the optimized softmax. ALL ratios below use the
+fair optimized-softmax cuBLAS-TC baseline.
+
+PTXAS (all clean, 0 spill, smem << 49152 B cap)
+-----------------------------------------------
+fa_dsweep d=64 : sm_80  91 reg / 14336 B   sm_90a  93 reg / 14336 B
+fa_dsweep d=128: sm_80 148 reg / 22528 B   sm_90a 155 reg / 22528 B
+fa_dsweep d=256: sm_80 247 reg / 38912 B   sm_90a 246 reg / 38912 B
+fa_pipe   d=64 : sm_90a 104 reg / 18432 B  (triple-buffer; 0 spill)
+
+NUMERIC GATE  (per-row-scaled rel ≤ 1e-2 vs f64 CPU ref; NaN/Inf hard-fail)
+---------------------------------------------------------------------------
+ALL 9 (N,d) probe-A shapes PASS, naninf=0:
+  d=64 : rel 5.674e-4 / 6.105e-4 / 7.142e-4   @ N=1024/2048/4096
+  d=128: rel 5.817e-4 / 6.013e-4 / 6.158e-4
+  d=256: rel 5.788e-4 / 5.650e-4 / 5.849e-4
+  (d=64 rows are bit-identical to R10 — faithful generalization)
+probe-B d=64 PASS, naninf=0: rel 5.674e-4 / 6.105e-4 / 7.142e-4 (bit-identical to R10)
+
+PROBE (A) — head_dim sweep  [median_ms, 20 warmup + 200 timed; ratio = fused/cuBLAS-TC]
+--------------------------------------------------------------------------------------
+   d      N   fused_ms   cuBLAS_ms   ratio       (ratio < 1.0 = WIN)
+  64   1024   0.040352   0.032832    1.229  (+22.9% above cuBLAS)
+  64   2048   0.073088   0.059648    1.225  (+22.5%)   <- best ratio of probe A
+  64   4096   0.217408   0.176224    1.234  (+23.4%)
+ 128   1024   0.071040   0.033056    2.149  (+114.9%)
+ 128   2048   0.128352   0.076736    1.673  (+67.3%)
+ 128   4096   0.408960   0.233440    1.752  (+75.2%)
+ 256   1024   0.128352   0.043264    2.967  (+196.7%)
+ 256   2048   0.232800   0.101664    2.290  (+129.0%)
+ 256   4096   0.785728   0.354368    2.217  (+121.7%)
+
+d-TREND (does ratio improve toward 1.0 as d rises?  — the pre-registered question)
+  N=1024: d64 1.229 -> d128 2.149 -> d256 2.967   WORSENS
+  N=2048: d64 1.225 -> d128 1.673 -> d256 2.290   WORSENS
+  N=4096: d64 1.234 -> d128 1.752 -> d256 2.217   WORSENS
+
+=> PROBE (A) FALSIFIED IN THE WRONG DIRECTION. The hypothesis was a crossover at
+   larger d. OBSERVED: the ratio WORSENS monotonically with d. cuBLAS's two big TC
+   GEMMs are dominated by the d-INDEPENDENT N*N S HBM round-trip, so cuBLAS barely
+   slows as d grows (0.176 -> 0.233 -> 0.354 ms @ N=4096). The fused per-warp serial
+   d-tile loop (DTILES = d/16 mma + scale_o + repack ON the critical dependency
+   chain) scales LINEARLY with d and degrades (0.217 -> 0.409 -> 0.786 ms @ N=4096).
+   The d-lever moves the WRONG way — RULED OUT.
+
+PROBE (B) — 2-stage compute pipeline at best-d (d=64)
+-----------------------------------------------------
+v1 (serialized load: hoist QK^T(j+1) but cp_async_wait<0> first -> lost the
+    load-overlap): +23.6% / +27.9% / +18.9% SLOWER than R10 — confirms R10's
+    lever-isolation that cp.async LOAD-overlap is the dominant lever.
+v2 (race-free triple-buffer K+V: KEEP 2-deep cp.async LOAD overlap AND hoist the
+    QK^T(j+1) compute from the already-prefetched slot; numeric bit-identical):
+       N=1024  0.042336 ms vs R10 0.040352  (+4.9%)
+       N=2048  0.076064 ms vs R10 0.073024  (+4.2%)
+       N=4096  0.222560 ms vs R10 0.217440  (+2.4%)
+=> PROBE (B) FALSIFIED. Even the clean triple-buffered compute-pipeline is +2.4..
+   +4.9% SLOWER. With 4 warps * 20 warps/SM the warp scheduler ALREADY interleaves
+   the wmma streams — there is NO idle pipeline bubble for the hoisted QK^T to fill.
+   The extra __syncthreads + register pressure (93->104) cost more than any gain.
+
+DUAL-AXIS VERDICT (g3)
+----------------------
+🟠 ORANGE — NEAR-CEILING CLOSED-NEGATIVE. Numeric PASS all 12 measured shapes. The
+fused FP16-TC attention NEVER crosses ≤1.0x: best ratio 1.225x @ d=64 N=2048
+(22.5% ABOVE the fair cuBLAS-TC stack). BOTH pre-registered levers are FALSIFIED:
+ • d-lever (probe A): the ratio WORSENS with d (1.23x -> 1.75x -> 2.22x); raising
+   head_dim does NOT close the gap, it WIDENS it — the d-trend DIVERGES from a
+   crossover. RULED OUT.
+ • compute-pipeline lever (probe B): +2.4..4.9% slower than R10; the dependency
+   chain is NOT an exposed bubble (multi-warp already hides it). RULED OUT.
+The campaign-best ratio remains R10's 1.149x @ N=4096 d=64. Finding: "fused
+attention at d ∈ {64..256} approaches the cuBLAS-TC stack within ~23% at the
+favorable d=64 but the inner-GEMM TC-utilization gap does NOT close at these shapes
+— it is fundamental; raising d and software-pipelining the compute both move the
+wrong way." This is a valid g3 closed-negative ruling out the two most plausible
+remaining levers (d and compute-overlap) for the fused-attention fusable axis.
+
+§10 : NO FLIP — axis-A-attention box stays [ ] (no 1.0x cross on any probe).
+PAPER: NO — orange. /paper triggers only on a 🟢 ≤1.0x cross.
+
+ARTIFACTS (archive/fires/fusion_attn_dsweep_pipe_2026_05_26/)
+  fa_dsweep_oracle.cu              probe A — head_dim-parameterized R10 kernel (DTILES=D/16)
+  fa_pipe_oracle.cu                probe B — triple-buffer compute-pipeline (load-overlap + QK^T hoist)
+  fusion_attn_cublas_tc_baseline.cu  fair FP16 cuBLAS-TC stack w/ OPTIMIZED parallel softmax
+  cublas_probe.cu                  launch-decomposition probe that caught the naive-softmax strawman
+  result_probeA.json / result_probeB.json  full matrices
+
+f1 (no LLVM) / f2 (no C-transpile change): codegen/runtime UNTOUCHED — pure .cu fires.

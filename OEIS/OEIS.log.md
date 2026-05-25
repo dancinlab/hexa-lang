@@ -2,6 +2,30 @@
 
 Append-only history sister of `OEIS.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
+## 2026-05-26T02:10Z — O5 TECS-L F11 cross-link (7 provenance link → TECS-L cite · NEXUS reuse edge g67)
+
+- [x] O4(PR #1138)가 확보한 **7 OEIS↔hexa-fn provenance link** 을 자매 도메인 **TECS-L** 의 축 F **F11("OEIS reuse cite")** 에 교차연결 + repo-root `NEXUS.tape` 에 intra-project reuse edge 등록 (commons @D g67). 격리 worktree `/tmp/wt-oeis-o5` (origin/main).
+  - **7 link** (O4 ledger 그대로): 4 @P 빌트인 attribution — sigma↔A000203 · tau↔A000005 · phi↔A000010 · mu↔A008683; 3 신규 @F fold — aliquot↔A001065 · sigma_2↔A001157 · sigma_3↔A001158.
+  - **TECS-L F11 closure** (`TECS-L/TECS-L.md`): `- [ ]`→`- [x]`. F11 재정의 = "OEIS reuse cite — TECS-L = OEIS-도메인 provenance 의 downstream consumer". M1·M3·M10 의 σ·φ·τ + M4 의 μ + 축 F F3 의 σ_2 가 모두 OEIS canonical-source 귀속을 받은 산술함수를 소비 → reuse-cite 성립.
+  - **NEXUS.tape reuse edge** (§3b 신설, **기존 NEXUS.tape 확장** — 새로 만들지 않음): 기존 파일은 g68 cross-repo STAR hub. 그 governance 가 g67+g68 둘 다 governs 라 명시 → §3b "intra-project domain reuse lattice (g67)" 섹션을 additive 로 추가. domain-node `d_oeis`(provides: 7 link) + `d_tecsl`(reused) + domain-reuse-edge `de1`(TECS-L --reuses--> OEIS). 타 도메인 노드(demiurge/anima/… STAR hub) 미접촉, ASCII (g3).
+  - **docs** (`OEIS/docs/o5-tecs-crosslink.md`, 한글): 7 link 표 + reuse-edge 근거(g67 vs g68) + TECS-L M1-M10 소비 경로 표.
+  - 영속: `.verdicts/oeis-tecs-crosslink/crosslink.txt` (ASCII 7 link + reuse edge) + `CLAIMS.tape` @C slug=oeis-tecs-crosslink group=OEIS 🟢.
+  - **scope**: docs + NEXUS only — **atlas fold 미접촉** (O4 가 embedded.gen.hexa 소유; 동시 broad-campaign 세션의 비-OEIS fold 와 분리). method=synthesis/crosslink (신규 hexa verify 0건; link 는 O4 ledger 인용).
+  - **다음 = O7** (catalogue closure report + 미러 unique pattern 발견 시 closed-negative/positive paper).
+
+## 2026-05-26T01:40Z — O4 atlas-fold (7 🔵 theorem · dedup 16K)
+
+- [x] O3 의 **7 distinct 🔵 theorem** 을 atlas 에 fold (verified-만) + 기존 ~16K node 와 dedup. 격리 worktree `/tmp/wt-oeis-o4` (origin/main 기준) 에서만 작업 — register/edit 가 install dir(~/core/hexa-lang) 로 leak 하지 않도록 `HEXA_ATLAS_EMBED` scope + main tree grep 검증.
+  - **dedup 결과 (`hexa atlas lookup`)**:
+    - **5 ALREADY-PRESENT/alias** (중복 node 안 만듦, OEIS-id attribution 만 기록): sigma↔A000203 = `@P sigma` (divisor_sum, foundation [11*]) · tau↔A000005 = `@P tau` (divisor_count, [11*]) · phi↔A000010 = `@P phi` (euler_totient, [10*]) · mu↔A008683 = `@P mu` (mobius, [10*]) · sigma_0↔A000005 = **alias of tau** (같은 hexa `len(divisors)` fn, 별도 node 없음).
+    - **3 NEWLY-FOLDED** (atlas 부재 = lookup MISS → OEIS-attributed `@F` node 추가): aliquot↔A001065 [aliquot(8)=7] · sigma_2↔A001157 [sigma_2(9)=91] · sigma_3↔A001158 [sigma_k(9,3)=757]. 값은 O3 tier_ledger sample-verified PASS 와 일치.
+  - 각 새 node = `id=oeis-Annnnnn` · `tier="🔵 SUPPORTED-FORMAL"` · `source="OEIS Annnnnn"` · `url=https://oeis.org/Annnnnn` · `cite` 에 CC-BY-SA + verbatim provenance. (register CLI 는 OEIS source 필드를 못 실어서 — `verified-<fn>-<n>` 고정 포맷 — OEIS-attributed @F 를 직접 fold.)
+  - net +3 atlas node (16134 → 16137, F kind 1379 → 1382). main shared tree 누수 0 (`grep oeis-A001* ~/core/hexa-lang/.../embedded.gen.hexa` = 0).
+  - 영속: `.verdicts/oeis-atlas-fold/fold_ledger.txt` (fn · oeis_id · status · node ref) + `CLAIMS.tape` @C slug=oeis-atlas-fold group=OEIS.
+  - 솔직성: O4 = **mostly-attribution** — 7 중 5 가 기존 present/alias. 가치는 node 수가 아니라 검증된 OEIS↔hexa-fn provenance link (sigma/tau/phi/mu 의 OEIS canonical-source 명시 + 3 신규 fn 의 CC-BY-SA 귀속). 🟡 41 alias + 🟠 287 no-path 는 scope 밖 (O3 결정 유지).
+  - ⚠ 동시성: 작업 중 `/tmp/wt-oeis-o4` 가 한 번 외부 정리로 삭제됨 (worktree + branch 소실) → origin/main 기준 재생성 후 전 편집 재적용 (idempotent, 손실 없음). 별도 broad-campaign 세션이 main tree 에 비-OEIS `verified-<fn>-<n>` node (attribution 없음) 를 동시 fold 중 — 본 O4 와 별개, 미포착.
+  - **다음 = O5**: TECS-L F11 cross-link PR (OEIS atlas → TECS-L cite) + reuse edge 등록 (g67 NEXUS.tape).
+
 ## 2026-05-26T00:50Z — O3 per-hit verify (336 K=20 survivors)
 
 - [x] O2 의 **336 K=20 survivor** 를 candidate fn 별로 그룹핑 → distinct (fn, oeis_id) 별로 `hexa verify --expr` (VERIFY-KIT V2-era CLI) 로 재확인 + tier 분류. 3-arg VERIFY (`--expr <fn> <n> <expected>`) + V2 value-less COMPUTE (`--expr <fn> <n>`) 둘 다 사용.

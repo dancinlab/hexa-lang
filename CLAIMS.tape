@@ -1509,6 +1509,36 @@
   status = "🟠 ATTRIBUTION — cp.async double-buffer dominant, multi-warp secondary (fades at large N). Residual = intra-warp QK^T->reduce->P.V dependency chain + per-tile __syncthreads barrier + low d=64 arithmetic intensity (4 d-tiles). Next wedge = 2-stage compute pipeline (overlap P.V of tile j with QK^T of tile j+1) or d>=128. NOT another multi-warp-only or shuffle-softmax attempt."
 
 # ───────────────────────────────────────────────────────────────────────
+# GPU — fusion-attention-dsweep-pipe (slug · group=GPU · R11 · paper-track)
+# R11 took R10's two next-wedges: (A) head_dim sweep d∈{64,128,256} and
+# (B) 2-stage compute pipeline (overlap P.V(j) with QK^T(j+1)). BOTH levers
+# FALSIFIED. Baseline-integrity: an early naive one-thread-per-row softmax was
+# a 13x-slower STRAWMAN (caught by a launch-decomposition probe, REJECTED);
+# all ratios use the fair FP16 cuBLAS-TC stack with an OPTIMIZED parallel
+# softmax (0.176 ms @ N=4096 d=64, matching R10's recorded baseline).
+
+@C fusion_attn_dsweep_numeric := "R11 fused attention parameterized over head_dim D (DTILES=D/16) is NUMERIC PASS at all 9 (N,d) shapes d∈{64,128,256} N∈{1024,2048,4096}: per-row-scaled rel 5.6-7.1e-4, naninf=0; d=64 rows bit-identical to R10. ptxas-clean 0-spill sm_80 91/148/247 reg @ d=64/128/256, smem 14336/22528/38912 B all << 49152 B cap. Probe-B triple-buffer compute-pipeline 104 reg / 18432 B also PASS (bit-identical to R10)" :: measurement [slug=fusion-attention-dsweep-pipe group=GPU]
+  method = "silicon-fire"
+  cmd    = "ubu-2 RTX 5070 sm_120 driver-JIT; nvcc -arch=sm_90a -DDVAL={64,128,256}; per-row-scale rel vs f64 CPU ref + NaN/Inf hard-fail; ptxas -v sm_80/sm_90a"
+  raw    = ".verdicts/fusion-attention-dsweep-pipe/F-FUSION-ATTN-DSWEEP-PIPE.txt"
+  src    = "archive/fires/fusion_attn_dsweep_pipe_2026_05_26/{fa_dsweep_oracle.cu,fa_pipe_oracle.cu,result_probeA.json,result_probeB.json}"
+  status = "🟢 SUPPORTED — numeric correctness REAL across the full sweep (verbatim verdict persisted). This is the correctness sub-claim; the WIN claim is the wall claim below (🟠)."
+
+@C fusion_attn_dsweep_wall := "R11 PROBE A (head_dim sweep) FALSIFIES the d-lever IN THE WRONG DIRECTION: fused/cuBLAS-TC ratio WORSENS monotonically with d — d=64 {1.229,1.225,1.234} d=128 {2.149,1.673,1.752} d=256 {2.967,2.290,2.217} @ N={1024,2048,4096}. cuBLAS is dominated by the d-INDEPENDENT N*N S HBM round-trip (0.176/0.233/0.354 ms @ N=4096, barely rises with d); the fused per-warp serial d-tile loop scales LINEARLY with d (0.217/0.409/0.786 ms @ N=4096). Raising head_dim WIDENS the gap. Best ratio 1.225x @ d=64 N=2048 NEVER crosses ≤1.0x. WIN FALSIFIED; d-lever RULED OUT" :: measurement [slug=fusion-attention-dsweep-pipe group=GPU]
+  method = "silicon-fire"
+  cmd    = "ubu-2 RTX 5070; cuEvent 20 warmup + 200 timed median; contention-gated (nvidia-smi 0%); fused vs fair FP16 cuBLAS-TC stack (GemmStridedBatchedEx x2 TENSOR_OP + OPTIMIZED block-per-row parallel softmax)"
+  raw    = ".verdicts/fusion-attention-dsweep-pipe/F-FUSION-ATTN-DSWEEP-PIPE.txt"
+  src    = "archive/fires/fusion_attn_dsweep_pipe_2026_05_26/{fa_dsweep_oracle.cu,fusion_attn_cublas_tc_baseline.cu,cublas_probe.cu,result_probeA.json}"
+  status = "🟠 CLOSED-NEGATIVE — d-lever ruled out (ratio diverges from a ≤1.0x crossover as d rises). No §10 flip. No paper."
+
+@C fusion_attn_pipe_wall := "R11 PROBE B (2-stage compute pipeline at best-d=64) FALSIFIED: overlapping P.V(tile j) with QK^T(tile j+1). v1 (serialize the load to hoist QK^T) = +18.9..27.9% SLOWER (confirms R10's cp.async LOAD-overlap is dominant). v2 (race-free triple-buffer K+V keeping 2-deep load overlap AND hoisting QK^T, numeric bit-identical) = +4.9/+4.2/+2.4% SLOWER than R10 @ N=1024/2048/4096. The intra-warp QK^T->reduce->P.V chain is NOT an exposed pipeline bubble — 4 warps * 20 warps/SM already interleave the wmma streams; the hoist's extra __syncthreads + register pressure (93->104) cost more than any gain. Campaign-best ratio stays R10's 1.149x @ N=4096 d=64" :: measurement [slug=fusion-attention-dsweep-pipe group=GPU]
+  method = "silicon-fire"
+  cmd    = "ubu-2 RTX 5070; cuEvent 20 warmup + 200 timed median, contention-gated; fa_pipe (triple-buffer compute-pipeline) vs R10 fa_d64 re-timed same session vs fair cuBLAS-TC"
+  raw    = ".verdicts/fusion-attention-dsweep-pipe/F-FUSION-ATTN-DSWEEP-PIPE.txt"
+  src    = "archive/fires/fusion_attn_dsweep_pipe_2026_05_26/{fa_pipe_oracle.cu,result_probeB.json}"
+  status = "🟠 NEAR-CEILING CLOSED-NEGATIVE — BOTH d and compute-overlap levers ruled out for fused attention at d∈{64..256}. Fused approaches cuBLAS-TC within ~23% at d=64 but the inner-GEMM TC-utilization gap does NOT close at these shapes. §10 axis-A-attention box stays [ ]. No paper (orange). Next untried lever = wgmma / FP8."
+
+# ───────────────────────────────────────────────────────────────────────
 # ───────────────────────────────────────────────────────────────────────
 # TECS-L axis A (MODFORM) — tecs-l-modform-dim-genus (slug · group=TECS-L · MF4)
 # Classical theorem dim S_2(Γ_0(N)) = genus(X_0(N)) — TESTED vs hexa fns.
@@ -2345,3 +2375,59 @@
   raw    = ".verdicts/verify-kit-mirror-unify/v1_register.txt"
   src    = "tool/atlas_cli.hexa (cmd_register --compute + 🟠→compute auto-route + _adapt_verify_compute + _parse_compute_value) · tool/verify_cli.hexa (cmd_expr_float_compute + --compute routing in cmd_expr_float). Both bin/hexa-atlas + bin/hexa-verify built mac arm64; full register→verify→compute chain tested via test shim routing inner `hexa verify` to the new binary."
   status = "🟢 SUPPORTED-NUMERICAL — built + e2e tested (verdict persisted verbatim). register COMPUTES 14.5511 (no more 'no calculator path'); RTSC absorption unblocked. Round-tolerance ε=1e-9 vs literature-rounded value (14.55 → 🔴) is a SEPARATE INBOX item, out of V1 scope. Terminal · paper-eligible (Δ vs baseline = register absorption capability the prior CLI lacked for ≥3-arg float fns)."
+
+# ───────────────────────────────────────────────────────────────────────
+# VERIFY-KIT — verify-kit-tol (slug · group=VERIFY-KIT · V3)
+# CLOSES the round-tolerance INBOX item (2026-05-26T01:30Z item 3) that V1
+# explicitly deferred as out-of-scope. Adds an OPT-IN `--tol <eps>` flag to
+# `hexa verify --expr`: when |calc − expected| > strict ε=1e-9 but ≤ <eps>,
+# the verdict flips from a SPURIOUS 🔴 to 🟢 SUPPORTED-NUMERICAL (round-tolerant)
+# — the literature 6-digit-rounding case (Tc=14.55 vs the engine's 14.5511).
+# FALSIFICATION INTEGRITY: --tol is EXPLICIT (default = no tolerance = strict);
+# a 🔴 BEYOND the stated <eps> STAYS 🔴 (allen_dynes_tc … 99.0 --tol 0.01 → 🔴).
+# Tolerance is for literature rounding, NOT a launder for failures. Both float
+# (cmd_expr_float) + int (cmd_expr) verdict paths gain the band; round-tolerant
+# 🟢 does NOT auto-absorb (the atlas folds the engine's exact value, V1).
+
+@C verify_kit_tol := "VERIFY-KIT V3 round-tolerance `--tol <eps>`: `hexa verify --expr allen_dynes_tc 0.6150 591.18 0.10 14.55 --tol 0.01` → 🟢 SUPPORTED-NUMERICAL (round-tolerant; calc=14.5511 vs literature-rounded 14.55, |Δ|=0.00108 ≤ tol). OPT-IN only: same cmd WITHOUT --tol → 🔴 (strict ε=1e-9, unchanged); BEYOND tol (… 99.0 --tol 0.01) → 🔴 (NOT laundered). Int path too (sigma 6 13 --tol 2 → 🟢; sigma 6 20 --tol 2 → 🔴). Regressions clean (sigma 6 12 → 🔵 exact). Closes INBOX 2026-05-26T01:30Z item(3) round-tolerance deferred by V1" :: formula [slug=verify-kit-tol group=VERIFY-KIT]
+  method = "tolerance"
+  cmd    = "hexa verify --expr allen_dynes_tc 0.6150 591.18 0.10 14.55 --tol 0.01  (build = bash tool/build_hexa_verify.sh)"
+  raw    = ".verdicts/verify-kit-tol/v3_tol.txt"
+  src    = "tool/verify_cli.hexa (_has_tol + _get_tol + _strip_tol helpers; cmd_expr_float + cmd_expr round-tolerance band; --tol stripped before arity detection). bin/hexa-verify built mac arm64; full --tol matrix tested (within-tol 🟢 / strict 🔴 / beyond-tol 🔴)."
+  status = "🟢 SUPPORTED-NUMERICAL — built (bin/hexa-verify) + tested (verdict persisted verbatim). Round-tolerant 🟢 within opt-in --tol; strict 🔴 unchanged when --tol absent; beyond-tol 🔴 NOT laundered (falsification integrity preserved). Terminal · paper-eligible (Δ vs baseline = round-tolerant comparison the prior strict-only CLI lacked for literature-rounded values)."
+
+# ───────────────────────────────────────────────────────────────────────
+# OEIS — oeis-atlas-fold (slug · group=OEIS · O4)
+# Atlas-fold of the 7 distinct 🔵 verified theorems from O3 (336 K=20 survivors
+# → 8 🔵 / 7 distinct: sigma↔A000203, tau/sigma_0↔A000005, phi↔A000010,
+# mu↔A008683, aliquot↔A001065, sigma_2↔A001157, sigma_3↔A001158). Dedup vs the
+# ~16K atlas: sigma/tau/phi/mu are pre-existing @P foundation builtins (TECS-L
+# core) → NO duplicate node, OEIS-id attribution recorded in ledger + CLAIMS;
+# sigma_0 == tau (same hexa divisor_count fn) shares A000005. aliquot/sigma_2/
+# sigma_3 were genuinely absent (lookup MISS) → 3 OEIS-attributed @F nodes folded
+# into MY worktree's embedded.gen.hexa (id=oeis-Annnnnn, source="OEIS Annnnnn",
+# url, CC-BY-SA cite). Scoped via HEXA_ATLAS_EMBED; no leak to main shared tree.
+
+@C oeis_atlas_fold := "OEIS O4 atlas-fold: 7 distinct 🔵 OEIS↔hexa-fn theorems atlas-linked (dedup vs 16K). 5 already-present/alias (sigma↔A000203 @P · tau↔A000005 @P · phi↔A000010 @P · mu↔A008683 @P · sigma_0==tau A000005 alias) — OEIS-id attribution recorded, NO duplicate node. 3 newly-folded OEIS-attributed @F (aliquot A001065 = aliquot(8)=7 · sigma_2 A001157 = sigma_2(9)=91 · sigma_3 A001158 = sigma_k(9,3)=757; values match O3 sample-verified PASS). Net +3 atlas nodes (16134→16137, F 1379→1382). OEIS CC-BY-SA provenance (source + url) on each new node. No leak to main tree (grep oeis-A001* = 0 in ~/core/hexa-lang)." :: formula [slug=oeis-atlas-fold group=OEIS]
+  method = "fold"
+  cmd    = "hexa atlas lookup <fn> (dedup) · direct OEIS-attributed @F fold into embedded.gen.hexa (HEXA_ATLAS_EMBED scoped to worktree); recompute values via tool/verify_cli.hexa::_recompute (aliquot=sigma(n)-n · sigma_2=sigma_k(n,2) · sigma_3=sigma_k(n,3))"
+  raw    = ".verdicts/oeis-atlas-fold/fold_ledger.txt"
+  src    = "compiler/atlas/embedded.gen.hexa (3 @F: oeis-A001065 · oeis-A001157 · oeis-A001158, each source=\"OEIS Annnnnn\" + url=https://oeis.org/Annnnnn) · .verdicts/oeis-perhit-verify/tier_ledger.txt (O3 8 🔵) · OEIS A000203/A000005/A000010/A008683/A001065/A001157/A001158 (CC-BY-SA)"
+  status = "🔵 7 verified theorems atlas-linked (5 already-present + attribution · 3 newly-folded). Dedup vs 16K confirmed: sigma/tau/phi/mu @P HIT (no dup); aliquot/sigma_2/sigma_3 MISS → folded with OEIS CC-BY-SA provenance. O4 = mostly-attribution (the value is the verified OEIS↔hexa-fn link, not node count). Terminal · O5-ready (TECS-L F11 cross-link)."
+
+# ───────────────────────────────────────────────────────────────────────
+# OEIS — oeis-tecs-crosslink (slug · group=OEIS · O5)
+# Cross-link of the 7 O4 OEIS↔hexa-fn provenance links to TECS-L axis-F F11
+# ("OEIS reuse cite" — TECS-L is the downstream consumer of OEIS-domain
+# provenance). g67 intra-project reuse lattice: OEIS PROVIDES verified
+# arithmetic-fn provenance; TECS-L REUSES it (n=6 identity σφ=nτ + M4 μ +
+# F3 σ_2 cite the now-OEIS-attributed sigma/tau/phi/mu). Reuse edge
+# `TECS-L --reuses--> OEIS` recorded in repo-root NEXUS.tape §3b. Docs+NEXUS
+# only — no atlas fold (O4 owns the fold; embedded.gen.hexa untouched).
+
+@C oeis_tecs_crosslink := "OEIS O5 TECS-L cross-link: the 7 O4 OEIS↔hexa-fn provenance links (sigma↔A000203 · tau↔A000005 · phi↔A000010 · mu↔A008683 @P builtins + aliquot↔A001065 · sigma_2↔A001157 · sigma_3↔A001158 @F folds) cross-linked to TECS-L axis-F F11 'OEIS reuse cite'. TECS-L M1-M10 (n=6 identity σφ=nτ ⟺ n∈{1,6}) + M4 (μ characterization) + F3 (σ_2 reverse-lookup) consume these arithmetic fns, which now carry OEIS canonical-source attribution → TECS-L = downstream consumer. g67 intra-project reuse edge `TECS-L --reuses--> OEIS` recorded in repo-root NEXUS.tape §3b (domain-node OEIS/TECS-L + domain-reuse-edge de1). O5 = docs+NEXUS only; no new atlas fold (O4 owns embedded.gen.hexa)." :: synthesis [slug=oeis-tecs-crosslink group=OEIS]
+  method = "crosslink"
+  cmd    = "synthesis (no new hexa verify) — links sourced from .verdicts/oeis-atlas-fold/fold_ledger.txt (O4); edge recorded in NEXUS.tape §3b"
+  raw    = ".verdicts/oeis-tecs-crosslink/crosslink.txt"
+  src    = "NEXUS.tape (§3b: domain-node d_oeis/d_tecsl + reuse-edge de1) · TECS-L/TECS-L.md (F11 [x] closure) · OEIS/docs/o5-tecs-crosslink.md · .verdicts/oeis-atlas-fold/fold_ledger.txt (O4, 7 links)"
+  status = "🟢 7 OEIS↔hexa provenance links cross-linked to TECS-L F11 + NEXUS.tape reuse edge (g67). TECS-L F11 closed (OEIS reuse cite); OEIS O5 closed. Docs+NEXUS only — no atlas fold."

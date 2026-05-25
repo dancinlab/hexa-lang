@@ -2,6 +2,16 @@
 
 Append-only history sister of `INBOX.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
+## 2026-05-26T00:45Z — 🔥 hexa_v2 transpiler SEGFAULT on ALL .hexa (pool-wide regression) · from demiurge CERN BLUE-MAX
+
+> **severity: blocker** — `hexa run <any.hexa>` 가 transpile 단계에서 `self/native/hexa_v2` Segmentation fault → C 파일 미생성. file-specific 아님 (3400줄 `tool/verify_cli.hexa` 와 40줄 `stdlib/cern/plasma_wakefield.hexa` 둘 다 동일 크래시). **오늘 아침(2026-05-25)엔 ubu-1 에서 정상 동작**했음 → 이후 origin/main 회귀. `hexa verify --expr` (g5 verdict) 전면 차단.
+
+- [ ] **repro**: ubu-1 `cd ~/core/hexa-lang && hexa run stdlib/cern/plasma_wakefield.hexa` → `[1/2] hexa_v2 … tmp.hexa build/artifacts/…c` → `Segmentation fault (core dumped)` → `transpile failed — C file not produced`
+- [ ] **선행 증상**: 처음엔 `runtime.c:1954: call to undeclared function '_hxlcl_syscall3_cf'` (ubu-1 stale `self/runtime.c`) → `git checkout origin/main -- self/runtime.c` 로 선언(1112행)은 복구됐으나 그 후 transpiler 가 segfault 로 회귀 (별개 2차 버그)
+- [ ] **host matrix**: ubu-1 = hexa_v2 segfault · ubu-2 = segfault(기존) · pool-mini = stale 체크아웃(`compiler/atlas/calc_dispatch.hexa` 부재, PR #1023 이전) · local Mac = AMFI SIGKILL/route → **g5 verdict 가능 호스트 0개**
+- [ ] **fix 후보**: `hexa cc --regen` 로 hexa_v2 재빌드 (g61) · origin/main HEAD `8e748438`(OEIS O3) 부근 codegen 회귀 bisect · 최근 VERIFY-KIT V2 / OEIS 대량 atom 추가가 transpiler 메모리/재귀 한계 유발했는지 확인 (HEXA_MEM_CAP_MB=4096 표시됨)
+- [ ] **차단된 작업**: demiurge CERN BLUE-MAX (g69) — 신규 🔵 atom `wakefield_omega_p_sq` / `wakefield_e0_lambda_product` (sqrt-free algebraic, python-확인 deterministic) 의 `hexa verify --expr` verdict 대기 중 → toolchain 복구 시 즉시 verify+land 가능
+
 ## 2026-05-26T00:30Z — atlas_cli.hexa recompute-dispatch drift (@D d4) · from ANTIMATTER atlas-fold #1132
 
 **맥락**: ANTIMATTER 26 atom을 atlas fold(PR #1132)하던 중 발견. `tool/atlas_cli.hexa`가 `_recompute_register` 등 **별도 하드코딩 recompute dispatch 테이블**을 들고 있고 antimatter atom과 동기 안 됨 = @D d4 single-generic-dispatch 위반. 이번엔 `_adapt_verify_generic`이 `hexa verify --expr`로 delegate해서 fold는 됐지만, 근본은 drift.
@@ -17,13 +27,14 @@ demiurge RTSC "atlas 흡수" 시도 중 발견 — RTSC 캠페인의 verify-able
 
 - [x] **(1) verify_cli HAS · atlas_cli register mirror LACKS** — RESOLVED (VERIFY-KIT V1). 진단 정정: main HEAD 는 이미 delegation 마이그레이션 완료 — `_adapt_verify_generic` 가 `exec("hexa verify --expr …")` 로 shell-out; per-fn 미러(`_recompute_float_register`)는 dead code(`calc_dispatch.hexa` 코멘트 명시). 즉 미러 desync 자체는 이미 해소. INBOX 가 본 🟠 는 OLD 설치 binary + 아래 (2) arity gap 의 복합 증상. V1 가 compute-delegation 으로 최종 닫음.
 - [x] **(2) 3-arg register arm 부재** — RESOLVED (VERIFY-KIT V1). 진짜 원인 = register 가 마지막 positional 을 `<v>` 로 소비 → 3-arg fn 의 μ* 가 claimed value 로 오인 → verify 가 2-arg 로 계산(argc<3 → `_NOCALC_F` → 🟠). 추가로 `cmd_expr_float` 에 value-less COMPUTE mode 부재. fix: verify_cli `cmd_expr_float_compute` 신설 + atlas `cmd_register` 가 value-bearing 🟠→compute auto-route(+ 명시 `--compute`). 임의 arity (allen_dynes_tc 3-arg) 처리. 실증: `register --from-verify allen_dynes_tc 0.6150 591.18 0.10` → 14.5511 🟢 (`.verdicts/verify-kit-mirror-unify/v1_register.txt`).
-- [ ] **(3) ε=1e-9 round-tolerance 재확인** — 여전히 OPEN (V1 비범위, 별개 항목). 단, V1 의 register 는 이제 *자체 계산값* 을 fold(claimed value 불필요) → register 경로는 round-tolerance 무관(14.5511 그대로 🟢 흡수). 남은 것은 `hexa verify --expr <fn> <args> 14.55`(literature-rounded claimed value)가 |Δ|>1e-9 → 🔴 라는 점 → `--tol`/`--approx` 옵션(VERIFY-KIT V3) 후속.
+- [x] **(3) ε=1e-9 round-tolerance 재확인** — RESOLVED (VERIFY-KIT V3). 옵트인 `--tol <eps>` 추가: `hexa verify --expr <fn> <args> 14.55 --tol 0.01` 에서 |Δ|>strict ε=1e-9 이지만 ≤ <eps> 면 spurious 🔴 대신 🟢 SUPPORTED-NUMERICAL (round-tolerant) 판정. literature 6-digit 반올림(Tc=14.55 vs 엔진 14.5511) 케이스 해소. **falsification 무결성 보존**: --tol 은 명시 옵트인(기본=무 tolerance=strict 그대로), 스테이트된 <eps> 너머의 🔴 는 🔴 유지(`… 99.0 --tol 0.01` → 🔴). float(cmd_expr_float)+int(cmd_expr) 양 경로. round-tolerant 🟢 는 auto-absorb 안 함(atlas 는 V1 대로 엔진 정밀값만 fold). 실증: `.verdicts/verify-kit-tol/v3_tol.txt`.
 - [x] **영향 범위** — RESOLVED (RTSC magnet 16-fn class). V1 compute-delegation 은 fn-agnostic — verify_cli `_recompute_float` 에 있는 fn 은 임의 arity 로 register 흡수 가능. 실증: mcmillan_tc=12.0423 🟢 · morel_anderson_mustar=0.112262 🟢.
 - [x] **제안** — (a) 채택. delegation(register → `hexa verify --expr … --compute`)이 미러 desync + arity 불일치 동시 소멸. (b) 미채택(미러 추가는 desync 근원 유지).
 
-Status: RESOLVED · VERIFY-KIT V1 (PR pending) · (1)(2)(4) closed · (3) round-tolerance 별개 항목으로 OPEN(V3) · proposed-by:agent · fixed-by:VERIFY-KIT V1 register↔verify_cli compute-delegation (tool/verify_cli.hexa cmd_expr_float_compute + tool/atlas_cli.hexa cmd_register auto-route) · #954 확장
+Status: RESOLVED · VERIFY-KIT V1+V3 · (1)(2)(3)(영향범위) ALL closed · proposed-by:agent · fixed-by:VERIFY-KIT V1 compute-delegation (tool/verify_cli.hexa cmd_expr_float_compute + tool/atlas_cli.hexa cmd_register auto-route) + V3 round-tolerance (tool/verify_cli.hexa --tol <eps>) · #954 확장
 
 > ACK 2026-05-26 (VERIFY-KIT V1): (1)(2)(영향범위) resolved-class — root delegation(proposal a) 채택. register `--from-verify allen_dynes_tc 0.6150 591.18 0.10` → COMPUTE 14.5511 🟢 (was 🟠 "no calculator path"). RTSC 3-arg 16-fn atlas 흡수 unblock. #954 mirror-desync 동일 closure (atlas 미러 의존 0). (3) round-tolerance 만 V3 후속으로 잔존.
+> ACK 2026-05-26 (VERIFY-KIT V3): (3) round-tolerance resolved-class — 옵트인 `--tol <eps>` 추가. `--expr allen_dynes_tc 0.6150 591.18 0.10 14.55 --tol 0.01` → 🟢 (within tol, calc=14.5511 vs literature-rounded 14.55); `--tol` 없으면 🔴 strict 그대로(unchanged); `… 99.0 --tol 0.01` → 🔴 (beyond tol, NOT laundered). falsification 무결성 보존(명시 옵트인·기본 strict). 실증 `.verdicts/verify-kit-tol/v3_tol.txt`. (3) CLOSED → 항목 전체(1)(2)(3)(영향범위) 종결.
 
 
 ## 2026-05-26 — inbox/patches/ 트리아지 3건 (anima 2-gap + flame V3 갭 + cloud Option A 후속 확인)
@@ -207,10 +218,12 @@ demiurge RTSC h3o micro-exp + SSCHA dispatch 중 발견된 hexa-lang 2 gap. stub
   - 제안: preflight 가 worktree path 부재 시 canonical repo root (`~/core/hexa-lang`) 로 fallback, 또는 `--workdir` 명시 override. d8 (Vast finding → INBOX) 정합.
   - severity: medium (worktree 격리 패턴이 표준이라 자주 발생).
 
-- [ ] **(b) `hexa verify --expr` ε=1e-9 가 low-precision input 에 과도 (round-tolerance 옵션)** — verify_cli 의 고정 ε=1e-9 가 1-decimal 입력 (예: result.txt 의 Tc=179.8K) 대비 너무 tight. hexa full-precision calc (179.779) 와 |Δ|=0.021K 차이가 순전히 입력 반올림인데 🔴 FALSIFIED 판정 (실효는 🟢 SUPPORTED-NUMERICAL).
+- [x] **(b) `hexa verify --expr` ε=1e-9 가 low-precision input 에 과도 (round-tolerance 옵션)** — RESOLVED (VERIFY-KIT V3). 제안한 `--tol <ε>` 옵트인 옵션 그대로 구현. 1-decimal 입력(Tc=179.8K) 대비 full-precision calc(179.779)의 |Δ|=0.021K 반올림 차이는 이제 `--tol 0.05` 류로 🟢 SUPPORTED-NUMERICAL 판정 가능(예: `--expr allen_dynes_tc 0.6150 591.18 0.10 14.55 --tol 0.01` → 🟢). 기본(--tol 무)은 strict ε=1e-9 그대로라 falsification 무결성 보존. 유효숫자 자동감지는 미채택(silent-widen 위험; 옵트인이 honest).
   - 발견: RTSC N5 funnel 4 candidate (h3o·h3si·h3f·h3po) allen_dynes_tc cross-check 전부 🔴 (round artifact).
-  - 제안: `--expr` 에 `--tol <ε>` 옵션 또는 expected 의 유효숫자 자동 감지 → 입력 정밀도 기반 ε 스케일. (현재 우회: full-precision expected 주면 🟢.)
-  - severity: low-medium (verdict 오탐 — honest tier 왜곡).
+  - fix: `--expr <fn> <args> <v> --tol <ε>` 옵트인 (tool/verify_cli.hexa _has_tol/_get_tol/_strip_tol + cmd_expr_float/cmd_expr round-tolerance band). 실증 `.verdicts/verify-kit-tol/v3_tol.txt`.
+  - severity: low-medium (verdict 오탐 — honest tier 왜곡) → CLOSED.
+
+> ACK 2026-05-26 (VERIFY-KIT V3): (b) round-tolerance resolved-class — 제안한 `--tol <ε>` 옵트인 옵션 구현. low-precision 입력의 반올림-artifact 🔴 가 명시 --tol 로 🟢 SUPPORTED-NUMERICAL 판정 가능. silent-widen 회피(옵트인). 동일 클래스 2026-05-26T01:30Z item(3) 와 함께 종결.
 
 ## 2026-05-25T23:10Z — hexa CLI verb sweep audit — 102 verb · 85.3% PASS · 5 결함 발견 (from: this-session full-sweep agent)
 

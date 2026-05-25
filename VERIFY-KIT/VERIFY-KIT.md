@@ -13,7 +13,7 @@
 
 - [x] V1 (P0a) — 미러통합: register delegation → allen_dynes_tc atlas 흡수 가능 (INBOX RTSC unblock). root fix(proposal a) — `register --from-verify` 가 `hexa verify --expr … --compute` 로 위임(atlas 미러 의존 0); float `cmd_expr_float` 에 value-less COMPUTE mode 추가 + `cmd_register` 가 value-bearing 🟠(arity miss)→compute auto-route + 명시 `--compute`. 흡수 acceptance 통과: allen_dynes_tc(0.615,591.18,0.1)=14.5511 🟢 (was 🟠). RTSC 3-arg 16-fn class unblock.
 - [x] V2 (P0b) — value-less compute mode: `hexa verify --expr <fn> <n>` (값 생략) = 계산+출력 (B1 unblock · OEIS O3) ← 이번 PR
-- [ ] V3 (P1a) — tolerance verify: `--approx <fn> <x> <v> <eps>` 연속값 ε 비교 (🟢)
+- [x] V3 (P1a) — round-tolerance `--tol <eps>`: literature-rounded 값 🟢 (opt-in, falsification 무결성 보존). `hexa verify --expr <fn> <args> <v> --tol <eps>` 에서 strict ε=1e-9 너머 ≤ <eps> 면 spurious 🔴 대신 🟢 SUPPORTED-NUMERICAL (round-tolerant); --tol 없으면 strict 그대로, <eps> 너머 🔴 는 🔴 유지(NOT laundered). float+int 양 경로. INBOX item(3)+(b) 해소.
 - [ ] V4 (P1b) — 특수함수 stdlib `stdlib/special/`: gamma·erf·bessel·zeta (libm 기반) → DLMF 재개
 - [ ] V5 (P2) — IIT Φ 엔진 `stdlib/consciousness/iit4/` n≤8 exact (PyPhi calibrate · anima 공유 g61) → ARXIV A2
 - [ ] V6 (P3a) — primitive 자동등록 `register --from-selftest`
