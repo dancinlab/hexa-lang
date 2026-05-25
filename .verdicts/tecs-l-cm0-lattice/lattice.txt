@@ -1,14 +1,7 @@
-CM0 lattice n=6 (main-tree verify)
-=== hexa verify --expr sigma 6 12 ===
-error: usage: hexa verify --expr <fn> <n> <v>  |  <fn> <a> <b> <v>  [--absorb]
-=== hexa verify --expr tau 6 4 ===
-error: usage: hexa verify --expr <fn> <n> <v>  |  <fn> <a> <b> <v>  [--absorb]
-=== hexa verify --expr phi 6 2 ===
-error: usage: hexa verify --expr <fn> <n> <v>  |  <fn> <a> <b> <v>  [--absorb]
-=== sopfr 6 5 (calculator gap) ===
-verify --expr sopfr(6)=5
-  tier   = 🟠 INSUFFICIENT
-  reason = calculator system has NO path for 'sopfr'
-  gap    = extend tool/verify_cli.hexa::_recompute (계산기시스템 개선 후보)
+CM0 — n=6 lattice backbone (cite TECS-L M2/M5 + sopfr gap)
 
-master: sigma(6)*phi(6)=12*2=24=6*4=n*tau(6)
+sigma(6)=12   BLUE SUPPORTED-FORMAL  (cite M2 .verdicts/tecs-l-arith-stdlib + main-tree verify calc=12)
+tau(6)=4      BLUE  (cite M2)
+phi(6)=2      BLUE  (cite M2)
+sopfr(6)=5    ORANGE INSUFFICIENT — "calculator system has NO path for sopfr" (verify_cli _recompute whitelist gap -> INBOX candidate; honest, NOT a verified value)
+master identity: sigma(6)*phi(6) = 12*2 = 24 = 6*4 = n*tau(6)  [integer assembly; 3 lattice components BLUE, sopfr is a calculator-gap]
