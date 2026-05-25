@@ -2,6 +2,16 @@
 
 Append-only history sister of `CANON.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
+## 2026-05-25T06:40Z — M4 verb drawer 착지 + 도메인 SSOT publish + R2 fan-out (맥 크래시 복구 세션)
+
+맥 크래시로 detached HEAD에 4개 도메인 leak(GO daemon·NUCLEAR N11·ATLAS R2·RUNTIME) 미커밋 잔재가 뒤엉킴 → 전부 origin/main 머지본의 stale 복사본으로 확정(`nuclear/sim.hexa`는 워킹트리가 −1376 LOC) → stash 안전보관 후 origin/main(`44bd7a30`) 동기화.
+
+- [x] **M4 verb drawer** — PR #964 merged. `hexa tool [list|<verb>]` go-tool 드로어. mergeable CLEAN·CI 4/4 SUCCESS(bootstrap 3-platform + consent) → squash 머지. **M1~M4 전부 착지 = CANON @goal 4축 종결.**
+- [x] **도메인 SSOT publish** — PR #966 merged. `CANON.md/log`·`ATLAS.md/log`·`RUNTIME.log.md` 가 `/domain init` 이후 untracked(GitHub 부재·크래시 유실 위험)였음 → tracked 화. `RUNTIME.md`·`INBOX.md`만 기존 tracked였던 이유 = 도메인 시스템 이전 문서.
+- [ ] **R2 fan-out** — M5(deploy 갭)·M6(M4 polish)·M7(`_v2` dead-ref 스윕) 3-way 병렬 dispatch.
+
+**교훈**: `/domain init` 은 로컬 파일만 만들고 커밋 안 함 → 도메인 SSOT 가 origin 에 안 올라가 크래시 시 유실. 신규 도메인은 init 직후 1회 tracked-publish 권장.
+
 ## 2026-05-25T05:23Z — M3b 컴파일러 바이너리 git 제거 + auto-bootstrap (PR #943 merged · 파괴)
 
 CANON stacked PR 3/4 마지막. 격리 worktree `/tmp/canon-m3b`. **M3 완전 종결** (M3a+M3b).
