@@ -1093,6 +1093,61 @@ static inline long _hxlcl_syscall3_cf(long nr, long a0, long a1, long a2) {
     if (cf) { errno = (int)x0; return -1; }
     return x0;
 }
+// cycle 71 — additional carry-flag-correct arities for the remaining R
+// syscall group (dup2/fstat/stat = 2-arg, lseek/open = 3-arg already via
+// _cf3, wait4 = 4-arg, mmap = 6-arg). Same carry-on-error -> -1 + errno
+// translation as the cycle-70 cf1/cf3 helpers.
+static inline long _hxlcl_syscall2_cf(long nr, long a0, long a1) {
+    register long x0 __asm__("x0") = a0;
+    register long x1 __asm__("x1") = a1;
+    register long x16 __asm__("x16") = nr;
+    register long cf;
+    __asm__ volatile("svc #0x80\n\tcset %1, cs"
+                     : "+r"(x0), "=r"(cf) : "r"(x1), "r"(x16) : "memory", "cc");
+    if (cf) { errno = (int)x0; return -1; }
+    return x0;
+}
+static inline long _hxlcl_syscall4_cf(long nr, long a0, long a1, long a2, long a3) {
+    register long x0 __asm__("x0") = a0;
+    register long x1 __asm__("x1") = a1;
+    register long x2 __asm__("x2") = a2;
+    register long x3 __asm__("x3") = a3;
+    register long x16 __asm__("x16") = nr;
+    register long cf;
+    __asm__ volatile("svc #0x80\n\tcset %1, cs"
+                     : "+r"(x0), "=r"(cf) : "r"(x1), "r"(x2), "r"(x3), "r"(x16) : "memory", "cc");
+    if (cf) { errno = (int)x0; return -1; }
+    return x0;
+}
+static inline long _hxlcl_syscall6_cf(long nr, long a0, long a1, long a2, long a3, long a4, long a5) {
+    register long x0 __asm__("x0") = a0;
+    register long x1 __asm__("x1") = a1;
+    register long x2 __asm__("x2") = a2;
+    register long x3 __asm__("x3") = a3;
+    register long x4 __asm__("x4") = a4;
+    register long x5 __asm__("x5") = a5;
+    register long x16 __asm__("x16") = nr;
+    register long cf;
+    __asm__ volatile("svc #0x80\n\tcset %1, cs"
+                     : "+r"(x0), "=r"(cf) : "r"(x1), "r"(x2), "r"(x3), "r"(x4), "r"(x5), "r"(x16) : "memory", "cc");
+    if (cf) { errno = (int)x0; return -1; }
+    return x0;
+}
+// cycle 71 — pipe(2) PAIR-RETURN carry-flag trap. The Darwin BSD pipe
+// syscall returns the two fds in x0 AND x1 registers (NOT in the user
+// int[2] -- that was the cycle-63/64 bug that left fds[1] garbage). This
+// helper captures BOTH registers via an explicit asm block (the
+// register-constrained `"=r"(x1)` form confused clang into a hang during
+// validation), checks the carry flag for failure, and writes both fds on
+// success. Probe-verified: pipe->fds 3,4 + write(6)/read(6) roundtrip OK.
+static inline int _hxlcl_pipe_cf(int fds[2]) {
+    long r0, r1, cf;
+    __asm__ volatile("mov x16, #42\n\tsvc #0x80\n\tcset %2, cs\n\tmov %0, x0\n\tmov %1, x1"
+                     : "=r"(r0), "=r"(r1), "=r"(cf) :: "x0", "x1", "x16", "memory", "cc");
+    if (cf) { errno = (int)r0; return -1; }
+    fds[0] = (int)r0; fds[1] = (int)r1;
+    return 0;
+}
 
 // cycle 70 — read/write/close re-trapped via carry-flag-correct svc 0x80
 // (the inverse of PR #251's revert, but carry-correct this time). This is
@@ -1115,8 +1170,9 @@ static int __attribute__((noinline)) hxlcl_getpid(void) {
 }
 // cycle 66 — libc dup2 (same carry-flag issue as close).
 extern int dup2(int oldfd, int newfd);
+// cycle 71 — dup2 re-trapped via carry-flag-correct svc 0x80 (SYS_DUP2=90).
 static int __attribute__((noinline)) hxlcl_dup2(int oldfd, int newfd) {
-    return dup2(oldfd, newfd);
+    return (int)_hxlcl_syscall2_cf(HXLCL_SYS_DUP2, (long)oldfd, (long)newfd);
 }
 // cycle 66 — restore libc pipe() backing. The cycle 63+64 svc-0x80
 // path mis-handled the Darwin pipe(2) pair-return: the kernel
@@ -1127,8 +1183,11 @@ static int __attribute__((noinline)) hxlcl_dup2(int oldfd, int newfd) {
 // "". Resolves inbox/patches/yosys-exec-runtime-regression-cycles-
 // 61-64.md Secondary suspect (cycles 63+64 pipe machinery).
 extern int pipe(int fds[2]);
+// cycle 71 — pipe re-trapped via the carry-flag PAIR-RETURN trap
+// (_hxlcl_pipe_cf captures BOTH x0/x1 fds — fixes the cycle-63/64
+// garbage-fds[1] bug that PR #251 reverted to libc to escape).
 static int __attribute__((noinline)) hxlcl_pipe(int fds[2]) {
-    return pipe(fds);
+    return _hxlcl_pipe_cf(fds);
 }
 // cycle 66 — libc fork (BSD pair-return convention; svc 0x80 path
 // captured only x0, missing the carry-flag-disambiguates-parent-vs-
@@ -1155,8 +1214,11 @@ static int __attribute__((noinline)) hxlcl_ioctl(int fd, unsigned long req, void
 // failures return -1 + set errno. lseek prototype comes from the
 // top-of-file <unistd.h> include (uses off_t — no extern decl to avoid
 // conflicting with the libc signature).
+// cycle 71 — lseek re-trapped via carry-flag-correct svc 0x80 (SYS_LSEEK=199).
+// A failed lseek now returns -1+errno instead of a positive errno that a
+// `< 0` sentinel test would mistake for a valid offset (PR #426 hazard).
 static long __attribute__((noinline)) hxlcl_lseek(int fd, long off, int whence) {
-    return (long)lseek(fd, (off_t)off, whence);
+    return _hxlcl_syscall3_cf(HXLCL_SYS_LSEEK, (long)fd, off, (long)whence);
 }
 static int __attribute__((noinline)) hxlcl_select(int nfds, void *r, void *w, void *e, void *t) {
     return (int)_hxlcl_syscall6(HXLCL_SYS_SELECT, (long)nfds, (long)r, (long)w, (long)e, (long)t, 0);
@@ -1167,8 +1229,10 @@ static int __attribute__((noinline)) hxlcl_poll(void *fds, unsigned int nfds, in
 // cycle 66 — libc waitpid (wait4 syscall has 4 args + needs proper
 // errno/EINTR handling that the raw syscall path drops).
 extern int waitpid(int pid, int *status, int options);
+// cycle 71 — waitpid re-trapped via the wait4 syscall (SYS_WAIT4=7) with
+// carry-flag-correct error handling; 4th arg (struct rusage*) = NULL.
 static int __attribute__((noinline)) hxlcl_waitpid(int pid, int *status, int options) {
-    return waitpid(pid, status, options);
+    return (int)_hxlcl_syscall4_cf(HXLCL_SYS_WAIT4, (long)pid, (long)status, (long)options, 0);
 }
 /* Cycle 65: variadic to handle both 2-arg and 3-arg open() callers. */
 extern int open(const char *path, int flags, ...);
@@ -1186,8 +1250,11 @@ static int __attribute__((noinline)) hxlcl_open_sys(const char *path, int flags,
      * sites then wrote content to that low descriptor instead of returning
      * failure. Same carry-flag fix already applied to read/write/close/dup2
      * in cycle 66; open was missed. (inbox patch canonical-audit-round-8:
-     * write_file content-leak + false `true` return.) */
-    return open(path, flags, mode);
+     * write_file content-leak + false `true` return.)
+     * cycle 71: re-trapped via carry-flag-correct svc 0x80 (SYS_OPEN=5) —
+     * a failed open now returns -1+errno (ENOENT etc) instead of a small
+     * positive errno-as-fd that defeated the content-leak guard. */
+    return (int)_hxlcl_syscall3_cf(HXLCL_SYS_OPEN, (long)path, (long)flags, (long)mode);
 }
 // PR #426 follow-up — libc fstat/stat (same Darwin arm64 carry-flag class
 // as open in #414). Raw syscall returned positive errno on failure that
@@ -1197,11 +1264,13 @@ static int __attribute__((noinline)) hxlcl_open_sys(const char *path, int flags,
 // matches Linux block. Prototypes come from top-of-file <sys/stat.h>
 // (Darwin uses __DARWIN_INODE64 symbol renaming — no extern decl, must
 // use the header's `struct stat *` signature).
+// cycle 71 — fstat re-trapped via carry-flag-correct svc 0x80 (SYS_FSTAT=339).
 static int __attribute__((noinline)) hxlcl_fstat(int fd, void *buf) {
-    return fstat(fd, (struct stat *)buf);
+    return (int)_hxlcl_syscall2_cf(HXLCL_SYS_FSTAT, (long)fd, (long)buf);
 }
+// cycle 71 — stat re-trapped via carry-flag-correct svc 0x80 (SYS_STAT=338).
 static int __attribute__((noinline)) hxlcl_stat(const char *path, void *buf) {
-    return stat(path, (struct stat *)buf);
+    return (int)_hxlcl_syscall2_cf(HXLCL_SYS_STAT, (long)path, (long)buf);
 }
 // Cycle 65 — close out remaining real syscalls.
 #define HXLCL_SYS_GETTIMEOFDAY 116
@@ -1220,8 +1289,11 @@ static void __attribute__((noinline, noreturn)) hxlcl_exit(int code) {
 // structural hazard is identical to PR #414's open carry-flag bug.
 // Route through libc for proper MAP_FAILED + errno semantics — matches
 // the Linux block below. Prototype from top-of-file <sys/mman.h>.
+// cycle 71 — mmap re-trapped via carry-flag-correct svc 0x80 (SYS_MMAP=197).
+// On error the cf6 helper returns -1, which cast to (void *) is exactly
+// MAP_FAILED ((void *)-1) — probe-verified mmap(badfd) -> MAP_FAILED+EBADF.
 static void *__attribute__((noinline)) hxlcl_mmap(void *addr, unsigned long len, int prot, int flags, int fd, long off) {
-    return mmap(addr, (size_t)len, prot, flags, fd, (off_t)off);
+    return (void *)_hxlcl_syscall6_cf(HXLCL_SYS_MMAP, (long)addr, (long)len, (long)prot, (long)flags, (long)fd, off);
 }
 static int __attribute__((noinline)) hxlcl_clock_gettime(int clk, void *ts) {
     // Use gettimeofday(2) (syscall 116) since clock_gettime is a vDSO
