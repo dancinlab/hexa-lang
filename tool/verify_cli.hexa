@@ -209,6 +209,8 @@ fn cmd_rubric() {
     println("             royer_log10_t(Z,A,Qα)       → a+bA^{1/6}√Z+cZ/√Qα   (Royer 2000 α-decay log10 T₁/₂[s], NUCLEAR N7/N11, 3-arg)")
     println("             pair_threshold_kinetic(m_p_c²) → 6·m_p_c²            (p+p→p+p+p+p̄ kinetic threshold T_th, ANTIMATTER ⓵생성, 1-arg)")
     println("             pair_threshold_total(m_p_c²)   → 7·m_p_c²            (antiproton-prod total beam-E threshold E_beam,th, ANTIMATTER ⓵생성, 1-arg)")
+    println("             rel_kinetic_from_p(pc_MeV)  → √(pc²+938.272²)−938.272 (AD/ELENA decel-ladder T(pc) [MeV], ANTIMATTER ⓶감속, 1-arg)")
+    println("             rel_p_from_kinetic(T_MeV)   → √(T²+2·T·938.272)       (AD/ELENA decel-ladder pc(T) [MeV/c], ANTIMATTER ⓶감속, 1-arg)")
     println("             transition_factor_1s2s()    → 1/1²−1/2²=3/4           ((anti)H 1S-2S Rydberg level-diff factor, ANTIMATTER ⓻측정, 0-arg)")
     println("             h1s2s_rydberg(R∞,c)         → (3/4)·R∞·c·1e-15 [PHz]  ((anti)H 1S-2S leading freq ≈2.4661 PHz, ANTIMATTER ⓻측정, 2-arg)")
     println("             sf_log10_t(Z,A)             → 21.08+ΣCᵢxⁱ/A           (Ren-Xu 2005 SF log10 T₁/₂[s], NUCLEAR C1, 2-arg)")
@@ -1269,6 +1271,29 @@ fn _pair_threshold_total(m_p_c2: float) -> float {
     return 7.0 * m_p_c2
 }
 
+// ── ANTIMATTER ⓶감속 — AD/ELENA deceleration-ladder relativistic kinematics ─
+//   Exact relativistic energy–momentum relation for the antiproton beam:
+//     E = sqrt((pc)² + (m_p c²)²)   ⇒   T = E − m_p c² = sqrt((pc)²+(m_p c²)²) − m_p c².
+//   CODATA m_p c² = 938.272 MeV (hardcoded constant — 1-arg input is pc in MeV/c).
+//   rel_kinetic_from_p(pc) = sqrt(pc² + 938.272²) − 938.272   [MeV]   (1-arg).
+//   Ladder rungs: AD-in pc=3500 → T≈2685.311 MeV (≈2.685 GeV) ·
+//                 AD-out pc=100 → T≈5.3139 MeV · (ELENA inverse: see rel_p_from_kinetic).
+fn _rel_kinetic_from_p(pc_MeV: float) -> float {
+    if pc_MeV < 0.0 { return _NOCALC_F }
+    let m = 938.272
+    return sqrt(pc_MeV * pc_MeV + m * m) - m
+}
+//   Inverse: pc = sqrt(T² + 2·T·m_p c²)  [MeV/c]   (1-arg input T in MeV).
+//   rel_p_from_kinetic(T) = sqrt(T² + 2·T·938.272)   [MeV/c]   (1-arg).
+//   ELENA-out T=0.1 MeV (100 keV) → pc≈13.699 MeV/c. Non-rel limit (T≪m_p c²):
+//   pc ≈ sqrt(2·m_p c²·T) = sqrt(2·938.272·0.1) ≈ 13.6987 MeV/c — the exact
+//   relativistic form reduces to sqrt(2mT) at the lowest rung (Δ≈3.6e-4 MeV/c).
+fn _rel_p_from_kinetic(T_MeV: float) -> float {
+    if T_MeV < 0.0 { return _NOCALC_F }
+    let m = 938.272
+    return sqrt(T_MeV * T_MeV + 2.0 * T_MeV * m)
+}
+
 // ── ANTIMATTER ⓻측정 — (anti)hydrogen 1S-2S two-photon frequency ───────
 //   Bohr/Rydberg level (point-nucleus, leading order): E_n = − R∞·h·c / n².
 //   1S→2S transition energy: ΔE = R∞·h·c·(1/1² − 1/2²) = (3/4)·R∞·h·c.
@@ -2312,6 +2337,15 @@ fn _recompute_float(fn_name: string, a0: float, a1: float, a2: float, a3: float,
     if fn_name == "pair_threshold_total" {
         return _pair_threshold_total(a0)
     }
+    // ── AD/ELENA deceleration-ladder relativistic kinematics (ANTIMATTER ⓶감속) ──
+    //   rel_kinetic_from_p(pc)  1-arg: sqrt(pc²+938.272²)−938.272 [MeV]
+    //   rel_p_from_kinetic(T)   1-arg: sqrt(T²+2·T·938.272) [MeV/c]
+    if fn_name == "rel_kinetic_from_p" {
+        return _rel_kinetic_from_p(a0)
+    }
+    if fn_name == "rel_p_from_kinetic" {
+        return _rel_p_from_kinetic(a0)
+    }
     // ── (anti)hydrogen 1S-2S two-photon frequency (ANTIMATTER ⓻측정) ────
     //   transition_factor_1s2s()  0-arg: 1/1² − 1/2² = 3/4
     //   h1s2s_rydberg(R∞, c)      2-arg: (3/4)·R∞·c·1e-15 [PHz] ≈ 2.4660730772
@@ -2576,6 +2610,8 @@ fn _is_float_fn(fn_name: string) -> bool {
         || fn_name == "pippard_coherence"
         // Antiproton pair-production threshold (ANTIMATTER ⓵생성 · 2026-05-25):
         || fn_name == "pair_threshold_kinetic" || fn_name == "pair_threshold_total"
+        // AD/ELENA deceleration-ladder relativistic kinematics (ANTIMATTER ⓶감속 · 2026-05-25):
+        || fn_name == "rel_kinetic_from_p" || fn_name == "rel_p_from_kinetic"
         // (anti)hydrogen 1S-2S two-photon frequency (ANTIMATTER ⓻측정 · 2026-05-25):
         || fn_name == "transition_factor_1s2s" || fn_name == "h1s2s_rydberg"
         // Nuclear α-decay half-life (NUCLEAR.md N7/N11 funnel · 2026-05-25):
