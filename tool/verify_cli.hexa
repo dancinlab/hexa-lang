@@ -31,6 +31,7 @@ use "compiler/atlas/symbolic/congruence_chain_engine"
 use "self/stdlib/fs"
 use "compiler/atlas/calc_dispatch"   // calc_eps / calc_is_float_fn / calc_is_zero_arg_float_fn — float-recompute SSOT
 use "stdlib/consciousness/iit4/faithful_phi"   // VERIFY-KIT V5.2 — iit4_faithful_phi recompute engine (n<=8 exact MIP-EI)
+use "self/runtime/bignum_mini_pure"            // VERIFY-KIT V10 — arbitrary-precision σ(P)=2P at p where P overflows int64
 
 // HXC retired 2026-05-22 — verify now reads from static_atlas() which
 // parses n6/atlas.n6 via the merger (no hxc). HXC_PATH constant kept as
@@ -426,6 +427,19 @@ fn _recompute(fn_name: string, n: int) -> int {
         return 0
     }
     if fn_name == "aliquot" { return sigma_k(n, 1) - n }
+    // ── VERIFY-KIT V10 (P5) — arbitrary-precision (bignum) perfect-number path ─
+    // `is_perfect` above runs in int64 (sigma_k accumulates in int) → it CANNOT
+    // verify large even perfect numbers whose value overflows int64 (P_9 at
+    // Mersenne exponent p=61 is ≈2.66e36 > 2^63). mersenne_perfect_sigma takes
+    // the Mersenne EXPONENT p (small int) and verifies the Euclid–Euler identity
+    // σ(P)=2·P for P=2^(p-1)·(2^p−1) ENTIRELY in bignum (radix-10 limbs, no bc,
+    // no libgmp) — so σ(P_k)=2·P_k checks hold at p where int64 cannot even
+    // represent P. Returns 1 (identity holds) / 0. p must be a Mersenne-prime
+    // exponent for P to be perfect (caller's hypothesis; p∈{2,3,5,7,13,17,19,
+    // 31,61,89,…}). The non-tautological core is the independent geometric-sum
+    // check Σ2^i == 2^p−1 inside mersenne_perfect_sigma_pure. (g0/g33 minimal
+    // slice — bignum only, NOT PSLQ/symbolic/ODE.)
+    if fn_name == "mersenne_perfect_sigma" { return mersenne_perfect_sigma_pure(n) }
     // ── combinatorial / prime integer primitives (VERIFY-KIT V7) ──────────
     // OEIS 🟠→🔵 mutual-feed: A000040 prime×67 + A000108/A000142/A000110/
     // A000041 gain an exact-integer recompute path (no --tol; closed-forms

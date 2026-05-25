@@ -31,15 +31,16 @@
 //      bignum_from_int_pure(n)       -> [int]       int -> limbs  (n >= 0)
 //      bignum_to_string_pure(limbs)  -> string      limbs -> decimal str
 //      bignum_add_pure(a, b)         -> [int]       a + b, carry-propagate
-//      bignum_sub_pure(a, b)         -> [int]|nil   a - b, nil if a < b
+//      bignum_sub_pure(a, b)         -> [int]|[]    a - b, [] (empty) if a < b
 //      bignum_mul_int_pure(lmb, n)   -> [int]       lmb * n, n small int >= 0
 //
 //  SEMANTIC NOTES
 //  ──────────────
 //  * All inputs are assumed non-negative. Negative bignums would need a
 //    sign field; out of scope for mini. `bignum_from_int_pure(-5)`
-//    returns nil.
-//  * `bignum_sub_pure` returns nil on underflow rather than producing
+//    returns [] (empty array — the invalid/error sentinel, distinct from
+//    canonical zero [0]).
+//  * `bignum_sub_pure` returns [] (empty) on underflow rather than producing
 //    a two's-complement result. Callers should cmp first if they care.
 //  * All results are in canonical form (no trailing-zero limbs; 0 is [0]).
 //  * P50 compliant: zero use of `<<` / `>>`. All arithmetic via * / % + -.
@@ -110,10 +111,10 @@ pub fn bignum_cmp_pure(a, b) {
 
 // ── bignum_from_int_pure ────────────────────────────────────────────
 // Convert non-negative int -> little-endian radix-10 limb array.
-// Returns [0] for 0 and nil for negatives.
+// Returns [0] for 0 and [] (empty error sentinel) for negatives.
 @pure
 pub fn bignum_from_int_pure(n) {
-    if n < 0 { return nil }
+    if n < 0 { return [] }
     if n == 0 { return [0] }
     let mut out = []
     let mut x = n
@@ -169,11 +170,11 @@ pub fn bignum_add_pure(a, b) {
 }
 
 // ── bignum_sub_pure ─────────────────────────────────────────────────
-// a - b with borrow. Returns nil if a < b (we don't represent negatives).
+// a - b with borrow. Returns [] (empty) if a < b (we don't represent negatives).
 @pure
 pub fn bignum_sub_pure(a, b) {
     let cmp = bignum_cmp_pure(a, b)
-    if cmp < 0 { return nil }
+    if cmp < 0 { return [] }
     if cmp == 0 { return [0] }
     let la = len(a)
     let lb = len(b)
@@ -203,7 +204,7 @@ pub fn bignum_sub_pure(a, b) {
 // m <= 10^17 this is comfortable.
 @pure
 pub fn bignum_mul_int_pure(limbs, m) {
-    if m < 0 { return nil }
+    if m < 0 { return [] }
     if m == 0 { return [0] }
     if bignum_is_zero_pure(limbs) { return [0] }
     let n = len(limbs)
@@ -221,4 +222,86 @@ pub fn bignum_mul_int_pure(limbs, m) {
         carry = carry / 10
     }
     return _bn_trim(out)
+}
+
+// ── bignum_pow2_pure ────────────────────────────────────────────────
+// 2^p as a bignum (p >= 0). Repeated doubling — no full bignum-multiply
+// primitive needed (`bignum_mul_int_pure(_, 2)` only). Returns [1] for p=0.
+// Net-new: enables exact 2^p for p far beyond int64's 2^62 ceiling.
+@pure
+pub fn bignum_pow2_pure(p) {
+    if p < 0 { return [] }
+    let mut out = [1]
+    let mut i = 0
+    while i < p {
+        out = bignum_mul_int_pure(out, 2)
+        i = i + 1
+    }
+    return out
+}
+
+// ── bignum_geosum_pow2_pure ─────────────────────────────────────────
+// Σ_{i=0}^{p-1} 2^i  =  1 + 2 + 4 + ... + 2^(p-1), accumulated in bignum.
+// This is σ(2^(p-1)) (the divisor-power sum of a prime power of 2). The
+// Euclid–Euler identity asserts it equals 2^p − 1 — checked INDEPENDENTLY
+// in mersenne_perfect_sigma_pure (the non-definitional verification core).
+@pure
+pub fn bignum_geosum_pow2_pure(p) {
+    if p <= 0 { return [0] }
+    let mut acc = [0]
+    let mut term = [1]            // 2^0
+    let mut i = 0
+    while i < p {
+        acc = bignum_add_pure(acc, term)
+        term = bignum_mul_int_pure(term, 2)
+        i = i + 1
+    }
+    return acc
+}
+
+// ── mersenne_perfect_sigma_pure ─────────────────────────────────────
+// VERIFY-KIT V10 (P5 · bignum slice). Given a Mersenne exponent p, verify
+// the Euclid–Euler perfect-number identity σ(P) = 2·P for the even perfect
+// number P = 2^(p-1)·(2^p − 1), ENTIRELY in bignum so it holds at p where
+// P overflows int64 (p >= 62 → P > 2^63; e.g. p=61 ⇒ P ≈ 2.66e36).
+//
+// Assumes M_p = 2^p − 1 is a Mersenne PRIME (true for p ∈ {2,3,5,7,13,17,
+// 19,31,61,89,…}); under that hypothesis P is perfect.
+//
+// Verification (NOT a definitional rewrite — two INDEPENDENT computations):
+//   geo = Σ_{i=0}^{p-1} 2^i   (bignum repeated-add)        = σ(2^(p-1))
+//   Mp  = 2^p − 1             (bignum doubling, then −1)
+//   (1) geo == Mp             ← the load-bearing Euclid identity check
+//   sigma_P = M_p doubled p times         (= M_p·2^p, since σ multiplicative)
+//   P       = 2^(p-1)·M_p     = M_p doubled (p-1) times
+//   two_P   = 2·P             = P doubled once
+//   (2) sigma_P == two_P      ← σ(P) = 2P (perfection)
+// Returns 1 iff BOTH hold, else 0. p < 1 → 0.
+@pure
+pub fn mersenne_perfect_sigma_pure(p) {
+    if p < 1 { return 0 }
+    // (1) Euclid identity: 1+2+...+2^(p-1) == 2^p − 1.
+    let geo = bignum_geosum_pow2_pure(p)
+    let pow_p = bignum_pow2_pure(p)
+    let mp = bignum_sub_pure(pow_p, [1])
+    if len(mp) == 0 { return 0 }    // underflow sentinel (cannot happen for p>=1)
+    if bignum_cmp_pure(geo, mp) != 0 { return 0 }
+    // (2) σ(P) = 2P.  σ(P) = M_p·(M_p+1) = M_p·2^p ; 2P = 2·2^(p-1)·M_p = 2^p·M_p.
+    // sigma_P = M_p doubled p times.
+    let mut sigma_p = mp
+    let mut i = 0
+    while i < p {
+        sigma_p = bignum_mul_int_pure(sigma_p, 2)
+        i = i + 1
+    }
+    // P = M_p doubled (p-1) times ; two_P = P doubled once = M_p doubled p times.
+    let mut perfp = mp
+    let mut j = 0
+    while j < p - 1 {
+        perfp = bignum_mul_int_pure(perfp, 2)
+        j = j + 1
+    }
+    let two_p = bignum_mul_int_pure(perfp, 2)
+    if bignum_cmp_pure(sigma_p, two_p) != 0 { return 0 }
+    return 1
 }

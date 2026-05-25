@@ -2632,6 +2632,21 @@
   status = "🟢 proxy calibrated vs independent MI-MIP ref (|Δ|=1.67e-06) + documented substrate-divergence vs PyPhi IIT (2.3125 ≠ 3.83659, different metric by design) — V5 complete"
 
 # ───────────────────────────────────────────────────────────────────────
+# VERIFY-KIT — verify-kit-bignum (slug · group=VERIFY-KIT · V10 · P5)
+# Arbitrary-precision (radix-10 bignum) verify path: σ(P)=2·P for large
+# even perfect numbers whose value overflows int64. The int `is_perfect`
+# path accumulates σ in int64 and so CANNOT verify P_9 (p=61, ≈2.66e36)
+# or P_10 (p=89, ≈1.9e53). mersenne_perfect_sigma(p) does it entirely in
+# bignum (no bc, no libgmp). SMALLEST P5 slice — bignum only, NOT
+# PSLQ/symbolic/ODE (those stay above the $0-lane frontier, depletion_not_terminal).
+@C verify_kit_bignum := "VERIFY-KIT V10 arbitrary-precision (bignum) verify path: `hexa verify --expr mersenne_perfect_sigma <p> 1` verifies the Euclid–Euler identity σ(P)=2·P for the even perfect number P=2^(p-1)·(2^p−1) ENTIRELY in radix-10 bignum (self/runtime/bignum_mini_pure pow2/geosum/sub/cmp via doubling+add; no bc, no libgmp). Holds at p where P OVERFLOWS int64: p=17 (P_6=8589869056) 🔵 · p=19 (P_7=137438691328) 🔵 · p=61 (P_9=2658455991569831744654692615953842176 ≫ int64 9.2e18) 🔵 · p=89 (P_10≈1.9e53) 🔵 — the int64 `is_perfect` path cannot even represent these. Non-tautological core = independent geometric-sum check Σ_{i<p}2^i == 2^p−1. Wrong-value control (claim 0 at p=61) → 🔴 FALSIFIED; p=0 (not perfect; claim 1) → 🔴. Regression sigma 6 12 → 🔵 (V7 int path intact). bin/hexa-verify rebuilt clean at HEAD #1180 transpiler (V7 flatten fix #1178 + nil→[] sentinel in bignum_mini_pure unblocks its first-ever flatten)." :: formula [slug=verify-kit-bignum group=VERIFY-KIT]
+  method = "expr"
+  cmd    = "hexa verify --expr mersenne_perfect_sigma 17 1 | 19 1 | 61 1 | 89 1 (🔵); 61 0 | 0 1 (🔴 control); sigma 6 12 (🔵 regression)"
+  raw    = ".verdicts/verify-kit-bignum/v10.txt"
+  src    = "self/runtime/bignum_mini_pure.hexa (bignum_pow2_pure · bignum_geosum_pow2_pure · mersenne_perfect_sigma_pure) · tool/verify_cli.hexa::_recompute (mersenne_perfect_sigma wire + use bignum_mini_pure)"
+  status = "🔵 SUPPORTED-FORMAL — bignum σ(P)=2P verified at p∈{17,19,61,89} (61/89 overflow int64) + 🔴 wrong-value control + 🔵 regression. V10 landed (hard-tier). REAL verdict persisted verbatim."
+
+# ───────────────────────────────────────────────────────────────────────
 # OEIS — oeis-atlas-fold (slug · group=OEIS · O4)
 # Atlas-fold of the 7 distinct 🔵 verified theorems from O3 (336 K=20 survivors
 # → 8 🔵 / 7 distinct: sigma↔A000203, tau/sigma_0↔A000005, phi↔A000010,
