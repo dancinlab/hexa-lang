@@ -2,6 +2,18 @@
 
 Append-only history sister of `INBOX.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
+## 2026-05-26T01:30Z — atlas register 가 `allen_dynes_tc` (RTSC 핵심 verify fn, 3-arg) 흡수 불가 — atlas_cli↔verify_cli desync + 3-arg register arm 부재 (#954 확장)
+
+demiurge RTSC "atlas 흡수" 시도 중 발견 — RTSC 캠페인의 verify-able 결과(초전도 Tc)가 atlas 에 전혀 흡수되지 못함. 차단 2겹:
+
+- [ ] **(1) verify_cli HAS · atlas_cli register mirror LACKS** — `hexa verify --expr allen_dynes_tc 0.6150 591.18 0.10 14.55` → calc=14.5511 (계산기 정상 작동). 그러나 `hexa atlas register --from-verify allen_dynes_tc 0.6150 591.18 0.10` → `🟠 INSUFFICIENT · reason="hexa verify --expr allen_dynes_tc has no calculator path" · gap="add allen_dynes_tc to tool/verify_cli.hexa"`. = #954 와 동일 class: register 는 verify_cli 로 shell-out 하지 않고 `atlas_cli.hexa` 의 자체 미러(`_recompute_float_register`)로 in-process recompute → allen_dynes_tc 가 그 미러에 부재. **RTSC 의 1순위 verify fn 이 atlas 흡수 불가**.
+- [ ] **(2) 3-arg register arm 부재** — allen_dynes_tc(λ, ω_log, μ*) = **3-arg**. 현 register 는 1-op (`<fn> <n> <v>`) + 2-op (`<fn> <a> <b> <v>`) 만. 3-arg `_recompute3_register` 경로 자체가 없음 (#954 의 2-arg case 들과 별개의 NEW sub-gap). verify_cli `--expr` 는 3-arg 처리하므로(14.5511 계산 확인) verify↔register arity 불일치.
+- [ ] **(3) ε=1e-9 round-tolerance 재확인** — 설령 register 가 동작해도, 로그/문헌 Tc(6자리 반올림, 예 14.55)는 calc(14.55109xx)와 |Δ|>1e-9 → 🔴 FALSIFIED. register 가 expected 없이 *자체 계산값*을 fold 하거나 `--tol` 옵션 필요 (기존 RTSC INBOX round-tolerance item 과 동일).
+- [ ] **영향 범위** — allen_dynes_tc 뿐 아니라 RTSC magnet 16-fn(wheeler·solenoid_endleakage·mutual_M_coaxial·current_loop_offaxis·elliptic_K/E·…, #954 목록)도 동일 차단 → RTSC 캠페인 전 verify-able 결과가 atlas 미흡수. 우선순위 ↑ (atlas 가 RTSC SSOT 역할 못 함).
+- [ ] **제안** — (a) `--from-selftest`/generic verify-delegation arm (#954 제안 a)이 이 3건 모두 우회 — register 가 verify_cli 로 직접 shell-out(또는 동일 dispatch 공유)하면 미러 desync + arity 불일치 소멸. (b) 차선: atlas_cli 미러에 allen_dynes_tc + 3-arg `_recompute3_register` 추가.
+
+Status: open · proposed-by:agent · severity:high (RTSC SSOT 흡수 전면 차단, 1순위 verify fn) · source:demiurge RTSC atlas-absorb 세션 2026-05-26 (실증: verify 🟢-able vs register 🟠) · awaits:hexa-lang fix · #954 확장
+
 
 ## 2026-05-26 — inbox/patches/ 트리아지 3건 (anima 2-gap + flame V3 갭 + cloud Option A 후속 확인)
 
