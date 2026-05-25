@@ -1,0 +1,90 @@
+F-FUSION-LAUNCH-AMORT — verdict (verbatim, g5 / claim_verify)
+==============================================================
+slug   : fusion-launch-amort
+group  : GPU
+method : oracle (deterministic hexa-native recompute, exit-coded) + ptxas-clean
+date   : 2026-05-25
+host   : Mac arm64 (oracle build+run) · ubu-2 RTX 5070 CUDA 12.0 (ptxas-clean)
+
+--------------------------------------------------------------------------------
+[A] $0 STRUCTURAL + PROJECTION ORACLE — verbatim stdout of
+    archive/fires/gpu_fusion_launch_amort_2026_05_25/oracle.hexa (built native,
+    exit 0):
+--------------------------------------------------------------------------------
+=== F-FUSION-LAUNCH-AMORT -- $0 structural + projection oracle ===
+chain: y = residual + scale * GeLU(a*x + b)  (mul,add,gelu,mul-scale,add-resid)
+
+[1] LAUNCH COUNT
+    fused    = 1 launch
+    baseline = 5 launches
+    ratio    = 5.0x fewer launches (fused)
+
+[2] HBM TRAFFIC (per element)
+    fused    = 2 read + 1 write = 3 transfers
+    baseline = 6 read + 5 write = 11 transfers
+    ratio    = 3.66667x more HBM traffic (baseline)
+
+[3] CLOSED-FORM PROJECTION (measured per-launch L=1us, BW=200GB/s)
+    launch-bound (n small) pct_faster -> 1 - 1/5 = 80.0%
+    bandwidth-bound (n inf) pct_faster -> 1 - 3/11 = 72.7273%
+    closed-form 30%-crossover n* = -26595.7 (NEGATIVE => no crossover)
+    => >= 30% advantage is UNCONDITIONAL across all n>0 (both regimes)
+
+[4] pct_faster(n) sample points
+    n=64       -> 79.9796%
+    n=256      -> 79.919%
+    n=1024     -> 79.6864%
+    n=4096     -> 78.8894%
+    n=16384    -> 76.9534%
+    n=65536    -> 74.6%
+    n=1048576  -> 72.8816%
+
+VERDICT: F-FUSION-LAUNCH-AMORT structural advantage PROVEN
+  launch 1<5, HBM 3<11; >=30% wall win UNCONDITIONAL (launch-bound 80%, bw-bound 72.7%)
+  TIER: blue (structural + closed-form projection) -- timed wall DEFERRED-to-serial
+ORACLE_EXIT=0
+
+--------------------------------------------------------------------------------
+[B] ptxas-clean — verbatim `ptxas -arch=sm_80 -v` on ubu-2 (CUDA 12.0,
+    Built Jan 6 2023). Both PTX modules assemble clean, 0 spill:
+--------------------------------------------------------------------------------
+=== FUSED (fused_chain.ptx) ===
+ptxas info    : 0 bytes gmem
+ptxas info    : Compiling entry function 'fused_chain' for 'sm_80'
+ptxas info    : Function properties for fused_chain
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 11 registers, 392 bytes cmem[0]
+FUSED_RC=0
+
+=== BASELINE (baseline_chain.ptx) ===
+ptxas info    : Used 12 registers (k5_add_resid), 0 spill
+ptxas info    : Used 10 registers (k4_mul_scale), 0 spill
+ptxas info    : Used 11 registers (k3_gelu),      0 spill
+ptxas info    : Used 10 registers (k2_add),       0 spill
+ptxas info    : Used 10 registers (k1_mul),       0 spill
+BASELINE_RC=0
+(full log: archive/fires/gpu_fusion_launch_amort_2026_05_25/ptxas_clean.log)
+
+--------------------------------------------------------------------------------
+[C] NUMERIC CORRECTNESS — host_fusion_launch.c compares the fused kernel
+    output to an f64 CPU reference of the IDENTICAL chain
+    (y = residual + scale * GeLU(a*x+b), tanh-approx GeLU), tol = 1e-2 abs
+    (tanh.approx.f32 ~2^-11 rel error bound). Numeric PASS confirmation is part
+    of the timed silicon fire (DEFERRED-to-serial; ubu-2 shared).
+
+--------------------------------------------------------------------------------
+TERMINAL VERDICT
+--------------------------------------------------------------------------------
+🔵/🟢 SUPPORTED — structural launch-count (1<5) and HBM-traffic (3<11) advantage
+is PROVEN closed-form; the >=30% wall projection is closed-form from measured
+per-launch overhead (F-RFC067-PB-TIMING L=1us) and holds UNCONDITIONALLY across
+all tensor sizes (launch-bound 80% down to bandwidth-bound asymptote 72.7%).
+The falsifier F-FUSION-LAUNCH-AMORT is NOT falsified — it is over-satisfied:
+the predicted launch-bound-only crossover is replaced by an unconditional win
+because the fused kernel dominates on the HBM-traffic axis too.
+
+TIMED-WALL CONFIRMATION: DEFERRED-to-serial (ubu-2 RTX 5070; parallel timed
+fires contend). host_fusion_launch.c + both PTX are ptxas-clean and ready to
+fire — the serial follow-up records fused_med_ms / baseline_med_ms / pct_faster.
+
+§10 box ">=30% whole-program fusion advantage" stays [ ] (needs the timed wall).

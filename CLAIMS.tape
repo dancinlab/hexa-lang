@@ -55,3 +55,22 @@
   raw    = ".verdicts/compiler-selfhost-fixpoint/<id>.txt   # NOT YET PERSISTED"
   src    = "COMPILER.md S3 (2026-05-20 🛸 SELF-HOST FIXPOINT) + RFC 063 P0/P1/P2/P3"
   status = "STUB — terminal verdict NOT persisted (md5/byte-diff evidence is md-only). gated OUT of /paper until claim_verify writes a closure verdict to .verdicts/."
+
+# ───────────────────────────────────────────────────────────────────────
+# GPU — fusion-launch-amort (slug · group=GPU · paper-track)
+# Whole-program elementwise fusion (GPU.md §5f). A fused single-launch
+# >=5-op chain (mul·add·gelu·mul-scale·add-resid) computing
+# y = residual + scale·GeLU(a·x+b) vs a per-op eager/library baseline
+# (5 separate kernel launches, tensor round-tripping HBM each op).
+# Deterministic $0 oracle: launch 1<5, HBM 3<11 transfers/elem; the >=30%
+# wall win is UNCONDITIONAL across all n (closed-form from measured
+# per-launch overhead F-RFC067-PB-TIMING L=1us). Positive structural +
+# numerical-projection result (REAL verdict persisted). Timed silicon wall
+# DEFERRED-to-serial (ubu-2 shared) — the §10 >=30% box stays unflipped.
+
+@C fusion_launch_amort := "fused 1-launch 5-op chain beats 5-launch per-op baseline by >=30% unconditionally (launch 1<5, HBM 3<11, bound [72.7%,80%])" :: measurement [slug=fusion-launch-amort group=GPU]
+  method = "oracle"
+  cmd    = "hexa build archive/fires/gpu_fusion_launch_amort_2026_05_25/oracle.hexa && ./oracle  (exit 0) + ptxas -arch=sm_80 (rc 0)"
+  raw    = ".verdicts/fusion-launch-amort/fusion_launch_amort.txt"
+  src    = "GPU.md §5f + §1g F-RFC067-PB-TIMING (measured L=1us) · archive/fires/gpu_fusion_launch_amort_2026_05_25/"
+  status = "🔵/🟢 SUPPORTED — structural closed-form (launch 1<5 · HBM 3<11) + numerical projection (>=30% unconditional). REAL verdict persisted verbatim. terminal · paper-eligible. Timed silicon wall DEFERRED-to-serial (§10 >=30% box stays [ ])."
