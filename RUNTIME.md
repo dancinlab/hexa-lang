@@ -1072,7 +1072,79 @@ opt-in via `git config core.hooksPath .githooks`) + project.tape @D
   - `self/native/hexa_cc.c` — `sl_1178` string literal `write(` → `hxlcl_write(`
   - `self/native/hexa_v2` — rebuilt from patched hexa_cc.c (binary, Mac arm64)
   - `RUNTIME.md` (this entry)
-- Acceptance line: `cycle 72: write-codegen-fix CLOSED · approach=codegen hexa_cc.c surgical-edit + hexa_v2 rebuild (s4_flatc_post path .py-governance-blocked; full cc --regen avoided) · _write dropped (41→40) · correctness PASS: atlas 16088 + smoke 42 + println/eprintln stdout intact · PR #(this)`
+- Acceptance line: `cycle 72: write-codegen-fix CLOSED · approach=codegen hexa_cc.c surgical-edit + hexa_v2 rebuild (s4_flatc_post path .py-governance-blocked; full cc --regen avoided) · _write dropped (41→40 vs branch base; the codegen-layer site cycle 71 left deferred) · correctness PASS: atlas 16088 + smoke 42 + println/eprintln stdout intact · PR #(this)`
+
+### 2026-05-25 — cycle 71: carry-flag svc re-trap expansion (8 R syscalls) — CLOSED
+
+- cycle 71 — scaled the cycle-70 (`3bdb8d3b` #933) carry-flag-correct `svc
+  #0x80` proof from the 3-syscall beachhead (read/write/close) to **8 more R
+  syscalls**, dropping their libc externs without resurrecting the carry-flag /
+  pair-return bugs that forced PR #251's revert. `self/runtime.c` ONLY (a
+  parallel agent owns the codegen-layer `_write` fix in `self/codegen_c2.hexa`).
+
+- **Helpers added** (4, right after cycle-70's `_hxlcl_syscall{1,3}_cf`):
+  `_hxlcl_syscall2_cf` (dup2/fstat/stat), `_hxlcl_syscall4_cf` (wait4),
+  `_hxlcl_syscall6_cf` (mmap), and `_hxlcl_pipe_cf` — a **pair-return** trap
+  that captures BOTH x0/x1 fds via an explicit `mov`-out asm block (the
+  register-constrained `"=r"(x1)` output form hung clang during validation;
+  the explicit block is the working form). All use the same carry-on-error →
+  `errno = (int)x0; return -1;` translation as cycle 70.
+
+- **8 R syscalls re-trapped** (Darwin branch only — Linux stays libc; Darwin
+  SYS_* numbers + `svc #0x80` don't apply on Linux):
+  - simple-return: `dup2`(SYS_DUP2=90·cf2), `fstat`(339·cf2), `stat`(338·cf2),
+    `lseek`(199·cf3), `waitpid`→wait4(7·cf4 rusage=NULL), `open`(5·cf3)
+  - sentinel: `mmap`(197·cf6 — carry→-1 cast to (void*) == MAP_FAILED),
+    `pipe`(42·pair-return cf — both fds from x0/x1)
+
+- **Externs: 41 → 33** (baseline on this HEAD was 41, not the cycle-69 catalog's
+  42 — read+close already gone from cycle 70 + intervening merges). DROPPED
+  exactly 8: `_dup2 _fstat _lseek _mmap _open _pipe _stat _waitpid`. ZERO new
+  externs added (`comm` diff confirmed). Binary 1,244,280 B → **1,243,976 B**
+  (libc-call stubs → inline svc traps).
+
+- **DEFERRED (left on libc — NOT broken, intentional)**:
+  - `fork` — BSD pair-return disambiguates parent/child via the SECOND return
+    reg; the carry/x1 child-vs-parent capture is the trickiest case and a
+    miscompile would corrupt every subprocess spawn. High risk, low marginal
+    value (1 extern). Follow-up cycle.
+  - socket family (`socket/bind/listen/accept/connect/send/recv/...`) +
+    `execve/execvp` + `posix_spawn*` — re-trapping these is a BEHAVIOR CHANGE
+    on the subprocess/network path that broke yosys/ABC/anima/pool in cycle 61;
+    aprime_cc never networks at compile-time so libc here is harmless. Defer.
+  - `gmtime_r` — **NOT a kernel syscall** (userspace libc time formatting from
+    a `time_t`); cannot be svc-trapped. Permanent libc.
+  - `mkdir`, `write` — **codegen-layer externs**, not runtime.c. `rt_fs_mkdir_p`
+    is a noop stub (doesn't call mkdir); both come from transpiled compiler
+    code (`s4_flatc_post` "mkdir lowering" + hexa-level write builtin). Out of
+    scope for a runtime.c cycle (same finding as cycle 70's `_write`).
+
+- **Correctness PROOF** (the whole point — why #251 reverted):
+  1. **Isolated C probes** (`/tmp/sc.c`, `/tmp/pp4.c`, `/tmp/mm.c`, exact `_cf`
+     code, `clang -O1 -arch arm64`): `lseek(999)`→-1/EBADF(9); `fstat(999)`→
+     -1/EBADF; `open(noexist)`→-1/ENOENT(2); `open(valid)`→fd 3; `wait4(999999)`
+     →-1/ECHILD(10); `dup2(999,1000)`→-1/EBADF; `mmap(badfd)`→MAP_FAILED
+     (0xffff…ffff, == MAP_FAILED) + EBADF (NOT a bogus low pointer); pipe→fds
+     3,4 + `write(6)`/`read(6)` roundtrip data="hexa42". ALL PASS.
+  2. **atlas load = open/read/lseek/stat/mmap-heavy** (parses
+     embedded.gen.hexa): **16088 nodes loaded** — a broken trap would
+     corrupt/truncate the parse.
+  3. **smoke exit(6*7)==42 PASS** + a larger compile (`/tmp/t71.hexa`: fn calls
+     + loop + array) via the new binary → end-to-end emit/link/run → **exit 15**
+     (1+2+3+4+5). Confirms the re-trapped paths under real compile pressure.
+
+- **Pattern remaining for follow-up**: fork (pair-return parent/child) is the
+  last simple-arity R syscall; socket family needs a behavior-change review.
+  The carry mechanism is now proven across 11 syscalls / 4 arities + pipe
+  pair-return — fork is the same `mov`-out pair-capture as pipe but with the
+  parent/child semantics check.
+
+- Files touched (per @D `wipe_guard`, runtime/syscall scope; +81/-9 lines, net
+  additive, well under wipe threshold):
+  - `self/runtime.c` — `_hxlcl_syscall{2,4,6}_cf` + `_hxlcl_pipe_cf` helpers +
+    dup2/fstat/stat/lseek/waitpid/open/mmap/pipe re-trap (Darwin branch)
+  - `RUNTIME.md` (this entry)
+- Acceptance line: `cycle 71: syscall-cf-expand CLOSED · re-trapped=dup2/fstat/stat/lseek/waitpid/open/mmap/pipe · deferred=fork/socket-family/execve/gmtime_r(non-syscall)/mkdir+write(codegen-layer) · externs 41→33 · correctness PASS: atlas 16088 + smoke 42 + isolated-probes (mmap→MAP_FAILED, pipe roundtrip, open→ENOENT) · PR #(this)`
 
 ### 2026-05-25 — cycle 70: carry-flag-correct svc syscall re-trap (read/write/close PROOF) — CLOSED
 
