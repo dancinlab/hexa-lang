@@ -1,6 +1,6 @@
 // stdlib/loop/dfs.hexa — RFC 080 DFS+LLM recursive atlas expansion.
 //
-// TECS-L.md §5. Ports the archive-TECS-L `dfs_engine.py` "타고타고 내려가는"
+// docs/rfc/rfc_drafts_2026_05_22/rfc_080_hexa_loop_dfs.md §5. Ports the archive-TECS-L `dfs_engine.py` "타고타고 내려가는"
 // (depth-first descent) discovery strategy into `hexa loop`. A lens-emitted
 // Candidate is treated as a DFS seed; an external LLM (pluggable via
 // --llm-cmd) proposes child hypotheses one level deeper; verified children
@@ -8,7 +8,7 @@
 // archive/atlas_candidates/dfs_<parent>/ for human PR review — never mutates
 // the binary built-in atlas (@D g_atlas_binary_builtin, PR-only).
 //
-// PHASE MAP (TECS-L.md §5):
+// PHASE MAP (docs/rfc/rfc_drafts_2026_05_22/rfc_080_hexa_loop_dfs.md §5):
 //   B  dfs_llm_invoke       — pluggable LLM shellout (stdin=prompt)
 //   C  dfs_build_prompt /   — prompt scaffold + markdown front-matter parse
 //      dfs_parse_children /   + iterative beam-search frontier walk
