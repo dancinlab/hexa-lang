@@ -681,16 +681,22 @@ fn _cdr_perfect_mitigation_register(p_noise: float) -> float {
 
 // Wigner stabilizer sum-negativity at odd prime d — verbatim port of
 // verify_cli::_wigner_stabilizer_sn (Veitch 2014 NJP 16 013009 + Gross-Hudson).
-// At odd prime d in {3, 5, 7, 11, 13, ...} every stabilizer state has
-// W >= 0, so sn = 0 exactly. 1-arg closed-form: d (odd prime, >= 3).
+// At any odd prime d (real sieve, not a fixed small-prime list) every
+// stabilizer state has W >= 0, so sn = 0 exactly. 1-arg closed-form: d
+// (odd prime, >= 3); composite/even d => NOCALC, matching verify_cli.
 fn _wigner_stabilizer_sn_register(d: int) -> float {
     if d < 3 { return _NOCALC_F_REGISTER }
-    if d == 3 { return 0.0 }
-    if d == 5 { return 0.0 }
-    if d == 7 { return 0.0 }
-    if d == 11 { return 0.0 }
-    if d == 13 { return 0.0 }
-    return _NOCALC_F_REGISTER
+    // odd prime gate: d=4,6,8,9,... fail (composite or even).
+    if (d % 2) == 0 { return _NOCALC_F_REGISTER }
+    // real odd-prime sieve (verbatim mirror of verify_cli::_wigner_stabilizer_sn).
+    let mut k = 3
+    let mut is_prime = 1
+    while k * k <= d {
+        if (d % k) == 0 { is_prime = 0 }
+        k = k + 2
+    }
+    if is_prime == 0 { return _NOCALC_F_REGISTER }
+    return 0.0
 }
 
 // ── RFC 045 qmirror PR-C atoms (Variational/Fisher/Shadow) ─────────────
