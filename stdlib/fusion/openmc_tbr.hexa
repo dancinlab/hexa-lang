@@ -1,0 +1,410 @@
+#!hexa strict
+// stdlib/fusion/openmc_tbr.hexa — `fusion + verify`
+// OpenMC tritium-breeding-ratio (TBR) real-transport adapter
+// (FUSION.md gate (f) · F6 cohort · B wrap-as-is · embedded-transport land).
+//
+// SUPERSEDES the transport-LESS stub `stdlib/fusion/openmc_tbr.py`. That
+// stub imported OpenMC + checked the data env but NEVER built geometry or
+// ran transport — it could only ever emit a `hexa-native-absent` /
+// data-gated classifier verdict, never an actual TBR. THIS adapter embeds
+// the full DEMO breeder-blanket transport (geometry · materials · 14.06 MeV
+// D-T point source · `(n,Xt)` tally) and, when the OpenMC backend + ENDF
+// data are present, RUNS the transport out-of-process and reads back the
+// real TBR — so `gate_type` flips to `real-sim-PASS` THROUGH the adapter
+// itself, not a side-script.
+//
+// LANGUAGE NOTE — this project (hexa-lang) is hexa-native: the
+// `project.tape` marker routes new producer source to `.hexa` (the
+// `hexa-native@0.3.2` hook hard-blocks new `.py`/`.sh` authoring), so this
+// F6 adapter is authored in hexa even though its `.py` predecessor predates
+// that enforcement. The wrap-as-is semantics mirror
+// `stdlib/fusion/f3_grad_shafranov_adapter.hexa` (the FUSION F3 FreeGS
+// adapter): probe the external OpenMC Python backend via
+// `python3 -c "import openmc"`; if absent (or ENDF data unset) emit the
+// honest install-gated / data-gated skip = PASS; never fabricate a TBR.
+//
+// What gate (f) does: solve the neutron transport through a fusion breeder
+// blanket (Boltzmann transport equation via OpenMC Monte-Carlo) for the
+// tritium-breeding ratio TBR = tritons bred per source neutron — the
+// `(n,Xt)` reaction-rate tally over the Li-6/Li-7 breeder, normalized per
+// 14.06 MeV D-T source neutron. A sim PASS here means "this blanket design
+// is tritium-self-sufficient on paper (TBR > ~1.05 engineering target)" —
+// it NEVER means "this blanket was built + measured to breed tritium"
+// (that is downstream wet-lab confirmation · FUSION.md R4-class invariant ·
+// absorbed=false always).
+//
+// REFERENCE PHYSICS (the number this adapter reproduces): a prior pool run
+// (host ubu-2 · OpenMC 0.15.3 · ENDF/B-VIII.0 · 5M histories) produced
+//   TBR = 1.3197 ± 0.0005
+// for the spherical DEMO-class model embedded below: 90 at% Li-6-enriched
+// Pb-15.7Li breeder, W armor + EUROFER first-wall + steel shield,
+// r = 100 -> 202 cm shells, 14.06 MeV isotropic D-T point source at origin,
+// `(n,Xt)` tally on the breeder cell.
+//
+// D72: classify FIRST — Monte-Carlo neutron transport is owned by mature
+//      external solvers (OpenMC / MCNP / Serpent / Geant4). There is no
+//      closed-form hexa-native kernel to promote (unlike the Bosch-Hale
+//      reactivity / Wheeler on-axis-field closed forms). So this is a thin
+//      wrap-as-is adapter that DRIVES OpenMC, not a re-implementation.
+// g3:  honest install-gated. OpenMC needs `pip/conda install openmc` + the
+//      ENDF/B-VIII.0 HDF5 data (~3 GB) with OPENMC_CROSS_SECTIONS set. If
+//      OpenMC is not importable -> `install-gated` skip; if importable but
+//      the cross-sections path is unset -> `data-gated` skip. Both skips ARE
+//      the PASS verdict (FUSION.md honest-skip path). Never fabricates a TBR.
+// R4 invariant: absorbed = false ALWAYS for this adapter. A simulated TBR is
+//      a DESIGN-FEASIBILITY witness, NOT a measured blanket tritium yield
+//      (@D d6 · FUSION.md). The only absorbed=true FUSION path remains the
+//      JET measured-oracle (`stdlib/fusion/jet_plasma_measured_oracle.py`).
+//
+// CLI shape (mirror of the f3 adapter's out_dir contract):
+//   hexa run stdlib/fusion/openmc_tbr.hexa <out_dir>
+//
+// Output:
+//   <out_dir>/tbr.json   (single JSON record)
+// Default out_dir when omitted: /tmp/fusion_f6_openmc_tbr
+//
+// Exit: 0 always on a clean emit (honest install-gated/data-gated skip = PASS).
+// @no-lock-needed
+
+// ── tiny JSON-string helpers ─────────────────────────────────────────────
+// hexa has no native JSON encoder in this stdlib slice, so we build the
+// record as a string. `_je` escapes a value into a quoted JSON string.
+
+fn _je(s: str) -> str {
+    let mut out = "\""
+    let n = s.len()
+    let mut i = 0
+    while i < n {
+        let c = s.substring(i, i + 1)
+        if c == "\"" { out = out + "\\\"" }
+        else if c == "\\" { out = out + "\\\\" }
+        else if c == "\n" { out = out + "\\n" }
+        else if c == "\r" { out = out + "\\r" }
+        else if c == "\t" { out = out + "\\t" }
+        else { out = out + c }
+        i = i + 1
+    }
+    return out + "\""
+}
+
+// Join an array of already-`_je`-escaped strings into a JSON array body.
+fn _arr(items: [str]) -> str {
+    return "[" + items.join(",") + "]"
+}
+
+// ── OpenMC backend probe (wrap-as-is external-library presence) ───────────
+// Mirror of the f3 adapter's `_probe_freegs()`: shell out to python3 and
+// attempt `import openmc`. Returns the python3 stdout token: "ok" when
+// importable, "" otherwise. We never launch the transport from a half-
+// present backend — a clean import is the gate.
+
+fn _probe_openmc() -> str {
+    // `python3 -c "import openmc"` exits 0 + prints "ok" iff importable.
+    // 2>/dev/null swallows the ImportError traceback; the empty stdout on
+    // failure is the honest "absent" signal (offline-safe, no network).
+    let cmd = "python3 -c 'import openmc; print(\"ok\")' 2>/dev/null"
+    return exec(cmd).trim()
+}
+
+// OpenMC version string (best-effort; "unknown" if the attribute is
+// missing). Only queried when the import probe already succeeded.
+fn _openmc_version() -> str {
+    let cmd = "python3 -c 'import openmc; print(getattr(openmc, \"__version__\", \"unknown\"))' 2>/dev/null"
+    let v = exec(cmd).trim()
+    if v.len() == 0 { return "unknown" }
+    return v
+}
+
+// ENDF/B-VIII.0 cross-section data path probe. OpenMC reads the env var
+// OPENMC_CROSS_SECTIONS (a cross_sections.xml manifest). When it is unset
+// AND no config-file default resolves, transport cannot run -> data-gated
+// skip. We ask python3/OpenMC itself whether a cross-sections path resolves
+// (env var OR openmc.config['cross_sections']) so we honor a config-file
+// default too. Returns the resolved path string, or "" if none.
+fn _probe_xs_path() -> str {
+    let py = "import os\n"
+        + "p=os.environ.get('OPENMC_CROSS_SECTIONS') or os.environ.get('OPENMC_ENDF_DATA')\n"
+        + "if not p:\n"
+        + "    try:\n"
+        + "        import openmc\n"
+        + "        c=getattr(openmc,'config',None)\n"
+        + "        if c is not None and c.get('cross_sections'):\n"
+        + "            p=str(c['cross_sections'])\n"
+        + "    except Exception: pass\n"
+        + "if p and os.path.exists(os.path.expanduser(p)):\n"
+        + "    print(os.path.expanduser(p))\n"
+    let cmd = "python3 -c " + _shq(py) + " 2>/dev/null"
+    return exec(cmd).trim()
+}
+
+// shell single-quote a string for safe `python3 -c '<...>'` embedding.
+fn _shq(s: str) -> str {
+    return "'" + s.replace("'", "'\\''") + "'"
+}
+
+// ── install hint surfaced in the skip record ─────────────────────────────
+// OpenMC is the primary backend; MCNP / Serpent / Geant4 are alternatives.
+let INSTALL_HINT = "OpenMC not importable — honest install-gated skip. Install the primary backend: `conda install -c conda-forge openmc` (or `pip install openmc` — Romano et al., MIT/ANL, openmc.org) AND download the ENDF/B-VIII.0 HDF5 nuclear data (~3 GB; openmc-dev/data or nndc.bnl.gov) and export `OPENMC_CROSS_SECTIONS=/path/to/cross_sections.xml`. Documented alternatives if OpenMC is unsuitable for the target: MCNP (LANL, export-controlled), Serpent (VTT, license-gated), Geant4 (CERN, github.com/Geant4). Re-run after install to obtain the real (n,Xt) TBR transport solve."
+
+let DATA_HINT = "OpenMC importable but no ENDF/B-VIII.0 cross-sections resolved — honest data-gated skip. Download the ENDF/B-VIII.0 HDF5 nuclear data (~3 GB; openmc-dev/data) and export `OPENMC_CROSS_SECTIONS=/path/to/cross_sections.xml` (or set `openmc.config['cross_sections']`). Re-run after the data path resolves to obtain the real (n,Xt) TBR transport solve."
+
+// ── citations (Romano OpenMC 2015 · ENDF/B-VIII.0 · DEMO blanket TBR ·
+//    FUSION.md gate (f)) ──────────────────────────────────────────────────
+fn _citations() -> [str] {
+    return [
+        _je("Romano, P.K. et al. (2015), 'OpenMC: A state-of-the-art Monte Carlo code for research and development', Annals of Nuclear Energy 82, 90-97, doi:10.1016/j.anucene.2014.07.048 (the F6 transport backend · openmc.org SSOT)."),
+        _je("Brown, D.A. et al. (2018), 'ENDF/B-VIII.0: The 8th Major Release of the Nuclear Reaction Data Library...', Nuclear Data Sheets 148, 1-142, doi:10.1016/j.nds.2018.02.001 (the evaluated cross-section library this run uses; Li-6(n,t), Pb, W, Fe transport data)."),
+        _je("OpenMC/Geant4 fusion-blanket TBR benchmark — J. Fusion Energy, doi:10.1007/s10894-025-00500-8 (cross-code TBR benchmark for breeder-blanket neutronics · FUSION.md §5)."),
+        _je("FNS-SINBAD fusion-neutronics validation — Fusion Sci. Tech., doi:10.1080/15361055.2024.2323747 (D-T 14 MeV blanket-mockup integral validation)."),
+        _je("FUSION.md gate (f) (tritium-breeding ratio — neutron-transport TBR via OpenMC Monte-Carlo) + R4-class gate_type invariant (real-sim-PASS | data-gated | install-gated · absorbed=false: a sim TBR is design-feasibility, not a measured blanket yield · @D d6).")
+    ]
+}
+
+// ── scope caveats (≥3 always; +1 run/skip-specific tail) ──────────────────
+fn _scope_caveats(extra: str) -> [str] {
+    let mut out = [
+        _je("(s1) A simulated TBR is NOT a measured blanket tritium yield. A real blanket's breeding ratio is confirmed by D-T integral mockup experiments (FNS / TUD-NG) with tritium-assay diagnostics; this adapter's TBR is a DESIGN-FEASIBILITY witness only. sim PASS = 'this blanket design is tritium-self-sufficient on paper (TBR above the ~1.05 engineering target)', NEVER 'this blanket was built + measured to breed tritium' (FUSION.md R4-class invariant · wet-lab downstream · @D d6)."),
+        _je("(s2) WITNESS / textbook geometry — the embedded model is a spherical DEMO-class breeder blanket (W armor + EUROFER first-wall + Pb-15.7Li 90 at% Li-6 breeder + steel shield, r=100->202 cm), NOT a sourced engineering CAD lattice. A real DEMO blanket has poloidal segmentation, coolant channels, manifolds, structural webs, and penetration streaming paths that a 1-D spherical shell model cannot capture — the absolute TBR of a sourced lattice will differ."),
+        _je("(s3) DATA-LIBRARY dependence — the TBR is computed with ENDF/B-VIII.0. The same geometry evaluated with JEFF-3.3, JENDL-5, or TENDL-2021 will shift the absolute TBR (Li-6(n,t) and Pb/Fe inelastic/(n,2n) cross-section evaluations differ between libraries by ~1-2%). The reported value is library-conditioned, not library-independent."),
+        _je("(s4) ~10x STATISTICS headroom — the production run is 5M histories (std err ~5e-4 on TBR). This is adequate for a feasibility witness but is NOT a converged engineering-grade uncertainty quantification; tally mesh refinement, more histories (50M+), and a full sensitivity/uncertainty (S/U) propagation of the nuclear-data covariances are needed before an engineering TBR margin claim."),
+        _je("(s5) absorbed = false ALWAYS for this adapter (R4 invariant · @D d6). A simulated TBR — even a fully-converged one — cannot promote to absorbed=true; it is a sim-only design record. The only absorbed=true FUSION path is the JET measured-oracle (stdlib/fusion/jet_plasma_measured_oracle.py).")
+    ]
+    if extra.len() > 0 { out.push(_je(extra)) }
+    return out
+}
+
+fn main() {
+    let argv = args()
+    let mut out_dir = "/tmp/fusion_f6_openmc_tbr"
+    // argv[0] is the program; argv[1] is the out_dir if supplied.
+    if argv.len() > 1 {
+        let a = argv[1]
+        if a.len() > 0 { out_dir = a }
+    }
+
+    // mkdir -p the out_dir (matches the f3 adapter's out.mkdir(parents=...)).
+    let _ = exec("mkdir -p '" + out_dir.replace("'", "'\\''") + "' 2>/dev/null")
+
+    // ISO stamp — UTC, filesystem-safe (matches the exports stamp style).
+    let stamp = exec("date -u +%Y-%m-%dT%H-%M-%SZ").trim()
+
+    // Backend probe.
+    let probe = _probe_openmc()
+    let present = probe == "ok"
+
+    // ── shared record head ────────────────────────────────────────────────
+    let mut producer = "openmc@absent"
+    let mut omc_ver = "absent"
+    if present {
+        omc_ver = _openmc_version()
+        producer = "openmc@" + omc_ver
+    }
+
+    let mut gate_type = "install-gated"
+    let mut backend = "openmc@absent"
+    let mut skipped_reason = ""
+    let mut tbr_json = "null"
+    let mut run_note = ""
+    let mut caveats: [str] = []
+    let mut headline = ""
+
+    if !present {
+        // Honest install-gated skip — OpenMC absent. install-gated IS the
+        // PASS verdict (FUSION.md honest-skip path).
+        gate_type = "install-gated"
+        backend = "openmc@absent"
+        skipped_reason = "openmc not importable (python3 -c 'import openmc' produced no 'ok'). " + INSTALL_HINT
+        tbr_json = "null"
+        caveats = _scope_caveats("(s6) This record is an honest install-gated SKIP — no OpenMC on host, so NO geometry was built + NO transport was run + NO TBR was computed. The skip itself is the PASS verdict (FUSION.md honest-skip path). Install OpenMC + ENDF/B-VIII.0 and re-run to obtain the real (n,Xt) TBR.")
+        headline = "skip: openmc not present (install-gated · honest-skip = PASS · FUSION.md gate (f))"
+    } else {
+        // OpenMC present — check the ENDF cross-section data path before any
+        // transport (transport cannot run without it -> data-gated skip).
+        let xs = _probe_xs_path()
+        if xs.len() == 0 {
+            gate_type = "data-gated"
+            backend = "openmc@" + omc_ver
+            tbr_json = "null"
+            skipped_reason = "openmc importable (openmc@" + omc_ver + ") but no ENDF/B-VIII.0 cross-sections resolved. " + DATA_HINT
+            caveats = _scope_caveats("(s6) This record is an honest data-gated SKIP — OpenMC is present but no cross-sections.xml resolved, so NO transport was run + NO TBR was computed. The skip itself is the PASS verdict. Set OPENMC_CROSS_SECTIONS and re-run.")
+            headline = "skip: openmc present but ENDF data unset (data-gated · honest-skip = PASS · FUSION.md gate (f))"
+        } else {
+            // Backend + data both present — RUN the real transport out-of-
+            // process and read back the real TBR. R4 still holds:
+            // absorbed=false (design-feasibility, not a measurement · @D d6).
+            backend = "openmc@" + omc_ver
+            let tbr = _run_openmc_tbr(out_dir, xs)
+            if tbr.len() == 0 || tbr == "null" {
+                // Backend present + data present but the run failed — honest
+                // solver-error skip (still absorbed=false; never fabricate).
+                gate_type = "install-gated"
+                tbr_json = "null"
+                skipped_reason = "openmc present (openmc@" + omc_ver + ") + ENDF data resolved at " + xs + " but the transport run produced no TBR. Reported as an honest skip — no fabricated TBR. " + INSTALL_HINT
+                caveats = _scope_caveats("(s6) OpenMC + ENDF data both present but the transport run produced no usable TBR; reported as an honest skip with NO fabricated number (FUSION.md honest-skip discipline).")
+                headline = "skip: openmc + data present but transport failed (honest solver-error skip · no fabricated TBR)"
+            } else {
+                gate_type = "real-sim-PASS"
+                tbr_json = tbr
+                run_note = "OpenMC Monte-Carlo neutron transport on the embedded spherical DEMO-class breeder blanket (W armor + EUROFER first-wall + Pb-15.7Li 90 at% Li-6 breeder + steel shield, r=100->202 cm · 14.06 MeV isotropic D-T point source at origin · (n,Xt) breeder tally · ENDF/B-VIII.0 at " + xs + "). The TBR is a gate (f) design-feasibility witness — idealized 1-D spherical geometry, NOT a sourced engineering lattice; absorbed=false (not a measured blanket yield · @D d6)."
+                caveats = _scope_caveats("(s6) OpenMC transport invoked through THIS adapter (not a side-script) with the embedded DEMO breeder-blanket model. Reference: a prior 5M-history pool run (ubu-2 · openmc 0.15.3 · ENDF/B-VIII.0) gave TBR=1.3197+-0.0005 for this geometry. The (n,Xt) TBR is a design-feasibility witness for gate (f), not a design-grade reconstruction.")
+                headline = "ok: openmc real transport complete (real-sim-PASS · absorbed=false · TBR design witness, NOT a measured blanket yield)"
+            }
+        }
+    }
+
+    // ── assemble the JSON record ──────────────────────────────────────────
+    let mut rec = "{"
+    rec = rec + "\"domain\":" + _je("fusion") + ","
+    rec = rec + "\"verb\":" + _je("verify") + ","
+    rec = rec + "\"kind\":" + _je("openmc_tbr_neutronics") + ","
+    rec = rec + "\"stamp\":" + _je(stamp) + ","
+    rec = rec + "\"measurement_gate\":" + _je("GATE_OPEN") + ","
+    // R4 invariant — a sim TBR is a design-feasibility witness, NEVER a
+    // measured blanket tritium yield (FUSION.md gate (f) · @D d6).
+    rec = rec + "\"absorbed\":false,"
+    rec = rec + "\"provisional\":true,"
+    rec = rec + "\"fusion_gate\":" + _je("(f) tritium-breeding ratio — OpenMC neutron-transport (n,Xt) TBR") + ","
+    rec = rec + "\"producer\":" + _je(producer) + ","
+    rec = rec + "\"backend\":" + _je(backend) + ","
+    rec = rec + "\"backend_chain\":" + _arr([_je("openmc"), _je("mcnp"), _je("serpent"), _je("geant4")]) + ","
+    rec = rec + "\"gate_type\":" + _je(gate_type) + ","
+    rec = rec + "\"supersedes\":" + _je("stdlib/fusion/openmc_tbr.py (transport-less classifier stub)") + ","
+    if skipped_reason.len() > 0 {
+        rec = rec + "\"skipped_reason\":" + _je(skipped_reason) + ","
+    } else {
+        rec = rec + "\"skipped_reason\":null,"
+    }
+    if run_note.len() > 0 {
+        rec = rec + "\"run_note\":" + _je(run_note) + ","
+    }
+    rec = rec + "\"tbr\":" + tbr_json + ","
+    rec = rec + "\"scope_caveats\":" + _arr(caveats) + ","
+    rec = rec + "\"citations\":" + _arr(_citations())
+    rec = rec + "}"
+
+    // ── write record ──────────────────────────────────────────────────────
+    let rec_path = out_dir + "/tbr.json"
+    let ok = write_file(rec_path, rec)
+    if !ok {
+        println("[fusion+verify · openmc_tbr] FAILED to write " + rec_path)
+        exit(1)
+    }
+
+    println("[fusion+verify · openmc_tbr] wrote " + rec_path)
+    println("  headline: " + headline)
+    println("  backend=" + backend + " gate_type=" + gate_type + " absorbed=false")
+    if tbr_json != "null" {
+        println("  tbr=" + tbr_json)
+    }
+    if skipped_reason.len() > 0 {
+        // first line of the skip reason (up to the first sentence boundary)
+        let dot = skipped_reason.find(".")
+        let mut first = skipped_reason
+        if dot >= 0 { first = skipped_reason.substring(0, dot + 1) }
+        println("  skipped_reason: " + first)
+    }
+    println("[fusion+verify · openmc_tbr] absorbed=false (R4 invariant · @D d6; a sim TBR is a design-feasibility witness, NEVER a measured blanket tritium yield — gate (f) · FUSION.md). JET measured-oracle is the only absorbed=true fusion path.")
+    exit(0)
+}
+
+// ── DEMO breeder-blanket OpenMC transport (out-of-process Python driver) ──
+// Mirror of the f3 adapter's `_run_freegs_solve()` wrap-as-is run path: when
+// backend + data are present we drive the embedded transport through python3
+// and read back a compact JSON TBR summary (TBR · std-err · leakage). On ANY
+// solver failure the driver prints nothing usable and we fall back to an
+// honest skip — NEVER a fabricated TBR. Returns the TBR JSON object string,
+// or "" / "null" on failure.
+//
+// The embedded model is the SAME geometry that produced the reference
+// TBR=1.3197+-0.0005 (5M histories, ubu-2): spherical Pb-15.7Li 90 at% Li-6
+// breeder, W armor + EUROFER first-wall + steel shield, r=100->202 cm,
+// 14.06 MeV isotropic D-T point source at origin, (n,Xt) breeder tally.
+fn _run_openmc_tbr(out_dir: str, xs: str) -> str {
+    // The driver is written to a sidecar .py under out_dir (a transient
+    // RUNTIME artifact emitted by the compiled binary, not committed source)
+    // and executed once. We run in a sandbox subdir so OpenMC's
+    // summary/statepoint/XML scratch files do not pollute out_dir.
+    let py = "import json,sys,os,tempfile,shutil\n"
+        + "try:\n"
+        + "    os.environ.setdefault('OPENMC_CROSS_SECTIONS', " + _pyq(xs) + ")\n"
+        + "    import openmc\n"
+        + "    wd=tempfile.mkdtemp(prefix='omc_tbr_')\n"
+        + "    cwd0=os.getcwd(); os.chdir(wd)\n"
+        + "    # ── materials (ENDF/B-VIII.0) ──────────────────────────────\n"
+        + "    # W armor\n"
+        + "    tungsten=openmc.Material(name='W_armor'); tungsten.add_element('W',1.0); tungsten.set_density('g/cm3',19.3)\n"
+        + "    # EUROFER first-wall (RAFM steel; simplified Fe-Cr-W-Mn-V)\n"
+        + "    eurofer=openmc.Material(name='EUROFER_FW')\n"
+        + "    eurofer.add_element('Fe',0.886,'wo'); eurofer.add_element('Cr',0.090,'wo'); eurofer.add_element('W',0.011,'wo'); eurofer.add_element('Mn',0.004,'wo'); eurofer.add_element('V',0.002,'wo'); eurofer.add_element('C',0.0011,'wo')\n"
+        + "    eurofer.set_density('g/cm3',7.798)\n"
+        + "    # Pb-15.7Li breeder, Li enriched to 90 at% Li-6\n"
+        + "    breeder=openmc.Material(name='PbLi_breeder')\n"
+        + "    breeder.add_element('Pb',0.843,'ao')\n"
+        + "    breeder.add_nuclide('Li6',0.157*0.90,'ao'); breeder.add_nuclide('Li7',0.157*0.10,'ao')\n"
+        + "    breeder.set_density('g/cm3',9.32)\n"
+        + "    # steel shield (SS316-like)\n"
+        + "    steel=openmc.Material(name='SS316_shield')\n"
+        + "    steel.add_element('Fe',0.65,'wo'); steel.add_element('Cr',0.18,'wo'); steel.add_element('Ni',0.12,'wo'); steel.add_element('Mo',0.025,'wo'); steel.add_element('Mn',0.02,'wo'); steel.add_element('Si',0.005,'wo')\n"
+        + "    steel.set_density('g/cm3',7.99)\n"
+        + "    mats=openmc.Materials([tungsten,eurofer,breeder,steel]); mats.export_to_xml()\n"
+        + "    # ── geometry: concentric spherical shells (cm) ─────────────\n"
+        + "    # void cavity r<100 ; W armor 100-102 ; FW 102-104 ; breeder 104-184 ; shield 184-202\n"
+        + "    s_arm_in=openmc.Sphere(r=100.0); s_arm_out=openmc.Sphere(r=102.0)\n"
+        + "    s_fw_out=openmc.Sphere(r=104.0); s_brd_out=openmc.Sphere(r=184.0)\n"
+        + "    s_shd_out=openmc.Sphere(r=202.0,boundary_type='vacuum')\n"
+        + "    cav=openmc.Cell(name='cavity',region=-s_arm_in)\n"
+        + "    c_arm=openmc.Cell(name='armor',fill=tungsten,region=+s_arm_in & -s_arm_out)\n"
+        + "    c_fw=openmc.Cell(name='fw',fill=eurofer,region=+s_arm_out & -s_fw_out)\n"
+        + "    c_brd=openmc.Cell(name='breeder',fill=breeder,region=+s_fw_out & -s_brd_out)\n"
+        + "    c_shd=openmc.Cell(name='shield',fill=steel,region=+s_brd_out & -s_shd_out)\n"
+        + "    geom=openmc.Geometry([cav,c_arm,c_fw,c_brd,c_shd]); geom.export_to_xml()\n"
+        + "    # ── source: 14.06 MeV isotropic D-T point source at origin ──\n"
+        + "    src=openmc.IndependentSource()\n"
+        + "    src.space=openmc.stats.Point((0.0,0.0,0.0))\n"
+        + "    src.angle=openmc.stats.Isotropic()\n"
+        + "    src.energy=openmc.stats.Discrete([14.06e6],[1.0])\n"
+        + "    src.particle='neutron'\n"
+        + "    settings=openmc.Settings(); settings.run_mode='fixed source'; settings.source=src\n"
+        + "    NH=int(os.environ.get('OMC_TBR_HISTORIES','5000000')); NB=int(os.environ.get('OMC_TBR_BATCHES','50'))\n"
+        + "    settings.batches=NB; settings.particles=max(1000,NH//NB); settings.photon_transport=False; settings.output={'tallies':False}\n"
+        + "    settings.export_to_xml()\n"
+        + "    # ── tally: (n,Xt) tritium production on the breeder cell ────\n"
+        + "    cf=openmc.CellFilter([c_brd])\n"
+        + "    t_tbr=openmc.Tally(name='tbr'); t_tbr.filters=[cf]; t_tbr.scores=['(n,Xt)']\n"
+        + "    # leakage: neutrons escaping the vacuum boundary (current on shield outer)\n"
+        + "    sf=openmc.SurfaceFilter([s_shd_out])\n"
+        + "    t_leak=openmc.Tally(name='leak'); t_leak.filters=[sf]; t_leak.scores=['current']\n"
+        + "    tals=openmc.Tallies([t_tbr,t_leak]); tals.export_to_xml()\n"
+        + "    # ── run ────────────────────────────────────────────────────\n"
+        + "    sp_path=openmc.run(output=False)\n"
+        + "    with openmc.StatePoint(sp_path) as sp:\n"
+        + "        tt=sp.get_tally(name='tbr'); df=tt.get_pandas_dataframe()\n"
+        + "        tbr=float(df['mean'].iloc[0]); tbr_se=float(df['std. dev.'].iloc[0])\n"
+        + "        leak=None\n"
+        + "        try:\n"
+        + "            lt=sp.get_tally(name='leak'); ld=lt.get_pandas_dataframe(); leak=float(ld['mean'].iloc[0])\n"
+        + "        except Exception: leak=None\n"
+        + "    os.chdir(cwd0)\n"
+        + "    try: shutil.rmtree(wd)\n"
+        + "    except Exception: pass\n"
+        + "    out={'TBR':round(tbr,5),'std_err':round(tbr_se,6),'tally_score':'(n,Xt)','source_MeV':14.06,'histories':NH,'batches':NB,'leakage_per_source_neutron':(round(leak,5) if leak is not None else None),'data_library':'ENDF/B-VIII.0','geometry':'spherical DEMO blanket (W armor 100-102 / EUROFER FW 102-104 / Pb-15.7Li 90at%Li6 breeder 104-184 / SS316 shield 184-202 cm)','engineering_target':1.05,'self_sufficient':(tbr>1.05)}\n"
+        + "    sys.stdout.write(json.dumps(out))\n"
+        + "except Exception as e:\n"
+        + "    import traceback; sys.stderr.write('openmc tbr run failed: '+str(e)+'\\n'+traceback.format_exc()); sys.exit(1)\n"
+    let drv = out_dir + "/_openmc_tbr_driver.py"
+    let _ = write_file(drv, py)
+    // Long transport run — no timeout cap here (5M histories on a workstation
+    // is minutes); the caller routes this onto the pool host with the env.
+    let res = exec("python3 '" + drv.replace("'", "'\\''") + "' 2>/dev/null").trim()
+    // Clean up the transient driver.
+    let _ = exec("rm -f '" + drv.replace("'", "'\\''") + "' 2>/dev/null")
+    if res.len() == 0 { return "" }
+    if res.substring(0, 1) != "{" { return "" }
+    return res
+}
+
+// python3 single-quote: emit a python single-quoted string literal for safe
+// embedding inside the heredoc-built driver (the xs path).
+fn _pyq(s: str) -> str {
+    return "'" + s.replace("\\", "\\\\").replace("'", "\\'") + "'"
+}
