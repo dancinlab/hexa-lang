@@ -86,3 +86,13 @@
 @D discovery_log := "discoveries persist at .discoveries/<slug>.tape" :: workflow [required active]
   do   = "log every kick/gap discovery to `.discoveries/<slug>.tape` — id · seed · verdict-tier-target"
   dont = "discard discovery output · paraphrase findings · skip linking discovery → next-cycle claim"
+
+@D h_verify_auto_absorb := "hexa verify auto-folds atom to atlas on success — ambient, not ceremony" :: governance [required active]
+  do   = "successful 🔵/🟢 verify auto-folds the atom to atlas (embedded.gen.hexa SSOT) by default"
+  do   = "verify is the SINGLE canonical surface — no separate `atlas register` ceremony needed post-verify"
+  dont = "ship a verify pass that doesn't auto-fold on success · require manual `atlas register` after verify"
+
+@D h_audit_axis_form := "domain audits = `hexa verify --<axis> <domain>` subcommand form (e.g. --blue-max)" :: governance [required active]
+  do   = "future domain-level audits land as `hexa verify --<axis> <domain>` — single CLI surface, no new verbs"
+  do   = "audit output = tier matrix + pair-coverage + atlas-absorb side-effect (ambient via auto-absorb)"
+  dont = "spawn new top-level `hexa <audit>` verbs · split audit from verify · split atlas absorb from verify"
