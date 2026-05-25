@@ -402,8 +402,8 @@ axis 의 첫 설계서.
   - `[F-DAEMON-4-2] atlas fold → cache flushed → re-BUILT (no stale HIT) PASS` ← F-DAEMON-4 핵심
   - `[F-DAEMON-4-3] 안정화 후 HIT 복귀 (flush = one-shot edge) PASS`
 - **daemon log 증거**: `hexa daemon: atlas SSOT changed (bb8058b8... -> 19538e40...) — flushing in-memory cache (1 entries)` (수동 repro 로그).
-- **R1/R2/R3 회귀 무**: r1 4/4 · r2 3/3 · r3 3/3 PASS (atlas-flush 삽입에도 기존 falsifier 불변).
-- **gate**: `hexa parse self/main.hexa` + `hexa parse tests/m_daemon_r4_atlas_flush_test.hexa` clean. `hexa build self/main.hexa` clang green (warning만).
+- **회귀 (rebased onto origin/main = M13 codegen 머지 후)**: r4_atlas_flush 3/3 · r4_codegen (M13) 3/3 · r2 3/3 · r1 4/4 PASS. **r3 R3-1b/1c 는 PRE-EXISTING FAIL** — origin/main (M14 미포함) 에서도 동일 재현 (M13 의 uid-scoped socket `/tmp/hexa-daemon-<uid>.sock` 변경이 R3 autospawn 의 고정 socket-path 기대와 충돌 → fork-mode 전환). **M14 와 무관** (M14 는 serve-loop atlas check + throttle env 만; socket path resolution 미변경). M13 follow-up 으로 추적 필요.
+- **gate**: `hexa parse self/main.hexa` + `hexa parse tests/m_daemon_r4_atlas_flush_test.hexa` clean. `hexa build self/main.hexa` clang green (warning만). rebase 충돌 해소 = RFC §12 표 (M13 R4-codegen 행 + M14 R4-atlas-flush 행 공존, R5 todo 에서 (c) 제거).
 
 ### 다음 (R4 잔여)
 
