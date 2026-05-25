@@ -1,0 +1,9 @@
+# A5 HEXA-LANG math.NT verify-native recompute (verbatim hexa verify stdout)
+# paper: 1011.6160 Shevelev — On perfect and near-perfect numbers (math.NT); 1309.0906 Dris odd-perfect
+# cmd  : POOL_DISABLE=1 hexa verify --expr is_perfect 496 1  (HEAD driver #1153, mini arm64)
+# date : 2026-05-26
+----------------------------------------------------------------------------
+verify --expr is_perfect(496)=1
+  calc   = 1  == expected 1
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+  absorb = · already in atlas — idempotent skip (default · @D g69)

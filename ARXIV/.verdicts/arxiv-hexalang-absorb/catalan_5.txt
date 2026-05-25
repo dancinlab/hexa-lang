@@ -1,0 +1,9 @@
+# A5 HEXA-LANG math.NT verify-native recompute (verbatim hexa verify stdout)
+# paper: 0502532 Callan — Some identities for the Catalan and Fine numbers (math.CO/NT)
+# cmd  : POOL_DISABLE=1 hexa verify --expr catalan 5 42  (HEAD driver #1153, mini arm64)
+# date : 2026-05-26
+----------------------------------------------------------------------------
+verify --expr catalan(5)=42
+  calc   = 42  == expected 42
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+  absorb = · already in atlas — idempotent skip (default · @D g69)
