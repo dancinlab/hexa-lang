@@ -1226,6 +1226,30 @@ void hxlcl_chkstk(void) __asm__("___chkstk_darwin");
 __attribute__((naked,used)) void hxlcl_chkstk(void){ __asm__ volatile(
   "mov x17, sp\n mov x16, x9\n 1: subs x16, x16, #0x1000\n b.lt 2f\n"
   " sub x17, x17, #0x1000\n ldr xzr, [x17]\n b 1b\n 2: ret\n"); }
+// RUNTIME tail (cycle 86): native setjmp/longjmp pair (Darwin arm64) — drops
+// the LAST libc extern (_longjmp). Saves callee-saved GPRs (x19-x28), fp/lr,
+// sp, and FP callee-saved (d8-d15) into the 192-byte jmp_buf slot the codegen
+// allocates (uses 168 B). hxlcl_setjmp is GLOBAL — compiled programs' try
+// blocks emit `bl _hxlcl_setjmp` (codegen arm64_darwin.hexa), paired with
+// hexa_throw's hxlcl_longjmp. csinc makes longjmp(buf,0) return 1.
+int hxlcl_setjmp(void *buf) __asm__("_hxlcl_setjmp");
+__attribute__((naked,used,returns_twice)) int hxlcl_setjmp(void *buf) { __asm__ volatile(
+  "stp x19, x20, [x0, #0]\n  stp x21, x22, [x0, #16]\n"
+  "stp x23, x24, [x0, #32]\n stp x25, x26, [x0, #48]\n"
+  "stp x27, x28, [x0, #64]\n stp x29, x30, [x0, #80]\n"
+  "mov x9, sp\n str x9, [x0, #96]\n"
+  "stp d8,  d9,  [x0, #104]\n stp d10, d11, [x0, #120]\n"
+  "stp d12, d13, [x0, #136]\n stp d14, d15, [x0, #152]\n"
+  "mov w0, #0\n ret\n"); }
+void hxlcl_longjmp(void *buf, int val) __asm__("_hxlcl_longjmp");
+__attribute__((naked,used,noreturn)) void hxlcl_longjmp(void *buf, int val) { __asm__ volatile(
+  "ldp x19, x20, [x0, #0]\n  ldp x21, x22, [x0, #16]\n"
+  "ldp x23, x24, [x0, #32]\n ldp x25, x26, [x0, #48]\n"
+  "ldp x27, x28, [x0, #64]\n ldp x29, x30, [x0, #80]\n"
+  "ldr x9, [x0, #96]\n mov sp, x9\n"
+  "ldp d8,  d9,  [x0, #104]\n ldp d10, d11, [x0, #120]\n"
+  "ldp d12, d13, [x0, #136]\n ldp d14, d15, [x0, #152]\n"
+  "cmp w1, #0\n csinc w0, w1, wzr, ne\n ret\n"); }
 // getuid(2) — SYS_GETUID=24. Like getpid, this BSD syscall cannot fail
 // (no errno / carry-flag path), so the plain _hxlcl_syscall1 trap (not the
 // _cf carry-flag variant) is correct. Drops the libc `_getuid` extern that

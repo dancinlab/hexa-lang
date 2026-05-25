@@ -1934,10 +1934,11 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
                          _arm64_op_reg("sp"),
                          _arm64_op_label("#" + to_string(off)),
                          "try_setjmp: &jbuf[" + to_string(try_slot_idx) + "]"))
-        // libc setjmp — Mach-O sym is `_setjmp` (auto-prefixed by _fmt_label).
-        // We pass the C name; _fmt_label injects the Darwin `_` prefix.
-        buf.push(_arm64_instr1("bl", _arm64_op_label("setjmp"),
-                         "try_setjmp: call libc _setjmp"))
+        // RUNTIME tail (cycle 86): hexa-native setjmp — `_hxlcl_setjmp` in
+        // runtime.c (paired with hexa_throw's hxlcl_longjmp). Saves into the
+        // same 192-byte jmp_buf slot. _fmt_label injects the Darwin `_` prefix.
+        buf.push(_arm64_instr1("bl", _arm64_op_label("hxlcl_setjmp"),
+                         "try_setjmp: call native _hxlcl_setjmp"))
         // Branch to catch on nonzero return. cbnz uses w0 (the C int).
         let catch_lab = _arm64_block_label(modhash, fname, s.target_block_else)
         buf.push(_arm64_instr2("cbnz", _arm64_op_reg("w0"),
