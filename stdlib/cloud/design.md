@@ -110,11 +110,33 @@ The remote exit code is recovered from a `; echo __CLOUD_RC__=$?` marker line.
 ## Cycle A deliverable
 
 - `cloud.hexa` — library: `CloudResult` struct; `cloud_run` / `cloud_nohup`
-  / `cloud_poll` and their `*_opts` variants (extra `ssh_opts: [str]`);
-  `cloud_lint_argv`; `_shq` / `_join_argv` / marker helpers.
-- `cloud_cli.hexa` — standalone CLI (`run` / `nohup` / `poll` / `help` /
-  `version`; `--port` / `--insecure` connection flags).
+  / `cloud_poll` / `cloud_tail_cmd` and their `*_opts` variants (extra
+  `ssh_opts: [str]`); `cloud_lint_argv`; `_ssh_cmd` / `_shq` / `_join_argv`
+  / marker helpers.
+- `cloud_cli.hexa` — standalone CLI (`run` / `nohup` / `poll` / `tail` /
+  `help` / `version`; `--port` / `--insecure` connection flags).
 - `README.md`, `design.md` (this file).
+
+### Decision 8 — `cloud tail` streams via `exec_replace` + remote `sed -u`
+
+**picked**: `cloud tail` builds `ssh host 'tail -F -n +1 LOG | sed -E -un
+"/until/{p;q}; /grep/p"'` and runs it through `exec_replace` (execvp /bin/sh).
+**rationale**:
+- The harness Monitor attaches to a command's stdout. exec_replace makes the
+  hexa process *become* the ssh pipeline, inheriting stdout, so each line
+  streams live with zero buffering and the process exits when the pipe closes.
+- `exec_stream(cmd, on_line)` would be the obvious fit, but its callback
+  fn-pointer path **SIGSEGVs in a `hexa build` standalone binary** (works only
+  in the bootstrapped `hexa` driver) — logged as an upstream gap. exec_replace
+  has no callback and is the same primitive `hexa lsp` uses for stream
+  passthrough.
+- The remote consumer is `sed -E -un`, not `awk`: the stock pod `awk` is mawk,
+  which **block-buffers its stdin** behind a following `tail -F` and never
+  emits until EOF (and `stdbuf` cannot fix it — mawk owns its read buffer).
+  `sed -u` is line-buffered. Verified live on a Linux pod (mawk 1.3.4).
+- terminal-first program (`/until/{p;q}` before the filter) means a terminal
+  line always surfaces and stops the stream; the default `until` ERE covers a
+  clean finish AND crash signatures so a watch is never silent on a crashloop.
 
 ## Cycle B-2 — `runpod` provider (GraphQL pod lifecycle)
 

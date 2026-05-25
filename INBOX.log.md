@@ -2,7 +2,14 @@
 
 Append-only history sister of `INBOX.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
-## 2026-05-25T17:58Z — 🔌 `hexa cloud {run,exec,nohup,…}` 가 vast 등록 ssh 키를 안 씀 → 전 vast pod 도달 불가 (silent auth-fail) · from demiurge RTSC
+## 2026-05-26T04:30Z — 🐛 `exec_stream(cmd, on_line)` SIGSEGV in a `hexa build` standalone binary (callback fn-pointer path) · from this-session cloud-tail
+
+> **severity: medium** — `exec_stream` is the documented streaming primitive (per-line callback, runtime `_IOLBF` flush). It works in the bootstrapped `hexa` driver but **segfaults immediately (exit 139)** in any program compiled with `hexa build` — even a trivial `exec_stream("printf 'a\\nb\\n'", on_line)`. Discovered while building `hexa cloud tail`; worked around with `exec_replace` (no callback) so the verb shipped, but the gap stands. Same family as `exec_argv not codegen-wired`.
+
+- [ ] **repro**: `printf 'fn f(s){print(s)}\nfn main(){let _=exec_stream("printf x\\\\n",f)}\n' > /tmp/es.hexa; hexa build /tmp/es.hexa -o /tmp/es && /tmp/es` → exit 139, no output. `exec_replace("printf x\n")` in the same harness streams fine (exit 0).
+- [ ] **likely cause**: codegen emits `hexa_exec_stream(cmd, <callback>)` (self/codegen.hexa:5932) passing a hexa fn value as the C callback arg; the standalone-build runtime link (vs the self-host driver build) maps that fn-pointer differently → bad call. Driver build works because its runtime/codegen pairing differs.
+- [ ] **impact**: any standalone CLI that wants live line-streaming of a subprocess must use `exec_replace` (process-replacing, single subprocess only — no post-stream logic) or `exec_capture` (buffers, no live stream). `exec_stream`'s callback model is unavailable in shipped `hexa build` binaries.
+- [ ] **workaround in use** (`stdlib/cloud/cloud tail`): build the ssh pipeline string and `exec_replace` it (execvp /bin/sh), inheriting stdout. Fine for a leaf streamer; not a fix.
 
 > **severity: high** — RTSC 캠페인 세션에서 `hexa cloud run/exec/nohup/poll/copy-to/copy-from` 이 vast.ai pod 에 대해 **전부** `[cloud] cloud_run: no exit-code marker — ssh transport failure or remote shell died` 로 실패. el-ph 결과 수확·pod hygiene(orphan 정리) 전면 차단되어, 부득이 raw ssh 우회로 진행함(아래). d8 (Vast 발견 → INBOX).
 

@@ -28,6 +28,8 @@ fn _cloud_help() {
     println("  cloud nohup     <host> <logfile> [conn] [--env K=V] [--early-life-check N] -- <argv...>   background argv, print remote pid")
     println("                                                         --early-life-check N: after launch, sleep N s + poll once; exit 3 if pid already DIED (silent class-1 launch failure)")
     println("  cloud poll      <host> <pid> [conn]                    exit 0 if remote pid alive, else 1")
+    println("  cloud tail      <host> <logfile> [conn] [--grep RE] [--until RE]   live-stream a remote log (Monitor bridge)")
+    println("                                                         tail -F | sed -u: print --grep lines, print+quit on --until (default: JOB DONE|crash); follows forever if --until ''")
     println("  cloud watch     <host> <pid> [conn] [--interval N] [--max-wait S] [--then-down <id> [--provider P]]")
     println("                                                         loop poll until pid dies (exit 0) / max-wait (124); optional teardown")
     println("  cloud ssh-port  <id> [--provider P]                    print live ssh host:port of a pod (vast|runpod)")
@@ -56,6 +58,12 @@ fn _cloud_help() {
     println("                  it already DIED (a launcher that execs and exits at")
     println("                  once) so the caller can tear the pod down instead of")
     println("                  burning a watchdog timeout on a job that never ran.")
+    println("  --grep <re>     (tail only) stream only lines matching the awk ERE")
+    println("                  <re>; empty / absent = every line.")
+    println("  --until <re>    (tail only) print + stop on the first line matching")
+    println("                  the awk ERE <re>; default covers JOB DONE + crash")
+    println("                  signatures (Traceback|Killed|OOM|...). Pass '' to")
+    println("                  follow forever (use a persistent Monitor then).")
     println("  --resume        (copy-from) rsync --partial --append-verify; resume")
     println("                  an interrupted large-file pull (needs rsync >= 3.0).")
     println("  --recursive,-r  (copy-to) copy a directory tree (scp -r).")
@@ -117,6 +125,10 @@ fn _ssh_opts_cli(av: [str], start: int) -> [str] {
         } else if t == "--early-life-check" {
             // nohup-verb early-death window (handled by _early_life_cli) —
             // skip flag+value here so it never lands in ssh_opts.
+            i = i + 2
+        } else if t == "--grep" || t == "--until" {
+            // tail-verb filter / terminal regexes (handled by _flag_val) —
+            // skip flag+value so a regex value never lands in ssh_opts.
             i = i + 2
         } else {
             i = i + 1
@@ -584,6 +596,11 @@ fn _cloud_early_life_check(host: str, ssh_opts: [str], pid: int, sec: int) -> in
     return 3
 }
 
+// Default --until ERE: terminal markers covering BOTH a clean finish and the
+// crash signatures, so a watch never stays silent through a crashloop ("silence
+// is not success"). Operators pass --until '' to follow forever instead.
+let _CLOUD_TAIL_UNTIL_DEFAULT = "JOB DONE|JOB FAILED|RESULT_DONE|Traceback|Killed|CUDA out of memory|OOMKilled|Segmentation fault|FATAL"
+
 fn main() {
     let av = args()
     let mut si = -1
@@ -592,7 +609,7 @@ fn main() {
     while i < len(av) {
         let t = av[i]
         if si < 0 {
-            if t == "rent" || t == "up" || t == "down" || t == "destroy" || t == "list" || t == "status" || t == "preflight" || t == "watchdog" || t == "run" || t == "exec" || t == "nohup" || t == "poll" || t == "watch" || t == "ssh-port" || t == "copy-to" || t == "copy-from" || t == "orphans" || t == "reconcile" || t == "adopt" || t == "forget" || t == "help" || t == "--help" || t == "-h" || t == "version" || t == "--version" || t == "-v" {
+            if t == "rent" || t == "up" || t == "down" || t == "destroy" || t == "list" || t == "status" || t == "preflight" || t == "watchdog" || t == "run" || t == "exec" || t == "nohup" || t == "poll" || t == "tail" || t == "watch" || t == "ssh-port" || t == "copy-to" || t == "copy-from" || t == "orphans" || t == "reconcile" || t == "adopt" || t == "forget" || t == "help" || t == "--help" || t == "-h" || t == "version" || t == "--version" || t == "-v" {
                 si = i
                 sub = t
             }
@@ -608,7 +625,7 @@ fn main() {
         return
     }
     if sub == "version" || sub == "--version" || sub == "-v" {
-        println("hexa cloud 0.2.3 — watch (poll-loop + teardown) · ssh-port verb · copy --verify-sha (sha256) · [0.2.2: env/resume/-r/fail-tail]")
+        println("hexa cloud 0.2.4 — tail verb (live remote-log stream → Monitor bridge) · [0.2.3: nohup --early-life-check · watch · ssh-port · copy --verify-sha]")
         return
     }
     if sub == "rent" || sub == "up" {
@@ -767,6 +784,38 @@ fn main() {
             exit(0)
         }
         println("[cloud] pid " + str(pid) + " DEAD")
+        exit(1)
+    }
+    if sub == "tail" {
+        // Live-stream a remote logfile to stdout so a harness (Monitor) can
+        // attach to a remote job's progress with no polling — the canonical
+        // bridge for `@D g57` ("attach Monitor to the LOG"). The remote
+        // `tail -F | awk` does the grep filter + terminal-exit.
+        //
+        // We exec_replace() (execvp /bin/sh -c) rather than exec_stream():
+        // the hexa process BECOMES the ssh pipeline, inheriting this stdout
+        // fd, so each line reaches the local end live with zero buffering and
+        // the process simply exits when the pipeline ends (until-match closes
+        // the pipe → tail SIGPIPE → ssh returns). exec_stream's callback
+        // fn-pointer path segfaults in a `hexa build` standalone binary
+        // (upstream gap, logged to INBOX) — exec_replace has no callback and
+        // is the same primitive `hexa lsp` uses for clean stream passthrough.
+        if si + 2 >= len(av) {
+            println("[cloud] tail: usage — cloud tail <host> <logfile> [--port N] [--insecure] [--grep RE] [--until RE]")
+            exit(2)
+        }
+        let host = av[si + 1]
+        let logfile = av[si + 2]
+        let ssh_opts = _ssh_opts_cli(av, si + 3)
+        let grep_re = _flag_val(av, si + 3, "--grep", "")
+        // Absent --until → default terminal set; explicit `--until ''` → empty
+        // (follow forever). _flag_val returns the literal value when present,
+        // so `--until ''` yields "" and disables the terminal-exit.
+        let until_re = _flag_val(av, si + 3, "--until", _CLOUD_TAIL_UNTIL_DEFAULT)
+        let cmd = cloud_tail_cmd_opts(host, ssh_opts, logfile, grep_re, until_re)
+        let _ = exec_replace(cmd)
+        // exec_replace only returns on execvp failure (no /bin/sh) — surface it.
+        println("[cloud] tail: exec_replace failed — could not spawn ssh pipeline")
         exit(1)
     }
     if sub == "watch" {

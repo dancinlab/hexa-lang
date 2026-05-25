@@ -151,6 +151,7 @@ runpod_terminate_unless(api_key, pod.pod_id, keep)
 | `pod_terminate(_, save_pod)` | `runpod_terminate_unless(api_key, id, skip)`|
 | `corpus_build_*`             | `cloud_run(host, argv)`                      |
 | `train_launch`               | `cloud_nohup(host, argv, logfile)`          |
+| `train_progress` (Monitor)   | `cloud tail <host> <log>` (→ exec_replace)  |
 | `result_pull`                | `cloud_copy_from(host, remote, local)`      |
 | ssh transport / opts         | `cloud_run_opts` + `runpod_pod_opts(port)`  |
 
@@ -166,7 +167,37 @@ hexa run stdlib/cloud/cloud_cli.hexa run       root@1.2.3.4 --port 19241 --insec
 hexa run stdlib/cloud/cloud_cli.hexa copy-to   root@1.2.3.4 ./train.py /workspace/train.py --port 19241 --insecure
 hexa run stdlib/cloud/cloud_cli.hexa copy-from root@1.2.3.4 /workspace/result.json ./result.json --port 19241 --insecure
 hexa run stdlib/cloud/cloud_cli.hexa poll      gpu-pod-1 12345
+hexa cloud tail gpu-pod-1 /workspace/train.log               # live-stream a remote log
+hexa cloud tail gpu-pod-1 /workspace/train.log --grep 'step='  # filter to progress lines
 ```
+
+### `cloud tail` — live remote-log stream (Monitor bridge)
+
+`cloud tail <host> <logfile>` follows a remote log over ssh and forwards each
+line to local stdout in real time — the canonical way to wire a remote job's
+progress into a harness Monitor (commons `@D g57`, "attach Monitor to the
+LOG") with **no polling**:
+
+```
+hexa cloud tail   →  ssh host 'tail -F -n +1 LOG | sed -E -un "/until/{p;q}; /grep/p"'
+   (exec_replace)        │ replay+follow      │ line-buffered: print, quit on terminal
+   inherits stdout  ◄────┘ each line ─────────┘
+```
+
+- `--grep <ere>` streams only matching lines (default: all).
+- `--until <ere>` prints then **stops** on the first terminal line; the
+  default covers a clean finish **and** crash signatures
+  (`JOB DONE|Traceback|Killed|CUDA out of memory|…`) so a watch never stays
+  silent through a crashloop. `--until ''` follows forever (pair with a
+  persistent Monitor).
+- The remote consumer is `sed -E -un`, not `awk`: a stock pod's `awk` is
+  **mawk**, which block-buffers its stdin behind a following `tail -F` and
+  stalls (and `stdbuf` cannot fix it — mawk owns its read buffer); `sed -u`
+  is line-buffered. The verb runs via `exec_replace` (execvp) so the process
+  inherits stdout and streams with zero buffering.
+
+Pairs with `nohup --early-life-check` — early-life catches a launch that dies
+in the first seconds; `tail` watches the whole run after it survives that.
 
 ## Compared to the nearest tools
 
