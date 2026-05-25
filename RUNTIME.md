@@ -623,6 +623,44 @@ repr floor remains." NOT blocked at arithmetic (de-risked). Campaign continues
 per-op, fixpoint-verified, event-driven — number-parse family (atof #1201 ·
 atoll/atoi #1205) was the warm-up; arithmetic core is next.
 
+### 2026-05-26 — `.c none` arithmetic-core PRECISE BLOCKER (rt_sub attempt FAILED build — codegen typed→HexaVal-return boxing prerequisite)
+
+First arithmetic-core op attempt (`hexa_sub` → hexa `rt_sub`, full-polymorphic:
+`type_of` dispatch + bool-coerce + typed `(a as int) - (b as int)` native isub +
+throw) was authored + built on mini (branch `runtime-arith-sub-2026-05-26`,
+NOT merged). Build result (the fixpoint/caution gate caught it):
+- aprime_cc itself **BUILT** (rt_sub links fine, 1281800 B, ≤5 externs preserved)
+- but **smoke FAILED** — aprime_cc emitted NO `.s` when compiling a test program.
+  Cause: aprime_cc's own codegen does subtraction → calls rt_sub → CRASH mid-
+  compile → no output. (Gate worked: nothing merged, shared build safe.)
+
+**Precise root cause — a `-> HexaVal` fn does NOT box a bare typed-scalar return.**
+The arithmetic escape from operator-circularity is `(a as int) - (b as int)` →
+native `isub` (not hexa_sub), yielding a BARE int64. My rt_sub was `-> HexaVal`
+and did `let r: int = …; return r` — every existing `-> HexaVal` rt_ fn returns an
+already-HexaVal value (out/acc/v), NONE returns a bare typed scalar, so the bare
+int didn't box → garbage HexaVal → aprime_cc crash. NOTE: this is NOT a codegen
+gap — `-> int` / `-> float` TYPED-return fns DO box correctly (precedent:
+`rt_isalnum -> bool`, `rt_atoll -> int`). The bug was specifically a `-> HexaVal`
+fn returning a bare native scalar.
+
+**Two viable shapes (next debug cycle picks one):**
+1. **rt_eq pattern (works, but marginal for arithmetic):** keep the DISPATCH
+   (bool-coerce + tag-checks + throw) in the C `hexa_sub` shim; move only the
+   per-branch arithmetic to TYPED hexa fns `rt_sub_int(a,b)->int` /
+   `rt_sub_float(a,b)->float` (these box on return — proven). LOW-risk, fixpoint-
+   safe (native int/float subtract == the C body), but .c barely shrinks (the
+   dispatch shell is the bulk).
+2. **full dispatch-in-hexa (real .c-none, harder):** move the whole hexa_sub
+   (dispatch + branches + throw) to hexa. Needs the polymorphic result boxed —
+   either return via the typed-branch helpers (call rt_sub_int/float and return
+   their HexaVal) so no bare-scalar return ever occurs, OR a codegen `hexa_box`
+   of a typed scalar. This is the shape that actually empties the C body.
+So the arithmetic core is portable (not a codegen gap); the open question is
+shape-2's boxing of the polymorphic return. warm-up number-parse #1201/#1205
+avoided it (rt_atof delegates to an existing HexaVal fn; rt_atoll is `-> int`
+typed-return which boxes).
+
 ### 2026-05-26 — Phase-1 doc-lag reconciliation (88 Tier-A boxes → `[x]`)
 
 `/cycle` (inline) caught a doc-content-stale gap: RUNTIME.md was git-fresh
