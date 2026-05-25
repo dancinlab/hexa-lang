@@ -475,3 +475,12 @@ Append-only history sister of `TECS-L.md`. Each entry starts with `## <ISO times
   - CN1 amicable aliquot 고정점 아님 (aliquot(220)=284≠220) · CN2 quasi-perfect σ=2n+1 [1,50] 공집합 (σ(12)=28≠25) · CN3 3-perfect 120 ≠ abundancy-2 (σ(120)=360≠240) · CN4 n·φ=σ off{1,6} n=12 실패 (σ(12)=28≠48) · CN4b n·φ=σ perfect 28 실패 (σ(28)=56≠336) · CN5 μ 6-주기 아님 (μ(12)=0≠1) · CN6 perfect≠superperfect (σ(σ(6))=28≠12)
   - 전부 exact 정수산술 🔴 (tolerance 0). M10 (σφ=nτ⟺{1,6}) + F6 (D≠0 off {1,6}) 인용 (재실행 안 함) — n=6 정체성 EXCLUSIVE 확정.
   - 14 verdict (7 truth 🔵 + 7 falsifier 🔴) → `.verdicts/tecs-l-closed-neg-miner/` · `CLAIMS.tape` slug=tecs-l-closed-neg-miner (8 @C). resumed `/tmp/wt-tecs-f5` (prior 500-death, 0 prior commit) → fetch+merge origin/main clean.
+
+## 2026-05-26 · 축 A · MF8 MODFORM paper SHIPPED (dim≠genus + n=6 non-lift)
+- [x] MF8 — MODFORM 축(MF1-MF7)을 **두 사전등록 closed-negative** 둘레로 집약한 arxiv-style 논문 출간 (paper_on_discovery · paper_negative_ok). g51 충족 = 11페이지 + fal.ai figure 1장.
+  - 발견 1 (MF4 dim≠genus 🔴): hexa `dim_cusp_forms(N,2)` 가 고전 정리 dim S₂(Γ₀(N))=genus(X₀(N)) 를 실현 안 함 — N∈[1,30] sweep 에서 **20/30 mismatch** (N=11 hexa=0/고전=1; N=30 hexa=6/고전=3; 소-N 우연만 일치). 사전등록 falsifier 기각. **수학 거짓 아니라 hexa 함수 정의 갭** (업스트림 PR #1083). gamma0_genus 는 MF3 가 22/22 0-mismatch 로 신뢰성 확보 → fault 가 dim_cusp_forms 에 국한됨.
+  - 발견 2 (F7 n=6 non-lift 🔴): σφ=nτ⟺{1,6} 는 Γ₀-레벨 산술-항등식 현상으로 modular-curve 탑(Γ₀→Γ₁→Γ(N)) 으로 **lift 안 됨**. Γ₁ idx=ψφ/2, X(N) idx=N·Γ₁ 는 N 에 대해 smooth/multiplicative — n=6 은 generic 값 (12,72) 에 앉음, peak/특이성/collapse 없음. 사전등록 falsifier 기각. 10/10 정수 component 🔵 + 조립 index 🟡 citation.
+  - 두 발견 모두 사전등록 + 측정 + closed-negative → **paper_significance 충족** (falsifier + 실측 + 반증). 검증된 Γ₀(N) backdrop(MF1-MF7: index/cusps/genus/dim/AL) 위에 안착.
+  - 산출물: `PAPER/tecs-l-modform-n6-nonlift/` (main.tex·main.pdf 11p·references.bib·Makefile·README.md ko·figures/fig01_lift.png fal gpt-image-2). §abstract·§1 statement·§2 method·§3 verification·§4 finding(2 closed-neg)·§5 caveats·§6 related·부록 A(30-N dim/genus 표)·B(Γ₁/X index 표)·C(raw verdict transcript ASCII-sanitized)·D(Γ₀(N) backdrop sweeps).
+  - `CLAIMS.tape` slug=tecs-l-modform-n6-nonlift 3 @C (paper + 2 falsifier) → verdict ptr `.verdicts/tecs-l-modform-{dim-genus,other-curves}/`. TECS-L.md MF8 [ ]→[x].
+  - 격리 worktree `/tmp/wt-mf8` (branch `tecs-l-mf8-modform-paper-2026-05-26`). 형제 VERIFY-KIT-V8 (`/tmp/wt-vkit-v8`) 동시 진행 — verify_cli 미접촉 (paper/docs only).
