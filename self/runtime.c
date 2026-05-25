@@ -1549,6 +1549,22 @@ static void __attribute__((noinline, noreturn)) hxlcl_longjmp(void *buf, int val
     (void)val;
     __builtin_longjmp((void **)buf, 1);
 }
+// getuid + the OOB-trace backtrace stubs (arm64-darwin defines these via the
+// raw-trap / hexa-native-stub path; mirror on Linux). backtrace is a no-op
+// stub on both platforms (a self-host binary has no frame walker); getuid
+// routes through libc.
+static int __attribute__((noinline)) hxlcl_getuid(void) {
+    return (int)getuid();  // <unistd.h> included above
+}
+static int __attribute__((noinline)) hxlcl_backtrace(void **buf, int sz) {
+    (void)buf; (void)sz;
+    return 0;  // 0 frames captured — hexa-native stub, no real unwinder
+}
+static void __attribute__((noinline)) hxlcl_backtrace_symbols_fd(void *const *buf, int sz, int fd) {
+    (void)buf; (void)sz;
+    static const char msg[] = "(backtrace unavailable — hexa-native stub)\n";
+    (void)write(fd, msg, sizeof(msg) - 1);  // libc write; <unistd.h>
+}
 #endif  /* darwin-arm64 raw-trap / linux libc */
 // cycle 6: time/term/mach forward decls — bodies after #include
 static int hxlcl_time(int *t);
