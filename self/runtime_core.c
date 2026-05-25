@@ -7653,6 +7653,19 @@ HexaVal hexa_fma(HexaVal a, HexaVal b, HexaVal c) {
                         hexa_float(__hx_to_double(c)));
 }
 #endif
+// Bootstrap bridge for the __raw_idiv/__raw_imod codegen primitives. The NEW
+// codegen.hexa lowers these inline (hexa_int(HX_INT/HX_INT)), but a PRE-builtin
+// bootstrap transpiler (self/native/hexat before regen) doesn't recognize them
+// and emits a bare C call — these macros let that call resolve during the build
+// transition. Identical expansion to the codegen branch; harmless (unreferenced)
+// once the bootstrap is regenerated. Same class as the hexa_add ROI-37 macro.
+#ifndef __raw_idiv
+#define __raw_idiv(a, b) hexa_int(HX_INT(a) / HX_INT(b))
+#endif
+#ifndef __raw_imod
+#define __raw_imod(a, b) hexa_int(HX_INT(a) % HX_INT(b))
+#endif
+
 // RUNTIME.md Step 4 .c-none arith core op 3: under HEXA_HAS_HEXA_RT_STDLIB
 // hexa_div delegates to hexa-source rt_div (stdlib/runtime/numeric.hexa). The
 // int divide there uses the __raw_idiv codegen escape (native HX_INT/HX_INT)
