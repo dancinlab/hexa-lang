@@ -87,10 +87,10 @@
 | 파일 | LOC | 운명 | 대체 |
 |---|---:|---|---|
 | `hexa_cc.c` | 13,308 | **완전 삭제** | `self/hexa_full.hexa` (self-hosted parser/lexer/typer) + native codegen (P7-7) 완료 시 |
-| `codegen_c2_v2.c` | 1,996 | **완전 삭제** | `self/codegen/` ARM64/x86_64 네이티브 백엔드 (ROI #162 P7-6a) |
-| `parser_v2.c` | 3,169 | **완전 삭제** | `self/parser.hexa` |
-| `lexer_v2.c` | 758 | **완전 삭제** | `self/lexer.hexa` |
-| `type_checker_v2.c` | 1,697 | **완전 삭제** | `self/type_checker.hexa` (포팅 필요) |
+| `codegen_c2_v2.c` | 1,996 | ✅ **삭제됨 (CANON M2)** | dead·unreferenced — 라이브 = `hexa_cc.c` |
+| `parser_v2.c` | 3,169 | ✅ **삭제됨 (CANON M2)** | `self/parser.hexa` |
+| `lexer_v2.c` | 758 | ✅ **삭제됨 (CANON M2)** | `self/lexer.hexa` |
+| `type_checker_v2.c` | 1,697 | ✅ **삭제됨 (CANON M2)** | `self/type_checker.hexa` |
 | `net.c` | 175 | **완전 삭제** | `self/rt/net.hexa` (Wave 4, `@syscall`) |
 | `hxblas_linux.c` | 672 | **@hot_kernel drop** | pure-hexa NEON/SVE kernel (ROI #139) |
 | `hxccl_linux.c` | 403 | **@hot_kernel drop** | pure-hexa MPI/gloo 대체 |
