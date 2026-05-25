@@ -3,6 +3,25 @@
 Append-only history sister of `TECS-L.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
 
+## 2026-05-25T18:30 — 축 B MR3 · abundancy σ(P)=2P 닫힌형 도출 (reasoned synthesis)
+
+- [x] **명제**: P = 2^{p-1}·M_p (M_p = 2^p−1 메르센 소수) ⟹ σ(P) = 2P
+- [x] **도출 (4단 초등 정수론)**:
+  - S1: σ multiplicative (gcd(a,b)=1 ⟹ σ(ab)=σ(a)σ(b))
+  - S2: gcd(2^{p-1}, M_p) = 1 (M_p 는 홀수, 2^{p-1} 는 2-멱)
+  - S3: σ(2^{p-1}) = (2^p−1)/(2−1) = 2^p−1 = M_p
+  - S4: σ(M_p) = M_p + 1 = 2^p (M_p 소수 가정)
+  - 결합: σ(P) = M_p · 2^p = (2^p−1)·2^p = 2·2^{p-1}·M_p = 2P ∎
+- [x] **7 완전수 anchor 표** (P_1..P_7, 새 산술 verify 없음 — 기존 🔵 인용만):
+  - P1=6 / 12 · P2=28 / 56 · P3=496 / 992 · P4=8128 / 16256 · P5=33550336 / 67100672 → 축 0 M6 (`.verdicts/tecs-l-hypotheses/abundancy_sigma*.txt`)
+  - P6=8589869056 / 17179738112 · P7=137438691328 / 274877382656 → MR2 (`.verdicts/tecs-l-mersenne-perfect/sigma_p{6,7}.txt`)
+  - 닫힌형 (2^p−1)·2^p 직접 계산이 7행 모두 일치 (검산표 verdict 동봉)
+- [x] verdict artifact 1 (reasoned-synthesis ASCII-only): `.verdicts/tecs-l-mersenne-abundancy-closed/abundancy_closed_form.txt`
+- [x] 문서 (Korean): `TECS-L/docs/mr3-abundancy-closed-form.md`
+- [x] CLAIMS 1 entry (method=synthesis · 🟢 reasoned · slug=tecs-l-mersenne-abundancy-closed)
+- [x] **정직한 범위**: 짝(even) 완전수만. Euler (1747) 역명제로 짝 완전수 완전 분류. 홀(odd) 완전수는 미해결 → MR7 🟠 별도
+- [x] cross-ref MR2 (P6/P7 σ 원자) · MR5 (자매 τ=2p 닫힌형) · MR6 (반례 M_11=2047, M_p 소수 가설 필요성)
+
 ## 2026-05-25T13:13 — 축 A MF6 · n=6 modular bridge synthesis (Γ₀(6) 4 불변량 통합)
 
 - [x] **synthesis 명제**: Γ₀(6) / X₀(6) 모듈러 곡선의 모든 핵심 불변량(index · cusps · weight · genus · |AL|)이 n=6 의 산술함수(σ · τ · φ · ω) 값으로 환원
