@@ -2902,6 +2902,21 @@
   status = "🔴 FALSIFIED — Γ₁/X index smooth, no n=6 peak (10/10 🔵 integer components, assembled idx 🟡 citation). ruled-out axis = {1,6} specialness lifting to higher modular level."
 
 # ───────────────────────────────────────────────────────────────────────
+# TECS-L — tecs-l-f1-kick (slug · group=TECS-L · axis F · F1 · NOVEL discovery lane)
+# `hexa kick` (mk9, hexa-internal NOT external LLM) on 3 n=6/divisor-function
+# seeds. HONEST: the mk9 6-stage chain surfaces a SEED-INVARIANT n=6 hexad
+# fingerprint that re-derives KNOWN identities — 3/3 verify 🔵 but NON-NOVEL.
+# No new closed-form atom. 🟡 known-identity surface (engine-run closure, not
+# a novel-atom flip). Gated OUT of /paper (no pre-registered falsifier / Δ).
+# ───────────────────────────────────────────────────────────────────────
+@C tecs_l_f1_kick := "axis F F1 NOVEL kick lane: mk9 `hexa kick` on 3 n=6/divisor-function seeds (sigma·tau·phi identity / divisor multiplicative gap / abundancy index) emits ~650–685 overlay candidates/seed — but the per-seed smash hexad evo vector [σ(6)=12, 0.014, 0.5, 4, 2, n=6] is IDENTICAL across all 3 distinct seeds = a seed-INVARIANT n=6 structural fingerprint, not seed-derived. The 3 number-theoretically meaningful echoes (12=σ(6), 6=aliquot(6)=n, is_perfect(6)) verify 🔵 but are all KNOWN domain-core identities (M1 σφ=nτ / M3 Dedekind / perfect-number def). NO new closed-form atom. Honest 🟡 known-identity surface — the kick lane is exercised + faithfully recorded, NOT a novel-atom flip. mk9 surfaces parametric algebraic echoes, not falsifiable propositions; verifier=skip (no hook installed)." :: discovery [slug=tecs-l-f1-kick group=TECS-L]
+  method = "expr"
+  cmd    = "hexa kick --seed <3 n=6 seeds> --rounds 1 (mk9) ; hexa verify --expr {sigma 6 12 | aliquot 6 6 | is_perfect 6 1}"
+  raw    = ".verdicts/tecs-l-f1-kick/ (sigma_6_eq_12 · aliquot_6_eq_6 · is_perfect_6) + .discoveries/tecs-l-f1-kick-2026-05-26.tape"
+  src    = "TECS-L axis F F1 · compiler/drill/drill.hexa (mk9 Mk.IX 6-stage) · overlay /Users/.hx/data/atlas.overlay.n6"
+  status = "🟡 KNOWN-IDENTITY SURFACE — 3 seeds → ~2000 candidates → 3 verifiable echoes all 🔵 but NON-NOVEL (domain-core M1/M3). 0 new atoms. honest dead-end for NOVEL; engine-run closure. gated OUT of /paper (no falsifier/Δ)."
+
+# ───────────────────────────────────────────────────────────────────────
 # TECS-L — tecs-l-n6-exclusivity-atlas (slug · group=TECS-L · paper-track · TECS-L/TECS-L.md F12)
 # NOVEL-axis (F family) paper aggregating the closed-negative CLUSTER around the
 # {1,6} positive kernel (atlas atom tecs_l_up_theorem / M10 — σφ=nτ⟺{1,6}).

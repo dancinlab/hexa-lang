@@ -495,6 +495,20 @@ Append-only history sister of `TECS-L.md`. Each entry starts with `## <ISO times
   - `CLAIMS.tape` slug=tecs-l-mersenne-exponent-primality 2 @C (paper + finding) → verdict ptr `.verdicts/tecs-l-mersenne-{composite,euclid-euler,abundancy-closed,perfect,tau-2p,odd-perfect-open}/`. TECS-L.md MR8 [ ]→[x].
   - 격리 worktree `/tmp/wt-mr8` (branch `tecs-l-mr8-mersenne-paper-2026-05-26`). 형제 VERIFY-KIT-V9 (`/tmp/wt-vkit-v9`) 동시 진행 — verify_cli 미접촉 (paper/docs only).
 
+## 2026-05-26 · 축 F · F1 NOVEL kick — n=6/약수함수 시드 discovery
+- [x] F1 — `hexa kick` (mk9, **hexa-내부 엔진 · 외부 LLM 아님 · 무예산 게이트**) 을 3개 n=6/약수함수 시드로 실행. 결과: 3 seeds → ~2000 candidates, 0 verified 🔵-novel / 3 known-🟡 / honest dead-end (above-$0 NOVEL frontier 의 정직한 닫힘).
+  - 시드 1 "sigma tau phi identity n=6 perfect number closed-form" → 685 후보 (smash+414 free+211 res+59), overlay 517줄, verifier=skip
+  - 시드 2 "divisor function multiplicative gap n=6" → 664 후보 (smash+414 free+211 res+38), overlay 517줄, verifier=skip
+  - 시드 3 "abundancy index sigma(n)/n perfect deficient" → 647 후보 (smash+414 free+211 res+21), overlay 517줄, verifier=skip
+  - **핵심 발견 (정직): smash hexad evo 벡터 [σ(6)=12, 0.014, 0.5, 4, 2, n=6] · singularity=6.0 가 3개 distinct 시드 전부 동일** = 시드-불변 n=6 구조 지문(엔진이 시드 문자열의 약수함수 의미에 차등 반응 안 함; 핑거프린트는 smash 스테이지에 baked-in). 시드-유도 후보공간 아님.
+  - 수론적으로 의미있는 echo만 검증 가능: evo_0=12.0 → σ(6)=12 (`hexa verify --expr sigma 6 12` 🔵) · singularity=6.0 → aliquot(6)=6=n=완전수 성질 (`hexa verify --expr aliquot 6 6` 🔵) · perfect target → is_perfect(6)=1 (`hexa verify --expr is_perfect 6 1` 🔵). **3/3 🔵 SUPPORTED-FORMAL 이나 전부 도메인 코어(M1 σφ=nτ / M3 Dedekind / 완전수 정의)의 기지 항등식 = NON-NOVEL.**
+  - smash:P4 cross-product 노드 (_ded/_xfer/_orbit/_dual/_closure/_recur/_meta, 예: 6.25·11.21·−11.35) 는 hexad 의 임의 float 조합 = 수론적 해석 없음 = verifiable closed-form 아님 (대응 calc-fn 없음).
+  - 정직한 결론: **신규 closed-form atom 0개.** kick lane 이 실행·충실 기록되었으나 novel-atom flip 은 아님 → 🟡 known-identity surface. F1 = ENGINE-RUN closure (NOVEL 후보가 모두 기지로 환원). pool-route 가 ubu-1/ubu-2 로 라우팅 시도 → preflight 실패(workdir-missing) → kick 은 seed-only 라 LOCAL 실행이 faithful ($0, Mac).
+  - 정직한 한계: mk9 는 falsifiable 수론 명제가 아니라 n=6 hexad 의 파라메트릭 대수 echo 를 surface; verifier=skip(기본·훅 미설치). 진짜 NOVEL atom 은 mk10 엔진 / 다라운드 saturation / verifier 훅 wiring 이 필요 (deferred).
+  - 산출물: `.discoveries/tecs-l-f1-kick-2026-05-26.tape` (id·3 seed·3 candidate·verdict-tier-target, discovery_log 준수) · `.verdicts/tecs-l-f1-kick/` (sigma_6_eq_12·aliquot_6_eq_6·is_perfect_6 raw verbatim) · `CLAIMS.tape` slug=tecs-l-f1-kick 1 @C (🟡 정직 상태). TECS-L.md F1 [ ]→[x].
+  - 격리 worktree `/tmp/wt-tecs-f1` (branch `tecs-l-f1-novel-kick-2026-05-26`). 형제 TECS-L-F12 (`/tmp/wt-f12`, NOVEL paper docs — PAPER/ vs .discoveries/ 파일 분리) 동시 진행 — 미접촉.
+
+## 2026-05-26 · 축 F · F12 NOVEL paper — n=6 exclusivity atlas (closed-negative cluster)
 - [x] F12 — NOVEL 축(F family) 발견을 그 **closed-negative 군집** 둘레로 집약한 arxiv-style 논문 출간 (paper_on_discovery · paper_negative_ok). g51 충족 = 12페이지 + fal.ai figure 1장.
   - 헤드라인 발견 (§finding): NOVEL 축은 **verify-driven exclusivity engine** 이다 — n=6 정체성을 *확인*만 하지 않고, 인접 공간을 *체계적으로 배제* 한다. positive kernel = M10 (tecs_l_up_theorem, σφ=nτ⟺{1,6}); 그 둘레의 배제공간을 ruling-out 하여 `{1,6}` 를 "하나의 정체성" → **"배타적·비-리프팅·스케일-안정 산술 현상"** 으로 좁힘. 총 **10+ 결정적 closed-negative**.
   - (E) Exclusive — F5 7 closed-negative: CN1 aliquot(220)=284≠220 (amicable≠aliquot 고정점, 2-cycle) · CN2 σ(12)=28≠25 (quasi-perfect σ=2n+1 [1,50] 공집합, 전수스윕 0건) · CN3 σ(120)=360≠240 (3-perfect≠abundancy-2, perfect/multiply-perfect 서로소) · CN4 σ(12)=28≠48 (n·φ=σ {1,6}-only) · CN4b σ(28)=56≠336 (2번째 완전수에서도 실패, 완전성 무관) · CN5 μ(12)=0≠1 (μ 6-주기 없음, 12=2²·3 squareful) · CN6 σ(σ(6))=28≠12 (perfect≠superperfect locus 서로소). 전부 exact 정수산술 🔴, tolerance 0.
