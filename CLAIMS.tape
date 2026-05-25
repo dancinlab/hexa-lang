@@ -2701,6 +2701,19 @@
   status = "🟡 anima Φ engine promoted to stdlib/consciousness/iit4 (wire+calibrate → V5.2/V5.3)"
 
 # ───────────────────────────────────────────────────────────────────────
+# VERIFY-KIT — verify-kit-verifier-plugin (slug · group=VERIFY-KIT · V8)
+# Pluggable EXTERNAL verifier arm — connects `hexa verify` to the phanes
+# "tenants bring a verifier" model. The external cmd IS the verifier (g5 —
+# hexa delegates + records its verdict verbatim, no LLM self-judge).
+# ───────────────────────────────────────────────────────────────────────
+@C verify_kit_verifier_plugin := "VERIFY-KIT V8 pluggable external-verifier arm: `hexa verify --verifier-cmd \"<sh-cmd>\" --claim \"<text>\" [--expect \"<str>\"]` runs the tenant's OWN deterministic checker (via exec_capture → [stdout, stderr, exit_code]) and maps its result to a tier — exit 0 → 🟢 SUPPORTED-NUMERICAL (with --expect → gate on stdout match), nonzero (1..126) → 🔴 FALSIFIED (closed negative, NOT laundered), rc=127/exec-fail or no cmd supplied → 🟠 INSUFFICIENT. The external cmd IS the verifier (delegation); hexa records its verdict VERBATIM and self-judges nothing (g5 — no LLM judge). Connects hexa verify to the phanes tenant-verifier model (tenants bring an objective + verifier; phanes drives the OUROBOROS loop). The external verifier MUST be deterministic. Matrix 6/6: test 4 -eq 4 → 🟢 · test 4 -eq 5 → 🔴 · absent-cmd → 🟠 · echo PASS --expect PASS → 🟢 · echo NOPE --expect PASS → 🔴 · empty --verifier-cmd → 🟠. Regression clean (--expr sigma 6 12 → 🔵, built-in path intact). Built bin/hexa-verify clean from HEAD source (transpiler #1170 — bessel _Generic blocker cleared; no codegen change, verify_cli.hexa edit only)." :: formula [slug=verify-kit-verifier-plugin group=VERIFY-KIT]
+  method = "verifier-cmd"
+  cmd    = "hexa verify --verifier-cmd \"<sh-cmd>\" --claim \"<text>\" [--expect \"<str>\"] (delegation + tier mapping; 6-case matrix + regression)"
+  raw    = ".verdicts/verify-kit-verifier-plugin/v8.txt"
+  src    = "tool/verify_cli.hexa::cmd_verifier (exec_capture delegation) · bin/hexa-verify built from HEAD (transpiler #1170)"
+  status = "🟢 --verifier-cmd pluggable external-verifier arm (phanes tenant-verifier model) — delegation + tier mapping"
+
+# ───────────────────────────────────────────────────────────────────────
 # TECS-L — tecs-l-closed-neg-miner (slug · group=TECS-L · axis F · F5 · paper_negative_ok)
 # 7 closed-negatives: each a plausible "n=6-like" conjecture computed EXACTLY and
 # shown to FAIL deterministically (🔴 = ruled-out axis). Cites M10 (σφ=nτ⟺{1,6})
