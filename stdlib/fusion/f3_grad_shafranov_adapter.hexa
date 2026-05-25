@@ -195,7 +195,7 @@ fn main() {
             headline = "skip: freegs present but solve failed (honest solver-error skip · no fabricated numbers)"
         } else {
             equilibrium_json = eq
-            run_note = "FreeGS free-boundary Grad-Shafranov solve on a textbook 4-coil tokamak example (ConstrainPaxisIp analytic profile · isoflux X-point constraints). Outputs are a gate (c) design-feasibility witness — idealized coil set, NOT a sourced engineering lattice; absorbed=false (not a measured reconstruction)."
+            run_note = "FreeGS free-boundary Grad-Shafranov solve on the textbook freegs.machine.TestTokamak() example (freeBoundaryHagenow boundary · ConstrainPaxisIp analytic profile · isoflux X-point constraints). Outputs are a gate (c) design-feasibility witness — idealized coil set, NOT a sourced engineering lattice; absorbed=false (not a measured reconstruction)."
             caveats = _scope_caveats("(s5) FreeGS free-boundary solve invoked with a minimal idealized tokamak coil set + analytic plasma profile (textbook example geometry, NOT a sourced engineering lattice). The psi / q(psi) / beta / boundary outputs are a design-feasibility witness for gate (c), not a design-grade reconstruction.")
             headline = "ok: freegs free-boundary solve complete (fusion-design-feasibility · absorbed=false · design witness, NOT a measured reconstruction)"
         }
@@ -262,21 +262,31 @@ fn main() {
 // "" / "null" on failure.
 fn _run_freegs_solve(out_dir: str) -> str {
     // The driver is written to a sidecar .py under out_dir (a transient
-    // artifact, not committed source) and executed once. The 4-coil
-    // MAST-like example + ConstrainPaxisIp analytic profile + isoflux
-    // X-point constraints is the canonical FreeGS quickstart geometry.
+    // artifact, not committed source) and executed once. The
+    // freegs.machine.TestTokamak() example + freeBoundaryHagenow boundary +
+    // ConstrainPaxisIp analytic profile + isoflux/X-point constraints is the
+    // canonical FreeGS quickstart geometry that converges cleanly (the prior
+    // custom 4-coil + 3-isoflux set diverged with "No O points found").
     let py = "import json,sys\n"
         + "try:\n"
         + "    import freegs\n"
         + "    import numpy as np\n"
-        + "    coils=[('P1L',freegs.machine.Coil(1.0,-1.1)),('P1U',freegs.machine.Coil(1.0,1.1)),('P2L',freegs.machine.Coil(1.75,-0.6)),('P2U',freegs.machine.Coil(1.75,0.6))]\n"
-        + "    tok=freegs.machine.Machine(coils)\n"
-        + "    eq=freegs.Equilibrium(tokamak=tok,Rmin=0.1,Rmax=2.0,Zmin=-1.0,Zmax=1.0,nx=65,ny=65)\n"
+        + "    tok=freegs.machine.TestTokamak()\n"
+        + "    eq=freegs.Equilibrium(tokamak=tok,Rmin=0.1,Rmax=2.0,Zmin=-1.0,Zmax=1.0,nx=65,ny=65,boundary=freegs.boundary.freeBoundaryHagenow)\n"
         + "    prof=freegs.jtor.ConstrainPaxisIp(eq,1e3,2e5,2.0)\n"
-        + "    xpt=[(1.1,-0.6),(1.1,0.6)]\n"
-        + "    iso=[(1.1,-0.6,1.1,0.6),(1.1,-0.6,0.4,0.0),(1.1,-0.6,1.6,0.0)]\n"
+        + "    xpt=[(1.1,-0.6),(1.1,0.8)]\n"
+        + "    iso=[(1.1,-0.6,1.1,0.6)]\n"
         + "    con=freegs.control.constrain(xpoints=xpt,isoflux=iso)\n"
-        + "    freegs.solve(eq,prof,con)\n"
+        // FreeGS prints transient Picard diagnostics (e.g. an early-iteration
+        // 'Warning: No O points found' that resolves once the plasma seeds)
+        // straight to stdout. Re-point stdout at stderr across the solve so
+        // ONLY the final JSON reaches stdout — otherwise the warning prefix
+        // would make stdout[0] != '{' and trip the honest-skip fallback.
+        + "    _real_stdout=sys.stdout; sys.stdout=sys.stderr\n"
+        + "    try:\n"
+        + "        freegs.solve(eq,prof,con)\n"
+        + "    finally:\n"
+        + "        sys.stdout=_real_stdout\n"
         + "    def s(f,*a):\n"
         + "        try:\n"
         + "            v=f(*a); return float(v) if v is not None else None\n"
