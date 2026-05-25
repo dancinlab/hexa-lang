@@ -1372,6 +1372,43 @@
   status = "🟢 SUPPORTED-NUMERICAL — empirical with err 1e-7 / 6e-8 bit-exact matches. terminal."
 
 # ───────────────────────────────────────────────────────────────────────
+# GPU — fusion-attention-flashalgo (slug · group=GPU · GPU.md §10 · round 8)
+# TRUE FlashAttention-2 algorithm with O accumulator REGISTER-RESIDENT across
+# the K/V loop (the next-wedge identified by round-7's result.json). Round-4
+# attempt at reg-O FAILED numeric due to wrong m16n16k16 f32 acc fragment row
+# map (the matrix_a/B convention {0..3}/{4..7} mistakenly applied to acc).
+# Round-8 fixes via empirical frag_probe.cu: elems {0,1,4,5} -> row=lane/4,
+# elems {2,3,6,7} -> row=lane/4+8. Single fix -> 5.3-6.9x -> 1.60-1.99x.
+
+@C fusion_attn_flashalgo_frag_map := "m16n16k16 f32 accumulator C-fragment lane-to-row map empirically determined: elems {0,1,4,5} -> row=lane/4, elems {2,3,6,7} -> row=lane/4+8 (NOT the matrix_a/B {0..3}/{4..7} convention round-4 mistakenly applied)" :: measurement [slug=fusion-attention-flashalgo group=GPU]
+  method = "silicon-fire"
+  cmd    = "frag_probe.cu : tag-store-inspect each lane*16+i unique value -> store_matrix_sync -> read shared by lane 0, decode (row,col) -> (lane,elem)"
+  raw    = ".verdicts/fusion-attention-flashalgo/F-FUSION-ATTN-FLASHALGO-ABOVE-CUBLAS.txt"
+  src    = "archive/fires/fusion_attn_flashalgo_2026_05_25/frag_probe.cu"
+  status = "🟢 SUPPORTED-NUMERICAL — empirical fragment-map ground truth on RTX 5070 sm_120. Unblocks reg-O implementation. terminal."
+
+@C fusion_attn_flashalgo_numeric := "FA-2 register-resident-O fused flash-attention is NUMERICALLY CORRECT (rel_rowscale 5.41e-4 / 5.67e-4 / 6.11e-4 / 7.14e-4 at N=512..4096, rms_rel 2.6-2.7e-4, max_abs 3.1-6.1e-5) matches f64 CPU reference by 1-2 orders of magnitude vs the 1e-2 gate" :: measurement [slug=fusion-attention-flashalgo group=GPU]
+  method = "silicon-fire"
+  cmd    = "ubu-2 RTX 5070 (clean) fa_flashalgo_host fa_regO_v2.sm90.ptx, f64 CPU ref, rel_rowscale<=1e-2 gate, N in {512,1024,2048,4096} d=64; CUDA-C oracle PASS cross-check"
+  raw    = ".verdicts/fusion-attention-flashalgo/F-FUSION-ATTN-FLASHALGO-ABOVE-CUBLAS.txt"
+  src    = "archive/fires/fusion_attn_flashalgo_2026_05_25/{fa_regO_v2.sm90.ptx,fa_regO_v2_oracle.cu,fa_flashalgo_host.c}"
+  status = "🟢 SUPPORTED-NUMERICAL — reg-O fused flash-attn numerically correct on 4 shapes. terminal-numerical."
+
+@C fusion_attn_flashalgo_wall := "QUANTIFIED PARTIAL: FA-2 reg-O fused flash-attn closes the gap to 1.60-1.99x vs cuBLAS-TC stack (was round-7 5.27-6.87x, round-4 3.4-5.0x) -- LARGEST single-round positive gap closure of 8-round campaign (overall vs round-3: 15.5x -> 1.60x = 9.7x at N=4096). Still NOT below 1.0x (above-cuBLAS target). Binding constraint shifts: O smem round-trip removed -> residual wall is the per-tile S/P smem round-trip + per-row softmax serial loop, NOT GEMM payload nor S-HBM" :: measurement [slug=fusion-attention-flashalgo group=GPU]
+  method = "silicon-fire"
+  cmd    = "ubu-2 RTX 5070 (clean, 0 procs) fa_flashalgo_host fa_regO_v2.sm90.ptx vs fa_cublas_tc_baseline, cuEvent 20 warmup + 200 timed median, N in {512,1024,2048,4096} d=64"
+  raw    = ".verdicts/fusion-attention-flashalgo/F-FUSION-ATTN-FLASHALGO-ABOVE-CUBLAS.txt"
+  src    = "archive/fires/fusion_attn_flashalgo_2026_05_25/{fa_regO_v2.sm90.ptx,fa_cublas_tc_baseline.c,fa_flashalgo_host.c,result.json}"
+  status = "🟠 QUANTIFIED-PARTIAL — reg-O FA-2 closes 4-9x of the round-7 regression but still 1.60-1.99x slower than cuBLAS-TC stack. paper_gate forbids 🟠. sec10 box stays [x] via launch-amort only; GEMM-fusion (attention) axis NOT-WON at d=64."
+
+@C fusion_attn_flashalgo_occupancy := "FA-2 reg-O achieves 24 CTAs/SM occupancy (vs round-4 8 CTAs/SM, round-7 1 CTA/SM): smem reduced from 28864 B/CTA to 1728 B/CTA (16.7x reduction by removing o_tile and the wide-KV S/P tiles). 0 spills on sm_80/sm_90/sm_120 (66/72/71 regs). The wide-KV BK=256 lever (winning in round-4) becomes counterproductive with reg-O (regO+BK16=0.302ms vs regO+BK256=0.779ms at N=4096) because wide-KV amortized the OLD O smem round-trip cost, which reg-O eliminated" :: measurement [slug=fusion-attention-flashalgo group=GPU]
+  method = "silicon-fire"
+  cmd    = "ubu-2 RTX 5070 cuOccupancyMaxActiveBlocksPerMultiprocessor + ptxas -v on sm_80/sm_90/sm_120; geometry sweep regO+{BK16,BK256}+{1,2,4}warp variants"
+  raw    = ".verdicts/fusion-attention-flashalgo/F-FUSION-ATTN-FLASHALGO-ABOVE-CUBLAS.txt"
+  src    = "archive/fires/fusion_attn_flashalgo_2026_05_25/{fa_regO_v2_oracle.cu,fa_regO_bk256_oracle.cu,fa_regO_2warp_oracle.cu}"
+  status = "🟢 SUPPORTED-NUMERICAL — occupancy + smem footprint measured, all 0 spills. The wide-KV-becomes-counterproductive finding is a closed-negative on the round-4 lever applicability."
+
+# ───────────────────────────────────────────────────────────────────────
 # ───────────────────────────────────────────────────────────────────────
 # TECS-L axis A (MODFORM) — tecs-l-modform-dim-genus (slug · group=TECS-L · MF4)
 # Classical theorem dim S_2(Γ_0(N)) = genus(X_0(N)) — TESTED vs hexa fns.

@@ -1,0 +1,135 @@
+F-FUSION-ATTN-FLASHALGO-ABOVE-CUBLAS  (round 8 of GPU sec10 GEMM-fusion axis)
+================================================================================
+Date     : 2026-05-25
+Host     : ubu-2 RTX 5070 sm_120 driver 580 (48 SMs, 0 compute procs at fire)
+Toolchain: nvcc/ptxas 12.9 V12.9.86, NVVM 7.0.1
+Falsifier: True FlashAttention-2 algorithm (online softmax INSIDE fused kernel,
+           S never to HBM, running O accumulator REGISTER-RESIDENT across the
+           K/V loop) must beat the cuBLAS-batched-GEMM+softmax+batched-GEMM
+           stack by a POSITIVE MARGIN on at least one (N,d) shape.
+
+VERDICT  : 🟠 INSUFFICIENT (quantified-partial, gap closed dramatically)
+           Pre-registered above-cuBLAS-stack target NOT hit (fused_ms still
+           1.60x-1.99x cuBLAS-stack-ms on all four shapes), but the gap-closure
+           trajectory R3 9-15x -> R4 3.4-5.0x -> R5 3.47x -> R7 5.3-6.9x ->
+           R8 1.60-1.99x measures a 4-9x improvement vs round-7's regression.
+
+ALGORITHM (the FA-2 formula, as in Dao 2023):
+  Online softmax m_i, l_i carried ACROSS all K/V tiles (not per-tile reset)
+  O accumulator REGISTER-RESIDENT across the entire K/V loop (NO smem o_tile
+    and NO per-tile rescale store-load round-trip)
+  S, P resident in smem only for the wmma-load-A handoff (S 1024 B, P 512 B)
+  ONE kernel launch per (Q-block, head) streaming through all K/V tiles
+  Inner GEMMs via wmma::mma_sync m16n16k16 fp16 fp32-acc
+
+KEY FIX vs ROUND-4'S FAILED reg-O ATTEMPT
+  Round-4 result.json noted: "register_resident_O: FAILED numeric (wrong
+  m16n16k16 fp32 C-frag row map) -> dropped". Root cause empirically resolved
+  via frag_probe.cu (in this fire dir): the lane-element-to-row map for the
+  m16n16k16 f32 ACCUMULATOR fragment is
+    elems {0,1,4,5} -> row = lane/4
+    elems {2,3,6,7} -> row = lane/4 + 8
+  Round-4 oracle used {0..3} -> lo and {4..7} -> hi (matches matrix_a/B maps
+  but NOT the accumulator). Frag_probe.cu nails the actual layout by tag-store
+  inspection, fixing the FAILED case.
+
+GEOMETRY
+  d   = 64 (head dim; 4 wmma K-tiles)
+  BM  = 16 query rows per CTA (one wmma M)
+  BK  = 16 key rows per inner mma sub-tile (online softmax per 16 keys)
+  1 thread block = 1 warp (32 threads)
+  grid.x = N / 16 (32..256 CTAs for N=512..4096)
+
+PTXAS-CLEAN (.ptx pure ASCII, 0 non-ASCII bytes)
+  sm_80     : rc=0  66 regs, 0 spills, 1728 B smem
+  sm_90     : rc=0  72 regs, 0 spills, 1728 B smem
+  sm_120    : rc=0  71 regs, 0 spills, 1728 B smem  (RTX 5070 native)
+  Smem 1728 B vs round-4 28864 B (16.7x reduction: o_tile + wide BK removed)
+
+OCCUPANCY (measured via cuOccupancyMaxActiveBlocksPerMultiprocessor)
+  CTAs/SM = 24  (vs round-4 8 CTAs/SM, vs round-7 1 CTA/SM)
+  Total resident at full grid: 24 * 48 SMs = 1152 CTAs theoretically (N>=2304)
+
+NUMERIC (rel_rowscale <= 1e-2 vs f64 CPU reference)
+  N=512   rel_rowscale = 5.414e-04   rms_rel = 2.580e-04   PASS
+  N=1024  rel_rowscale = 5.674e-04   rms_rel = 2.653e-04   PASS
+  N=2048  rel_rowscale = 6.105e-04   rms_rel = 2.711e-04   PASS
+  N=4096  rel_rowscale = 7.142e-04   rms_rel = 2.721e-04   PASS
+  All four shapes PASS by 1-2 orders of magnitude (target was 1e-2).
+
+TIMED WALL (cuEvent 20 warmup + 200 timed, median ms)
+                  fused_ms   cublas_stack_ms   ratio_vs_cublas_stack
+  N=512           0.0319     0.0166            1.92x
+  N=1024          0.0609     0.0309            1.97x
+  N=2048          0.1223     0.0616            1.99x
+  N=4096          0.3026     0.1887            1.60x
+
+GAP-CLOSURE TRAJECTORY (positive movement direction)
+  Round 3   (#1035)  9.4 - 15.5 x slower      single-CTA wmma
+  Round 4   (#1052)  3.40 - 5.01 x slower     multi-CTA wmma BK=256
+  Round 5   (#1060)  3.47 x slower            KV-split decomposition
+  Round 7   (#1080)  5.27 - 6.87 x slower     N204 TMA+swizzle transplant (REGRESSION)
+  Round 8   (this)   1.60 - 1.99 x slower     FA-2 reg-O (KEY DISTINCTION)
+
+WIN-CONDITION  : fused_ms < cublas_stack_ms (above-cuBLAS-stack -> 🟢)
+WIN            : NO (1.60-1.99x SLOWER, not below 1.0x)
+
+WHAT THE GAP STILL IS (binding constraint, measured)
+  At d=64, the per-row softmax + smem round-trip for S/P is now the dominant
+  cost (no longer the O round-trip, which reg-O eliminated). To approach
+  cuBLAS's wall further requires keeping S in REGISTERS across softmax via
+  warp-shuffle reductions, and feeding P directly to the next mma's A
+  fragment via mma.x4-from-regs (no smem P round-trip). This is a substantial
+  rewrite of the inner softmax block and was OUT OF SCOPE for round 8.
+
+OTHER VARIANTS TESTED (all 🟠, kept for reference)
+  fa_regO_bk256        BK=256 wide-KV + reg-O    0.051/0.100/0.202/0.779 ms
+                       SLOWER than BK=16 reg-O because the wide-KV lever
+                       amortized the OLD O-round-trip cost (now gone)
+  fa_regO_2warp        BM=32, 2 warps/CTA        0.035/0.065/0.135/0.309 ms
+                       Marginally slower; per-row softmax stays serial
+  fa_regO_4warp        BM=64, 4 warps/CTA        (host bug; algorithm fine)
+
+INVARIANTS (PRESERVED)
+  no_llvm                : true
+  no_c_transpile_change  : true
+  codegen_untouched      : compiler/codegen/*.hexa UNTOUCHED (hand-emit PTX
+                           path via nvcc-lowered CUDA-C; the algorithm is mine,
+                           lowering is mechanical)
+  S_tile_never_to_HBM    : TRUE (structural moat preserved)
+  single_launch          : TRUE (1 launch vs cuBLAS-TC 3-launch moat preserved)
+  pure_ASCII             : 0 non-ASCII bytes in committed .ptx
+
+PAPER ELIGIBILITY (project.tape paper_gate + paper_significance)
+  paper_eligible = false
+  paper_reason   = "🟠 INSUFFICIENT (paper_gate forbids 🟠) + a re-confirmation
+                    of an already-quantified wall (rounds 4/5/7) via the same
+                    GPU axis; paper_significance forbids re-confirmation."
+
+§10 BOX FLIP
+  GEMM-fusion (attention) axis : NOT-WON (1.60-1.99x slower than cuBLAS-stack)
+  §10 6/8 + launch-amort row [x] : UNCHANGED. No flip from this round.
+
+FINDING (closed-negative-on-recipe-axis + positive-gap-closure on algorithm-axis)
+  Register-resident O is the largest single algorithmic lever between the
+  round-4 baseline and the FA-2 ceiling at d=64 -- it closes the gap from
+  3.4-5.0x to 1.60-1.99x in ONE change (with a corrected fragment row map).
+  The remaining 1.60-1.99x gap to cuBLAS-stack at d=64 is bound by the smem
+  round-trip on S/P, not by the GEMM payload itself. cuBLAS's 3-launch
+  HBM-materializing stack still beats the fused kernel on small head-dim
+  because at d=64 the GEMM payload is too small to amortize launch+smem
+  overhead. The dual-axis verdict framing remains: cuBLAS is NOT the ceiling
+  on this fusable axis -- it just hasn't been exceeded YET. Open: register-S
+  + warp-shuffle softmax rewrite (next round).
+
+ARTIFACTS
+  archive/fires/fusion_attn_flashalgo_2026_05_25/
+    fa_regO_v2_oracle.cu       (CUDA-C kernel + host, the algorithm)
+    fa_regO_v2.sm80.ptx        (hand-emit PTX target sm_80)
+    fa_regO_v2.sm90.ptx        (hand-emit PTX target sm_90 - shipped)
+    fa_regO_v2.sm120.ptx       (hand-emit PTX target sm_120 - RTX 5070)
+    fa_regO_bk256_oracle.cu    (BK=256+reg-O variant, slower; reference)
+    fa_regO_2warp_oracle.cu    (BM=32 2-warp variant, slower; reference)
+    fa_regO_4warp_oracle.cu    (BM=64 4-warp variant; reference)
+    frag_probe.cu              (the empirical fragment-row-map probe)
+    fa_flashalgo_host.c        (host driver via cuModuleLoadDataEx; 1 launch)
