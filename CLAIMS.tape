@@ -253,6 +253,25 @@
   status = "🟠 QUANTIFIED-PARTIAL — correct multi-CTA fused, gap closed ~3-8x but still 1.3-5.0x slower than cuBLAS-TC. NOT a >=30% win. NOT paper-eligible (paper_gate forbids partials). sec10 box stays [x] via launch-amort only."
 
 # ───────────────────────────────────────────────────────────────────────
+# GPU — fusion-attention-decomp-sweep (slug · group=GPU · GPU.md §10 · round 5)
+# Full dimensional-decomposition sweep (Bq x kv_split x BK x N) of fused flash-
+# attn. Tests the KV-SPLIT (flash-decoding gridDim.z) hypothesis. 153 configs.
+
+@C fusion_attn_decomp_kvsplit := "KV-SPLIT (flash-decoding gridDim.z) CLOSES the small-N occupancy gap — N=512 Bq16: 32->128 CTAs, 0.146->0.058 ms (intra-framework 2.53x), reaching parity with the round-4 single-kernel (0.0568 ms); benefit saturates at ctas_partial>=~48 SMs (kv=8/16 regress)" :: measurement [slug=fusion-attention-decomp-sweep group=GPU]
+  method = "silicon-fire"
+  cmd    = "ubu-2 RTX 5070 (clean, 0 procs) fa_decomp_oracle (CUDA-C nvcuda::wmma flash-decoding 2-kernel partial+LSE-merge) vs fa_cublas_tc_baseline, cuEvent 20 warmup + 200 timed median, 153 configs N{512,1024,2048,4096} x Bq{16,32,64} x kv_split{1,2,4,8,16} x BK{64,128,256} d=64, ALL numeric PASS (rel_rowscale<=1e-2 vs f64 ref)"
+  raw    = ".verdicts/fusion-attention-decomp-sweep/F-FUSION-ATTN-DECOMP-WALL.txt"
+  src    = "archive/fires/fusion_attention_decomp_2026_05_25/{fa_decomp_oracle.cu,sweep_raw.txt}"
+  status = "🟢 SUPPORTED-NUMERICAL — KV-split closes the small-N occupancy gap (measured 2.53x at N=512, 32->128 CTAs). terminal-numerical. (occupancy claim only; NOT a cuBLAS win.)"
+
+@C fusion_attn_decomp_wall := "CLOSED-NEGATIVE: no dimensional decomposition of hand-PTX flash-attn beats cuBLAS-TC (best ratio 3.47x @ N=512); KV-split is a SMALL-N-ONLY lever — its occupancy benefit saturates once N alone fills the 48 SMs while its partial-O HBM round-trip cost grows O(N*split*d), net-negative at N>=2048 (decomp-best 0.668ms vs round-4 single-kernel 0.245ms @N=2048). The GEMM-tile-efficiency wall is fundamental." :: measurement [slug=fusion-attention-decomp-sweep group=GPU]
+  method = "silicon-fire"
+  cmd    = "ubu-2 RTX 5070 (clean) fa_decomp_oracle 153-config sweep vs fa_cublas_tc_baseline; optimum per shape N512 3.47x / N1024 5.88x / N2048 10.82x / N4096 13.17x; round-4 single-kernel cross-reference reproduced"
+  raw    = ".verdicts/fusion-attention-decomp-sweep/F-FUSION-ATTN-DECOMP-WALL.txt"
+  src    = "archive/fires/fusion_attention_decomp_2026_05_25/{fa_decomp_oracle.cu,sweep_raw.txt}"
+  status = "🟠 QUANTIFIED-PARTIAL / closed-negative — KV-split closes the small-N gap (parity w/ round-4) but no decomposition beats cuBLAS; GEMM-tile-efficiency wall confirmed fundamental. sec10 box stays [x], NOT flipped. NOT paper-eligible as a 30% win, but a clean closed-negative on the decomposition axis."
+
+# ───────────────────────────────────────────────────────────────────────
 # TECS-L — tecs-l-dedekind-psi-uniqueness (slug · group=TECS-L · TECS-L/TECS-L.md M3)
 # Dedekind-ψ discrepancy, re-grounded hexa-native via `hexa verify` g5.
 #
