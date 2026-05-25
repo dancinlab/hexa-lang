@@ -3,6 +3,16 @@
 Append-only history sister of `INBOX.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
 
+## 2026-05-26 — inbox/patches/ 트리아지 3건 (anima 2-gap + flame V3 갭 + cloud Option A 후속 확인)
+
+`inbox/patches/` 에 미트리아지 상태로 쌓인 anima handoff 를 INBOX.md 로 라우팅. 각 건 origin/main 코드 대조로 status 판정:
+
+- [x] **`cloud-launch-trainer-script-arg-missing.md` Option A (anima-side argv 수정)** — anima repo 대조: `HEXAD/PURE/launchers/dispatch_p21h_v3.hexa` train_launch argv 가 이미 `[…/launch_trainer_p21h.sh, …/train_p21h_v3.py, …]` (script-path 포함). 버그 형태 `[…sh, init_variant, seed]` 는 anima 트리 전체 grep 0건. anima **PR #423** (`fix(PURE): dispatch_p21h_v3 train_launch full argv`) 로 closed, origin/main 조상 확인. → Option A·C 양쪽 닫힘 (C = hexa-lang #1120).
+- [ ] **`anima-flame-v3-coverage-gaps.md` (2026-05-26)** — flame coverage 기능 갭 8건. INBOX.md 신규 open 항목. P1 둘(full-position CE · V3-extension backward)이 학습정확도 직접 영향 + RFC 059 정렬. 차단 아님(anima 포팅본이 fallback 으로 smoke PASS). one-shot 아님 — RFC/feature 트랙.
+- [ ] **`anima-discovered-2gaps-2026-05-25.md` G1 (linux wrapper 깨짐 + `-D_GNU_SOURCE`)** — G1 절반(`-D_GNU_SOURCE`)은 **이미 canonical 레시피에 존재**: `self/main.hexa` (`hexa cc` 경로 L1188/1294/1304) + `tool/build_hexa_v2_linux.hexa:145` (`-O2 -std=gnu11 -D_GNU_SOURCE`). 패치가 본 누락은 "runtime.c 직접 recompile fallback" 경로 한정 — canonical `hexa cc` 쓰면 비-이슈. 나머지 절반(ubu wrapper 심링크 dangling/PATH 부재)은 기존 open "pool stale" 항목과 동일뿌리 → 그 항목에 corroboration 으로 fold ([[reference_ubu_hexa_install_paths]]).
+- [ ] **`anima-discovered-2gaps-2026-05-25.md` G2 (import-time `main()` auto-invoke)** — 진짜 미해결 갭. 트리 grep: `__main__`/`no_auto_main`/`_selftest` 가드 컨벤션 전무(archive 의 .py-풍 fire 파일 외엔 0). import 가 모듈 `main()` 을 auto-fire → eval/probe 라이브러리화 차단. **언어-semantics 변경 (blast-radius)** → 반사적 구현 금지, 설계결정 필요. INBOX.md 신규 open 항목 (RFC 후보).
+
+
 ## 2026-05-25T23:30Z — `hexa cloud nohup --early-life-check` — 조기-사망 launch 감지 (anima cloud handoff Option C 해소)
 
 anima patch `inbox/patches/cloud-launch-trainer-script-arg-missing.md` (PR #1110 으로 filing) 수신. F-CURRICULA-1 fire (A100 SXM $1.49/hr) 가 `dispatch_p21h_v3.hexa:365` 의 argv 누락으로 `launch_trainer_p21h.sh` 의 `exec python3 -u "$@"` 가 script-path 없이 `python3 -u qwen 1337` 실행 → 즉사. pod 는 RUNNING 유지·과금, train 0 → **158분 idle burn ($3.92)**. dispatcher 는 `cloud_nohup` 이 pid 만 반환하면 즉시 리턴해서 원격 즉사를 못 봄 = silent class-1 실패.
