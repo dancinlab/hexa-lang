@@ -3,6 +3,24 @@
 Append-only history sister of `TECS-L.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
 
+## 2026-05-25T18:30 — 축 B MR1 · Euclid-Euler 짝완전수 ⟺ 2^{p-1}·M_p (M_p 소수) — synthesis 닫힘
+
+- [x] MR1 milestone = "Euclid-Euler 짝완전수 ⟺ 2^{p-1}·M_p, 첫 N 완전수 unified statement + g5 anchor cross-reference 표"
+- [x] **정리**: Euclid IX.36(충분성, c. 300 BCE) + Euler 1849(짝수에 대한 필요성). 홀수 완전수는 미해결(open, < 10^{1500} 부재 — Ochem-Rao 2012) → MR7 로 이월 (🟠 deferred, honest scope)
+- [x] **첫 7 짝완전수 표** (P_k = 2^{p-1}·M_p, M_p Mersenne prime):
+  - P_1=6 (p=2, M_2=3), P_2=28 (p=3, M_3=7), P_3=496 (p=5, M_5=31)
+  - P_4=8128 (p=7, M_7=127), P_5=33550336 (p=13, M_13=8191)
+  - P_6=8589869056 (p=17, M_17=131071), P_7=137438691328 (p=19, M_19=524287)
+  - τ(P_k) = 2p 7/7 (MR5 닫힌형 framing 일치)
+- [x] **per-P_k g5 anchor 표** — `is_perfect`·`σ=2n`·`τ=2p`·LL 각 atom 의 verdict 파일을 1:1 cross-reference. 총 anchor 21+ 개 (P_1..P_5 의 LL 4개 포함), 전부 prior slugs 에서 이미 🔵 (M1/M4/M5/M6/MR2/MR4/MR5/MR6)
+- [x] **신규 verify 0건** (M10 닫힘 패턴과 동일) — MR1 은 기존 🔵 atom 위의 reasoned synthesis 닫힘
+- [x] **역명제 닫힘**: p prime ⇏ M_p prime. 첫 반례 M_11=2047=23·89 (MR6 슬러그 `tecs-l-mersenne-composite` 에 🔵 보존) → Lucas-Lehmer (MR4) 같은 별도 소수성 판정의 필수성을 정리가 강제
+- [x] 1 verdict (synthesis artifact) → `.verdicts/tecs-l-mersenne-euclid-euler/euclid_euler_statement.txt` (deterministic statement + 표 + per-P_k pointer, M7 closed-negative artifact 패턴)
+- [x] `CLAIMS.tape` slug=tecs-l-mersenne-euclid-euler group=TECS-L 1 entry (`@C` method=synthesis, status 🟢 SUPPORTED-NUMERICAL)
+- [x] `TECS-L/docs/mr1-euclid-euler.md` (Korean) — 정리·표·anchor 표·역명제·정직한 잔여 6 섹션
+- [x] `TECS-L.md` MR1 체크 → `- [x]`, 잔여 MR7(odd perfect) 명시
+
+
 ## 2026-05-25T18:00 — 축 E E2 · atlas health audit + binary vs source divergence 발견
 
 - [x] audit: stats --audit merged·clean, 16101 entries (binary 내부 정합)
