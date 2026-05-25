@@ -1354,8 +1354,8 @@ fn _test_wmma_scaffold() -> bool {
     // Resolved mnemonic emits as a real PTX instruction now (not a stub
     // comment). The canonical f16×f16→f32 mnemonic from
     // `_nvptx_wmma_mnemonic`.
-    ok = _check(ok, ptx, "wmma.mma.sync.aligned.row.col.m16n16k16.f32.f16.f16.f32",
-        "wmma.mma mnemonic emitted (real instr)")
+    ok = _check(ok, ptx, "wmma.mma.sync.aligned.row.col.m16n16k16.f32.f32",
+        "wmma.mma mnemonic emitted (real instr, ptxas-legal short f16 form)")
     // The dst fragment tuple starts with `{%fra<id>_e0,` — proves the
     // 8-element curly-braced operand tuple is generated.
     ok = _check(ok, ptx, "_e0,",
@@ -2380,7 +2380,7 @@ fn _test_dtype_family() -> bool {
     // Family 1 — canonical f16×f16→f32 (default empty inputs → backward-
     // compat fallthrough to PR #150's `_nvptx_wmma_mnemonic`).
     let mnem_canonical = _nvptx_wmma_mnemonic_family("gpu_wmma_mma", "", "", "")
-    let expect_canonical = "wmma.mma.sync.aligned.row.col.m16n16k16.f32.f16.f16.f32"
+    let expect_canonical = "wmma.mma.sync.aligned.row.col.m16n16k16.f32.f32"
     if mnem_canonical != expect_canonical {
         println("  FAIL: canonical f16×f16→f32 family mnemonic mismatch")
         println("        got:  " + mnem_canonical)
@@ -2405,7 +2405,7 @@ fn _test_dtype_family() -> bool {
     // Family 3 — f16×f16→f16 (dtype=.f16 + role=d routes to the f16-acc
     // mma instruction; verifies the role discriminator on _mma).
     let mnem_f16acc = _nvptx_wmma_mnemonic_family("gpu_wmma_mma", "d", ".f16", ".row")
-    let expect_f16acc = "wmma.mma.sync.aligned.row.col.m16n16k16.f16.f16.f16.f16"
+    let expect_f16acc = "wmma.mma.sync.aligned.row.col.m16n16k16.f16.f16"
     if mnem_f16acc != expect_f16acc {
         println("  FAIL: f16xf16 -> f16 family mnemonic mismatch")
         println("        got:  " + mnem_f16acc)
@@ -2630,14 +2630,14 @@ fn _test_wmma_instr_emit() -> bool {
     println(ptx)
 
     // 4 real PTX wmma mnemonics emit.
-    ok = _check(ok, ptx, "wmma.load.a.sync.aligned.row.m16n16k16.f16.shared",
-        "wmma.load.a real instr")
-    ok = _check(ok, ptx, "wmma.load.b.sync.aligned.col.m16n16k16.f16.shared",
-        "wmma.load.b real instr")
-    ok = _check(ok, ptx, "wmma.mma.sync.aligned.row.col.m16n16k16.f32.f16.f16.f32",
-        "wmma.mma real instr")
-    ok = _check(ok, ptx, "wmma.store.d.sync.aligned.row.m16n16k16.f32.shared",
-        "wmma.store.d real instr")
+    ok = _check(ok, ptx, "wmma.load.a.sync.aligned.row.m16n16k16.shared.f16",
+        "wmma.load.a real instr (ptxas-legal state-space.type order)")
+    ok = _check(ok, ptx, "wmma.load.b.sync.aligned.col.m16n16k16.shared.f16",
+        "wmma.load.b real instr (ptxas-legal state-space.type order)")
+    ok = _check(ok, ptx, "wmma.mma.sync.aligned.row.col.m16n16k16.f32.f32",
+        "wmma.mma real instr (ptxas-legal short f16 form)")
+    ok = _check(ok, ptx, "wmma.store.d.sync.aligned.row.m16n16k16.shared.f32",
+        "wmma.store.d real instr (ptxas-legal state-space.type order)")
     // Per-op staging offsets (proves the lowering threads them
     // correctly).
     ok = _check(ok, ptx, "[_hexa_wmma_stage+0]",    "load.a staging offset 0")
