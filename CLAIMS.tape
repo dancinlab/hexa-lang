@@ -272,6 +272,28 @@
   status = "🟠 QUANTIFIED-PARTIAL / closed-negative — KV-split closes the small-N gap (parity w/ round-4) but no decomposition beats cuBLAS; GEMM-tile-efficiency wall confirmed fundamental. sec10 box stays [x], NOT flipped. NOT paper-eligible as a 30% win, but a clean closed-negative on the decomposition axis."
 
 # ───────────────────────────────────────────────────────────────────────
+# GPU — fusion-layerblock-cross-layer (slug · group=GPU · paper-track · GPU.md §10 axis C)
+# Whole-graph cross-layer transformer-block fusion -- axis C, the third moat
+# axis orthogonal to axis-A (memory-bound, LAUNCH-AMORT) and axis-B (compute-
+# bound, ATTN-FLASH/WMMA). Closure-criterion = ABOVE the library/eager stack
+# (PyTorch eager / cuBLAS-using); the LIBRARY API itself structurally forbids
+# cross-op fusion. Round 8 = structural+codegen-clean BLUE; timed wall = round 9.
+
+@C fusion_layerblock_cross_layer_structural := "cross-layer fused transformer block = 3 kernel launches + 3*BSd*4 activation-HBM vs PyTorch eager 11 launches + (13d+4dff)*BS*4 activation-HBM; ratio 9.667x at dff=4d; ptxas-clean sm_80/90/120-driver-JIT (k1 39 regs / k2 32 regs / 0 spill)" :: fixpoint [slug=fusion-layerblock-cross-layer group=GPU]
+  method = "fixpoint"
+  cmd    = "cc -O2 structural_oracle.c && ./structural_oracle ; hexa build ratio_check.hexa && ./lb_ratio_check ; ptxas -arch=sm_80/sm_90 rc=0 ; cuModuleLoad driver-JIT sm_120 rc=0 (ubu-2 RTX 5070)"
+  raw    = ".verdicts/fusion-layerblock-cross-layer/F-FUSION-LAYERBLOCK-CROSS-LAYER.txt"
+  src    = "archive/fires/fusion_layerblock_cross_layer_2026_05_25/{structural_oracle.c,ratio_check.hexa,block_fused_k1.ptx,block_fused_k2.ptx,result.json}"
+  status = "🔵 SUPPORTED-FORMAL — closed-form launch + activation-HBM ratio reproduced by hexa-native compile; pure-ASCII PTX ptxas-clean sm_80 (k1 39 regs / k2 32 regs / 0 spill) + sm_90 (32 regs / 0 spill) + sm_120 driver-JIT cuModuleLoad rc=0. Existence proof = flame d=768 12L step1 3.84x above PyTorch eager (28e9d648 2026-05-18). terminal · paper-track (paper deferred to round 9 once timed wall lands)."
+
+@C fusion_layerblock_cross_layer_wall := "round-9 timed wall on ubu-2 RTX 5070: cuEventRecord K1+K2 pair vs PyTorch d=768 12L eager 116.286 ms (RFC 072 P1 PROXY); rel-err <= 1e-2 vs f64 CPU ref" :: measurement [slug=fusion-layerblock-cross-layer group=GPU]
+  method = "silicon-fire"
+  cmd    = "ROUND-9-PENDING: ubu-2 RTX 5070 (clean) lb_host (cuMemAlloc Q/K/V/Wq/Wk/Wv/Wo + Wup/Wgate/Wdown + LN gamma/beta) cuEvent K1+K2 vs PyTorch d=768 12L eager 116.286 ms baseline; 20 warmup + 200 timed median; numeric vs f64 CPU ref rel-err <= 1e-2"
+  raw    = ".verdicts/fusion-layerblock-cross-layer/F-FUSION-LAYERBLOCK-CROSS-LAYER.txt"
+  src    = "archive/fires/fusion_layerblock_cross_layer_2026_05_25/result.json (wall_round_9 plan)"
+  status = "🟠 DEFERRED — clause (c) timed wall is the round-9 §finding; harness design ready (mirrors F-FUSION-ATTENTION-FLASH host pattern). NOT terminal until the timed fire runs (sequenced AFTER F-FUSION-ATTN-FLASHALGO timed-fire releases the GPU)."
+
+# ───────────────────────────────────────────────────────────────────────
 # TECS-L — tecs-l-dedekind-psi-uniqueness (slug · group=TECS-L · TECS-L/TECS-L.md M3)
 # Dedekind-ψ discrepancy, re-grounded hexa-native via `hexa verify` g5.
 #

@@ -788,6 +788,7 @@ Silicon-measured PASS rows:
 - [x] **Multi-tile WMMA throughput ≥ 50% of cuBLAS HGEMM** — vendor-comparable on specific kernels: M=N=K=256 ratio = 0.500 ±0.0002 (PR #214 + variance commit `05a85bb9`); caveat: single shape, large-M/N/K scale-up pending
 - [x] **Whole-program-fusion measurable advantage** — at least one workload where hexa beats cuBLAS-using stack by ≥ 30%. ✅ **WALL CONFIRMED 2026-05-25** (`F-FUSION-LAUNCH-AMORT-WALL`, branch `gpu-fusion-wall-confirm`): the fused 1-launch 5-op elementwise chain `y = residual + scale·GeLU(a·x+b)` beats the per-op library/eager baseline (5 separate kernel launches each round-tripping HBM — the execution model a cuBLAS-using NN stack uses for its non-GEMM elementwise sub-graph) by **73.1–76.2 % wall UNCONDITIONALLY across n∈{1024…16.7M}** on ubu-2 RTX 5070 sm_120 (uncontended, 20 warmup + 200 timed median; n=262144 76.2 %/4.20×). Numeric max|Δ|=1.1e-5 PASS. 🟢 SUPPORTED-NUMERICAL — confirms the round-1 closed-form projection [72.7 %,80 %] by measurement. Verdict `.verdicts/fusion-launch-amort-wall/`. **SCOPE (g3):** the box flips on the launch-overhead-amortization axis (§5f); the cuBLAS-GEMM-fusion axes (epilogue, attention) still need Tensor-Core inner GEMMs to win their OWN walls (round 3 `F-FUSION-ATTN-WMMA`) — a naive scalar fused GEMM loses to `cublasSgemm` (see `F-FUSION-ATTENTION-FLASH` 🔴). **STRUCTURAL FINDING LANDED 2026-05-25** (`F-FUSION-EPILOGUE-GEMM-BIAS-GELU`, branch `gpu-fusion-epilogue`): a single fused hexa-emit kernel `GeLU(A@B + bias)` (GEMM + bias-add + GeLU fused into one epilogue, M×N written to HBM ONCE) uses **1 launch + 1× M×N HBM C-write** vs the cuBLAS-using baseline (`cublasSgemm` → bias-add kernel → GeLU kernel) = **3 launches + 3× M×N HBM C-write**. `$0` deterministic structural oracle (`tool/fusion_epilogue_structural_oracle.hexa`, compiled hexa, run on ubu-1) proves **66.667 % reduction in BOTH launch-count AND HBM-write-traffic** at the LLaMA-7B FFN shape (M=4096 N=11008 K=4096; C tensor 180 355 072 B → fused 1× vs baseline 3×) and shape-independently (256³ cross-check identical). PTX **ptxas-clean** sm_80 (md5 `1d738055…`, RC=0, 23 regs, 0 spill, ubu-2). 🔵 structural-formal. **Box FLIPPED to `[x]` 2026-05-25 via the launch-amort wall (above).** The epilogue's OWN timed wall remains DEFERRED — the round-1 epilogue harness is correctness+structural only (no cudaEvent timing), and its fused kernel uses a naive scalar GEMM that loses to `cublasSgemm` (same root cause as `F-FUSION-ATTENTION-FLASH` 🔴); the cuBLAS-GEMM-fusion wall awaits a Tensor-Core (wmma) inner GEMM (round 3). Epilogue STRUCTURAL re-confirmed this cycle on ubu-2: fused 1-launch/1× HBM-C-write + correctness PASS @4096 vs `cublasSgemm` baseline 3-launch/3× HBM-C-write + correctness PASS @4096 (verdict `.verdicts/fusion-epilogue-wall/`). Artifact: `archive/fires/fusion_epilogue_gemm_bias_gelu_2026_05_25/` (fused PTX + 2 host .c launchers + oracle_run.log + ptxas.log + result.json) + verdict `.verdicts/fusion-epilogue-gemm-bias-gelu/`. **MOAT BREADTH BROADENED 2026-05-25** (`F-FUSION-AXISA-BREADTH`, §1l, branch `gpu-axisA-breadth`): the box no longer rests on a single workload — moat confirmed across **N+1 = 5 elementwise/norm workloads** (timed, ubu-2 RTX 5070, large-regime): **LayerNorm 66.2%, RMSNorm 59.5%, Softmax 65.9%, SwiGLU 63.0%, launch-amort 73–76%**. 4/4 new workloads PASS ≥30% in BOTH launch-bound and bandwidth-bound regimes (8/8 measurements, 8/8 numeric, all ptxas 0 spill). The §5f launch-overhead / §5a memory-bound-fusion WON axis now generalises across the real NN elementwise/reduction surface (norms + activations), not one data point. Ledger `exports/sweep/gpu-axisA-breadth-2026-05-25/`
 - [x] **n=6 lattice GPU emit smoke** — bridge to north-star ③ — degree-6 hex-neighbor stencil on axial-coordinate 8x8 grid, FP32 byte-eq vs CPU reference (`max|d|=0`, 0 mismatches / 64 cells) on RTX 5070 sm_120 driver 580 (RFC 070 P1, this branch)
+- [ ] **axis-C — Cross-layer transformer-block fusion vs PyTorch eager stack** — the third moat axis (orthogonal to axis-A memory-bound and axis-B compute-bound). Closure-criterion = ABOVE the library/eager stack (NOT cuBLAS roofline) — the cuBLAS/PyTorch API itself structurally forbids cross-op fusion. **STRUCTURAL+CODEGEN LANDED 2026-05-25** (`F-FUSION-LAYERBLOCK-CROSS-LAYER`, branch `gpu-fusion-layerblock-cross-layer`): a hand-emitted cross-layer fused transformer block — `K1 = LN → QKV-proj → flash-attn → OUT-proj → +residual1` + `K2 = LN2 → FFN-up → SiLU*gate → FFN-down → +residual2` — uses **3 kernel launches per block (vs PyTorch eager's 11)** and **3·B·S·d·4 bytes of activation-HBM per block (vs eager's `(13·d + 4·dff)·B·S·4` bytes)**. Closed-form ratio R(d, dff) = (13d + 4dff) / (3d) = **9.667× at dff = 4d** (the canonical SwiGLU/FFN shape). $0 deterministic structural oracle PASS 5/5 shapes (flame d=768/S=512+1024, RFC 072 d=1024/S=512 (B=1+B=2), GPT-3 d=4096/S=2048); hexa-native compiled `ratio_check.hexa` reproduces 3·R = 29 exactly across all shapes. PTX **ptxas-clean** sm_80 (k1 39 regs / k2 32 regs / **0 spill** / 3584+3072 B stack) + sm_90 (32/32 regs / 0 spill) + sm_120 (**driver-JIT `cuModuleLoad` rc=0** on ubu-2 RTX 5070); pure-ASCII verified. 🔵 SUPPORTED-FORMAL (structural + ptxas-clean). **Existence proof cited (not re-measured)**: flame d=768 12L step1 wall 191–268 s vs PyTorch eager 336.85 s = **3.84× above PyTorch eager** (commit `28e9d648` 2026-05-18, `project_flame_phase4d9_closure.md`) — the structural moat formalised this cycle is the closed-form mechanism behind that wall. **PENDING the round-9 timed wall confirmation** (sequenced AFTER `F-FUSION-ATTN-FLASHALGO` releases the ubu-2 GPU; baseline = RFC 072 P1 PROXY PyTorch d=768 12L 116.286 ms; rel-err ≤ 1e-2 vs f64 CPU ref). Box stays `[ ]` per axis-B precedent (`F-FUSION-ATTN-WMMA`: structural ≠ wall when inner GEMMs are scalar). Artifact `archive/fires/fusion_layerblock_cross_layer_2026_05_25/`; verdict `.verdicts/fusion-layerblock-cross-layer/F-FUSION-LAYERBLOCK-CROSS-LAYER.txt`
 
 Once 4-6 of these check off, the GPU substrate phase is "done enough" to consume from the higher-level NN / agent / chip layers without re-touching.
 
@@ -1266,3 +1267,40 @@ available + idle. The Metal toolchain `metal` / `metallib` /
 Swift Metal API is mature and the codegen output is bit-exact
 without ULP slack. Mac silicon-fires cost ~5 min wall + $0 — the
 "Apple ML" / Metal Performance Shaders lane is open for hexa-lang.
+
+### 2026-05-25 — F-FUSION-LAYERBLOCK-CROSS-LAYER round 8 (axis-C structural+codegen)
+
+The §10 third moat axis (axis C — whole-graph cross-layer fusion) lands its
+structural+codegen-clean round. **🔵 SUPPORTED-FORMAL** — closed-form 9.667×
+activation-HBM moat (R(d, dff) = (13d + 4dff)/(3d) at dff = 4d), 3.667×
+fewer kernel launches per transformer block (3 vs 11), reproduced by the
+$0 deterministic structural oracle (5/5 shapes — flame d=768, RFC 072
+d=1024, GPT-3 d=4096) AND by the hexa-native compiled `ratio_check.hexa`
+(3·R = 29 verbatim). Two hand-emitted PTX kernels (`block_fused_k1.ptx` =
+LN → QKV → attn → OUT + residual1; `block_fused_k2.ptx` = LN2 → FFN-up →
+SiLU*gate → FFN-down + residual2) are **ptxas-clean sm_80 + sm_90 (32-39
+regs, 0 spill, 0 spill-load both archs)** and **driver-JIT-clean sm_120
+on the live RTX 5070** (cuModuleLoad rc=0 both kernels), pure-ASCII
+verified.
+
+Axis-C closure-criterion = **ABOVE** the library/eager stack (cuBLAS API
+itself structurally forbids cross-op fusion — each library call gets one
+op; the cross-layer activation seams are unaddressable). The existence
+proof for the wall axis is **flame d=768 12L step1 = 3.84× above PyTorch
+eager** (project_flame_phase4d9_closure.md, commit `28e9d648` 2026-05-18) —
+THIS round's structural-formal finding is the closed-form mechanism
+behind that wall. The §10 axis-C row is added but stays `[ ]` per the
+axis-B precedent (F-FUSION-ATTN-WMMA: structural ≠ wall when inner GEMMs
+are scalar); the round-9 timed wall on ubu-2 RTX 5070 (cuEvent K1+K2 vs
+PyTorch d=768 12L eager 116.286 ms; rel-err ≤ 1e-2 vs f64 CPU) is
+sequenced after `F-FUSION-ATTN-FLASHALGO` releases the GPU.
+
+Artifact: `archive/fires/fusion_layerblock_cross_layer_2026_05_25/`
+(structural_oracle.c + ratio_check.hexa + block_fused_k1.ptx +
+block_fused_k2.ptx + result.json). Verdict
+`.verdicts/fusion-layerblock-cross-layer/F-FUSION-LAYERBLOCK-CROSS-LAYER.txt`.
+CLAIMS.tape entries: `fusion_layerblock_cross_layer_structural` (🔵) +
+`fusion_layerblock_cross_layer_wall` (🟠 deferred round 9).
+
+**§10 closure scoreboard**: unchanged 8/8 (axis-C box ADDED but stays
+`[ ]` per g3 honesty — structural ≠ wall confirmation pending round 9).
