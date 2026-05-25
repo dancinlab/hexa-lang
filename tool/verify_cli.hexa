@@ -210,6 +210,8 @@ fn cmd_rubric() {
     println("             alpha_sf_branching(Lα,Lsf)  → 10^−Lα/(10^−Lα+10^−Lsf) (α branching ratio b_α, NUCLEAR C1, 2-arg)")
     println("             island_weight(Z,N,σ)        → exp(−(dZ²+dN²)/2σ²)     (island-of-stability magic-distance weight, NUCLEAR C2, 3-arg)")
     println("             anz_reason(Z,N,A,Q_α)       → 0/1/2/3/4 reason code   ((Z,N,A,Q_α) consistency guard, NUCLEAR G1, 4-arg)")
+    println("             model_validity_flag(Z,N)    → 0/1/2 validity code     (odd-A hindrance / domain flag, NUCLEAR G2, 2-arg)")
+    println("             consensus3_outlier_count(x0,x1,x2) → outlier count    (leave-one-out 3σ Byzantine guard, NUCLEAR G2, 3-arg)")
 }
 
 let NOCALC: int = -999999
@@ -1324,6 +1326,52 @@ fn _anz_reason(zf: float, nf: float, af: float, q_alpha_mev: float) -> float {
     return 0.0
 }
 
+// ── NUCLEAR G2 — odd-A model-validity + consensus outlier (sim.hexa mirror) ─
+//
+// (a) model_validity_flag — mirror of stdlib/nuclear/sim.hexa
+// _model_validity_code (NUCLEAR.md §3.4 · gap-audit top-3a). 2-arg (Z, N).
+// Returns the validity CODE as a float: 0=nominal (even-even) · 1=odd-A-
+// hindrance-not-modeled (Z,N differ in parity) · 2=out-of-domain (odd-odd).
+// Reference: (118,176)→0 · (114,175)→1 · (115,173)→2.
+fn _model_validity_flag(zf: float, nf: float) -> float {
+    let z = to_int(zf)
+    let n = to_int(nf)
+    let z_even = (z % 2) == 0
+    let n_even = (n % 2) == 0
+    if z_even && n_even { return 0.0 }
+    if z_even != n_even { return 1.0 }
+    return 2.0
+}
+
+// (b) consensus3_outlier_count — mirror of stdlib/nuclear/sim.hexa
+// consensus_alpha outlier guard for a 3-member ensemble (NUCLEAR.md §6.2 ·
+// gap-audit top-3b). 3-arg (x0, x1, x2). Leave-one-out: a member is flagged
+// iff |x_i − peer_mean| > 3·peer_spread (peer = the other two). Returns the
+// flagged-member count. Reference: (-2.82,-3.04,-2.93)→0 (in-bound) ·
+// (-2.82,-3.04,42.0)→1 (Byzantine member trimmed).
+fn _consensus3_outlier_count(x0: float, x1: float, x2: float) -> float {
+    let mut n_out = 0
+    let mut a = 0
+    while a < 3 {
+        let mut xa = x0
+        let mut p0 = x1
+        let mut p1 = x2
+        if a == 1 { xa = x1  p0 = x0  p1 = x2 }
+        if a == 2 { xa = x2  p0 = x0  p1 = x1 }
+        let peer_mean = (p0 + p1) / 2.0
+        let mut plo = p0
+        let mut phi = p0
+        if p1 < plo { plo = p1 }
+        if p1 > phi { phi = p1 }
+        let peer_spread = phi - plo
+        if _fabs(xa - peer_mean) > 3.0 * peer_spread {
+            n_out = n_out + 1
+        }
+        a = a + 1
+    }
+    return to_float(n_out)
+}
+
 // ── Bio-physical Phase 3 (demiurge cross-domain V2 closure) ─────────
 // Three remaining identities from the inbox patch — Higuchi sustained
 // release (2-arg, simple form) · Tafel overpotential (3-arg, log10 path)
@@ -1834,6 +1882,17 @@ fn _recompute_float(fn_name: string, a0: float, a1: float, a2: float, a3: float,
         if argc < 4 { return _NOCALC_F }
         return _anz_reason(a0, a1, a2, a3)
     }
+    // ── Nuclear G2 — odd-A model-validity + consensus outlier (NUCLEAR.md) ─
+    //   model_validity_flag(Z, N)         2-arg: 0=nominal 1=odd-A 2=odd-odd
+    //   consensus3_outlier_count(x0,x1,x2) 3-arg: leave-one-out 3σ outliers
+    if fn_name == "model_validity_flag" {
+        if argc < 2 { return _NOCALC_F }
+        return _model_validity_flag(a0, a1)
+    }
+    if fn_name == "consensus3_outlier_count" {
+        if argc < 3 { return _NOCALC_F }
+        return _consensus3_outlier_count(a0, a1, a2)
+    }
     // ── Bio-physical Phase 3 (demiurge cross-domain V2 closure) ─────────
     //   higuchi(k_H, t)                   2-arg: k_H * sqrt(t)
     //   tafel(a, b, j)                    3-arg: a + b * log10(j)
@@ -1953,6 +2012,8 @@ fn _is_float_fn(fn_name: string) -> bool {
         || fn_name == "island_weight"
         // Nuclear G1 — (Z,N,A,Q_α) consistency guard (NUCLEAR.md §3.3 · gap-audit):
         || fn_name == "anz_reason"
+        // Nuclear G2 — odd-A model-validity + consensus outlier (NUCLEAR.md §6.2 · gap-audit):
+        || fn_name == "model_validity_flag" || fn_name == "consensus3_outlier_count"
         // Bio-physical Phase 3 (demiurge cross-domain V2 closure):
         || fn_name == "higuchi" || fn_name == "tafel" || fn_name == "hagen_poiseuille"
         // TTR-ORAL / TTR-LAC bundle (topical PK + laser optics · INBOX T22:35Z):
