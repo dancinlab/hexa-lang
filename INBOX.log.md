@@ -2,6 +2,16 @@
 
 Append-only history sister of `INBOX.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
+## 2026-05-26T00:45Z — 🔥 hexa_v2 transpiler SEGFAULT on ALL .hexa (pool-wide regression) · from demiurge CERN BLUE-MAX
+
+> **severity: blocker** — `hexa run <any.hexa>` 가 transpile 단계에서 `self/native/hexa_v2` Segmentation fault → C 파일 미생성. file-specific 아님 (3400줄 `tool/verify_cli.hexa` 와 40줄 `stdlib/cern/plasma_wakefield.hexa` 둘 다 동일 크래시). **오늘 아침(2026-05-25)엔 ubu-1 에서 정상 동작**했음 → 이후 origin/main 회귀. `hexa verify --expr` (g5 verdict) 전면 차단.
+
+- [ ] **repro**: ubu-1 `cd ~/core/hexa-lang && hexa run stdlib/cern/plasma_wakefield.hexa` → `[1/2] hexa_v2 … tmp.hexa build/artifacts/…c` → `Segmentation fault (core dumped)` → `transpile failed — C file not produced`
+- [ ] **선행 증상**: 처음엔 `runtime.c:1954: call to undeclared function '_hxlcl_syscall3_cf'` (ubu-1 stale `self/runtime.c`) → `git checkout origin/main -- self/runtime.c` 로 선언(1112행)은 복구됐으나 그 후 transpiler 가 segfault 로 회귀 (별개 2차 버그)
+- [ ] **host matrix**: ubu-1 = hexa_v2 segfault · ubu-2 = segfault(기존) · pool-mini = stale 체크아웃(`compiler/atlas/calc_dispatch.hexa` 부재, PR #1023 이전) · local Mac = AMFI SIGKILL/route → **g5 verdict 가능 호스트 0개**
+- [ ] **fix 후보**: `hexa cc --regen` 로 hexa_v2 재빌드 (g61) · origin/main HEAD `8e748438`(OEIS O3) 부근 codegen 회귀 bisect · 최근 VERIFY-KIT V2 / OEIS 대량 atom 추가가 transpiler 메모리/재귀 한계 유발했는지 확인 (HEXA_MEM_CAP_MB=4096 표시됨)
+- [ ] **차단된 작업**: demiurge CERN BLUE-MAX (g69) — 신규 🔵 atom `wakefield_omega_p_sq` / `wakefield_e0_lambda_product` (sqrt-free algebraic, python-확인 deterministic) 의 `hexa verify --expr` verdict 대기 중 → toolchain 복구 시 즉시 verify+land 가능
+
 ## 2026-05-26T00:30Z — atlas_cli.hexa recompute-dispatch drift (@D d4) · from ANTIMATTER atlas-fold #1132
 
 **맥락**: ANTIMATTER 26 atom을 atlas fold(PR #1132)하던 중 발견. `tool/atlas_cli.hexa`가 `_recompute_register` 등 **별도 하드코딩 recompute dispatch 테이블**을 들고 있고 antimatter atom과 동기 안 됨 = @D d4 single-generic-dispatch 위반. 이번엔 `_adapt_verify_generic`이 `hexa verify --expr`로 delegate해서 fold는 됐지만, 근본은 drift.
