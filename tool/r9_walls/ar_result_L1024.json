@@ -1,0 +1,16 @@
+{
+  "falsifier": "F-FUSION-AUTOREGRESSIVE-DECODE-TIMED",
+  "L": 1024,
+  "fused_numeric": "FAIL",
+  "eager_numeric": "FAIL",
+  "fused_max_rel": 1.61278,
+  "eager_max_rel": 1.92771,
+  "ref_abs": 0.758695,
+  "fused_launches": 2,
+  "eager_launches": 17,
+  "fused_med_ms": 80.177055,
+  "fused_sd_ms": 0.120836,
+  "eager_med_ms": 1.931648,
+  "eager_sd_ms": 0.002948,
+  "pct_above_eager": -4050.7073
+}
