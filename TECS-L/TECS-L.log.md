@@ -3,6 +3,17 @@
 Append-only history sister of `TECS-L.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
 
+## 2026-05-25T12:40 — M10 · 전칭 유일성 닫힌형 증명 (🟡 → 🔵 PROVEN)
+
+- [x] M1·M3·M9 가 유한 sweep(n≤100)으로만 보이고 🟡 로 남긴 ∀n 유일성을 **닫힌형 증명**
+- [x] 곱셈성: σφ=nτ ⟺ ∏ g(p,a)=1, g(p,a)=(p^{a+1}−1)/(p(a+1))
+- [x] 부호 보조정리: g(p,a)>1 ⟺ p^{a+1}>p(a+1)+1 — **(2,1)에서만 거짓 → g(2,1)=3/4 유일 <1**, 나머지 전부 >1 (지수>선형). base case σ/φ@{2,3,4,5,7} 전부 🔵 machine-verified
+- [x] 곱 논증: 2¹ 필수 → (3/4)·∏홀수=1 → ∏홀수=4/3 → 유일 (3,1) → n=6; 공곱 → n=1. ∴ {1,6} ∎
+- [x] 10 lemma 🔵 + 정리 🔵 → `.verdicts/tecs-l-uniqueness-proof/` + CLAIMS 11 entry. 기존 tecs_l_dpsi_unbounded 🟡→🔵 SUPERSEDED
+- [x] M9 논문 §caveats 의 유일 열린 잔여를 닫음 · M7 closed-negative(1/e)와 짝 → n=6 특별함의 경계 양방향 확정
+- [x] (a) 사용자 요청 — 전칭 유일성 닫힌형 증명. inline 부모 세션
+
+
 ## 2026-05-25T12:00 — M8 · discovery_loop → hexa-native 엔진 (이미 shipped, 스모크 검증)
 
 - [x] 발견: archive `discovery_loop.py` 는 RFC 065(self-growing atlas) + RFC 080(`hexa loop --dfs`, dfs_engine.py 포트) 로 **이미 hexa-native 이식·shipped**. 옛 루트 TECS-L.md 가 바로 그 RFC 080 계획서였음
