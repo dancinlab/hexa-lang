@@ -221,6 +221,15 @@ fn cmd_rubric() {
     println("             is_neutron_drip(Sn)         → 1.0 if Sn<0            (neutron drip-line predicate, NUCLEAR N10, 1-arg)")
     println("             is_proton_drip(Sp)          → 1.0 if Sp<0            (proton drip-line predicate, NUCLEAR N10, 1-arg)")
     println("             dripline_margin(Sn,Sp)      → min(Sn,Sp) [MeV]       (closest-channel margin; <0 ⇒ past drip, NUCLEAR N10, 2-arg)")
+    println("             sigma_v_dt(T)               → C1θ√(ξ/m_rc²T³)e^−3ξ   (Bosch-Hale D-T ⟨σv⟩[cm³/s], T[keV], FUSION F1, 1-arg)")
+    println("             sigma_v_dhe3(T)             → Bosch-Hale ³He(d,p)⁴He (Bosch-Hale D-³He ⟨σv⟩[cm³/s], T[keV], FUSION F1, 1-arg)")
+    println("             sigma_v_ddp(T)              → Bosch-Hale D(d,p)T      (Bosch-Hale D-D p-branch ⟨σv⟩[cm³/s], T[keV], FUSION F1, 1-arg)")
+    println("             sigma_v_ddn(T)              → Bosch-Hale D(d,n)³He    (Bosch-Hale D-D n-branch ⟨σv⟩[cm³/s], T[keV], FUSION F1, 1-arg)")
+    println("             sigma_v_dd_total(T)         → ddp+ddn                 (Bosch-Hale D-D total ⟨σv⟩[cm³/s], T[keV], FUSION F1, 1-arg)")
+    println("             sigma_v_dt_e18(T)           → sigma_v_dt·1e18          (D-T ⟨σv⟩×1e18 — discriminating-ε view, FUSION F1, 1-arg)")
+    println("             triple_product(n,T,τ)       → n·T·τ_E                 (Lawson triple product [m⁻³·keV·s], FUSION F2, 3-arg)")
+    println("             q_plasma(Pfus,Pheat)        → P_fus/P_heat            (0-D plasma energy gain Q; design-feasibility, FUSION F2, 2-arg)")
+    println("             ignition_margin(Pf,W,τ,fα)  → (fα·Pf)/(W/τ_E)         (Lawson ignition margin; ≥1 ⇒ 0-D ignition, FUSION F2, 4-arg)")
 }
 
 let NOCALC: int = -999999
@@ -1563,6 +1572,119 @@ fn _dripline_margin(sn_mev: float, sp_mev: float) -> float {
     return sp_mev
 }
 
+// ── FUSION F1 — Bosch-Hale thermonuclear reactivity ⟨σv⟩(T) (sim.hexa
+//    sibling · stdlib/kernels/fusion_reactivity/reactivity.hexa mirror) ────
+//
+// Maxwellian-averaged fusion reactivity ⟨σv⟩ [cm³/s] vs ion temperature T
+// [keV]. VERBATIM mirror of the ①a kernel — same Table VII coefficients,
+// same Eqs. 12-14 arithmetic. The `--expr` atoms below gate the closed-form
+// identity against Bosch & Hale's OWN Table VIII tabulated ⟨σv⟩ column (the
+// paper's verification table) → 🟢 NUMERICAL within the Table VIII 4-sig-fig
+// rounding, or 🔴 at the engine large-coefficient float-floor (same class as
+// the VS/Royer/sf_log10_t nuclear atoms).
+// Source: H.-S. Bosch & G. M. Hale, Nucl. Fusion 32, 611 (1992),
+// DOI 10.1088/0029-5515/32/4/I07, Table VII (fit params) / Table VIII (⟨σv⟩).
+//
+//   θ = T/(1 − T·(C2+T·(C4+T·C6))/(1+T·(C3+T·(C5+T·C7))))       (Eq. 13)
+//   ξ = (B_G²/(4θ))^(1/3)                                       (Eq. 14)
+//   ⟨σv⟩ = C1·θ·√(ξ/(m_r c²·T³))·exp(−3ξ)   [cm³/s]            (Eq. 12)
+//
+// Bosch-Hale Eqs. 12-14 core evaluator (T in keV, ⟨σv⟩ in cm³/s).
+fn _bosch_hale_sigma_v(t_kev: float, bg: float, mrc2: float,
+                       c1: float, c2: float, c3: float, c4: float,
+                       c5: float, c6: float, c7: float) -> float {
+    if t_kev <= 0.0 { return _NOCALC_F }
+    let t = t_kev
+    let num = t * (c2 + t * (c4 + t * c6))
+    let den = 1.0 + t * (c3 + t * (c5 + t * c7))
+    let theta = t / (1.0 - num / den)
+    let xi = pow(bg * bg / (4.0 * theta), 1.0 / 3.0)
+    return c1 * theta * sqrt(xi / (mrc2 * t * t * t)) * exp(0.0 - 3.0 * xi)
+}
+
+// D-T  [T(d,n)⁴He]. 1-arg (T_i [keV]). Bosch-Hale Table VII column 1.
+// Reference (Table VIII): T=10 keV → 1.136e-16, T=20 keV → 4.330e-16 cm³/s.
+fn _sigma_v_dt(t_kev: float) -> float {
+    return _bosch_hale_sigma_v(t_kev, 34.3827, 1124656.0,
+        1.17302e-9, 1.51361e-2, 7.51886e-2, 4.60643e-3, 1.35000e-2,
+        0.0 - 1.06750e-4, 1.36600e-5)
+}
+
+// D-³He  [³He(d,p)⁴He]. 1-arg (T_i [keV]). Bosch-Hale Table VII column 2.
+// Reference (Table VIII): T=10 keV → 2.126e-19, T=20 keV → 3.482e-18 cm³/s.
+fn _sigma_v_dhe3(t_kev: float) -> float {
+    return _bosch_hale_sigma_v(t_kev, 68.7508, 1124572.0,
+        5.51036e-10, 6.41918e-3, 0.0 - 2.02896e-3, 0.0 - 1.91080e-5,
+        1.35776e-4, 0.0, 0.0)
+}
+
+// D-D proton branch  [D(d,p)T]. 1-arg (T_i [keV]). Table VII column 3.
+// Reference (Table VIII): T=10 keV → 5.781e-19, T=20 keV → 2.399e-18 cm³/s.
+fn _sigma_v_ddp(t_kev: float) -> float {
+    return _bosch_hale_sigma_v(t_kev, 31.3970, 937814.0,
+        5.65718e-12, 3.41267e-3, 1.99167e-3, 0.0, 1.05060e-5, 0.0, 0.0)
+}
+
+// D-D neutron branch  [D(d,n)³He]. 1-arg (T_i [keV]). Table VII column 4.
+// Reference (Table VIII): T=10 keV → 6.023e-19, T=20 keV → 2.603e-18 cm³/s.
+fn _sigma_v_ddn(t_kev: float) -> float {
+    return _bosch_hale_sigma_v(t_kev, 31.3970, 937814.0,
+        5.43360e-12, 5.85778e-3, 7.68222e-3, 0.0, 0.0 - 2.96400e-6, 0.0, 0.0)
+}
+
+// Total D-D reactivity = D(d,p)T + D(d,n)³He branches. 1-arg (T_i [keV]).
+// Reference (Table VIII DDtotal): T=10 keV → 1.180e-18, T=20 keV → 5.002e-18.
+fn _sigma_v_dd_total(t_kev: float) -> float {
+    if t_kev <= 0.0 { return _NOCALC_F }
+    return _sigma_v_ddp(t_kev) + _sigma_v_ddn(t_kev)
+}
+
+// D-T reactivity scaled ×1e18 [cm³/s · 1e18]. 1-arg (T_i [keV]). The raw
+// ⟨σv⟩ is ~1e-16, far below the verify engine's ABSOLUTE ε=1e-9 gate, so a
+// raw `--expr sigma_v_dt` verdict is non-discriminating (any expected value
+// within 1e-9 of ~1e-16 trivially passes). This ×1e18 view lifts D-T@10keV
+// to ~113.6 — an O(100) value where |Δ|≤1e-9 is a GENUINE full-precision
+// discriminator against the Bosch-Hale Table VIII value (113.6 = 1.136e-16
+// ×1e18). Reference: T=10 keV → 113.617..., T=20 keV → 433.02...
+fn _sigma_v_dt_e18(t_kev: float) -> float {
+    let raw = _sigma_v_dt(t_kev)
+    if raw == _NOCALC_F { return _NOCALC_F }
+    return raw * 1.0e18
+}
+
+// ── FUSION F2 — Lawson triple product / 0-D Q_plasma (kernel mirror) ─────
+//
+// Classic 0-D D-T power balance. VERBATIM mirror of the ①a kernel
+// Lawson / Q_plasma functions. Provenance: Lawson 1957 (Proc. Phys. Soc.
+// B 70, 6) triple-product ignition statement + textbook volumetric power
+// balance (Wesson "Tokamaks", Freidberg). Identities, not a fit.
+
+// Lawson triple product n_i·T_i·τ_E [m⁻³·keV·s]. 3-arg. Pure product.
+// Reference: n=1e20, T=15, τ=3 → 4.5e21.
+fn _triple_product(n_i_m3: float, t_kev: float, tau_e_s: float) -> float {
+    return n_i_m3 * t_kev * tau_e_s
+}
+
+// Q_plasma = P_fusion / P_heat. 2-arg [W, W]. P_heat ≤ 0 → _NOCALC_F.
+// Reference: P_fus=100, P_heat=50 → 2.0.
+fn _q_plasma(p_fusion_w: float, p_heat_w: float) -> float {
+    if p_heat_w <= 0.0 { return _NOCALC_F }
+    return p_fusion_w / p_heat_w
+}
+
+// Lawson ignition margin = (f_α·P_fus)/(W/τ_E), volumetric. 4-arg
+// (P_fus_density [W/m³], W_density [J/m³], τ_E [s], f_α). margin ≥ 1 ⇒
+// 0-D ignition criterion crossed. τ_E ≤ 0 or P_loss ≤ 0 → _NOCALC_F.
+// Reference: P_fus=1e5, W=1e6, τ=3, f_α=0.1989 → (0.1989·1e5)/(1e6/3)
+//            = 19890/333333.33 = 0.059670...
+fn _ignition_margin(p_fus_density_w: float, w_density_j: float,
+                    tau_e_s: float, alpha_fraction: float) -> float {
+    if tau_e_s <= 0.0 { return _NOCALC_F }
+    let p_loss = w_density_j / tau_e_s
+    if p_loss <= 0.0 { return _NOCALC_F }
+    return (alpha_fraction * p_fus_density_w) / p_loss
+}
+
 // ── Bio-physical Phase 3 (demiurge cross-domain V2 closure) ─────────
 // Three remaining identities from the inbox patch — Higuchi sustained
 // release (2-arg, simple form) · Tafel overpotential (3-arg, log10 path)
@@ -2130,6 +2252,46 @@ fn _recompute_float(fn_name: string, a0: float, a1: float, a2: float, a3: float,
         if argc < 2 { return _NOCALC_F }
         return _dripline_margin(a0, a1)
     }
+    // ── FUSION F1 — Bosch-Hale ⟨σv⟩(T) reactivity (Nucl. Fusion 32, 611) ─
+    //   sigma_v_dt(T)          1-arg: D-T  [T(d,n)⁴He] ⟨σv⟩ [cm³/s]
+    //   sigma_v_dhe3(T)        1-arg: D-³He [³He(d,p)⁴He] ⟨σv⟩ [cm³/s]
+    //   sigma_v_ddp(T)         1-arg: D-D proton [D(d,p)T] ⟨σv⟩ [cm³/s]
+    //   sigma_v_ddn(T)         1-arg: D-D neutron [D(d,n)³He] ⟨σv⟩ [cm³/s]
+    //   sigma_v_dd_total(T)    1-arg: D-D total (both branches) [cm³/s]
+    if fn_name == "sigma_v_dt" {
+        return _sigma_v_dt(a0)
+    }
+    if fn_name == "sigma_v_dhe3" {
+        return _sigma_v_dhe3(a0)
+    }
+    if fn_name == "sigma_v_ddp" {
+        return _sigma_v_ddp(a0)
+    }
+    if fn_name == "sigma_v_ddn" {
+        return _sigma_v_ddn(a0)
+    }
+    if fn_name == "sigma_v_dd_total" {
+        return _sigma_v_dd_total(a0)
+    }
+    if fn_name == "sigma_v_dt_e18" {
+        return _sigma_v_dt_e18(a0)
+    }
+    // ── FUSION F2 — Lawson triple product / 0-D Q_plasma (Lawson 1957) ──
+    //   triple_product(n_i, T, τ_E)   3-arg: n·T·τ_E [m⁻³·keV·s]
+    //   q_plasma(P_fus, P_heat)       2-arg: P_fusion / P_heat
+    //   ignition_margin(Pf,W,τ,f_α)   4-arg: (f_α·P_fus)/(W/τ_E)
+    if fn_name == "triple_product" {
+        if argc < 3 { return _NOCALC_F }
+        return _triple_product(a0, a1, a2)
+    }
+    if fn_name == "q_plasma" {
+        if argc < 2 { return _NOCALC_F }
+        return _q_plasma(a0, a1)
+    }
+    if fn_name == "ignition_margin" {
+        if argc < 4 { return _NOCALC_F }
+        return _ignition_margin(a0, a1, a2, a3)
+    }
     // ── Bio-physical Phase 3 (demiurge cross-domain V2 closure) ─────────
     //   higuchi(k_H, t)                   2-arg: k_H * sqrt(t)
     //   tafel(a, b, j)                    3-arg: a + b * log10(j)
@@ -2259,6 +2421,13 @@ fn _is_float_fn(fn_name: string) -> bool {
         // Nuclear N10 — drip-line predicates (NUCLEAR.md §4.5 · dripline.hexa · 2026-05-25):
         || fn_name == "is_neutron_drip" || fn_name == "is_proton_drip"
         || fn_name == "dripline_margin"
+        // FUSION F1 — Bosch-Hale ⟨σv⟩(T) reactivity (Nucl. Fusion 32, 611 (1992) · 2026-05-25):
+        || fn_name == "sigma_v_dt" || fn_name == "sigma_v_dhe3"
+        || fn_name == "sigma_v_ddp" || fn_name == "sigma_v_ddn"
+        || fn_name == "sigma_v_dd_total" || fn_name == "sigma_v_dt_e18"
+        // FUSION F2 — Lawson triple product / 0-D Q_plasma (Lawson 1957 · 2026-05-25):
+        || fn_name == "triple_product" || fn_name == "q_plasma"
+        || fn_name == "ignition_margin"
         // Bio-physical Phase 3 (demiurge cross-domain V2 closure):
         || fn_name == "higuchi" || fn_name == "tafel" || fn_name == "hagen_poiseuille"
         // TTR-ORAL / TTR-LAC bundle (topical PK + laser optics · INBOX T22:35Z):
