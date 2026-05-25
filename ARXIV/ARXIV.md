@@ -14,7 +14,7 @@ arxiv query → 논문 추상 → claim 추출 → 3갈래 분류:
 (c) project-specific → cross-repo INBOX handoff (g60).
 4 axis = anima(의식/IIT/Φ) · demiurge(반물질 공정) · phanes(자율발견) · hexa-lang(컴파일러/수론). naive dump 금지 — verify-gate 또는 명시적 handoff 만.
 
-> **진행 2026-05-26**: A1(POC, 12편) + **A2(ANIMA axis, 11편 흡수 · 6 anima LIFE H 핸드오프 g60)** DONE. verify-able 누적 0 (in-tree IIT primitive 부재 — V5 IIT 엔진 랜딩 후 verify-able-CANDIDATE 회수). 다음 = A3 DEMIURGE axis.
+> **진행 2026-05-26**: A1(POC, 12편) + A2(ANIMA, 11편 · 6 anima H 핸드오프) + **A3(DEMIURGE axis, 12편 흡수 · 12 demiurge 7공정 핸드오프 g60)** DONE. **A3 = ARXIV 첫 verify-able 축** — 정수-exact ANTIMATTER 물리상수 5종 🔵 LIVE 확인(pair-threshold ⓵ ×2 + cooling-scaling ⓸ ×3, DEMIURGE 가 verify-native; A1·A2 는 0). Penning 3주파 float·1S-2S Rydberg 는 V9 float-driver 후보. 다음 = A4 PHANES axis.
 
 ## 1 · 4 axis × arxiv 카테고리
 
@@ -29,7 +29,7 @@ arxiv query → 논문 추상 → claim 추출 → 3갈래 분류:
 
 - [x] A1 — ingest POC: 12 IIT-Φ 논문 triage (0 verify-able / 5 🟡 citation / 7 anima handoff). 파이프라인 검증. 다음 = A2 (ANIMA axis 본격 흡수).
 - [x] A2 — ANIMA axis: consciousness/IIT 논문 11편 흡수 → anima LIFE H_xxx cross-link 6 handoff (g60). 0 verify-able (in-tree IIT primitive 부재 — V5 IIT 엔진 후 4 candidate → 첫 🟢). 7 🟡 citation. verdict=`.verdicts/arxiv-anima-absorb/triage_a2.txt` · docs=`docs/a2-anima-axis.md`.
-- [ ] A3 — DEMIURGE axis: 반물질 7공정 물리 논문 흡수 → ANTIMATTER verify atom 보강 (handoff to ~/core/demiurge)
+- [x] A3 — DEMIURGE axis: 반물질 공장 7공정 물리 논문 12편 흡수 → ANTIMATTER 7공정 cross-link 12 handoff (g60, ~/core/demiurge). **ARXIV 첫 verify-able 축** — 정수-exact 물리상수 5종 🔵 LIVE(pair_threshold_kinetic/total_factor ⓵ · cyclotron_cool_massexponent/bratio_exponent/bexponent ⓸; HEAD #1153) + 1 🔴 neg ctrl. 7 🟡 citation. Penning 3주파 float(`penning_invariance` @F 🟢)·1S-2S Rydberg = V9 float-driver candidate. verdict=`.verdicts/arxiv-demiurge-absorb/triage_a3.txt` · docs=`docs/a3-demiurge-axis.md`.
 - [ ] A4 — PHANES axis: autonomous-discovery/OUROBOROS 논문 흡수 → loop 알고리즘 (handoff to ~/core/phanes)
 - [ ] A5 — HEXA-LANG axis: compiler/number-theory 논문 흡수 → atlas/codegen 보강 (in-repo)
 - [ ] A6 — cross-repo handoff 메커니즘 정립 (g60 INBOX) — 흡수 finding → 각 repo INBOX 분배 + ack 루프
