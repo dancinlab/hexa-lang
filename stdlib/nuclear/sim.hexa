@@ -1,6 +1,6 @@
 // HEXA Standard Library — nuclear/sim
 //
-// @version 0.7.0
+// @version 0.8.0
 // @capabilities [pure, io]
 //
 // NUCLEAR.md §6 Phase 4 #1 — N7 hot closed-form post-processing,
@@ -19,6 +19,9 @@
 //   pub fn consensus_alpha(values: [float]) -> Consensus           // NC3
 //   pub fn sf_log10_t(Z, A) -> float                               // C1 (SF)
 //   pub fn sf_log10_t_hindered(Z, A) -> float                      // C3 (Hoffman HF)
+//   pub fn sf_log10_t_zwp(Z, A) -> float                           // C4 (2nd SF)
+//   pub fn sf_consensus(values: [float]) -> ConsensusSF            // C4 (SF spread)
+//   pub fn sf_consensus_cell(Z, A) -> ConsensusSF                  // C4 (one-shot)
 //   pub fn total_halflife(L_alpha, L_sf) -> DecayTotal             // C1 (combine)
 //   pub fn total_halflife_guarded(L_alpha, L_sf, Z) -> DecayTotal  // C3 (SF guard)
 //   pub fn c_gate_total_cell(Z, A, Q_alpha_MeV) -> DecayTotal      // C1 (one-shot)
@@ -451,6 +454,115 @@ pub fn sf_log10_t(Z: int, A: int) -> float {
         + _SF_C4 * x * asym * asym / Af
 }
 
+// ── C4 (PR2) — 2nd SF formula: Zdeb-Warda-Pomorski 2013 liquid-drop ────
+//
+// gap-audit Round-2 A (PR2): α-decay carries a 2-formula ensemble
+// (Viola-Seaborg + Royer) with a consensus spread; SF used only Ren-Xu —
+// a single-source SF channel with NO honest uncertainty band. C4 adds a
+// SECOND, independently-published SF half-life formula so SF carries a
+// 2-formula spread mirroring ConsensusAlpha.
+//
+// VERBATIM formula — A. Zdeb, M. Warda, K. Pomorski, Phys. Rev. C 87,
+// 024308 (2013) (DOI 10.1103/PhysRevC.87.024308), "Spontaneous fission
+// half-lives of nuclei in a phenomenological model" (a la Świątecki 1955).
+// Eq. (4) is the liquid-drop F(Z) fission-lifetime estimate (two crossing
+// straight lines in Z) and Eq. (5) adds the global SF hindrance:
+//   log10(T_sf / y) = F(Z) − 7.5·δM(Z,N) + parity
+//     F(Z) = −4·Z + 371.2   for Z < 104
+//     F(Z) = −42.8          for Z ≥ 104
+//     parity = 0 (even-even) · 10.3 (odd-A) · 17.8 (odd-odd)   [Eq.(5) verbatim]
+//   "this shift … global hindrance factor … is equal to h = 10.3 for odd-A
+//    nuclei and 17.8 for odd-odd systems."  (PRC 87 024308, §III)
+//
+// HONEST SCOPE: the δM(Z,N) ground-state microscopic energy correction
+// (Eq. 3, needs an AME/Möller mass table) is OMITTED here — this kernel is
+// the BARE liquid-drop F(Z) + parity estimate (δM = 0), i.e. SHELL
+// CORRECTIONS ARE NOT INCLUDED. The paper's own δM-free F(Z) is "the
+// liquid-drop estimate of the fission lifetime" (§III); without δM it
+// UNDER-predicts T_SF in the shell-stabilised island (the island-of-
+// stability lengthening is exactly the δM term). It is therefore a
+// CONSERVATIVE (short-T_SF) SF bound, used here only to give the SF channel
+// an honest 2-formula spread — NOT a precision predictor. §3.3: F(Z) +
+// parity coefficients cited verbatim, not refit; δM honestly dropped (no
+// AME mass-table dependency in this libm-only closed-form). Output is
+// log10 years; converted to log10 seconds via +log10(3.15576e7 s/y).
+let _SF_ZWP_A0:      float =      371.2    // Eq.(4) intercept (Z < 104)
+let _SF_ZWP_SLOPE:   float = 0.0 - 4.0     // Eq.(4) slope (linear in Z)
+let _SF_ZWP_PLATEAU: float = 0.0 - 42.8    // Eq.(4) plateau (Z ≥ 104)
+let _SF_ZWP_Z_KNEE:  int   =      104      // Eq.(4) crossing-line knee
+let _SF_ZWP_H_ODDA:  float =      10.3     // Eq.(5) odd-A  hindrance (log y)
+let _SF_ZWP_H_ODDODD:float =      17.8     // Eq.(5) odd-odd hindrance (log y)
+let _SF_Y_TO_S_LOG:  float =      7.499122 // log10(365.25·86400) yr → s
+
+fn _sf_zwp_parity(Z: int, N: int) -> float {
+    let code = _model_validity_code(Z, N)   // 0 ee · 1 odd-A · 2 odd-odd
+    if code == 0 { return 0.0 }
+    if code == 1 { return _SF_ZWP_H_ODDA }
+    return _SF_ZWP_H_ODDODD
+}
+
+// Zdeb-Warda-Pomorski 2013 bare liquid-drop SF log10 T₁/₂ [s] (δM omitted).
+// 2nd SF formula for the C4 consensus. A must be > 0 (sentinel 0.0).
+pub fn sf_log10_t_zwp(Z: int, A: int) -> float {
+    if A <= 0 { return 0.0 }
+    let N = A - Z
+    let Zf = to_float(Z)
+    let mut fz = _SF_ZWP_A0 + _SF_ZWP_SLOPE * Zf   // F(Z), Z < 104
+    if Z >= _SF_ZWP_Z_KNEE { fz = _SF_ZWP_PLATEAU } // plateau, Z ≥ 104
+    // log10(T_sf / y) = F(Z) + parity (δM = 0); → log10 s.
+    return fz + _sf_zwp_parity(Z, N) + _SF_Y_TO_S_LOG
+}
+
+// ── C4 — SF cross-formula consensus (MIRROR of ConsensusAlpha) ─────────
+//
+// Same unweighted mean + raw (max−min) spread semantics as consensus_alpha
+// (NC3) — keep the two in sync. SF systematics scatter is documented as
+// LARGER than α (±2-3 dex vs α's ±0.5-1 dex, s4), so the 2-formula SF
+// spread is wider than the α spread — that is the honest SF uncertainty
+// band, NOT a defect. Distinct struct shape from ConsensusAlpha (no
+// Byzantine leave-one-out trim: with n=2 SF formulas it is never active,
+// exactly as for the VS,Royer α pair). Edge case n=0 → all-zero sentinel.
+struct ConsensusSF {
+    mean:       float,
+    min:        float,
+    max:        float,
+    spread_dex: float,
+    n:          int,
+}
+
+pub fn sf_consensus(values: [float]) -> ConsensusSF {
+    let n = len(values)
+    if n == 0 {
+        return ConsensusSF { mean: 0.0, min: 0.0, max: 0.0,
+                             spread_dex: 0.0, n: 0 }
+    }
+    let nf = to_float(n)
+    let mut sum: float = 0.0
+    let mut lo: float = values[0]
+    let mut hi: float = values[0]
+    let mut i = 0
+    while i < n {
+        let v = values[i]
+        sum = sum + v
+        lo = _fmin(lo, v)
+        hi = _fmax(hi, v)
+        i = i + 1
+    }
+    let mean = sum / nf
+    return ConsensusSF { mean: mean, min: lo, max: hi,
+                         spread_dex: hi - lo, n: n }
+}
+
+// One-shot SF 2-formula consensus from (Z, A): Ren-Xu (hindered, C3) +
+// Zdeb-Warda-Pomorski (C4) → ConsensusSF. The honest SF channel with a
+// 2-formula uncertainty band, mirroring the α (VS,Royer) consensus.
+pub fn sf_consensus_cell(Z: int, A: int) -> ConsensusSF {
+    let renxu = sf_log10_t_hindered(Z, A)
+    let zwp   = sf_log10_t_zwp(Z, A)
+    let v: [float] = [renxu, zwp]
+    return sf_consensus(v)
+}
+
 // ── C1 combiner — competing α + SF partial rates → total survival ──────
 //
 // Two parallel decay channels add their partial DECAY RATES (λ = ln2/T):
@@ -846,6 +958,20 @@ fn _emit_c1(name: string, Z: int, A: int, Q_alpha_MeV: float) {
             "  L_total=" + to_string(d.log10_T_total_s) +
             "  b_alpha=" + to_string(d.alpha_branching) +
             "  dominant=" + dom + sfflag)
+}
+
+// C4 demo row: SF 2-formula consensus (Ren-Xu hindered + Zdeb-Warda-Pomorski)
+// → mean + raw spread, mirroring the α (VS,Royer) consensus.
+fn _emit_sfc(name: string, Z: int, A: int) {
+    let rx = sf_log10_t_hindered(Z, A)
+    let zw = sf_log10_t_zwp(Z, A)
+    let c  = sf_consensus_cell(Z, A)
+    println("  · " + name +
+            ": L_SF_RenXu=" + to_string(rx) +
+            "  L_SF_ZWP=" + to_string(zw) +
+            "  mean=" + to_string(c.mean) +
+            "  spread_dex=" + to_string(c.spread_dex) +
+            "  n=" + to_string(c.n))
 }
 
 // Guard demo row: (Z,N,A)-explicit checked cell — shows valid + reason for
@@ -1358,6 +1484,20 @@ fn main() {
     _emit_c1("Fl-289  (Z=114, A=289, Q=9.71  · odd-A)",
              114, 289, 9.71)
 
+    // ── C4 SF 2-formula consensus (Ren-Xu hindered + Zdeb-Warda-Pomorski) ─
+    // SF now carries an honest 2-formula spread mirroring the α (VS,Royer)
+    // consensus. The SF spread is WIDER than the α spread (SF systematics
+    // scatter ±2-3 dex >> α ±0.5-1 dex, s4) — the honest SF uncertainty band.
+    // Zdeb-WP is the bare liquid-drop F(Z)+parity (δM omitted), a CONSERVATIVE
+    // short-T_SF bound, NOT a precision predictor (PR2 honest scope).
+    println("[nuclear+verify · C4] SF 2-formula consensus (Ren-Xu 2005 ⊕ " +
+            "Zdeb-Warda-Pomorski PRC87 024308; log10 T_SF [s])")
+    _emit_sfc("U-238   (Z=92,  A=238, e-e)", 92, 238)
+    _emit_sfc("Cm-244  (Z=96,  A=244, e-e)", 96, 244)
+    _emit_sfc("Og-294  (Z=118, A=294, e-e)", 118, 294)
+    _emit_sfc("Lv-293  (Z=116, A=293, odd-A)", 116, 293)
+    _emit_sfc("Fl-289  (Z=114, A=289, odd-A)", 114, 289)
+
     // ── C2 island-weighted composite (C1 α⊕SF total × magic-number Gaussian)
     // Sources the (c)-score from C1's TOTAL survival (not α-only) and folds
     // in island_weight(Z,N,σ) (σ=6.0 default). Re-ranks toward the island.
@@ -1480,6 +1620,20 @@ fn main() {
             "NOT a hard composite=0 collapse (@D d2). The hindrance numbers " +
             "are verbatim-cited, not refit (§3.3); the guard is a domain " +
             "gate, not a fabricated value.")
+    println("[scope] (s4c PR2) SF 2-formula consensus: C4 adds a SECOND " +
+            "published SF formula (Zdeb-Warda-Pomorski PRC87 024308, bare " +
+            "liquid-drop F(Z)+parity, δM shell-correction OMITTED) so SF " +
+            "carries a 2-formula spread (sf_consensus) mirroring the α " +
+            "(VS,Royer) consensus. The SF spread is WIDER than the α spread " +
+            "(SF systematics scatter ±2-3 dex >> α ±0.5-1 dex) — the honest " +
+            "SF uncertainty band, not a defect. Zdeb-WP without δM UNDER-" +
+            "predicts T_SF in the shell-stabilised island (δM IS the island " +
+            "lengthening), so it is a CONSERVATIVE short-T_SF bound, NOT a " +
+            "precision predictor; it is used only to honest-bound the SF " +
+            "channel. The α⊕SF (c)-gate total still sources the SF leg from " +
+            "Ren-Xu-hindered (C1/C3) — C4 is the uncertainty band, not a " +
+            "swap. F(Z)+parity coefficients verbatim-cited, δM honestly " +
+            "dropped (no AME mass-table dep in this libm closed-form, §3.3).")
     println("[scope] (s5) Path A microkernel: this module is libm-only " +
             "closed-form (no external binary, no install gate). NUCLEAR.md " +
             "§6 Phase 4 #1 land — mirror of RTSC.md §9.9.1 Phase 4 #1 " +
@@ -1498,6 +1652,10 @@ fn main() {
     println("[cite] D.C. Hoffman 1993 · UCRL-JC-115794 (Actinides-93, Santa " +
             "Fe) p.4 — SF hindrance log HF~5 (odd-A) / ~10 (odd-odd) " +
             "[C3/PR1 odd-A hindrance addend, verbatim].")
+    println("[cite] A. Zdeb, M. Warda, K. Pomorski 2013 · Phys. Rev. C 87 " +
+            "024308 (DOI 10.1103/PhysRevC.87.024308) — 2nd SF formula " +
+            "(liquid-drop F(Z) Eq.4 + parity h=10.3 odd-A / 17.8 odd-odd " +
+            "Eq.5; δM omitted) [C4/PR2 SF consensus, verbatim].")
     println("[anchor] NUCLEAR.md §2 (c) gate + §4.2 (N7 cohort spec) + " +
             "§6 (Phase 4 #1 microkernel port) + §7 (R4 invariant block)")
     println("[anchor] RTSC.md §9.9.1 Phase 4 (B→A microkernel transition " +
