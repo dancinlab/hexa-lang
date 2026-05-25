@@ -1777,6 +1777,152 @@
   src    = "axis F family (e) F8 — TECS-L/docs/f8-cross-domain-bridge.md. Anchors the arithmetic kernel to its pre-existing 🔵 verdicts: M1 (.verdicts/tecs-l-n6-identity/), M3 (.verdicts/tecs-l-dedekind-psi-discrepancy/), M10 (.verdicts/tecs-l-n6-universal-uniqueness/). Honest separation: chip-comb 'n=6' = graph degree (vertex neighbor count = 6 in hex tiling), NOT divisor-function n=6; FIRMWARE.md §6 explicitly excludes 'lattice n=6' from verification — policy-level confirmation of the homonym separation."
   status = "🔵 BRIDGED-AT-IDENTITY-LAYER + 🟠 HONESTLY-SEPARATED-AT-SYSTEMS-LAYER — survey terminal. 3 real bridges 🔵 + 1 indirect 🟡 + 3 incidental homonyms 🟠 + 13 no-bridge (normal pillar separation). No new bridges invented; method=survey reflects classification-only. Follow-up candidates (deferred): (1) g5 re-verify the 5 atlas foundation L-laws' arithmetic kernel for 🔵 SUPPORTED-FORMAL verdict files; (2) ANIMA Psi_balance = phi/tau@n=6 = 1/2 vs M7 Golden Zone 1/e closed-negative quantitative bridge; (3) speculative /kick seed: chip-comb degree-6 vs sigma(2)*tau(2)=6 (likely 🔴 closed-negative). paper_significance NOT satisfied — F8 has no new falsifier; the arithmetic core is already covered by PAPER/tecs-l-n6-identity-locus."
 
+# -----------------------------------------------------------------------------
+# TECS-L axis F (NOVEL) — tecs-l-oeis-mining (slug · group=TECS-L · F3)
+# OEIS reverse-lookup at n=6: scan sequences whose a(6) matches σ/τ/φ-derived
+# values in the TECS-L atlas. Filter: those that NOT already covered by other
+# slugs (tecs-l-n6-identity / tecs-l-n6-characterizations / tecs-l-physics-
+# constants / tecs-l-hypotheses / tecs-l-modform-* / tecs-l-mersenne-*).
+# Method = "expr" (hexa-native recompute) + "citation" (compound arithmetic).
+# Honest result: 17 OEIS sequences scanned, every n=6 value reproduces, but
+# nearly all are well-known catalogue entries. 10 🔵 direct + 7 🟡 compound.
+# No new atom required — hexa σ/τ/φ + gamma0_index cover all hits.
+# F3 lane = systematic catalogue cross-check, not breakthrough discovery.
+# -----------------------------------------------------------------------------
+
+@C tecs_l_oeis_A000005_tau6 := "OEIS A000005 τ(n) divisor count: a(6)=4" :: formula [slug=tecs-l-oeis-mining group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr tau 6 4"
+  raw    = ".verdicts/tecs-l-oeis-mining/A000005_tau6.txt"
+  src    = "OEIS A000005 — number of divisors. https://oeis.org/A000005"
+  status = "🔵 SUPPORTED-FORMAL — hexa tau(6)=4 reproduces OEIS A000005 a(6)."
+
+@C tecs_l_oeis_A000010_phi6 := "OEIS A000010 φ(n) Euler totient: a(6)=2" :: formula [slug=tecs-l-oeis-mining group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr phi 6 2"
+  raw    = ".verdicts/tecs-l-oeis-mining/A000010_phi6.txt"
+  src    = "OEIS A000010 — Euler totient. https://oeis.org/A000010"
+  status = "🔵 SUPPORTED-FORMAL — hexa phi(6)=2 reproduces OEIS A000010 a(6)."
+
+@C tecs_l_oeis_A000203_sigma6 := "OEIS A000203 σ(n) divisor sum: a(6)=12" :: formula [slug=tecs-l-oeis-mining group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr sigma 6 12"
+  raw    = ".verdicts/tecs-l-oeis-mining/A000203_sigma6.txt"
+  src    = "OEIS A000203 — sum of divisors. https://oeis.org/A000203"
+  status = "🔵 SUPPORTED-FORMAL — hexa sigma(6)=12 reproduces OEIS A000203 a(6)."
+
+@C tecs_l_oeis_A001157_sigma2_6 := "OEIS A001157 σ_2(n) sum-of-squares-of-divisors: a(6)=50" :: formula [slug=tecs-l-oeis-mining group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr sigma_2 6 50"
+  raw    = ".verdicts/tecs-l-oeis-mining/A001157_sigma2_6.txt"
+  src    = "OEIS A001157 — sigma_2. https://oeis.org/A001157"
+  status = "🔵 SUPPORTED-FORMAL — hexa sigma_2(6)=50 reproduces OEIS A001157 a(6)."
+
+@C tecs_l_oeis_A008683_mu6 := "OEIS A008683 μ(n) Möbius: a(6)=1 (6=2·3 squarefree, 2 prime factors)" :: formula [slug=tecs-l-oeis-mining group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr mu 6 1"
+  raw    = ".verdicts/tecs-l-oeis-mining/A008683_mu6.txt"
+  src    = "OEIS A008683 — Möbius. https://oeis.org/A008683"
+  status = "🔵 SUPPORTED-FORMAL — hexa mu(6)=1 reproduces OEIS A008683 a(6)."
+
+@C tecs_l_oeis_A001065_aliquot6 := "OEIS A001065 s(n) aliquot sum: a(6)=6 (perfect-number marker)" :: formula [slug=tecs-l-oeis-mining group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr aliquot 6 6"
+  raw    = ".verdicts/tecs-l-oeis-mining/A001065_aliquot6.txt"
+  src    = "OEIS A001065 — aliquot sum. s(n)=n ⟺ n perfect. https://oeis.org/A001065"
+  status = "🔵 SUPPORTED-FORMAL — hexa aliquot(6)=6 reproduces OEIS A001065 a(6). n=6 marker (first perfect)."
+
+@C tecs_l_oeis_A000396_isperfect6 := "OEIS A000396 perfect numbers: 6 ∈ seq (σ(6)=2·6=12)" :: formula [slug=tecs-l-oeis-mining group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr is_perfect 6 1"
+  raw    = ".verdicts/tecs-l-oeis-mining/A000396_isperfect6.txt"
+  src    = "OEIS A000396 — perfect numbers. https://oeis.org/A000396"
+  status = "🔵 SUPPORTED-FORMAL — hexa is_perfect(6)=1 confirms 6 ∈ A000396."
+
+@C tecs_l_oeis_A001615_dedekind_psi6 := "OEIS A001615 ψ(n) Dedekind = Γ₀(N) index: a(6)=12" :: formula [slug=tecs-l-oeis-mining group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr gamma0_index 6 12"
+  raw    = ".verdicts/tecs-l-oeis-mining/A001615_dedekind_psi6.txt"
+  src    = "OEIS A001615 — Dedekind ψ. ψ(n)=σ(n) when n squarefree. https://oeis.org/A001615"
+  status = "🔵 SUPPORTED-FORMAL — hexa gamma0_index(6)=12 reproduces ψ(6). Same value as σ(6) — squarefree coincidence."
+
+@C tecs_l_oeis_sigma_sigma6_chain := "σ-iteration chain 6→12→28: σ(σ(6))=σ(12)=28 hits 2nd perfect P_2" :: formula [slug=tecs-l-oeis-mining group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr sigma 12 28"
+  raw    = ".verdicts/tecs-l-oeis-mining/sigma_sigma_6_chain_sigma12.txt"
+  src    = "Classical: aliquot(6)=6 (self-fixed) while σ(σ(6))=σ(12)=28=P_2. OEIS A019278 'σ(σ(n))=kn' — 6 NOT in seq (28/6 ∉ Z) but the chain still lands on a perfect number."
+  status = "🔵 SUPPORTED-FORMAL — hexa sigma(12)=28 confirms the σ-chain bridge. Chain terminates at 28 (σ(28)=56=2·28 perfect, no further hop)."
+
+@C tecs_l_oeis_sigma28_perfect_witness := "σ(28)=56=2·28 — confirms P_2=28 perfect property in F3 chain context" :: formula [slug=tecs-l-oeis-mining group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr sigma 28 56"
+  raw    = ".verdicts/tecs-l-oeis-mining/sigma_sigma_sigma_6_chain_sigma28.txt"
+  src    = "OEIS A000396 P_2=28. σ(28)=56=2·28 ⟺ 28 perfect. Closes the σ-chain in F3 context."
+  status = "🔵 SUPPORTED-FORMAL — hexa sigma(28)=56=2·28. P_2 perfect closure."
+
+@C tecs_l_oeis_A062354_sigma_phi := "OEIS A062354 σ(n)·φ(n) — number of conj classes in GL_2(Z/nZ): a(6)=24" :: formula [slug=tecs-l-oeis-mining group=TECS-L]
+  method = "citation"
+  cmd    = "hexa verify --expr sigma 6 12 && hexa verify --expr phi 6 2  -- compound: 12*2=24"
+  raw    = ".verdicts/tecs-l-oeis-mining/A000203_sigma6.txt + .verdicts/tecs-l-oeis-mining/A000010_phi6.txt"
+  src    = "OEIS A062354 — σ·φ. Group-theoretic interp = |conj classes of GL_2(Z/nZ)|. https://oeis.org/A062354"
+  status = "🟡 SUPPORTED-BY-CITATION — hexa σ(6)=12 and φ(6)=2 reproduced separately; product 24=A062354 a(6) by arithmetic. No single hexa fn for σ·φ."
+
+@C tecs_l_oeis_A065387_sigma_plus_phi := "OEIS A065387 σ(n)+φ(n) — Makowski: a(n)=n·d(n) ⟺ prime: a(6)=14" :: formula [slug=tecs-l-oeis-mining group=TECS-L]
+  method = "citation"
+  cmd    = "hexa σ(6)=12 + φ(6)=2 → sum 14"
+  raw    = ".verdicts/tecs-l-oeis-mining/A000203_sigma6.txt + .verdicts/tecs-l-oeis-mining/A000010_phi6.txt"
+  src    = "OEIS A065387 — σ+φ. Makowski 1960: a(n)=n·d(n) iff n prime. https://oeis.org/A065387"
+  status = "🟡 SUPPORTED-BY-CITATION — compound 12+2=14 matches A065387 a(6). No single hexa fn."
+
+@C tecs_l_oeis_A051612_sigma_minus_phi := "OEIS A051612 σ(n)-φ(n): a(6)=10. a(n)=2 ⟺ n prime" :: formula [slug=tecs-l-oeis-mining group=TECS-L]
+  method = "citation"
+  cmd    = "hexa σ(6)=12 - φ(6)=2 → diff 10"
+  raw    = ".verdicts/tecs-l-oeis-mining/A000203_sigma6.txt + .verdicts/tecs-l-oeis-mining/A000010_phi6.txt"
+  src    = "OEIS A051612 — σ-φ. https://oeis.org/A051612"
+  status = "🟡 SUPPORTED-BY-CITATION — compound 12-2=10 matches A051612 a(6). No single hexa fn."
+
+@C tecs_l_oeis_A007947_rad6 := "OEIS A007947 rad(n) squarefree kernel: a(6)=6 (6=2·3 already squarefree)" :: formula [slug=tecs-l-oeis-mining group=TECS-L]
+  method = "citation"
+  cmd    = "by inspection: 6=2·3 distinct primes ⇒ rad(6)=2·3=6"
+  raw    = "(no dedicated hexa verify; deferred to factor inspection)"
+  src    = "OEIS A007947 — radical (squarefree kernel). rad(n)=n ⟺ n squarefree. https://oeis.org/A007947"
+  status = "🟡 SUPPORTED-BY-CITATION — n=6 squarefree marker. Pins n=6 as 'rad(n)=n'."
+
+@C tecs_l_oeis_A048250_sum_sqfree_div := "OEIS A048250 sum of squarefree divisors: a(6)=12=σ(6) (squarefree coincidence)" :: formula [slug=tecs-l-oeis-mining group=TECS-L]
+  method = "citation"
+  cmd    = "n squarefree ⇒ A048250 = σ. hexa σ(6)=12."
+  raw    = ".verdicts/tecs-l-oeis-mining/A000203_sigma6.txt"
+  src    = "OEIS A048250 — sum of squarefree divisors. = σ when n squarefree. https://oeis.org/A048250"
+  status = "🟡 SUPPORTED-BY-CITATION — coincidence at n=6 (squarefree): A048250 = σ. Already covered by σ atom."
+
+@C tecs_l_oeis_A007434_jordan_J2 := "OEIS A007434 J_2(n) Jordan totient: a(6)=24=σ(6)·φ(6) (n=6 coincidence)" :: formula [slug=tecs-l-oeis-mining group=TECS-L]
+  method = "citation"
+  cmd    = "J_2(n)=n²·Π(1-1/p²). J_2(6)=36·(3/4)·(8/9)=24. Independently σ(6)·φ(6)=24."
+  raw    = "(hand-compute; cross-check: hexa σ(6)·φ(6) = 12·2 = 24)"
+  src    = "OEIS A007434 — Jordan J_2. https://oeis.org/A007434"
+  status = "🟡 SUPPORTED-BY-CITATION — n=6 coincidence J_2(6)=σ·φ(6)=24, NOT a general identity (only at n=6 due to small-prime structure 2·3)."
+
+@C tecs_l_oeis_A002618_n_phi := "OEIS A002618 n·φ(n): a(6)=12=σ(6) (n=6 sibling-locus identity to M10 σφ=nτ)" :: formula [slug=tecs-l-oeis-mining group=TECS-L]
+  method = "citation"
+  cmd    = "hexa 6·φ(6) = 6·2 = 12. Independently σ(6)=12."
+  raw    = ".verdicts/tecs-l-oeis-mining/A000010_phi6.txt + .verdicts/tecs-l-oeis-mining/A000203_sigma6.txt"
+  src    = "OEIS A002618 — n·φ(n)=φ(n²). https://oeis.org/A002618"
+  status = "🟡 SUPPORTED-BY-CITATION — n·φ(n)=σ(n) at n∈{1,6} (hand-checked n=1..8). SIBLING identity to TECS-L M10 σφ=nτ⟺n∈{1,6}. Both pin {1,6} locus independently. General uniqueness UNVERIFIED (lane defers to atlas M10 kernel)."
+
+@C tecs_l_oeis_A002322_carmichael_lambda := "OEIS A002322 λ(n) Carmichael: a(6)=2=φ(6) (cyclic (Z/6Z)*)" :: formula [slug=tecs-l-oeis-mining group=TECS-L]
+  method = "citation"
+  cmd    = "(Z/6Z)* cyclic of order 2 ⇒ λ(6)=φ(6)=2. hexa φ(6)=2 already 🔵."
+  raw    = ".verdicts/tecs-l-oeis-mining/A000010_phi6.txt"
+  src    = "OEIS A002322 — reduced totient λ. λ(n)=φ(n) ⟺ (Z/nZ)* cyclic. https://oeis.org/A002322"
+  status = "🟡 SUPPORTED-BY-CITATION — n=6 coincidence λ=φ via cyclic-unit-group. Standard group theory."
+
+@C tecs_l_oeis_F3_summary := "F3 OEIS reverse-lookup at n=6 — 17 sequences scanned, 10 🔵 direct + 7 🟡 compound, 0 🔴" :: survey [slug=tecs-l-oeis-mining group=TECS-L]
+  method = "survey"
+  cmd    = "curl https://oeis.org/search?q=<id>&fmt=text for 17 sequences + hexa verify cross-check"
+  raw    = ".verdicts/tecs-l-oeis-mining/oeis_scan_summary.txt"
+  src    = "axis F family (c) F3 — OEIS catalogue overlap channel. Honest result: every n=6 value reproduces, but the channel is catalogue-confirmation, not new-discovery. No new atlas atom needed — existing σ/τ/φ + gamma0_index cover all hits. Lightly novel: A002618 n·φ(n)=σ(n) at n∈{1,6} is a sibling-locus identity to M10 σφ=nτ, independent witness of the {1,6} locus."
+  status = "🟡 SUPPORTED-BY-CITATION (overall) — F3 lane terminal as catalogue cross-check. 10 hits 🔵 direct recompute, 7 hits 🟡 compound. No 🔴 mismatches. Sibling-locus A002618 noted but not folded (general uniqueness UNVERIFIED beyond hand-sweep n=1..8; M10 kernel already covers the {1,6} locus formally)."
+
 # ───────────────────────────────────────────────────────────────────────
 # TECS-L axis F — tecs-l-beyond-n6 (slug · group=TECS-L · TECS-L/TECS-L.md F6)
 # Extends M3 [1,100] sweep to NOTABLE n beyond 100, confirming M10's
