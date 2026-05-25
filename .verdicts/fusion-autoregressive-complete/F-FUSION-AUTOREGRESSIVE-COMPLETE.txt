@@ -1,0 +1,85 @@
+F-FUSION-AUTOREGRESSIVE-COMPLETE  --  GPU Round 12 verdict (verbatim silicon record)
+=====================================================================================
+Date     : 2026-05-26
+Host     : ubu-2  NVIDIA GeForce RTX 5070 (sm_120, driver 580.159.03)
+Toolchain: nvcc/ptxas CUDA 12.0 V12.0.140 ; cuLaunchCooperativeKernel driver API
+Axis     : LAUNCH-BOUND autoregressive single-token decode (fusable; R6 elementwise moat)
+Shape    : GPT-2-small d=768 n_heads=12 head_dim=64 ffn_inner=3072 ; L in {64..4096}
+Contention: GPU 0% util, no compute procs at fire time -> timed wall taken.
+
+PRE-REGISTERED FALSIFIER
+  A COMPLETE, PROPERLY-PARALLELIZED fused 2-mega-kernel decode (RMSNorm + Q/K/V
+  GEMV + KV-cache append + masked single-q attention + O-proj + RMSNorm + SwiGLU,
+  coalesced multi-CTA/multi-warp GEMVs -- NOT the R9 single-CTA single-thread-per-row
+  stub) beats the eager 18-launch-per-layer decode by >=30% wall in the launch-bound
+  regime (small KV-cache-len L). FALSIFIED if not >=30% above eager at any L despite
+  a complete + parallelized body.
+
+NUMERIC FIRST GATE  (per-row-scaled rel-err <= 1e-2 + NaN/Inf hard-fail, vs f64 CPU
+autoregressive reference, each L) -- PASS:
+  fused : max_rel <= 3.2e-05 ALL L ; nan_inf = 0 ALL L
+  eager : max_rel <= 1.6e-05 ALL L ; nan_inf = 0 ALL L   (reference correct)
+
+EAGER BASELINE FAIRNESS (R11 lesson -- each sub-kernel coalesced/parallel?)
+  STRAWMAN CAUGHT + FIXED: the first eager attn_av (CTA-per-head, HD=64 threads,
+  serial-over-L) measured 0.076 ms @ L=4096, dominating the whole layer and faking
+  a +47% fused win. Rewrote to key-parallel (split L across KB blocks + flash-merge)
+  -> 0.0069 ms @ L=4096 (10x). The FAIR 18-launch eager (incl. a zero-init kernel for
+  the parallel attn accumulation) is the baseline. All sub-kernels now coalesced/
+  parallel; per-sub-kernel medians @ L=4096 (ms):
+    rmsnorm 0.0040  gemv_DxD 0.0053  gemv_FFxD 0.0065  gemv_DxFF 0.0061
+    kv_append 0.0027  qk_scores 0.0143  softmax 0.0062  attn_av 0.0069
+    residual 0.0026  swiglu 0.0045   (no naive sub-kernel remains)
+
+PTXAS-CLEAN
+  PTX pure-ASCII. ptxas -arch=sm_80 rc=0 ; -arch=sm_90 rc=0 ; driver-JIT sm_120 rc=0.
+  decode_attn_fused: 45 registers, 1024 B smem, 0 spill.
+  decode_ffn_fused : 37 registers, 1024 B smem, 0 spill.
+  Launches/layer: fused 2 (cooperative)  vs  eager 18.
+
+CONTENTION-GATED TIMED WALL (cudaEvent 20 warmup + 200 median; canonical = median
+of 3 such runs; fused = 120 cooperative CTAs):
+  L      eager_us   fused_us   fused/eager   speedup
+  64      65.8       61.6       0.936        +6.4%
+  256     65.9       63.6       0.966        +3.4%
+  512     71.4       63.7       0.892       +10.8%
+  1024    74.0       65.8       0.889       +11.1%   <- best launch-bound win
+  1536    75.9       90.3       1.189       -18.9%   <- CROSSOVER to loss
+  2048    82.1      100.6       1.225       -22.5%
+  4096   155.8      162.8       1.044        -4.4%
+
+LAUNCH-SAVING REALIZED vs THEORETICAL
+  per-launch overhead measured (18 noop back-to-back, best-of-300) : 1.81 us
+  grid.sync unit cost measured (isolated, best-of-200)            : 0.85 us
+  gross launch saving  = (18 - 2) x 1.81                          = 28.9 us/layer
+  grid.sync paid       = 10 x 0.85                                =  8.5 us/layer
+  net theoretical win  = 28.9 - 8.5                               = 20.4 us/layer
+  realized @ L=1024    = 74.0 - 65.8                              =  8.2 us/layer
+                         ( ~40% of net theoretical ; ~28% of gross launch saving )
+  WHAT SWAMPED IT: the fused body is slightly slower than the SUM of eager's
+  optimized per-op kernel bodies, because (a) the flash-merge reads KW key-partials
+  serially per head; (b) 10 grid.sync barriers serialize the phases, defeating the
+  cross-kernel latency-hiding the GPU performs between independent eager launches;
+  (c) the single global cooperative-grid config (GRID=120) cannot retune occupancy
+  per phase the way eager's 18 independent grids each do.
+
+CROSSOVER : L ~ 1536. Launch-bound regime (L <= 1024): fusion wins +3..+11%.
+  Attention compute/memory-bound regime (L >= 1536): eager's per-phase-tuned
+  key-parallel attention scales better, fusion loses.
+
+VERDICT (g3 honest)
+  numeric FIRST GATE  : PASS (all L)
+  complete kernel     : YES
+  fair baseline       : YES (strawman caught + fixed)
+  honest metric       : per-row rel-err + NaN/Inf counter, median-of-3
+  >=30% above eager   : NO at any L (best +11.1% @ L=1024)
+  => 🟠 SUB-THRESHOLD launch-bound WIN. The launch-overhead fusion moat is REAL for
+     decode (fusion wins the launch-bound regime L<=1024) but the realized saving is
+     below the 30% gate. NOT a numeric falsification; NOT a 🟢.
+  §10 axis-E decode row : stays [ ] (honest record appended).
+  paper                 : NOT triggered (@D paper_gate requires terminal 🟢).
+
+INVARIANTS
+  @F f1 no LLVM. @F f2 no C-transpile changes. PTX hand-authored + nvcc-assembled,
+  driver-API launch. CPU codegen untouched (x86_64_linux.hexa md5
+  b50a2a3c8ab0ba0802bcc7b4c0419992 preserved vs origin/main).
