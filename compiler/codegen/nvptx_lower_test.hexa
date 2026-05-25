@@ -791,6 +791,19 @@ fn _test_tma_codegen_scaffold() -> bool {
     ok = _check(ok, header_120a, ".target sm_120a",     "TMA header .target sm_120a")
     ok = _check(ok, header_120a, ".address_size 64",    "TMA header .address_size 64")
 
+    // (1b) N153-fire finding — bare sm_120 `.version` must be 8.7 (was
+    // 8.0, which the RTX 5070 driver-JIT rejected for the matmul/WMMA
+    // E2E). sm_120a already 8.7; sm_80 stays 7.0.
+    let ver_120  = _nvptx_ptx_version_for_sm_arch("sm_120")
+    let ver_120a = _nvptx_ptx_version_for_sm_arch("sm_120a")
+    let ver_80   = _nvptx_ptx_version_for_sm_arch("sm_80")
+    if ver_120 != "8.7" { println("  FAIL: sm_120 .version → `" + ver_120 + "` want `8.7`"); ok = false }
+    else { println("  ok: sm_120 .version -> 8.7") }
+    if ver_120a != "8.7" { println("  FAIL: sm_120a .version → `" + ver_120a + "` want `8.7`"); ok = false }
+    else { println("  ok: sm_120a .version -> 8.7") }
+    if ver_80 != "7.0" { println("  FAIL: sm_80 .version → `" + ver_80 + "` want `7.0`"); ok = false }
+    else { println("  ok: sm_80 .version -> 7.0") }
+
     // (2) Fall-through — non-sm_120a returns "".
     let header_sm80  = nvptx_emit_module_header_for_tma("sm_80")
     let header_sm90  = nvptx_emit_module_header_for_tma("sm_90")
