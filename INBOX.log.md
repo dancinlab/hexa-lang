@@ -2,6 +2,15 @@
 
 Append-only history sister of `INBOX.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
+## 2026-05-26T00:30Z — atlas_cli.hexa recompute-dispatch drift (@D d4) · from ANTIMATTER atlas-fold #1132
+
+**맥락**: ANTIMATTER 26 atom을 atlas fold(PR #1132)하던 중 발견. `tool/atlas_cli.hexa`가 `_recompute_register` 등 **별도 하드코딩 recompute dispatch 테이블**을 들고 있고 antimatter atom과 동기 안 됨 = @D d4 single-generic-dispatch 위반. 이번엔 `_adapt_verify_generic`이 `hexa verify --expr`로 delegate해서 fold는 됐지만, 근본은 drift.
+
+- [ ] `tool/atlas_cli.hexa`의 `_recompute_register` 하드코딩 테이블 제거 → 공유 `compiler/atlas/symbolic` dispatcher로 통합 (파일 자체 TODO도 동일 지적)
+- [ ] 관련: shipped `bin/hexa-{verify,atlas}` stale → install-sync 갭 (atom 추가 후 재빌드 강제됨)
+
+repro: hexa atlas register --from-verify <antimatter fn> · PR #1132 설명에도 flag됨
+
 ## 2026-05-26T01:30Z — atlas register 가 `allen_dynes_tc` (RTSC 핵심 verify fn, 3-arg) 흡수 불가 — atlas_cli↔verify_cli desync + 3-arg register arm 부재 (#954 확장)
 
 demiurge RTSC "atlas 흡수" 시도 중 발견 — RTSC 캠페인의 verify-able 결과(초전도 Tc)가 atlas 에 전혀 흡수되지 못함. 차단 2겹:
