@@ -79,6 +79,10 @@ pub fn calc_is_float_fn(fn_name: string) -> bool {
         || fn_name == "rel_kinetic_from_p" || fn_name == "rel_p_from_kinetic"
         // Cyclotron (synchrotron) cooling time-constant scalings (ANTIMATTER ⓸냉각 · 2026-05-25):
         || fn_name == "cyclotron_cool_bratio" || fn_name == "cyclotron_cool_massspeedup"
+        // Ioffe-Pritchard magnetic-minimum trap (ANTIMATTER ⓺가둠 · RTSC magnet inherit · 2026-05-25):
+        || fn_name == "ioffe_loop_bz" || fn_name == "ioffe_mirror_bmin"
+        || fn_name == "ioffe_mirror_bcoil" || fn_name == "ioffe_mirror_deltab"
+        || fn_name == "ioffe_trap_depth_k" || fn_name == "mu_b_over_kb"
         // Three-body recombination scaling (ANTIMATTER ⓹합성 · 2026-05-25):
         || fn_name == "recomb_3body_exponent" || fn_name == "recomb_3body_tratio"
         // (anti)hydrogen 1S-2S two-photon frequency (ANTIMATTER ⓻측정 · 2026-05-25):
@@ -140,4 +144,5 @@ pub fn calc_is_zero_arg_float_fn(fn_name: string) -> bool {
         || fn_name == "bcs_gap_ratio"
         || fn_name == "transition_factor_1s2s"
         || fn_name == "recomb_3body_exponent"
+        || fn_name == "mu_b_over_kb"
 }

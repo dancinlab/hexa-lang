@@ -219,6 +219,12 @@ fn cmd_rubric() {
     println("             cyclotron_cool_massspeedup(mh,ml) → (mh/ml)³·1e-9     (cyclotron cooling speedup τ_c(ml)/τ_c(mh)∝(mh/ml)³ Giga-view, m_p/m_e→6.1905, raw≈6.19e9, ANTIMATTER ⓸냉각, 2-arg)")
     println("             recomb_3body_exponent()     → −9/2 = −4.5             (p̄+e⁺+e⁺→H̄ 3-body recomb T-scaling exponent α₃ᵦ∝T^−9/2, ANTIMATTER ⓹합성, 0-arg)")
     println("             recomb_3body_tratio(Tᴴ,Tᴸ)  → (Tᴴ/Tᴸ)^4.5            (3-body recomb α-ratio α(Tᴸ)/α(Tᴴ); 4K vs 100K ⇒ 25^4.5=1953125, ANTIMATTER ⓹합성, 2-arg)")
+    println("             ioffe_loop_bz(a,I,ζ)        → μ₀Ia²/(2(a²+ζ²)^1.5)    (on-axis current-loop B [T], RTSC/Wheeler inherit, ANTIMATTER ⓺가둠, 3-arg)")
+    println("             ioffe_mirror_bmin(a,I,s)    → 2·B_loop(s/2)           (mirror-pair B_min at trap center [T], ANTIMATTER ⓺가둠, 3-arg)")
+    println("             ioffe_mirror_bcoil(a,I,s)   → B_loop(0)+B_loop(s)     (mirror-pair B at coil plane [T], ANTIMATTER ⓺가둠, 3-arg)")
+    println("             ioffe_mirror_deltab(a,I,s)  → B_coil−B_min            (field trap depth ΔB [T], ANTIMATTER ⓺가둠, 3-arg)")
+    println("             ioffe_trap_depth_k(ΔB)      → (μ_B/k_B)·ΔB            (H̄ trap depth [K], 1T→0.672K, ANTIMATTER ⓺가둠, 1-arg)")
+    println("             mu_b_over_kb()              → μ_B/k_B=0.67171 K/T      (Bohr-magneton/Boltzmann ratio, ANTIMATTER ⓺가둠, 0-arg)")
     println("             sf_log10_t(Z,A)             → 21.08+ΣCᵢxⁱ/A           (Ren-Xu 2005 SF log10 T₁/₂[s], NUCLEAR C1, 2-arg)")
     println("             sf_log10_t_hindered(Z,A)    → sf_log10_t+HF(0/5/10)   (Ren-Xu+Hoffman93 odd-A/odd-odd HF, NUCLEAR C3, 2-arg)")
     println("             sf_log10_t_zwp(Z,A)         → F(Z)+parity+7.499122    (Zdeb-Warda-Pomorski 2013 SF log10 T₁/₂[s], NUCLEAR C4, 2-arg)")
@@ -1378,6 +1384,91 @@ fn _cyclotron_cool_massspeedup(m_heavy: float, m_light: float) -> float {
     if m_light <= 0.0 { return _NOCALC_F }
     let r = m_heavy / m_light
     return r * r * r * 0.000000001
+}
+
+// ── Ioffe-Pritchard magnetic-minimum trap (ANTIMATTER ⓺가둠) ─────────────
+//   A neutral antihydrogen atom (electrically inaccessible to Penning fields)
+//   is held in a MAGNETIC BOTTLE: two coaxial mirror coils give |B| a local
+//   MINIMUM at the center that rises in every direction, so a low-field-seeking
+//   magnetic moment (μ ≈ μ_B for ground-state H̄) is pushed back toward the
+//   minimum. This축 directly INHERITS the RTSC magnet toolchain — the on-axis
+//   current-loop closed form is the same primitive landed in
+//   hexa-lang/stdlib/material/magnet/current_loop_offaxis.hexa (NOVEL-TOOL
+//   M2.4 loop_offaxis_Bz at r=0) and the Wheeler finite-solenoid family.
+//
+//   On-axis field of ONE circular loop (radius a, current I) at axial
+//   distance ζ from its own center (the inherited Biot–Savart/Wheeler form):
+//       B_loop(ζ) = μ₀·I·a² / (2·(a² + ζ²)^{3/2})              [T]
+//   For a MIRROR PAIR separated by s (coils at z = ±s/2):
+//       B(z) = B_loop(z − s/2) + B_loop(z + s/2)
+//   When s > Helmholtz spacing (s > a) the center z=0 is a true on-axis
+//   minimum and the field rises toward each coil plane z=±s/2:
+//       B_min  = B(0)        = 2·μ₀·I·a² / (2·(a² + (s/2)²)^{3/2})
+//       B_coil = B(s/2)      = μ₀·I·a²/(2·a³) + μ₀·I·a²/(2·(a²+s²)^{3/2})
+//       ΔB     = B_coil − B_min                                 (field trap depth)
+//   Potential trap depth for ground-state H̄ (moment ≈ μ_B):
+//       U_depth/k_B = (μ_B/k_B)·ΔB,   μ_B/k_B = 0.67171 K/T
+//   1 T deep well ⇒ 0.672 K trap depth; ALPHA's ~0.5 T ⇒ ~0.5 K — only the
+//   coldest H̄ stays trapped. @cite Pritchard PRL 51 1336 (1983) · ALPHA
+//   Andresen et al. Nature 468 673 (2010) "Trapped antihydrogen".
+//   μ₀ = 1.25663706212e-6 H/m · μ_B = 9.2740100783e-24 J/T ·
+//   k_B = 1.380649e-23 J/K (CODATA-2018).
+
+let _MU0_IP: float = 1.25663706212e-6      // vacuum permeability H/m
+let _MU_B_IP: float = 9.2740100783e-24     // Bohr magneton J/T (CODATA-2018)
+let _K_B_IP: float = 1.380649e-23          // Boltzmann constant J/K (exact, SI-2019)
+
+// On-axis B of a single current loop at axial offset ζ (3-arg: a_m, i_amp, zeta_m).
+// Inherited RTSC/Wheeler primitive: B = μ₀·I·a²/(2·(a²+ζ²)^{3/2}). a,I>0.
+fn _ioffe_loop_bz(a_m: float, i_amp: float, zeta_m: float) -> float {
+    if a_m <= 0.0 { return _NOCALC_F }
+    if i_amp <= 0.0 { return _NOCALC_F }
+    let aa = a_m * a_m
+    let r2 = aa + zeta_m * zeta_m
+    let r3 = r2 * sqrt(r2)                  // (a²+ζ²)^{3/2}
+    return _MU0_IP * i_amp * aa / (2.0 * r3)
+}
+
+// Mirror-pair on-axis B_min at the trap center z=0 (3-arg: a_m, i_amp, s_m).
+// Two coils at z=±s/2 → B(0)=2·B_loop(s/2). a,I>0, s>0.
+fn _ioffe_mirror_bmin(a_m: float, i_amp: float, s_m: float) -> float {
+    if s_m <= 0.0 { return _NOCALC_F }
+    let bl = _ioffe_loop_bz(a_m, i_amp, s_m / 2.0)
+    if bl == _NOCALC_F { return _NOCALC_F }
+    return 2.0 * bl
+}
+
+// Mirror-pair on-axis B at the coil plane z=s/2 (3-arg: a_m, i_amp, s_m).
+// B(s/2)=B_loop(0)+B_loop(s) — the near-coil field (≈ on-axis max for s>a).
+fn _ioffe_mirror_bcoil(a_m: float, i_amp: float, s_m: float) -> float {
+    if s_m <= 0.0 { return _NOCALC_F }
+    let b_near = _ioffe_loop_bz(a_m, i_amp, 0.0)    // this coil, at its own center
+    if b_near == _NOCALC_F { return _NOCALC_F }
+    let b_far = _ioffe_loop_bz(a_m, i_amp, s_m)     // far coil, full separation away
+    return b_near + b_far
+}
+
+// Field trap depth ΔB = B_coil − B_min (3-arg: a_m, i_amp, s_m). For s>a
+// (true magnetic bottle) this is positive; for s≤a (Helmholtz/flat) →≈0.
+fn _ioffe_mirror_deltab(a_m: float, i_amp: float, s_m: float) -> float {
+    let bc = _ioffe_mirror_bcoil(a_m, i_amp, s_m)
+    if bc == _NOCALC_F { return _NOCALC_F }
+    let bm = _ioffe_mirror_bmin(a_m, i_amp, s_m)
+    if bm == _NOCALC_F { return _NOCALC_F }
+    return bc - bm
+}
+
+// Potential trap depth in Kelvin for ground-state H̄ (1-arg: delta_b_t in T).
+// U_depth/k_B = (μ_B/k_B)·ΔB. ΔB≥0 expected; negative → _NOCALC_F.
+fn _ioffe_trap_depth_k(delta_b_t: float) -> float {
+    if delta_b_t < 0.0 { return _NOCALC_F }
+    return (_MU_B_IP / _K_B_IP) * delta_b_t
+}
+
+// The KEY constant μ_B/k_B = 0.67171 K/T (0-arg closed-form ratio of two
+// CODATA-2018 constants). 1 T well ⇒ 0.672 K trap depth.
+fn _mu_b_over_kb() -> float {
+    return _MU_B_IP / _K_B_IP
 }
 
 // ── Three-body recombination scaling (ANTIMATTER ⓹합성) ────────────────
@@ -2545,6 +2636,25 @@ fn _recompute_float(fn_name: string, a0: float, a1: float, a2: float, a3: float,
         if argc < 2 { return _NOCALC_F }
         return _cyclotron_cool_massspeedup(a0, a1)
     }
+    // ── Ioffe-Pritchard magnetic-minimum trap (ANTIMATTER ⓺가둠 · RTSC inherit)
+    if fn_name == "ioffe_loop_bz" {
+        if argc < 3 { return _NOCALC_F }
+        return _ioffe_loop_bz(a0, a1, a2)
+    }
+    if fn_name == "ioffe_mirror_bmin" {
+        if argc < 3 { return _NOCALC_F }
+        return _ioffe_mirror_bmin(a0, a1, a2)
+    }
+    if fn_name == "ioffe_mirror_bcoil" {
+        if argc < 3 { return _NOCALC_F }
+        return _ioffe_mirror_bcoil(a0, a1, a2)
+    }
+    if fn_name == "ioffe_mirror_deltab" {
+        if argc < 3 { return _NOCALC_F }
+        return _ioffe_mirror_deltab(a0, a1, a2)
+    }
+    if fn_name == "ioffe_trap_depth_k" { return _ioffe_trap_depth_k(a0) }
+    if fn_name == "mu_b_over_kb" { return _mu_b_over_kb() }
     // ── Nuclear α-decay half-life (NUCLEAR.md N7/N11 funnel cohort) ─────
     //   viola_seaborg_log10_t(Z, Q_α)     2-arg: (aZ+b)/√Q + (cZ+d)
     //   royer_log10_t(Z, A, Q_α)          3-arg: a + bA^{1/6}√Z + cZ/√Q
