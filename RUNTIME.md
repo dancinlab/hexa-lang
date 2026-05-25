@@ -548,6 +548,44 @@ For each Tier-A sub-phase:
 
 ## Log
 
+### 2026-05-26 — step-4 assessment: the irreducible-core FLOOR (runtime.c retirement terminal)
+
+scan-B of the post-step-2/3 state (both "frontiers" the user asked to pursue):
+
+- **Frontier 1 — step-3 codegen-blocked residuals: CLOSED.** The hexa_eq
+  deep-eq blocker is 9/9 done (cycles 91 TAG_STR · 97 TAG_ARRAY · 100
+  TAG_VALSTRUCT/MAP · 103 TAG_INT/FLOAT/BOOL); the cycle-72/76 codegen
+  typed-param/as-cast fixes landed. Not an open frontier (doc "Next/잔여" hints
+  were stale).
+- **Frontier 2 — step-4 runtime_core.c: the PORTABLE LAYER is done; the
+  remainder is the irreducible floor.** The hexa-source helper layer is
+  essentially complete — 150+ `rt_*` fns (numeric.hexa 88 + ctype/math/thread/
+  net/posix/io + the number-parse family atof #1201 · atoll/atoi #1205). What
+  remains in runtime_core.c is NOT unfinished porting but two IRREDUCIBLE-C
+  categories (the physical floor of the retirement, per
+  `feedback-closure-is-physical-limit` · Go-1.5 model):
+  1. **value-repr + memory + GC core** — HexaVal tagged-union repr · arena
+     allocator · GC · tag/intern. CIRCULAR: hexa fns ARE HexaVal-based, so the
+     HexaVal representation itself can't be implemented in HexaVal-based hexa
+     without a C bottom. The bootstrap floor — analogous to Go's asm + unsafe
+     primitives (Go's GC is in Go but rests on unsafe/asm; hexa's value-repr
+     rests on C).
+  2. **perf-critical hot path** — `hexa_add/sub/mul/div/mod/fma` · `hexa_eq`
+     dispatch · `hexa_str_concat` · `hexa_to_string`. On EVERY hexa program's
+     hot loop; HexaVal wrap/unwrap per call (~5 ns, fine for aprime_cc
+     compile-then-exit but NOT for flame/NN hot loops — cycle-1 note). Stays C
+     for perf, intentionally (like getenv init-order / strerror lifetime).
+
+**Terminal framing (closure-is-physical-limit):** the runtime.c retirement's
+"끝" is the irreducible value-repr/GC core + perf-hot-path staying C — NOT
+100%-zero-C (which is physically circular for the value representation).
+step-1 (0 libc externs) ✅ · step-2 (helper C→hexa) ✅ CLOSED · step-3
+(HI-tier C→hexa) ✅ portable layer done · step-4 = the core floor (terminal).
+Going below the floor requires a Go-style GC-in-hexa campaign with asm/unsafe
+primitives at the bottom (large; likely a closed-negative on the repr
+circularity) — otherwise the C core IS the honest bootstrap floor. This is the
+terminal state, not a failure: the portable layer reached its physical limit.
+
 ### 2026-05-26 — Phase-1 doc-lag reconciliation (88 Tier-A boxes → `[x]`)
 
 `/cycle` (inline) caught a doc-content-stale gap: RUNTIME.md was git-fresh
