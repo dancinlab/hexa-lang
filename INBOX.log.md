@@ -2,6 +2,18 @@
 
 Append-only history sister of `INBOX.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
+## 2026-05-25T07:35Z — hexa cloud lifecycle verb 부재 → raw vastai/runpodctl 직접 호출 강제 (orphan 양산 근원 · d8)
+
+demiurge RTSC micro-exp/agent provisioning 중 반복 발견 — `hexa cloud` 엔 transport/transfer verb (run·exec·nohup·poll·copy-to/from) 만 있고 **pod lifecycle verb (rent·list/ps·down·destroy) 가 부재**. pod 생성/라이브조회/종료를 하려면 raw `vastai create`·`vastai show instances`·`vastai destroy`·`runpodctl pod list` 를 직접 호출할 수밖에 없음. 이게 cloud-guard(g8) "hexa cloud 로만" 정책의 구멍이자 orphan 양산의 구조적 근원. 사용자 요청: vast/runpod CLI·API 를 직접 안 쓰게 hexa cloud 가 lifecycle 까지 일급 흡수.
+
+- [ ] **증상 — lifecycle 구멍** — `hexa cloud` (installed cycle-A binary) verb = run/exec/nohup/poll/copy-to/copy-from/orphans/reconcile/adopt/forget 뿐. `rent`·`list`·`down`·`destroy` 없음. cloud-guard 는 raw vastai/runpodctl 의 exec/ssh/transfer 만 차단하고 lifecycle(create/show/destroy)은 **명시적으로 허용** → provisioning 이 정식 경로가 없어 raw CLI 로 샘.
+- [ ] **실증 (이번 세션 4건)** — (1) micro-exp + 2 agent 가 `hexa cloud rent` 부재로 `vastai create` 직접 사용. (2) `vastai destroy` 는 인터랙티브 `[y/N]` 확인 → 비대화형에서 `Aborted` → **pod 살아있는데 forget 돼 orphan 화 실제 발생** (printf 'y' 파이프로 수동 강제 종료). (3) 라이브/과금 조회는 `vastai show instances`·`runpodctl pod list` 직접 (provider-truth verb 부재). (4) `stdlib/cloud/cloud_cli.hexa rent` 경로는 `hexa run` 이라 **local sign-gate (user-only)** 필요 → 에이전트 자가 provisioning 불가 (deck-ready YSbH₆ 에이전트가 토큰 대기 중 정지).
+- [ ] **부가 — provider-truth 조회 공백** — `hexa cloud list/ps` (vast/runpod 라이브 인스턴스 + 과금 직접 조회) 부재. `reconcile` 의 GHOST 오분류(#967 동봉)와 함께, 정상 점검에 raw `vastai show`/`runpodctl pod list` 강제.
+- [ ] **제안 (a · 핵심)** — hexa cloud 에 **lifecycle verb 일급 추가**: `rent <provider> [--query ...] [--owner ...]` (tracked → pods.jsonl) · `list`/`ps` (provider-truth 라이브+과금) · `down <pod>` (**비대화형** destroy + forget 원자적, `[y/N]` 프롬프트 없음) · `destroy <pod>`. 이로써 raw vastai/runpodctl/API 호출 0 → cloud-guard 가 lifecycle 까지 차단 가능 (진짜 single-surface).
+- [ ] **제안 (b)** — `cloud_cli.hexa` 의 `rent` 를 **installed binary (cycle-D lifecycle)** 로 승격 → `hexa run` (sign-gate) 불필요. 에이전트가 자가 provisioning 가능해짐.
+
+Status: open · proposed-by:agent · severity:high (orphan 양산 근원 + provisioning 정식경로 부재 + 에이전트 자가-provisioning 차단) · source:demiurge RTSC micro-exp/Mg₂XH₆ 세션 · awaits:hexa-lang fix
+
 ## 2026-05-25T06:37Z — pool-route 가 `hexa cloud` 를 ubu 로 오라우팅 (remote argv heavy-word 트립 · cloud verb 는 Mac-local-only · d8)
 
 죽은-맥 복구 세션(demiurge RTSC)에서 발견 — `hexa cloud exec/run <pod>` 의 **remote argv** 에 heavy-word 가 들면 pool-route(0.6.9) classifier 가 전체 명령을 heavy 로 판정 → ubu-1/ubu-2 로 ssh 라우팅. 그러나 `hexa cloud` 는 Mac-local-only (로컬 hexa 빌드 + `stdlib/cloud/cloud_cli.hexa` 필요) → ubu 에서 `unknown subcommand 'cloud'`(ubu-2) / `source file not found: stdlib/cloud/cloud_cli.hexa`(ubu-1) 로 실패. 위 09:30Z exit-255 와 별개 — 이건 라우팅이 애초에 잘못된 호스트로 가는 문제.
