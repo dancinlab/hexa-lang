@@ -1,4 +1,4 @@
-// tool/verify_cli.hexa — `hexa verify {<id>|--expr|--fence|rubric|list}`
+// tool/verify_cli.hexa — `hexa verify {<id>|--expr|--fence|--verifier-cmd|rubric|list}`
 //
 // @version 0.2.0
 // @capabilities [fs_read, fs_write]
@@ -201,6 +201,7 @@ fn _slug(s: string) -> string {
 fn _is_sub(a) -> bool {
     return a == "rubric" || a == "list" || a == "help" || a == "--help" || a == "-h"
         || a == "--expr" || a == "--fence" || a == "--blue-max"
+        || a == "--verifier-cmd"
 }
 
 fn _slice_args() -> array {
@@ -260,6 +261,13 @@ fn cmd_rubric() {
     println("                                                beyond <eps> STAYS 🔴; default = strict ε=1e-9)")
     println("  hexa verify --fence <claim>              ⚪ SPECULATION-FENCED (honest)")
     println("  hexa verify --blue-max <DOMAIN>          BLUE-MAX 🔵-pair audit (@D g69)")
+    println("  hexa verify --verifier-cmd \"<sh-cmd>\" --claim \"<text>\" [--expect \"<str>\"]")
+    println("                                           V8: PLUGGABLE EXTERNAL verifier (phanes")
+    println("                                           tenant-verifier model) — runs <sh-cmd>,")
+    println("                                           records its verdict VERBATIM, maps to a")
+    println("                                           tier (exit0→🟢/🔵, nonzero→🔴, error→🟠).")
+    println("                                           <sh-cmd> MUST be deterministic (g5 — no")
+    println("                                           LLM self-judge; the tenant cmd IS the checker)")
     println("  hexa verify rubric | list                this rubric")
     println("")
     println("  [DEFAULT auto-absorb]: 🔵/🟢 verdicts are auto-folded into the live atlas")
@@ -3929,6 +3937,93 @@ fn cmd_blue_max(rest) {
     println(out)
 }
 
+// cmd_verifier — VERIFY-KIT V8: PLUGGABLE EXTERNAL verifier arm.
+//
+// `hexa verify --verifier-cmd "<sh-cmd>" --claim "<text>" [--expect "<str>"]`
+//
+// Connects `hexa verify` to the phanes "tenants bring a verifier" model: a
+// domain/tenant plugs its OWN deterministic checker; hexa delegates to it and
+// maps its result to a tier. The external command IS the verifier — hexa
+// records its verdict VERBATIM and self-judges NOTHING (g5: no LLM judge).
+//
+// Tier mapping (deterministic, result-agnostic per TECS-L):
+//   exit 0, no --expect              → 🟢 SUPPORTED-NUMERICAL (verifier passed)
+//   exit 0, --expect matches stdout  → 🟢 SUPPORTED-NUMERICAL
+//   exit 0, --expect MISmatch stdout → 🔴 FALSIFIED (expected-string disagrees)
+//   exit 1..126 (nonzero)            → 🔴 FALSIFIED (verifier rejected — closed neg)
+//   exit 127 / fork / pipe error     → 🟠 INSUFFICIENT (no verifier path / error)
+//
+// The external verifier MUST be deterministic (same input → same verdict);
+// a nondeterministic cmd voids the tier. No auto-absorb: a tenant's external
+// verdict is delegated, not an atlas-certified hexa-native recompute.
+fn cmd_verifier(rest) {
+    // rest[0] = "--verifier-cmd"; scan the remaining tokens for the cmd +
+    // --claim + --expect, tolerating any token order.
+    let mut vcmd = ""
+    let mut claim = ""
+    let mut expect = ""
+    let mut have_expect = false
+    let mut i = 1
+    while i < len(rest) {
+        let tok = to_string(rest[i])
+        if tok == "--verifier-cmd" && i + 1 < len(rest) {
+            vcmd = to_string(rest[i + 1])
+            i = i + 2
+        } else if tok == "--claim" && i + 1 < len(rest) {
+            claim = to_string(rest[i + 1])
+            i = i + 2
+        } else if tok == "--expect" && i + 1 < len(rest) {
+            expect = to_string(rest[i + 1])
+            have_expect = true
+            i = i + 2
+        } else if i == 1 && tok != "--claim" && tok != "--expect" {
+            // bare first operand: the verifier cmd (allow positional form)
+            vcmd = tok
+            i = i + 1
+        } else {
+            i = i + 1
+        }
+    }
+    println("verify --verifier-cmd  (VERIFY-KIT V8 — pluggable external verifier, phanes tenant-verifier model)")
+    println("  claim    = " + claim)
+    println("  verifier = " + vcmd)
+    if len(vcmd) == 0 {
+        println("  tier   = 🟠 INSUFFICIENT  (no --verifier-cmd path supplied — nothing to delegate to)")
+        exit(2)
+    }
+    // delegate: run the tenant's checker, capture [stdout, stderr, exit_code].
+    let res = exec_capture(vcmd)
+    let vout = to_string(res[0]).trim()
+    let verr = to_string(res[1]).trim()
+    let rc = to_int(res[2])
+    // record the external verdict VERBATIM (g5 — no paraphrase, no LLM judge).
+    println("  ext rc   = " + to_string(rc))
+    if len(vout) > 0 { println("  ext out  = " + vout) }
+    if len(verr) > 0 { println("  ext err  = " + verr) }
+    if rc == 127 {
+        // no-such-command / exec failure → no verifier path
+        println("  tier   = 🟠 INSUFFICIENT  (verifier cmd not found / exec failed rc=127 — no checker path)")
+        return
+    }
+    if rc != 0 {
+        // tenant's checker REJECTED → closed negative, NOT laundered
+        println("  tier   = 🔴 FALSIFIED  (external verifier rejected rc=" + to_string(rc) + " — TECS-L result-agnostic closed negative; failures NOT laundered)")
+        return
+    }
+    // rc == 0 → verifier passed. If --expect supplied, gate on stdout match.
+    if have_expect {
+        if vout == expect || vout.contains(expect) {
+            println("  expect = matched (\"" + expect + "\")")
+            println("  tier   = 🟢 SUPPORTED-NUMERICAL  (external verifier passed AND stdout matches --expect — delegated, deterministic)")
+        } else {
+            println("  expect = MISMATCH (wanted \"" + expect + "\", got \"" + vout + "\")")
+            println("  tier   = 🔴 FALSIFIED  (verifier exit 0 but stdout disagrees with --expect — closed negative, not laundered)")
+        }
+        return
+    }
+    println("  tier   = 🟢 SUPPORTED-NUMERICAL  (external verifier passed rc=0 — delegated to tenant checker, deterministic)")
+}
+
 fn main() {
     let a = _slice_args()
     if len(a) == 0 { cmd_rubric(); return }
@@ -3941,6 +4036,8 @@ fn main() {
         cmd_fence(a)
     } else if sub == "--blue-max" {
         cmd_blue_max(a)
+    } else if sub == "--verifier-cmd" {
+        cmd_verifier(a)
     } else {
         cmd_verify_id(a)
     }
