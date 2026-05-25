@@ -1,0 +1,58 @@
+// HEXA Standard Library — consciousness/iit4_test
+//
+// Canonical import-based test for the stdlib IIT 4.0 cause-effect Φ-structure
+// engine (iit4_tpm · iit4_distinction · iit4_relation · iit4_bigphi · iit4_complex;
+// iit4_bounded covered by its own checks). Promoted from anima HEXAD/IIT4 (per
+// commons @D g61 — reusable domain engine → stdlib/<domain>/). Like phi_spatial_test,
+// `import "stdlib/..."` is not flattened by single-file build, so this is the
+// canonical (run-only) test.
+//
+// Hand-verifiable networks (deterministic ⇒ exact):
+//   COPY/SWAP n=2 (u0'=u1, u1'=u0)        → big-Φ = 2.0 (irreducible)
+//   SELF-COPY n=2 (u_i'=u_i)              → big-Φ = 0   (reducible)
+//   EMBEDDED CORE n=3 (COPY{0,1} + self{2}) → complex = {0,1} (mask 3), unit 2 excluded
+//   ALL-NOISE n=2                          → big-Φ = 0
+// ════════════════════════════════════════════════════════════════════════════
+import "stdlib/consciousness/iit4_complex.hexa"
+
+fn _ck(name: string, ok: int) -> int {
+    if ok == 1 { println("PASS " + name); return 0 }
+    println("FAIL " + name); return 1
+}
+
+fn _approx2(a: float) -> int { if (a > 1.99) && (a < 2.01) { return 1 } return 0 }
+fn _zero(a: float) -> int { if (a < 0.000001) && (a > 0.0 - 0.000001) { return 1 } return 0 }
+
+// embedded core: u0'=u1, u1'=u0, u2'=u2  (flat tpm[s*3+u], via stdlib iit4_bit)
+fn _embedded3() -> array {
+    let mut t = []
+    let mut s = 0
+    while s < 8 {
+        t = t.push(to_float(iit4_bit(s, 1)))             // u0' = u1
+        t = t.push(to_float(iit4_bit(s, 0)))             // u1' = u0
+        t = t.push(to_float(iit4_bit(s, 2)))             // u2' = u2
+        s = s + 1
+    }
+    return t
+}
+
+fn main() {
+    let mut fails = 0
+
+    let copy2 = [0.0,0.0, 0.0,1.0, 1.0,0.0, 1.0,1.0]
+    let self2 = [0.0,0.0, 1.0,0.0, 0.0,1.0, 1.0,1.0]
+    let mut noise2 = []
+    let mut i = 0
+    while i < 8 { noise2 = noise2.push(0.5); i = i + 1 }
+
+    fails = fails + _ck("COPY big-Φ = 2.0 (irreducible)",  _approx2(big_phi(copy2, 2, 3)[0]))
+    fails = fails + _ck("SELF-COPY big-Φ = 0 (reducible)", _zero(big_phi(self2, 2, 3)[0]))
+    fails = fails + _ck("NOISE big-Φ = 0",                 _zero(big_phi(noise2, 2, 3)[0]))
+
+    let cx = find_complex(_embedded3(), 3, 7)
+    fails = fails + _ck("EMBEDDED complex = {0,1} (mask 3, excl unit 2)", if cx[0] > 2.99 && cx[0] < 3.01 { 1 } else { 0 })
+    fails = fails + _ck("EMBEDDED complex Φ = 2.0", _approx2(cx[1]))
+
+    if fails == 0 { println("stdlib/consciousness/iit4 — ALL PASS") }
+    else { panic("stdlib iit4 test FAILED") }
+}
