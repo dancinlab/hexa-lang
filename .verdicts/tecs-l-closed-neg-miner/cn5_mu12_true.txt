@@ -1,0 +1,5 @@
+$ hexa verify --expr mu 12 0
+verify --expr mu(12)=0
+  calc   = 0  == expected 0
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+  absorb = · already in atlas — idempotent skip (default · @D g69)

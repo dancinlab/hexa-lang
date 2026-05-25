@@ -457,3 +457,9 @@ Append-only history sister of `TECS-L.md`. Each entry starts with `## <ISO times
 - [x] `TECS-L.md` 도메인 SSOT 작성 — @title + @goal + 출처 코퍼스 표 + M1–M9 마일스톤 + 거버넌스/비범위
 - [x] 격리 worktree `/tmp/wt-tecs-l` (branch `tecs-l-domain-2026-05-25`) 에서 작업 — 공유 main 트리 race 회피
 - [ ] M1 착수 — n=6 정체성 σ·φ=n·τ ⟺ n∈{1,6} `hexa verify` 🔵
+
+## 2026-05-26 · axis F · F5 closed-negative miner
+- [x] F5 — 반증사냥 7 closed-negative 발굴 (paper_negative_ok). `hexa verify --expr` (HEAD #1153, σ/τ/φ/μ/aliquot/is_perfect live) 로 그럴듯한 "n=6-같은" 추측을 정확히 계산 → 결정적 🔴.
+  - CN1 amicable aliquot 고정점 아님 (aliquot(220)=284≠220) · CN2 quasi-perfect σ=2n+1 [1,50] 공집합 (σ(12)=28≠25) · CN3 3-perfect 120 ≠ abundancy-2 (σ(120)=360≠240) · CN4 n·φ=σ off{1,6} n=12 실패 (σ(12)=28≠48) · CN4b n·φ=σ perfect 28 실패 (σ(28)=56≠336) · CN5 μ 6-주기 아님 (μ(12)=0≠1) · CN6 perfect≠superperfect (σ(σ(6))=28≠12)
+  - 전부 exact 정수산술 🔴 (tolerance 0). M10 (σφ=nτ⟺{1,6}) + F6 (D≠0 off {1,6}) 인용 (재실행 안 함) — n=6 정체성 EXCLUSIVE 확정.
+  - 14 verdict (7 truth 🔵 + 7 falsifier 🔴) → `.verdicts/tecs-l-closed-neg-miner/` · `CLAIMS.tape` slug=tecs-l-closed-neg-miner (8 @C). resumed `/tmp/wt-tecs-f5` (prior 500-death, 0 prior commit) → fetch+merge origin/main clean.
