@@ -3,6 +3,13 @@
 Append-only history sister of `TECS-L.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
 
+## 2026-05-26 · 새 대축 R3 — CM1-CM7 Clay 7 candidate honest closure (수학 대축 G 완결)
+
+- [x] CM1-CM7 (수학 대축 축 G) — Clay 7 Millennium candidate g5 triage **honest closure**: aggregate CANDIDATE_SPECS_ONLY (0/7 본 도메인 formal proof, README 확인). **candidate 전부 🟠** (BSD·Hodge·N-S·P-vs-NP·Riemann·Yang-Mills 미증명 조직화 가설) + **Poincaré 🟡** (Perelman 2003 외부 증명) + 각 난제 **lattice layer 🔵** (σ/τ/φ @ n=6 M2 cite; YM β₀=σ−sopfr=12−5=7, sopfr 🟠 calculator gap). → `.verdicts/tecs-l-cm17-clay/`
+- 핵심 honest: Clay 난제는 verify-able 아님 (수십년 미해결) — n=6 candidate 는 조직화 가설(🟠), paper-ineligible by gate. over-claim 없음 (g3/g5). MILLENNIUM 수학 대축(축 G) CM0-CM7 전부 triage 완결.
+- **새 대축 lane 평가**: 5 대축(MATH-G·PHYSICS·COSMOS·LIFE + 메타) 첫 milestone R1/R2/R3 완료. verify-able 🔵 = M2/M5 cite (lattice·차원·gauge); 신규 verify-able 희소 (CM candidate 🟠 · 관측 🟠 · calculator-gap pow/sopfr · IIT Φ deferred). $0-whitelist lane 소진 — 잔여 frontier = verify_cli whitelist 확장(INBOX) · IIT Φ phi_demo · candidate paper 불가.
+- 격리 worktree `../hexa-lang-cm17r3` (sibling · branch `tecs-cm17-r3b-2026-05-26`).
+
 ## 2026-05-26 · 새 대축 R2 — COSMOS CO1 + LIFE LF1 honest triage (verify infra 복구 확인)
 
 - [x] **verify infra 복구 확인**: 타 세션 #1198/#1213 (`build_hexa_module_loader.sh`) 로 worktree verify_cli rebuild 막힘 RESOLVED. worktree `hexa verify --expr sigma 6 12 → 🔵` rebuild 성공 (이전 bessel/iit4 `_Generic` 막힘 해소, INBOX #1204 ack). 단 worktree rebuild 는 매 호출 느림 → main-tree cache-hit verify 가 효율적.
