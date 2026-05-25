@@ -2,6 +2,23 @@
 
 Append-only history sister of `INBOX.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
+
+## 2026-05-25T15:00Z — hexa `dim_cusp_forms(N,2)` 가 표준 dim S₂(Γ₀(N))=genus 와 불일치
+
+TECS-L 축 A MF4 발견 (PR pending). 고전 정리 `dim S_2(Γ_0(N)) = genus(X_0(N))` 를 hexa 의 `dim_cusp_forms`/`gamma0_genus` 두 fn 으로 N=1..30 교차검증한 결과:
+
+- `gamma0_genus(N)`: 22/22 고전 표와 일치 (MF3 — 15 classical genus-0 + 7 boundary)
+- `dim_cusp_forms(N,2)`: N=1..10 일치(전부 genus=0 우연), **N=11..30 중 20개 mismatch** (~67%)
+  - N=11: hexa=0, 고전=1   ·   N=14: hexa=2, 고전=1   ·   N=20: hexa=4, 고전=1   ·   N=30: hexa=6, 고전=3
+
+→ `dim_cusp_forms` 가 표준 dim S_2(Γ_0(N)) 를 직접 제공하지 않음 (다른 정의/관례 또는 버그).
+
+- [ ] `dim_cusp_forms(N, k)` 의 실제 계산 정의 명세 확인 (소스: `compiler/atlas/atlas_cli.hexa` `_recompute2` 또는 `static_atlas` 내부)
+- [ ] 표준 dim S_k(Γ_0(N)) 와 다르다면 fn 명/시그니처 분리(가령 `dim_cusp_forms_standard` vs 현행)
+- [ ] 또는 dim S_k 표준 정의로 수정 (genus + boundary 식)
+- [ ] 참고 verdicts: `.verdicts/tecs-l-modform-dim-genus/dim_vs_genus_sweep.txt` (30-N 전수 비교)
+- [ ] cross-link: TECS-L MF4 (`TECS-L/docs/mf4-dim-genus-mismatch.md`) · g59 upstream
+
 ## 2026-05-25T09:40Z — hexa cloud vast provisioning 3 구체 버그픽스 (rent 빈-offer · cpu_ram 단위 · direct-IP ssh identity · d8)
 
 demiurge RTSC Mg₂XH₆/LaBeH₈ vast 캠페인(2 agent 실증, pod 37753444)에서 발견한 hexa cloud vast 경로의 구체적 결함 3건 + 수정. lifecycle 부재(#989)·오라우팅(#967)·ssh-255(#976)와 별개의 actionable 1-라인급 픽스.

@@ -3,6 +3,15 @@
 Append-only history sister of `TECS-L.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
 
+## 2026-05-25T15:00 — 축 A MF4 · dim S₂ = genus 정리 falsified for hexa fn (🔴 closed-negative)
+
+- [x] MF4 milestone = "dim S₂(Γ₀(N)) = genus 일치 verify (🔵)" 의도 → **결과 🔴**: hexa `dim_cusp_forms(N,2)` 는 표준 dim S_2 가 아님. N=1..30 sweep 에서 10 우연 일치(전부 genus=0)·20 mismatch
+- [x] gamma0_genus 는 MF3 (22/22 고전 표 일치) 로 신뢰. dim_cusp_forms 는 다른 정의/관례 (예: N=11 hexa=0/고전=1, N=12 hexa=2/고전=0, N=30 hexa=6/고전=3)
+- [x] paper_negative_ok 충족 (1 axis 결정적 배제: "hexa dim_cusp_forms = 표준 dim S_2" 거짓)
+- [x] 5 verdict → `.verdicts/tecs-l-modform-dim-genus/` + CLAIMS 5 entry (sweep 🔴 + 4 🔵 atoms, 1:1 orphan 0)
+- [x] **g59 INBOX 업스트림**: `INBOX.log.md` 에 hexa `dim_cusp_forms` 정의 갭 보고 prepended
+
+
 ## 2026-05-25T21:20 — 축 B MERSENNE · MR4 Lucas-Lehmer hexa-native (소수성 판정)
 
 - [x] **Lucas–Lehmer 소수성 판정을 hexa-native stdlib 로 구현** — 소수 p>2 에 대해 M_p=2^p−1 이 소수 ⟺ S_{p-2} ≡ 0 (mod M_p), S₀=4·S_{k+1}=S_k²−2
