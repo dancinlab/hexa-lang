@@ -14,6 +14,8 @@ arxiv query → 논문 추상 → claim 추출 → 3갈래 분류:
 (c) project-specific → cross-repo INBOX handoff (g60).
 4 axis = anima(의식/IIT/Φ) · demiurge(반물질 공정) · phanes(자율발견) · hexa-lang(컴파일러/수론). naive dump 금지 — verify-gate 또는 명시적 handoff 만.
 
+> **진행 2026-05-26**: A1(POC, 12편) + **A2(ANIMA axis, 11편 흡수 · 6 anima LIFE H 핸드오프 g60)** DONE. verify-able 누적 0 (in-tree IIT primitive 부재 — V5 IIT 엔진 랜딩 후 verify-able-CANDIDATE 회수). 다음 = A3 DEMIURGE axis.
+
 ## 1 · 4 axis × arxiv 카테고리
 
 | axis | 프로젝트 | arxiv cats | 흡수 대상 |
@@ -26,7 +28,7 @@ arxiv query → 논문 추상 → claim 추출 → 3갈래 분류:
 ## 2 · 로드맵
 
 - [x] A1 — ingest POC: 12 IIT-Φ 논문 triage (0 verify-able / 5 🟡 citation / 7 anima handoff). 파이프라인 검증. 다음 = A2 (ANIMA axis 본격 흡수).
-- [ ] A2 — ANIMA axis: consciousness/IIT 논문 흡수 → anima LIFE 도메인 hypotheses cross-link + verify 가능분 hexa
+- [x] A2 — ANIMA axis: consciousness/IIT 논문 11편 흡수 → anima LIFE H_xxx cross-link 6 handoff (g60). 0 verify-able (in-tree IIT primitive 부재 — V5 IIT 엔진 후 4 candidate → 첫 🟢). 7 🟡 citation. verdict=`.verdicts/arxiv-anima-absorb/triage_a2.txt` · docs=`docs/a2-anima-axis.md`.
 - [ ] A3 — DEMIURGE axis: 반물질 7공정 물리 논문 흡수 → ANTIMATTER verify atom 보강 (handoff to ~/core/demiurge)
 - [ ] A4 — PHANES axis: autonomous-discovery/OUROBOROS 논문 흡수 → loop 알고리즘 (handoff to ~/core/phanes)
 - [ ] A5 — HEXA-LANG axis: compiler/number-theory 논문 흡수 → atlas/codegen 보강 (in-repo)

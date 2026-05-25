@@ -2,6 +2,22 @@
 
 Append-only history sister of `ARXIV.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
+## 2026-05-26 — A2 ANIMA axis 흡수 (IIT/의식 11편 + anima 핸드오프 g60)
+
+- [x] A2 ingest — ANIMA axis 본격 흡수 (A1 12편 IIT-코어와 **중복 0**, 경험적 의식 측정자·causal-emergence·AI-의식 이론으로 폭 확장)
+  - fetch = arXiv API (`export.arxiv.org/api/query`, https — `hexa run` interp 회피, polite 10-req cap 아래) — **8 query**
+  - query: PCI(perturbational complexity) · LZc-EEG · IIT-anesthesia · GWT-cs.AI · neural-complexity · phi-cause-effect-computation · IIT-approximation · causal-emergence-effective-information
+  - **11 on-topic 흡수** (off-topic/A1중복/약한 hit drop: physics/0409140 · 1108.4296 phil · 2510.09858 opinion-survey · PCI-clinical Casali 2013=journal-only)
+  - **3-class triage** (a) verify-able 🔵/🟢 / (b) 🟡 citation / (c) handoff→anima:
+    - **(a) verify-able = 0** — 정직·예상. `hexa verify --expr` 에 IIT primitive 0개 (Φ·EMD·PCI·effective-information·cause-effect repertoire 전무). A1 + OEIS-O6 P3 hexa-coverage 동일 블로커. **4 verify-able-CANDIDATE** deferred → V5/LIFE axis-C: 2405.09207 exact-EI(linear-Gaussian closed-form) · 1011.5334 neural-complexity(graph closed-form) · 1608.08450 ETC 압축-복잡도 proxy · 2011.09850 Conscious Turing Machine.
+    - **(b) 🟡 citation = 7** — 1608.08450 · 1701.07061 · 2509.10891 · 2410.11407 · 2308.08708 · 2011.09850 · 1011.5334 · 2405.09207(dual). atlas reference node, 재계산 경로 없음.
+    - **(c) handoff→anima = 11** — 11편 전부 anima LIFE H_xxx cross-link 보유.
+  - **anima LIFE cross-link (6 H 핸드오프 g60)**: `~/core/anima/LIFE.md` + `HEXAD/LIFE/README.md` 매핑 — H_239 alt-Φ-metric ← 1608.08450/1701.07061/1011.5334 · H_209 EEG-1/f ← 2509.19254/1701.07061 · H_222/H_244 마취-수면 ← 1604.00002 · H_275 causal-DAG-Φ ← 2405.09207/2201.10154 · H_002 Φ-scale-variant ← 2509.10891 · H_277 turing-completeness ← 2011.09850.
+  - **V5-engine seed**: `effective_information(TPM)` closed-form (2405.09207 linear-Gaussian exact) = V5/LIFE axis-C 의 가장 싼 첫 IIT recompute primitive → 노출 시 첫 진짜 🟢 ARXIV-ANIMA claim.
+  - 영속: `.verdicts/arxiv-anima-absorb/triage_a2.txt` (ASCII triage 표) + `docs/a2-anima-axis.md` (한글) + `CLAIMS.tape` @C slug=arxiv-anima-absorb (🟡 11 papers + 6 handoffs, verify-able→V5).
+- [x] anima 핸드오프 filing (g60, **실제 filing** — A1 은 STUB 였음) — `~/core/anima/INBOX.log.md` 에 slug `arxiv-a2-iit-empirical-ingest` append (stub-first, dedup). **주의**: anima working tree 가 dirty orphan-recover 브랜치 위 → 기존 INBOX 노트 + memory `feedback_closure` 에 따라 working-copy edit 만 (공유 dirty anima 트리 commit 금지) → anima 세션이 commit 必 (parent 보고).
+- [x] honesty — verify-able ≈ 0 은 V5 IIT 엔진 랜딩까지 정직한 결과. A2 가치 = citation + anima cross-pollination. sibling V5-IIT lane 동시 진행.
+
 ## 2026-05-26 — 도메인 개시 + A1 ingest POC
 
 - [x] 도메인 SSOT `ARXIV/ARXIV.md` 작성 — @title + @goal + 4-axis 표 + A1-A8 roadmap + 거버넌스/비범위
