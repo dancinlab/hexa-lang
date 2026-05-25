@@ -1470,14 +1470,20 @@ fn dispatch_absorbed(verb, ab_args) {
     let is_annot = len(raw) >= 6 && raw.substring(0, 6) == "ANNOT:"
     let rel = if is_annot { raw.substring(6, len(raw)) } else { raw }
 
-    // Resolve to absolute path: install_dir_from_argv0() preferred, then
-    // cwd fallback (in-repo dev runs). Mirrors the atlas dispatch resolver.
+    // Resolve to absolute path with hexa's documented precedence
+    // `$HEXA_LANG > install_dir > cwd` (same chain as stdlib `use` /
+    // resolve_hxroot). Build low→high so the highest existing match wins:
+    //   1. cwd-relative `rel` (lowest — in-repo dev runs from the root)
+    //   2. install_dir_from_argv0() + rel (binary install carrying sources)
+    //   3. $HEXA_LANG + rel (highest — explicit checkout override)
+    // Prior code consulted only install_dir + cwd, so an exported HEXA_LANG
+    // was ignored: `hexa kick` from a non-repo cwd on a host whose ~/.hx
+    // install lacks the compiler/ sources failed even with HEXA_LANG set.
     let __inst = install_dir_from_argv0()
     let mut script = rel
-    if len(__inst) > 0 {
-        let inst_path = __inst + "/" + rel
-        if file_exists(inst_path) { script = inst_path }
-    }
+    if len(__inst) > 0 && file_exists(__inst + "/" + rel) { script = __inst + "/" + rel }
+    let __hl = env_var("HEXA_LANG")
+    if len(__hl) > 0 && file_exists(__hl + "/" + rel) { script = __hl + "/" + rel }
     if !file_exists(script) {
         println("error: absorbed verb '" + verb + "' script not found: " + script)
         return
