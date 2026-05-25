@@ -1370,3 +1370,47 @@
   raw    = ".verdicts/fusion-attention-roofline/F-FUSION-ATTN-ROOFLINE.txt"
   src    = "round-7 fragment-map discovery campaign archive/fires/fusion_attention_roofline_2026_05_25/probe{2,3}.cu"
   status = "🟢 SUPPORTED-NUMERICAL — empirical with err 1e-7 / 6e-8 bit-exact matches. terminal."
+
+# ───────────────────────────────────────────────────────────────────────
+# ───────────────────────────────────────────────────────────────────────
+# TECS-L axis A (MODFORM) — tecs-l-modform-dim-genus (slug · group=TECS-L · MF4)
+# Classical theorem dim S_2(Γ_0(N)) = genus(X_0(N)) — TESTED vs hexa fns.
+# 🔴 CLOSED-NEGATIVE: hexa `dim_cusp_forms(N,2)` does NOT match `gamma0_genus(N)`
+# for N≥11 (10/30 match by coincidence at genus=0, 20/30 mismatch). gamma0_genus
+# is trusted (MF3 22/22 vs classical table); dim_cusp_forms is NOT standard dim S_2.
+# Doc: TECS-L/docs/mf4-dim-genus-mismatch.md. Upstream report: INBOX.log.md.
+
+@C tecs_l_mf_dim_sweep := "dim_cusp_forms(N,2) =/= gamma0_genus(N) for N≥11 (20/30 mismatch; classical theorem dim S_2 = genus FALSIFIED for hexa's fn)" :: experiment [slug=tecs-l-modform-dim-genus group=TECS-L]
+  method = "sweep"
+  cmd    = "for N in 1..30: compare hexa verify --expr dim_cusp_forms N 2 g  vs  gamma0_genus N g"
+  raw    = ".verdicts/tecs-l-modform-dim-genus/dim_vs_genus_sweep.txt"
+  src    = "MF4 closed-negative; classical dim S_2(Γ_0(N)) = genus(X_0(N))"
+  status = "🔴 FALSIFIED — closed negative on the identity for hexa's fn. dim_cusp_forms is NOT standard dim S_2. terminal · paper-eligible (paper_negative_ok)."
+
+@C tecs_l_mf_dim_n6_match := "dim_cusp_forms(6,2) = 0 = gamma0_genus(6) (n=6, genus-0 region coincidence)" :: formula [slug=tecs-l-modform-dim-genus group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr dim_cusp_forms 6 2 0"
+  raw    = ".verdicts/tecs-l-modform-dim-genus/dim_n6_match.txt"
+  src    = "MF4 — coincidence-match at genus=0"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal."
+
+@C tecs_l_mf_dim_n11_actual := "dim_cusp_forms(11,2) = 0 (hexa actual; expected 1 by classical dim S_2 = genus → mismatch)" :: formula [slug=tecs-l-modform-dim-genus group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr dim_cusp_forms 11 2 0"
+  raw    = ".verdicts/tecs-l-modform-dim-genus/dim_n11_actual.txt"
+  src    = "MF4 mismatch — hexa returns 0, classical dim S_2(Γ_0(11)) = genus = 1"
+  status = "🔵 SUPPORTED-FORMAL — hexa's actual value verified. (anchors the 🔴 finding)."
+
+@C tecs_l_mf_genus_n11 := "gamma0_genus(11) = 1 (MF3-anchored; classical X_0(11) genus = 1)" :: formula [slug=tecs-l-modform-dim-genus group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr gamma0_genus 11 1"
+  raw    = ".verdicts/tecs-l-modform-dim-genus/genus_n11.txt"
+  src    = "MF3 — gamma0_genus matches classical table"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal."
+
+@C tecs_l_mf_dim_n30_actual := "dim_cusp_forms(30,2) = 6 (hexa actual; expected 3 by classical → mismatch, diff +3)" :: formula [slug=tecs-l-modform-dim-genus group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr dim_cusp_forms 30 2 6"
+  raw    = ".verdicts/tecs-l-modform-dim-genus/dim_n30_actual.txt"
+  src    = "MF4 mismatch — hexa returns 6, classical dim S_2(Γ_0(30)) = genus = 3"
+  status = "🔵 SUPPORTED-FORMAL — hexa's actual value verified. (anchors the 🔴 finding)."
