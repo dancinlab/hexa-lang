@@ -2,6 +2,18 @@
 
 Append-only history sister of `CANON.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
+## 2026-05-25T16:00Z — M6 `hexa tool` 서랍 완전 커버리지 + core↔tool 경계 정리 (M4 polish)
+
+PR #964(M4)의 후속 polish. 격리 worktree `agent-a119c1b3b270d14f8` (base origin/main). 편집 범위 = `self/main.hexa`의 `cmd_help`/`cmd_tool_list`만 (`resolve_or_bootstrap_hexa_v2`는 M5 세션 소유라 미접촉).
+
+- [x] **커버리지 감사** — 메인 dispatch ladder(31 `else if sub==`) + `_absorbed_script`(69 흡수 verb) 전수 열거 → `cmd_tool_list` 4-family와 대조. **고아 8개 발견**: `n6-list`(annotator 누락) · `convergence tape hxc url stdlib`(format/dispatch 도구) · `cache daemon`(빌드 인프라) · `batch typecheck`(추가 빌드 verb). 양방향 감사 = 고아 0 · dead-entry 0 확정.
+- [x] **TOOLCHAIN family 신설** — 신규 5번째 family `TOOLCHAIN`(batch typecheck cache daemon convergence tape hxc url stdlib). `n6-list`를 ANNOTATOR에 추가. `loop`은 SCIENCE→DISCOVERY 재분류(self-growing atlas 발견 사이클). 결과 5-family 전부 non-empty. CANON not-goal 준수 = verb는 GROUP만, 제거 없음(bare `hexa <verb>` 전부 유지).
+- [x] **core↔tool 경계** — `LANGUAGE TOOLCHAIN`→`CORE TOOLCHAIN`. core에 everyday 11개만(run/build/test/parse/check/bench/cc/lsp/init/status/version) 잔류 · 나머지(batch·typecheck·cache·daemon·convergence·tape·hxc·url)는 `hexa tool` 포인터 1줄로 이동.
+- [x] **검증(compiled-path only)** — `hexa parse self/main.hexa` OK. `cmd_help`+`cmd_tool_list` 추출 harness를 `hexa build`로 컴파일(RC=0) → 실행 출력으로 5-family 전부 채워짐 + core 경계 확인. interp(`hexa run`) 미사용.
+- [x] **랜딩** — net −5 LOC(16+/21−, g4 통과 · wipe-guard 무관). stacked PR base origin/main.
+
+**교훈**: (1) 초기 절대경로 Read가 메인 repo 경로였던 탓에 Edit이 공유 메인트리 `self/main.hexa`로 leak — `git diff`로 내 편집만임을 확인 후 worktree로 `cp` 이동 + 메인 `git checkout --`로 복원(메인 = HEAD 일치 확정, 타 세션 WIP 무손상). worktree 작업 시 편집 대상 경로가 worktree 안인지 매번 확인 필수. (2) 워크트리는 build 산출물(self/native/hexa_v2) 미공유 → 메인 repo `HEXA_LANG`로 트랜스파일러 빌려 parse/build.
+
 ## 2026-05-25T05:23Z — M3b 컴파일러 바이너리 git 제거 + auto-bootstrap (PR #943 merged · 파괴)
 
 CANON stacked PR 3/4 마지막. 격리 worktree `/tmp/canon-m3b`. **M3 완전 종결** (M3a+M3b).
