@@ -2008,6 +2008,28 @@
   status = "🟠 INSUFFICIENT/DEFERRED — open problem, known lower bounds cited, no closure. paper-ineligible by gate (project.tape @D paper_gate excludes 🟠). No PAPER/<slug>/. No atlas fold (axis E E1 = verified-only). Deliberate honest-scope milestone to forbid axis-B over-claim."
 
 # ───────────────────────────────────────────────────────────────────────
+# TECS-L axis B (MERSENNE) — tecs-l-mersenne-exponent-primality (slug · group=TECS-L · MR8 PAPER)
+# MR8: arxiv-style paper aggregating the MERSENNE axis (MR1-MR7) around its
+# headline closed-negative (MR6: p prime ⇏ M_p prime) plus the verified
+# Euclid-Euler core (MR1/MR3). 11-page paper, g51 (≥10p + fal.ai figure).
+# Honest residual = MR7 odd-perfect OPEN (stated as a frontier, never a finding).
+
+@C tecs_l_mersenne_exponent_primality_paper := "MERSENNE paper: headline closed-negative MR6 (p prime ⇏ M_p=2^p-1 prime — M_11=2047=23*89 composite, sigma=2160!=2048, tau=4!=2; exponent primality alone does NOT generate perfect numbers) on the verified Euclid-Euler core (even perfect <=> 2^(p-1)*M_p, sigma(P)=2P, tau=2p, P1..P7 🔵); MR7 odd-perfect honestly OPEN. 11-page paper PAPER/tecs-l-mersenne-exponent-primality/, g51 (≥10p + fal figure)." :: paper [slug=tecs-l-mersenne-exponent-primality group=TECS-L]
+  method = "paper"
+  cmd    = "pdflatex×3 + bibtex (PAPER/tecs-l-mersenne-exponent-primality/Makefile) → main.pdf 11 pages"
+  raw    = ".verdicts/tecs-l-mersenne-composite/m11_tau.txt"
+  src    = "PAPER/tecs-l-mersenne-exponent-primality/main.tex · MR6 finding · backdrop MR1/MR2/MR3/MR5 · open frontier MR7"
+  status = "🔴 MR6 closed-negative (p prime ⇏ M_p prime, M_11=2047=23*89) + Euclid-Euler 🔵 core + MR7 open. Paper PAPER/tecs-l-mersenne-exponent-primality/"
+
+# — Paper §finding verdict ptrs (MR6 closed-negative + Euclid-Euler core) —
+@C tecs_l_mersenne_exponent_primality_finding := "MR6 finding 🔴: exponent primality does NOT imply Mersenne primality — pre-registered falsifier 'p prime ⟹ M_p prime' FALSIFIED at p=11 (M_11=2047 composite: sigma=2160!=2048, tau=4!=2; exact factorization 23*89, both factors prime sigma=n+1/tau=2); corroborated M_23=47*178481 (tau=4), M_29=233*1103*2089 (tau=8). Ruled-out axis = exponent primality alone generates perfect numbers (Mersenne-prime hypothesis is essential)." :: empirical [slug=tecs-l-mersenne-exponent-primality group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr sigma 2047 2160 + tau 2047 4 + sigma 23 24 + sigma 89 90 + tau 8388607 4 + tau 536870911 8"
+  raw    = ".verdicts/tecs-l-mersenne-composite/m11_sigma.txt"
+  src    = "TECS-L axis B MR6 (slug=tecs-l-mersenne-composite) · verdicts m11_{sigma,tau} · f23_{sigma,tau} · f89_{sigma,tau} · m23_tau · m29_tau · paper §1/§3/§4. Euclid-Euler core = MR1 (tecs-l-mersenne-euclid-euler) + MR3 (tecs-l-mersenne-abundancy-closed). Open residual = MR7 (tecs-l-mersenne-odd-perfect-open) honestly flagged, not a finding."
+  status = "🔴 FALSIFIED — M_11=2047=23*89 composite (first prime exponent with composite M_p). ruled-out axis = exponent-primality ⟹ perfect-number generation. Euclid-Euler 🔵 backdrop survives intact. MR7 odd-perfect 🟠 OPEN (stated as frontier, never the finding)."
+
+# ───────────────────────────────────────────────────────────────────────
 # TECS-L axis F · family (e) · F8 — tecs-l-cross-domain-bridge (slug · group=TECS-L · F8)
 # Cross-domain n=6 bridge scan (commons g67 NEXUS): survey root-level
 # hexa-lang domain SSOTs and atlas atoms for genuine n=6 identity bridges.
