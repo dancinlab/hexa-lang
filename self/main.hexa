@@ -53,7 +53,7 @@ fn cmd_help() {
     println("  hexa --version, -v                      Version + build hash")
     println("  hexa --help, -h                         This help")
     println("")
-    println("CORE TOOLCHAIN  (everyday verbs — run `hexa tool` for the full specialized drawer)")
+    println("CORE TOOLCHAIN  (everyday verbs — `hexa <verb> --help` for per-verb detail · `hexa tool` for the drawer)")
     println("  run [--no-sentinel] <file> [args...]    Execute .hexa script (compile-then-exec)")
     println("                                            --no-sentinel: stdout 청정 (no __HEXA_RC=N tail)")
     println("  build <file> [-o out] [--target=<t>]    Compile to native (RFC-018 5-stage IR;")
@@ -244,6 +244,66 @@ fn cmd_help() {
     println("  `hexa <verb>` loads the module and exits 0. Per-verb fn main() CLI shims")
     println("  are a deferred follow-up; programmatic use via `use \"compiler/<x>/...\"` works")
     println("  today. Test smokes (`compiler/<x>/*_test.hexa`) demonstrate live API surfaces.")
+}
+
+// CANON M10: focused per-verb help. `hexa <verb> --help` / `-h` lands here
+// instead of dumping the whole top-level catalog (cmd_help). One uniform
+// block per core verb: signature · one-line purpose · key flags. Verbs that
+// own a sub-CLI binary (atlas/qrng/qmirror/cloud/loop/gpu/sim-universe) keep
+// delegating --help to their own binary; this covers the core toolchain 11.
+fn cmd_verb_help(verb) {
+    if verb == "run" {
+        println("hexa run [--no-sentinel] <file> [args...]")
+        println("  Compile a .hexa script to a native binary, then exec it (interp retired).")
+        println("  args...        forwarded to the script as argv")
+        println("  --no-sentinel  drop the trailing __HEXA_RC=N stdout sentinel (clean pipe)")
+    } else if verb == "build" {
+        println("hexa build <file> [-o out] [--target=<t>] [--shared] [--c-only]")
+        println("  Compile a .hexa file to a native binary (RFC-018 5-stage IR; atlas baked in).")
+        println("  -o out         output path (default build/artifacts/app)")
+        println("  --target=<t>   cross-compile target triple")
+        println("  --shared       emit a shared library (.so/.dylib; -fPIC -shared)")
+        println("  --c-only       stop after C emission (no clang link)")
+    } else if verb == "test" {
+        println("hexa test <file> [--filter NAME] [--verbose] [--selftest-only]")
+        println("  Run the @test fns in <file> via the native test runner.")
+        println("  --filter NAME  run only @test fns whose name contains NAME")
+        println("  --verbose      per-test output")
+    } else if verb == "parse" {
+        println("hexa parse <file>")
+        println("  Parse-only syntactic check — no codegen, no exec. Exit 0 OK, 1 on error.")
+    } else if verb == "check" {
+        println("hexa check <file>")
+        println("  Verify @invariant DSL blocks (AST-based predicate check). Exit 0 OK, else nonzero.")
+    } else if verb == "typecheck" {
+        println("hexa typecheck <file>")
+        println("  Opt-in type-checker pass over <file> (diagnostics only, no codegen).")
+    } else if verb == "bench" {
+        println("hexa bench <file> [--runs N] [--json] [--compare <bin>]")
+        println("  Benchmark wall/RSS/alloc over N runs (default 3).")
+        println("  --json             machine-readable output")
+        println("  --compare <bin>    A/B against another binary")
+    } else if verb == "cc" {
+        println("hexa cc [--regen]")
+        println("  Rebuild the transpiler (hexa_cc — the C-seed compiler, go-tool-compile style).")
+        println("  --regen        run the full auto-regeneration pipeline")
+    } else if verb == "lsp" {
+        println("hexa lsp")
+        println("  Start the LSP server (stdin/stdout JSON-RPC) for editor integration.")
+    } else if verb == "init" {
+        println("hexa init <dir> [--name N]")
+        println("  Scaffold <dir>/project.hexa + main.hexa. Refuses to clobber an existing project.")
+        println("  --name N       project name (default = basename of <dir>)")
+    } else if verb == "status" {
+        println("hexa status")
+        println("  Print toolchain status (transpiler / installed binaries / repo root).")
+    } else if verb == "version" {
+        println("hexa version    (also: --version, -v)")
+        println("  Print the version string + build hash.")
+    } else {
+        // Unknown / sub-CLI verb — fall back to the full catalog.
+        cmd_help()
+    }
 }
 
 // CANON M4: go-tool-style verb index. The bare `hexa <verb>` dispatch still
@@ -5400,10 +5460,16 @@ if len(av) < 3 {
     } else if sub == "version" || sub == "-v" || sub == "--version" {
         cmd_version()
     } else if sub == "status" {
-        cmd_status()
+        if len(av) >= 4 && (av[3] == "--help" || av[3] == "-h") {
+            cmd_verb_help("status")         // CANON M10
+        } else {
+            cmd_status()
+        }
     } else if sub == "cc" {
         // bt 50 Phase C: `hexa cc --regen` 신규 자동 재생성 파이프라인
-        if len(av) >= 4 && av[3] == "--regen" {
+        if len(av) >= 4 && (av[3] == "--help" || av[3] == "-h") {
+            cmd_verb_help("cc")             // CANON M10 (avoid heavy rebuild on --help)
+        } else if len(av) >= 4 && av[3] == "--regen" {
             cmd_regen_cc()
         } else {
             cmd_cc()
@@ -5415,8 +5481,8 @@ if len(av) < 3 {
         } else if av[3] == "--help" || av[3] == "-h" {
             // INBOX T23:10Z (a): `hexa run --help` was interpreting "--help"
             // as a source file path → `error: source file not found: --help`.
-            // Intercept early so the standard help text is shown (rc=0).
-            cmd_help()
+            // CANON M10: focused per-verb help instead of the full catalog.
+            cmd_verb_help("run")
         } else {
             // `--no-sentinel` opt-in flag — accepted before/after the file
             //   arg, stripped from forwarded run_args. Suppresses the
@@ -5467,9 +5533,11 @@ if len(av) < 3 {
         }
     } else if sub == "bench" {
         // bt 81: hexa bench <file> [--runs N] [--json] [--compare <other_bin>]
-        if len(av) < 4 {
+        if len(av) >= 4 && (av[3] == "--help" || av[3] == "-h") {
+            cmd_verb_help("bench")          // CANON M10
+        } else if len(av) < 4 {
             println("error: 'bench' requires <file>")
-            cmd_help()
+            cmd_verb_help("bench")
         } else {
             // hexa_v2 트랜스파일러: dispatch 블록 내부에서 `let mut` 시퀀스의
             // 일부 HexaVal decl 이 누락되는 회귀가 확인됨(원인 추적은 별도
@@ -5509,18 +5577,22 @@ if len(av) < 3 {
         }
     } else if sub == "parse" {
         // T27: parse-only check — exit 0 OK, exit 1 with error on stderr/stdout.
-        if len(av) < 4 {
+        if len(av) >= 4 && (av[3] == "--help" || av[3] == "-h") {
+            cmd_verb_help("parse")          // CANON M10
+        } else if len(av) < 4 {
             println("error: 'parse' requires <file>")
-            cmd_help()
+            cmd_verb_help("parse")
             exit(1)
         } else {
             cmd_parse(av[3])
         }
     } else if sub == "typecheck" {
         // PROBE r14 #453 follow-up: opt-in type-checker pass.
-        if len(av) < 4 {
+        if len(av) >= 4 && (av[3] == "--help" || av[3] == "-h") {
+            cmd_verb_help("typecheck")      // CANON M10
+        } else if len(av) < 4 {
             println("error: 'typecheck' requires <file>")
-            cmd_help()
+            cmd_verb_help("typecheck")
             exit(1)
         } else {
             cmd_typecheck(av[3])
@@ -5541,7 +5613,8 @@ if len(av) < 3 {
         // --help/-h before daemon entry so the standard help text is shown.
         let __lsp_want_help = (len(av) >= 4 && (av[3] == "--help" || av[3] == "-h"))
         if __lsp_want_help {
-            cmd_help()
+            // CANON M10: focused per-verb help instead of the full catalog.
+            cmd_verb_help("lsp")
             exit(0)
         }
         let __inst_lsp = install_dir_from_argv0()
@@ -5567,8 +5640,8 @@ if len(av) < 3 {
         } else if av[3] == "--help" || av[3] == "-h" {
             // INBOX T23:10Z (a): `hexa build --help` was interpreting "--help"
             // as a source file path → `error: source file not found: --help`.
-            // Intercept early so the standard help text is shown (rc=0).
-            cmd_help()
+            // CANON M10: focused per-verb help instead of the full catalog.
+            cmd_verb_help("build")
         } else {
             // hexa_v2 트랜스파일러 회귀: dispatch 블록 내부 `let src = av[3]`
             // decl 이 누락되어 cmd_build(src, ...) 가 undeclared 오류. bench
@@ -5618,9 +5691,11 @@ if len(av) < 3 {
         // R7 track B (2026-05-18, cycle 6): preferred path = standalone
         // compiled bin/hexa-check binary. invariant_check.hexa main_check →
         // main rename + module-level call removal.
-        if len(av) < 4 {
+        if len(av) >= 4 && (av[3] == "--help" || av[3] == "-h") {
+            cmd_verb_help("check")          // CANON M10
+        } else if len(av) < 4 {
             println("error: 'check' requires <file>")
-            cmd_help()
+            cmd_verb_help("check")
             exit(1)
         } else {
             let __inst_c = install_dir_from_argv0()
@@ -5769,7 +5844,9 @@ if len(av) < 3 {
         // compiled bin/hexa-test binary. test_runner.hexa was reshaped:
         // module-level entry block wrapped in `fn main()` so compiled
         // binary entry works; interp `hexa run` auto-invokes main() too.
-        if len(av) < 4 {
+        if len(av) >= 4 && (av[3] == "--help" || av[3] == "-h") {
+            cmd_verb_help("test")           // CANON M10
+        } else if len(av) < 4 {
             println("error: 'test' requires <file>")
             println("usage: hexa test <file.hexa> [--filter NAME] [--verbose] [--selftest-only]")
             exit(2)
@@ -5873,13 +5950,17 @@ if len(av) < 3 {
         // would re-introduce the interp dep (feedback_no_interp_use_compiled);
         // the inline path is byte-equivalent to the sister tool/init_project.hexa
         // (kept as a future standalone-bin source).
-        let mut init_args: [string] = []
-        let mut ai = 3
-        while ai < len(av) {
-            init_args.push(av[ai])
-            ai = ai + 1
+        if len(av) >= 4 && (av[3] == "--help" || av[3] == "-h") {
+            cmd_verb_help("init")           // CANON M10
+        } else {
+            let mut init_args: [string] = []
+            let mut ai = 3
+            while ai < len(av) {
+                init_args.push(av[ai])
+                ai = ai + 1
+            }
+            cmd_init(init_args)
         }
-        cmd_init(init_args)
     } else if sub == "url" {
         if len(av) < 4 {
             println("error: hexa url requires URL argument (e.g. 'hexa://run?file=/path/script.hexa')")
