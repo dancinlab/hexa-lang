@@ -2,6 +2,45 @@
 
 Append-only step log for the theorem-atlas upgrade campaign. Newest on top.
 
+## 2026-05-25 — R5 falsifier 구조화 accessor + cascade 무효화 query (additive·read-only)
+
+goal(deferred): "falsifier 구조화 필드 + cascade 무효화". 노드가 claim을 반증하는 조건
+(falsifier)을 운반 + 어떤 노드가 falsified되면 그것을 인용하는 파생 노드를 cascade-플래그.
+
+조사: 노드 모델 = `compiler/atlas/parser.hexa` 단일 `struct AtlasNode`(kind·id·raw·source_file·
+source_line·grade·edges). edges=`EdgeInfo`(depends_on `<-`·derives `->`·applications `=>`·
+equivalents `==`·converges `~>`·verified_by `|>`·breakthroughs `!!`) — **인용/의존 메커니즘 이미 존재**.
+falsifier는 현재 비구조화 prose: 코퍼스 427 "falsifier" 히트 대부분 노드 id/도메인명
+(`F19_F23_falsifier_expansion_*`), 실제 클로즈는 `=> "...falsifier:..."` 설명 prose 안 2건뿐
+(구조화 `falsifier:` 연속줄 = 0). `falsifier_wellformed_audit.hexa`는 raw 전체 substring-anywhere로
+@? 노드만 감사. RETIRED `compiler/discover/cascade.hexa`(RFC-017 §5e) = atlas.n6 디스크 읽기 +
+normalized_form substring 휴리스틱 + tombstone/manifest write(fs_write·중량) — out of scope 유지.
+
+**스키마-광역 위험 실측**: hexa 구조체 리터럴은 누락 필드를 default 하지 **않음** — codegen이
+`hexa_codegen_error__missing_field__Foo__c` 의도적 컴파일 에러 방출(테스트 빌드로 확인). 따라서
+`AtlasNode`에 필드 1개라도 추가 = embedded.gen.hexa의 16101 리터럴 + ~20 생성 파일 전부 재작성
+강제(데이터 파일 편집 금지 위반). → **스키마 변경 0**으로 결정. additive accessor 패턴 채택:
+
+- [x] compiler/atlas/cascade.hexa (신규 ~260줄, 코드+주석; 코드 본문 g4 내) —
+  (1) `node_falsifier(node)->string` = `raw` 연속줄에서 `falsifier:`/`falsifier = `/`falsifier=` +
+  quoted-prose 래핑을 구조화 추출(필드 없이 타입드 surface · 부재 시 "" · `=>` 설명 prose는 의도적
+  非매칭 = false-positive 방지) · `node_has_falsifier` 술어.
+  (2) `CascadeHit{id·kind·via}` + `cascade_candidates(falsified_id, nodes)` = 기존 edge 재사용,
+  falsified-id를 depends_on/verified_by/equivalents/derives로 인용하는 他노드 read-only 리스트
+  (self-cascade 제외 · 강한-의존 우선 probe 순). `cascade_candidates_static(id)` = atlas_list+enrich
+  래퍼. `cascade_to_text` 렌더. **read-only — tombstone/mutate/PR/I-O 無**.
+- [x] compiler/atlas/cascade_test.hexa (신규) — 19/19 PASS(node_falsifier 3형식+quoted+부재·
+  cascade 4-edge-type 후보·self/lonely 제외·empty/unknown id→0·render count).
+- 검증: `hexa parse` 양파일 clean · 격리 worktree 빌드(차용 transpiler symlink + 메인
+  HEXA_MODULE_LOADER + SIDECAR_NO_POOL_ROUTE=1) PASS. **16101 노드 byte-identical 로드**
+  (corpus harness: `loaded 16101` · `n`→kind=P · `sigma`→kind=P 불변) · 실데이터 cascade
+  (`n` falsified 가정 → 26 노드 인용: sigma depends_on, n6-* 등) · 기존 parser_test 재빌드 PASS
+  (파서 무손상). **스키마/데이터/sibling 파일(atlas_cli·audit) 미변경 — git status = 신규 2파일만.**
+- 결론: structured falsifier 필드는 hexa no-default-field 의미론 + 16k 동결 데이터 때문에 깨끗한
+  additive 슬라이스 아님(스키마 강제 안 함). accessor+cascade-query로 동일 목표(구조화 surface +
+  cascade 무효화 후보)를 read-only·byte-preserving 달성. 현 코퍼스 structured-falsifier=0 = 정직한
+  상태(이 마일스톤이 채울 갭). cascade CLI verb 노출은 atlas_cli sibling rebase 후 deferred.
+
 ## 2026-05-25 — R5 active-acquisition 랭킹 (Q / 🟡 / 🟠 프론티어 우선순위)
 
 audit 축은 코퍼스를 **측정**만 했다. R5는 그 측정을 **우선순위 to-acquire 리스트**로 전환 —
