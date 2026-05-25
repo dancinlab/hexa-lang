@@ -2,6 +2,18 @@
 
 Append-only history sister of `OEIS.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
+## 2026-05-26T03:30Z — O7 catalogue-mirror closure report + O8 paper-gate eval (TRIGGER)
+
+- [x] O1–O6 종합 **카탈로그-미러 클로저 리포트** + paper_significance 게이트 평가. 격리 worktree `/tmp/wt-oeis-o7` (origin/main). docs+verdict+CLAIMS only — **atlas(embedded.gen.hexa) 미접촉**.
+  - **funnel** (전부 ledger verbatim): 374,047 swept seq × 20 candidate fn → **1,707** K=10 hit → K=20 second-pass **336 survive / 1,334 coincidence / 37 na** → O3 per-hit verify **🔵 8(7 distinct) / 🟡 41 / 🟠 287** → O4 **7 atlas-linked** (4 @P sigma/tau/phi/mu present + 1 alias sigma_0==tau + 3 새 @F aliquot A001065/sigma_2 A001157/sigma_3 A001158). selectivity 5.3×10⁻⁵ (verify-gated, naive dump 아님). ASCII funnel diagram = `OEIS/docs/o7-catalogue-closure.md` §1.
+  - **성과 (§2)**: 7 NT-fn 의 검증된 OEIS↔hexa provenance + **K=20 coincidence-filter 방법** — K=10 hit 의 **78.1%(1334/1707)** 가 first-K artifact (≥20항 disprovable 기준 79.9%). 즉 K=10 prefix-match 단독으로는 sequence identity 결정 불가, K=20 second-pass 가 거의-무료 거름망.
+  - **한계 (§3, honest)**: 🟠 287 = 100% calculator-gap (`_recompute` 에 n×190/prime×67/poly 경로 부재) → **VERIFY-KIT V7** (combinatorial/prime fn) mutual-feed 로 전환 가능(단 대부분 n/prime trivial-alias 라 🟡 cite, 새 theorem 아님). O6 DLMF = closed-negative(패턴 비이식성). 7 중 5 = mostly-attribution(@P present).
+  - **unique pattern (§4)**: (a) A000926 Idoneal↔n 우연(첫 10항 일치, term≤20 divergence — clean exemplar) · (b) 78% coincidence rate · (c) sibling-locus n·φ(n)=σ(n)⟺n∈{1,6} (A002618, F3 — hand-sweep n=1..8, uniqueness 미증명).
+  - **paper-gate eval (§5, STRICT)** → **O8 TRIGGER**: candidate **(b) 78%-coincidence-rate** 가 `paper_significance` 3요건 충족 — **pre-registered falsifier**(O1 scanner 가 A000926↔n 를 "11항부터 diverge 예상, O3 falsifier" 로 기록 = H "K=10 prefix-match ⟹ sequence identity" pre-register) + **real measurement**(374K sweep, 1334/1707=78.1%) + **closed-negative finding**(H FALSIFIED, 배제된 축 = short-prefix-as-identity-test; `paper_negative_ok`). **caveat 必**: candidate-set-relative(20 low-entropy fn 편향) + single K=10→20 prefix-pair. candidates **(a) anecdote + (c) uniqueness 미증명 = SKIP** (게이트 미달, **강제 paper 안 함** — paper_violation 회피).
+  - **O8 spec** (다음 라운드): slug=`oeis-prefix-collision-falsifier` · §statement/method/verification/finding 명시 + g51(≥10p + fal.ai fig). O8 milestone 에 falsifier+finding spec 기록, `- [ ]` 유지(TRIGGER).
+  - 영속: `OEIS/docs/o7-catalogue-closure.md` (한글 §1–§5 + 부록) + `.verdicts/oeis-closure/closure_report.txt` (ASCII funnel + paper-gate verdict) + `CLAIMS.tape` @C slug=oeis-closure group=OEIS 🟢. method=synthesis/closure (신규 hexa verify 0건).
+  - **다음 = O8** (closed-negative paper: catalogue cross-check 은 engineering closure, publishable finding 은 78% prefix-collision falsifier 하나).
+
 ## 2026-05-26T02:40Z — O8 paper SHIPPED (prefix-collision falsifier · 78.1% closed-negative · g51)
 
 - [x] O8 — **paper_on_discovery**: O1-O7 가 surface 한 닫힌-부정(closed-negative) 발견을 arxiv 스타일 논문으로 ship. 격리 worktree `/tmp/wt-oeis-o8` (origin/main). `PAPER/oeis-prefix-collision-falsifier/`.
