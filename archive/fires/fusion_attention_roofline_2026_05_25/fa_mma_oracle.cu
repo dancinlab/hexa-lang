@@ -43,59 +43,38 @@ __device__ __forceinline__ uint32_t smem_u32(const void* p){
     return (uint32_t)__cvta_generic_to_shared(p);
 }
 
-/* One mma K-step over the warp's 32-row A band and 32-col B band.
- * acc[32] are the 8 mma's f32 accumulators (4 each).
- * a_base/b_base = smem byte addr of the warp's tile (row 0, col 0).
- * s_idx in 0..3 (covers K-cols [s_idx*16 .. s_idx*16+15]).
- * b_trans: 1 -> ldmatrix.trans (K^T) ; 0 -> non-trans (V).
+/* One mma K-step. BOTH GEMMs use the EMPIRICALLY-PROVEN non-trans path which
+ * computes C = A . Bop^T (contraction along Bop's COLUMNS). Verified by probe2
+ * (non-trans => A.B^T, err 1e-7) + probe3 (P.V via V pre-transpose, err 6e-8).
+ *   QK^T: Bop = K[keys x d] -> A.K^T = Q.K^T (contraction d, K's cols). DIRECT.
+ *   P.V : Bop = V^T[d x keys] -> A.(V^T)^T = P.V (contraction keys). caller feeds
+ *         a pre-transposed V^T tile so this is identical to the QK^T path.
  *
- * UNSWIZZLED CANONICAL ldmatrix.x4 addressing for a 16x16 fp16 tile (row-major,
- * 128 B/row): lane i supplies the address of row (i & 15), col-half (i>>4)*8.
- *   ldmatrix.x4 non-trans -> the 4 result regs are the 16x16 tile distributed in
- *     the m16k16 A-fragment layout (or m16n16 B for V).
- *   ldmatrix.x4 trans -> transposes each 8x8 (used for K^T).
- * The warp owns 32 A-rows (2 stacked 16x16) and 32 B-cols. For the A operand the
- * two 16-row halves load into ra[0..3] (rows 0-15) and ra[4..7] (rows 16-31).
- * For the B operand the K-contraction tile is 16x16 too; we load two 16-col
- * halves rbl (cols 0-15) and rbh (cols 16-31) of the n-direction.
+ * CANONICAL ldmatrix.x4 (16x16 fp16, 128 B/row): lane i -> row (i&15),
+ * col-half (i>>4)*8. The warp owns 32 A-rows (2 stacked 16x16) -> ra[0..3] rows
+ * 0-15, ra[4..7] rows 16-31. B-operand: 32 n-rows -> rbl (n 0-15), rbh (n 16-31),
+ * each a 16x16 tile whose 16 cols are the K-contraction group.
  */
 __device__ __forceinline__ void mma_kstep(float acc[32], uint32_t a_base,
-        uint32_t b_base, int s_idx, int lane, int b_trans) {
+        uint32_t b_base, int s_idx, int lane) {
     int k_byte = s_idx * 16 * 2;     /* K-col group start byte (16 fp16 = 32 B) */
     int r15 = lane & 15;
     int chalf = (lane >> 4) * 8;     /* 0 or 8 (fp16 col within the 16) */
-    /* A operand: contraction (K) along columns. Tile A[row, k_col].
-     *   row = r15 (+0 / +16 for the two 16-row halves)
-     *   col within the 16-K group = chalf .. chalf+7
-     *   addr = a_base + row*128 + (k_byte + chalf*2)  */
-    uint32_t a_lo = a_base + r15*128 + k_byte + chalf*2;          /* rows 0-15 */
-    uint32_t a_hi = a_base + (r15+16)*128 + k_byte + chalf*2;     /* rows 16-31 */
+    uint32_t a_lo = a_base + r15*128 + k_byte + chalf*2;          /* A rows 0-15 */
+    uint32_t a_hi = a_base + (r15+16)*128 + k_byte + chalf*2;     /* A rows 16-31 */
+    /* B-operand: n-rows along the 32-row band (n_tile already in b_base); the two
+     * 16-n halves are at row 0-15 and 16-31 of the band; K-cols = k_byte+chalf. */
+    uint32_t b_lo = b_base + r15*128 + k_byte + chalf*2;          /* n 0-15 */
+    uint32_t b_hi = b_base + (r15+16)*128 + k_byte + chalf*2;     /* n 16-31 */
     uint32_t ra[8], rbl[4], rbh[4];
     asm volatile("ldmatrix.sync.aligned.m8n8.x4.shared.b16 {%0,%1,%2,%3}, [%4];"
         : "=r"(ra[0]),"=r"(ra[1]),"=r"(ra[2]),"=r"(ra[3]) : "r"(a_lo));
     asm volatile("ldmatrix.sync.aligned.m8n8.x4.shared.b16 {%0,%1,%2,%3}, [%4];"
         : "=r"(ra[4]),"=r"(ra[5]),"=r"(ra[6]),"=r"(ra[7]) : "r"(a_hi));
-    if (b_trans) {
-        /* QK^T: B = K stored [keys x d] row-major; need K^T (contraction d).
-         * For mma .col operand with ldmatrix.trans, lane i addresses key-row
-         * (i&15) at d-col group (k_byte + chalf). Two 16-key halves -> rbl/rbh. */
-        uint32_t b_lo = b_base + r15*128 + k_byte + chalf*2;          /* keys 0-15 */
-        uint32_t b_hi = b_base + (r15+16)*128 + k_byte + chalf*2;     /* keys 16-31 */
-        asm volatile("ldmatrix.sync.aligned.m8n8.x4.trans.shared.b16 {%0,%1,%2,%3}, [%4];"
-            : "=r"(rbl[0]),"=r"(rbl[1]),"=r"(rbl[2]),"=r"(rbl[3]) : "r"(b_lo));
-        asm volatile("ldmatrix.sync.aligned.m8n8.x4.trans.shared.b16 {%0,%1,%2,%3}, [%4];"
-            : "=r"(rbh[0]),"=r"(rbh[1]),"=r"(rbh[2]),"=r"(rbh[3]) : "r"(b_hi));
-    } else {
-        /* P.V: B = V stored [keys x d] row-major, contraction = keys (along rows).
-         * mma .col operand non-trans: lane i addresses k-row (i&15) at n-col
-         * group. n-col halves -> rbl (cols 0-15), rbh (cols 16-31). */
-        uint32_t b_lo = b_base + r15*128 + k_byte + chalf*2;
-        uint32_t b_hi = b_base + r15*128 + k_byte + chalf*2 + 16*2;   /* +16 cols */
-        asm volatile("ldmatrix.sync.aligned.m8n8.x4.shared.b16 {%0,%1,%2,%3}, [%4];"
-            : "=r"(rbl[0]),"=r"(rbl[1]),"=r"(rbl[2]),"=r"(rbl[3]) : "r"(b_lo));
-        asm volatile("ldmatrix.sync.aligned.m8n8.x4.shared.b16 {%0,%1,%2,%3}, [%4];"
-            : "=r"(rbh[0]),"=r"(rbh[1]),"=r"(rbh[2]),"=r"(rbh[3]) : "r"(b_hi));
-    }
+    asm volatile("ldmatrix.sync.aligned.m8n8.x4.shared.b16 {%0,%1,%2,%3}, [%4];"
+        : "=r"(rbl[0]),"=r"(rbl[1]),"=r"(rbl[2]),"=r"(rbl[3]) : "r"(b_lo));
+    asm volatile("ldmatrix.sync.aligned.m8n8.x4.shared.b16 {%0,%1,%2,%3}, [%4];"
+        : "=r"(rbh[0]),"=r"(rbh[1]),"=r"(rbh[2]),"=r"(rbh[3]) : "r"(b_hi));
     /* 8 mma.m16n8k16: [top16|bot16] rows x [n0 n1 n2 n3] (8-col) -> acc groups 0..7
      * matching the PTX emit order. */
     #define MMA(g, ar0,ar1,ar2,ar3, b0,b1) \
@@ -136,24 +115,26 @@ __device__ __forceinline__ void acc_to_smem(float acc[32], uint32_t dst,
 __global__ void fa_mma(const __half* q, const __half* k, const __half* v,
                        __half* o, int N, float scale) {
     extern __shared__ char smem[];
-    __half* sQ = (__half*)(smem + 0);
-    __half* sK = (__half*)(smem + 8192);
-    __half* sV = (__half*)(smem + 16384);
-    float*  sS = (float*) (smem + 24576);
-    __half* sP = (__half*)(smem + 24576 + 16384);
-    float*  sO = (float*) (smem + 24576 + 16384 + 8192);
-    float*  sm = (float*) (smem + 24576 + 16384 + 8192 + 16384);
-    float*  sl = sm + 64;
-    float*  sc = sl + 64;
+    __half* sQ  = (__half*)(smem + 0);
+    __half* sK  = (__half*)(smem + 8192);
+    __half* sV  = (__half*)(smem + 16384);
+    __half* sVt = (__half*)(smem + 24576);              /* V transposed [d x keys] */
+    float*  sS  = (float*) (smem + 32768);
+    __half* sP  = (__half*)(smem + 32768 + 16384);
+    float*  sO  = (float*) (smem + 32768 + 16384 + 8192);
+    float*  sm  = (float*) (smem + 32768 + 16384 + 8192 + 16384);
+    float*  sl  = sm + 64;
+    float*  sc  = sl + 64;
 
     int tid = threadIdx.x;
     int warp = tid>>5, lane = tid&31;
     int m_tile = warp>>1, n_tile = warp&1;
     uint32_t a_band = m_tile*32*128;   /* warp A row band byte */
-    uint32_t b_band = n_tile*32*128;   /* warp B row band byte */
+    uint32_t b_band = n_tile*32*128;   /* warp B (n) row band byte */
     int qrow_base = blockIdx.x*64;
 
-    uint32_t sQb = smem_u32(sQ), sKb = smem_u32(sK), sVb = smem_u32(sV);
+    uint32_t sQb = smem_u32(sQ), sKb = smem_u32(sK);
+    uint32_t sVtb = smem_u32(sVt);
     uint32_t sPb = smem_u32(sP), sSb = smem_u32(sS), sOb = smem_u32(sO);
 
     /* load Q tile once (row-major [64 x 64] fp16) */
@@ -166,17 +147,20 @@ __global__ void fa_mma(const __half* q, const __half* k, const __half* v,
 
     int n_blocks = N/64;
     for (int kb = 0; kb < n_blocks; ++kb) {
-        /* load K,V block (row-major [64 keys x 64 d]) */
+        /* load K,V block (row-major [64 keys x 64 d]) + transpose V -> sVt[d x keys] */
         for (int i = tid; i < 64*64; i += blockDim.x) {
             sK[i] = k[(size_t)kb*64*64 + i];
-            sV[i] = v[(size_t)kb*64*64 + i];
+            __half vv = v[(size_t)kb*64*64 + i];
+            sV[i] = vv;
+            int kk = i/64, nn = i%64;          /* V[key=kk][d=nn] */
+            sVt[nn*64 + kk] = vv;              /* V^T[d=nn][key=kk] */
         }
         __syncthreads();
 
         /* QK^T -> S */
         float acc[32];
         for (int i=0;i<32;++i) acc[i]=0.0f;
-        for (int s=0;s<4;++s) mma_kstep(acc, sQb + a_band, sKb + b_band, s, lane, 1);
+        for (int s=0;s<4;++s) mma_kstep(acc, sQb + a_band, sKb + b_band, s, lane);
         for (int i=0;i<32;++i) acc[i] *= scale;
         uint32_t sS_warp = sSb + m_tile*32*256 + n_tile*32*4;
         acc_to_smem(acc, sS_warp, lane, 256, 0);
@@ -203,7 +187,7 @@ __global__ void fa_mma(const __half* q, const __half* k, const __half* v,
 
         /* P.V -> O (accumulate) */
         for (int i=0;i<32;++i) acc[i]=0.0f;
-        for (int s=0;s<4;++s) mma_kstep(acc, sPb + a_band, sVb + b_band, s, lane, 0);
+        for (int s=0;s<4;++s) mma_kstep(acc, sPb + a_band, sVtb + b_band, s, lane);
         uint32_t sO_warp = sOb + m_tile*32*256 + n_tile*32*4;
         acc_to_smem(acc, sO_warp, lane, 256, 1);
         __syncthreads();
@@ -255,7 +239,7 @@ int main(int argc, char** argv){
     CK(cudaMemcpy(dk,hk,elems*2,cudaMemcpyHostToDevice));
     CK(cudaMemcpy(dv,hv,elems*2,cudaMemcpyHostToDevice));
 
-    size_t smem_bytes = 24576 + 16384 + 8192 + 16384 + 64*3*4;  /* ~67 KB */
+    size_t smem_bytes = 32768 + 16384 + 8192 + 16384 + 64*3*4;  /* ~75 KB (Q+K+V+Vt+S+P+O+mlc) */
     cudaFuncSetAttribute(fa_mma, cudaFuncAttributeMaxDynamicSharedMemorySize, (int)smem_bytes);
     fa_mma<<<N/64, 128, smem_bytes>>>(dq,dk,dv,dO,N,scale);
     CK(cudaDeviceSynchronize());
