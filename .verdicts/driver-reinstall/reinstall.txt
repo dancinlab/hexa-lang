@@ -1,0 +1,26 @@
+DRIVER REINSTALL TO HEAD — VERDICT (g27 ship-cycle fix)
+=========================================================
+date: 2026-05-26
+HEAD: e7c15ec1 (includes #1148 V4 special-fn, #1150 V7 combinatorial/prime, #1152 V6)
+build host: mini (arm64 macOS pool host, matches local) — fresh clone /tmp/wt-driver-head @ e7c15ec1
+install dir (resolved from ~/.hx/bin/hexa symlink): /Users/ghost/core/hexa-lang
+
+ROOT CAUSE (refined): `hexa verify --expr` delegates to the precompiled
+sub-binary $install/bin/hexa-verify (built from tool/verify_cli.hexa), NOT
+to a JIT rebuild. The stale component was bin/hexa-verify (predated V4 --tol
++ V7 nth_prime). The driver binary (hexa.real/hxv2) also rebuilt for safety.
+
+BACKUPS (kept until verified):
+  ~/.hx/bin/hexa.real.bak-<ts>
+  ~/.hx/bin/hxv2.bak-<ts>
+  /Users/ghost/core/hexa-lang/bin/hexa-verify.bak-<ts>
+
+BEFORE (currently-installed driver + stale bin/hexa-verify):
+  $ hexa verify --expr gamma 5 24 --tol 1e-6
+    error: to_int: trailing garbage in "--tol"          <-- V4 --tol unknown
+  $ hexa verify --expr nth_prime 5 11
+    tier = 🟠 INSUFFICIENT — calculator system has NO path for 'nth_prime'  <-- V7 missing
+  $ hexa verify --expr sigma 6 12
+    tier = 🔵 SUPPORTED-FORMAL   (regression baseline OK)
+
+AFTER — pending atomic install + re-verify with installed driver (see below).
