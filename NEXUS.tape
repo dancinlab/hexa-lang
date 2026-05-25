@@ -55,6 +55,11 @@
   origin    = "folded from anima HEXAD/LIFE H_278 faithful-Φ engine (g68 cross-repo · g61 shared substrate)"
   evidence  = "VERIFY-KIT V5.1 promote · .verdicts/verify-kit-iit-promote/v5_1.txt · self-contained (zero anima-local deps)"
 
+@X p_arxiv := "ARXIV domain (catalogue-mirror paper-provenance)" :: provides [active]
+  primitive = "arxiv paper-provenance (id + authors + title + verify-tier + cross-link) — distinct substrate KIND from code modules (orthogonal to p_magnet/p_antimatter/...)"
+  consumers = "anima (A1+A2 6 H_xxx LIFE cross-link) · demiurge (A3 12 ANTIMATTER 7-process) · phanes (A4 10 4-surface) · hexa-lang (A5 self-absorb null case = in-repo atlas feed)"
+  evidence  = "ARXIV/docs/a7-catalogue-closure.md · .verdicts/arxiv-closure/ledger.json · CLAIMS.tape @C slug=arxiv-closure · 5-axis funnel ~58 papers / 13 🔵 verify-native"
+
 # === 2. hub -> consumer star edges (from-hexa · verified by sibling NEXUS.tape evidence) ===
 
 @X e1 := "stdlib/material/magnet -> demiurge" :: reuse-edge [active]
@@ -80,6 +85,12 @@
   primitive = "embedded.gen.hexa SSOT + atlas CLI"
   reused_by = "demiurge · anima · airgenome · echoes · ghost · growth · forge · hexa-codex"
   evidence  = "every NEXUS.tape's discovery-substrate pointer · 22+ atoms folded by ANTIMATTER alone"
+
+@X e5 := "ARXIV paper-provenance -> anima/demiurge/phanes" :: reuse-edge [active]
+  provides  = "ARXIV domain (catalogue-mirror paper-provenance · g60 INBOX handoff)"
+  primitive = "arxiv id + authors + title + verify-tier + project cross-link"
+  reused_by = "anima (6 H LIFE) · demiurge (12 ANTIMATTER 7-process) · phanes (10 4-surface) — A5 hexa-lang self-absorb = null/identity case (in-repo atlas feed, NO INBOX hop)"
+  evidence  = "A6 3-debt clear: anima PR #576 (merge 4618d7c9) · demiurge 10f909ca · phanes 22414be4 (each on origin/main) · ARXIV/docs/a6-crossrepo-handoff.md · a7-catalogue-closure.md §5"
 
 # === 3. candidate edges (stdlib families with no project NEXUS.tape edge yet) ===
 
