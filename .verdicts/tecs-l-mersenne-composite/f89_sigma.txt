@@ -1,0 +1,3 @@
+verify --expr sigma(89)=90
+  calc   = 90  == expected 90
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
