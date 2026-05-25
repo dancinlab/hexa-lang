@@ -1,0 +1,341 @@
+// stdlib/verify/blue_max_audit.hexa — BLUE-MAX domain audit (commons @D g69).
+//
+// @version 0.1.0
+// @capabilities [fs_read]
+//
+// Audits a domain's `hexa verify --expr` atoms for BLUE-MAX 🔵-pair coverage —
+// the universal absorbed=true gate added to commons.tape 0.10.10 (@D g69).
+//
+// BLUE-MAX pattern (proven by demiurge ANTIMATTER PR #1094 = 8 integer 🔵-pair
+// atoms): every 🟢 SUPPORTED-NUMERICAL (libm-class) atom backed by an
+// algebraic-root 🔵 SUPPORTED-FORMAL (integer closed-form) sibling that closes
+// the underlying integer identity (factor / numerator / denominator / exponent
+// / mass-exponent / bratio-exponent / etc.).
+//
+// Wired by tool/verify_cli.hexa::cmd_blue_max — `hexa verify --blue-max <DOMAIN>`.
+// Also runnable directly for testing:
+//   hexa run stdlib/verify/blue_max_audit.hexa ANTIMATTER
+//
+// PURE: reads tool/verify_cli.hexa text and parses fn-name → tier classification
+// + pair-coverage heuristic. NO LLM, NO atlas write, deterministic.
+
+use "self/stdlib/fs"
+
+// ── domain taxonomy (NAME → fn-name prefix list) ──────────────────────────
+//
+// Authoritative seed list per the conversation's existing ANTIMATTER taxonomy.
+// For an unknown DOMAIN the fallback is a single prefix == DOMAIN.lowercased() —
+// the audit then matches by `fn.starts_with(prefix)` (case-insensitive).
+fn _domain_prefixes(domain: string) -> array {
+    let d = domain.to_upper()
+    if d == "ANTIMATTER" {
+        return ["pair_threshold", "transition_factor_1s2s", "h1s2s",
+                "cyclotron_cool", "recomb_3body", "penning"]
+    }
+    if d == "NUCLEAR" {
+        return ["viola_seaborg", "royer", "sf_log10_t", "sf_consensus",
+                "total_halflife", "alpha_sf_branching", "island_weight",
+                "anz_reason", "model_validity_flag", "consensus3_outlier",
+                "is_neutron_drip", "is_proton_drip", "dripline_margin"]
+    }
+    if d == "RTSC" {
+        return ["allen_dynes", "mcmillan_tc", "bcs_gap", "lambda_eliashberg",
+                "beenet_grid_bins", "migdal_ratio", "lambda_anharm",
+                "stability_coupling", "morel_anderson", "coherence_length",
+                "isotope_exponent", "gl_parameter_kappa", "london_penetration",
+                "thermo_critical_field", "condensation_energy", "pippard_coherence"]
+    }
+    if d == "QMIRROR" {
+        return ["chsh_tsirelson", "hardy_bound", "cdr_perfect",
+                "wigner_stabilizer", "mabk_quantum", "pt_doily",
+                "vqe_h2", "qfi_", "shadow_", "page_curve", "qdrift",
+                "sym_shadow", "overlap_vqe", "rpe_heisenberg", "mirror_bench"]
+    }
+    if d == "BIO" {
+        return ["exp_release", "ldl_pct", "beer_lambert", "nnt", "arr",
+                "ln_hr_to_hr", "hill", "cheng_prusoff", "fick", "laplace",
+                "stokes_einstein", "higuchi", "tafel", "hagen_poiseuille",
+                "partition_coeff", "permeability_skin", "auc_first_order",
+                "clearance", "fluence", "beam_waist", "rayleigh_range",
+                "absorption_depth"]
+    }
+    if d == "FUSION" {
+        return ["bosch_hale", "sigma_v_dt", "pb11_", "solenoid_axis", "q_star"]
+    }
+    // fallback — single prefix == lowercased DOMAIN
+    return [domain.to_lower()]
+}
+
+// ── parser: extract (fn_name, block_name) tuples from verify_cli.hexa ────
+//
+// Walks the text line-by-line, tracks which top-level fn we're inside
+// (_recompute · _recompute2 · _recompute3 · _recompute_float), and records
+// every `if fn_name == "<X>"` occurrence. Returns parallel arrays:
+//   names[]  = fn-name string
+//   blocks[] = block label ("int1" | "int2" | "int3" | "float")
+fn _parse_fn_table(src: string) -> array {
+    let mut names = []
+    let mut blocks = []
+    let n = len(src)
+    let mut i = 0
+    let mut cur_block = ""
+    // walk lines manually (no .split — keep self-contained)
+    while i < n {
+        // gather one line into `line`
+        let mut line = ""
+        while i < n && src[i] != "\n" {
+            line = line + src[i]
+            i = i + 1
+        }
+        if i < n { i = i + 1 }   // consume '\n'
+        // top-level fn signature → enter / exit a recompute block
+        if line.contains("fn _recompute(") { cur_block = "int1" }
+        else if line.contains("fn _recompute2(") { cur_block = "int2" }
+        else if line.contains("fn _recompute3(") { cur_block = "int3" }
+        else if line.contains("fn _recompute_float(") { cur_block = "float" }
+        else if line.contains("fn _") && line.contains("(") && cur_block != "" {
+            // a different top-level fn — close current block
+            // (heuristic: a bare `fn ...` at col0 ends the previous block.
+            //  conservative — only clear on `fn _<name>(` not nested patterns.)
+            let trimmed = line.trim()
+            if trimmed.contains("fn _") {
+                // peek for fns we KNOW exit the dispatch: _fstr / _parse_float / etc.
+                // To stay simple we just clear on any new `fn _<name>(` AT COLUMN 0.
+                // The actual recompute fns start at col 0 too — but they re-set cur_block above.
+                if len(line) >= 3 && line.substring(0, 3) == "fn " {
+                    cur_block = ""
+                }
+            }
+        }
+        // detect `if fn_name == "<X>"` (any-arity form)
+        if cur_block != "" && line.contains("fn_name == \"") {
+            // extract the quoted name
+            let mut j = 0
+            let ll = len(line)
+            while j + 12 < ll && !(line[j] == "f" && line[j+1] == "n" && line[j+2] == "_" && line[j+3] == "n" && line[j+4] == "a" && line[j+5] == "m" && line[j+6] == "e") {
+                j = j + 1
+            }
+            // advance to opening quote
+            while j < ll && line[j] != "\"" { j = j + 1 }
+            if j < ll { j = j + 1 }    // past opening "
+            let mut nm = ""
+            while j < ll && line[j] != "\"" {
+                nm = nm + line[j]
+                j = j + 1
+            }
+            if len(nm) > 0 {
+                names.push(nm)
+                blocks.push(cur_block)
+            }
+        }
+    }
+    return [names, blocks]
+}
+
+// ── domain filter ─────────────────────────────────────────────────────────
+fn _matches_any_prefix(nm: string, prefixes: array) -> bool {
+    let lo = nm.to_lower()
+    let mut i = 0
+    while i < len(prefixes) {
+        let p = to_string(prefixes[i]).to_lower()
+        if len(lo) >= len(p) && lo.substring(0, len(p)) == p { return true }
+        i = i + 1
+    }
+    return false
+}
+
+// ── pair-coverage heuristic ───────────────────────────────────────────────
+//
+// For a 🟢 atom NAME, the BLUE-MAX rule says there must exist a 🔵 sibling
+// whose name encodes the integer algebraic root of NAME. Concretely, the 🔵
+// sibling name typically:
+//   (a) shares a non-empty prefix with NAME (up to the first 2 underscore
+//       tokens — `pair_threshold_kinetic` shares `pair_threshold` with the
+//       🔵 sibling `pair_threshold_kinetic_factor`), AND
+//   (b) ends in one of the recognised algebraic-root suffixes:
+//       _factor · _numerator · _denominator · _exponent · _doubled
+//       · _massexponent · _bratio_exponent · _bexponent · _density_power
+//       · _massspeedup · _tratio_exponent_doubled · _exponent_doubled.
+// A 🟢 atom is COVERED iff ≥1 🔵 sibling matching (a)+(b) exists in the same
+// domain. Returns the matching 🔵 sibling name, or "" if none.
+fn _root_suffixes() -> array {
+    return ["_factor", "_numerator", "_denominator", "_exponent",
+            "_doubled", "_massexponent", "_bratio_exponent",
+            "_bexponent", "_density_power", "_massspeedup",
+            "_tratio_exponent_doubled", "_exponent_doubled"]
+}
+
+fn _two_token_prefix(nm: string) -> string {
+    // return the substring up to the 2nd underscore (or whole string if <2 _)
+    let n = len(nm)
+    let mut i = 0
+    let mut count = 0
+    while i < n {
+        if nm[i] == "_" {
+            count = count + 1
+            if count == 2 { return nm.substring(0, i) }
+        }
+        i = i + 1
+    }
+    return nm
+}
+
+fn _has_root_suffix(nm: string) -> bool {
+    let suffixes = _root_suffixes()
+    let mut i = 0
+    while i < len(suffixes) {
+        let s = to_string(suffixes[i])
+        let nn = len(nm)
+        let sl = len(s)
+        if nn >= sl && nm.substring(nn - sl, nn) == s { return true }
+        i = i + 1
+    }
+    return false
+}
+
+fn _find_blue_sibling(green_name: string, blue_names: array) -> string {
+    let prefix = _two_token_prefix(green_name)
+    let mut i = 0
+    while i < len(blue_names) {
+        let b = to_string(blue_names[i])
+        let nn = len(b)
+        let pl = len(prefix)
+        if nn >= pl && b.substring(0, pl) == prefix && _has_root_suffix(b) {
+            return b
+        }
+        i = i + 1
+    }
+    return ""
+}
+
+// ── public entry: run_audit(domain) → prints report + returns exit code ───
+pub fn run_audit(domain: string) -> int {
+    let src = read_file_safe("tool/verify_cli.hexa")
+    if len(src) == 0 {
+        println("error: cannot read tool/verify_cli.hexa (run from hexa-lang root)")
+        return 2
+    }
+    let parsed = _parse_fn_table(src)
+    let names = parsed[0]
+    let blocks = parsed[1]
+    let prefixes = _domain_prefixes(domain)
+
+    // collect domain-filtered atoms (dedup names — same fn may appear in
+    // multiple blocks under aliases like sigma/sigma_1)
+    let mut blue_names = []        // 🔵 (int — int1/int2/int3)
+    let mut green_names = []       // 🟢 (float)
+    let mut seen = []
+    let mut i = 0
+    while i < len(names) {
+        let nm = to_string(names[i])
+        let blk = to_string(blocks[i])
+        if _matches_any_prefix(nm, prefixes) {
+            // dedup
+            let mut dup = false
+            let mut j = 0
+            while j < len(seen) {
+                if to_string(seen[j]) == nm { dup = true }
+                j = j + 1
+            }
+            if !dup {
+                seen.push(nm)
+                if blk == "float" { green_names.push(nm) }
+                else { blue_names.push(nm) }
+            }
+        }
+        i = i + 1
+    }
+
+    // ── tier matrix table ─────────────────────────────────────────────
+    println("hexa verify --blue-max " + domain)
+    println("")
+    println("  tier matrix:")
+    println("    | tier                       | count |")
+    println("    |----------------------------|-------|")
+    println("    | 🔵 SUPPORTED-FORMAL        | " + _pad3(len(blue_names))  + "   |")
+    println("    | 🟢 SUPPORTED-NUMERICAL     | " + _pad3(len(green_names)) + "   |")
+    println("    | 🟠 INSUFFICIENT (no calc)  | 0     |")
+    println("    | total                      | " + _pad3(len(blue_names) + len(green_names)) + "   |")
+    println("")
+
+    // ── 🔵-pair coverage ───────────────────────────────────────────────
+    println("  🔵-pair coverage (per 🟢 atom):")
+    let mut covered = 0
+    let mut missing = []
+    let mut k = 0
+    while k < len(green_names) {
+        let g = to_string(green_names[k])
+        let sib = _find_blue_sibling(g, blue_names)
+        if len(sib) > 0 {
+            println("    ✓ " + g + "  ⇒  🔵 sibling: " + sib)
+            covered = covered + 1
+        } else {
+            println("    ⚠ " + g + "  ⇒  (no 🔵 algebraic-root sibling found)")
+            missing.push(g)
+        }
+        k = k + 1
+    }
+    println("")
+    println("  coverage: " + to_string(covered) + " / " + to_string(len(green_names))
+            + " 🟢 atoms have a 🔵 algebraic-root pair")
+    println("")
+
+    // ── 🔵 atom inventory ─────────────────────────────────────────────
+    println("  🔵 atom inventory (" + to_string(len(blue_names)) + "):")
+    let mut bi = 0
+    while bi < len(blue_names) {
+        println("    - " + to_string(blue_names[bi]))
+        bi = bi + 1
+    }
+    println("")
+    println("  🟢 atom inventory (" + to_string(len(green_names)) + "):")
+    let mut gi = 0
+    while gi < len(green_names) {
+        println("    - " + to_string(green_names[gi]))
+        gi = gi + 1
+    }
+    println("")
+
+    // ── verdict ──────────────────────────────────────────────────────
+    if len(missing) == 0 && len(green_names) > 0 {
+        println("  verdict: ✅ BLUE-MAX PASS — domain absorbed=true gate cleared")
+        println("           (every 🟢 atom is backed by a 🔵 algebraic-root sibling · @D g69)")
+        return 0
+    }
+    if len(green_names) == 0 && len(blue_names) == 0 {
+        println("  verdict: ⚠ NO ATOMS FOUND for domain '" + domain + "'")
+        println("           (extend stdlib/verify/blue_max_audit::_domain_prefixes or check fn-name prefixes)")
+        return 3
+    }
+    if len(green_names) == 0 {
+        println("  verdict: ✅ BLUE-MAX TRIVIAL — no 🟢 atoms (all closed-form 🔵)")
+        return 0
+    }
+    println("  verdict: ⚠ MISSING-PAIRS: " + to_string(len(missing)) + " 🟢 atom(s) without 🔵 sibling")
+    let mut mi = 0
+    while mi < len(missing) {
+        println("           - " + to_string(missing[mi]))
+        mi = mi + 1
+    }
+    println("           (add integer-root 🔵 atom(s) per BLUE-MAX pattern · @D g69)")
+    return 1
+}
+
+fn _pad3(n: int) -> string {
+    let s = to_string(n)
+    if len(s) == 1 { return s + "    " }
+    if len(s) == 2 { return s + "   " }
+    return s + "  "
+}
+
+fn main() {
+    let av = args()
+    if len(av) < 2 {
+        println("usage: hexa run stdlib/verify/blue_max_audit.hexa <DOMAIN>")
+        println("       (or via the CLI:  hexa verify --blue-max <DOMAIN>)")
+        return
+    }
+    let dom = to_string(av[1])
+    let rc = run_audit(dom)
+    if rc != 0 { exit(rc) }
+}
