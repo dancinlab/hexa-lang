@@ -3,6 +3,15 @@
 Append-only history sister of `TECS-L.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
 
+## 2026-05-25T21:42 — 축 E E2 · atlas health audit 🟢 green (drift=0 · 6 verified-* 노드 queryable)
+
+- [x] `hexa atlas stats --audit`: merged · entries=16108 · duplicates=0 · malformed=0 → **drift=0** (clean)
+- [x] ATLAS_HASH = `663698a06bc6f967fa2855a77bc4e399aae465dda5ca948b3c7352dbf98ce7fb` 영속화 (`hash.txt` 스냅샷, 차후 drift diff 기준)
+- [x] E1-fold 6 노드 모두 `hexa atlas lookup --prefix=verified-{tau,is_perfect,gamma0_genus,gamma0_cusps}-` 으로 조회 가능: verified-tau-{496,8128,33550336} · verified-is_perfect-8589869056 · verified-gamma0_genus-6 · verified-gamma0_cusps-6 (값 일치: τ=10/14/26 · is_perfect=1 · genus=0 · cusps=4)
+- [x] HEXA_ATLAS_EMBED 노트: install 바이너리는 16101-node 정적 임베드(E1 이전 스냅샷), worktree SSOT(16108 nodes, F=1353)는 `HEXA_ATLAS_EMBED=/tmp/wt-e2/compiler/atlas` 환경변수로 조회. ATLAS_HASH 는 바이너리 임베드라 두 경로 모두 동일 값을 echo (E3 install-dir 직렬화 메모와 일관)
+- [x] 4 verdict → `.verdicts/tecs-l-atlas-health/` (audit.txt · hash.txt · stats.txt · lookup_verified.txt) + CLAIMS 6 entry (1:1 orphan 0)
+- [x] axis E E3 = 위 직렬화 작업(다음 라운드 이후) — E2 는 read-only 라 도메인 SSOT 변경 없음, atlas register/write 금지(spec 준수)
+
 ## 2026-05-25T15:00 — 축 A MF4 · dim S₂ = genus 정리 falsified for hexa fn (🔴 closed-negative)
 
 - [x] MF4 milestone = "dim S₂(Γ₀(N)) = genus 일치 verify (🔵)" 의도 → **결과 🔴**: hexa `dim_cusp_forms(N,2)` 는 표준 dim S_2 가 아님. N=1..30 sweep 에서 10 우연 일치(전부 genus=0)·20 mismatch

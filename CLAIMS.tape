@@ -1414,3 +1414,53 @@
   raw    = ".verdicts/tecs-l-modform-dim-genus/dim_n30_actual.txt"
   src    = "MF4 mismatch — hexa returns 6, classical dim S_2(Γ_0(30)) = genus = 3"
   status = "🔵 SUPPORTED-FORMAL — hexa's actual value verified. (anchors the 🔴 finding)."
+
+# ───────────────────────────────────────────────────────────────────────
+# TECS-L — tecs-l-atlas-health (slug · group=TECS-L · TECS-L/TECS-L.md axis E E2)
+# Atlas health audit: drift=0 (clean·merged) + ATLAS_HASH snapshot + the 6
+# E1-folded verified-* nodes (τ-33550336·τ-496·τ-8128·is_perfect-8589869056·
+# gamma0_genus-6·gamma0_cusps-6) confirmed queryable.
+# Empirical atlas-read; HEXA_ATLAS_EMBED=/tmp/wt-e2/compiler/atlas to consult
+# the worktree SSOT (the default install ships a 16101-node snapshot pre-E1).
+
+@C tecs_l_atlas_audit_clean := "hexa atlas stats --audit: merged · entries=16108 · duplicates=0 · malformed=0 (no drift)" :: formula [slug=tecs-l-atlas-health group=TECS-L]
+  method = "atlas-read"
+  cmd    = "HEXA_ATLAS_EMBED=/tmp/wt-e2/compiler/atlas hexa atlas stats --audit"
+  raw    = ".verdicts/tecs-l-atlas-health/audit.txt"
+  src    = "compiler/atlas/embedded.gen.hexa (16108 nodes, includes E1 fold)"
+  status = "🟢 EMPIRICAL — audit clean (duplicates=0 · malformed=0). terminal · paper-eligible (health green)."
+
+@C tecs_l_atlas_hash_snapshot := "ATLAS_HASH = 663698a06bc6f967fa2855a77bc4e399aae465dda5ca948b3c7352dbf98ce7fb (health snapshot for future drift diff)" :: formula [slug=tecs-l-atlas-health group=TECS-L]
+  method = "atlas-read"
+  cmd    = "HEXA_ATLAS_EMBED=/tmp/wt-e2/compiler/atlas hexa atlas hash"
+  raw    = ".verdicts/tecs-l-atlas-health/hash.txt"
+  src    = "compiler/atlas/embedded.gen.hexa header (binary-embedded ATLAS_HASH)"
+  status = "🟢 EMPIRICAL — REAL hash captured verbatim. terminal."
+
+@C tecs_l_atlas_lookup_verified_tau := "verified-tau-{496,8128,33550336} all queryable via hexa atlas lookup --prefix=verified-tau-" :: formula [slug=tecs-l-atlas-health group=TECS-L]
+  method = "atlas-read"
+  cmd    = "HEXA_ATLAS_EMBED=/tmp/wt-e2/compiler/atlas hexa atlas lookup --prefix=verified-tau-"
+  raw    = ".verdicts/tecs-l-atlas-health/lookup_verified.txt"
+  src    = "compiler/atlas/embedded.gen.hexa:30524/30529/30534 (E1 fold)"
+  status = "🟢 EMPIRICAL — 3 nodes found verbatim (tau(496)=10·tau(8128)=14·tau(33550336)=26). terminal."
+
+@C tecs_l_atlas_lookup_verified_isperfect := "verified-is_perfect-8589869056 = 1 queryable (6th perfect number)" :: formula [slug=tecs-l-atlas-health group=TECS-L]
+  method = "atlas-read"
+  cmd    = "HEXA_ATLAS_EMBED=/tmp/wt-e2/compiler/atlas hexa atlas lookup --prefix=verified-is_perfect-"
+  raw    = ".verdicts/tecs-l-atlas-health/lookup_verified.txt"
+  src    = "compiler/atlas/embedded.gen.hexa:30519 (E1 fold)"
+  status = "🟢 EMPIRICAL — node found verbatim. terminal."
+
+@C tecs_l_atlas_lookup_verified_gamma0_genus := "verified-gamma0_genus-6 = 0 queryable (Γ_0(6) genus = 0)" :: formula [slug=tecs-l-atlas-health group=TECS-L]
+  method = "atlas-read"
+  cmd    = "HEXA_ATLAS_EMBED=/tmp/wt-e2/compiler/atlas hexa atlas lookup --prefix=verified-gamma0_genus-"
+  raw    = ".verdicts/tecs-l-atlas-health/lookup_verified.txt"
+  src    = "compiler/atlas/embedded.gen.hexa:30514 (E1 fold)"
+  status = "🟢 EMPIRICAL — node found verbatim. terminal."
+
+@C tecs_l_atlas_lookup_verified_gamma0_cusps := "verified-gamma0_cusps-6 = 4 queryable (Γ_0(6) cusps = 4)" :: formula [slug=tecs-l-atlas-health group=TECS-L]
+  method = "atlas-read"
+  cmd    = "HEXA_ATLAS_EMBED=/tmp/wt-e2/compiler/atlas hexa atlas lookup --prefix=verified-gamma0_cusps-"
+  raw    = ".verdicts/tecs-l-atlas-health/lookup_verified.txt"
+  src    = "compiler/atlas/embedded.gen.hexa:30509 (E1 fold)"
+  status = "🟢 EMPIRICAL — node found verbatim. terminal."

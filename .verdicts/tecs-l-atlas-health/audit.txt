@@ -1,0 +1,84 @@
+=== atlas audit: merged ===
+  entries:        16108
+  P primitives:   455
+  C constants:    5763
+  L laws:         530
+  E experiments:  15
+  F formulas:     1353
+  R relations:    6319
+  S symmetries:   10
+  X crossings:    1580
+  Q open questions: 83
+  verified [*]:   7612
+  breakthrough [!]: 512
+  hypothesis [?]: 377
+  duplicates:     0
+  orphan refs:    1322
+  malformed:      0
+  grade histogram:
+    [10*] 6629
+    [7] 4841
+    [10] 2011
+    [0*] 524
+    [4] 520
+    [4!] 437
+    [5*] 253
+    [9] 157
+    [--] 150
+    [11*] 148
+    [5?] 119
+    [0?] 114
+    [9*] 29
+    [8?] 27
+    [10*!] 24
+    [11!] 23
+    [8!] 19
+    [6?] 18
+    [11] 15
+    [7?] 10
+    [8] 9
+    [3] 6
+    [9!] 6
+    [9?] 5
+    [5] 3
+    [8*] 2
+    [3?] 2
+    [2?] 2
+    [6*] 1
+    [6] 1
+    [7*] 1
+    [4?] 1
+    [12*] 1
+  orphan sample (up to 32):
+    ANIMA-CXP-OWN2-PROD-TRIAD-... [truncated
+    full=1703bytes]
+    roadmap_93_meta3_transcendence
+    banach_contraction_chain_alpha_beta_gamma_delta_epsilon
+    atlas_R28_sopfr_discovery
+    banach_contraction_terminator
+    consciousness_laws_law_2061
+    integer_atoms_for_structure
+    transcendentals_for_dynamics
+    consciousness_coupling_constant
+    A_tension
+    B_atlas_traversal
+    C_fixpoint_assess
+    D_collective
+    S_sense
+    W_will
+    C_consciousness
+    E_ethics
+    M_memory
+    D_decoder
+    eigenvec_corpus
+    raw_108_discovery_implementation_absorption
+    at_emission_deterministic
+    three_layer_safety_net
+    raw_66_ai_native_error_message
+    raw_12_silent_error_ban
+    kick_pass_path_trailer
+    kick_fail_path_trailer
+    post_hoc_trailer_emission
+    low_risk_alternative
+    raw_37_38_39_omega_saturation
+    diminishing_returns_evidence

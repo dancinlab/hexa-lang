@@ -1,0 +1,43 @@
+=== verified-tau- ===
+@F verified-tau-8128 :: embedded.gen.hexa:30524
+@F verified-tau-8128 = tau(8128) = 14 :: formula [d=2026-05-25 active]
+  verified-by = "hexa verify --expr tau 8128 14"
+  cite = "@D g_self_verify · TECS-L Tier1 — hexa-native NT closed-form"
+  provenance = "tool/atlas_cli.hexa register --from-verify (direct node-gen → embedded.gen.hexa SSOT)"
+--
+@F verified-tau-496 :: embedded.gen.hexa:30529
+@F verified-tau-496 = tau(496) = 10 :: formula [d=2026-05-25 active]
+  verified-by = "hexa verify --expr tau 496 10"
+  cite = "@D g_self_verify · TECS-L Tier1 — hexa-native NT closed-form"
+  provenance = "tool/atlas_cli.hexa register --from-verify (direct node-gen → embedded.gen.hexa SSOT)"
+--
+@F verified-tau-33550336 :: embedded.gen.hexa:30534
+@F verified-tau-33550336 = tau(33550336) = 26 :: formula [d=2026-05-25 active]
+  verified-by = "hexa verify --expr tau 33550336 26"
+  cite = "@D g_self_verify · TECS-L Tier1 — hexa-native NT closed-form"
+  provenance = "tool/atlas_cli.hexa register --from-verify (direct node-gen → embedded.gen.hexa SSOT)"
+--
+
+=== verified-is_perfect- ===
+@F verified-is_perfect-8589869056 :: embedded.gen.hexa:30519
+@F verified-is_perfect-8589869056 = is_perfect(8589869056) = 1 :: formula [d=2026-05-25 active]
+  verified-by = "hexa verify --expr is_perfect 8589869056 1"
+  cite = "@D g_self_verify · TECS-L Tier1 — hexa-native NT closed-form"
+  provenance = "tool/atlas_cli.hexa register --from-verify (direct node-gen → embedded.gen.hexa SSOT)"
+--
+
+=== verified-gamma0_genus- ===
+@F verified-gamma0_genus-6 :: embedded.gen.hexa:30514
+@F verified-gamma0_genus-6 = gamma0_genus(6) = 0 :: formula [d=2026-05-25 active]
+  verified-by = "hexa verify --expr gamma0_genus 6 0"
+  cite = "@D g_self_verify · TECS-L Tier1 — hexa-native NT closed-form"
+  provenance = "tool/atlas_cli.hexa register --from-verify (direct node-gen → embedded.gen.hexa SSOT)"
+--
+
+=== verified-gamma0_cusps- ===
+@F verified-gamma0_cusps-6 :: embedded.gen.hexa:30509
+@F verified-gamma0_cusps-6 = gamma0_cusps(6) = 4 :: formula [d=2026-05-25 active]
+  verified-by = "hexa verify --expr gamma0_cusps 6 4"
+  cite = "@D g_self_verify · TECS-L Tier1 — hexa-native NT closed-form"
+  provenance = "tool/atlas_cli.hexa register --from-verify (direct node-gen → embedded.gen.hexa SSOT)"
+--
