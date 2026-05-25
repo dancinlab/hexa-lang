@@ -1,0 +1,106 @@
+VERIFY-KIT V7 — combinatorial / prime integer primitives
+=========================================================
+slug   : verify-kit-combinatorial
+group  : VERIFY-KIT
+method : cli / integer (exact integer recompute; no --tol)
+build  : bin/hexa-verify (mini arm64, V4-aware driver bootstrapped from
+         worktree self/native/hexa_cc.c — NO codegen regen; the cg_math_sym
+         V4 mapping was already committed, only a non-stale driver was needed)
+fns    : nth_prime (A000040) · is_prime · factorial (A000142) · catalan
+         (A000108) · bell (A000110) · partition (A000041)
+         all defined in compiler/atlas/symbolic/congruence_chain_engine.hexa
+         wired into tool/verify_cli.hexa::_recompute (1-arg, mirrors sigma/tau)
+
+### V7 COMBINATORIAL/PRIME TEST MATRIX (verbatim) ###
+
+## PRIMARY ##
+COMPUTE: nth_prime(5) = 11
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form compute, self-verified deterministic · g_self_verify · TECS-L Tier1)
+verify --expr nth_prime(5)=11
+  calc   = 11  == expected 11
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+verify --expr nth_prime(1)=2
+  calc   = 2  == expected 2
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+COMPUTE: catalan(4) = 14
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form compute, self-verified deterministic · g_self_verify · TECS-L Tier1)
+verify --expr catalan(4)=14
+  calc   = 14  == expected 14
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+verify --expr catalan(0)=1
+  calc   = 1  == expected 1
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+verify --expr is_prime(7)=1
+  calc   = 1  == expected 1
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+verify --expr is_prime(6)=0
+  calc   = 0  == expected 0
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+verify --expr factorial(5)=120
+  calc   = 120  == expected 120
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+
+## STRETCH ##
+verify --expr bell(3)=5
+  calc   = 5  == expected 5
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+verify --expr partition(4)=5
+  calc   = 5  == expected 5
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+
+## REGRESSION (V4 intact) ##
+verify --expr sigma(6)=12
+  calc   = 12  == expected 12
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+verify --expr gamma(5.0)=24.0
+  calc   = 24.0  ≈ expected 24.0  (|Δ|=0.0 ≤ ε=1e-9)
+  tier   = 🟢 SUPPORTED-NUMERICAL  (hexa-native libm-class recompute, TECS-L n6-rep Tier2)
+
+## NEGATIVE CONTROL (determinism — result-agnostic) ##
+verify --expr nth_prime(5)=13
+  calc   = 11  != expected 13
+  tier   = 🔴 FALSIFIED  (calc deterministically disagrees — TECS-L result-agnostic closed negative)
+verify --expr is_prime(6)=1
+  calc   = 0  != expected 1
+  tier   = 🔴 FALSIFIED  (calc deterministically disagrees — TECS-L result-agnostic closed negative)
+
+
+### OEIS 🟠→🔵 CONVERSION PROOF (mutual-feed loop realized) ###
+=================================================================
+The OEIS O3 tiering left 287 🟠 NO-PATH survivors. The dominant family
+is A000040 (the prime sequence) appearing as ~67 hits with NO recompute
+path. V7's nth_prime gives those an EXACT integer recompute path, so
+every A000040 hit now tiers 🔵 instead of 🟠. Spot-verified:
+
+verify --expr nth_prime(1)=2     -> 🔵   (A000040 a(1)=2)
+verify --expr nth_prime(5)=11    -> 🔵   (A000040 a(5)=11)
+verify --expr nth_prime(10)=29   -> 🔵   (A000040 a(10)=29)
+verify --expr nth_prime(25)=97   -> 🔵   (A000040 a(25)=97)
+verify --expr nth_prime(100)=541 -> 🔵   (A000040 a(100)=541)
+
+verify --expr nth_prime(10)=29
+  calc   = 29  == expected 29
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+verify --expr nth_prime(25)=97
+  calc   = 97  == expected 97
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+verify --expr nth_prime(100)=541
+  calc   = 541  == expected 541
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+
+CONVERSION COUNT
+  - prime family (A000040)  ~67 of 287 🟠  -> now 🔵-reachable via nth_prime
+  - the remaining 🟠 are dominated by n×190 (trivial identity `a(n)=n`,
+    NOT a function — stays out of scope, not a recompute candidate) plus
+    ~30 misc conjectural/no-formula sequences (stay 🟠, honest).
+  - additional combinatorial OEIS reach unlocked (beyond the O3 set):
+    A000108 catalan · A000142 factorial · A000110 bell · A000041 partition
+    are now all 🔵-verifiable closed-forms.
+
+MUTUAL-FEED LOOP: OEIS surfaced the gap (prime×67 NO-PATH) -> VERIFY-KIT
+V7 closed it (nth_prime/is_prime) -> OEIS prime hits re-tier 🟠->🔵. The
+OEIS↔VERIFY-KIT feed loop is realized: the catalogue drives primitive
+additions, the primitives upgrade the catalogue tiering.
+
+V7 TIER: 🔵 SUPPORTED-FORMAL (6 integer-exact closed-form primitives,
+12/12 positive cases 🔵/🟢, 2/2 negative controls 🔴, V4 regression intact).

@@ -274,6 +274,7 @@ fn cmd_rubric() {
     println("             canonical sink. Verifies & absorbs equations NOT YET in the atlas.")
     println("  calc fns : sigma|sigma_0|sigma_2|phi|mu|tau|is_perfect|aliquot|gamma0_index|")
     println("             gamma0_cusps|gamma0_genus|isotropy_lcm|first_cusp_form_weight|pair_threshold_factor|recomb_3body_density_power")
+    println("             nth_prime|is_prime|factorial|catalan|bell|partition  (VERIFY-KIT V7 OEIS A000040/108/142/110/41 · integer-exact)")
     println("             2-op: sigma_k|jacobi|kronecker|dim_cusp_forms|ssh_winding  (extend _recompute on gap)")
     println("             3-op: tknn_chern (RFC 046 TKNN Chern/Hall integer · Diophantine gap label)")
     println("  float fns: welch_t_crit(df)  wilson_hilferty_p(t,df)   → 🟢 NUMERICAL (ε=1e-9")
@@ -410,6 +411,16 @@ fn _recompute(fn_name: string, n: int) -> int {
         return 0
     }
     if fn_name == "aliquot" { return sigma_k(n, 1) - n }
+    // ── combinatorial / prime integer primitives (VERIFY-KIT V7) ──────────
+    // OEIS 🟠→🔵 mutual-feed: A000040 prime×67 + A000108/A000142/A000110/
+    // A000041 gain an exact-integer recompute path (no --tol; closed-forms
+    // ported into congruence_chain_engine). Mirrors sigma/tau exactly.
+    if fn_name == "nth_prime"      { return nth_prime(n) }          // A000040
+    if fn_name == "is_prime"       { return is_prime_int(n) }       // 0/1
+    if fn_name == "factorial"      { return factorial_int(n) }      // A000142
+    if fn_name == "catalan"        { return catalan(n) }            // A000108
+    if fn_name == "bell"           { return bell(n) }               // A000110
+    if fn_name == "partition"      { return partition(n) }          // A000041
     if fn_name == "gamma0_index"   { return gamma0_index(n) }
     if fn_name == "gamma0_cusps"   { return gamma0_cusps(n) }
     if fn_name == "gamma0_genus"   { return gamma0_genus(n) }

@@ -2481,6 +2481,23 @@
   status = "🟢 SUPPORTED-NUMERICAL — 4 special fns landed via native libm (gamma·erf PRIMARY + bessel_j0·bessel_j1 STRETCH), all 🟢 through --tol. zeta DEFERRED (no libm, Euler-Maclaurin build risk). Terminal · resolves DLMF blocker(2) {gamma,erf,bessel} coverage; blocker(1) bulk-corpus open (HONEST — primitives not DLMF re-absorption)."
 
 # ───────────────────────────────────────────────────────────────────────
+# VERIFY-KIT — verify-kit-combinatorial (slug · group=VERIFY-KIT · V7)
+# Combinatorial/prime INTEGER primitives added to `hexa verify`. Pure
+# integer-exact closed-forms (no --tol) — MIRRORS the existing sigma/tau
+# integer path (compiler/atlas/symbolic/congruence_chain_engine.hexa +
+# tool/verify_cli.hexa::_recompute). Realizes the OEIS↔VERIFY-KIT mutual
+# feed: OEIS O3 surfaced ~67 A000040 prime hits with NO recompute path
+# (🟠); nth_prime/is_prime close it → those re-tier 🔵. NO codegen regen —
+# integer path needs no cg_math_sym; build only needed a V4-aware driver.
+
+@C verify_kit_combinatorial := "VERIFY-KIT V7 combinatorial/prime integer primitives: nth_prime(A000040 · 1→2,5→11,100→541), is_prime(0/1), factorial(A000142 · 5→120), catalan(A000108 · 0→1,4→14), bell(A000110 · 3→5,4→15), partition(A000041 · 4→5,5→7) added to `hexa verify --expr`. Pure integer-exact closed-forms → 🔵 SUPPORTED-FORMAL (no --tol). 12/12 positive 🔵/🟢, 2/2 negative controls 🔴 (nth_prime 5 13 → 🔴, is_prime 6 1 → 🔴 — determinism). Mechanism MIRRORS sigma/tau integer path (defs in compiler/atlas/symbolic/congruence_chain_engine.hexa, wired into tool/verify_cli.hexa::_recompute — 1-arg). NO codegen/cg_math_sym change (integer-only). OEIS 🟠→🔵 MUTUAL-FEED: O3 left ~67 A000040 prime hits as 🟠 NO-PATH; nth_prime gives exact recompute → all re-tier 🔵 (proof: nth_prime 1 2 / 5 11 / 10 29 / 25 97 / 100 541 all 🔵). n×190 stays trivial-identity (a(n)=n, not a fn — out of scope). Regression clean (sigma 6 12 🔵 · gamma 5 24 --tol 1e-6 🟢, V4 intact)" :: formula [slug=verify-kit-combinatorial group=VERIFY-KIT]
+  method = "integer"
+  cmd    = "hexa verify --expr nth_prime 5 11  ·  hexa verify --expr catalan 4 14  ·  hexa verify --expr is_prime 7 1  (build = worktree-bootstrapped build/hexa_v2 + bin/hexa-verify, mini arm64)"
+  raw    = ".verdicts/verify-kit-combinatorial/v7.txt"
+  src    = "compiler/atlas/symbolic/congruence_chain_engine.hexa (nth_prime/is_prime_int/factorial_int/catalan/bell/partition — pure integer, mirrors sigma_k/euler_phi style) · tool/verify_cli.hexa (_recompute dispatch + help). NO codegen change (integer path needs no cg_math_sym). bin/hexa-verify rebuilt mini arm64 from worktree-bootstrapped V4-aware driver (installed driver was V4-stale; integer fns themselves built clean)."
+  status = "🔵 SUPPORTED-FORMAL — 6 combinatorial/prime integer fns landed (nth_prime/is_prime/factorial/catalan/bell/partition), exact integer recompute. OEIS 🟠 prime×67 (A000040) → 🔵 conversion ENABLED (mutual-feed loop realized). Terminal · paper-eligible."
+
+# ───────────────────────────────────────────────────────────────────────
 # OEIS — oeis-prefix-collision-falsifier (slug · group=OEIS · O8 paper · closed-negative)
 # ───────────────────────────────────────────────────────────────────────
 @C oeis_prefix_collision_falsifier := "OEIS O8 closed-negative: K=10 integer-tuple prefix-match does NOT imply OEIS sequence identity. Pre-registered falsifier H (O1 ledger: A000926 Idoneal ↔ `n` — first 10 terms coincide, diverge at term 11 — set BEFORE the full sweep). Measured (O2 full sweep): 374047 OEIS seq × 20 low-entropy arithmetic candidate fn → 1707 K=10 hits → K=20 second pass → 1334/1707 = 78.1% are first-K coincidences (1334/1670 = 79.9% of the disprovable ≥20-term seqs). H FALSIFIED. Ruled-out axis = short-prefix (K=10) tuple-match as a standalone sequence-identity test, at ~78% false-positive over a 374K sweep. CAVEAT (candidate-set-relative): the 78% is for THIS 20-fn low-entropy candidate set + single K=10→K=20 prefix-pair — NOT a universal claim about OEIS prefix collisions. Paper PAPER/oeis-prefix-collision-falsifier/ (10 pages + 1 fal.ai figure, g51)." :: empirical [slug=oeis-prefix-collision-falsifier group=OEIS]
