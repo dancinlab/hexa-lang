@@ -554,3 +554,220 @@ pub fn audit_to_text(rep: AuditReport) -> string {
     }
     return p.join("")
 }
+
+// --- R5: active-acquisition ranking (Q / 🟡 / 🟠) ---------------------------
+//
+// Turns the audit measures into a PRIORITIZED to-acquire list: which
+// registered-but-unverified or open nodes to verify/acquire next. Read-only
+// (no node mutation, no fold). Verdict-tier model (ATLAS.md):
+//   🟠 INSUFFICIENT  — cite-bearing kind (F/L/P/R), NO cite & NO verified [*].
+//   🟡 CITATION-ONLY — cite-bearing & cited (cite= / |>) but NOT [*]-verified.
+//   Q  OPEN-QUESTION — kind "Q" open questions (discovery frontier).
+// Verified [*] nodes (🔵/🟢) are excluded. Composite priority:
+//   priority = tier_weight + domain_gap_weight + kind_weight
+//     tier_weight       : 🟠=300 🟡=200 Q=100  (deepest gap first)
+//     domain_gap_weight : clamp(60 - domain_size, 0, 60) — sparse domains rank
+//                         higher (acquiring there moves an under-covered domain)
+//     kind_weight       : F=8 L=6 P=4 R=2 Q=0  (formula assertions first)
+// Ties broken by id-order (earlier = more foundational).
+
+pub struct AcqItem {
+    kind: string,
+    id: string,
+    tier: string,        // "🟠" | "🟡" | "Q"
+    domain: string,
+    domain_size: i64,    // sibling count in the same domain bucket
+    priority: i64
+}
+
+pub struct AcqReport {
+    audit_scope: string,
+    frontier_count: i64,   // total 🟠 + 🟡 + Q nodes
+    insufficient_count: i64, // 🟠
+    citation_only_count: i64, // 🟡
+    open_question_count: i64, // Q
+    top_k: i64,            // how many items the `items` list holds
+    items: array           // [AcqItem] — ranked desc by priority, top_k deep
+}
+
+// Per-tier kind weight (formula assertions rank above relations).
+fn _acq_kind_weight(kind: string) -> i64 {
+    if kind == "F" { return 8 }
+    if kind == "L" { return 6 }
+    if kind == "P" { return 4 }
+    if kind == "R" { return 2 }
+    return 0
+}
+
+// Domain-gap weight: sparse domains score higher (acquiring there moves the
+// needle more). clamp(60 - size, 0, 60). size includes the node itself.
+fn _acq_domain_gap_weight(size: i64) -> i64 {
+    let w = 60 - size
+    if w < 0 { return 0 }
+    if w > 60 { return 60 }
+    return w
+}
+
+// Classify a node into a frontier tier, or "" if it is not a frontier node
+// (verified, or a non-frontier kind like C/E/S/X).
+fn _acq_tier_of(node: AtlasNode) -> string {
+    if node.kind == "Q" { return "Q" }
+    if !_kind_is_cite_bearing(node.kind) { return "" }
+    // cite-bearing: exclude recompute-verified ([*] grade or *] raw marker).
+    let verified = if node.grade.value >= 0 { node.grade.verified }
+                   else { _raw_has_verified(node.raw) }
+    if verified { return "" }
+    if _node_has_cite(node) { return "🟡" }
+    return "🟠"
+}
+
+fn _acq_tier_weight(tier: string) -> i64 {
+    if tier == "🟠" { return 300 }
+    if tier == "🟡" { return 200 }
+    return 100   // Q
+}
+
+// audit_acquisition_with_scope — enumerate + rank the acquisition frontier
+// over `nodes`. top_k bounds the returned `items` (counts are over the full
+// frontier regardless of top_k). Read-only.
+pub fn audit_acquisition_with_scope(scope_name: string, nodes: array, top_k: i64) -> AcqReport {
+    let n = len(nodes)
+    // Pass 1: per-domain sibling counts (only over frontier-eligible nodes).
+    let dom_keys = []
+    let dom_counts = []
+    let mut i = 0
+    while i < n {
+        let node0 = nodes[i]
+        let node = if node0.grade.value < 0 && node0.edges.depends_on.len() == 0
+            { enrich_node(node0) } else { node0 }
+        if _acq_tier_of(node) != "" {
+            _bucket_bump(dom_keys, dom_counts, _extract_domain(node.raw))
+        }
+        i = i + 1
+    }
+    // Pass 2: build frontier items with composite priority.
+    let items = []
+    let mut insuff = 0
+    let mut cite_only = 0
+    let mut openq = 0
+    let mut j = 0
+    while j < n {
+        let node0 = nodes[j]
+        let node = if node0.grade.value < 0 && node0.edges.depends_on.len() == 0
+            { enrich_node(node0) } else { node0 }
+        let tier = _acq_tier_of(node)
+        if tier == "" { j = j + 1; continue }
+        if tier == "🟠" { insuff = insuff + 1 }
+        else if tier == "🟡" { cite_only = cite_only + 1 }
+        else { openq = openq + 1 }
+        let dom = _extract_domain(node.raw)
+        let di = _bucket_find(dom_keys, dom)
+        let dsize = if di >= 0 { to_int(to_string(dom_counts[di])) } else { 1 }
+        let prio = _acq_tier_weight(tier)
+            + _acq_domain_gap_weight(dsize)
+            + _acq_kind_weight(node.kind)
+        items.push(AcqItem {
+            kind: node.kind,
+            id: node.id,
+            tier: tier,
+            domain: dom,
+            domain_size: dsize,
+            priority: prio
+        })
+        j = j + 1
+    }
+    // Sort items by priority desc (selection-sort; top_k slice taken after).
+    let m = len(items)
+    let mut a = 0
+    while a < m {
+        let mut best = a
+        let mut b = a + 1
+        while b < m {
+            if items[b].priority > items[best].priority { best = b }
+            b = b + 1
+        }
+        if best != a {
+            let tmp = items[a]; items[a] = items[best]; items[best] = tmp
+        }
+        a = a + 1
+    }
+    // Slice to top_k (top_k <= 0 means "all").
+    let keep = if top_k <= 0 || top_k > m { m } else { top_k }
+    let sliced = []
+    let mut k = 0
+    while k < keep {
+        sliced.push(items[k])
+        k = k + 1
+    }
+    return AcqReport {
+        audit_scope: scope_name,
+        frontier_count: m,
+        insufficient_count: insuff,
+        citation_only_count: cite_only,
+        open_question_count: openq,
+        top_k: keep,
+        items: sliced
+    }
+}
+
+// audit_acquisition_overlay — frontier ranking over the runtime overlay only.
+pub fn audit_acquisition_overlay(top_k: i64) -> AcqReport {
+    return audit_acquisition_with_scope("overlay", overlay_load_cached(), top_k)
+}
+
+// acquisition_to_text — human-readable ranked frontier.
+pub fn acquisition_to_text(rep: AcqReport) -> string {
+    let p = []
+    p.push("=== atlas acquisition frontier: " + rep.audit_scope + " ===\n")
+    p.push("  frontier total:    " + to_string(rep.frontier_count) + "\n")
+    p.push("  🟠 insufficient:   " + to_string(rep.insufficient_count)
+        + "  (cite-bearing · no cite · no recompute)\n")
+    p.push("  🟡 citation-only:  " + to_string(rep.citation_only_count)
+        + "  (cited · not recompute-verified)\n")
+    p.push("  Q  open question:  " + to_string(rep.open_question_count) + "\n")
+    p.push("  top-" + to_string(rep.top_k) + " by priority"
+        + " (priority = tier + domain-gap + kind):\n")
+    let mut i = 0
+    while i < len(rep.items) {
+        let it = rep.items[i]
+        p.push("    " + to_string(i + 1) + ". "
+            + it.tier + " " + it.kind + ":" + it.id
+            + "  p=" + to_string(it.priority)
+            + "  dom=" + it.domain + "(" + to_string(it.domain_size) + ")\n")
+        i = i + 1
+    }
+    return p.join("")
+}
+
+// acquisition_to_json — machine-readable ranked frontier for CI dashboards.
+pub fn acquisition_to_json(rep: AcqReport) -> string {
+    let p = []
+    p.push("{\"scope\":\"")
+    p.push(_jesc(rep.audit_scope))
+    p.push("\",\"frontier_count\":")
+    p.push(to_string(rep.frontier_count))
+    p.push(",\"insufficient_count\":")
+    p.push(to_string(rep.insufficient_count))
+    p.push(",\"citation_only_count\":")
+    p.push(to_string(rep.citation_only_count))
+    p.push(",\"open_question_count\":")
+    p.push(to_string(rep.open_question_count))
+    p.push(",\"top_k\":")
+    p.push(to_string(rep.top_k))
+    p.push(",\"items\":[")
+    let mut i = 0
+    while i < len(rep.items) {
+        let it = rep.items[i]
+        if i > 0 { p.push(",") }
+        p.push("{\"rank\":" + to_string(i + 1))
+        p.push(",\"tier\":\"" + _jesc(it.tier) + "\"")
+        p.push(",\"kind\":\"" + _jesc(it.kind) + "\"")
+        p.push(",\"id\":\"" + _jesc(it.id) + "\"")
+        p.push(",\"domain\":\"" + _jesc(it.domain) + "\"")
+        p.push(",\"domain_size\":" + to_string(it.domain_size))
+        p.push(",\"priority\":" + to_string(it.priority) + "}")
+        i = i + 1
+    }
+    p.push("]}")
+    return p.join("")
+}
