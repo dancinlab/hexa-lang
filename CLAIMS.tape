@@ -2296,3 +2296,23 @@
   raw    = ".verdicts/verify-kit-compute-mode/v2_compute.txt"
   src    = "tool/verify_cli.hexa (cmd_expr_compute + _has_compute + --expr routing; VERIFY-KIT/VERIFY-KIT.md V2). Build SUCCESS on origin/main (INBOX-cited link blocker did not reproduce)."
   status = "🟢 SUPPORTED-NUMERICAL/FORMAL — built (bin/hexa-verify) + tested. COMPUTE: sigma(7)=8 / tau(6)=4 / phi(6)=2 all 🔵 self-verified; VERIFY path regression-clean. Terminal · paper-eligible (Δ vs baseline = compute capability the prior CLI lacked)."
+
+# ───────────────────────────────────────────────────────────────────────
+# VERIFY-KIT — verify-kit-mirror-unify (slug · group=VERIFY-KIT · V1)
+# Resolves the atlas_cli↔verify_cli recompute desync + the 3-arg register
+# arity gap (#954 / INBOX 2026-05-26T01:30Z). ROOT FIX (proposal a): register
+# --from-verify DELEGATES to `hexa verify --expr <fn> <args> --compute` (V2
+# value-less compute) and folds the COMPUTEd value — atlas owns NO recompute
+# mirror. Two code seams: (1) verify_cli cmd_expr_float gains the value-less
+# COMPUTE mode the int path already had (cmd_expr_compute), so 3-arg float fns
+# compute without consuming the 3rd operand as <v>; (2) atlas_cli cmd_register
+# auto-routes a value-bearing 🟠 (arity miss) into compute-and-fold, +
+# explicit --compute. allen_dynes_tc(0.615,591.18,0.1)=14.5511 🟢 (was 🟠 "no
+# calculator path"). RTSC 16-fn class unblocked (mcmillan_tc/morel_anderson_…).
+
+@C verify_kit_mirror_unify := "VERIFY-KIT V1 register↔verify_cli mirror unify: `hexa atlas register --from-verify allen_dynes_tc 0.6150 591.18 0.10` now COMPUTES 14.5511 → 🟢 SUPPORTED-NUMERICAL (was 🟠 INSUFFICIENT 'no calculator path'). Root fix = register delegates to `hexa verify --expr … --compute` (proposal a; atlas owns NO recompute mirror); float COMPUTE mode added to cmd_expr_float; cmd_register auto-routes value-bearing 🟠→compute + explicit --compute. RTSC 3-arg class unblocked (mcmillan_tc=12.0423, morel_anderson_mustar=0.112262). Regressions clean (sigma 6 12 🔵 VERIFY · sigma 6 --compute 🔵)" :: formula [slug=verify-kit-mirror-unify group=VERIFY-KIT]
+  method = "register"
+  cmd    = "hexa atlas register --from-verify allen_dynes_tc 0.6150 591.18 0.10  (build = bash tool/build_hexa_verify.sh + hexa build tool/atlas_cli.hexa -o bin/hexa-atlas)"
+  raw    = ".verdicts/verify-kit-mirror-unify/v1_register.txt"
+  src    = "tool/atlas_cli.hexa (cmd_register --compute + 🟠→compute auto-route + _adapt_verify_compute + _parse_compute_value) · tool/verify_cli.hexa (cmd_expr_float_compute + --compute routing in cmd_expr_float). Both bin/hexa-atlas + bin/hexa-verify built mac arm64; full register→verify→compute chain tested via test shim routing inner `hexa verify` to the new binary."
+  status = "🟢 SUPPORTED-NUMERICAL — built + e2e tested (verdict persisted verbatim). register COMPUTES 14.5511 (no more 'no calculator path'); RTSC absorption unblocked. Round-tolerance ε=1e-9 vs literature-rounded value (14.55 → 🔴) is a SEPARATE INBOX item, out of V1 scope. Terminal · paper-eligible (Δ vs baseline = register absorption capability the prior CLI lacked for ≥3-arg float fns)."

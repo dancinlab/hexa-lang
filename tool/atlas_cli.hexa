@@ -2014,6 +2014,78 @@ fn _adapt_verify_generic(fn_name: string, args: array, v_str: string, id_overrid
         verdict: verdict, source_verb: "verify", provenance: prov }
 }
 
+// _parse_compute_value — extract the numeric value from a verify compute-mode
+// stdout (`COMPUTE: <label> = <value>` line). Returns the value substring after
+// the LAST " = " on the COMPUTE line, or "" when no COMPUTE line is present.
+fn _parse_compute_value(out: string) -> string {
+    let lines = out.split("\n")
+    let mut i = 0
+    while i < len(lines) {
+        let ln = to_string(lines[i])
+        if ln.starts_with("COMPUTE: ") {
+            // value is the tail after the last " = "
+            let parts = ln.split(" = ")
+            if len(parts) >= 2 { return to_string(parts[len(parts) - 1]).trim() }
+        }
+        i = i + 1
+    }
+    return ""
+}
+
+// _adapt_verify_compute — VERIFY-KIT V1 value-less COMPUTE-and-fold adapter.
+// register's --from-verify treats EVERY positional after the fn name as an
+// OPERAND (no claimed value), delegates to `hexa verify --expr <fn> <args>
+// --compute` (the single calc home per @D g20 — atlas owns NO recompute
+// mirror), reads the COMPUTE value back, and folds it on 🔵/🟢. This kills
+// BOTH the atlas_cli↔verify_cli recompute desync (no mirror) AND the arity
+// gap (any operand count — allen_dynes_tc is 3-arg, handled by verify_cli).
+fn _adapt_verify_compute(fn_name: string, args: array, id_override: string) -> DiscoveryEvent {
+    let mut args_str_arr = []
+    let mut i = 0
+    while i < len(args) {
+        args_str_arr.push(to_string(args[i]))
+        i = i + 1
+    }
+    let arg_str_comma = args_str_arr.join(",")
+    let arg_str_space = args_str_arr.join(" ")
+    let mut invoke = "hexa verify --expr " + fn_name
+    if len(arg_str_space) > 0 { invoke = invoke + " " + arg_str_space }
+    invoke = invoke + " --compute"
+    let prov = "hexa atlas register --from-verify (generic verify-delegation, compute) · " + invoke
+
+    // Shell out to verify in compute mode; tier line is the canonical verdict.
+    let out = to_string(exec(invoke + " 2>&1"))
+
+    let mut verdict = "🟠 INSUFFICIENT"
+    if out.contains("🟢 SUPPORTED-NUMERICAL") { verdict = "🟢 SUPPORTED-NUMERICAL" }
+    else if out.contains("🔵 SUPPORTED-FORMAL") { verdict = "🔵 SUPPORTED-FORMAL" }
+    else if out.contains("🔴 FALSIFIED") { verdict = "🔴 FALSIFIED" }
+
+    let v_str = _parse_compute_value(out)
+    let name = fn_name + "(" + arg_str_comma + ")=" + v_str
+
+    if verdict == "🟠 INSUFFICIENT" || verdict == "🔴 FALSIFIED" || len(v_str) == 0 {
+        return DiscoveryEvent { kind: "F", id: "", name: name, raw: "",
+            verdict: verdict, source_verb: "verify", provenance: prov }
+    }
+
+    let today = _today_compact()
+    let mut id = id_override
+    if verdict == "🟢 SUPPORTED-NUMERICAL" {
+        if len(id) == 0 { id = "verified-" + _slug_register(fn_name) + "-num" }
+        let raw = _build_raw_F_numerical(id, fn_name, arg_str_comma, v_str, today)
+        return DiscoveryEvent { kind: "F", id: id, name: name, raw: raw,
+            verdict: verdict, source_verb: "verify", provenance: prov }
+    }
+    // 🔵 SUPPORTED-FORMAL — int closed-form; id includes args dash-joined.
+    if len(id) == 0 {
+        id = "verified-" + _slug_register(fn_name) + "-" + args_str_arr.join("-")
+    }
+    let raw = _build_raw_F(id, fn_name, arg_str_comma, to_int(v_str), today)
+    return DiscoveryEvent { kind: "F", id: id, name: name, raw: raw,
+        verdict: verdict, source_verb: "verify", provenance: prov }
+}
+
 // cmd_register — the absorption verb. Each `--from-<verb>` arm produces a
 // DiscoveryEvent and hands it to register_from_event, which folds the node's
 // .n6 block DIRECTLY into compiler/atlas/embedded.gen.hexa (the binary-builtin
@@ -2024,6 +2096,7 @@ fn _adapt_verify_generic(fn_name: string, args: array, v_str: string, id_overrid
 fn cmd_register(rest: array) {
     let mut from_verb = ""                  // "verify" | "drill" | ""
     let mut id_override = ""
+    let mut want_compute = false            // --compute → value-less compute-and-fold
     // drill-specific
     let mut drill_seed = ""
     let mut drill_rounds = 1
@@ -2034,6 +2107,7 @@ fn cmd_register(rest: array) {
     while i < n {
         let a = to_string(rest[i])
         if a == "--from-verify" { from_verb = "verify"; i = i + 1 }
+        else if a == "--compute" { want_compute = true; i = i + 1 }
         else if a == "--from-drill" || a == "--from-kick" { from_verb = "drill"; i = i + 1 }
         else if a == "--id" && i + 1 < n { id_override = to_string(rest[i + 1]); i = i + 2 }
         else if a == "--seed" && i + 1 < n { drill_seed = to_string(rest[i + 1]); i = i + 2 }
@@ -2059,11 +2133,44 @@ fn cmd_register(rest: array) {
     // ── dispatch ────────────────────────────────────────────────
     if from_verb == "verify" {
         if len(positional) < 2 {
-            println("error: --from-verify needs <fn> <args...> <v>")
+            println("error: --from-verify needs <fn> <args...> <v>  (or <fn> <args...> --compute)")
             println("       see: hexa atlas register --help")
             exit(2)
         }
         let fn_name = to_string(positional[0])
+
+        // VERIFY-KIT V1 — explicit value-less COMPUTE-and-fold. Every
+        // positional after the fn name is an OPERAND; register delegates to
+        // `hexa verify --expr <fn> <args> --compute` (single calc home; atlas
+        // owns NO recompute mirror), reads the computed value, and folds it.
+        if want_compute {
+            let mut cargs = []
+            let mut ci = 1
+            while ci < len(positional) {
+                cargs.push(to_string(positional[ci]))
+                ci = ci + 1
+            }
+            let cev = _adapt_verify_compute(fn_name, cargs, id_override)
+            println("hexa atlas register --from-verify " + cev.name + "  (compute)")
+            if cev.verdict == "🟠 INSUFFICIENT" {
+                println("  tier   = 🟠 INSUFFICIENT")
+                println("  reason = `hexa verify --expr " + fn_name + " --compute` produced no value")
+                println("  gap    = add " + fn_name + " to tool/verify_cli.hexa (single calc home per @D g20)")
+                exit(3)
+            }
+            if cev.verdict == "🔴 FALSIFIED" {
+                println("  tier   = 🔴 FALSIFIED — recompute non-deterministic; refusing to register")
+                exit(4)
+            }
+            println("  tier   = " + cev.verdict + "  (delegated via `hexa verify --expr … --compute`)")
+            let crerr = register_from_event(cev)
+            if len(crerr) > 0 {
+                println("error: " + crerr)
+                exit(5)
+            }
+            return
+        }
+
         let v_str = to_string(positional[len(positional) - 1])
         let mut args_arr = []
         let mut pi = 1
@@ -2072,6 +2179,31 @@ fn cmd_register(rest: array) {
             pi = pi + 1
         }
         let ev = _adapt_verify_generic(fn_name, args_arr, v_str, id_override)
+        // VERIFY-KIT V1 auto-route: a 🟠 from the value-bearing form means the
+        // arity didn't compute (e.g. allen_dynes_tc(λ,ω_log,μ*) is 3-arg but
+        // the last operand was consumed as the claimed <v>, leaving a 2-arg
+        // call). Retry in value-less COMPUTE mode treating ALL positionals as
+        // operands. A genuine 🔴 (calc disagrees) is NOT retried — it stays
+        // falsified. This kills the arity gap without conflating falsification.
+        if ev.verdict == "🟠 INSUFFICIENT" {
+            let mut allargs = []
+            let mut ai = 1
+            while ai < len(positional) {
+                allargs.push(to_string(positional[ai]))
+                ai = ai + 1
+            }
+            let cev = _adapt_verify_compute(fn_name, allargs, id_override)
+            if cev.verdict == "🟢 SUPPORTED-NUMERICAL" || cev.verdict == "🔵 SUPPORTED-FORMAL" {
+                println("hexa atlas register --from-verify " + cev.name + "  (compute — auto-routed from 🟠)")
+                println("  tier   = " + cev.verdict + "  (delegated via `hexa verify --expr … --compute`)")
+                let crerr = register_from_event(cev)
+                if len(crerr) > 0 {
+                    println("error: " + crerr)
+                    exit(5)
+                }
+                return
+            }
+        }
         println("hexa atlas register --from-verify " + ev.name)
         if ev.verdict == "🟠 INSUFFICIENT" {
             println("  tier   = 🟠 INSUFFICIENT")

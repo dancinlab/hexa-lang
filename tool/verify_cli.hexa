@@ -3317,8 +3317,69 @@ fn cmd_verify_id(rest) {
 //   2-arg:  --expr <fn> <a0> <a1> <v>               (rest len 5)
 //   3-arg:  --expr <fn> <a0> <a1> <a2> <v>          (rest len 6; bio Phase 1/2)
 //   4-arg:  --expr <fn> <a0> <a1> <a2> <a3> <v>     (rest len 7; bio Phase 3 — hagen_poiseuille)
+// cmd_expr_float_compute — VERIFY-KIT V1 value-less COMPUTE mode for float
+// fns (the float counterpart of cmd_expr_compute). The legacy cmd_expr_float
+// always consumes the trailing operand as the EXPECTED value <v>, so a 3-arg
+// float fn invoked with its 3 operands (no <v>) was mis-parsed as a 2-arg
+// VERIFY (the 3rd operand swallowed as <v>) — the allen_dynes_tc(λ,ω_log,μ*)
+// arity gap. With --compute every non-flag operand after the fn name is an
+// ARG, the value is COMPUTED via the SAME _recompute_float helper, and the
+// result is printed `COMPUTE: <fn>(<args>) = <value>` + self-verified twice.
+// This is the delegation target for `atlas register --from-verify` — register
+// shells out in compute mode so it never needs its own recompute mirror.
+fn cmd_expr_float_compute(rest, fnm: string) {
+    // collect non-flag operand strings after the fn name (rest[0]=--expr,
+    // rest[1]=fn, rest[2..]=operands ∪ flags).
+    let mut ops_str: array = []
+    let mut k = 2
+    while k < len(rest) {
+        let tk = to_string(rest[k])
+        if tk != "--absorb" && tk != "--no-absorb" && tk != "--compute" { ops_str.push(tk) }
+        k = k + 1
+    }
+    let argc = len(ops_str)
+    let mut a0 = 0.0
+    let mut a1 = 0.0
+    let mut a2 = 0.0
+    let mut a3 = 0.0
+    if argc >= 1 { a0 = _parse_float(to_string(ops_str[0])) }
+    if argc >= 2 { a1 = _parse_float(to_string(ops_str[1])) }
+    if argc >= 3 { a2 = _parse_float(to_string(ops_str[2])) }
+    if argc >= 4 { a3 = _parse_float(to_string(ops_str[3])) }
+    let mut arg_echo = ""
+    if argc >= 1 { arg_echo = _fstr(a0) }
+    if argc >= 2 { arg_echo = arg_echo + "," + _fstr(a1) }
+    if argc >= 3 { arg_echo = arg_echo + "," + _fstr(a2) }
+    if argc >= 4 { arg_echo = arg_echo + "," + _fstr(a3) }
+    let label = fnm + "(" + arg_echo + ")"
+    let got = _recompute_float(fnm, a0, a1, a2, a3, argc)
+    if got == _NOCALC_F {
+        println("verify --expr " + label + "  (compute mode)")
+        println("  tier   = 🟠 INSUFFICIENT")
+        println("  reason = float calculator system has NO path for '" + fnm + "'")
+        println("  gap    = extend tool/verify_cli.hexa::_recompute_float (계산기시스템 개선 후보)")
+        return
+    }
+    // self-verify: recompute a SECOND time — deterministic calc MUST agree.
+    let got2 = _recompute_float(fnm, a0, a1, a2, a3, argc)
+    println("COMPUTE: " + label + " = " + _fstr(got))
+    if _fabs(got - got2) <= calc_eps() {
+        println("  tier   = 🟢 SUPPORTED-NUMERICAL  (hexa-native libm-class compute, self-verified deterministic · g_self_verify · TECS-L n6-rep Tier2)")
+    } else {
+        println("  tier   = 🔴 FALSIFIED  (recompute non-deterministic: " + _fstr(got) + " vs " + _fstr(got2) + " — calculator bug)")
+    }
+}
+
 fn cmd_expr_float(rest, fnm: string) {
     let zero_arg = calc_is_zero_arg_float_fn(fnm)
+    // VERIFY-KIT V1 — explicit value-less COMPUTE marker routes BEFORE the
+    // VERIFY arity parse (which would swallow the last operand as <v>). 0-arg
+    // constants keep their `--expr <fn> <v>` VERIFY form, so --compute on a
+    // 0-arg fn (no operands at all) still falls through to compute argc=0.
+    if _has_compute(rest) {
+        cmd_expr_float_compute(rest, fnm)
+        return
+    }
     let has7 = len(rest) >= 7 && to_string(rest[6]) != "--absorb" && to_string(rest[6]) != "--no-absorb"
     let has6 = len(rest) >= 6 && to_string(rest[5]) != "--absorb" && to_string(rest[5]) != "--no-absorb"
     let has5 = len(rest) >= 5 && to_string(rest[4]) != "--absorb" && to_string(rest[4]) != "--no-absorb"
