@@ -920,6 +920,19 @@ HexaVal hexa_farr_free(HexaVal h_v);                                   /* runtim
 HexaVal hexa_farr_matmul(HexaVal a_v, HexaVal ar_v, HexaVal ac_v,
                          HexaVal b_v, HexaVal bc_v);                    /* runtime.c — RFC 032 */
 HexaVal hexa_farr_copy(HexaVal src_v);                                 /* runtime.c — RFC 033 */
+/* FP32 forge mirror — same int-handle/HexaVal returns as the FP64 farr_*.
+ * Without these prototypes a codegenned trainer.c (#include "runtime.h")
+ * implicit-declares them `int`, mis-initing `HexaVal h = hexa_farr32_zeros(n)`. */
+HexaVal hexa_farr32_zeros(HexaVal n_v);                                 /* runtime.c — FP32 forge */
+HexaVal hexa_farr32_get(HexaVal h_v, HexaVal i_v);                      /* runtime.c — FP32 forge */
+HexaVal hexa_farr32_set(HexaVal h_v, HexaVal i_v, HexaVal x_v);         /* runtime.c — FP32 forge */
+HexaVal hexa_farr32_free(HexaVal h_v);                                  /* runtime.c — FP32 forge */
+HexaVal hexa_farr32_matmul(HexaVal a_v, HexaVal ar_v, HexaVal ac_v,
+                           HexaVal b_v, HexaVal bc_v);                  /* runtime.c — FP32 forge */
+HexaVal hexa_farr32_matmul_NT_b(HexaVal a_v, HexaVal ar_v, HexaVal ac_v,
+                                HexaVal b_v, HexaVal br_v);             /* runtime.c — FP32 forge (A·Bᵀ) */
+HexaVal hexa_farr32_matmul_NT_a(HexaVal a_v, HexaVal ar_v, HexaVal ac_v,
+                                HexaVal b_v, HexaVal bc_v);             /* runtime.c — FP32 forge (Aᵀ·B) */
 HexaVal hexa_farr_add_gaussian_noise(HexaVal target_v, HexaVal sigma_v); /* runtime.c — RFC 033 */
 
 /* ── RFC 041 Phase B forge RoPE — 6-arg direct wrappers ─────────────

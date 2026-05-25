@@ -6610,6 +6610,12 @@ fn gen2_expr(node) {
                 if name == "farr_zeros"     { return "hexa_farr_zeros(" + a0 + ")" }
                 if name == "farr_len"       { return "hexa_farr_len(" + a0 + ")" }
                 if name == "farr_free"      { return "hexa_farr_free(" + a0 + ")" }
+                // FP32 farr32_* mirror (forge GPU path) — same hexa_farr32_* C
+                // fns as the FP64 farr_*; without these the bare `farr32_zeros`
+                // (a file-local `static HexaVal` in runtime.c) leaks into the
+                // codegenned trainer.c → "undeclared identifier" at link.
+                if name == "farr32_zeros"   { return "hexa_farr32_zeros(" + a0 + ")" }
+                if name == "farr32_free"    { return "hexa_farr32_free(" + a0 + ")" }
                 // RFC 036: farr_int_array — 1-arg routes.
                 if name == "farr_int_zeros" { return "hexa_farr_int_zeros(" + a0 + ")" }
                 if name == "farr_int_len"   { return "hexa_farr_int_len("   + a0 + ")" }
@@ -6795,6 +6801,7 @@ fn gen2_expr(node) {
                 if name == "regex_split"      { return "hexa_regex_split("      + arg_strs[0] + ", " + arg_strs[1] + ")" }
                 // feat/primitive-float-array — packed-double array element access.
                 if name == "farr_get"         { return "hexa_farr_get(" + arg_strs[0] + ", " + arg_strs[1] + ")" }
+                if name == "farr32_get"       { return "hexa_farr32_get(" + arg_strs[0] + ", " + arg_strs[1] + ")" }
                 // RFC 036: farr_int_array — 2-arg routes.
                 if name == "farr_int_get"             { return "hexa_farr_int_get("             + arg_strs[0] + ", " + arg_strs[1] + ")" }
                 if name == "farr_int_fill_from_array" { return "hexa_farr_int_fill_from_array(" + arg_strs[0] + ", " + arg_strs[1] + ")" }
@@ -6825,6 +6832,7 @@ fn gen2_expr(node) {
                 if name == "regex_replace" { return "hexa_regex_replace(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ")" }
                 // feat/primitive-float-array — packed-double array element set.
                 if name == "farr_set"      { return "hexa_farr_set(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ")" }
+                if name == "farr32_set"    { return "hexa_farr32_set(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ")" }
                 // anima RFC 035 (2026-05-16): bf16 storage round-trip
                 // (src, dst, n). SSOT for hexa cc --regen; the committed
                 // transpiler reaches these via the hexa_call3 fallback.
@@ -6869,6 +6877,9 @@ fn gen2_expr(node) {
                 if name == "matmul"         { return "hexa_matmul(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ", " + arg_strs[4] + ")" }
                 // RFC 032 (2026-05-12): farr_matmul — packed-double matmul.
                 if name == "farr_matmul"    { return "hexa_farr_matmul(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ", " + arg_strs[4] + ")" }
+                if name == "farr32_matmul"  { return "hexa_farr32_matmul(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ", " + arg_strs[4] + ")" }
+                if name == "farr32_matmul_NT_b" { return "hexa_farr32_matmul_NT_b(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ", " + arg_strs[4] + ")" }
+                if name == "farr32_matmul_NT_a" { return "hexa_farr32_matmul_NT_a(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ", " + arg_strs[4] + ")" }
                 // RFC 050 L1 slice 1: forge_dispatch_matmul — routes the
                 // FP64 matmul through forge_tier_dispatch_v1 instead of
                 // calling hexa_farr_matmul directly. Returns the farr handle.
