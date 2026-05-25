@@ -1,0 +1,102 @@
+// HEXA Standard Library — core/math Lucas–Lehmer G5 test (TECS-L MR4)
+//
+// Exercises lucas_lehmer(p) from stdlib/core/math.hexa — the Lucas–Lehmer
+// primality test for the Mersenne number M_p = 2^p - 1:
+//   S_0 = 4,  S_{k+1} = S_k² − 2,  M_p prime ⟺ S_{p-2} ≡ 0 (mod M_p).
+//
+// Cross-validated against known Mersenne primality:
+//   PRIME exponents     p = 3 (M=7), 5 (31), 7 (127), 13 (8191)  → true
+//   COMPOSITE exponent  p = 11 (M_11 = 2047 = 23·89, axis-B MR6) → false
+//
+// The SAME conclusions are anchored by g5 atoms that ARE builtin:
+//   M_p prime ⟹ 2^{p-1}·M_p perfect — `hexa verify --expr is_perfect`:
+//     p=3→28, p=5→496, p=7→8128, p=13→33550336  (all 🔵)
+//   M_11 composite — `hexa verify --expr sigma 2047 2160`, `tau 2047 4` 🔵
+//   → see .verdicts/tecs-l-mersenne-lucas-lehmer/ (+ axis-B MR6
+//     .verdicts/tecs-l-mersenne-composite/ for the M_11 anchors).
+//
+// Self-contained — inline the module surface (sidesteps cross-file import
+// path, matching math_numtheory_test.hexa / collections_test.hexa idiom).
+
+let mut pass_count = 0
+let mut total_count = 0
+let mut failed_name = ""
+
+fn check_eq_bool(name, got, want) {
+    total_count = total_count + 1
+    if got == want {
+        pass_count = pass_count + 1
+    } else {
+        if failed_name == "" { failed_name = name }
+        println("FAIL " + name + " got=" + to_string(got) + " want=" + to_string(want))
+    }
+}
+
+fn check_eq_int(name, got, want) {
+    total_count = total_count + 1
+    if got == want {
+        pass_count = pass_count + 1
+    } else {
+        if failed_name == "" { failed_name = name }
+        println("FAIL " + name + " got=" + to_string(got) + " want=" + to_string(want))
+    }
+}
+
+// ── inlined module surface (verbatim from stdlib/core/math.hexa) ────────
+
+fn pow_t(base, exp) -> int {
+    let result = 1
+    let i = 0
+    while i < exp {
+        result = result * base
+        i = i + 1
+    }
+    result
+}
+
+fn mersenne_t(p) -> int {
+    pow_t(2, p) - 1
+}
+
+fn lucas_lehmer_t(p) -> bool {
+    if p < 2 { return false }
+    if p == 2 { return true }
+    let m = pow_t(2, p) - 1
+    let s = 4
+    let k = 0
+    while k < p - 2 {
+        s = (s * s - 2) % m
+        k = k + 1
+    }
+    s == 0
+}
+
+fn main() {
+    // ── M_p ground values (mersenne helper) ──────────────────────────
+    check_eq_int("mersenne(3)", mersenne_t(3), 7)
+    check_eq_int("mersenne(5)", mersenne_t(5), 31)
+    check_eq_int("mersenne(7)", mersenne_t(7), 127)
+    check_eq_int("mersenne(11)", mersenne_t(11), 2047)
+    check_eq_int("mersenne(13)", mersenne_t(13), 8191)
+
+    // ── PRIME exponents — LL says M_p PRIME (true) ───────────────────
+    // cross-anchored 🔵 via is_perfect(2^{p-1}*M_p): 28/496/8128/33550336
+    check_eq_bool("lucas_lehmer(3)  M_7    prime",  lucas_lehmer_t(3),  true)
+    check_eq_bool("lucas_lehmer(5)  M_31   prime",  lucas_lehmer_t(5),  true)
+    check_eq_bool("lucas_lehmer(7)  M_127  prime",  lucas_lehmer_t(7),  true)
+    check_eq_bool("lucas_lehmer(13) M_8191 prime",  lucas_lehmer_t(13), true)
+
+    // ── COMPOSITE exponent — LL says M_11 COMPOSITE (false) ──────────
+    // cross-anchored 🔵 via sigma(2047)=2160 != 2048, tau(2047)=4 != 2
+    // (M_11 = 2047 = 23*89, axis-B MR6 first counterexample)
+    check_eq_bool("lucas_lehmer(11) M_2047 composite", lucas_lehmer_t(11), false)
+
+    // ── edge case — M_2 = 3 is prime (zero LL iterations) ────────────
+    check_eq_bool("lucas_lehmer(2)  M_3    prime", lucas_lehmer_t(2), true)
+
+    println("PASS " + to_string(pass_count) + "/" + to_string(total_count))
+    if failed_name != "" {
+        println("first fail: " + failed_name)
+        exit(1)
+    }
+}

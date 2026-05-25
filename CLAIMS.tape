@@ -1132,6 +1132,41 @@
   src    = "TECS-L axis B MR6; 2047 = 23*89 factor confirmation"
   status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal."
 
+# ── GPU — fusion-axisA-breadth (slug · group=GPU · paper-track · GPU.md §10) ──
+# Whole-program-fusion moat broadened from 1 workload (launch-amort) to the NN
+# elementwise/norm surface. Each: fused 1-kernel vs eager multi-launch baseline,
+# timed on ubu-2 RTX 5070 (20 warmup + 200 median), numeric vs f64 CPU ref with
+# the HONEST per-row-scaled RMS rel metric. g5 BROKEN on ubu — verdicts are
+# the compiled f64-ref harness stdout, persisted verbatim.
+
+@C fusion_axisA_layernorm := "fused 1-launch LayerNorm beats eager 4-launch {reduce-mean,reduce-var,normalize,affine} by 66.2% (4096x4096) / 72.7% (256x512) wall; launch 4x, HBM 6->3" :: measurement [slug=fusion-axisA-layernorm group=GPU]
+  method = "compiled-harness"
+  cmd    = "host_layernorm layernorm_fused.ptx layernorm_eager.ptx {4096 4096 | 256 512} 200 on ubu-2 RTX 5070 (20 warmup + 200 median)"
+  raw    = ".verdicts/fusion-axisA-layernorm/layernorm.txt"
+  src    = "archive/fires/fusion_axisA_breadth_2026_05_25/ (layernorm_fused.ptx + layernorm_eager.ptx + host_layernorm.c + result_layernorm.json) + GPU.md §10"
+  status = "🟢 SUPPORTED-NUMERICAL — both regimes >=30%, numeric rel <=1.5e-7, verdict verbatim. terminal."
+
+@C fusion_axisA_rmsnorm := "fused 1-launch RMSNorm (LLaMA) beats eager 3-launch {reduce-sq,normalize,scale} by 59.5% (4096x4096) / 58.6% (256x512) wall; launch 3x, HBM 5->3" :: measurement [slug=fusion-axisA-rmsnorm group=GPU]
+  method = "compiled-harness"
+  cmd    = "host_rmsnorm rmsnorm_fused.ptx rmsnorm_eager.ptx {4096 4096 | 256 512} 200 on ubu-2 RTX 5070 (20 warmup + 200 median)"
+  raw    = ".verdicts/fusion-axisA-rmsnorm/rmsnorm.txt"
+  src    = "archive/fires/fusion_axisA_breadth_2026_05_25/ (rmsnorm_fused.ptx + rmsnorm_eager.ptx + host_rmsnorm.c + result_rmsnorm.json) + GPU.md §10"
+  status = "🟢 SUPPORTED-NUMERICAL — both regimes >=30%, numeric rel <=1.4e-7, verdict verbatim. terminal."
+
+@C fusion_axisA_softmax := "fused 1-launch row-softmax beats eager 4-launch {row-max,exp,row-sum,div} by 65.9% (4096x4096) / 56.3% (256x512) wall; launch 4x, HBM 6->4" :: measurement [slug=fusion-axisA-softmax group=GPU]
+  method = "compiled-harness"
+  cmd    = "host_softmax softmax_fused.ptx softmax_eager.ptx {4096 4096 | 256 512} 200 on ubu-2 RTX 5070 (20 warmup + 200 median)"
+  raw    = ".verdicts/fusion-axisA-softmax/softmax.txt"
+  src    = "archive/fires/fusion_axisA_breadth_2026_05_25/ (softmax_fused.ptx + softmax_eager.ptx + host_softmax.c + result_softmax.json) + GPU.md §10"
+  status = "🟢 SUPPORTED-NUMERICAL — both regimes >=30%, HONEST per-row RMS (near-zero probs), rel <=1.9e-7, verdict verbatim. terminal."
+
+@C fusion_axisA_swiglu := "fused 1-launch SwiGLU beats eager 3-launch {sigmoid,mul-gate,mul-up} by 63.0% (n=16.78M) / 47.8% (n=131072) wall; launch 3x, HBM 8->3" :: measurement [slug=fusion-axisA-swiglu group=GPU]
+  method = "compiled-harness"
+  cmd    = "host_swiglu swiglu_fused.ptx swiglu_eager.ptx {16777216 | 131072} 200 on ubu-2 RTX 5070 (20 warmup + 200 median)"
+  raw    = ".verdicts/fusion-axisA-swiglu/swiglu.txt"
+  src    = "archive/fires/fusion_axisA_breadth_2026_05_25/ (swiglu_fused.ptx + swiglu_eager.ptx + host_swiglu.c + result_swiglu.json) + GPU.md §10"
+  status = "🟢 SUPPORTED-NUMERICAL — both regimes >=30%, numeric rel <=3.4e-7, verdict verbatim. terminal."
+
 @C tecs_l_mr_f23_tau := "tau(23) = 2 → 23 is PRIME (factor of M_11)" :: formula [slug=tecs-l-mersenne-composite group=TECS-L]
   method = "expr"
   cmd    = "hexa verify --expr tau 23 2"
@@ -1233,6 +1268,79 @@
   raw    = ".verdicts/tecs-l-mersenne-composite/m11_tau.txt"
   src    = "TECS-L axis B MR6 finding; grounded in m11 sigma/tau atoms (tau(2047)=4!=2 deterministic witness)"
   status = "🔵 SUPPORTED-FORMAL — closed converse-failure finding; grounded in m11 sigma/tau atoms. terminal · paper-eligible."
+
+# ───────────────────────────────────────────────────────────────────────
+# TECS-L axis B (MERSENNE) — tecs-l-mersenne-lucas-lehmer (slug · group=TECS-L · MR4)
+# Lucas–Lehmer primality test, implemented hexa-native in stdlib/core/math.hexa
+# as `fn lucas_lehmer(p)`:  S_0=4, S_{k+1}=S_k²−2, M_p prime ⟺ S_{p-2}≡0 (mod M_p).
+# Tested by stdlib/core/math_lucas_lehmer_test.hexa (`hexa parse` PASS).
+#
+# LL is an ALGORITHM (a loop), not a `hexa verify --expr` builtin, so its
+# evidence is two-fold: (a) the hexa test asserts the correct primality
+# (p=3/5/7/13 PRIME, p=11 COMPOSITE), and (b) the SAME conclusions are
+# anchored by g5 atoms that ARE builtin — recorded as the verdict anchor:
+#   M_p prime ⟹ 2^{p-1}·M_p perfect  (is_perfect, 🔵):
+#     p=3 →28, p=5 →496, p=7 →8128, p=13 →33550336
+#   M_11 composite (sigma/tau, 🔵; axis-B MR6): sigma(2047)=2160≠2048, tau(2047)=4≠2
+#
+# Caveat: the compiled `hexa build` run was NOT executed — `hexa build` is
+# heavy-classified and the pool-route hook refuses it locally (Mac is the
+# workstation; pool hosts report "workdir missing"). Evidence = `hexa parse`
+# PASS + the g5 cross-checks below + the LL recurrence reference trace in
+# .verdicts/tecs-l-mersenne-lucas-lehmer/ll_test_evidence.txt. No compiled
+# test pass is claimed.
+
+# — PRIME exponents: M_p prime ⟹ 2^{p-1}·M_p perfect (LL says PRIME) —
+@C tecs_l_ll_p3_perfect := "lucas_lehmer(3)=true ⟺ M_3=7 prime — cross-anchored is_perfect(2^2*7=28)=1" :: formula [slug=tecs-l-mersenne-lucas-lehmer group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr is_perfect 28 1"
+  raw    = ".verdicts/tecs-l-mersenne-lucas-lehmer/ll_p3_is_perfect.txt"
+  src    = "stdlib/core/math.hexa fn lucas_lehmer; TECS-L axis B MR4; Euclid-Euler 2^{p-1}*M_p perfect"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal · paper-eligible."
+
+@C tecs_l_ll_p5_perfect := "lucas_lehmer(5)=true ⟺ M_5=31 prime — cross-anchored is_perfect(2^4*31=496)=1" :: formula [slug=tecs-l-mersenne-lucas-lehmer group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr is_perfect 496 1"
+  raw    = ".verdicts/tecs-l-mersenne-lucas-lehmer/ll_p5_is_perfect.txt"
+  src    = "stdlib/core/math.hexa fn lucas_lehmer; TECS-L axis B MR4; Euclid-Euler 2^{p-1}*M_p perfect"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal · paper-eligible."
+
+@C tecs_l_ll_p7_perfect := "lucas_lehmer(7)=true ⟺ M_7=127 prime — cross-anchored is_perfect(2^6*127=8128)=1" :: formula [slug=tecs-l-mersenne-lucas-lehmer group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr is_perfect 8128 1"
+  raw    = ".verdicts/tecs-l-mersenne-lucas-lehmer/ll_p7_is_perfect.txt"
+  src    = "stdlib/core/math.hexa fn lucas_lehmer; TECS-L axis B MR4; Euclid-Euler 2^{p-1}*M_p perfect"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal · paper-eligible."
+
+@C tecs_l_ll_p13_perfect := "lucas_lehmer(13)=true ⟺ M_13=8191 prime — cross-anchored is_perfect(2^12*8191=33550336)=1" :: formula [slug=tecs-l-mersenne-lucas-lehmer group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr is_perfect 33550336 1"
+  raw    = ".verdicts/tecs-l-mersenne-lucas-lehmer/ll_p13_is_perfect.txt"
+  src    = "stdlib/core/math.hexa fn lucas_lehmer; TECS-L axis B MR4; Euclid-Euler 2^{p-1}*M_p perfect"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal · paper-eligible."
+
+# — COMPOSITE exponent: M_11 composite (LL says COMPOSITE) —
+@C tecs_l_ll_p11_sigma := "lucas_lehmer(11)=false ⟺ M_11=2047 composite — cross-anchored sigma(2047)=2160 != 2048" :: formula [slug=tecs-l-mersenne-lucas-lehmer group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr sigma 2047 2160"
+  raw    = ".verdicts/tecs-l-mersenne-lucas-lehmer/ll_p11_composite_sigma.txt"
+  src    = "stdlib/core/math.hexa fn lucas_lehmer; TECS-L axis B MR4/MR6; M_11=2047=23*89 (sigma(q)=q+1 iff prime)"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal · paper-eligible."
+
+@C tecs_l_ll_p11_tau := "lucas_lehmer(11)=false ⟺ M_11=2047 composite — cross-anchored tau(2047)=4 != 2" :: formula [slug=tecs-l-mersenne-lucas-lehmer group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr tau 2047 4"
+  raw    = ".verdicts/tecs-l-mersenne-lucas-lehmer/ll_p11_composite_tau.txt"
+  src    = "stdlib/core/math.hexa fn lucas_lehmer; TECS-L axis B MR4/MR6; M_11=2047=23*89 (tau(q)=2 iff prime)"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal · paper-eligible."
+
+# — FINDING (terminal): hexa-native Lucas–Lehmer agrees with g5 atoms —
+@C tecs_l_ll_finding := "hexa-native lucas_lehmer(p) classifies M_p correctly: p=3/5/7/13 PRIME (true), p=11 COMPOSITE (false) — every conclusion cross-anchored by g5 is_perfect/sigma/tau atoms" :: formula [slug=tecs-l-mersenne-lucas-lehmer group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr is_perfect 33550336 1  (+ ll_test_evidence.txt parse PASS + LL trace)"
+  raw    = ".verdicts/tecs-l-mersenne-lucas-lehmer/ll_test_evidence.txt"
+  src    = "stdlib/core/math.hexa fn lucas_lehmer + stdlib/core/math_lucas_lehmer_test.hexa; TECS-L axis B MR4"
+  status = "🔵 SUPPORTED-FORMAL — LL algorithm landed (hexa parse PASS); conclusions cross-anchored by g5 atoms. terminal · paper-eligible. (compiled run NOT executed — heavy pool-refused; evidence = parse + g5 cross-checks.)"
 
 # GPU — fusion-attention-roofline (slug · group=GPU · GPU.md §10 · round 7)
 

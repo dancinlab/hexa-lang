@@ -127,6 +127,7 @@ fn cmd_stats(rest: array) {
     // when --audit, rodata otherwise for backward compat).
     let mut do_audit = false
     let mut do_acq = false
+    let mut do_num = false
     let mut acq_top = 20
     let mut fmt = "text"
     let mut audit_scope = ""
@@ -136,6 +137,7 @@ fn cmd_stats(rest: array) {
         let a = to_string(rest[i])
         if a == "--audit" { do_audit = true; i = i + 1 }
         else if a == "--acquisition" { do_acq = true; i = i + 1 }
+        else if a == "--numerology" { do_num = true; i = i + 1 }
         else if a.starts_with("--top=") { acq_top = to_int(a.substring(6, len(a))); i = i + 1 }
         else if a == "--format=json" || a == "--json" { fmt = "json"; i = i + 1 }
         else if a == "--format=text" { fmt = "text"; i = i + 1 }
@@ -152,6 +154,17 @@ fn cmd_stats(rest: array) {
                    else { audit_acquisition_merged(acq_top) }
         if fmt == "json" { println(acquisition_to_json(arep)) }
         else { print(acquisition_to_text(arep)) }
+        return
+    }
+    // Numerology quarantine tier (R7): isolate coincidence-claim nodes that
+    // carry no derivation / citation, so they aren't mixed with rigor.
+    if do_num {
+        if len(audit_scope) == 0 { audit_scope = "merged" }
+        let nrep = if audit_scope == "rodata" { audit_numerology_rodata() }
+                   else if audit_scope == "overlay" { audit_numerology_overlay() }
+                   else { audit_numerology_merged() }
+        if fmt == "json" { println(numerology_to_json(nrep)) }
+        else { print(numerology_to_text(nrep)) }
         return
     }
     if !do_audit {
@@ -2318,91 +2331,231 @@ fn _rev_parse_header(header: string) -> ReverifyParse {
     return ReverifyParse { ok: true, fn_name: fn_name, args: args, claimed: claimed }
 }
 
-// cmd_reverify — walk registered 🟢 NUMERICAL F nodes, re-run the
-// in-process float recompute, and report verdict drift. Read-only
-// (no atlas mutation). Flags: --limit N (cap nodes scanned).
+// ── R7: non-F recompute + --fix (auto-reregister) ─────────────────────
+//
+// R3/R4 reverify only re-checked 🟢 NUMERICAL **F** nodes via the float
+// calc_dispatch table. But OTHER kinds carry the SAME machine-recomputable
+// header `<fn>(<args>) = <claimed>`. The only such non-F kind today is @P
+// (the foundation axioms): `@P sigma = divisor_sum(6) = 12`, euler_totient,
+// divisor_count, mobius, jordan_totient, sum_prime_factors, mersenne — all
+// INTEGER number-theoretic forms. R7 widens reverify to walk EVERY node and,
+// when the fn is integer-recomputable (_recompute*_register), re-run that
+// path too. F float stays the float path; P int uses the int path.
+//
+// _rev_is_int_str — true iff `s` is a plain (optionally-signed) integer.
+// Guards the int path against prose headers like `@P x = capacity (Lyapunov …`
+// whose pseudo-args are not numbers (to_int would abort the whole sweep).
+fn _rev_is_int_str(s: string) -> bool {
+    let t = s.trim()
+    let n = len(t)
+    if n == 0 { return false }
+    let mut i = 0
+    if t[0] == "-" || t[0] == "+" { i = 1 }
+    if i >= n { return false }
+    while i < n {
+        if t[i] < "0" || t[i] > "9" { return false }
+        i = i + 1
+    }
+    return true
+}
+
+// _rev_int_recompute — try the integer recompute ladder (1/2/3-op) for a
+// non-float fn. Returns _NOCALC_REGISTER when no integer calc path exists OR
+// any arg is non-numeric (the UNVERIFIABLE signal — same convention as
+// cmd_register's adapters).
+fn _rev_int_recompute(fn_name: string, args: array) -> int {
+    let argc = len(args)
+    if argc < 1 || argc > 3 { return _NOCALC_REGISTER }
+    let mut ai = 0
+    while ai < argc {
+        if !_rev_is_int_str(to_string(args[ai])) { return _NOCALC_REGISTER }
+        ai = ai + 1
+    }
+    if argc == 1 {
+        return _recompute_register(fn_name, to_int(to_string(args[0])))
+    }
+    if argc == 2 {
+        return _recompute2_register(fn_name, to_int(to_string(args[0])), to_int(to_string(args[1])))
+    }
+    return _recompute3_register(fn_name, to_int(to_string(args[0])), to_int(to_string(args[1])), to_int(to_string(args[2])))
+}
+
+// _rev_drop_node_line — surgically delete the single AtlasNode literal line
+// for (kind,id) from embedded.gen.hexa (the R5 #1029 "delete stale node line"
+// step, automated). The emitter writes one node per line as
+// `    AtlasNode { kind: "<K>", id: "<id>", raw: ... }`. We match on the
+// composite `kind: "<K>", id: "<id>"` substring (same key embed_fold dedups
+// on) and drop that whole line + its trailing newline. Atomic temp+rename so
+// a reader never sees a half-written embed. Returns "" on success, else err.
+fn _rev_drop_node_line(embed_path: string, kind: string, id: string) -> string {
+    let body = read_file_safe(embed_path)
+    if len(body) == 0 { return "embedded.gen.hexa not readable or empty at: " + embed_path }
+    let key = "kind: \"" + kind + "\", id: \"" + id + "\""
+    let ki = body.index_of(key)
+    if ki < 0 { return "node line not found for @" + kind + " " + id }
+    // Walk to start-of-line and end-of-line (consume the trailing newline).
+    let mut ls = ki
+    while ls > 0 && body.substring(ls - 1, ls) != "\n" { ls = ls - 1 }
+    let nl = body.index_of("\n", ki)
+    let mut le = nl
+    if le < 0 { le = len(body) } else { le = le + 1 }
+    let new_body = body.substring(0, ls) + body.substring(le, len(body))
+    let tmp_path = embed_path + ".rfix." + to_string(mono_ns())
+    if !write_file_safe(tmp_path, new_body) { return "could not write temp file for fix: " + tmp_path }
+    if !_exec_ok("mv -f " + _shq(tmp_path) + " " + _shq(embed_path)) {
+        let _ = _exec_ok("rm -f " + _shq(tmp_path))
+        return "atomic rename failed (mv) for: " + embed_path
+    }
+    return ""
+}
+
+// _rev_fix_node — automate R5 #1029: re-register a DRIFTED node at full
+// precision IN PLACE. Replace the claimed token in the node's raw header with
+// the recomputed value, drop the stale line, then re-fold the corrected raw
+// (same kind+id, body preserved). Returns "" on success, else an error.
+fn _rev_fix_node(kind: string, id: string, raw: string, header: string, claimed: string, fresh: string) -> string {
+    // Replace ONLY the claimed-value occurrence in the header (`= <claimed>`),
+    // leaving the rest of the raw body (cite / provenance / prose) intact.
+    let new_header = header.replace("= " + claimed, "= " + fresh)
+    let new_raw = raw.replace(header, new_header)
+    let embed_path = _resolve_embedded_path()
+    let derr = _rev_drop_node_line(embed_path, kind, id)
+    if len(derr) > 0 { return derr }
+    return _fold_into_embedded(kind, new_raw, id)
+}
+
+// cmd_reverify — walk ALL registered nodes carrying a machine-recomputable
+// `<fn>(<args>) = <claimed>` header, re-run the in-process recompute (float
+// path for 🟢 F, integer path for @P number-theoretic forms), and report
+// per-kind verdict drift. Read-only by default. Flags:
+//   --limit N   cap nodes scanned
+//   --fix       (opt-in MUTATION) re-register each DRIFT at full precision
+//               in place (delete stale line → re-fold corrected raw)
 fn cmd_reverify(rest: array) {
     let mut limit = -1
+    let mut do_fix = false
     let mut i = 0
     while i < len(rest) {
         let a = to_string(rest[i])
         if a == "--limit" && i + 1 < len(rest) { limit = to_int(to_string(rest[i + 1])); i = i + 2 }
+        else if a == "--fix" { do_fix = true; i = i + 1 }
         else if a == "--help" || a == "-h" {
-            println("usage: hexa atlas reverify [--limit N]")
-            println("  Re-runs the in-process float recompute over registered 🟢 SUPPORTED-NUMERICAL")
-            println("  F nodes and reports verdict drift (MATCH / DRIFT / UNVERIFIABLE). Read-only —")
-            println("  never tombstones or mutates the atlas. Addresses the 'frozen at registration,")
-            println("  never re-verified' gap (ATLAS @goal META-SIGNAL ②).")
+            println("usage: hexa atlas reverify [--limit N] [--fix]")
+            println("  Re-runs the in-process recompute over EVERY registered node carrying a")
+            println("  machine-recomputable `<fn>(<args>) = <claimed>` header — 🟢 NUMERICAL F nodes")
+            println("  (float calc) AND @P number-theoretic axioms (integer calc) — and reports")
+            println("  per-kind verdict drift (MATCH / DRIFT / UNVERIFIABLE). Read-only by default.")
+            println("  --fix (opt-in MUTATION): for each DRIFT, re-register at full precision IN PLACE")
+            println("        (delete stale node line → re-fold corrected raw; the R5 #1029 manual")
+            println("        remediation, automated). No drift → --fix is a safe no-op.")
+            println("  Addresses the 'frozen at registration, never re-verified' gap (META-SIGNAL ②).")
             return
         }
         else { i = i + 1 }
     }
 
-    let idx = static_atlas()
-    let f_nodes = idx.f_nodes
+    let nodes = atlas_list()
     let mut seen: i64 = 0
     let mut matched: i64 = 0
     let mut drifted: i64 = 0
+    let mut fixed: i64 = 0
     let mut unverifiable: i64 = 0
-    let mut not_numerical: i64 = 0
-    println("hexa atlas reverify — re-running in-process float recompute over registered 🟢 F nodes")
-    println("  (ε=1e-9 · read-only · no tombstone)")
+    let mut skipped: i64 = 0
+    println("hexa atlas reverify — re-running in-process recompute over ALL recomputable nodes (F float · P int)")
+    if do_fix { println("  (ε=1e-9 · --fix = re-register drift at full precision IN PLACE)") }
+    else { println("  (ε=1e-9 · read-only · no tombstone)") }
     println("")
     let mut ni = 0
-    while ni < len(f_nodes) {
+    while ni < len(nodes) {
         if limit >= 0 && seen >= limit { break }
-        let nd = f_nodes[ni]
+        let nd = nodes[ni]
         ni = ni + 1
-        // Restrict to 🟢 SUPPORTED-NUMERICAL nodes (the drift-prone tier).
-        if !nd.raw.contains("🟢 SUPPORTED-NUMERICAL") { not_numerical = not_numerical + 1; continue }
         let header = _rev_extract_header(nd.raw)
         let p = _rev_parse_header(header)
-        if !p.ok { unverifiable = unverifiable + 1; println("  PARSE?  @F " + nd.id + " (header not in canonical f(args)=v shape)"); continue }
-        seen = seen + 1
-        if !calc_is_float_fn(p.fn_name) {
-            unverifiable = unverifiable + 1
-            println("  UNVERIF @F " + nd.id + " — no in-process float calc path for " + p.fn_name + "()")
+        // Skip nodes with no machine-recomputable fn(args)=v header (prose-only
+        // C/L/R/X/etc.). Not a failure — just out of reverify scope.
+        if !p.ok { skipped = skipped + 1; continue }
+        // F float path (the R3/R4 tier) — gated on 🟢 SUPPORTED-NUMERICAL.
+        if nd.kind == "F" && calc_is_float_fn(p.fn_name) {
+            if !nd.raw.contains("🟢 SUPPORTED-NUMERICAL") { skipped = skipped + 1; continue }
+            seen = seen + 1
+            let argc = len(p.args)
+            let mut a0 = 0.0
+            let mut a1 = 0.0
+            let mut a2 = 0.0
+            let mut a3 = 0.0
+            if argc >= 1 { a0 = _parse_float_register(to_string(p.args[0])) }
+            if argc >= 2 { a1 = _parse_float_register(to_string(p.args[1])) }
+            if argc >= 3 { a2 = _parse_float_register(to_string(p.args[2])) }
+            if argc >= 4 { a3 = _parse_float_register(to_string(p.args[3])) }
+            let claimed = _parse_float_register(p.claimed)
+            let got = _recompute_float_register(p.fn_name, a0, a1, a2, a3, argc)
+            if got == _NOCALC_F_REGISTER {
+                unverifiable = unverifiable + 1
+                println("  UNVERIF @F " + nd.id + " — " + p.fn_name + "() returned NOCALC")
+                continue
+            }
+            let diff = _fabs_register(got - claimed)
+            if diff > calc_eps() {
+                drifted = drifted + 1
+                println("  DRIFT   @F " + nd.id + " — " + p.fn_name + "() claimed=" + p.claimed +
+                        " recompute=" + _fstr_register(got) + " |Δ|=" + _fstr_register(diff))
+                if do_fix {
+                    let ferr = _rev_fix_node("F", nd.id, nd.raw, header, p.claimed, _fstr_register(got))
+                    if len(ferr) > 0 { println("    FIX-ERR @F " + nd.id + " — " + ferr) }
+                    else { fixed = fixed + 1; println("    FIXED   @F " + nd.id + " → " + _fstr_register(got)) }
+                }
+            } else {
+                matched = matched + 1
+                println("  MATCH   @F " + nd.id + " — " + p.fn_name + "() == " + p.claimed + " (within ε)")
+            }
             continue
         }
-        let argc = len(p.args)
-        let mut a0 = 0.0
-        let mut a1 = 0.0
-        let mut a2 = 0.0
-        let mut a3 = 0.0
-        if argc >= 1 { a0 = _parse_float_register(to_string(p.args[0])) }
-        if argc >= 2 { a1 = _parse_float_register(to_string(p.args[1])) }
-        if argc >= 3 { a2 = _parse_float_register(to_string(p.args[2])) }
-        if argc >= 4 { a3 = _parse_float_register(to_string(p.args[3])) }
-        let claimed = _parse_float_register(p.claimed)
-        let got = _recompute_float_register(p.fn_name, a0, a1, a2, a3, argc)
-        if got == _NOCALC_F_REGISTER {
-            unverifiable = unverifiable + 1
-            println("  UNVERIF @F " + nd.id + " — " + p.fn_name + "() returned NOCALC")
+        // Integer path (the R7 widening) — @P number-theoretic axioms and any
+        // other kind whose fn is on the integer recompute ladder.
+        let got_i = _rev_int_recompute(p.fn_name, p.args)
+        if got_i != _NOCALC_REGISTER && _rev_is_int_str(p.claimed) {
+            seen = seen + 1
+            let claimed_i = to_int(p.claimed)
+            if got_i != claimed_i {
+                drifted = drifted + 1
+                println("  DRIFT   @" + nd.kind + " " + nd.id + " — " + p.fn_name + "() claimed=" + p.claimed +
+                        " recompute=" + to_string(got_i))
+                if do_fix {
+                    let ferr = _rev_fix_node(nd.kind, nd.id, nd.raw, header, p.claimed, to_string(got_i))
+                    if len(ferr) > 0 { println("    FIX-ERR @" + nd.kind + " " + nd.id + " — " + ferr) }
+                    else { fixed = fixed + 1; println("    FIXED   @" + nd.kind + " " + nd.id + " → " + to_string(got_i)) }
+                }
+            } else {
+                matched = matched + 1
+                println("  MATCH   @" + nd.kind + " " + nd.id + " — " + p.fn_name + "() == " + p.claimed)
+            }
             continue
         }
-        let diff = _fabs_register(got - claimed)
-        if diff > calc_eps() {
-            drifted = drifted + 1
-            println("  DRIFT   @F " + nd.id + " — " + p.fn_name + "() claimed=" + p.claimed +
-                    " recompute=" + _fstr_register(got) + " |Δ|=" + _fstr_register(diff))
-        } else {
-            matched = matched + 1
-            println("  MATCH   @F " + nd.id + " — " + p.fn_name + "() == " + p.claimed + " (within ε)")
-        }
+        // Header parses but no calc path for this fn — out of scope, not a fail.
+        skipped = skipped + 1
     }
     println("")
-    println("reverify: numerical_seen=" + to_string(seen) +
+    let mut fixed_str = ""
+    if do_fix && fixed > 0 { fixed_str = " fixed=" + to_string(fixed) }
+    println("reverify: recompute_seen=" + to_string(seen) +
             " match=" + to_string(matched) +
             " drift=" + to_string(drifted) +
+            fixed_str +
             " unverifiable=" + to_string(unverifiable) +
-            " (non-numerical_F_skipped=" + to_string(not_numerical) + ")")
+            " (no_calc_path_skipped=" + to_string(skipped) + ")")
     if drifted > 0 {
-        println("  ⚠ " + to_string(drifted) + " node(s) drifted — a frozen 🟢 verdict no longer reproduces.")
-        println("    Inspect the calculator (tool/verify_cli.hexa) vs the registered value; re-register if the new value is correct.")
-        exit(1)
+        if do_fix && fixed == drifted {
+            println("  ✓ all " + to_string(drifted) + " drifted node(s) re-registered at full precision in embedded.gen.hexa.")
+            println("    Commit the fold:  git add compiler/atlas/embedded.gen.hexa && git commit")
+        } else {
+            println("  ⚠ " + to_string(drifted) + " node(s) drifted — a frozen verdict no longer reproduces.")
+            println("    Inspect the calculator vs the registered value; re-run with --fix to auto re-register.")
+            exit(1)
+        }
     }
     if matched == 0 && seen == 0 {
-        println("  note   = no 🟢 SUPPORTED-NUMERICAL F nodes with an in-process calc path were found.")
+        println("  note   = no recomputable nodes (F float / P int) with an in-process calc path were found.")
     }
 }
 
@@ -2554,6 +2707,8 @@ fn cmd_help() {
     println("                          rich audit (grades / dups / orphans / breakthroughs)")
     println("  stats --acquisition [--top=N] [--scope=...] [--format=json]")
     println("                          ranked acquire-next frontier (Q / 🟡 cite-only / 🟠 insufficient)")
+    println("  stats --numerology [--scope=rodata|overlay|merged] [--format=json]")
+    println("                          quarantine tier: coincidence-claim nodes w/ no derivation/cite")
     println("  lookup <id>             search all 9 kinds for matching id")
     println("  lookup <K> <id>         restrict to one kind (K ∈ {P|C|L|E|F|R|S|X|Q})")
     println("  lookup --prefix=<p>     list nodes whose id starts with <p>")
@@ -2577,11 +2732,15 @@ fn cmd_help() {
     println("                          A/B = .n6 export OR embedded.gen.hexa (auto-detected);")
     println("                          reports removed (only-A) / added (only-B) / changed (raw differs)")
     println("")
-    println("reverify subcommand (re-run the calc over FROZEN 🟢 nodes; read-only · no tombstone):")
-    println("  reverify [--limit N]    re-run in-process float recompute over registered 🟢")
-    println("                          SUPPORTED-NUMERICAL F nodes → report MATCH / DRIFT /")
-    println("                          UNVERIFIABLE (ε=1e-9). Closes the 'frozen at registration,")
-    println("                          never re-verified' gap (META-SIGNAL ②). exit 1 if any drift.")
+    println("reverify subcommand (re-run the calc over FROZEN recomputable nodes; read-only by default):")
+    println("  reverify [--limit N] [--fix]")
+    println("                          re-run in-process recompute over ALL nodes with a")
+    println("                          `<fn>(<args>) = <claimed>` header — 🟢 NUMERICAL F (float) AND")
+    println("                          @P number-theoretic axioms (integer) → report MATCH / DRIFT /")
+    println("                          UNVERIFIABLE (ε=1e-9). Closes 'frozen at registration, never")
+    println("                          re-verified' (META-SIGNAL ②). exit 1 if drift (no --fix).")
+    println("                          --fix re-registers each DRIFT at full precision IN PLACE")
+    println("                          (R5 #1029 remediation automated); no drift → safe no-op.")
     println("")
     println("cascade subcommand (read-only cascade-invalidation query; no tombstone · no mutate):")
     println("  cascade <id> [--format=json]")
