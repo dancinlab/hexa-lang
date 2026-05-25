@@ -1026,6 +1026,7 @@ static int hxlcl_pthread_join(void *thread, void **retval);
 #define HXLCL_SYS_MMAP    197
 #define HXLCL_SYS_FLOCK   131
 #define HXLCL_SYS_EXECVE   59
+#define HXLCL_SYS_MKDIR   136
 // RUNTIME net/exec ③④ (cycle 78): socket + message-group Darwin syscall #s.
 // NB: no SYS_recv/SYS_send on Darwin — recv/send are libc wrappers over
 // recvfrom/sendto, so we route to those with NULL addr args.
@@ -1183,6 +1184,12 @@ static inline int _hxlcl_pipe_cf(int fds[2]) {
 // content-leak / bogus-fd hazards that motivated #251 cannot recur.
 static long __attribute__((noinline)) hxlcl_read(int fd, void *buf, unsigned long n) {
     return _hxlcl_syscall3_cf(HXLCL_SYS_READ, (long)fd, (long)buf, (long)n);
+}
+// RUNTIME tail (cycle 82): svc-trap mkdir (136) — a direct kernel syscall,
+// 2 args. Replaces the libc mkdir call in runtime_core.c + the generated
+// code's s4-lowered mkdir. carry-set -> -1 + errno.
+static int __attribute__((noinline)) hxlcl_mkdir(const char *path, int mode) {
+    return (int)_hxlcl_syscall2_cf(HXLCL_SYS_MKDIR, (long)path, (long)mode);
 }
 static long __attribute__((noinline)) hxlcl_write(int fd, const void *buf, unsigned long n) {
     return _hxlcl_syscall3_cf(HXLCL_SYS_WRITE, (long)fd, (long)buf, (long)n);
