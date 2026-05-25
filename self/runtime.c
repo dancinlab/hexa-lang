@@ -23,7 +23,18 @@
 #include <sys/mman.h>   // RFC 025 (2026-05-12): mmap-backed safetensors load
 #include <sys/socket.h> // GO M10 (RFC 093): hexa daemon unix-socket primitives
 #include <arpa/inet.h>  // GO M10: inet_pton for AF_INET addr parse
-extern char **environ; // posix_spawnp inherits parent env explicitly
+// RUNTIME tail (cycle 85): own the environ global instead of libc's. A
+// priority-101 constructor (runs before all default-priority ctors — incl.
+// the arena init that calls getenv) captures envp, which Darwin/dyld passes
+// to __mod_init_func routines as (argc, argv, envp, apple). Drops the libc
+// _environ extern. <unistd.h> (line 15) is already parsed, so this #define
+// does not corrupt its prototype; later guarded re-includes are no-ops.
+static char **hxlcl_environ = 0;
+__attribute__((constructor(101)))
+static void hxlcl_capture_environ(int argc, char **argv, char **envp) {
+    (void)argc; (void)argv; hxlcl_environ = envp;
+}
+#define environ hxlcl_environ
 // RUNTIME.md Tier-A.4 (cycle 76): the HEXA_OOB_TRACE backtrace path is now
 // served by hexa-native stubs (hxlcl_backtrace / hxlcl_backtrace_symbols_fd
 // below) instead of libc execinfo(3). <execinfo.h> is therefore no longer
@@ -932,8 +943,8 @@ static int hxlcl_sigprocmask(int how, const void *set, void *oldset);
 // Resolves inbox/patches/yosys-exec-runtime-regression-cycles-61-64.md
 // + inbox/patches/runtime-env-and-exec-capture-stubs-block-cli-tools.md.
 // Walks the `environ` global directly; matches libc getenv semantics
-// (case-sensitive, returns first match, NULL on miss).
-extern char **environ;
+// (case-sensitive, returns first match, NULL on miss). `environ` is our
+// own captured copy (see the priority-101 constructor near the top).
 static char *__attribute__((noinline)) hxlcl_getenv(const char *name) {
     if (!name) return (char *)0;
     char **e = environ;
