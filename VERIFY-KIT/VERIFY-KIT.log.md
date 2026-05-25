@@ -4,6 +4,23 @@
 
 ---
 
+## 2026-05-26 — V9 (P4b) 반물질/트랩 물리 primitive (demiurge ARXIV A3 boost)
+
+- GOAL: ARXIV A3(DEMIURGE 반물질-공장 축)가 verify-able candidate 로 남긴 트랩/분광 폐형해를 verify CLI 에 추가 → demiurge verify coverage 확장. RFC-045/ANTIMATTER physics-fn 메커니즘(`_recompute_float` + `calc_is_float_fn` SSOT) 그대로 미러.
+- 추가한 5 fn (전부 closed-form · libm-class ÷/√ → 🟢 NUMERICAL via V3 `--tol`):
+  - `cyclotron_freq_hz(q,B,m) = qB/(2πm)` [Hz] — 자유 cyclotron 주파수. p̄@1T → 15245186.458209697 Hz (≈15.245 MHz) · e⁻@1T → 27992489872.33 Hz (≈27.99 GHz). ⓺가둠.
+  - `penning_axial_freq(q,U,m,d) = √(qU/(m·d²))` [rad/s] — Penning 트랩 축방향 secular ω_z. q=e,U=10,m_p,d=5mm → 6189938.014534115 rad/s = **기존 `penning_omega_±` 가 입력으로 받던 ω_z 앵커값을 정확히 재현** (cross-consistency PASS). 트랩 체인이 raw (q,U,m,d)→ω_z 까지 verify-native 완결. ⓺가둠.
+  - `h_reduced_mass_factor(m_e,m_nuc) = m_nuc/(m_e+m_nuc)` — 환산질량 인자 μ/m_e. m_p → 0.9994556794247658 (반양성자 질량 = 양성자 질량 by CPT → 반수소 동일). ⓻측정.
+  - `antihydrogen_1s_binding(Ry_eV,μr) = Ry·μr` [eV] — 환산질량 보정 1S 결합에너지. 13.605693122994 · 0.99945568 → 13.598287264286832 eV (leading point-nucleus, QED/Lamb 제외). ⓻측정.
+  - `gbar_free_fall_time(h,g) = √(2h/g)` [s] — GBAR 반물질 약등가원리(WEP) 자유낙하 시간. 0.2m,9.81 → 0.2019275109384609 s. ⓼중력.
+- EDIT: `tool/verify_cli.hexa` (헬퍼 5 + `_recompute_float` dispatch 5 + help 5줄) · `compiler/atlas/calc_dispatch.hexa::calc_is_float_fn` (float-fn SSOT 등록 5). **codegen 무변경** — libm sqrt 는 기배선, cg_math_sym 불필요 (`hexa cc --regen` 불요).
+- VERIFY: parse-gate PASS (2/2 — verify_cli + calc_dispatch). 참조값 5/5 독립 IEEE-754 double 재계산과 일치. penning_axial_freq 가 기존 ω_z 앵커 정확 재현. +🔴 determinism control (cyclotron_freq_hz 오답값 → FALSIFIED) + 회귀 `sigma 6 12`→🔵 (deployed binary). verdict=`.verdicts/verify-kit-physics/v9.txt`.
+- ⚠ BLOCKER: `bin/hexa-verify` 재빌드 실패 — **V9 와 무관한 선존 V7 transpiler flatten 버그**. `congruence_chain_engine.hexa` 의 순수 정수 fn 블록(`is_prime_int`/`nth_prime`/`factorial_int`/`catalan`/`bell`/`partition`)이 flatten 에서 누락되어 emitted C 에서 `hexa_call1(...)` undeclared(12 clang error). HEAD-fresh transpiler(main repo `self/native/hexa_v2` 2026-05-26 04:39 복사) + 신규 빌드 `build/hexa_module_loader` + `HEXA_MODULE_LOADER` 배선해도 동일. V9 fn 자체는 direct call + body 정상 emit(flatten+compile clean). pristine origin/main 도 동일 호출 → 동일 실패. deployed `bin/hexa-verify`(04:36) 조차 `is_prime` 를 🟠 INSUFFICIENT 로 보고 = V7 정수 fn 도 아직 어느 빌드에도 없음 (V7 = source-only 랜딩). → inbox note `inbox/notes/verify_cli_congruence_engine_flatten_drop_2026_05_26.md` 기록.
+- TIER: 🟢/partial. **NOT terminal** — binary verify 는 upstream V7 transpiler flatten fix 후. demiurge A3 verify boost = 트랩/분광 5 atom (포획⓺·측정⓻·중력⓼).
+- LAND: CLAIMS.tape `@C verify_kit_physics [slug=verify-kit-physics group=VERIFY-KIT]` · VERIFY-KIT.md V9 `[x]` · ARXIV.md A3 cross-link. concurrency: sibling TECS-L-MF8(`/tmp/wt-mf8`, verify_cli 미편집) 와 CLAIMS.tape/ARXIV.md 충돌 시 fetch+merge keep-both.
+
+---
+
 ## 2026-05-26 — V5.2 (P2) faithful-Φ 엔진을 verify CLI 에 배선 (`hexa verify --expr phi_demo`)
 
 ### 목표 (V5 의 둘째 슬라이스 — wire 만)

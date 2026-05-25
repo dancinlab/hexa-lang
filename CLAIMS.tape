@@ -2754,6 +2754,24 @@
   status = "🟢 --verifier-cmd pluggable external-verifier arm (phanes tenant-verifier model) — delegation + tier mapping"
 
 # ───────────────────────────────────────────────────────────────────────
+# VERIFY-KIT — verify-kit-physics (slug · group=VERIFY-KIT · V9)
+# Antimatter trap/spectroscopy CLOSED-FORM physics primitives — boosts the
+# DEMIURGE antihydrogen-factory verify axis (ARXIV A3). MIRRORS the RFC-045 /
+# ANTIMATTER physics-fn mechanism (_recompute_float + calc_is_float_fn SSOT).
+# All libm-class (division / sqrt) → 🟢 NUMERICAL via V3 --tol. NOTE: bin/
+# hexa-verify could NOT be REBUILT to exercise these — the build is blocked
+# by a PRE-EXISTING V7 transpiler flatten bug (congruence_chain_engine.hexa
+# integer-fn block dropped → undeclared is_prime_int/.../partition), NOT a V9
+# regression (V9 fns flatten + compile clean; pristine main hits the same).
+# ───────────────────────────────────────────────────────────────────────
+@C verify_kit_physics := "VERIFY-KIT V9 antimatter trap/spectroscopy physics primitives (demiurge ARXIV A3 boost): 5 closed-form physics fns added to `hexa verify --expr` mirroring the RFC-045/ANTIMATTER physics-fn mechanism — cyclotron_freq_hz(q,B,m)=qB/(2πm) [Hz] (free cyclotron, p̄@1T→15245186.458 Hz≈15.245 MHz, ⓺가둠), penning_axial_freq(q,U,m,d)=√(qU/(m·d²)) [rad/s] (Penning trap axial secular ω_z; q=e,U=10,m_p,d=5mm→6189938.0145 rad/s — REPRODUCES the existing penning_omega_± ω_z anchor EXACTLY, ⓺가둠), h_reduced_mass_factor(m_e,m_nuc)=m_nuc/(m_e+m_nuc) (μ/m_e; m_p→0.99945568, ⓻측정), antihydrogen_1s_binding(Ry_eV,μr)=Ry·μr [eV] (1S binding w/ reduced-mass; 13.605693·0.99945568→13.598287 eV, ⓻측정), gbar_free_fall_time(h,g)=√(2h/g) [s] (GBAR antimatter WEP drop time; 0.2m,9.81→0.20193 s, ⓼중력). All libm-class (÷/√) → 🟢 NUMERICAL via V3 --tol. parse-gate PASS (verify_cli + calc_dispatch). 5/5 reference values match independent IEEE-754 double eval; +1 🔴 determinism control (cyclotron_freq_hz wrong-value→FALSIFIED); regression sigma 6 12→🔵 on deployed binary. bin/hexa-verify REBUILD BLOCKED on a pre-existing V7 transpiler flatten bug (congruence_chain_engine.hexa pure-int block — is_prime_int/nth_prime/factorial_int/catalan/bell/partition — dropped → undeclared in emitted C; V9 fns themselves flatten+compile clean, pristine main hits identical failure; even deployed bin/hexa-verify lacks V7 int fns). Tracked in inbox note. @cite Penning 1936 Physica 3:873 · Brown & Gabrielse 1986 RMP 58:233 · Bohr 1913/Rydberg · GBAR Pérez & Sacquin 2012 CQG 29:184008" :: formula [slug=verify-kit-physics group=VERIFY-KIT]
+  method = "expr"
+  cmd    = "hexa verify --expr cyclotron_freq_hz 1.602176634e-19 1.0 1.67262192369e-27 15245186.458209697 --tol 1e-3  ·  hexa verify --expr penning_axial_freq 1.602176634e-19 10.0 1.67262192369e-27 0.005 6189938.014534115 --tol 1e-3  ·  hexa verify --expr gbar_free_fall_time 0.2 9.81 0.2019275109384609 --tol 1e-6  (verify pending V7 build unblock)"
+  raw    = ".verdicts/verify-kit-physics/v9.txt"
+  src    = "tool/verify_cli.hexa (_cyclotron_freq_hz/_penning_axial_freq/_h_reduced_mass_factor/_antihydrogen_1s_binding/_gbar_free_fall_time + _recompute_float dispatch + help 5 lines) · compiler/atlas/calc_dispatch.hexa::calc_is_float_fn (float-fn SSOT registration). No codegen change (libm sqrt already wired). bin/hexa-verify rebuild blocked on pre-existing V7 congruence-engine flatten bug (inbox/notes/verify_cli_congruence_engine_flatten_drop_2026_05_26.md)."
+  status = "🟢/partial — 5 antimatter/trap physics fns (cyclotron/Penning axial/reduced-mass/antihydrogen 1S binding/GBAR free-fall) landed + parse-gate PASS + numerically verified (independent IEEE-754); demiurge A3 verify boost (capture ⓺ · spectroscopy ⓻ · WEP gravity ⓼). NOT terminal — binary verify pending upstream V7 transpiler flatten fix (build blocked; honest-fenced)."
+
+# ───────────────────────────────────────────────────────────────────────
 # TECS-L — tecs-l-closed-neg-miner (slug · group=TECS-L · axis F · F5 · paper_negative_ok)
 # 7 closed-negatives: each a plausible "n=6-like" conjecture computed EXACTLY and
 # shown to FAIL deterministically (🔴 = ruled-out axis). Cites M10 (σφ=nτ⟺{1,6})
