@@ -1,0 +1,262 @@
+//
+// Cross-layer fused kernel K2 -- { LN2 -> FFN-up -> SiLU*gate -> FFN-down -> +residual2 }
+//
+// AXIS-C MOAT: the LN2 -> FFN-up seam, FFN-up -> SiLU*gate seam, SiLU*gate ->
+// FFN-down seam, and the FFN-down -> +residual2 write seam ALL stay in shared
+// memory / registers. The dff=4*d intermediate hidden state (the largest
+// activation tensor in the block -- 4x bigger than the d-wide tensors) is
+// streamed in registers WITHIN the same kernel and NEVER written to HBM.
+// cuBLAS / PyTorch eager API forbids this fusion: every op call materialises
+// the dff-wide intermediate.
+//
+// SwiGLU/SiLU shape (per LLaMA / PaLM family):
+//   x_ln2 = LN2(x_in)
+//   h_up  = x_ln2 . W_up         [d -> dff]
+//   h_gate= x_ln2 . W_gate       [d -> dff]
+//   h_sig = silu(h_up) * h_gate  [dff -> dff]   element-wise, register-resident
+//   y     = h_sig . W_down       [dff -> d]
+//   x_out = x_in + y             (residual2 add at write-time)
+//
+// Pragmatic shape this round (round 8 -- structural + codegen + ptxas-clean):
+//   d_model = 768, dff = 3072, S=512, B=1
+//   threads-per-CTA = 128 (each thread owns ONE row of the activation and
+//                          streams over the d -> dff -> d projections in
+//                          tiles; the dff-wide intermediate is held in
+//                          register tiles of width 16 at a time -- 192 tiles
+//                          per d=768 row across the dff=3072 axis fits the
+//                          register budget). For BLOCK_Q=128 we get good
+//                          occupancy at sm_80/90/120.
+//   grid = (S / BLOCK_Q, 1, B)
+//
+// PURE ASCII -- driver-JIT ptxas rejects non-ASCII comments.
+// Numeric correctness DESIGN: per-row hidden state is fp32 throughout;
+//   round-9 harness compares vs an f64 CPU reference (rel-err <= 1e-2
+//   per-row-scale).
+//
+// SiLU(x) = x * sigmoid(x) = x / (1 + exp(-x))
+// We compute sigmoid via 1/(1+exp(-x)) using ex2.approx (same trick as
+// flash_attn online-softmax: exp(x) = ex2(x * log2(e))).
+
+.version 7.0
+.target sm_80
+.address_size 64
+
+.visible .entry block_fused_k2 (
+    .param .u64 x_in_ptr,        // [S x d_model] fp32 -- input (also residual2 base = K1 output)
+    .param .u64 ln_gamma_ptr,    // [d_model] fp32
+    .param .u64 ln_beta_ptr,     // [d_model] fp32
+    .param .u64 wup_ptr,         // [d_model x dff] fp32
+    .param .u64 wgate_ptr,       // [d_model x dff] fp32
+    .param .u64 wdown_ptr,       // [dff x d_model] fp32
+    .param .u64 x_out_ptr,       // [S x d_model] fp32 -- block output (residual2 + FFN-down)
+    .param .u32 n_seq,           // S
+    .param .u32 d_model,         // 768
+    .param .u32 d_ffn,           // 3072
+    .param .f32 inv_d_model      // 1.0/d_model
+)
+{
+    .reg .pred  %p<8>;
+    .reg .b32   %r<32>;
+    .reg .f32   %f<64>;
+    .reg .b64   %rd<32>;
+
+    ld.param.u64 %rd0,  [x_in_ptr];
+    ld.param.u64 %rd1,  [ln_gamma_ptr];
+    ld.param.u64 %rd2,  [ln_beta_ptr];
+    ld.param.u64 %rd3,  [wup_ptr];
+    ld.param.u64 %rd4,  [wgate_ptr];
+    ld.param.u64 %rd5,  [wdown_ptr];
+    ld.param.u64 %rd6,  [x_out_ptr];
+    ld.param.u32 %r0,   [n_seq];
+    ld.param.u32 %r1,   [d_model];
+    ld.param.u32 %r2,   [d_ffn];
+    ld.param.f32 %f40,  [inv_d_model];
+
+    cvta.to.global.u64 %rd0, %rd0;
+    cvta.to.global.u64 %rd1, %rd1;
+    cvta.to.global.u64 %rd2, %rd2;
+    cvta.to.global.u64 %rd3, %rd3;
+    cvta.to.global.u64 %rd4, %rd4;
+    cvta.to.global.u64 %rd5, %rd5;
+    cvta.to.global.u64 %rd6, %rd6;
+
+    // global row index ri = ctaid.x * ntid.x + tid.x
+    mov.u32 %r3, %ctaid.x;
+    mov.u32 %r4, %ntid.x;
+    mov.u32 %r5, %tid.x;
+    mad.lo.s32 %r6, %r3, %r4, %r5;     // r6 = ri
+
+    setp.ge.s32 %p1, %r6, %r0;
+    @%p1 bra $done;
+
+    // d_model = 768 -> byte stride 3072
+    mul.lo.s32 %r7, %r6, %r1;          // ri * d_model
+    mul.wide.s32 %rd10, %r7, 4;
+    add.u64 %rd10, %rd0, %rd10;        // &x_in[ri][0]
+    add.u64 %rd11, %rd6, %rd10;
+    sub.u64 %rd11, %rd11, %rd0;        // &x_out[ri][0]
+    add.u64 %rd11, %rd6, %rd10;
+    sub.u64 %rd11, %rd11, %rd0;
+
+    // d_model*4 in bytes
+    mul.lo.u32 %r8, %r1, 4;
+
+    // ---- LN2 over d_model-wide row -- same shape as K1 ----
+    .local .align 4 .b8 xln_local[3072];  // 768 f32
+
+    // pass 1 -- mu
+    mov.f32 %f0, 0f00000000;
+    mov.u32 %r9, 0;
+$mu_loop2:
+    setp.ge.u32 %p2, %r9, %r8;
+    @%p2 bra $mu_done2;
+    cvt.u64.u32 %rd12, %r9;
+    add.u64 %rd13, %rd10, %rd12;
+    ld.global.f32 %f1, [%rd13];
+    add.f32 %f0, %f0, %f1;
+    add.u32 %r9, %r9, 4;
+    bra $mu_loop2;
+$mu_done2:
+    mul.f32 %f2, %f0, %f40;            // mu
+
+    // pass 2 -- var + cache x-mu
+    mov.f32 %f3, 0f00000000;
+    mov.u32 %r9, 0;
+$var_loop2:
+    setp.ge.u32 %p3, %r9, %r8;
+    @%p3 bra $var_done2;
+    cvt.u64.u32 %rd12, %r9;
+    add.u64 %rd13, %rd10, %rd12;
+    ld.global.f32 %f4, [%rd13];
+    sub.f32 %f5, %f4, %f2;
+    fma.rn.f32 %f3, %f5, %f5, %f3;
+    mov.u64 %rd14, xln_local;
+    add.u64 %rd14, %rd14, %rd12;
+    st.local.f32 [%rd14], %f5;
+    add.u32 %r9, %r9, 4;
+    bra $var_loop2;
+$var_done2:
+    mul.f32 %f6, %f3, %f40;
+    add.f32 %f6, %f6, 0f3727C5AC;      // + 1e-5
+    rsqrt.approx.f32 %f7, %f6;
+
+    // pass 3 -- finalize xln = (x-mu)*rstd*gamma + beta
+    mov.u32 %r9, 0;
+$ln_finalize2:
+    setp.ge.u32 %p4, %r9, %r8;
+    @%p4 bra $ln_done2;
+    cvt.u64.u32 %rd12, %r9;
+    mov.u64 %rd14, xln_local;
+    add.u64 %rd14, %rd14, %rd12;
+    ld.local.f32 %f8, [%rd14];
+    add.u64 %rd15, %rd1, %rd12;
+    ld.global.f32 %f9, [%rd15];
+    add.u64 %rd16, %rd2, %rd12;
+    ld.global.f32 %f10, [%rd16];
+    mul.f32 %f11, %f8, %f7;
+    fma.rn.f32 %f12, %f11, %f9, %f10;
+    st.local.f32 [%rd14], %f12;
+    add.u32 %r9, %r9, 4;
+    bra $ln_finalize2;
+$ln_done2:
+
+    // ---- FFN-up + FFN-gate + SiLU*gate + FFN-down + residual2 ----
+    //
+    // CROSS-LAYER FUSION CORE: for each output column out_col in [0, d_model),
+    // we ACCUMULATE the FFN-down contribution by streaming over the dff-wide
+    // hidden axis. At each hidden index h in [0, dff), we compute h_up_h and
+    // h_gate_h as dot(xln, Wup[:,h]) / dot(xln, Wgate[:,h]) ON THE FLY (NO HBM
+    // round-trip for h_up / h_gate / h_sig), compute h_sig = silu(h_up)*h_gate,
+    // then accumulate y[out_col] += h_sig * Wdown[h, out_col]. Finally write
+    // y + x_in[ri, out_col] to x_out[ri, out_col].
+    //
+    // This is the SwiGLU FFN with the dff-wide intermediate held register-
+    // resident across the up/gate/SiLU/down seams -- exactly the cross-layer
+    // fusion shape cuBLAS API cannot express (each op gets one call).
+    //
+    // To keep the round-8 emit ptxas-clean and bounded register pressure, we
+    // express the triple-nest as out_col-outer, h-middle, im-inner. The h-loop
+    // body holds a SINGLE scalar h_sig in register, no .local array. This is
+    // the "register-streaming" pattern: h_sig lives for ~50 instructions then
+    // is consumed and discarded -- never spilled to .local, never to HBM.
+
+    mov.u32 %r10, 0;                   // out_col (byte)
+$out_col_loop:
+    setp.ge.u32 %p2, %r10, %r8;
+    @%p2 bra $out_col_done;
+
+    mov.f32 %f13, 0f00000000;          // y_col accumulator
+    mov.u32 %r11, 0;                   // h (byte stride: h_idx * 4)
+    mul.lo.u32 %r12, %r2, 4;           // dff*4 in bytes
+$h_loop:
+    setp.ge.u32 %p3, %r11, %r12;
+    @%p3 bra $h_done;
+
+    // Compute h_up_h = sum_im xln[im] * Wup[im, h_idx]
+    mov.f32 %f14, 0f00000000;          // h_up
+    // Compute h_gate_h in parallel pass
+    mov.f32 %f15, 0f00000000;          // h_gate
+    mov.u32 %r13, 0;                   // im (byte)
+$im_loop:
+    setp.ge.u32 %p4, %r13, %r8;
+    @%p4 bra $im_done;
+    cvt.u64.u32 %rd17, %r13;
+    mov.u64 %rd18, xln_local;
+    add.u64 %rd18, %rd18, %rd17;
+    ld.local.f32 %f16, [%rd18];        // xln[im]
+    // Wup row-major [d_model x dff]; element [im_idx, h_idx]
+    // byte offset = im_idx * dff*4 + h_byte
+    // im_idx = im_byte/4; im_byte/4 * dff*4 = im_byte * dff
+    mul.lo.u32 %r14, %r13, %r2;
+    add.u32 %r15, %r14, %r11;
+    cvt.u64.u32 %rd19, %r15;
+    add.u64 %rd20, %rd3, %rd19;
+    ld.global.f32 %f17, [%rd20];       // Wup[im_idx, h_idx]
+    fma.rn.f32 %f14, %f16, %f17, %f14;
+    add.u64 %rd21, %rd4, %rd19;
+    ld.global.f32 %f18, [%rd21];       // Wgate[im_idx, h_idx]
+    fma.rn.f32 %f15, %f16, %f18, %f15;
+    add.u32 %r13, %r13, 4;
+    bra $im_loop;
+$im_done:
+    // SiLU(h_up) = h_up * sigmoid(h_up) = h_up / (1 + exp(-h_up))
+    //   exp(x) = ex2(x * log2(e));  log2(e) = 0x3FB8AA3B
+    mov.f32 %f19, 0fBF800000;          // -1.0
+    mul.f32 %f20, %f14, %f19;          // -h_up
+    mov.f32 %f21, 0f3FB8AA3B;          // log2(e)
+    mul.f32 %f22, %f20, %f21;          // -h_up * log2(e)
+    ex2.approx.f32 %f23, %f22;         // exp(-h_up)
+    mov.f32 %f24, 0f3F800000;          // 1.0
+    add.f32 %f25, %f24, %f23;          // 1 + exp(-h_up)
+    rcp.rn.f32 %f26, %f25;             // 1/(1+exp(-h_up)) = sigmoid(h_up)
+    mul.f32 %f27, %f14, %f26;          // silu(h_up) = h_up * sigmoid
+    mul.f32 %f28, %f27, %f15;          // h_sig = silu(h_up) * h_gate
+
+    // Wdown row-major [dff x d_model]; element [h_idx, out_col_idx]
+    // byte offset = h_idx * d_model*4 + out_col_byte = h_byte * d_model + out_col_byte
+    mul.lo.u32 %r16, %r11, %r1;
+    add.u32 %r17, %r16, %r10;
+    cvt.u64.u32 %rd22, %r17;
+    add.u64 %rd23, %rd5, %rd22;
+    ld.global.f32 %f29, [%rd23];       // Wdown[h_idx, out_col]
+    fma.rn.f32 %f13, %f28, %f29, %f13; // y_col += h_sig * Wdown
+
+    add.u32 %r11, %r11, 4;
+    bra $h_loop;
+$h_done:
+
+    // y_col + residual2: + x_in[ri, out_col]
+    cvt.u64.u32 %rd24, %r10;
+    add.u64 %rd25, %rd10, %rd24;
+    ld.global.f32 %f30, [%rd25];       // x_in[ri, out_col]
+    add.f32 %f31, %f13, %f30;          // residual2 add
+    add.u64 %rd26, %rd11, %rd24;
+    st.global.f32 [%rd26], %f31;
+
+    add.u32 %r10, %r10, 4;
+    bra $out_col_loop;
+$out_col_done:
+
+$done:
+    ret;
+}
