@@ -253,6 +253,25 @@
   status = "🟠 QUANTIFIED-PARTIAL — correct multi-CTA fused, gap closed ~3-8x but still 1.3-5.0x slower than cuBLAS-TC. NOT a >=30% win. NOT paper-eligible (paper_gate forbids partials). sec10 box stays [x] via launch-amort only."
 
 # ───────────────────────────────────────────────────────────────────────
+# GPU — fusion-attention-decomp-sweep (slug · group=GPU · GPU.md §10 · round 5)
+# Full dimensional-decomposition sweep (Bq x kv_split x BK x N) of fused flash-
+# attn. Tests the KV-SPLIT (flash-decoding gridDim.z) hypothesis. 153 configs.
+
+@C fusion_attn_decomp_kvsplit := "KV-SPLIT (flash-decoding gridDim.z) CLOSES the small-N occupancy gap — N=512 Bq16: 32->128 CTAs, 0.146->0.058 ms (intra-framework 2.53x), reaching parity with the round-4 single-kernel (0.0568 ms); benefit saturates at ctas_partial>=~48 SMs (kv=8/16 regress)" :: measurement [slug=fusion-attention-decomp-sweep group=GPU]
+  method = "silicon-fire"
+  cmd    = "ubu-2 RTX 5070 (clean, 0 procs) fa_decomp_oracle (CUDA-C nvcuda::wmma flash-decoding 2-kernel partial+LSE-merge) vs fa_cublas_tc_baseline, cuEvent 20 warmup + 200 timed median, 153 configs N{512,1024,2048,4096} x Bq{16,32,64} x kv_split{1,2,4,8,16} x BK{64,128,256} d=64, ALL numeric PASS (rel_rowscale<=1e-2 vs f64 ref)"
+  raw    = ".verdicts/fusion-attention-decomp-sweep/F-FUSION-ATTN-DECOMP-WALL.txt"
+  src    = "archive/fires/fusion_attention_decomp_2026_05_25/{fa_decomp_oracle.cu,sweep_raw.txt}"
+  status = "🟢 SUPPORTED-NUMERICAL — KV-split closes the small-N occupancy gap (measured 2.53x at N=512, 32->128 CTAs). terminal-numerical. (occupancy claim only; NOT a cuBLAS win.)"
+
+@C fusion_attn_decomp_wall := "CLOSED-NEGATIVE: no dimensional decomposition of hand-PTX flash-attn beats cuBLAS-TC (best ratio 3.47x @ N=512); KV-split is a SMALL-N-ONLY lever — its occupancy benefit saturates once N alone fills the 48 SMs while its partial-O HBM round-trip cost grows O(N*split*d), net-negative at N>=2048 (decomp-best 0.668ms vs round-4 single-kernel 0.245ms @N=2048). The GEMM-tile-efficiency wall is fundamental." :: measurement [slug=fusion-attention-decomp-sweep group=GPU]
+  method = "silicon-fire"
+  cmd    = "ubu-2 RTX 5070 (clean) fa_decomp_oracle 153-config sweep vs fa_cublas_tc_baseline; optimum per shape N512 3.47x / N1024 5.88x / N2048 10.82x / N4096 13.17x; round-4 single-kernel cross-reference reproduced"
+  raw    = ".verdicts/fusion-attention-decomp-sweep/F-FUSION-ATTN-DECOMP-WALL.txt"
+  src    = "archive/fires/fusion_attention_decomp_2026_05_25/{fa_decomp_oracle.cu,sweep_raw.txt}"
+  status = "🟠 QUANTIFIED-PARTIAL / closed-negative — KV-split closes the small-N gap (parity w/ round-4) but no decomposition beats cuBLAS; GEMM-tile-efficiency wall confirmed fundamental. sec10 box stays [x], NOT flipped. NOT paper-eligible as a 30% win, but a clean closed-negative on the decomposition axis."
+
+# ───────────────────────────────────────────────────────────────────────
 # TECS-L — tecs-l-dedekind-psi-uniqueness (slug · group=TECS-L · TECS-L/TECS-L.md M3)
 # Dedekind-ψ discrepancy, re-grounded hexa-native via `hexa verify` g5.
 #
@@ -957,3 +976,260 @@
   raw    = ".verdicts/tecs-l-modform-index/idx_n30.txt"
   src    = "MODFORM MF1"
   status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal."
+
+# ───────────────────────────────────────────────────────────────────────
+# TECS-L axis A (MODFORM) — tecs-l-modform-genus (slug · group=TECS-L · MF3)
+# Gamma_0(N) genus recomputed by gamma0_genus. The classical genus-0 set is
+# exactly N in {1,2,3,4,5,6,7,8,9,10,12,13,16,18,25} (15 levels, all g=0 🔵);
+# off that list the genus rises (N=11/14/15/17/19 -> g=1, N=22/23 -> g=2).
+# hexa's gamma0_genus AGREES with every classical/known value (no 🔴). Bridge:
+# Gamma_0(6) genus = 0 (X_0(6) is genus-0 — n=6 modular-curve bridge).
+
+@C tecs_l_mf_genus_sweep := "gamma0_genus(N) = 0 for all 15 classical genus-0 levels N in {1..10,12,13,16,18,25} (15/15 closed-form)" :: experiment [slug=tecs-l-modform-genus group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr gamma0_genus N 0  for N in {1,2,3,4,5,6,7,8,9,10,12,13,16,18,25}"
+  raw    = ".verdicts/tecs-l-modform-genus/genus_sweep.txt"
+  src    = "MODFORM axis MF3 (Gamma_0(N) classical genus-0 set); calc fn gamma0_genus"
+  status = "🔵 SUPPORTED-FORMAL — 15/15 genus=0, verdicts persisted verbatim. terminal."
+
+@C tecs_l_mf_genus_boundary := "gamma0_genus rises off the classical list: N=11/14/15/17/19 -> 1, N=22/23 -> 2 (genus>=1 boundary, 7/7)" :: experiment [slug=tecs-l-modform-genus group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr gamma0_genus N g  for (N,g) in {(11,1),(14,1),(15,1),(17,1),(19,1),(22,2),(23,2)}"
+  raw    = ".verdicts/tecs-l-modform-genus/genus_sweep.txt"
+  src    = "MODFORM MF3 (off-classical genus>=1; matches well-known X_0(N) genus)"
+  status = "🔵 SUPPORTED-FORMAL — 7/7 match known genus values, verdicts persisted verbatim. terminal."
+
+@C tecs_l_mf_genus_n6 := "gamma0_genus(6) = 0 (X_0(6) is genus-0 — n=6 modular-curve bridge, axis 0 M4)" :: formula [slug=tecs-l-modform-genus group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr gamma0_genus 6 0"
+  raw    = ".verdicts/tecs-l-modform-genus/genus_n6.txt"
+  src    = "MODFORM MF6 bridge (axis 0 M4: Gamma_0(6) genus=0)"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal."
+
+@C tecs_l_mf_genus_n1 := "gamma0_genus(1) = 0 (Gamma_0(1) = SL2(Z), X_0(1) = j-line, genus 0)" :: formula [slug=tecs-l-modform-genus group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr gamma0_genus 1 0"
+  raw    = ".verdicts/tecs-l-modform-genus/genus_n1.txt"
+  src    = "MODFORM MF3"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal."
+
+@C tecs_l_mf_genus_n11 := "gamma0_genus(11) = 1 (first genus-1 level — X_0(11) is the conductor-11 elliptic curve)" :: formula [slug=tecs-l-modform-genus group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr gamma0_genus 11 1"
+  raw    = ".verdicts/tecs-l-modform-genus/genus_n11.txt"
+  src    = "MODFORM MF3 (first level off the classical genus-0 list)"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal."
+
+# ───────────────────────────────────────────────────────────────────────
+# TECS-L axis A (MODFORM) — tecs-l-modform-cusps (slug · group=TECS-L · MF2)
+# Gamma_0(N) cusp count c(N) = sum_{d|N} phi(gcd(d, N/d)), recomputed by
+# gamma0_cusps for N=1..30 (all 🔵). Closed-form modular-curve cusp count.
+# Headline bridge: Gamma_0(6) cusps = 4 = tau(6) (n=6, axis-0 M4 connection).
+
+@C tecs_l_mf_cusps_sweep := "gamma0_cusps(N) = sum_{d|N} phi(gcd(d,N/d)) for all N in 1..30 (Gamma_0(N) cusp count, 30/30 closed-form)" :: experiment [slug=tecs-l-modform-cusps group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr gamma0_cusps N c(N)  for N=1..30"
+  raw    = ".verdicts/tecs-l-modform-cusps/cusps_sweep_1_30.txt"
+  src    = "MODFORM axis MF2 (Gamma_0(N) cusp-count formula); calc fn gamma0_cusps"
+  status = "🔵 SUPPORTED-FORMAL — 30/30 closed-form, verdicts persisted verbatim. terminal."
+
+@C tecs_l_mf_cusps_n6 := "gamma0_cusps(6) = 4 = tau(6) (n=6 bridge: modular curve cusp count = divisor count)" :: formula [slug=tecs-l-modform-cusps group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr gamma0_cusps 6 4"
+  raw    = ".verdicts/tecs-l-modform-cusps/cusps_n6.txt"
+  src    = "MODFORM MF6 bridge (axis 0 M4: Gamma_0(6) cusps=tau(6))"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal."
+
+@C tecs_l_mf_cusps_n1 := "gamma0_cusps(1) = 1 (Gamma_0(1) = SL2(Z), single cusp at infinity)" :: formula [slug=tecs-l-modform-cusps group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr gamma0_cusps 1 1"
+  raw    = ".verdicts/tecs-l-modform-cusps/cusps_n1.txt"
+  src    = "MODFORM MF2"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal."
+
+@C tecs_l_mf_cusps_n12 := "gamma0_cusps(12) = 6 (divisors 1,2,3,4,6,12; sum phi(gcd(d,12/d)) = 6)" :: formula [slug=tecs-l-modform-cusps group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr gamma0_cusps 12 6"
+  raw    = ".verdicts/tecs-l-modform-cusps/cusps_n12.txt"
+  src    = "MODFORM MF2"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal."
+
+# ───────────────────────────────────────────────────────────────────────
+# TECS-L axis B (MERSENNE) — tecs-l-mersenne-perfect (slug · group=TECS-L · MR2)
+# Euclid-Euler: M_p = 2^p-1 prime  ==>  2^(p-1)(2^p-1) is perfect.
+# Axis-0 M5/M6 already verified the first 5 perfect numbers
+#   (6, 28, 496, 8128, 33550336 — for p=2,3,5,7,13) — referenced in src, NOT
+# re-verified here. MR2's NEW angle EXTENDS the correspondence to the 6th and
+# 7th perfect numbers, generated by the next two Mersenne-prime exponents:
+#   p=17 -> M17=131071 (prime) -> P6 = 2^16 * 131071  = 8589869056
+#   p=19 -> M19=524287 (prime) -> P7 = 2^18 * 524287  = 137438691328
+# is_perfect(P6)=is_perfect(P7)=1 (🔵) + abundancy=2 (sigma(N)=2N) for both.
+
+@C tecs_l_mersenne_perfect_p6 := "is_perfect(8589869056) = 1 (6th perfect number = 2^16*(2^17-1), M17=131071 Mersenne prime)" :: formula [slug=tecs-l-mersenne-perfect group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr is_perfect 8589869056 1"
+  raw    = ".verdicts/tecs-l-mersenne-perfect/is_perfect_p6.txt"
+  src    = "Euclid-Euler axis B MR2; M17=2^17-1=131071 prime. Axis-0 M5/M6 covered the first 5 perfects (6,28,496,8128,33550336) — not duplicated here."
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal · paper-eligible."
+
+@C tecs_l_mersenne_perfect_p7 := "is_perfect(137438691328) = 1 (7th perfect number = 2^18*(2^19-1), M19=524287 Mersenne prime)" :: formula [slug=tecs-l-mersenne-perfect group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr is_perfect 137438691328 1"
+  raw    = ".verdicts/tecs-l-mersenne-perfect/is_perfect_p7.txt"
+  src    = "Euclid-Euler axis B MR2; M19=2^19-1=524287 prime. Axis-0 M5/M6 covered the first 5 perfects — not duplicated here."
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal · paper-eligible."
+
+@C tecs_l_mersenne_abundancy_p6 := "sigma(8589869056) = 17179738112 = 2*8589869056 (abundancy=2 ⟺ perfect, 6th perfect number)" :: formula [slug=tecs-l-mersenne-perfect group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr sigma 8589869056 17179738112"
+  raw    = ".verdicts/tecs-l-mersenne-perfect/sigma_p6.txt"
+  src    = "abundancy=2 form of Euclid-Euler (axis 0 M6 H18 sigma(N)=2N extended to P6); sigma multiplicative on 2^16*131071."
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal · paper-eligible."
+
+@C tecs_l_mersenne_abundancy_p7 := "sigma(137438691328) = 274877382656 = 2*137438691328 (abundancy=2 ⟺ perfect, 7th perfect number)" :: formula [slug=tecs-l-mersenne-perfect group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr sigma 137438691328 274877382656"
+  raw    = ".verdicts/tecs-l-mersenne-perfect/sigma_p7.txt"
+  src    = "abundancy=2 form of Euclid-Euler (axis 0 M6 H18 sigma(N)=2N extended to P7); sigma multiplicative on 2^18*524287."
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal · paper-eligible."
+
+# ───────────────────────────────────────────────────────────────────────
+# TECS-L — tecs-l-mersenne-composite (slug · group=TECS-L · TECS-L/TECS-L.md MR6)
+# Composite Mersenne numbers with PRIME exponent. A number q is prime iff
+# sigma(q)=q+1 iff tau(q)=2. For M_p = 2^p - 1 with p prime, this is FALSE
+# in general — the first counterexample is M_11 = 2047 = 23*89:
+#   sigma(2047) = 1+23+89+2047 = 2160 != 2048 (= 2047+1)  → NOT prime
+#   tau(2047)   = 4 != 2                                   → NOT prime
+# Also M_23 = 8388607 = 47*178481 (tau=4) and M_29 = 536870911 =
+# 233*1103*2089 (tau=8). The sigma/tau ground values are 🔵; the conclusion
+# "M_p is composite" is the closed deterministic finding they carry.
+#
+# FINDING (terminal 🔵 closed): the CONVERSE of Euclid-Euler fails — p prime
+# does NOT imply M_p prime (M_11 the first counterexample), so not every
+# prime exponent yields a Mersenne prime / perfect number. Grounded in the
+# sigma/tau atoms below (tau(2047)=4 != 2 is the deterministic witness).
+
+# — M_11 = 2047 = 23*89 (first composite Mersenne with prime exponent) —
+@C tecs_l_mr_m11_sigma := "sigma(2047) = 2160 != 2048 (= 2047+1) → M_11 = 2^11-1 is COMPOSITE (= 23*89)" :: formula [slug=tecs-l-mersenne-composite group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr sigma 2047 2160"
+  raw    = ".verdicts/tecs-l-mersenne-composite/m11_sigma.txt"
+  src    = "TECS-L axis B MR6; archive-TECS-L Mersenne thread; sigma prime-test sigma(q)=q+1"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal · paper-eligible."
+
+@C tecs_l_mr_m11_tau := "tau(2047) = 4 != 2 → M_11 = 2^11-1 is COMPOSITE (deterministic prime-test witness)" :: formula [slug=tecs-l-mersenne-composite group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr tau 2047 4"
+  raw    = ".verdicts/tecs-l-mersenne-composite/m11_tau.txt"
+  src    = "TECS-L axis B MR6; tau prime-test tau(q)=2 iff q prime"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal · paper-eligible."
+
+# — M_11 factors 23, 89 (both prime: sigma=q+1, tau=2) —
+@C tecs_l_mr_f23_sigma := "sigma(23) = 24 = 23+1 → 23 is PRIME (factor of M_11)" :: formula [slug=tecs-l-mersenne-composite group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr sigma 23 24"
+  raw    = ".verdicts/tecs-l-mersenne-composite/f23_sigma.txt"
+  src    = "TECS-L axis B MR6; 2047 = 23*89 factor confirmation"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal."
+
+@C tecs_l_mr_f23_tau := "tau(23) = 2 → 23 is PRIME (factor of M_11)" :: formula [slug=tecs-l-mersenne-composite group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr tau 23 2"
+  raw    = ".verdicts/tecs-l-mersenne-composite/f23_tau.txt"
+  src    = "TECS-L axis B MR6; 2047 = 23*89 factor confirmation"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal."
+
+@C tecs_l_mr_f89_sigma := "sigma(89) = 90 = 89+1 → 89 is PRIME (factor of M_11)" :: formula [slug=tecs-l-mersenne-composite group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr sigma 89 90"
+  raw    = ".verdicts/tecs-l-mersenne-composite/f89_sigma.txt"
+  src    = "TECS-L axis B MR6; 2047 = 23*89 factor confirmation"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal."
+
+@C tecs_l_mr_f89_tau := "tau(89) = 2 → 89 is PRIME (factor of M_11)" :: formula [slug=tecs-l-mersenne-composite group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr tau 89 2"
+  raw    = ".verdicts/tecs-l-mersenne-composite/f89_tau.txt"
+  src    = "TECS-L axis B MR6; 2047 = 23*89 factor confirmation"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal."
+
+# — M_23 = 8388607 = 47*178481 (composite, tau=4) —
+@C tecs_l_mr_m23_sigma := "sigma(8388607) = 8567136 != 8388608 → M_23 = 2^23-1 is COMPOSITE (= 47*178481)" :: formula [slug=tecs-l-mersenne-composite group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr sigma 8388607 8567136"
+  raw    = ".verdicts/tecs-l-mersenne-composite/m23_sigma.txt"
+  src    = "TECS-L axis B MR6; M_23 composite (47*178481)"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal."
+
+@C tecs_l_mr_m23_tau := "tau(8388607) = 4 != 2 → M_23 = 2^23-1 is COMPOSITE (deterministic witness)" :: formula [slug=tecs-l-mersenne-composite group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr tau 8388607 4"
+  raw    = ".verdicts/tecs-l-mersenne-composite/m23_tau.txt"
+  src    = "TECS-L axis B MR6; M_23 composite (47*178481)"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal."
+
+# — M_29 = 536870911 = 233*1103*2089 (composite, tau=8) —
+@C tecs_l_mr_m29_sigma := "sigma(536870911) = 539922240 != 536870912 → M_29 = 2^29-1 is COMPOSITE (= 233*1103*2089)" :: formula [slug=tecs-l-mersenne-composite group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr sigma 536870911 539922240"
+  raw    = ".verdicts/tecs-l-mersenne-composite/m29_sigma.txt"
+  src    = "TECS-L axis B MR6; M_29 composite (233*1103*2089)"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal."
+
+@C tecs_l_mr_m29_tau := "tau(536870911) = 8 != 2 → M_29 = 2^29-1 is COMPOSITE (3 distinct prime factors)" :: formula [slug=tecs-l-mersenne-composite group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr tau 536870911 8"
+  raw    = ".verdicts/tecs-l-mersenne-composite/m29_tau.txt"
+  src    = "TECS-L axis B MR6; M_29 composite (233*1103*2089)"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal."
+
+# — M_29 factors 233, 1103, 2089 (all prime: sigma=q+1, tau=2) —
+@C tecs_l_mr_f233_sigma := "sigma(233) = 234 = 233+1 → 233 is PRIME (factor of M_29)" :: formula [slug=tecs-l-mersenne-composite group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr sigma 233 234"
+  raw    = ".verdicts/tecs-l-mersenne-composite/f233_sigma.txt"
+  src    = "TECS-L axis B MR6; M_29 = 233*1103*2089 factor confirmation"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal."
+
+@C tecs_l_mr_f233_tau := "tau(233) = 2 → 233 is PRIME (factor of M_29)" :: formula [slug=tecs-l-mersenne-composite group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr tau 233 2"
+  raw    = ".verdicts/tecs-l-mersenne-composite/f233_tau.txt"
+  src    = "TECS-L axis B MR6; M_29 = 233*1103*2089 factor confirmation"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal."
+
+@C tecs_l_mr_f1103_sigma := "sigma(1103) = 1104 = 1103+1 → 1103 is PRIME (factor of M_29)" :: formula [slug=tecs-l-mersenne-composite group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr sigma 1103 1104"
+  raw    = ".verdicts/tecs-l-mersenne-composite/f1103_sigma.txt"
+  src    = "TECS-L axis B MR6; M_29 = 233*1103*2089 factor confirmation"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal."
+
+@C tecs_l_mr_f1103_tau := "tau(1103) = 2 → 1103 is PRIME (factor of M_29)" :: formula [slug=tecs-l-mersenne-composite group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr tau 1103 2"
+  raw    = ".verdicts/tecs-l-mersenne-composite/f1103_tau.txt"
+  src    = "TECS-L axis B MR6; M_29 = 233*1103*2089 factor confirmation"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal."
+
+@C tecs_l_mr_f2089_sigma := "sigma(2089) = 2090 = 2089+1 → 2089 is PRIME (factor of M_29)" :: formula [slug=tecs-l-mersenne-composite group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr sigma 2089 2090"
+  raw    = ".verdicts/tecs-l-mersenne-composite/f2089_sigma.txt"
+  src    = "TECS-L axis B MR6; M_29 = 233*1103*2089 factor confirmation"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal."
+
+@C tecs_l_mr_f2089_tau := "tau(2089) = 2 → 2089 is PRIME (factor of M_29)" :: formula [slug=tecs-l-mersenne-composite group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr tau 2089 2"
+  raw    = ".verdicts/tecs-l-mersenne-composite/f2089_tau.txt"
+  src    = "TECS-L axis B MR6; M_29 = 233*1103*2089 factor confirmation"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal."
+
+# — FINDING (terminal): converse of Euclid-Euler fails —
+@C tecs_l_mr_finding := "p prime does NOT imply M_p = 2^p-1 prime — M_11 = 2047 = 23*89 is the first counterexample (sigma=2160 != 2048, tau=4 != 2); thus not every prime exponent yields a perfect number" :: formula [slug=tecs-l-mersenne-composite group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr tau 2047 4"
+  raw    = ".verdicts/tecs-l-mersenne-composite/m11_tau.txt"
+  src    = "TECS-L axis B MR6 finding; grounded in m11 sigma/tau atoms (tau(2047)=4!=2 deterministic witness)"
+  status = "🔵 SUPPORTED-FORMAL — closed converse-failure finding; grounded in m11 sigma/tau atoms. terminal · paper-eligible."

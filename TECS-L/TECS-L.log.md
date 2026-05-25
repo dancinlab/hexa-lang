@@ -3,6 +3,56 @@
 Append-only history sister of `TECS-L.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
 
+## 2026-05-25T21:00 — 축 B MERSENNE · MR2 6·7번째 완전수 (Euclid-Euler 확장)
+
+- [x] Euclid-Euler: M_p=2^p−1 소수 ⟹ 2^{p-1}(2^p−1) 완전수. 축 0 M5/M6 이 첫 5개(p=2,3,5,7,13 → 6·28·496·8128·33550336)를 이미 🔵 처리 → MR2 는 **다음 두 메르센 지수로 6·7번째 완전수 확장** (중복검증 없이 src 참조만)
+- [x] p=17 → M17=2^17−1=131071 (소수) → **P6 = 2^16·131071 = 8589869056 · `is_perfect`=1 🔵** (`is_perfect_p6.txt`)
+- [x] p=19 → M19=2^19−1=524287 (소수) → **P7 = 2^18·524287 = 137438691328 · `is_perfect`=1 🔵** (`is_perfect_p7.txt`)
+- [x] abundancy=2 (σ(N)=2N ⟺ perfect, 축 0 M6 H18 확장): σ(P6)=17179738112=2·P6 🔵 · σ(P7)=274877382656=2·P7 🔵 (`sigma_p6.txt`·`sigma_p7.txt`)
+- [x] `is_perfect`/`sigma` 둘 다 닫힌형이라 ~8.6e9·~1.37e11 대수도 <0.05s — P7 deferral 불필요, 4/4 verdict 영속화
+- [x] CLAIMS slug=tecs-l-mersenne-perfect 4 entry (P6·P7 is_perfect + P6·P7 abundancy, 1:1, orphan 없음)
+- [ ] MR3 abundancy 닫힌형 일반화 · MR4 Lucas-Lehmer hexa-native (다음 라운드)
+
+
+## 2026-05-25T21:00 — 축 B MERSENNE · MR6 메르센 합성수 (p 소수 ⇏ M_p 소수) CLOSED
+
+- [x] **헤드라인: Euclid-Euler 가설의 역명제 실패** — p 가 소수여도 M_p=2^p−1 은 소수가 아닐 수 있다. 첫 반례 = M_11=2047
+- [x] 소수 판정 항등식 q 소수 ⟺ σ(q)=q+1 ⟺ τ(q)=2 를 `hexa verify --expr` 로 결정적 적용
+- [x] **M_11=2047**: σ(2047)=2160 ≠ 2048(=2047+1) 🔵 · τ(2047)=4 ≠ 2 🔵 → **합성수 (=23·89)**. 인수 23·89 도 각각 소수 확인 (σ=q+1·τ=2)
+- [x] M_23=8388607: σ=8567136·τ=4 → 합성 (=47·178481) 🔵. M_29=536870911: σ=539922240·τ=8 → 합성 (=233·1103·2089) 🔵 (인수 233·1103·2089 각 소수 확인)
+- [x] M_29(~5.4e8)도 verify 빠르게 통과(<0.3s) — 표본 3개 전부 hexa-native 검증 완료
+- [x] 17 claim / 16 verdict 영속화 → `.verdicts/tecs-l-mersenne-composite/` · `CLAIMS.tape` slug=tecs-l-mersenne-composite (finding 1건은 m11_tau 원본을 deterministic witness 로 인용)
+- [x] **finding (terminal 🔵)**: M_11 이 첫 반례 → 모든 소수지수가 완전수를 낳는 것은 아님 (Euclid-Euler 짝완전수 생성은 M_p 가 *소수*일 때만 — MR2 와 짝)
+- [ ] MR7 odd perfect number 부재 (미해결 정직 문서화) · MR8 terminal → /paper (다음 라운드)
+## 2026-05-25T14:30 — 축 E 신설 (Atlas 개선/성장) + 1차 fold 6 atom
+
+- [x] 사용자 directive: "atlas 개선사항 함께 진행 + TECS-L 축으로 등록" → 축 E (Atlas 개선/성장) 신설
+- [x] atlas 상태 점검: 16103 노드, audit drift=0 clean. 단 TECS-L 이번 발견은 atlas 미등록(no `tecs`/`verified-*` for our atoms) — verify/CLAIMS엔 있으나 atlas atom 아님
+- [x] E1 1차 fold (6 atom): `hexa atlas register --from-verify` → τ(496/8128/33550336)=string-dim · is_perfect(8589869056) · Γ₀(6) genus=0/cusps=4 → embedded.gen.hexa 16103→16109
+- [x] **register install-dir 해저드 발견·회수**: register 는 cwd 무관 install-dir(공유 main 트리=타 에이전트 antimatter 브랜치) 의 embedded.gen 에 fold → leak. `git diff>patch` → 공유트리 `checkout --` 회수 → worktree `git apply` (stray pair_threshold_factor-1 타 에이전트분 strip) → PR. 축 E E3 에 직렬화 패턴 기록
+- [ ] E2 atlas health 정기점검 · E3 register 직렬화 (perpetual)
+
+
+## 2026-05-25T14:35 — 축 A MODFORM · MF2 Γ₀(N) cusp 수 (n=6↔τ 다리)
+
+- [x] c(N)=Σ_{d|N} φ(gcd(d,N/d)) 닫힌형 = hexa `gamma0_cusps`: **N=1..30 전수 30/30 🔵** (`cusps_sweep_1_30.txt`)
+- [x] n=6 bridge: Γ₀(6) cusps=4=τ(6) (축 0 M4 연계 — 완전수 약수개수 = 모듈러곡선 cusp 수) · Γ₀(1)=1 (SL2(Z) ∞ 단일 cusp) · Γ₀(12)=6
+- [x] CLAIMS slug=tecs-l-modform-cusps 4 entry (sweep + 3 headline N=6/1/12, raw 1:1). MF1 index 와 같은 패턴
+- [x] verify-gate 통과(정상) — 30개 verdict 영속화. (참고: 첫 스윕 zsh 1-index 배열 오프바이원으로 오판정 → python 생성 expected 직접 주입으로 정정)
+- [ ] MF4 dim S₂ 관계 · MF5 Jacobi/Kronecker (다음 라운드)
+
+
+## 2026-05-25T14:30 — 축 A MODFORM · MF3 Γ₀(N) genus 고전 genus-0 전수
+
+- [x] 고전 genus-0 15개 N∈{1,2,3,4,5,6,7,8,9,10,12,13,16,18,25} `gamma0_genus`=0 verify **15/15 🔵** (`genus_sweep.txt`)
+- [x] genus≥1 경계 7/7 🔵: N=11/14/15/17/19→1, N=22/23→2 — 고전 리스트 밖에서 genus 상승 실증
+- [x] hexa `gamma0_genus` 가 모든 고전/기지값과 **완전 일치 — 🔴 불일치 0** (강제맞춤 불필요, 정직 판정)
+- [x] **헤드라인: Γ₀(6) genus=0** (X₀(6) genus-0 — n=6 모듈러곡선 bridge, 축 0 M4 연계). 헤드라인 개별 verdict N=6→0 · N=11→1 · N=1→0
+- [x] CLAIMS slug=tecs-l-modform-genus 6 entry (sweep + boundary + 4 headline, 1:1 포인터). 22 raw verdict 영속화
+- [x] `hexa verify` 게이트 미적용 (로컬 실행 성공) — verify-ran (게이트 caveat 불필요)
+- [ ] MF2 cusp 수 · MF4 dim S₂=genus 관계 · MF5 Jacobi/Kronecker (다음 라운드)
+
+
 ## 2026-05-25T14:00 — 축 A MODFORM · MF1 Γ₀(N) index (영구 엔진 첫 전진)
 
 - [x] ψ(N)=N∏_{p|N}(1+1/p) 닫힌형 = hexa `gamma0_index`: **N=1..30 전수 30/30 🔵** (`index_sweep_1_30.txt`)

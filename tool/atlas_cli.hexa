@@ -32,6 +32,7 @@ use "compiler/atlas/static_index"
 use "compiler/atlas/cascade"       // cascade_candidates / cascade_to_text — read-only cascade-invalidation query (R5 #1026)
 use "compiler/atlas/atlas_diff"    // cmd_diff — diff two atlas sources (R6)
 use "compiler/atlas/proof_chain"   // proof_chain / proof_to_text / proof_to_json — read-only proof-chain export (R6)
+use "compiler/atlas/auto_edge"     // infer_edges / infer_proposals_to_text/json — read-only auto-edge inference (R7)
 use "compiler/atlas/embed_fold"    // embed_fold_into (kind,id dedup + atomic write)
 use "compiler/atlas/calc_dispatch" // calc_eps / calc_is_float_fn — float-recompute SSOT (shared w/ verify_cli)
 use "self/stdlib/fs"               // read_file_safe (used by cmd_append_witness)
@@ -50,7 +51,7 @@ fn _slice_args() -> array {
     let mut i = 1
     while i < n {
         let a = to_string(av[i])
-        if a == "lookup" || a == "dump" || a == "stats" || a == "hash" || a == "register" || a == "export" || a == "diff" || a == "reverify" || a == "cascade" || a == "proof" || a == "--help" || a == "-h" || a == "help" {
+        if a == "lookup" || a == "dump" || a == "stats" || a == "hash" || a == "register" || a == "export" || a == "diff" || a == "reverify" || a == "cascade" || a == "proof" || a == "infer-edges" || a == "--help" || a == "-h" || a == "help" {
             let mut out = []
             let mut j = i
             while j < n {
@@ -2646,6 +2647,43 @@ fn cmd_proof(rest: array) {
     else { print(proof_to_text(id, links)) }
 }
 
+// cmd_infer_edges — INFER candidate edges for a node (R7). Scans <id>'s raw
+// text for whole-identifier references to OTHER real atlas ids that are NOT
+// already in its declared edges, and PROPOSES them (guessed kind depends_on
+// + evidence line). False-positive guard: maximal id-char-run tokenization
+// is a strict word-boundary match (`divisor_sum` never matches id `n`).
+// READ-ONLY — proposals only, NEVER folds edges into embedded.gen.hexa.
+//   hexa atlas infer-edges <id> [--format=json]
+fn cmd_infer_edges(rest: array) {
+    let mut id = ""
+    let mut json_mode = false
+    let mut i = 0
+    while i < len(rest) {
+        let a = to_string(rest[i])
+        if a == "--format=json" || a == "--json" { json_mode = true }
+        else if a == "--format=text" { json_mode = false }
+        else if len(id) == 0 && !a.starts_with("--") { id = a }
+        i = i + 1
+    }
+    if len(id) == 0 {
+        println("usage: hexa atlas infer-edges <id> [--format=json]")
+        println("       proposes undeclared id references in <id>'s raw as candidate edges (read-only)")
+        exit(2)
+    }
+    let node = atlas_lookup_enriched(id)
+    if node.kind == "" {
+        if json_mode {
+            println("{\"source\":\"" + _jq(id) + "\",\"found\":false,\"count\":0,\"proposals\":[]}")
+        } else {
+            println("# unknown id: " + id + " (no such node in the atlas)")
+        }
+        exit(1)
+    }
+    let props = infer_edges(id)
+    if json_mode { println(infer_proposals_to_json(id, props)) }
+    else { print(infer_proposals_to_text(id, props)) }
+}
+
 fn cmd_help() {
     println("hexa atlas — atlas SSOT surface (embedded.gen.hexa read + direct-fold write)")
     println("")
@@ -2702,6 +2740,13 @@ fn cmd_help() {
     println("                          rests on. ordered chain + per-node tier (🟢/🟡/🟠) shows if")
     println("                          it grounds out in verified nodes. cycle-safe · unknown id → exit 1.")
     println("")
+    println("infer-edges subcommand (read-only auto-edge inference; proposals only · no fold):")
+    println("  infer-edges <id> [--format=json]")
+    println("                          scan <id>'s raw for whole-identifier references to OTHER atlas")
+    println("                          ids NOT already in its declared edges → propose them as candidate")
+    println("                          edges (kind depends_on + evidence). maximal id-token match guards")
+    println("                          substring noise. NEVER folds into embedded.gen. unknown id → exit 1.")
+    println("")
     println("SSOT: compiler/atlas/embedded.gen.hexa (set $HEXA_ATLAS_EMBED=/abs/dir to override).")
 }
 
@@ -2728,6 +2773,7 @@ fn main() {
     else if sub == "reverify" { cmd_reverify(rest) }
     else if sub == "cascade" { cmd_cascade(rest) }
     else if sub == "proof" { cmd_proof(rest) }
+    else if sub == "infer-edges" { cmd_infer_edges(rest) }
     else if sub == "help" || sub == "--help" || sub == "-h" { cmd_help() }
     else {
         println("error: unknown subcommand: " + sub)
