@@ -126,6 +126,7 @@ fn cmd_stats(rest: array) {
     // when --audit, rodata otherwise for backward compat).
     let mut do_audit = false
     let mut do_acq = false
+    let mut do_num = false
     let mut acq_top = 20
     let mut fmt = "text"
     let mut audit_scope = ""
@@ -135,6 +136,7 @@ fn cmd_stats(rest: array) {
         let a = to_string(rest[i])
         if a == "--audit" { do_audit = true; i = i + 1 }
         else if a == "--acquisition" { do_acq = true; i = i + 1 }
+        else if a == "--numerology" { do_num = true; i = i + 1 }
         else if a.starts_with("--top=") { acq_top = to_int(a.substring(6, len(a))); i = i + 1 }
         else if a == "--format=json" || a == "--json" { fmt = "json"; i = i + 1 }
         else if a == "--format=text" { fmt = "text"; i = i + 1 }
@@ -151,6 +153,17 @@ fn cmd_stats(rest: array) {
                    else { audit_acquisition_merged(acq_top) }
         if fmt == "json" { println(acquisition_to_json(arep)) }
         else { print(acquisition_to_text(arep)) }
+        return
+    }
+    // Numerology quarantine tier (R7): isolate coincidence-claim nodes that
+    // carry no derivation / citation, so they aren't mixed with rigor.
+    if do_num {
+        if len(audit_scope) == 0 { audit_scope = "merged" }
+        let nrep = if audit_scope == "rodata" { audit_numerology_rodata() }
+                   else if audit_scope == "overlay" { audit_numerology_overlay() }
+                   else { audit_numerology_merged() }
+        if fmt == "json" { println(numerology_to_json(nrep)) }
+        else { print(numerology_to_text(nrep)) }
         return
     }
     if !do_audit {
@@ -2516,6 +2529,8 @@ fn cmd_help() {
     println("                          rich audit (grades / dups / orphans / breakthroughs)")
     println("  stats --acquisition [--top=N] [--scope=...] [--format=json]")
     println("                          ranked acquire-next frontier (Q / 🟡 cite-only / 🟠 insufficient)")
+    println("  stats --numerology [--scope=rodata|overlay|merged] [--format=json]")
+    println("                          quarantine tier: coincidence-claim nodes w/ no derivation/cite")
     println("  lookup <id>             search all 9 kinds for matching id")
     println("  lookup <K> <id>         restrict to one kind (K ∈ {P|C|L|E|F|R|S|X|Q})")
     println("  lookup --prefix=<p>     list nodes whose id starts with <p>")
