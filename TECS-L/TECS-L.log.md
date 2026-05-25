@@ -3,6 +3,16 @@
 Append-only history sister of `TECS-L.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
 
+## 2026-05-25T13:13 — 축 A MF6 · n=6 modular bridge synthesis (Γ₀(6) 4 불변량 통합)
+
+- [x] **synthesis 명제**: Γ₀(6) / X₀(6) 모듈러 곡선의 모든 핵심 불변량(index · cusps · weight · genus · |AL|)이 n=6 의 산술함수(σ · τ · φ · ω) 값으로 환원
+- [x] 통일 표 5행: ψ(6)=12=σ(6) (MF1) · c(6)=4=τ(6) (MF2) · g(X₀(6))=0 (MF3, 고전 genus-0) · weight=4=τ(6) (MF7) · |AL|=4=2^ω(6) (MF7 closed-form)
+- [x] **method = synthesis only** (신규 verify 호출 0). 모든 셀이 기존 4 슬러그(MF1/MF2/MF3/MF7) 의 🔵 verdict 파일 verbatim 인용 + 1 🟡 AL closed-form citation
+- [x] n=6 특수 구조 명시: 6=2·3 (squarefree, ω=2) → 작은 AL 군 · σ=2n (perfect) → 풍부한 index · genus-0 → rational curve
+- [x] synthesis artifact 1 + 한글 문서 1 → `.verdicts/tecs-l-modform-n6-bridge/n6_bridge_table.txt` (ASCII-only) · `TECS-L/docs/mf6-n6-modular-bridge.md`
+- [x] CLAIMS.tape 1 @C entry slug=tecs-l-modform-n6-bridge group=TECS-L (tier 🟢 SYNTHESIS-REASONED)
+- [x] 축 0 M4 의 Γ₀(6) 맛보기를 MF1/MF2/MF3/MF7 의 N 전반 sweep 결과 위에 다시 얹어 통합
+
 ## 2026-05-25T18:00 — 축 E E2 · atlas health audit + binary vs source divergence 발견
 
 - [x] audit: stats --audit merged·clean, 16101 entries (binary 내부 정합)
