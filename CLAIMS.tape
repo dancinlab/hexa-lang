@@ -2183,3 +2183,25 @@
   raw    = ".verdicts/oeis-scanner-poc/scan_log.txt"
   src    = "OEIS/tool/scanner.hexa (stripped.gz bulk dump + exec_with_status awk hash-intersect). Per-hit hexa verify --expr re-confirm deferred to O3. CC-BY-SA upstream cited per OEIS/OEIS.md §2 governance."
   status = "🟢 empirical scanner — 6/899 hit (0.67%) on first 1000 OEIS A-lines, K=10 hash-intersect against 20 candidate hexa-native fn. Reproducible. NOT terminal arithmetic claim (per-hit verify = O3 milestone)."
+
+# ───────────────────────────────────────────────────────────────────────
+# OEIS — oeis-dlmf-probe (slug · group=OEIS · O6)
+# Feasibility probe: does the OEIS exact-integer hash-intersect catalogue-
+# mirror pattern generalize to DLMF (NIST special-functions library)?
+# CLOSED-NEGATIVE: it does NOT, as-is. Two of three preconditions FAIL
+# deterministically — (P1) DLMF has no bulk numeric corpus (per-page MathML,
+# no stripped.gz-equivalent, no API); (P3) hexa verify --expr exposes ZERO
+# classical special functions (no Bessel/Gamma(z)/erf/Hermite/Legendre/Airy/
+# zeta/hypergeometric — only number-theoretic integer fns + RFC-045 constants).
+# OEIS = {id->integer tuple} (uniform, exact-hashable); DLMF = {id->symbolic
+# identity OR continuous f} (heterogeneous, not tuple-hashable). The falsified
+# property = pattern portability. A DLMF mirror would need a DIFFERENT
+# mechanism (numeric sampling + tolerance) + a hexa special-fn library — both
+# substantial new work, not a same-pattern reuse. paper_negative_ok.
+
+@C oeis_dlmf_probe := "O6 DLMF catalogue-mirror feasibility: the OEIS exact-integer hash-intersect pattern does NOT generalize to DLMF as-is. P1 BULK-CORPUS FAIL (DLMF = per-page MathML, no bulk numeric dump/API per WebFetch dlmf.nist.gov/about+/help) + P3 HEXA-COVERAGE FAIL (hexa verify --expr has ZERO classical special fns: no bessel/gamma(z)/erf/hermite/legendre/airy/zeta/hypergeom; gamma0_index is the MODULAR index, not Gamma function). Structural: OEIS={id->integer tuple, exact-hashable} vs DLMF={id->symbolic identity OR continuous f, not tuple-hashable}. Sub-opts: (A) numeric-table intersect blocked by no-source AND no-special-fns AND exact-hash->tolerance mechanism mismatch; (B) identity-citation rejected by OEIS-domain governance (naive-dump-forbidden + verify-gated-only); (C) closed-negative ADOPTED. Ruled-out axis = pattern portability to symbolic-identity catalogues" :: synthesis [slug=oeis-dlmf-probe group=OEIS]
+  method = "feasibility"
+  cmd    = "WebFetch dlmf.nist.gov/about + /help (no bulk dump/API) ; hexa verify rubric (special-fn registry = 0 classical) → .verdicts/oeis-dlmf-probe/dlmf_assessment.txt"
+  raw    = ".verdicts/oeis-dlmf-probe/dlmf_assessment.txt"
+  src    = "OEIS/docs/o6-dlmf-feasibility.md (§1 pattern recap · §2 DLMF structure · §3 A/B/C sub-options · §4 verdict + ruled-out axis · §5 hexa special-fn availability). Evidence: WebFetch dlmf.nist.gov 2026-05-25 + `hexa verify rubric`."
+  status = "🔴 FALSIFIED (closed-negative) — OEIS catalogue-mirror pattern does NOT generalize to DLMF as-is. Falsified property = pattern portability (P1 no bulk corpus + P3 no hexa special-fns, two independent fails). A DLMF mirror needs a different mechanism (numeric sampling + tolerance) + a hexa special-fn library — both substantial new work. Terminal · paper-eligible (paper_negative_ok)."

@@ -23,7 +23,7 @@ precompute + hash 교집합 (O(N), 수 초) 으로 wall-time 절감. fold scope 
 - [ ] O3 — match 별 hexa verify 재확인 (~수백~수천 hit 예상) + 🔵/🟡 tier 분류
 - [ ] O4 — atlas auto-fold (verified 만) + dedup against existing atlas 16K nodes
 - [ ] O5 — TECS-L F11 cross-link PR (OEIS atlas → TECS-L cite) + reuse edge 등록 (g67 NEXUS.tape)
-- [ ] O6 — DLMF 카탈로그 family 확장 시도 (특수함수 ID + 항등식) — same 패턴 재사용
+- [x] O6 — DLMF feasibility: 🔴 FALSIFIED (closed-negative). OEIS exact-integer hash-intersect 패턴은 DLMF 로 일반화 안 됨 — structurally incompatible (P1 bulk 수치 corpus 부재 + P3 hexa 고전 특수함수 0개, 2개 독립 fail). sampling-intersect 도 메커니즘 다르고 hexa 특수함수 라이브러리 부재로 차단. docs/o6-dlmf-feasibility.md.
 - [ ] O7 — catalogue closure report + 미러 unique pattern 발견 시 closed-negative / closed-positive paper
 - [ ] O8 — paper (paper_on_discovery: catalogue mirror 가 새 identity 를 surface 한 경우만)
 
