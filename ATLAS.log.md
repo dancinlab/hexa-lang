@@ -2,6 +2,46 @@
 
 Append-only step log for the theorem-atlas upgrade campaign. Newest on top.
 
+## 2026-05-25 — R5 active-acquisition 랭킹 (Q / 🟡 / 🟠 프론티어 우선순위)
+
+audit 축은 코퍼스를 **측정**만 했다. R5는 그 측정을 **우선순위 to-acquire 리스트**로 전환 —
+동결-but-미검증/open 노드 중 "다음에 검증/획득할 최고가치 타깃"을 랭킹. 순수 read-only
+(노드 무변경 · fold 없음). `compiler/atlas/audit.hexa` 소유 라운드.
+
+**verdict-tier 매핑 (ATLAS.md 모델)**:
+- 🟠 INSUFFICIENT — cite-bearing kind(F/L/P/R) · 인용증거 無(`cite=`/`|>`) · 검증등급[*] 無.
+  가장 깊은 갭: provenance도 재계산도 없는 공식 주장.
+- 🟡 CITATION-ONLY — cite-bearing & 인용有 but [*]-미검증. 등록됐으나 재계산 안 됨.
+- Q OPEN-QUESTION — kind "Q" open question (discovery 프론티어).
+- verified[*](🔵/🟢)는 프론티어 아님 → 제외.
+
+**defensible composite priority** = tier_weight + domain_gap_weight + kind_weight:
+- tier: 🟠=300 🟡=200 Q=100 (깊은 갭 우선). domain_gap: clamp(60-domain_size,0,60) —
+  sparse 도메인(#958 coverage 축 활용) 우선 = 거기 획득이 under-covered 도메인을 더 움직임.
+  kind: F=8 L=6 P=4 R=2 Q=0. 동률은 id-순(오래된=foundational 우선).
+
+**구현(additive·minimal)**:
+- [x] compiler/atlas/audit.hexa — `AcqItem`/`AcqReport` struct + `audit_acquisition_with_scope`
+  (2패스: 도메인 sibling-count → 프론티어 아이템+priority, selection-sort desc, top_k slice) +
+  `audit_acquisition_overlay` + `acquisition_to_text`/`acquisition_to_json`. 기존 헬퍼
+  (`_kind_is_cite_bearing`/`_node_has_cite`/`_extract_domain`/`_bucket_bump`) 재사용.
+- [x] compiler/atlas/audit_rodata.hexa — `audit_acquisition_rodata`/`_merged` rodata-aware 래퍼
+  (`audit_rodata`/`_merged` 패턴 미러).
+- [x] tool/atlas_cli.hexa — `cmd_stats`에 `--acquisition`/`--top=N` 플래그 + 1-블록 dispatch
+  (`--audit` 분기 前 early-return, 기존 경로 무회귀) + help 2줄. (sibling R5가 같은 파일
+  소유 → rebase 시 KEEP BOTH 예상).
+
+**검증**: parse-gate 3파일 OK. bin/hexa-atlas 빌드 PASS(borrowed transpiler ·
+`SIDECAR_NO_POOL_ROUTE=1` · HEXA_MODULE_LOADER 명시). 기능 실측(rodata):
+- 프론티어 2152 = 🟠 1709 + 🟡 360 + Q 83 (서브카운트 합 = frontier_count ✓).
+- 불변식: 🟡(360) ⊆ cite_present(458) · 🟠(1709) ⊆ cite_missing(8194) ·
+  verified F/L/P/R 6583 정확히 제외 · priority 단조감소(sort 정합) · JSON well-formed.
+- overlay scope = 0 clean-degrade · default=merged · `--audit`/plain stats 무회귀.
+- top-1 = 🟠 F:L6-genetics-mutation-rate p=367 dom=genetics_applied(1) — sparse-domain
+  미검증 공식이 정확히 최상위로 surface.
+
+후속(이월): domain×tier 매트릭스 · 프론티어 → drill seed 자동 공급 (acquire 루프 클로즈).
+
 ## 2026-05-25 — R4 calc_dispatch SSOT (verify↔atlas float 미러 단일화 · META-SIGNAL ①)
 
 float-recompute 미러 이중화가 drift 뿌리(R3 reverify 3노드 drift · wigner #957 동일 클래스).

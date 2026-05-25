@@ -16,10 +16,11 @@ SSOT = `compiler/atlas/embedded.gen.hexa` (런타임 TEXT-parse). 등록 = `hexa
 - [x] R3: re-verify-🟢 부활 — `hexa atlas reverify [--limit N]` read-only drift 리포트(35노드 중 3 DRIFT 실측). 동결 등록 verdict in-process 재계산 (META-SIGNAL ② 첫 슬라이스)
 - [x] R3: lookup on-disk offset 색인 — 단일 `lookup <id>`가 16k-노드 풀파싱 회피, 해당 노드 1줄만 seek+파싱. byte-identical(47-id 샘플 PASS) + unhealthy-index 풀파싱 폴백. ~3.9x user-CPU 가속 (offset_index.hexa)
 - [x] R4: calc_dispatch.hexa SSOT 모듈 신설 — float 멤버십 술어(`calc_is_float_fn` 99-fn · `calc_is_zero_arg_float_fn` 8-fn) + ε(`calc_eps`=1e-9)를 단일 홈으로 호이스팅. verify_cli·atlas_cli 양쪽 `use` (META-SIGNAL ① 멤버십+ε 슬라이스). 양 바이너리 LINK PASS(핵심 위험 해소) · reverify byte-identical(36/32/3/1) · verify --expr·register 동작 불변. R3 실측 36-fn 멤버십 갭(99 vs 63) 제거 — float fn 추가는 이제 verify↔atlas 미러 동기 불필요, calc_dispatch 1곳만 편집
+- [x] R5: active-acquisition 랭킹(Q/🟡/🟠) — `hexa atlas stats --acquisition [--top=N] [--scope] [--format=json]` 신규 read-only 축. 동결-but-미검증/open 노드를 composite priority(tier+domain-gap+kind)로 정렬한 "다음 검증/획득 프론티어" 출력. 실측 rodata 프론티어 2152 = 🟠 1709(cite-bearing·무인용·무재계산) + 🟡 360(인용·미재계산) + Q 83. 검증 불변식 PASS(서브카운트 합=총, 🟡⊆cite_present, 🟠⊆cite_missing, verified[*] 6583 제외, priority 단조감소). audit.hexa 소유 + atlas_cli 1-블록 dispatch wire
 
 ## deferred (다음 라운드)
 
-calc_dispatch recompute-helper 풀 이동(R4 잔여: `_recompute_float`의 ~99 per-fn 계산 helper ~2200줄 — g4 200-LOC·link-risk로 별도 PR; atlas register는 이미 `hexa verify --expr` shell-out 위임이라 register-side 미러는 dead-code, reverify만 live subset) · falsifier 구조화 필드 + cascade 무효화 · numerology 격리 tier · active-acquisition 랭킹(Q/🟡/🟠) · reverify 확장(비-F kind · drift→자동 재등록) · 신규역량(MCP/API·시맨틱검색·proof-chain export·auto-edge 추론·atlas diff)
+calc_dispatch recompute-helper 풀 이동(R4 잔여: `_recompute_float`의 ~99 per-fn 계산 helper ~2200줄 — g4 200-LOC·link-risk로 별도 PR; atlas register는 이미 `hexa verify --expr` shell-out 위임이라 register-side 미러는 dead-code, reverify만 live subset) · falsifier 구조화 필드 + cascade 무효화 · numerology 격리 tier · reverify 확장(비-F kind · drift→자동 재등록) · acquisition 랭킹 후속(domain×tier 매트릭스 · 프론티어→drill seed 자동 공급) · 신규역량(MCP/API·시맨틱검색·proof-chain export·auto-edge 추론·atlas diff)
 
 ## 방법
 

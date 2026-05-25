@@ -122,6 +122,8 @@ fn cmd_stats(rest: array) {
     // (machine-readable), --scope=rodata|overlay|merged (default merged
     // when --audit, rodata otherwise for backward compat).
     let mut do_audit = false
+    let mut do_acq = false
+    let mut acq_top = 20
     let mut fmt = "text"
     let mut audit_scope = ""
     let mut i = 0
@@ -129,12 +131,24 @@ fn cmd_stats(rest: array) {
     while i < n {
         let a = to_string(rest[i])
         if a == "--audit" { do_audit = true; i = i + 1 }
+        else if a == "--acquisition" { do_acq = true; i = i + 1 }
+        else if a.starts_with("--top=") { acq_top = to_int(a.substring(6, len(a))); i = i + 1 }
         else if a == "--format=json" || a == "--json" { fmt = "json"; i = i + 1 }
         else if a == "--format=text" { fmt = "text"; i = i + 1 }
         else if a == "--scope=rodata" { audit_scope = "rodata"; i = i + 1 }
         else if a == "--scope=overlay" { audit_scope = "overlay"; i = i + 1 }
         else if a == "--scope=merged" { audit_scope = "merged"; i = i + 1 }
         else { i = i + 1 }
+    }
+    // Acquisition-frontier ranking (R5): Q / 🟡 / 🟠 prioritization.
+    if do_acq {
+        if len(audit_scope) == 0 { audit_scope = "merged" }
+        let arep = if audit_scope == "rodata" { audit_acquisition_rodata(acq_top) }
+                   else if audit_scope == "overlay" { audit_acquisition_overlay(acq_top) }
+                   else { audit_acquisition_merged(acq_top) }
+        if fmt == "json" { println(acquisition_to_json(arep)) }
+        else { print(acquisition_to_text(arep)) }
+        return
     }
     if !do_audit {
         // Legacy compact stats — keep stable for callers / CI pinning.
@@ -2369,6 +2383,8 @@ fn cmd_help() {
     println("  stats                   per-kind counts + ATLAS_HASH + source_count")
     println("  stats --audit [--scope=rodata|overlay|merged] [--format=json]")
     println("                          rich audit (grades / dups / orphans / breakthroughs)")
+    println("  stats --acquisition [--top=N] [--scope=...] [--format=json]")
+    println("                          ranked acquire-next frontier (Q / 🟡 cite-only / 🟠 insufficient)")
     println("  lookup <id>             search all 9 kinds for matching id")
     println("  lookup <K> <id>         restrict to one kind (K ∈ {P|C|L|E|F|R|S|X|Q})")
     println("  lookup --prefix=<p>     list nodes whose id starts with <p>")
