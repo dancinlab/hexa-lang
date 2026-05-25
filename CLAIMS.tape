@@ -447,3 +447,99 @@
   raw    = ".verdicts/tecs-l-n6-characterizations/n6_conductor.txt"
   src    = "archive-TECS-L math/README.md line 677 (Conductor = n² = 36)"
   status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal · paper-eligible."
+
+# ───────────────────────────────────────────────────────────────────────
+# TECS-L — tecs-l-arith-stdlib (slug · group=TECS-L · TECS-L.md M2)
+# hexa-native arithmetic stdlib module σ/τ/φ/sopfr (stdlib/core/math.hexa),
+# replacing archive-TECS-L Python model_utils.py. Each public function's
+# known value at n∈{1,6,12,28} is cross-checked against the authoritative
+# `hexa verify --expr` g5 recompute (🔵 SUPPORTED-FORMAL) and persisted
+# verbatim. sopfr is unit-tested in stdlib/core/math_numtheory_test.hexa
+# (textbook prime-factor sums — no --expr handle in the verify binary).
+
+# — sigma(n) = Σ_{d|n} d (divisor sum) —
+@C tecs_l_arith_sigma_1 := "sigma(1) = 1 (stdlib core/math sigma, divisor sum)" :: formula [slug=tecs-l-arith-stdlib group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr sigma 1 1"
+  raw    = ".verdicts/tecs-l-arith-stdlib/sigma_1.txt"
+  src    = "stdlib/core/math.hexa sigma · archive-TECS-L model_utils.py"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim."
+
+@C tecs_l_arith_sigma_6 := "sigma(6) = 12 (stdlib core/math sigma, divisor sum)" :: formula [slug=tecs-l-arith-stdlib group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr sigma 6 12"
+  raw    = ".verdicts/tecs-l-arith-stdlib/sigma_6.txt"
+  src    = "stdlib/core/math.hexa sigma · archive-TECS-L model_utils.py"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim."
+
+@C tecs_l_arith_sigma_12 := "sigma(12) = 28 (stdlib core/math sigma, divisor sum)" :: formula [slug=tecs-l-arith-stdlib group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr sigma 12 28"
+  raw    = ".verdicts/tecs-l-arith-stdlib/sigma_12.txt"
+  src    = "stdlib/core/math.hexa sigma · archive-TECS-L model_utils.py"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim."
+
+@C tecs_l_arith_sigma_28 := "sigma(28) = 56 (stdlib core/math sigma, divisor sum)" :: formula [slug=tecs-l-arith-stdlib group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr sigma 28 56"
+  raw    = ".verdicts/tecs-l-arith-stdlib/sigma_28.txt"
+  src    = "stdlib/core/math.hexa sigma · archive-TECS-L model_utils.py"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim."
+
+# — tau(n) = #{d | n} (divisor count) —
+@C tecs_l_arith_tau_1 := "tau(1) = 1 (stdlib core/math tau, divisor count)" :: formula [slug=tecs-l-arith-stdlib group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr tau 1 1"
+  raw    = ".verdicts/tecs-l-arith-stdlib/tau_1.txt"
+  src    = "stdlib/core/math.hexa tau · archive-TECS-L model_utils.py"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim."
+
+@C tecs_l_arith_tau_6 := "tau(6) = 4 (stdlib core/math tau, divisor count)" :: formula [slug=tecs-l-arith-stdlib group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr tau 6 4"
+  raw    = ".verdicts/tecs-l-arith-stdlib/tau_6.txt"
+  src    = "stdlib/core/math.hexa tau · archive-TECS-L model_utils.py"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim."
+
+@C tecs_l_arith_tau_12 := "tau(12) = 6 (stdlib core/math tau, divisor count)" :: formula [slug=tecs-l-arith-stdlib group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr tau 12 6"
+  raw    = ".verdicts/tecs-l-arith-stdlib/tau_12.txt"
+  src    = "stdlib/core/math.hexa tau · archive-TECS-L model_utils.py"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim."
+
+@C tecs_l_arith_tau_28 := "tau(28) = 6 (stdlib core/math tau, divisor count)" :: formula [slug=tecs-l-arith-stdlib group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr tau 28 6"
+  raw    = ".verdicts/tecs-l-arith-stdlib/tau_28.txt"
+  src    = "stdlib/core/math.hexa tau · archive-TECS-L model_utils.py"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim."
+
+# — phi(n) = Euler totient (alias euler_phi) —
+@C tecs_l_arith_phi_1 := "phi(1) = 1 (stdlib core/math phi, Euler totient)" :: formula [slug=tecs-l-arith-stdlib group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr phi 1 1"
+  raw    = ".verdicts/tecs-l-arith-stdlib/phi_1.txt"
+  src    = "stdlib/core/math.hexa phi/euler_phi · archive-TECS-L model_utils.py"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim."
+
+@C tecs_l_arith_phi_6 := "phi(6) = 2 (stdlib core/math phi, Euler totient)" :: formula [slug=tecs-l-arith-stdlib group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr phi 6 2"
+  raw    = ".verdicts/tecs-l-arith-stdlib/phi_6.txt"
+  src    = "stdlib/core/math.hexa phi/euler_phi · archive-TECS-L model_utils.py"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim."
+
+@C tecs_l_arith_phi_12 := "phi(12) = 4 (stdlib core/math phi, Euler totient)" :: formula [slug=tecs-l-arith-stdlib group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr phi 12 4"
+  raw    = ".verdicts/tecs-l-arith-stdlib/phi_12.txt"
+  src    = "stdlib/core/math.hexa phi/euler_phi · archive-TECS-L model_utils.py"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim."
+
+@C tecs_l_arith_phi_28 := "phi(28) = 12 (stdlib core/math phi, Euler totient)" :: formula [slug=tecs-l-arith-stdlib group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr phi 28 12"
+  raw    = ".verdicts/tecs-l-arith-stdlib/phi_28.txt"
+  src    = "stdlib/core/math.hexa phi/euler_phi · archive-TECS-L model_utils.py"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim."
