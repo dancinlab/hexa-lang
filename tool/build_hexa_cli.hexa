@@ -16,6 +16,13 @@
 //   LOCAL_BUILD=1               permit local Mac build (escape hatch)
 //   HEXA_POOL_BUILD_HOST=<host> ack-only marker (PR2 will auto-offload)
 //
+// Flags (opt-in):
+//   --install                   after a successful build, deploy
+//                               build/hexa_cli_driver to the shim's targets
+//                               (CANON M8 — closes the M3b deploy gap so a
+//                               pull never leaves a stale deployed hexa).
+//                               OFF by default — CI / fresh-clone never deploy.
+//
 // Re-entry gate (kick-storm Mac kill 2026-05-23 root cause —
 // memory: feedback_pool_cli_offload_heavy_build):
 //   On Mac (Darwin) without LOCAL_BUILD=1 the build REFUSES with a
@@ -123,6 +130,63 @@ fn _print_refuse_hint(repo_root: string) {
     eprintln("")
     eprintln("  force local (will burden Mac):")
     eprintln("    LOCAL_BUILD=1 tool/build_hexa_cli")
+}
+
+// --install present anywhere in argv? Opt-in deploy gate (CANON M8).
+fn _want_install() -> bool {
+    let av = args()
+    let n = len(av)
+    let mut i = 0
+    while i < n {
+        if to_string(av[i]) == "--install" { return true }
+        i = i + 1
+    }
+    return false
+}
+
+// $HOME, robustly (env first). Empty → caller skips the ~/.hx/bin targets.
+fn _home() -> string {
+    let h = env_var("HOME")
+    if h != "" { return h }
+    return to_string(exec("echo $HOME")).trim()
+}
+
+// Copy build/hexa_cli_driver into one shim target + codesign on Mac.
+fn _deploy_one(driver_out: string, dst: string, uname: string) {
+    if dst == "" { return }
+    _run("cp -f " + _shq(driver_out) + " " + _shq(dst), "deploy → " + dst)
+    if uname == "Darwin" {
+        let _ = exec("codesign --force --sign - " + _shq(dst) + " 2>/dev/null || true")
+    }
+    println("  deployed: " + dst)
+}
+
+// CANON M8 — install step. The shim resolves ~/.hx/bin/hexa → main-worktree
+// `hexa` shim → __hexa_dir = main-worktree → tries `hxv2` (preferred) →
+// falls back to `hexa.real`. The root cause of the M3b deploy gap (M5
+// diagnosis, PR #975) was that the build produced build/hexa_cli_driver but
+// never copied it to these targets, so a post-pull deployed hexa stayed
+// stale (PRE-M3b) and broke. This copies the fresh driver to all four
+// targets so the gap can never recur. Opt-in (--install) — never auto-runs.
+fn _install_driver(repo_root: string, uname: string) {
+    let driver_out = repo_root + "/build/hexa_cli_driver"
+    _must_exist(driver_out, "driver (build first)")
+    println("")
+    println("=== INSTALL (deploy to shim targets) ===")
+    // main-worktree: hxv2 (shim-preferred) + hexa.real (fallback)
+    _deploy_one(driver_out, repo_root + "/hxv2",      uname)
+    _deploy_one(driver_out, repo_root + "/hexa.real", uname)
+    // ~/.hx/bin: hxv2 + hexa.real
+    let home = _home()
+    if home != "" {
+        let hxbin = home + "/.hx/bin"
+        let _ = exec("mkdir -p " + _shq(hxbin))
+        _deploy_one(driver_out, hxbin + "/hxv2",      uname)
+        _deploy_one(driver_out, hxbin + "/hexa.real", uname)
+    } else {
+        eprintln("  warn: $HOME unresolved — skipped ~/.hx/bin targets")
+    }
+    println("=== INSTALL OK ===")
 }
 
 fn _do_build(repo_root: string) {
@@ -311,4 +375,9 @@ fn main() {
         exit(2)
     }
     _do_build(repo_root)
+    // CANON M8 — opt-in deploy. Only when --install is passed; the build
+    // alone (CI, fresh clone) never touches the shim targets.
+    if _want_install() {
+        _install_driver(repo_root, _uname())
+    }
 }
