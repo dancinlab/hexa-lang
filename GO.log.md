@@ -373,7 +373,29 @@ axis 의 첫 설계서.
 
 ### 다음 (R4)
 
-- [ ] R4 — (a) binary u32-LE length-prefix wire (선행 `net_read_raw` 빌트인 + codegen) · (b) AST/lexer/lower in-memory 유지 (현 R2/R3 는 binary-path 매핑까지만) · (c) atlas SSOT hash flush (F-DAEMON-4) · (d) multi-uid reject + root refuse (F-DAEMON-5 · `getuid()` builtin 선행) · (e) prod ship — verb 안정화 · 문서 · `hexa init` 안내 · 10/10 falsifier closure.
+- [ ] R4 — (a) binary u32-LE length-prefix wire (선행 `net_read_raw` 빌트인 + codegen) · (b) AST/lexer/lower in-memory 유지 (현 R2/R3 는 binary-path 매핑까지만) · [x] (c) atlas SSOT hash flush (F-DAEMON-4) · (d) multi-uid reject + root refuse (F-DAEMON-5 · `getuid()` builtin 선행) · (e) prod ship — verb 안정화 · 문서 · `hexa init` 안내 · 10/10 falsifier closure.
+
+## 2026-05-25 · M14 — hexa daemon R4(c) atlas SSOT hash flush (RFC 093 Phase 4 · F-DAEMON-4)
+
+> R2/R3 (PR #922/#931) 의 in-memory cache 키는 `sha256(source)[0:16] + "_" + version_str()` — **atlas SSOT hash 를 안 봄**. atlas SSOT (`compiler/atlas/embedded.gen.hexa`) 에 노드가 fold 되면 atlas-cite 코드가 *다른* binary 로 컴파일될 수 있는데 daemon 은 직전 memoized binary 를 HIT 으로 반환 → stale 결과. R2 agent 가 "atlas SSOT hash flush" 를 R4 carve-out 으로 명시. M14 가 이걸 닫음.
+
+- [x] M14 — `self/main.hexa` daemon atlas-flush logic (**Option B — daemon-only invalidation layer**):
+  - 신규 helper `_daemon_atlas_ssot_path()` — atlas SSOT (`compiler/atlas/embedded.gen.hexa`) 를 `$HEXA_LANG > install_dir_from_argv0() > ./` precedence 로 해석 (toolchain 나머지와 동일). miss 시 `""`.
+  - 신규 helper `_daemon_atlas_hash()` — SSOT content hash (`sha256_file`) 의 short-form (앞 16 hex). SSOT 부재 시 `""` (= unknown).
+  - serve-loop 에 throttled flush 삽입 — COMPILE 처리 직전, 2 s throttle 윈도우당 1회 `_daemon_atlas_hash()` 호출 → 직전 `last_atlas_hash` 와 다르면 (둘 다 non-empty) `cache_keys`/`cache_bins` 전체 flush + cache_bins 의 모든 `~/.hexa-cache` disk-mirror 바이너리 `rm -f` (키 불변이라 disk HIT 도 stale → unlink 필수) → 다음 COMPILE 이 새 atlas 로 re-build. `""` current-hash = never flush (transient miss thrash 방지). 첫 관측값 = baseline 기록.
+  - `daemon help` 텍스트 R2 → R2/R4 + F-DAEMON-4 설명 갱신.
+- [x] M14 — `tests/m_daemon_r4_atlas_flush_test.hexa` 신규 e2e (3 falsifier). 임시 `$HEXA_LANG` 에 작은 fake `compiler/atlas/embedded.gen.hexa` 를 두고 fake 파일을 rewrite 해 fold 시뮬 (10 MB 실 SSOT 안 건드림 · daemon 의 fork build 는 install_dir hexa 사용 → 실 compile 정상). F-DAEMON-4-1 (atlas 불변 + > throttle gap → 2nd compile HIT, 무spurious-flush) · F-DAEMON-4-2 (fake SSOT content 변경 → 다음 compile flush → re-BUILT, NOT stale HIT) · F-DAEMON-4-3 (안정화 후 → HIT 복귀 = flush 는 change-edge one-shot).
+- [x] M14 — RFC 093 §12 표 R4(c) ✅ landed + R4(c) honest carve-out (Option A/B/C 비교 · flush 신호 = SSOT 파일 hash · disk unlink · throttle · "" never-flush) · GO.md M14 milestone.
+
+### 디자인 결정 (R4(c))
+
+- **Option B 선택** — Option A (cache key 에 `…_<atlas[0:8]>` 추가) 는 daemon 키를 `cmd_run`/`hexa build`/precompile 키와 divergence → M7 drift-guard 위반 + M2 precompile lookup 깨짐 (scope 큼, `cmd_run` 동시 수정 필요). Option B 는 키 불변 유지 + daemon-local invalidation → drift-guard/precompile 무영향 (occam g0). Option C (mtime) 는 `touch` false-positive → content hash 채택.
+- **disk-mirror 도 unlink** — 키가 atlas fold 로 안 바뀌므로 in-mem flush 만으로는 다음 COMPILE 이 `~/.hexa-cache/hexa_run.<key>` disk HIT 으로 여전히 stale. flush 시 cache_bins disk 바이너리 전부 `rm -f`.
+- **2 s throttle** — hot-path 에서 매 COMPILE 마다 `sha256_file` (최대 10 MB) 읽기 회피. fold 감지 지연 ≤ 2 s ≪ RFC §7 F-DAEMON-4 gate "60 s 내 flush".
+
+### 다음 (R4 잔여)
+
+- [ ] R4(a/b/d/e) — (a) binary u32-LE length-prefix wire (선행 `net_read_raw` 빌트인 + codegen) · (b) AST/lexer/lower in-memory 유지 · (d) multi-uid reject + root refuse (F-DAEMON-5 · `getuid()` builtin 선행) · (e) prod ship — verb 안정화 · 문서 · `hexa init` 안내 · 10/10 falsifier closure.
 
 ## 2026-05-25 · M13 — hexa daemon R4 codegen (net_read_raw + os_getuid 빌트인 + multi-uid 강화, RFC 093 § R4 carve-out)
 

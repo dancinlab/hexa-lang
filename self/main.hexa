@@ -4717,6 +4717,58 @@ fn _daemon_build_binary(file, tmpbin) {
     return brc
 }
 
+// GO M14 (RFC 093 R4 · F-DAEMON-4) — atlas SSOT hash flush.
+//
+// PROBLEM: the daemon's in-memory cache key is sha256(source)[0:16] + "_" +
+// version_str() (byte-identical to cmd_run — see _daemon_compute_key). It does
+// NOT include the atlas SSOT hash. When a new node is folded into the atlas
+// SSOT (compiler/atlas/embedded.gen.hexa), an atlas-citing source can compile
+// to a DIFFERENT binary — but the daemon would return its stale memoized
+// binary as a HIT (wrong result).
+//
+// FIX (Option B — daemon-only invalidation layer): the daemon hashes the
+// atlas SSOT file and, when that hash changes vs the last observed value,
+// flushes the entire in-memory cache (cache_keys / cache_bins). The next
+// COMPILE for any source re-builds against the new atlas. cmd_run's key is
+// UNCHANGED — no M7 drift-guard violation, no M2 precompile-lookup breakage.
+// The flush is daemon-local and self-contained.
+//
+// We hash the file content (sha256_file) rather than mtime so a no-op `touch`
+// does NOT spuriously flush (Option C's false-positive). Returns "" when the
+// SSOT cannot be located (graceful — flush logic treats "" as "unknown", i.e.
+// never flushes on a missing-atlas read so a transient resolution miss can't
+// thrash the cache).
+
+// Resolve the atlas SSOT path (compiler/atlas/embedded.gen.hexa) using the
+// same precedence as the rest of the toolchain:
+//   $HEXA_LANG > install_dir_from_argv0() > ./   (repo-root relative).
+fn _daemon_atlas_ssot_path() {
+    let rel = "/compiler/atlas/embedded.gen.hexa"
+    let h = env_var("HEXA_LANG")
+    if len(h) > 0 {
+        let p = h + rel
+        if file_exists(p) { return p }
+    }
+    let inst = install_dir_from_argv0()
+    if len(inst) > 0 {
+        let p = inst + rel
+        if file_exists(p) { return p }
+    }
+    let cwd = "." + rel
+    if file_exists(cwd) { return cwd }
+    return ""
+}
+
+// Compute the current atlas SSOT content hash, or "" if the SSOT is not
+// locatable. Short-form (first 16 hex chars) is enough to detect a fold.
+fn _daemon_atlas_hash() {
+    let p = _daemon_atlas_ssot_path()
+    if len(p) == 0 { return "" }
+    let full = sha256_file(p)
+    if len(full) < 16 { return full }
+    return full.substring(0, 16)
+}
+
 fn cmd_daemon_compile(sock_path, file) {
     // Client side of the compile method — connect, send `COMPILE <file>`,
     // print the daemon's reply (HIT/BUILT/ERR + binary path). The path is
@@ -4840,6 +4892,16 @@ fn cmd_daemon_start(sock_path, idle_ttl_str) {
     let mut cache_keys = []
     let mut cache_bins = []
     let _mkc = exec("mkdir -p " + shq(_daemon_cache_dir()) + " 2>/dev/null")
+    // GO M14 (RFC 093 R4 · F-DAEMON-4) — atlas SSOT hash flush state.
+    // last_atlas_hash records the atlas SSOT hash observed at the last check.
+    // "" = not-yet-read / unresolvable (never triggers a flush). Checked at
+    // most once per atlas_check_throttle_ns window, immediately before serving
+    // a COMPILE — so an atlas fold mid-session invalidates the in-mem cache
+    // before the next memoized HIT could return a stale binary. The throttle
+    // keeps the sha256_file read off the hot path for back-to-back COMPILEs.
+    let mut last_atlas_hash = _daemon_atlas_hash()
+    let mut last_atlas_check_ns = mono_ns()
+    let atlas_check_throttle_ns = 2 * ns_per_sec
     while !shutdown {
         // Wait up to 1 second for an incoming connection.
         let ready = net_select([listen_fd], 1000)
@@ -4863,6 +4925,38 @@ fn cmd_daemon_start(sock_path, idle_ttl_str) {
                     // the pure R1 dispatcher.
                     let ln = len(line)
                     if ln >= 8 && line.substring(0, 8) == "COMPILE " {
+                        // GO M14 (F-DAEMON-4) — throttled atlas SSOT hash check.
+                        // If the atlas SSOT content hash changed since the last
+                        // check (a node was folded into embedded.gen.hexa), drop
+                        // the entire in-memory cache so this COMPILE re-builds
+                        // against the new atlas instead of returning a stale HIT.
+                        // A "" current-hash (SSOT unresolvable) is treated as
+                        // "unknown" → never flushes (avoids cache thrash on a
+                        // transient resolution miss).
+                        let _atlas_now_ns = mono_ns()
+                        if (_atlas_now_ns - last_atlas_check_ns) >= atlas_check_throttle_ns {
+                            last_atlas_check_ns = _atlas_now_ns
+                            let cur_atlas = _daemon_atlas_hash()
+                            if len(cur_atlas) > 0 && len(last_atlas_hash) > 0 && cur_atlas != last_atlas_hash {
+                                println("hexa daemon: atlas SSOT changed (" + last_atlas_hash + " -> " + cur_atlas + ") — flushing in-memory cache (" + to_string(len(cache_keys)) + " entries)")
+                                // Also unlink the disk-mirror binaries for every
+                                // flushed key. The cache key (sha256(source) +
+                                // version_str) is unchanged by an atlas fold, so
+                                // an un-removed ~/.hexa-cache binary would be
+                                // re-found as a disk HIT on the very next COMPILE
+                                // — still stale. Removing them forces a true
+                                // re-build against the new atlas (F-DAEMON-4).
+                                let mut _fi = 0
+                                let _fn = len(cache_bins)
+                                while _fi < _fn {
+                                    let _rmb = exec("rm -f " + shq(cache_bins[_fi]) + " 2>/dev/null")
+                                    _fi = _fi + 1
+                                }
+                                cache_keys = []
+                                cache_bins = []
+                            }
+                            if len(cur_atlas) > 0 { last_atlas_hash = cur_atlas }
+                        }
                         let cfile = line.substring(8, ln)
                         if !file_exists(cfile) {
                             reply = "ERR no such source: " + cfile
@@ -4938,11 +5032,13 @@ fn cmd_daemon(args) {
         println("  Default socket path: /tmp/hexa-daemon-$UID.sock  (uid-scoped · RFC 093 §6.1)")
         println("  Default idle TTL:    0  (no auto-exit)")
         println("")
-        println("R2 SCOPE  (RFC 093 § Phase plan)")
+        println("R2/R4 SCOPE  (RFC 093 § Phase plan)")
         println("  compile method + in-memory cache (path → built binary).")
         println("  COMPILE <src> → HIT <bin> (memoized) | BUILT <bin> | ERR <reason>.")
         println("  Cache key byte-identical to `hexa run` (~/.hexa-cache mirror).")
-        println("  Wire = newline text; binary length-prefix + atlas flush land in R3.")
+        println("  R4 (F-DAEMON-4): atlas SSOT hash flush — a fold into")
+        println("  compiler/atlas/embedded.gen.hexa auto-flushes the in-mem cache")
+        println("  (+ disk mirror) on the next COMPILE so no stale binary is served.")
         return
     }
 

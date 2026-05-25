@@ -421,7 +421,8 @@ in-memory code. 권장 = daemon 시작 시 자기 binary mtime 캐시 → 주기
 | **R2** | (this) GO M11 | ✅ landed | `compile` 메서드 + in-memory cache. `COMPILE <src>` → `HIT <bin>` (memoized) / `BUILT <bin>` / `ERR <reason>`. 캐시 키 = `sha256(source)[0:16] + "_" + version_str()` — **`hexa run` / `hexa build` 과 byte-identical** → `~/.hexa-cache/hexa_run.<key>` 슬롯 공유. 3 falsifier (`tests/m_daemon_r2_test.hexa`): R2-1 cache hit · R2-2 fork-mode fallback · R2-3 determinism. |
 | **R3** | (this) GO M12 | ✅ landed | `hexa run` autospawn wiring (`HEXA_DAEMON_AUTOSPAWN=1` opt-in → socket probe → spawn-if-missing → `COMPILE` → exec returned binary). 3-tier fallback **precompile (M2) → daemon (R3) → fork-mode** in `cmd_run_user_direct`. `HEXA_DAEMON_SOCKET` env override (socket isolation). `tests/m_daemon_r3_test.hexa` 3 falsifier: **F-DAEMON-R3-1 (autospawn)** · **F-DAEMON-R3-2 (latency N=100)** · **F-DAEMON-R3-3 (crash-respawn fallback)**. 측정 (mini arm64 fresh build): **N=100 warm-daemon 9,395 ms vs fork-mode 174,933 ms = 18.6× speedup** (F-DAEMON-2 RFC gate ≤ 1.5× far exceeded). R1/R2 회귀 무 (4/4 + 3/3 PASS). |
 | **R4 (codegen)** | (this) GO M13 | ✅ landed | R4 의 **codegen-bound** 부분. 2 신규 builtin: **`net_read_raw(fd, len)`** = 정확히 len byte NUL-preserving read (binary u32-LE length-prefix wire 의 reader 선행) · **`os_getuid()`** = getuid(2) wrapper (`getuid` reserved-name mangle 회피 위해 `os_getuid` 명명 — `term_getppid` 패턴). 그 위 **F-DAEMON-5 multi-uid 강화**: socket path uid-scoped (`/tmp/hexa-daemon-<uid>.sock`) + root-refuse (`os_getuid()==0 → exit 1`). codegen 레시피 (cc --regen → promote → DIRECT transpile → **fixpoint gen2≡gen3 byte-identical** → 회귀 무). `tests/m_daemon_r4_codegen_test.hexa` 3 falsifier ALL PASS: R4-1 (loopback NUL round-trip) · R4-2 (os_getuid==`id -u`) · R4-3 (uid-scoped socket + non-root). |
-| **R5** | (next) | ⛔ todo | R4 의 **나머지** (codegen 의존 없음): (a) binary u32-LE length-prefix wire **실전환** (net_read_raw 사용 — 현재는 builtin 만 land, daemon payload 가 NUL-free 라 occam g0 로 newline-text 유지) · (b) AST/lexer/lower in-memory 유지 (R2/R3 는 binary-path 매핑까지만) · (c) atlas SSOT hash flush (F-DAEMON-4) · (d) SO_PEERCRED/LOCAL_PEERCRED per-connection peer-uid 확인 (현재는 uid-scoped path + root-refuse 까지) · (e) prod ship — verb 안정화 · 문서 · `hexa init` 안내 · 10/10 falsifier closure. |
+| **R4 (atlas flush · c)** | (this) GO M14 | ✅ landed | **atlas SSOT hash flush (F-DAEMON-4)** — daemon serve-loop 가 COMPILE 처리 전 (2 s throttle · `HEXA_DAEMON_ATLAS_THROTTLE_MS` override) `compiler/atlas/embedded.gen.hexa` content hash (`sha256_file`, $HEXA_LANG > install_dir > ./ 해석) 를 직전 값과 비교 → 다르면 in-mem cache (cache_keys/cache_bins) **전체 flush + 해당 disk-mirror 바이너리 unlink** → 다음 COMPILE 이 새 atlas 로 re-build (stale HIT 방지). **Option B (daemon-only invalidation layer)** — `cmd_run`/precompile 키 불변 → M7 drift-guard · M2 precompile 무영향. `tests/m_daemon_r4_atlas_flush_test.hexa` 3 falsifier ALL PASS (mini arm64): F-DAEMON-4-1 (atlas 불변 → HIT) · F-DAEMON-4-2 (fold → flush → re-BUILT, no stale HIT) · F-DAEMON-4-3 (안정화 후 HIT 복귀, flush = one-shot edge). R1/R2/R3 회귀 무 (4/4 + 3/3 + 3/3). |
+| **R5** | (next) | ⛔ todo | R4 의 **나머지** (M13 codegen + M14 atlas flush 가 (c) 닫음): (a) binary u32-LE length-prefix wire **실전환** (net_read_raw 사용 — 현재는 builtin 만 land, daemon payload 가 NUL-free 라 occam g0 로 newline-text 유지) · (b) AST/lexer/lower in-memory 유지 (R2/R3 는 binary-path 매핑까지만) · (d) SO_PEERCRED/LOCAL_PEERCRED per-connection peer-uid 확인 (현재는 uid-scoped path + root-refuse 까지) · (e) prod ship — verb 안정화 · 문서 · `hexa init` 안내 · 10/10 falsifier closure. |
 
 ### R4 (codegen) honest carve-out
 
@@ -439,6 +440,36 @@ in-memory code. 권장 = daemon 시작 시 자기 binary mtime 캐시 → 주기
   재-regen 한 `hexa_cc.c.new` 와 byte-identical (gen2≡gen3) 확인 — 트랜스파일러가 자기
   변경을 stable-point 로 재생산. 회귀: 새 vs base 트랜스파일러로 동일 test transpile+compile,
   clang-err new==base (WORSE 0).
+
+### R4 (atlas flush) honest carve-out (F-DAEMON-4)
+
+- **Option B 선택 (daemon-only invalidation), NOT Option A (key 에 atlas hash 포함)** —
+  Option A (cache key 를 `…_<atlas[0:8]>` 로 확장) 는 daemon 키를 `cmd_run`/`hexa build`
+  /precompile 키와 **divergence** 시켜 M7 drift-guard 위반 + M2 precompile lookup 깨짐
+  (scope 큼 — `cmd_run` 도 동시 수정 필요). Option B 는 daemon serve-loop 안에
+  자체 invalidation layer 를 두어 키 불변 유지 → drift-guard/precompile 무영향
+  (occam g0). Option C (mtime) 는 no-op `touch` 에도 flush 하는 false-positive →
+  content hash (`sha256_file`) 채택.
+- **flush 신호 = atlas SSOT *파일* content hash, NOT 임베드된 `ATLAS_HASH` 상수** —
+  F-DAEMON-4 falsifier 문구("atlas SSOT 파일 hash 변경 시")대로 daemon 이 fork 하는
+  `hexa build` 가 참조하는 atlas SSOT 파일(`compiler/atlas/embedded.gen.hexa`)의 실제
+  바이트가 변하면 flush. 한 fold 가 commit 되면 그 파일 hash 가 바뀌므로 daemon 이
+  다음 COMPILE 에서 감지.
+- **disk-mirror 도 unlink** — 키(`sha256(source)+version_str`)는 atlas fold 로 안 바뀌므로
+  in-mem flush 만으로는 부족 (다음 COMPILE 이 `~/.hexa-cache/hexa_run.<key>` disk HIT
+  으로 여전히 stale binary 반환). flush 시 cache_bins 의 모든 disk 바이너리를 `rm -f`
+  → true re-build 강제.
+- **2 s throttle (`HEXA_DAEMON_ATLAS_THROTTLE_MS` override)** — back-to-back COMPILE 마다
+  `sha256_file` (잠재적으로 10 MB) 를 읽으면 hot-path 비용. 기본 2 s 윈도우당 1회로 제한 →
+  fold 감지 지연 ≤ 2 s (RFC §7 F-DAEMON-4 gate "60 s 내 flush" 대비 여유). 0 = 매 COMPILE
+  체크 (테스트가 사용 — flush 를 wall-clock sleep 무관하게 deterministic 하게).
+- **"" current-hash = unknown → never flush** — SSOT 해석 실패(파일 부재) 시 빈 hash
+  반환 → flush 안 함 (transient 해석 miss 가 cache 를 thrash 하지 않게). 첫 관측값도
+  마찬가지로 baseline 으로만 기록.
+- **테스트 하네스 함정 (daemon 로직과 무관)** — (1) compiled `sleep_ms` 가 사실상 no-op
+  (mono_ns delta ≈ 1000 ns) → throttle 윈도우를 sleep 으로 못 넘김 → throttle env=0 으로 우회.
+  (2) build-host (mini) 에서 `hexa*`-prefix argv0 SIGKILL (rc=137) — `hexac` 통과. 둘 다
+  atlas-flush 로직과 무관; `hexac` 드라이버 + throttle=0 으로 ALL 3 PASS.
 
 ### R3 honest carve-out
 
