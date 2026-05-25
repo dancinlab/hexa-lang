@@ -237,7 +237,7 @@ fn _do_build(repo_root: string) {
         while i < len(lines) {
             let p = lines[i]
             let base = to_string(exec("basename " + _shq(p))).trim()
-            if base != "hexa_cc.c" && base != "codegen_c2_v2.c" && base != "lexer_v2.c" && base != "type_checker_v2.c" {
+            if base != "hexa_cc.c" {
                 let _ = exec("cp -f " + _shq(p) + " " + _shq(repo_root + "/build/self/native/" + base))
             }
             i = i + 1

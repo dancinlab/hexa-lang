@@ -8617,7 +8617,7 @@ fn _lambda_param_name(p) {
 // initialized; on first call it caches (keys_ptr, len, idx) and every
 // subsequent monomorphic hit skips the strcmp-chain in hexa_map_get.
 //
-// The native-C codegen (self/native/hexa_cc.c and codegen_c2_v2.c) honors
+// The native-C codegen (self/native/hexa_cc.c) honors
 // HEXA_IC_DISABLE=1 at codegen time for A/B benchmarking. This .hexa mirror
 // is kept in sync but always emits IC — hexa_v2 is the active backend.
 let mut _ic_counter = 0
