@@ -2185,6 +2185,24 @@
   status = "🟢 empirical scanner — 6/899 hit (0.67%) on first 1000 OEIS A-lines, K=10 hash-intersect against 20 candidate hexa-native fn. Reproducible. NOT terminal arithmetic claim (per-hit verify = O3 milestone)."
 
 # ───────────────────────────────────────────────────────────────────────
+# OEIS — oeis-full-sweep (slug · group=OEIS · O2)
+# Full 380K sweep extending the O1 POC from "first 1000" to the ENTIRE
+# stripped.gz bulk dump (374047 A-lines with >=K=10 terms), plus a K=20
+# second pass over the K=10 hits to filter first-K coincidences. Candidate
+# K=20 tables are catalogue-verbatim (offset-correct) — this both fixes the
+# POC's offset mismatch (n^2/n!/Fib/... started at n=1, missed the dump's
+# offset-0 window) and adds a coincidence falsifier. Per-hit fresh hexa
+# verify --expr is gated on a value-less compute path that the CLI lacks
+# (see INBOX g59 filing) and is deferred to O3.
+
+@C oeis_full_sweep := "OEIS full 380K sweep (O2): 20 candidate hexa-native fn precomputed at K=10 AND K=20 (catalogue-verbatim, offset-correct) + hash-intersected against the ENTIRE stripped.gz dump (374047 A-lines with >=K=10 terms), then a K=20 second pass over the K=10 hits filters first-K coincidences. Result = 1707 K=10 hit; 336 survive K=20; 1334 coincidence filtered at K=20 (e.g. A000926 Idoneal numbers match `n` for first 10 terms but diverge by term <=20 -> k20_survives=no); 37 na (<20 catalogue terms). All 6 O1 POC hits reproduce; the 5 genuine ones survive K=20, A000926 is correctly flagged as a coincidence." :: empirical [slug=oeis-full-sweep group=OEIS]
+  method = "sweep+intersect"
+  cmd    = "hexa OEIS/tool/full_sweep.hexa  → .verdicts/oeis-full-sweep/sweep_log.txt"
+  raw    = ".verdicts/oeis-full-sweep/sweep_log.txt"
+  src    = "OEIS/tool/full_sweep.hexa (stripped.gz bulk dump + exec_with_status awk hash-intersect, K=10 full sweep + K=20 coincidence filter). Ledger .verdicts/oeis-full-sweep/ledger.json (g65 typed) + hits.tsv (full match table). Per-hit fresh hexa verify --expr re-confirm deferred to O3 (CLI lacks value-less compute mode — INBOX g59 filing). CC-BY-SA upstream cited per OEIS/OEIS.md §2 governance."
+  status = "🟢 empirical — 1707 hit / 380K seq, 1334 K=10 coincidences filtered at K=20 (336 survive, 37 na). Reproducible full sweep. NOT terminal arithmetic claim (per-hit verify = O3 milestone)."
+
+# ───────────────────────────────────────────────────────────────────────
 # GPU — fusion axis-C / axis-E ROUND-9 TIMED WALLS (2026-05-26)
 # Both closed-negatives: structural launch/HBM moats from R8 do NOT convert
 # to above-library timed wins with the as-merged STRUCTURAL-STUB kernels.
