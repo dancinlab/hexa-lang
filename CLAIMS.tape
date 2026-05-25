@@ -1550,6 +1550,32 @@
   status = "🟠 NEAR-CEILING CLOSED-NEGATIVE — BOTH d and compute-overlap levers ruled out for fused attention at d∈{64..256}. Fused approaches cuBLAS-TC within ~23% at d=64 but the inner-GEMM TC-utilization gap does NOT close at these shapes. §10 axis-A-attention box stays [ ]. No paper (orange). Next untried lever = wgmma / FP8."
 
 # ───────────────────────────────────────────────────────────────────────
+# GPU — fusion-layerblock-complete (slug · group=GPU · GPU.md §10 axis-C · round 13)
+# The LAST unmeasured axis of the fusion campaign. Closes the R8(structural)/
+# R9(stub→NaN→588× slower) gap with a COMPLETE numerically-faithful kernel.
+
+@C fusion_layerblock_complete_numeric := "the COMPLETE fused transformer block (R10 multi-warp+cp.async WMMA flash-attn embedded per-head + cuBLAS GemmEx FP16-TC for all 5 GEMMs + cross-layer fused glue) is NUMERICALLY FAITHFUL vs an f64 CPU reference of the FULL block — max_rel_rowscale 8.00e-4 @ refRows=64, 8.52e-4 @ 128; max_abs 1.0e-3; naninf=0; tol 1e-2. This CLOSES the R9 stub gap (R9 was 3072/3072 NaN from an empty flash-attn key-loop); the key-loop now does real online-softmax + P.V accumulation and the FFN is real tiled cuBLAS, NOT R9's naive scalar FFN. ptxas-clean native sm_120 (fa_head 94 regs / 14336 B smem / 0 spills)" :: measurement [slug=fusion-layerblock-complete group=GPU]
+  method = "silicon-fire"
+  cmd    = "ubu-2 (summer-B650M-K) RTX 5070 sm_120 driver 580 / nvcc-ptxas CUDA 12.9 native sm_120; ./lb_complete 0 64 (numeric-only); f64 CPU block ref + per-row-scaled rel + NaN/Inf hard-fail counter"
+  raw    = ".verdicts/fusion-layerblock-complete/F-FUSION-LAYERBLOCK-COMPLETE.txt"
+  src    = "archive/fires/fusion_layerblock_complete_2026_05_26/{lb_complete.cu,result.json,fire.log}"
+  status = "🟢 numeric PASS (complete kernel, not a stub)"
+
+@C fusion_layerblock_complete_wall := "🟠 NEAR-CEILING CLOSED-NEGATIVE (axis C, R13): the COMPLETE fused transformer block on d=768·h=12·dh=64·S=512·B=8 (M=4096 rows, dff=3072, training-batch GEMM-dominated) is fused 3.795 ms vs FAIR cuBLAS-using eager 3.832 ms = fused/eager 0.990 = +0.94..+1.03% ABOVE eager (3 reproducible runs, std <0.1%). gate30 BELOW-30% → the pre-registered >=30% WIN is FALSIFIED. Both stacks share the SAME cuBLAS GemmEx FP16-TC GEMMs (fair roofline, NOT a strawman) + the SAME R10 flash-attn; only the glue launches differ. The +1% margin is small but consistent and positive — fusion saves real glue traffic, just nowhere near 30%" :: measurement [slug=fusion-layerblock-complete group=GPU]
+  method = "silicon-fire"
+  cmd    = "ubu-2 RTX 5070; cuEvent 20 warmup + 200 timed median, contention-gated (nvidia-smi 0% pre-fire); fused run_fused() vs eager run_eager() vs gemms_only vs attn_only decomposition"
+  raw    = ".verdicts/fusion-layerblock-complete/F-FUSION-LAYERBLOCK-COMPLETE.txt"
+  src    = "archive/fires/fusion_layerblock_complete_2026_05_26/result.json"
+  status = "🟠 ORANGE — WIN FALSIFIED, near-ceiling confirmed. §10 axis-C box stays [ ]. No paper (orange)."
+
+@C fusion_layerblock_complete_decomp := "DECOMPOSITION (why near-ceiling): the fused-block wall splits 5× cuBLAS GemmEx 1.208 ms = 31.8% + flash-attn (96 fa_head launches) 2.425 ms = 63.9% + fused glue (LN/residual/SiLU/gather-scatter) ~0.16 ms = 4.3%. COMPUTE FLOOR (GEMM+attn) = 95.6% of the wall. The maximum possible fusion win is glue-bounded ~4% (the extra HBM round-trips the eager stack pays), so collapsing the seams buys ~1%. The cuBLAS GEMM roofline + R10 flash-attn (itself 1.149× below cuBLAS) are untouchable by cross-layer fusion. CONFIRMS the campaign EMPIRICAL LAW: fusion's >=30% win is inversely related to GEMM-throughput-boundedness — axis-A elementwise (no GEMM) 73-76% win; axis-A attention (GEMM-dominated) 1.149×; axis-C full block (95.6% GEMM+attn) +1%. Law holds across all 3 axes. The R8 structural moat (3 vs 11 launches, 9.667× less activation-HBM) is REAL but does NOT convert because the eliminated activation-HBM is a tiny fraction of a compute-dominated wall" :: measurement [slug=fusion-layerblock-complete group=GPU]
+  method = "silicon-fire"
+  cmd    = "ubu-2 RTX 5070; cuEvent median of run_gemms_only() (5 cuBLAS GEMMs) + run_attn_only() (gather+96 fa_head+scatter), 20 warmup + 200 median"
+  raw    = ".verdicts/fusion-layerblock-complete/F-FUSION-LAYERBLOCK-COMPLETE.txt"
+  src    = "archive/fires/fusion_layerblock_complete_2026_05_26/result.json"
+  status = "🟠 ORANGE — GEMM-vs-glue decomposition proves the near-ceiling cause; completes the axis-C landscape."
+
+# ───────────────────────────────────────────────────────────────────────
 # ───────────────────────────────────────────────────────────────────────
 # TECS-L axis A (MODFORM) — tecs-l-modform-dim-genus (slug · group=TECS-L · MF4)
 # Classical theorem dim S_2(Γ_0(N)) = genus(X_0(N)) — TESTED vs hexa fns.
