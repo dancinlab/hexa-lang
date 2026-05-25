@@ -600,3 +600,85 @@
   raw    = ".verdicts/tecs-l-arith-stdlib/phi_28.txt"
   src    = "stdlib/core/math.hexa phi/euler_phi · archive-TECS-L model_utils.py"
   status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim."
+
+# ───────────────────────────────────────────────────────────────────────
+# TECS-L — tecs-l-physics-constants (slug · group=TECS-L · TECS-L.md M5)
+# archive-TECS-L physical-constant assembly, g5-triaged. Only EXACT
+# number-theoretic identities (both sides exact) are 🔵; measured-value
+# matches (fermion masses 1.9%, Koide 5ppm, 1/α≈137) stay 🟡 (citation);
+# experiment-dependent (CERN, nuclear magic) are 🟠. Triage doc:
+# docs/tecs-l/m5-physics-constants-triage.md.
+#
+# HEADLINE 🔵: τ(perfect_k) reproduces the string-theory critical dimensions
+#   τ(6)=4 · τ(28)=6 · τ(496)=10 · τ(8128)=14 · τ(33550336)=26
+#   (D=10 superstring, D=26 bosonic string) — 5/5 exact closed-form.
+
+@C tecs_l_strdim_p1 := "tau(6) = 4 = string/spacetime dim (1st perfect number)" :: formula [slug=tecs-l-physics-constants group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr tau 6 4"
+  raw    = ".verdicts/tecs-l-physics-constants/str_dim_p1_tau6.txt"
+  src    = "archive-TECS-L README.md line 710 (tau(P_k) = string dims 4,6,10,14,26)"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal · paper-eligible."
+
+@C tecs_l_strdim_p2 := "tau(28) = 6 = string critical dim (2nd perfect number)" :: formula [slug=tecs-l-physics-constants group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr tau 28 6"
+  raw    = ".verdicts/tecs-l-physics-constants/str_dim_p2_tau28.txt"
+  src    = "archive-TECS-L README.md line 710"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal · paper-eligible."
+
+@C tecs_l_strdim_p3 := "tau(496) = 10 = superstring critical dim D=10 (3rd perfect number)" :: formula [slug=tecs-l-physics-constants group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr tau 496 10"
+  raw    = ".verdicts/tecs-l-physics-constants/str_dim_p3_tau496.txt"
+  src    = "archive-TECS-L README.md line 710 (D=10 superstring)"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal · paper-eligible."
+
+@C tecs_l_strdim_p4 := "tau(8128) = 14 = string critical dim (4th perfect number)" :: formula [slug=tecs-l-physics-constants group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr tau 8128 14"
+  raw    = ".verdicts/tecs-l-physics-constants/str_dim_p4_tau8128.txt"
+  src    = "archive-TECS-L README.md line 710"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal · paper-eligible."
+
+@C tecs_l_strdim_p5 := "tau(33550336) = 26 = bosonic string critical dim D=26 (5th perfect number, 2^12*M13)" :: formula [slug=tecs-l-physics-constants group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr tau 33550336 26"
+  raw    = ".verdicts/tecs-l-physics-constants/str_dim_p5_tau33m.txt"
+  src    = "archive-TECS-L README.md line 710 (D=26 bosonic string)"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal · paper-eligible."
+
+@C tecs_l_perfect_496 := "is_perfect(496) = 1 (3rd perfect number)" :: formula [slug=tecs-l-physics-constants group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr is_perfect 496 1"
+  raw    = ".verdicts/tecs-l-physics-constants/perfect_496.txt"
+  src    = "archive-TECS-L perfect_number_engine.py (n in {6,28,496,8128,33550336})"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal · paper-eligible."
+
+@C tecs_l_perfect_8128 := "is_perfect(8128) = 1 (4th perfect number)" :: formula [slug=tecs-l-physics-constants group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr is_perfect 8128 1"
+  raw    = ".verdicts/tecs-l-physics-constants/perfect_8128.txt"
+  src    = "archive-TECS-L perfect_number_engine.py"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal · paper-eligible."
+
+@C tecs_l_perfect_33m := "is_perfect(33550336) = 1 (5th perfect number)" :: formula [slug=tecs-l-physics-constants group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr is_perfect 33550336 1"
+  raw    = ".verdicts/tecs-l-physics-constants/perfect_33m.txt"
+  src    = "archive-TECS-L perfect_number_engine.py"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal · paper-eligible."
+
+@C tecs_l_gauge_sigma6 := "sigma(6) = 12 = SM gauge dim sum (dim SU(3)+SU(2)+U(1) = 8+3+1; SU(3)=sigma-tau=8)" :: formula [slug=tecs-l-physics-constants group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr sigma 6 12"
+  raw    = ".verdicts/tecs-l-physics-constants/gauge_sigma6.txt"
+  src    = "archive-TECS-L README.md line 712 (sigma(6) self-decomp = SU(3)xSU(2)xU(1))"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal · paper-eligible."
+
+@C tecs_l_gauge_phi6 := "phi(6) = 2 (sigma/phi = 12/2 = 6 = n; Koide Q = tau/n = 4/6 = 2/3)" :: formula [slug=tecs-l-physics-constants group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr phi 6 2"
+  raw    = ".verdicts/tecs-l-physics-constants/gauge_phi6.txt"
+  src    = "archive-TECS-L README.md line 558 (sigma/phi=6), line 713 (Koide 2/3 = tau/P1)"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal · paper-eligible."

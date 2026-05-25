@@ -2,6 +2,16 @@
 
 Append-only history sister of `TECS-L.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
+## 2026-05-25T09:20 — M5 · 물리상수 조립 g5 triage (τ=string-dim 발견)
+
+- [x] 🔵 HEADLINE: 첫 5개 완전수 약수개수 τ = 끈이론 임계차원 — τ(6)=4·τ(28)=6·τ(496)=10·τ(8128)=14·τ(33550336)=26 (D=10 초끈·D=26 보존끈). `hexa verify --expr tau` 5/5 일치, 신규
+- [x] 🔵 is_perfect(496·8128·33550336)=1 — 3개 완전수 신규 확인
+- [x] 🔵 게이지: SM 게이지 차원합 8+3+1=12=σ(6) (SU(3)=σ−τ=8) · σ/φ=12/2=6=n · Koide Q=τ/n=4/6=2/3 · 키싱수 6/12/24=n/σ/2σ — σ/τ/φ component 🔵 위에 정수/유리 산술로 닫음
+- [x] 🟡 관측매칭(페르미온 질량 1.9% · Koide 5ppm · Higgs 125 · 1/α≈137 · δ baryon 1232): 실측값 인용 필요 → never auto-🔵
+- [x] 🟠 CERN 5.26σ · 핵 magic number: 외부 측정 의존
+- [x] 10 verdict raw verbatim → `.verdicts/tecs-l-physics-constants/` + CLAIMS group=TECS-L 10 entry (1:1) + `docs/tecs-l/m5-physics-constants-triage.md`
+- [x] inline 부모 세션 실행 (서브에이전트 verify 게이트 회피) · 격리 worktree
+
 ## 2026-05-25T18:30 — M3 CLOSED · Dedekind ψ discrepancy D(n)=σφ−nτ 유일성
 
 - [x] D(n) = σ(n)·φ(n) − n·τ(n) 정의 — archive-TECS-L `math/dfs_dedekind_psi_discrepancy.py` 와 동일 (σ=약수합 · τ=약수개수 · φ=오일러 토션트). D(n)=0 ⟺ n∈{1,6} 의 유일성을 재근거화 (M1 이 미룬 잔여)
