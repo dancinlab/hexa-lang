@@ -1,0 +1,54 @@
+{
+  "round": 10,
+  "falsifier": "F-FUSION-ATTN-MULTIWARP",
+  "slug": "fusion-attention-multiwarp",
+  "date": "2026-05-26",
+  "host": "ubu-2 RTX 5070 sm_120 driver 580 (48 SMs, 0% util / 5 MiB used at fire)",
+  "toolchain": "nvcc/ptxas 12.0 (sm_120 not directly supported by 12.0 -> built compute_90 PTX, driver JIT to sm_120)",
+  "geometry": "BM=64, d=64, 4 warps/CTA (block=128), grid=N/64; K/V tile 16x64 half double-buffered in smem",
+  "ptxas": {
+    "sm_80": {"registers": 91, "smem_bytes": 14336, "rc": 0},
+    "sm_90a": {"registers": 93, "smem_bytes": 14336, "rc": 0},
+    "sm_90": {"registers": 93, "smem_bytes": 14336, "rc": 0},
+    "sm_120": "NOT supported by nvcc 12.0 (Blackwell needs 12.8+); ran via compute_90 PTX + driver JIT",
+    "smem_limit_check": "14336 B << 49152 B per-block cap PASS"
+  },
+  "occupancy": {
+    "model": "block=128 threads, 93 regs/thread, 14336 B smem",
+    "device": "RTX 5070: 48 SMs, maxThreadsPerSM=1536, regsPerSM=65536, smemPerSM=102400, maxBlocksPerSM=24",
+    "limits": {"by_threads": 12, "by_regs": 5, "by_smem": 7, "by_blocks": 24},
+    "ctas_per_sm": 5,
+    "warps_per_sm": 20,
+    "note": "reg-bound at 5 CTAs/SM = 20 warps/SM; comparable to R9's 25 warps/SM single-warp. grid=N/64 is small (N=4096 -> 64 CTAs ~= 1.3 CTAs/SM); bet is intra-CTA warp parallelism + cp.async overlap beats raw grid count -- it does (best-of-campaign) but does not cross 1.0x"
+  },
+  "numeric": {
+    "gate": "rel_rowscale <= 1e-2 per-row-scaled vs f64 CPU ref + NaN/Inf hard-fail counter (naninf==0)",
+    "512":  {"rel_rowscale": 5.414e-4, "max_abs": 4.426e-5, "rms_rel": 2.58e-4, "naninf": 0, "pass": true},
+    "1024": {"rel_rowscale": 5.674e-4, "max_abs": 6.104e-5, "rms_rel": 2.653e-4, "naninf": 0, "pass": true},
+    "2048": {"rel_rowscale": 6.105e-4, "max_abs": 3.411e-5, "rms_rel": 2.711e-4, "naninf": 0, "pass": true},
+    "4096": {"rel_rowscale": 7.142e-4, "max_abs": 3.116e-5, "rms_rel": 2.721e-4, "naninf": 0, "pass": true}
+  },
+  "timed_median_ms": {
+    "_method": "cuEvent 20 warmup + 200 timed median, GPU uncontended (0% util at start, reproducible to ~0.4%)",
+    "cublas_stack":        {"512": 0.015872, "1024": 0.030816, "2048": 0.061632, "4096": 0.189216},
+    "r9_singlewarp_smem":  {"512": 0.038208, "1024": 0.075040, "2048": 0.150528, "4096": 0.314496},
+    "r10_multiwarp_noasync": {"512": 0.034176, "1024": 0.058752, "2048": 0.109952, "4096": 0.303296},
+    "r10_multiwarp_cpasync": {"512": 0.025600, "1024": 0.040352, "2048": 0.073088, "4096": 0.217344}
+  },
+  "ratio_vs_cublas": {
+    "r9_singlewarp":  {"512": 2.407, "1024": 2.435, "2048": 2.442, "4096": 1.662},
+    "r10_noasync":    {"512": 2.153, "1024": 1.907, "2048": 1.784, "4096": 1.603},
+    "r10_cpasync":    {"512": 1.613, "1024": 1.309, "2048": 1.186, "4096": 1.149}
+  },
+  "best_ratio": {"value": 1.149, "shape": "N=4096", "vs_cublas": "14.9% BELOW cuBLAS-stack"},
+  "gap_closure": "R9 best 1.662x (same-session) -> R10 best 1.149x @ N=4096; same-session R10 mw+cpasync is 1.447x FASTER than R9 single-warp at N=4096",
+  "lever_isolation": {
+    "cp_async_lever": "mw+cpasync 1.34-1.50x faster than mw-noasync at all shapes (the LARGER mover)",
+    "multiwarp_lever": "mw-noasync 1.04-1.37x faster than R9 single-warp (smaller, fades at N=4096 to 1.04x)",
+    "verdict": "BOTH levers moved it; cp.async double-buffer is dominant"
+  },
+  "residual_bottleneck": "still latency-bound but now the QK^T mma -> row-reduce -> P.V mma dependency chain WITHIN each warp + the 4-warp __syncthreads barrier per K-tile; cuBLAS's two big TC GEMMs achieve higher TC pipeline utilization per launch. The 16x16 wmma tile + d=64 (only 4 d-tiles) keeps arithmetic intensity too low to saturate TCs; grid=N/64 also under-fills the 48 SMs at small N.",
+  "verdict": "ORANGE — numeric PASS all 4 shapes, best-of-campaign ratio 1.149x, but does NOT cross 1.0x on any shape -> pre-registered win condition (fused_ms < cublas_stack_ms) NOT met. F-FUSION-ATTN-MULTIWARP FALSIFIED as a WIN; SUPPORTED as a quantified gap-closure.",
+  "section10_flip": "NO (orange) -- GPU.md §10 attention axis-A box UNCHANGED; still NOT-above-cuBLAS at d=64",
+  "paper": "NO (orange) -- /paper triggers only on GREEN capstone win"
+}
