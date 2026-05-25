@@ -34,6 +34,7 @@ use "compiler/atlas/parser"
 use "compiler/atlas/merger"
 use "compiler/atlas/overlay"
 use "compiler/atlas/prefix_index"
+use "compiler/atlas/offset_index"
 // (2026-05-22 — `use "compiler/atlas/hxc_loader"` removed; hxc retired,
 //  static_atlas now parses n6/atlas.n6 via merger::load_atlas.)
 
@@ -295,6 +296,17 @@ fn _count_rodata() -> i64 {
 // scan; a packed perfect-hash variant lands later if profiling
 // justifies it.
 pub fn lookup_static(kind: string, id: string) -> AtlasNode {
+    // Fast path — on-disk offset index seeks to the single node's line and
+    // parses only it, avoiding the full ~16k-node parse (ATLAS R3 milestone).
+    // A hit (kind != "") is byte-identical to the full-parse result below.
+    // When the index is HEALTHY a sentinel is a DEFINITIVE miss (same kind==""
+    // sentinel the full parse returns), so we return it directly — no full
+    // parse. Only an UNhealthy index (empty / read failure / staleness) falls
+    // through to the canonical full parse, so correctness never depends on the
+    // accelerator (stale-safe by fallback).
+    let fast = offset_lookup(kind, id)
+    if fast.kind != "" { return fast }
+    if offset_index_healthy() { return fast }
     let idx = static_atlas()
     return lookup(idx, kind, id)
 }
@@ -319,6 +331,14 @@ pub fn lookup_static(kind: string, id: string) -> AtlasNode {
 // shorter name; callers that prefer this name get a uniform pair with
 // atlas_lookup_merged below.
 pub fn atlas_lookup(id: string) -> AtlasNode {
+    // Fast path — offset index seeks to the single node's line (file order is
+    // P,C,L,E,F,R,S,X,Q, matching the per-kind probe order below) and parses
+    // only it. Byte-identical to the full-parse probe on a hit; a healthy-index
+    // sentinel is a definitive miss (no full parse). Only an unhealthy index
+    // falls through to the canonical per-kind sweep (stale-safe).
+    let fast = offset_lookup("", id)
+    if fast.kind != "" { return fast }
+    if offset_index_healthy() { return fast }
     // Search P → C → L → E → F → R → S → X → Q. AtlasIndex keys are per-kind
     // so we have to probe each bucket; a hit short-circuits.
     let idx = static_atlas()
