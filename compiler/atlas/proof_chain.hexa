@@ -1,0 +1,268 @@
+// HEXA Native Compiler — Atlas proof-chain export (R6)
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// ATLAS R6 milestone: "proof-chain export". Given an atlas node, walk its
+// SUPPORTING edges transitively to export the full PROOF CHAIN — the set of
+// ancestor nodes the claim rests on — so a claim's evidentiary basis is
+// auditable end-to-end (the @goal's "증거" axis).
+//
+// DESIGN (additive, behaviour-preserving — see ATLAS.log.md):
+//   This is the INVERSE direction of compiler/atlas/cascade.hexa (R5).
+//   cascade asks "if A is falsified, who (downstream) cites A?" by scanning
+//   every node for an edge INTO A. proof asks the dual: "what does A (upstream)
+//   rest on?" by following the SUPPORTING edges stored ON A — no full scan,
+//   just per-node lookups along the dependency frontier.
+//
+//   SUPPORTING edges (already parsed into EdgeInfo by parser.hexa):
+//     <- depends_on   — A rests on this node (primary basis)
+//     |> verified_by  — A is verified by this node / script
+//     == equivalents  — A is provably the same as this node
+//   `->` derives / `=>` applications / `~>` converges / `!!` breakthroughs are
+//   DOWNSTREAM / annotative and are NOT followed (they are not A's basis).
+//
+//   TRAVERSAL = BFS over the supporting frontier with a visited-set (cycle
+//   safe) and a depth cap (default unlimited via -1). Each hop records the
+//   PARENT id + the edge bucket that carried the citation + the depth, so the
+//   caller can render an ordered chain / DAG. Edge targets that do NOT resolve
+//   to a real atlas node (e.g. `== phi * n`, `|> verify_primitives.py` — bare
+//   expressions / script names) are reported as UNRESOLVED leaves, never
+//   crash. READ-ONLY: no mutation, no tombstone, no I/O beyond atlas lookups.
+//
+// PUBLIC SURFACE
+//   pub struct ProofLink { id, kind, grade_value, verified, via, parent, depth, resolved }
+//   pub fn proof_chain(root_id, max_depth) -> ProofLink[]
+//   pub fn proof_bottoms_out(links) -> bool   // every leaf is verified (🔵/🟢)?
+//   pub fn proof_to_text(root_id, links) -> string
+//   pub fn proof_to_json(root_id, links) -> string
+//
+// Catalog/diagnostic strings: ENGLISH ONLY (repo policy).
+
+use "compiler/atlas/parser"
+use "compiler/atlas/static_index"
+
+// A single node in the proof chain (an ancestor the root claim rests on).
+// `parent` = the id whose supporting edge reached this node ("" for the root).
+// `via` = the edge bucket that carried the citation ("root" for the root).
+// `resolved` = whether `id` matched a real atlas node (false = bare
+// expression / external script reference — a terminal unresolved leaf).
+pub struct ProofLink {
+    id: string,          // the ancestor node's id (or raw edge target)
+    kind: string,        // node kind code ("P"|"C"|...) or "" when unresolved
+    grade_value: i64,    // node grade value (-1 = absent/unresolved)
+    verified: bool,      // node grade `*` flag (🔵/🟢-class basis)
+    via: string,         // "depends_on" | "verified_by" | "equivalents" | "root"
+    parent: string,      // id of the node whose edge reached here ("" = root)
+    depth: i64,          // 0 = root, 1 = direct basis, ...
+    resolved: bool       // true = matched a real atlas node
+}
+
+// _seen — has `id` already been visited (cycle / re-converge guard)?
+fn _seen(visited: array, id: string) -> bool {
+    let mut i = 0
+    while i < len(visited) {
+        if to_string(visited[i]) == id { return true }
+        i = i + 1
+    }
+    return false
+}
+
+// _verdict_tier — readable tier glyph from a link's grade. A verified node
+// (grade `*`) is 🔵/🟢-class supported; an unverified-but-graded node is
+// 🟡-class; an unresolved or ungraded target is 🟠-class (a gap the chain
+// hits). Mirrors the TECS-L rubric used across atlas_cli verdict echoes.
+pub fn _verdict_tier(link: ProofLink) -> string {
+    if !link.resolved { return "🟠" }
+    if link.verified { return "🟢" }
+    if link.grade_value >= 0 { return "🟡" }
+    return "🟠"
+}
+
+// proof_chain — BFS the SUPPORTING edges from `root_id`, returning the
+// ordered ProofLinks (root first, then each ancestor in discovery order).
+// `max_depth` < 0 = unlimited; 0 = root only; N = stop after N hops.
+// Cycle-safe (visited-set) + depth-capped. Pure / read-only.
+pub fn proof_chain(root_id: string, max_depth: i64) -> array {
+    let out = []
+    if len(root_id) == 0 { return out }
+    let root = atlas_lookup_enriched(root_id)
+    if root.kind == "" {
+        // Root itself is not a real node — report it as an unresolved leaf so
+        // the caller still gets a well-formed (single-element) chain.
+        out.push(ProofLink { id: root_id, kind: "", grade_value: -1,
+            verified: false, via: "root", parent: "", depth: 0, resolved: false })
+        return out
+    }
+    out.push(ProofLink { id: root.id, kind: root.kind, grade_value: root.grade.value,
+        verified: root.grade.verified, via: "root", parent: "", depth: 0, resolved: true })
+
+    let visited = [root.id]
+    // BFS frontier: parallel arrays of (id, depth) to expand.
+    let mut frontier_id = [root.id]
+    let mut frontier_depth = [0]
+    let mut fi = 0
+    while fi < len(frontier_id) {
+        let cur_id = to_string(frontier_id[fi])
+        let cur_depth = to_int(to_string(frontier_depth[fi]))
+        fi = fi + 1
+        if max_depth >= 0 && cur_depth >= max_depth { continue }
+        let node = atlas_lookup_enriched(cur_id)
+        if node.kind == "" { continue }
+        let e = node.edges
+        // Strongest-basis-first probe order, mirroring cascade's _scan_one.
+        let buckets = [e.depends_on, e.verified_by, e.equivalents]
+        let names = ["depends_on", "verified_by", "equivalents"]
+        let mut bi = 0
+        while bi < len(buckets) {
+            let arr = buckets[bi]
+            let via = to_string(names[bi])
+            let mut ai = 0
+            while ai < len(arr) {
+                let tgt = to_string(arr[ai])
+                if len(tgt) > 0 && !_seen(visited, tgt) {
+                    visited.push(tgt)
+                    let anc = atlas_lookup_enriched(tgt)
+                    let resolved = anc.kind != ""
+                    out.push(ProofLink { id: tgt,
+                        kind: if resolved { anc.kind } else { "" },
+                        grade_value: if resolved { anc.grade.value } else { -1 },
+                        verified: if resolved { anc.grade.verified } else { false },
+                        via: via, parent: cur_id, depth: cur_depth + 1,
+                        resolved: resolved })
+                    // Only real nodes can have further supporting edges.
+                    if resolved {
+                        frontier_id.push(tgt)
+                        frontier_depth.push(cur_depth + 1)
+                    }
+                }
+                ai = ai + 1
+            }
+            bi = bi + 1
+        }
+    }
+    return out
+}
+
+// proof_bottoms_out — does the chain ground out in verified (🔵/🟢) nodes?
+// True iff every LEAF (a link with no resolved children in `links`) is a
+// verified node. A 🟡/🟠 leaf means the chain hits an evidentiary gap. The
+// root alone (no basis) counts as bottoming-out iff the root is verified.
+pub fn proof_bottoms_out(links: array) -> bool {
+    let n = len(links)
+    if n == 0 { return false }
+    let mut i = 0
+    while i < n {
+        let link = links[i]
+        // Is `link.id` a parent of any other link? If so it is not a leaf.
+        let mut is_parent = false
+        let mut j = 0
+        while j < n {
+            if to_string(links[j].parent) == link.id { is_parent = true; break }
+            j = j + 1
+        }
+        if !is_parent {
+            // Leaf — it must be a verified real node to ground the chain.
+            if !(link.resolved && link.verified) { return false }
+        }
+        i = i + 1
+    }
+    return true
+}
+
+// proof_to_text — human-readable indented rendering of the proof chain.
+pub fn proof_to_text(root_id: string, links: array) -> string {
+    let parts = []
+    parts.push("proof-chain for ")
+    parts.push(root_id)
+    parts.push(" — ")
+    parts.push(to_string(len(links)))
+    parts.push(" node(s) in evidentiary basis:\n")
+    let mut i = 0
+    while i < len(links) {
+        let link = links[i]
+        let mut indent = ""
+        let mut d = 0
+        while d < link.depth { indent = indent + "  "; d = d + 1 }
+        parts.push(indent)
+        parts.push(_verdict_tier(link))
+        parts.push(" [")
+        parts.push(if link.resolved { link.kind } else { "?" })
+        parts.push("] ")
+        parts.push(link.id)
+        if link.depth > 0 {
+            parts.push("  (via ")
+            parts.push(link.via)
+            parts.push(" of ")
+            parts.push(link.parent)
+            parts.push(")")
+        }
+        if !link.resolved {
+            parts.push("  [UNRESOLVED — bare expr / external ref]")
+        }
+        parts.push("\n")
+        i = i + 1
+    }
+    parts.push("grounds-out-in-verified: ")
+    parts.push(if proof_bottoms_out(links) { "yes" } else { "no (chain hits a 🟡/🟠 gap)" })
+    parts.push("\n")
+    return parts.join("")
+}
+
+// _pj — minimal JSON string escaper (mirrors atlas_cli::_jq).
+fn _pj(s: string) -> string {
+    let n = len(s)
+    let mut out = ""
+    let mut i = 0
+    while i < n {
+        let c = s.substring(i, i + 1)
+        if c == "\\" { out = out + "\\\\" }
+        else if c == "\"" { out = out + "\\\"" }
+        else if c == "\n" { out = out + "\\n" }
+        else if c == "\r" { out = out + "\\r" }
+        else if c == "\t" { out = out + "\\t" }
+        else { out = out + c }
+        i = i + 1
+    }
+    return out
+}
+
+// proof_to_json — well-formed single-object JSON: { root, count, grounds_out,
+// chain: [ {id,kind,grade,verified,via,parent,depth,resolved,tier}, ... ] }.
+pub fn proof_to_json(root_id: string, links: array) -> string {
+    let parts = []
+    parts.push("{\"root\":\"")
+    parts.push(_pj(root_id))
+    parts.push("\",\"count\":")
+    parts.push(to_string(len(links)))
+    parts.push(",\"grounds_out\":")
+    parts.push(if proof_bottoms_out(links) { "true" } else { "false" })
+    parts.push(",\"chain\":[")
+    let mut i = 0
+    while i < len(links) {
+        let link = links[i]
+        if i > 0 { parts.push(",") }
+        parts.push("{\"id\":\"")
+        parts.push(_pj(link.id))
+        parts.push("\",\"kind\":\"")
+        parts.push(_pj(link.kind))
+        parts.push("\",\"grade\":")
+        parts.push(to_string(link.grade_value))
+        parts.push(",\"verified\":")
+        parts.push(if link.verified { "true" } else { "false" })
+        parts.push(",\"via\":\"")
+        parts.push(_pj(link.via))
+        parts.push("\",\"parent\":\"")
+        parts.push(_pj(link.parent))
+        parts.push("\",\"depth\":")
+        parts.push(to_string(link.depth))
+        parts.push(",\"resolved\":")
+        parts.push(if link.resolved { "true" } else { "false" })
+        parts.push(",\"tier\":\"")
+        parts.push(_pj(_verdict_tier(link)))
+        parts.push("\"}")
+        i = i + 1
+    }
+    parts.push("]}")
+    return parts.join("")
+}

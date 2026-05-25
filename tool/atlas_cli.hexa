@@ -30,6 +30,7 @@ use "compiler/atlas/parser"
 use "compiler/atlas/merger"
 use "compiler/atlas/static_index"
 use "compiler/atlas/cascade"       // cascade_candidates / cascade_to_text — read-only cascade-invalidation query (R5 #1026)
+use "compiler/atlas/proof_chain"   // proof_chain / proof_to_text / proof_to_json — read-only proof-chain export (R6)
 use "compiler/atlas/embed_fold"    // embed_fold_into (kind,id dedup + atomic write)
 use "compiler/atlas/calc_dispatch" // calc_eps / calc_is_float_fn — float-recompute SSOT (shared w/ verify_cli)
 use "self/stdlib/fs"               // read_file_safe (used by cmd_append_witness)
@@ -48,7 +49,7 @@ fn _slice_args() -> array {
     let mut i = 1
     while i < n {
         let a = to_string(av[i])
-        if a == "lookup" || a == "dump" || a == "stats" || a == "hash" || a == "register" || a == "export" || a == "reverify" || a == "cascade" || a == "--help" || a == "-h" || a == "help" {
+        if a == "lookup" || a == "dump" || a == "stats" || a == "hash" || a == "register" || a == "export" || a == "reverify" || a == "cascade" || a == "proof" || a == "--help" || a == "-h" || a == "help" {
             let mut out = []
             let mut j = i
             while j < n {
@@ -2442,6 +2443,41 @@ fn cmd_cascade(rest: array) {
     print(cascade_to_text(id, hits))
 }
 
+// cmd_proof — export a node's PROOF CHAIN (R6). The INVERSE of cascade: walks
+// the SUPPORTING edges (<- depends_on · |> verified_by · == equivalents)
+// transitively from <id> to the evidentiary basis it rests on. READ-ONLY.
+// Cycle-safe (visited-set) + depth-capped. Bare-expr / external-script edge
+// targets that don't resolve to a node are reported as UNRESOLVED leaves.
+//   hexa atlas proof <id> [--depth=N] [--format=json]
+fn cmd_proof(rest: array) {
+    let mut id = ""
+    let mut max_depth = -1   // unlimited
+    let mut json_mode = false
+    let mut i = 0
+    while i < len(rest) {
+        let a = to_string(rest[i])
+        if a.starts_with("--depth=") { max_depth = to_int(a.substring(8, len(a))) }
+        else if a == "--depth" && i + 1 < len(rest) { max_depth = to_int(to_string(rest[i + 1])); i = i + 1 }
+        else if a == "--format=json" || a == "--json" { json_mode = true }
+        else if a == "--format=text" { json_mode = false }
+        else if len(id) == 0 { id = a }
+        i = i + 1
+    }
+    if len(id) == 0 {
+        println("usage: hexa atlas proof <id> [--depth=N] [--format=json]")
+        exit(2)
+    }
+    let links = proof_chain(id, max_depth)
+    // A root that resolves to no real node yields a single unresolved leaf.
+    if len(links) == 1 && !links[0].resolved {
+        println("# not a node (unresolved root): " + id)
+        if json_mode { println(proof_to_json(id, links)) }
+        exit(1)
+    }
+    if json_mode { println(proof_to_json(id, links)) }
+    else { print(proof_to_text(id, links)) }
+}
+
 fn cmd_help() {
     println("hexa atlas — atlas SSOT surface (embedded.gen.hexa read + direct-fold write)")
     println("")
@@ -2482,6 +2518,13 @@ fn cmd_help() {
     println("                          edge (depends_on/verified_by/equivalents/derives) cites it —")
     println("                          the cascade candidates to re-examine. unknown id → exit 1.")
     println("")
+    println("proof subcommand (read-only proof-chain export; INVERSE of cascade · no mutate):")
+    println("  proof <id> [--depth=N] [--format=json]")
+    println("                          transitively walk <id>'s SUPPORTING edges (<- depends_on ·")
+    println("                          |> verified_by · == equivalents) to the verified basis it")
+    println("                          rests on. ordered chain + per-node tier (🟢/🟡/🟠) shows if")
+    println("                          it grounds out in verified nodes. cycle-safe · unknown id → exit 1.")
+    println("")
     println("SSOT: compiler/atlas/embedded.gen.hexa (set $HEXA_ATLAS_EMBED=/abs/dir to override).")
 }
 
@@ -2506,6 +2549,7 @@ fn main() {
     else if sub == "export" { cmd_export(rest) }
     else if sub == "reverify" { cmd_reverify(rest) }
     else if sub == "cascade" { cmd_cascade(rest) }
+    else if sub == "proof" { cmd_proof(rest) }
     else if sub == "help" || sub == "--help" || sub == "-h" { cmd_help() }
     else {
         println("error: unknown subcommand: " + sub)

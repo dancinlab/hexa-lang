@@ -2,6 +2,49 @@
 
 Append-only step log for the theorem-atlas upgrade campaign. Newest on top.
 
+## 2026-05-25 — R6 proof-chain export (`hexa atlas proof <id>` · read-only · cascade INVERSE)
+
+goal(deferred 신규역량): "proof-chain export". 아틀라스 노드의 edge 그래프를 walk해 그 claim이
+의존하는 노드의 transitive 집합(증거 기반)을 audit 가능한 체인/DAG로 export — @goal의 "증거" 축.
+
+**조사**: 노드 모델 = `compiler/atlas/parser.hexa` `struct AtlasNode`(kind·id·raw·source_file·
+source_line·grade·`edges`). `edges`=`EdgeInfo`(depends_on `<-`·derives `->`·applications `=>`·
+equivalents `==`·converges `~>`·verified_by `|>`·breakthroughs `!!`). embedded.gen.hexa의 노드
+리터럴은 edge가 **이미 파퓰레이트됨**(예: `sigma` = `depends_on: ["n"]`·`equivalents: ["1+2+3+6","phi * n"]`).
+런타임 접근자 = `atlas_lookup_enriched(id)`(단일 노드, edge 백필) / sentinel `kind==""`(non-node).
+R5 cascade.hexa(#1026/#1036)의 edge-traversal 패턴 미러 — 단 **방향 반전**.
+
+**설계**: cascade("A falsified → 누가 A 인용?", 전노드 스캔 IN A)의 **dual** = proof("A는 무엇에
+의존?", 노드에 저장된 SUPPORTING 엣지 OUT). SUPPORTING = `<-`depends_on(1차 기반)·`|>`verified_by
+(검증 소스)·`==`equivalents(증명적 동치). `->`derives/`=>`applications/`~>`converges/`!!` = 다운스트림/
+주석성이라 **미추적**(기반 아님). 전수 스캔 無 — depend 프론티어 따라 per-node lookup만.
+
+- [x] compiler/atlas/proof_chain.hexa (신규 ~268줄 코드+주석; 코드본문 189줄 g4 내) —
+  (1) `struct ProofLink {id,kind,grade_value,verified,via,parent,depth,resolved}` = 체인의 한 조상.
+  (2) `proof_chain(root_id,max_depth)->ProofLink[]` = SUPPORTING 엣지 **BFS** + visited-set(cycle/
+      diamond-safe) + depth-cap(-1=무제한·0=루트만·N=N홉). 각 홉이 parent id + 엣지 버킷 + depth 기록.
+      노드 미해석 타깃(bare expr/스크립트)은 `resolved=false` UNRESOLVED leaf(crash 無, 더 안 확장).
+  (3) `proof_bottoms_out(links)->bool` = 모든 leaf가 verified 실노드면 true(🔵/🟢 ground-out), 아니면
+      🟡/🟠 gap. (4) `proof_to_text`/`proof_to_json`(verdict tier 🟢/🟡/🟠 포함, jq-valid).
+- [x] tool/atlas_cli.hexa — `use compiler/atlas/proof_chain` + `cmd_proof` + main 1-블록 dispatch +
+  `_slice_args` allowlist에 `proof` 추가 + help. **cascade verb KEEP-ALL**(sibling #1036 위에 rebase).
+  `--depth=N`·`--depth N`·`--format=json`·`--json`·`--format=text` 파싱. unknown root → `# not a node`+exit 1.
+
+**검증(ATLAS.md method)**: `hexa parse` 양파일 OK · bin/hexa-atlas 빌드 PASS(borrowed main-repo
+transpiler hexa_v2→worktree build+self/native gitignored · `SIDECAR_NO_POOL_ROUTE=1` ·
+`HEXA_MODULE_LOADER`=main build/hexa_module_loader · `HEXA_ATLAS_EMBED`=worktree compiler/atlas).
+기능 테스트 실측:
+  - WITH-edges `sigma` → `n`(via depends_on, 🟢 verified) · equiv `1+2+3+6`·`phi * n` = UNRESOLVED 🟠
+  - leaf `n` → 자기 + `|> verify_primitives.py`(UNRESOLVED 스크립트 leaf)만(depends_on 無)
+  - multi-hop transitive `probe_steps_cpgd` → `template_count`/`round_seed`(depth1) → `n_axis_cell`(depth2)
+  - **diamond/cycle dedup**: `sigma_n`(←sigma,n)에서 sigma도 ←n → n이 2경로 도달하나 visited-set이
+    정확히 **1회만** 방출(cycle/re-converge safe 입증)
+  - `--depth=0`=루트 1노드(grounds-out yes) · `--depth=1`=직접 기반만 · `--format=json` jq `.chain|length` PASS
+  - unknown id `zzz_not_a_node` → `# not a node (unresolved root)` + exit 1
+  - cascade verb 동시 동작 확인(`cascade n`→26 노드, R5/R6 측정 일치) — KEEP-ALL
+embedded.gen.hexa(데이터)·cascade.hexa·audit.hexa·calc_dispatch.hexa 무수정. proof_chain.hexa는
+parser/static_index만 `use`(파서 중복 無).
+
 ## 2026-05-25 — R6 cascade CLI verb 노출 (`hexa atlas cascade <id>` · read-only)
 
 R5 #1026이 라이브러리 surface(`compiler/atlas/cascade.hexa` — `cascade_candidates`/`cascade_candidates_static`/`cascade_to_text`/`node_falsifier`)만 랜딩하고 CLI verb는 dispatch가 당시 sibling 소유 `atlas_cli.hexa`라 DEFERRED했던 것을 이번 라운드에서 wire.
