@@ -147,6 +147,13 @@ pub fn calc_is_float_fn(fn_name: string) -> bool {
         //   phi_demo(case_id) 1-arg, recomputes faithful Φ★ on a hardcoded
         //   canonical small state. Real-valued ⇒ 🟢 SUPPORTED-NUMERICAL via --tol.
         || fn_name == "phi_demo"
+        // VERIFY-KIT V9 — antimatter trap/spectroscopy closed-forms (2026-05-26):
+        //   cyclotron_freq_hz(q,B,m) · penning_axial_freq(q,U,m,d) ·
+        //   h_reduced_mass_factor(m_e,m_nuc) · antihydrogen_1s_binding(Ry,mr) ·
+        //   gbar_free_fall_time(h,g). All libm-class ⇒ 🟢 NUMERICAL via --tol.
+        || fn_name == "cyclotron_freq_hz" || fn_name == "penning_axial_freq"
+        || fn_name == "h_reduced_mass_factor" || fn_name == "antihydrogen_1s_binding"
+        || fn_name == "gbar_free_fall_time"
 }
 
 // calc_is_zero_arg_float_fn — is fn_name a 0-arg closed-form constant?
