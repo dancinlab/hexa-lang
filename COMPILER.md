@@ -232,8 +232,6 @@ the rename cycle runs if any name is contested):
 | `aprime_cc` · `tool/build_aprime.sh` | native codegen compiler + its build | `hexac` · `tool/build_hexac.sh` |
 | `hexa_v2` · `self/native/hexa_cc.c` | legacy C transpiler binary + source | `ctrans` · `ctrans.c` |
 | `self/codegen_c2.hexa` | C-backend codegen (SSOT) | `codegen_c.hexa` |
-| `self/native/codegen_c2_v2.c` | C-frontend codegen mirror | `codegen_c.c` |
-| `self/native/{lexer,parser,type_checker}_v2.c` | C-frontend mirror | drop `_v2` |
 | `tool/s4_flatc_post.py` | flatten post-processor | `tool/flatc_post.py` |
 | `self/native/*.bak.*` · `*.pre*` | dead bootstrap snapshots | delete |
 
