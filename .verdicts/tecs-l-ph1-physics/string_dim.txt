@@ -1,0 +1,8 @@
+PH1 — tau(perfect_k) = string critical dim (M5 thread promoted to PHYSICS macro-axis)
+
+tau(6)=4       BLUE  (cite M5 .verdicts/tecs-l-physics-constants)
+tau(28)=6      BLUE  (cite M5)
+tau(496)=10    BLUE  (cite M5)
+tau(8128)=14   BLUE  (cite M5)
+tau(33550336)=26  BLUE  bosonic-string D=26 (cite M5 str_dim)
+note: string critical dims (4,6,10,14,26) = tau(perfect_k); M5 verified 5/5 BLUE. PHYSICS macro-axis = M5 thread re-homed (cite, no re-verify per g68 reuse).

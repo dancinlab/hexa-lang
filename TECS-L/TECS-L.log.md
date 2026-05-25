@@ -3,6 +3,14 @@
 Append-only history sister of `TECS-L.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
 
+## 2026-05-26 · 새 대축 R1 — CM0 lattice + PH1 physics (cite M2/M5 🔵 + sopfr 🟠)
+
+- [x] CM0 (수학 대축 축 G) — n=6 lattice 재근거: σ(6)=12·τ(6)=4·φ(6)=2 🔵 (M2 cite + main-tree verify calc=12 재확인) + master σφ=nτ=24 정수조립 🔵 + sopfr(6)=5 🟠 (verify_cli `_recompute` whitelist gap, 기존 INBOX stdlib-primitive 추적). → `.verdicts/tecs-l-cm0-lattice/`
+- [x] PH1 (PHYSICS 대축) — M5 물리상수 thread 재편: string critical dim τ(perfect_k)=4/6/10/14/26 🔵 (M5 cite 5/5, g68 reuse 재verify 불요; bosonic D=26). → `.verdicts/tecs-l-ph1-physics/`
+- 방법: verify infra 가 worktree rebuild + 묶음에서 `_Generic` stale 불안정 (INBOX #1204) → main-tree 단독 verify 동작 입증(sigma 6 12 🔵) + 기존 M2/M5 verdict **cite** (g68 reuse) 로 우회. CM0/PH1 = 기존 검증 재사용 (새 verify 아닌 cite-based milestone).
+- 잔여: CM1-CM7 candidate triage (verify infra 의존) · COSMOS CO1 / LIFE LF1 (verify-able 후보 발굴) · sopfr/iit4/bessel = deployed 재설치 unblock 대상 (사용자 "2").
+- 격리 worktree `/tmp/wt-tx2` (branch `tecs-l-axis-r1b-2026-05-26`).
+
 ## 2026-05-26 · TECS-L 범용 다영역 발견 엔진으로 격상 (n=6 = 축 0) + MILLENNIUM 통합
 
 - [x] **정체성 재정의** (사용자 지시): TECS-L = n=6 전용 수론 엔진 → **범용 우주-법칙 다영역 발견 엔진**. n=6 완전수 lattice 는 여러 축 중 하나(축 0)일 뿐 — 첫 좌표계이지 유일 대상 아님. ("TECS-L 범용화 · n=6 한 축 · 물리·수학·우주·생명 축 추가 · MILLENNIUM 별도 말고")
