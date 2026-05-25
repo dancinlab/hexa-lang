@@ -3,6 +3,16 @@
 Append-only history sister of `TECS-L.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
 
+## 2026-05-25T11:00 — M9 · /paper 승격 (10p + fal.ai 그림)
+
+- [x] `PAPER/tecs-l-n6-identity-locus/` arxiv-style 논문 "The {1,6} Identity Locus" — paper_gate 통과(모든 섹션 claim terminal 🔵/🔴)
+- [x] finding = n∈{1,6}만 두 곱셈 항등식(σφ=nτ·D(n)=0)의 locus, 완전수 28조차 반례 — M1·M3·M5·M6 terminal 발견 소비
+- [x] pre-registered falsifier = n=28(2nd 완전수) → closed-negative (paper_significance 충족)
+- [x] g51: 10 page + fal.ai 그림 1장(`figures/fig01_locus.png`, gpt-image-2) · pdflatex×3+bibtex 클린 컴파일
+- [x] Appendix A 전체 D(n) sweep(n=1..100) · Appendix B 74-entry claim manifest · Appendix C raw verdict 전사
+- [x] 전칭(unbounded) 유일성은 §caveats 에 🟡 명시 제외 (over-claim 0) · inline 부모 세션 작성
+
+
 ## 2026-05-25T09:45 — 도메인 폴더 정리 (별도 `TECS-L/` 통합)
 
 - [x] `TECS-L.md` · `TECS-L.log.md` → `TECS-L/` 이동 (도메인 스킬 folder-nested 해석 지원: `<NAME>/<NAME>.md`)

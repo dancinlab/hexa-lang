@@ -1,0 +1,10 @@
+A clean, minimalist, publication-quality scientific line chart on a pure white
+background. The horizontal axis is labeled "n" (integers 1 to 100); the vertical
+axis is labeled "D(n) = sigma(n) phi(n) - n tau(n)". A single blue curve is
+jagged and grows large for most n, but touches exactly zero at only two points:
+n = 1 and n = 6, each marked with a small filled circle on the zero baseline and
+a short label. One other point, n = 28, is highlighted in red high above the zero
+line with a callout label "n=28 (perfect, yet D=504 ≠ 0)". A faint horizontal
+dashed line marks D = 0. Title at top: "The {1,6} identity locus". Monochrome
+blue curve with a single red highlight, thin clean lines, lots of white space,
+no 3D, no gradients, no clutter — the aesthetic of a Nature or arXiv figure.
