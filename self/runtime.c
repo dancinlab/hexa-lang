@@ -1026,6 +1026,19 @@ static int hxlcl_pthread_join(void *thread, void **retval);
 #define HXLCL_SYS_LSEEK   199
 #define HXLCL_SYS_MMAP    197
 #define HXLCL_SYS_FLOCK   131
+// RUNTIME net/exec ③④ (cycle 78): socket + message-group Darwin syscall #s.
+// NB: no SYS_recv/SYS_send on Darwin — recv/send are libc wrappers over
+// recvfrom/sendto, so we route to those with NULL addr args.
+#define HXLCL_SYS_RECVMSG      27
+#define HXLCL_SYS_SENDMSG      28
+#define HXLCL_SYS_RECVFROM     29
+#define HXLCL_SYS_ACCEPT       30
+#define HXLCL_SYS_SENDTO      133
+#define HXLCL_SYS_SOCKET       97
+#define HXLCL_SYS_CONNECT      98
+#define HXLCL_SYS_BIND        104
+#define HXLCL_SYS_SETSOCKOPT  105
+#define HXLCL_SYS_LISTEN      106
 
 static inline long _hxlcl_syscall1(long nr, long a0) {
     register long x0 __asm__("x0") = a0;
@@ -1774,7 +1787,9 @@ static int hxlcl_setenv(const char *name, const char *val, int overwrite) {
 // SO_REUSEADDR / SO_RCVTIMEO etc. were no-ops in the compiler binary.
 // Prototype from the top-of-file <sys/socket.h> include.
 static int __attribute__((noinline)) hxlcl_setsockopt(int sockfd, int level, int optname, const void *optval, unsigned int optlen) {
-    return setsockopt(sockfd, level, optname, optval, (socklen_t)optlen);
+    // net/exec ③: svc-trap setsockopt (105), 5 args -> sc6_cf (6th unused).
+    return (int)_hxlcl_syscall6_cf(HXLCL_SYS_SETSOCKOPT, (long)sockfd, (long)level,
+                                   (long)optname, (long)optval, (long)optlen, 0);
 }
 static int hxlcl_grantpt(int fd) { (void)fd; return (int)HX_INT(rt_posix_ok()); }
 static int hxlcl_unlockpt(int fd) { (void)fd; return (int)HX_INT(rt_posix_ok()); }
@@ -1853,32 +1868,38 @@ static size_t hxlcl_strftime(char *buf, size_t cap, const char *fmt, void *tm) {
 // pipe libc restore. The (void*)-typed addr/msg params widen the libc
 // `struct sockaddr*` / `struct msghdr*` signatures — the casts at the
 // call sites are exact, so this is ABI-safe.
+// net/exec ③ (cycle 78): svc-trap the socket group via carry-flag helpers.
+// Plain BSD syscalls — same shape as the already-trapped read/write/open;
+// _cf translates the carry-set error path to -1 + errno. accept returns a
+// new fd on success (positive = fd, handled by _cf).
 static int __attribute__((noinline)) hxlcl_socket(int d, int t, int p) {
-    return socket(d, t, p);
+    return (int)_hxlcl_syscall3_cf(HXLCL_SYS_SOCKET, (long)d, (long)t, (long)p);
 }
 static int __attribute__((noinline)) hxlcl_bind(int s, const void *addr, unsigned int len) {
-    return bind(s, (const struct sockaddr *)addr, (socklen_t)len);
+    return (int)_hxlcl_syscall3_cf(HXLCL_SYS_BIND, (long)s, (long)addr, (long)len);
 }
 static int __attribute__((noinline)) hxlcl_listen(int s, int backlog) {
-    return listen(s, backlog);
+    return (int)_hxlcl_syscall2_cf(HXLCL_SYS_LISTEN, (long)s, (long)backlog);
 }
 static int __attribute__((noinline)) hxlcl_accept(int s, void *addr, unsigned int *len) {
-    return accept(s, (struct sockaddr *)addr, (socklen_t *)len);
+    return (int)_hxlcl_syscall3_cf(HXLCL_SYS_ACCEPT, (long)s, (long)addr, (long)len);
 }
 static int __attribute__((noinline)) hxlcl_connect(int s, const void *addr, unsigned int len) {
-    return connect(s, (const struct sockaddr *)addr, (socklen_t)len);
+    return (int)_hxlcl_syscall3_cf(HXLCL_SYS_CONNECT, (long)s, (long)addr, (long)len);
 }
+// net/exec ④ (cycle 78): message-group svc-trap. recv/send have no Darwin
+// syscall — route to recvfrom(29)/sendto(133) with NULL addr (= recv/send).
 static long __attribute__((noinline)) hxlcl_recv(int s, void *b, unsigned long n, int f) {
-    return recv(s, b, (size_t)n, f);
+    return _hxlcl_syscall6_cf(HXLCL_SYS_RECVFROM, (long)s, (long)b, (long)n, (long)f, 0, 0);
 }
 static long __attribute__((noinline)) hxlcl_send(int s, const void *b, unsigned long n, int f) {
-    return send(s, b, (size_t)n, f);
+    return _hxlcl_syscall6_cf(HXLCL_SYS_SENDTO, (long)s, (long)b, (long)n, (long)f, 0, 0);
 }
 static long __attribute__((noinline)) hxlcl_recvmsg(int s, void *m, int f) {
-    return recvmsg(s, (struct msghdr *)m, f);
+    return _hxlcl_syscall3_cf(HXLCL_SYS_RECVMSG, (long)s, (long)m, (long)f);
 }
 static long __attribute__((noinline)) hxlcl_sendmsg(int s, const void *m, int f) {
-    return sendmsg(s, (const struct msghdr *)m, f);
+    return _hxlcl_syscall3_cf(HXLCL_SYS_SENDMSG, (long)s, (long)m, (long)f);
 }
 // RUNTIME net/exec ① (cycle 77): hexa-native inet_pton — drops the libc
 // _inet_pton extern. AF_INET only (the sole call site, net.c, passes
