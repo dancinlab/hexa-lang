@@ -49,6 +49,12 @@
   consumers = "ALL projects (universal discovery substrate)"
   evidence  = "every `hexa verify` folds an atom · cross-project query surface"
 
+@X p_iit4 := "stdlib/consciousness/iit4" :: provides [active]
+  primitive = "iit4_faithful_phi (small-N exact MIP-EI Φ · n<=8) · iit4_faithful_phi_from_mi · iit4_build_mi_matrix"
+  consumers = "VERIFY-KIT V5 (IIT Φ engine) · ARXIV A2 (Φ measurement) — wiring = V5.2"
+  origin    = "folded from anima HEXAD/LIFE H_278 faithful-Φ engine (g68 cross-repo · g61 shared substrate)"
+  evidence  = "VERIFY-KIT V5.1 promote · .verdicts/verify-kit-iit-promote/v5_1.txt · self-contained (zero anima-local deps)"
+
 # === 2. hub -> consumer star edges (from-hexa · verified by sibling NEXUS.tape evidence) ===
 
 @X e1 := "stdlib/material/magnet -> demiurge" :: reuse-edge [active]
