@@ -1,0 +1,96 @@
+# Gamma_0(N) genus sweep — hexa verify --expr gamma0_genus N <expected>
+# 15 classical genus-0 levels (all g=0, 🔵) + genus>=1 boundary (off the classical list).
+# one line per N: gamma0_genus(N)=g  <tier>
+#
+## --- 15 classical genus-0 levels (g=0) ---
+gamma0_genus(1)=0  🔵 SUPPORTED-FORMAL
+gamma0_genus(2)=0  🔵 SUPPORTED-FORMAL
+gamma0_genus(3)=0  🔵 SUPPORTED-FORMAL
+gamma0_genus(4)=0  🔵 SUPPORTED-FORMAL
+gamma0_genus(5)=0  🔵 SUPPORTED-FORMAL
+gamma0_genus(6)=0  🔵 SUPPORTED-FORMAL
+gamma0_genus(7)=0  🔵 SUPPORTED-FORMAL
+gamma0_genus(8)=0  🔵 SUPPORTED-FORMAL
+gamma0_genus(9)=0  🔵 SUPPORTED-FORMAL
+gamma0_genus(10)=0  🔵 SUPPORTED-FORMAL
+gamma0_genus(12)=0  🔵 SUPPORTED-FORMAL
+gamma0_genus(13)=0  🔵 SUPPORTED-FORMAL
+gamma0_genus(16)=0  🔵 SUPPORTED-FORMAL
+gamma0_genus(18)=0  🔵 SUPPORTED-FORMAL
+gamma0_genus(25)=0  🔵 SUPPORTED-FORMAL
+## --- genus>=1 boundary (off classical list) ---
+gamma0_genus(11)=1  🔵 SUPPORTED-FORMAL
+gamma0_genus(14)=1  🔵 SUPPORTED-FORMAL
+gamma0_genus(15)=1  🔵 SUPPORTED-FORMAL
+gamma0_genus(17)=1  🔵 SUPPORTED-FORMAL
+gamma0_genus(19)=1  🔵 SUPPORTED-FORMAL
+gamma0_genus(22)=2  🔵 SUPPORTED-FORMAL
+gamma0_genus(23)=2  🔵 SUPPORTED-FORMAL
+#
+## === raw verdict blocks (verbatim stdout) ===
+verify --expr gamma0_genus(1)=0
+  calc   = 0  == expected 0
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+verify --expr gamma0_genus(2)=0
+  calc   = 0  == expected 0
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+verify --expr gamma0_genus(3)=0
+  calc   = 0  == expected 0
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+verify --expr gamma0_genus(4)=0
+  calc   = 0  == expected 0
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+verify --expr gamma0_genus(5)=0
+  calc   = 0  == expected 0
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+verify --expr gamma0_genus(6)=0
+  calc   = 0  == expected 0
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+verify --expr gamma0_genus(7)=0
+  calc   = 0  == expected 0
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+verify --expr gamma0_genus(8)=0
+  calc   = 0  == expected 0
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+verify --expr gamma0_genus(9)=0
+  calc   = 0  == expected 0
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+verify --expr gamma0_genus(10)=0
+  calc   = 0  == expected 0
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+verify --expr gamma0_genus(12)=0
+  calc   = 0  == expected 0
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+verify --expr gamma0_genus(13)=0
+  calc   = 0  == expected 0
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+verify --expr gamma0_genus(16)=0
+  calc   = 0  == expected 0
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+verify --expr gamma0_genus(18)=0
+  calc   = 0  == expected 0
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+verify --expr gamma0_genus(25)=0
+  calc   = 0  == expected 0
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+verify --expr gamma0_genus(11)=1
+  calc   = 1  == expected 1
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+verify --expr gamma0_genus(14)=1
+  calc   = 1  == expected 1
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+verify --expr gamma0_genus(15)=1
+  calc   = 1  == expected 1
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+verify --expr gamma0_genus(17)=1
+  calc   = 1  == expected 1
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+verify --expr gamma0_genus(19)=1
+  calc   = 1  == expected 1
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+verify --expr gamma0_genus(22)=2
+  calc   = 2  == expected 2
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+verify --expr gamma0_genus(23)=2
+  calc   = 2  == expected 2
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)

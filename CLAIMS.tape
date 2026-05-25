@@ -957,3 +957,46 @@
   raw    = ".verdicts/tecs-l-modform-index/idx_n30.txt"
   src    = "MODFORM MF1"
   status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal."
+
+# ───────────────────────────────────────────────────────────────────────
+# TECS-L axis A (MODFORM) — tecs-l-modform-genus (slug · group=TECS-L · MF3)
+# Gamma_0(N) genus recomputed by gamma0_genus. The classical genus-0 set is
+# exactly N in {1,2,3,4,5,6,7,8,9,10,12,13,16,18,25} (15 levels, all g=0 🔵);
+# off that list the genus rises (N=11/14/15/17/19 -> g=1, N=22/23 -> g=2).
+# hexa's gamma0_genus AGREES with every classical/known value (no 🔴). Bridge:
+# Gamma_0(6) genus = 0 (X_0(6) is genus-0 — n=6 modular-curve bridge).
+
+@C tecs_l_mf_genus_sweep := "gamma0_genus(N) = 0 for all 15 classical genus-0 levels N in {1..10,12,13,16,18,25} (15/15 closed-form)" :: experiment [slug=tecs-l-modform-genus group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr gamma0_genus N 0  for N in {1,2,3,4,5,6,7,8,9,10,12,13,16,18,25}"
+  raw    = ".verdicts/tecs-l-modform-genus/genus_sweep.txt"
+  src    = "MODFORM axis MF3 (Gamma_0(N) classical genus-0 set); calc fn gamma0_genus"
+  status = "🔵 SUPPORTED-FORMAL — 15/15 genus=0, verdicts persisted verbatim. terminal."
+
+@C tecs_l_mf_genus_boundary := "gamma0_genus rises off the classical list: N=11/14/15/17/19 -> 1, N=22/23 -> 2 (genus>=1 boundary, 7/7)" :: experiment [slug=tecs-l-modform-genus group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr gamma0_genus N g  for (N,g) in {(11,1),(14,1),(15,1),(17,1),(19,1),(22,2),(23,2)}"
+  raw    = ".verdicts/tecs-l-modform-genus/genus_sweep.txt"
+  src    = "MODFORM MF3 (off-classical genus>=1; matches well-known X_0(N) genus)"
+  status = "🔵 SUPPORTED-FORMAL — 7/7 match known genus values, verdicts persisted verbatim. terminal."
+
+@C tecs_l_mf_genus_n6 := "gamma0_genus(6) = 0 (X_0(6) is genus-0 — n=6 modular-curve bridge, axis 0 M4)" :: formula [slug=tecs-l-modform-genus group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr gamma0_genus 6 0"
+  raw    = ".verdicts/tecs-l-modform-genus/genus_n6.txt"
+  src    = "MODFORM MF6 bridge (axis 0 M4: Gamma_0(6) genus=0)"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal."
+
+@C tecs_l_mf_genus_n1 := "gamma0_genus(1) = 0 (Gamma_0(1) = SL2(Z), X_0(1) = j-line, genus 0)" :: formula [slug=tecs-l-modform-genus group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr gamma0_genus 1 0"
+  raw    = ".verdicts/tecs-l-modform-genus/genus_n1.txt"
+  src    = "MODFORM MF3"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal."
+
+@C tecs_l_mf_genus_n11 := "gamma0_genus(11) = 1 (first genus-1 level — X_0(11) is the conductor-11 elliptic curve)" :: formula [slug=tecs-l-modform-genus group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr gamma0_genus 11 1"
+  raw    = ".verdicts/tecs-l-modform-genus/genus_n11.txt"
+  src    = "MODFORM MF3 (first level off the classical genus-0 list)"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal."
