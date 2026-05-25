@@ -30,7 +30,7 @@ use "self/lsp/handlers"
 let mut doc_store = #{}
 
 fn doc_get(uri: string) -> string {
-    if doc_store[uri] != null { return doc_store[uri] }
+    if doc_store[uri] != None { return doc_store[uri] }
     return ""
 }
 
