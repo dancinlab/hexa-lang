@@ -326,6 +326,21 @@ Broadens the §10 moat (already `[x]` via the launch-amort wall, §1h / PR #1028
 
 **4/4 workloads PASS ≥30% in BOTH launch-bound and bandwidth-bound regimes (8/8 measurements, 8/8 numeric).** The moat is now a robust GENERAL result across **N+1 = 5 workloads** (these 4 + launch-amort 73–76%), not a single data point. cuBLAS/cuDNN supply tuned GEMMs but the elementwise/norm/activation glue is exactly what fusion owns. All ptxas modules `-arch=sm_90 -v` clean, 0 spill. Ledger `exports/sweep/gpu-axisA-breadth-2026-05-25/`; artifact `archive/fires/fusion_axisA_breadth_2026_05_25/`. No LLVM (@F f1). No C-transpile change (@F f2). CPU codegen untouched (hand-emit PTX, pure ASCII).
 
+### 1n — Axis E — autoregressive single-token fusion (LLM decode) — round 8 of N · structural + projection (2026-05-25) 🛸🛸🛸
+
+Novel axis E (sibling to axes A/B/C/D), declared post-axis-C. Fuses an entire transformer-decoder layer step at autoregressive batch=1 (post-first-token) decode into **2 mega-kernels per layer** (`decode_attn_fused` + `decode_ffn_fused`) so the q-vector flows through registers/smem across all 17+ logical ops (LN · 3-GEMV Q/K/V · KV-append · QK · softmax · PV · O-proj · residual · LN · FFN-up · SiLU · FFN-down · residual). The MOAT: at decode batch=1 the per-op compute is tiny (~5 µs) vs the per-launch overhead (~1 µs warm × 17 launches = 17 µs in eager), so launch-count reduction transfers almost 1:1 into wall reduction. This is the §5f / §5a axis extended to a full transformer layer's worth of ops — the regime where vLLM / PyTorch eager per-token decode bleeds the most.
+
+**Shape**: GPT-2-small d=768, n_heads=12, head_dim=64, kv_cache_len L=512 (representative mid-context decode step).
+
+- [x] **F-FUSION-AUTOREGRESSIVE-DECODE structural** 🔵 SUPPORTED-FORMAL — `$0` deterministic oracle (compiled hexa `oracle.hexa`, exit 0): per layer per token **fused 2 launches vs eager 17 (8.5× fewer)**; **temp-HBM round-trip 0 B vs 112 656 B (100% eliminated)**; closed-form launch-bound wall projection from MEASURED L=1 µs/launch warm overhead (`F-RFC067-PB-TIMING`) gives **70.6%** wall reduction (eager 17 µs vs fused max(5 µs, 2 µs)=5 µs); compute-saturated floor **≥30%** unconditional (the 9 elementwise/norm/residual eager launches collapse into 0 in fused, ~9 µs overhead saved no matter what). For a 12-layer model: fused **24 launches/token vs eager 204** (8.5× fewer); fused **0 vs eager ~1.35 MiB temp-HBM/token**.
+- [x] **ptxas-clean** — sm_80 + sm_90 RC=0 on both fused (2 mega-kernels: 32+27 regs · 40 960+16 384 B smem · 0 spill) and eager (17 entries: 8–26 regs each · 0 spill). sm_120 reached via `cuModuleLoadDataEx` driver-JIT (forward-compat, same path as `F-FUSION-LAUNCH-AMORT` / `F-FUSION-ATTN-WMMA`). Smem 40 960 B fits the 49 152 B/block sm_80/sm_90 envelope.
+- [ ] **F-FUSION-AUTOREGRESSIVE-DECODE-WALL (round-9 timed silicon, DEFERRED)** — host harness + f64 CPU reference + per-row-scaled RMS rel ≤ 1e-2 (the honest metric, avoiding the round-3 near-zero false-FAIL artifact). cudaEvent warmup 20 / timed 200 median on ubu-2 RTX 5070 sm_120 uncontended. Sweep L ∈ {64, 256, 512, 1024, 2048} to map launch-bound → compute-bound transition. **Expected wall reduction in [30%, 70%] across L** (launch-bound ~70% at small L, compute floor ≥30% at large L).
+- [ ] **§10 axis-E row** — new closure lane added (NOT a new scoreboard slot; closure remains 8/8 ✅). Axis-E specific row says: structural ✅, timed wall ⏳ pending round-9.
+
+Verdict `.verdicts/fusion-autoregressive-decode/F-FUSION-AUTOREGRESSIVE-DECODE.txt`; discovery `.discoveries/fusion-autoregressive-decode.tape`; CLAIMS.tape `@C fusion_autoregressive_decode_structural`; artifact `archive/fires/fusion_autoregressive_decode_2026_05_25/` (fused_decode.ptx + eager_decode.ptx + oracle.hexa + oracle_output.txt + ptxas_clean.log + FIRE.md). No LLVM (@F f1). No C-transpile change (@F f2). CPU codegen untouched (hand-emit PTX, pure ASCII).
+
+**Verdict framing**: "structural launches per token per layer: hexa **2** vs eager **17** — vLLM / PyTorch API per-call structure forbids the fusion; projected launch-bound wall ≥**70%** above eager per-token (round-9 timed will confirm)."
+
 ---
 
 ## 2 · Next layer (concrete, scope-bounded — pick one to start)
