@@ -1480,6 +1480,35 @@
   status = "🔴 CLOSED-NEGATIVE — warp-shuffle softmax ruled out as the next lever at d=64/16x16; attention here is latency/dependency bound not bandwidth bound. Next wedge = larger Q tile + multi-warp + cp.async, NOT another shuffle softmax."
 
 # ───────────────────────────────────────────────────────────────────────
+# GPU — fusion-attention-multiwarp (slug · group=GPU · GPU.md §10 · round 10)
+# R10 took R9's next-wedge prescription: multi-warp BM=64 (4 warps/CTA, each
+# owning 16 independent Q rows, sharing one K/V smem tile) + cp.async.cg K/V
+# DOUBLE-BUFFER on the R9 reg-S+smem-reduce base. FASTEST fused attention of the
+# campaign (1.149x cuBLAS @ N=4096) but does NOT cross 1.0x -> WIN falsified, 🟠
+# quantified gap-closure. cp.async is the dominant lever (controlled A/B).
+
+@C fusion_attn_multiwarp_numeric := "multi-warp BM=64 (4 warps/CTA) + cp.async.cg K/V double-buffer fused FlashAttention-2 is NUMERICALLY CORRECT (rel_rowscale 5.41e-4/5.67e-4/6.11e-4/7.14e-4 at N=512..4096, naninf=0) -- bit-equivalent in tolerance to R8/R9; ptxas-clean 0-spill sm_80(91 reg)/sm_90a(93 reg)/sm_90(93 reg), 14336 B smem << 49152 B cap" :: measurement [slug=fusion-attention-multiwarp group=GPU]
+  method = "silicon-fire"
+  cmd    = "ubu-2 RTX 5070 (clean, 0% util) fa_mw_cpasync oracle vs f64 CPU ref, rel_rowscale<=1e-2 + NaN/Inf hard-fail gate, N in {512,1024,2048,4096} d=64; ptxas -v sm_80/90/90a"
+  raw    = ".verdicts/fusion-attention-multiwarp/F-FUSION-ATTN-MULTIWARP.txt"
+  src    = "archive/fires/fusion_attn_multiwarp_2026_05_26/fa_mw_cpasync_oracle.cu"
+  status = "🟢 SUPPORTED-NUMERICAL — multi-warp + cp.async fused flash-attn numerically correct on 4 shapes. terminal-numerical."
+
+@C fusion_attn_multiwarp_wall := "ORANGE: the multi-warp BM=64 + cp.async double-buffer fused kernel is the FASTEST fused attention of the campaign (ratio 1.613/1.309/1.186/1.149x cuBLAS at N=512..4096; best 1.149x @ N=4096 = 14.9% BELOW cuBLAS-stack) but does NOT cross 1.0x on any shape. The win condition fused_ms<cublas_stack_ms is NOT met -> pre-registered WIN FALSIFIED. Gap-closure: R9 best 1.662x (same session) -> R10 1.149x; R10 is 1.447x FASTER than R9 single-warp at N=4096 (0.2173 vs 0.3145 ms)" :: measurement [slug=fusion-attention-multiwarp group=GPU]
+  method = "silicon-fire"
+  cmd    = "ubu-2 RTX 5070 (clean) fa_mw_cpasync vs fa_regS_noshfl_diag (R9) vs fa_cublas_tc_baseline, cuEvent 20 warmup + 200 timed median, N in {512,1024,2048,4096} d=64"
+  raw    = ".verdicts/fusion-attention-multiwarp/F-FUSION-ATTN-MULTIWARP.txt"
+  src    = "archive/fires/fusion_attn_multiwarp_2026_05_26/{fa_mw_cpasync_oracle.cu,result.json}"
+  status = "🟠 INSUFFICIENT — best-of-campaign 1.149x but does NOT cross 1.0x. GPU.md §10 attention axis-A box UNCHANGED; GEMM-fusion (attention) axis still NOT-WON at d=64. No paper (orange)."
+
+@C fusion_attn_multiwarp_lever := "LEVER ISOLATION (controlled A/B, drop only cp.async): cp.async double-buffer is the DOMINANT lever -- mw+cpasync is 1.34/1.46/1.50/1.40x FASTER than no-async multi-warp at N=512..4096. The multi-warp lever alone (no-async vs R9 single-warp) is 1.12/1.28/1.37/1.04x -- real but smaller, and FADES to 1.04x at N=4096. BOTH levers moved it; overlapping the HBM K/V load with the mma pipeline closed most of the gap. Occupancy NOT binding (5 CTAs/SM x 4 warps = 20 warps/SM, vs R9 25 warps/SM)" :: measurement [slug=fusion-attention-multiwarp group=GPU]
+  method = "silicon-fire"
+  cmd    = "ubu-2 RTX 5070 controlled A/B: fa_mw_cpasync vs fa_mw_noasync (same multi-warp, cp.async REMOVED + single-buffer synchronous load), cuEvent median; analytic occupancy 5 CTAs/SM (reg-bound) x 4 warps = 20 warps/SM"
+  raw    = ".verdicts/fusion-attention-multiwarp/F-FUSION-ATTN-MULTIWARP.txt"
+  src    = "archive/fires/fusion_attn_multiwarp_2026_05_26/{fa_mw_noasync_oracle.cu,result.json}"
+  status = "🟠 ATTRIBUTION — cp.async double-buffer dominant, multi-warp secondary (fades at large N). Residual = intra-warp QK^T->reduce->P.V dependency chain + per-tile __syncthreads barrier + low d=64 arithmetic intensity (4 d-tiles). Next wedge = 2-stage compute pipeline (overlap P.V of tile j with QK^T of tile j+1) or d>=128. NOT another multi-warp-only or shuffle-softmax attempt."
+
+# ───────────────────────────────────────────────────────────────────────
 # ───────────────────────────────────────────────────────────────────────
 # TECS-L axis A (MODFORM) — tecs-l-modform-dim-genus (slug · group=TECS-L · MF4)
 # Classical theorem dim S_2(Γ_0(N)) = genus(X_0(N)) — TESTED vs hexa fns.
