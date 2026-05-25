@@ -3,6 +3,17 @@
 Append-only history sister of `TECS-L.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
 
+## 2026-05-25T21:00 — 축 B MERSENNE · MR2 6·7번째 완전수 (Euclid-Euler 확장)
+
+- [x] Euclid-Euler: M_p=2^p−1 소수 ⟹ 2^{p-1}(2^p−1) 완전수. 축 0 M5/M6 이 첫 5개(p=2,3,5,7,13 → 6·28·496·8128·33550336)를 이미 🔵 처리 → MR2 는 **다음 두 메르센 지수로 6·7번째 완전수 확장** (중복검증 없이 src 참조만)
+- [x] p=17 → M17=2^17−1=131071 (소수) → **P6 = 2^16·131071 = 8589869056 · `is_perfect`=1 🔵** (`is_perfect_p6.txt`)
+- [x] p=19 → M19=2^19−1=524287 (소수) → **P7 = 2^18·524287 = 137438691328 · `is_perfect`=1 🔵** (`is_perfect_p7.txt`)
+- [x] abundancy=2 (σ(N)=2N ⟺ perfect, 축 0 M6 H18 확장): σ(P6)=17179738112=2·P6 🔵 · σ(P7)=274877382656=2·P7 🔵 (`sigma_p6.txt`·`sigma_p7.txt`)
+- [x] `is_perfect`/`sigma` 둘 다 닫힌형이라 ~8.6e9·~1.37e11 대수도 <0.05s — P7 deferral 불필요, 4/4 verdict 영속화
+- [x] CLAIMS slug=tecs-l-mersenne-perfect 4 entry (P6·P7 is_perfect + P6·P7 abundancy, 1:1, orphan 없음)
+- [ ] MR3 abundancy 닫힌형 일반화 · MR4 Lucas-Lehmer hexa-native · MR6 합성 M_p 표본 (다음 라운드)
+
+
 ## 2026-05-25T14:00 — 축 A MODFORM · MF1 Γ₀(N) index (영구 엔진 첫 전진)
 
 - [x] ψ(N)=N∏_{p|N}(1+1/p) 닫힌형 = hexa `gamma0_index`: **N=1..30 전수 30/30 🔵** (`index_sweep_1_30.txt`)
