@@ -1,0 +1,148 @@
+// F-FUSION-EPILOGUE-GEMM-BIAS-GELU -- single fused hexa-emit NVPTX kernel.
+//
+// Computes, in ONE kernel launch, with the M x N result written to HBM
+// EXACTLY ONCE:
+//
+//     C[m][n] = GeLU( (A @ B)[m][n] + bias[n] )
+//
+// where the GEMM, the bias-add, and the GeLU activation are all fused into
+// a single kernel epilogue. This is the classic transformer-FFN epilogue
+// that cuBLAS cannot do: cublasGemmEx writes the GEMM result C to HBM, then
+// a separate bias-add kernel reads+writes C, then a separate GeLU kernel
+// reads+writes C -- 3 launches and 3x the M x N HBM write traffic.
+//
+// Layout (row-major, FP32):
+//   A   [M x K]   a[m*K + k]
+//   B   [K x N]   b[k*N + n]
+//   bias[N]       bias[n]
+//   C   [M x N]   c[m*N + n]    (written ONCE)
+//
+// Threading: one thread per output element. grid = ceil(M/16) x ceil(N/16)
+// blocks of 16 x 16 threads. (threadIdx.x -> n, threadIdx.y -> m.)
+//
+// GeLU: tanh approximation (Hendrycks & Gimpel 2016 / GPT-2 / BERT):
+//   gelu(x) = 0.5 * x * (1 + tanh( 0.7978845608028654 * (x + 0.044715*x^3) ))
+//   0.7978845608028654 = sqrt(2/pi)
+// tanh(t) computed via ex2.approx.f32 (base-2 exp):
+//   e^(2t) = exp2( 2t * log2(e) ),  log2(e) = 1.4426950408889634
+//   tanh(t) = (e^(2t) - 1) / (e^(2t) + 1)
+//
+// Pure ASCII. ptxas -arch=sm_80 clean.
+
+.version 7.0
+.target sm_80
+.address_size 64
+
+.visible .entry fused_gemm_bias_gelu (
+    .param .u64 p_a,
+    .param .u64 p_b,
+    .param .u64 p_bias,
+    .param .u64 p_c,
+    .param .u32 p_M,
+    .param .u32 p_N,
+    .param .u32 p_K
+)
+{
+    .reg .pred  %p<6>;
+    .reg .b32   %r<40>;
+    .reg .f32   %f<40>;
+    .reg .b64   %rd<20>;
+
+    ld.param.u64  %rd0, [p_a];
+    ld.param.u64  %rd1, [p_b];
+    ld.param.u64  %rd2, [p_bias];
+    ld.param.u64  %rd3, [p_c];
+    ld.param.u32  %r0,  [p_M];
+    ld.param.u32  %r1,  [p_N];
+    ld.param.u32  %r2,  [p_K];
+
+    // m = blockIdx.y * blockDim.y + threadIdx.y
+    mov.u32       %r3, %ctaid.y;
+    mov.u32       %r4, %ntid.y;
+    mov.u32       %r5, %tid.y;
+    mad.lo.s32    %r6, %r3, %r4, %r5;       // %r6 = m
+
+    // n = blockIdx.x * blockDim.x + threadIdx.x
+    mov.u32       %r7, %ctaid.x;
+    mov.u32       %r8, %ntid.x;
+    mov.u32       %r9, %tid.x;
+    mad.lo.s32    %r10, %r7, %r8, %r9;      // %r10 = n
+
+    // bounds guard: if (m >= M || n >= N) return;
+    setp.ge.s32   %p1, %r6, %r0;
+    setp.ge.s32   %p2, %r10, %r1;
+    or.pred       %p3, %p1, %p2;
+    @%p3 bra      $L_ret;
+
+    // ---- GEMM dot product: acc = sum_k A[m][k] * B[k][n] ----
+    mov.f32       %f0, 0f00000000;          // acc = 0.0
+
+    // a_ptr = a + (m*K) * 4
+    mul.lo.s32    %r11, %r6, %r2;            // m*K
+    mul.wide.s32  %rd4, %r11, 4;
+    add.s64       %rd5, %rd0, %rd4;          // %rd5 = &A[m][0]
+
+    // b_ptr = b + n * 4   (stride between k-steps = N*4 bytes)
+    mul.wide.s32  %rd6, %r10, 4;
+    add.s64       %rd7, %rd1, %rd6;          // %rd7 = &B[0][n]
+    mul.lo.s32    %r12, %r1, 4;              // N*4 = B row stride (bytes)
+    cvt.s64.s32   %rd8, %r12;                // %rd8 = row stride (bytes)
+
+    mov.u32       %r13, 0;                   // k = 0
+$L_kloop:
+    setp.ge.s32   %p4, %r13, %r2;
+    @%p4 bra      $L_kdone;
+
+    ld.global.f32 %f1, [%rd5];               // A[m][k]
+    ld.global.f32 %f2, [%rd7];               // B[k][n]
+    fma.rn.f32    %f0, %f1, %f2, %f0;         // acc += A*B
+
+    add.s64       %rd5, %rd5, 4;             // A[m][k+1]
+    add.s64       %rd7, %rd7, %rd8;          // B[k+1][n]
+    add.s32       %r13, %r13, 1;
+    bra           $L_kloop;
+$L_kdone:
+
+    // ---- fused bias-add: x = acc + bias[n] ----
+    mul.wide.s32  %rd9, %r10, 4;
+    add.s64       %rd10, %rd2, %rd9;
+    ld.global.f32 %f3, [%rd10];              // bias[n]
+    add.f32       %f4, %f0, %f3;             // x = acc + bias[n]
+
+    // ---- fused GeLU (tanh approx) ----
+    // inner = sqrt(2/pi) * (x + 0.044715 * x^3)
+    mul.f32       %f5, %f4, %f4;             // x^2
+    mul.f32       %f6, %f5, %f4;             // x^3
+    mov.f32       %f7, 0f3D372713;           // 0.044715
+    fma.rn.f32    %f8, %f6, %f7, %f4;        // x + 0.044715*x^3
+    mov.f32       %f9, 0f3F4C422A;           // 0.7978845608 = sqrt(2/pi)
+    mul.f32       %f10, %f8, %f9;            // t = sqrt(2/pi)*(...)
+
+    // tanh(t) = (e^{2t} - 1) / (e^{2t} + 1)
+    // e^{2t} = exp2( 2t * log2(e) )
+    add.f32       %f11, %f10, %f10;          // 2t
+    mov.f32       %f12, 0f3FB8AA3B;          // log2(e) = 1.4426950408889634
+    mul.f32       %f13, %f11, %f12;          // (2t)*log2(e)
+    ex2.approx.f32 %f14, %f13;               // e^{2t}
+    mov.f32       %f15, 0f3F800000;          // 1.0
+    sub.f32       %f16, %f14, %f15;          // e^{2t} - 1
+    add.f32       %f17, %f14, %f15;          // e^{2t} + 1
+    rcp.approx.f32 %f18, %f17;               // 1/(e^{2t}+1)
+    mul.f32       %f19, %f16, %f18;          // tanh(t)
+
+    // gelu = 0.5 * x * (1 + tanh(t))
+    add.f32       %f20, %f19, %f15;          // 1 + tanh(t)
+    mul.f32       %f21, %f4, %f20;           // x*(1+tanh)
+    mov.f32       %f22, 0f3F000000;          // 0.5
+    mul.f32       %f23, %f21, %f22;          // gelu
+
+    // ---- single store of the M x N result to HBM ----
+    mul.lo.s32    %r14, %r6, %r1;            // m*N
+    add.s32       %r15, %r14, %r10;          // m*N + n
+    mul.wide.s32  %rd11, %r15, 4;
+    add.s64       %rd12, %rd3, %rd11;
+    st.global.f32 [%rd12], %f23;             // C[m][n] written ONCE
+
+$L_ret:
+    ret;
+}

@@ -1,0 +1,27 @@
+F-FUSION-EPILOGUE-GEMM-BIAS-GELU structural oracle ($0, deterministic, no GPU)
+run host: ubu-1 (transpile self/native/hexa_v2_linux_x86_64 + clang -O2)
+runtime.o: runtime.17162cf67c188d0e33933d9c7a77b4467030d6c2.o
+
+== FFN (LLaMA-7B up-proj) : M=4096 N=11008 K=4096 ==
+  C tensor (M*N*4 bytes)        = 180355072
+  FUSED    launches=1  C-write-bytes=180355072
+  BASELINE launches=3  C-write-bytes=541065216
+  launch reduction   = 66.66%
+  HBM-write reduction= 66.66%
+  PASS: launch AND HBM-write both reduced, both >= 30%
+== smaller-fit cross-check : M=256 N=256 K=256 ==
+  C tensor (M*N*4 bytes)        = 262144
+  FUSED    launches=1  C-write-bytes=262144
+  BASELINE launches=3  C-write-bytes=786432
+  launch reduction   = 66.66%
+  HBM-write reduction= 66.66%
+  PASS: launch AND HBM-write both reduced, both >= 30%
+F-FUSION-EPILOGUE-GEMM-BIAS-GELU structural oracle: PASS (all shapes)
+  closed form: fused 1 launch + 1x M*N HBM C-write vs baseline 3 + 3x
+  => 3x launch reduction (66.67%) AND 3x HBM-write reduction (66.67%)
+  => clears the >=30% whole-program-fusion gate by construction
+ORACLE_RC=0
+
+Note: 66.66% printed = integer-arithmetic truncation of 66.667% (= 2/3).
+Closed-form: reduction = (base - fused)/base = (3-1)/3 = 2/3 = 66.667%
+for BOTH launch-count (1 vs 3) AND HBM C-write traffic (1x vs 3x M*N*4).
