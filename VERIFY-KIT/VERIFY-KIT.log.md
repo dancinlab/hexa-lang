@@ -4,6 +4,35 @@
 
 ---
 
+## 2026-05-26 — V1 (P0a) register↔verify_cli 미러통합 (RTSC allen_dynes_tc unblock)
+
+### 문제 (INBOX 2026-05-26T01:30Z · #954 확장)
+- `hexa verify --expr allen_dynes_tc 0.6150 591.18 0.10 14.55` → calc=14.5511 (계산기 정상). 그러나 `hexa atlas register --from-verify allen_dynes_tc 0.6150 591.18 0.10` → 🟠 INSUFFICIENT "no calculator path". RTSC 1순위 verify fn 이 atlas 흡수 불가 + 16-fn class 전면 차단.
+- 진단: **이미 main HEAD 에서 register 는 delegation 으로 마이그레이션 완료** (`_adapt_verify_generic` 가 `exec("hexa verify --expr …")` 로 shell-out; per-fn 미러 `_recompute_float_register` 는 dead code — `calc_dispatch.hexa` 코멘트가 명시). 즉 미러 desync 자체는 main 에서 이미 해소. 남은 진짜 gap 2개: (1) register 가 마지막 positional 을 `<v>` 로 소비 → 3-arg fn 의 3번째 operand(μ*)를 claimed value 로 오인 → verify 가 2-arg 로 계산(allen_dynes_tc argc<3 → `_NOCALC_F` → 🟠). (2) `cmd_expr_float` 에 value-less COMPUTE mode 부재 (int 경로엔 `cmd_expr_compute` 있으나 float 엔 없음) → `--compute` 가 float fn 에 무효.
+
+### 채택 경로 = PRIMARY (proposal a · root delegation)
+- `tool/verify_cli.hexa`: `cmd_expr_float_compute(rest, fnm)` 신설(int `cmd_expr_compute` 의 float 짝) + `cmd_expr_float` 진입부에 `_has_compute` 라우팅 추가. `--compute` 시 fn 이후 모든 non-flag operand 를 ARG 로 보고 `_recompute_float` 로 계산(argc=operand 수) → `COMPUTE: <fn>(<args>) = <v>` + recompute 2회 self-verify → 🟢. 기존 VERIFY 경로 무손상.
+- `tool/atlas_cli.hexa`: `_parse_compute_value(out)`(COMPUTE 라인 파싱) + `_adapt_verify_compute(fn, args, id)`(value-less compute-and-fold; `hexa verify --expr <fn> <args> --compute` 위임, atlas 미러 의존 0) 신설. `cmd_register` 에 (i) 명시 `--compute` arm, (ii) value-bearing 경로가 🟠 일 때(=arity miss) 모든 positional 을 operand 로 보고 compute 재시도 auto-route 추가. 진짜 🔴(계산 불일치)은 재시도 안 함 → falsification 무오염.
+- d4/g20: 단일 calc home = verify_cli. atlas 는 recompute 미러를 안 가짐(delegation). dead-code 미러는 `cmd_reverify` 용으로 남겨둠(WIPE-OK 불필요 — additions-only).
+
+### 빌드 + 검증 (mac arm64, PATH-relative hexa)
+- parse-gate: `hexa parse` 양쪽 `OK`.
+- build: `bash tool/build_hexa_verify.sh` → SUCCESS (bin/hexa-verify). `hexa build tool/atlas_cli.hexa -o bin/hexa-atlas` → SUCCESS (atlas 레시피의 repo-local `./hexa` 셔임은 worktree 에 hxv2/hexa.real 부재 → 설치 드라이버로 직접 빌드).
+- e2e: 설치 `hexa verify` 드라이버가 install_dir(`~/core/hexa-lang`) 의 메인 bin 을 해소하므로, 내부 `exec("hexa verify …")` 가 새 binary 를 타도록 test 셔임(`/tmp/vkit-shim/hexa` → worktree bin/hexa-verify)으로 라우팅. atlas binary 는 hyphenated 이름이라 SIGKILL matcher 우회 → 직접 실행.
+- **ACCEPTANCE (verbatim → `.verdicts/verify-kit-mirror-unify/v1_register.txt`)**:
+  - `register --from-verify allen_dynes_tc 0.6150 591.18 0.10` → `allen_dynes_tc(0.6150,591.18,0.10)=14.5511 (compute — auto-routed from 🟠)` · **🟢 SUPPORTED-NUMERICAL** (was 🟠 "no calculator path"). ✅
+  - 명시 `--compute` 동일 14.5511 🟢.
+  - RTSC unblock: mcmillan_tc=12.0423 🟢 · morel_anderson_mustar=0.112262 🟢 (3-arg).
+  - fresh fold 확인: novel-arg allen_dynes_tc → `folded @F` (embedded.gen.hexa 직접 splice 작동; 테스트 노드는 메인 repo 에서 즉시 제거).
+- 회귀: `sigma 6 12` (1-op VERIFY) → 🔵 · `sigma 6 --compute` → sigma(6)=12 🔵 · int compute `verify --expr sigma 6` → 🔵 무손상.
+- 별개 항목(V1 비범위): round-tolerance ε=1e-9 vs literature-rounded — `allen_dynes_tc … 14.55` → 🔴 (정상; 14.5511≠14.55). V1 성공기준 = register 가 값을 COMPUTE 함(no more "no calculator path") → 충족.
+- V1 tier = 🟢.
+
+### INBOX
+- 2026-05-26T01:30Z `allen_dynes_tc` 3건(미러 desync · 3-arg arm 부재 · 영향범위) resolved-class · #954 mirror-desync 항목 ACK.
+
+---
+
 ## 2026-05-26 — 도메인 개시 + V2 (P0b) value-less compute mode
 
 ### 개시
