@@ -19,7 +19,7 @@ precompute + hash 교집합 (O(N), 수 초) 으로 wall-time 절감. fold scope 
 ## 1 · 로드맵
 
 - [x] O1 — scanner POC: 6/899 seq match (0.67%). 20 candidate fn precompute + hash-intersect K=10. 다음 = O2 (full 380K sweep).
-- [ ] O2 — Full sweep (380K) + match ledger `.verdicts/oeis-full-sweep/ledger.json` (slug=oeis-full-sweep)
+- [x] O2 — full 380K sweep: 1707 hit (K=10), 1334 coincidence filtered at K=20 (e.g. A000926 Idoneal vs `n`; 336 survive · 37 na). ledger.json + CLAIMS. 다음 = O3 (per-hit verify — INBOX verify-compute gap filed).
 - [ ] O3 — match 별 hexa verify 재확인 (~수백~수천 hit 예상) + 🔵/🟡 tier 분류 (V2 compute mode unblocks per-hit fresh verify — VERIFY-KIT)
 - [ ] O4 — atlas auto-fold (verified 만) + dedup against existing atlas 16K nodes
 - [ ] O5 — TECS-L F11 cross-link PR (OEIS atlas → TECS-L cite) + reuse edge 등록 (g67 NEXUS.tape)
