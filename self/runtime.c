@@ -291,6 +291,18 @@ static unsigned long long __attribute__((noinline)) hxlcl_strtoull(const char *n
     if (endptr) *endptr = (char *)s;
     return n;
 }
+// RUNTIME.md step-2 cycle 5 — hxlcl_atof delegates to hexa-source
+// rt_str_parse_float (stdlib/runtime/ctype.hexa cycle-73; same lenient
+// ws+sign+int+.frac+eE-exp parse). Under HEXA_HAS_HEXA_RT_STDLIB the hexa
+// body is the source of truth; the #else C body (bit-for-bit identical)
+// stays for standalone / smoke builds. Two-mode pattern == cycle-1 (isalnum).
+#ifdef HEXA_HAS_HEXA_RT_STDLIB
+extern HexaVal rt_str_parse_float(HexaVal s);
+static double __attribute__((noinline)) hxlcl_atof(const char *s) {
+    if (!s) return 0.0;
+    return HX_FLOAT(rt_str_parse_float(hexa_str((char *)s)));
+}
+#else
 static double __attribute__((noinline)) hxlcl_atof(const char *s) {
     if (!s) return 0.0;
     size_t i = 0;
@@ -329,6 +341,7 @@ static double __attribute__((noinline)) hxlcl_atof(const char *s) {
     }
     return (sign < 0) ? -n : n;
 }
+#endif
 static void __attribute__((noinline)) hxlcl_bzero(void *s, size_t n) {
     unsigned char *p = (unsigned char *)s;
     for (size_t i = 0; i < n; i++) {
