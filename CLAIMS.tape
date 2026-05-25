@@ -1854,6 +1854,46 @@
   status = "🟢 SYNTHESIS-REASONED — composed entirely from 4 terminal 🔵 atoms (MF1/MF2/MF3/MF7) + 1 🟡 closed-form AL citation. No new measurement. n=6 bridge thesis: every Gamma_0(6) core invariant reduces to a standard n=6 arithmetic-function value."
 
 # ───────────────────────────────────────────────────────────────────────
+# TECS-L axis F (NOVEL) — tecs-l-modform-other-curves (slug · group=TECS-L · F7)
+# MODFORM axis A covered Gamma_0(N) ONLY. F7 extends the modular-curve tower to
+# Gamma_1(N) and the full level X(N)=Gamma(N). Index assembled from 🔵 integer
+# components (psi=gamma0_index, phi) + the standard closed-form (🟡 citation).
+#   [SL2(Z):Gamma_1(N)] = psi(N)*phi(N)/2  (N>2)
+#   [SL2(Z):Gamma(N)]   = N * [SL2(Z):Gamma_1(N)]  (N>2)
+# Headline: Gamma_1(6)=12, X(6)=Gamma(6)=72. n=6 distinction finding = CLOSED-
+# NEGATIVE: index is smooth/multiplicative in N, the {1,6} sigma*phi=n*tau
+# specialness does NOT lift to higher modular level. (Shimura direction: noted,
+# no hexa quaternion/Eichler-mass fn — capability gap, not a bug.)
+
+@C tecs_l_mf_oc_components := "Gamma_1(N)/X(N) index integer components verify: psi(N)=gamma0_index (5/5 🔵) and phi(N) (5/5 🔵) for N in {5,6,7,11,12}" :: experiment [slug=tecs-l-modform-other-curves group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr gamma0_index N psi(N) ; hexa verify --expr phi N phi(N)  for N in {5,6,7,11,12}"
+  raw    = ".verdicts/tecs-l-modform-other-curves/components_psi.txt"
+  src    = "axis F F7 — Gamma_1/X(N) index components (psi reused from Gamma_0 idx; phi = totient)"
+  status = "🔵 SUPPORTED-FORMAL — 10/10 components verified verbatim (5 psi + 5 phi). terminal."
+
+@C tecs_l_mf_oc_gamma1_n6 := "Gamma_1(6) index = psi(6)*phi(6)/2 = 12*2/2 = 12 (= Gamma_0(6) index, since phi(6)=2)" :: formula [slug=tecs-l-modform-other-curves group=TECS-L]
+  method = "citation"
+  cmd    = "assemble: gamma0_index(6)=12 [🔵] * phi(6)=2 [🔵] / 2 = 12 ; cite [SL2(Z):Gamma_1(N)]=psi*phi/2"
+  raw    = ".verdicts/tecs-l-modform-other-curves/n6_focal.txt"
+  src    = "axis F F7 — Gamma_1(6) index, assembled from 2x 🔵 components + standard index formula"
+  status = "🟡 CITATION — assembled from 2 terminal 🔵 components + cited closed-form. Gamma_1(6)=12."
+
+@C tecs_l_mf_oc_xlevel_n6 := "X(6)=Gamma(6) full-level index = 6 * Gamma_1(6) = 6*12 = 72 (= N^3/2 * prod(1-1/p^2) cross-check OK)" :: formula [slug=tecs-l-modform-other-curves group=TECS-L]
+  method = "citation"
+  cmd    = "assemble: 6 * Gamma_1(6)=12 = 72 ; cross-check 216/2*(3/4)(8/9)=72 ; cite [SL2(Z):Gamma(N)]=N*Gamma_1 idx"
+  raw    = ".verdicts/tecs-l-modform-other-curves/gamma1_x_index_assembled.txt"
+  src    = "axis F F7 — X(N)=Gamma(N) full-level index + relation X(N)=N*Gamma_1(N) (N>2)"
+  status = "🟡 CITATION — assembled from 🔵 components + cited formula, two-form cross-check (N*Gamma_1 and N^3/2*prod) agree. X(6)=72."
+
+@C tecs_l_mf_oc_n6_distinction := "n=6 distinction at higher modular level = CLOSED-NEGATIVE: Gamma_1/X(N) index is smooth/multiplicative in N; the sigma*phi=n*tau <=> {1,6} specialness does NOT lift beyond Gamma_0" :: experiment [slug=tecs-l-modform-other-curves group=TECS-L]
+  method = "citation"
+  cmd    = "compare Gamma_1/X(N) index across N (no peak at 6) ; pre-registered falsifier = 'a {1,6}-type index identity exists at level Gamma_1/X(N)'"
+  raw    = ".verdicts/tecs-l-modform-other-curves/gamma1_x_index_assembled.txt"
+  src    = "axis F F7 — n=6 distinction test (echo of axis-0 sigma*phi=n*tau {1,6})"
+  status = "🔴 CLOSED-NEGATIVE — falsifier ruled out: index smooth in N, no n=6 distinction in magnitude. Secondary 🟡: N=6 is the LARGEST of {3,4,6} where Gamma_1 idx = Gamma_0 idx (phi(N)=2 coincidence, not n=6-unique)."
+
+# ───────────────────────────────────────────────────────────────────────
 # TECS-L axis E — tecs-l-atlas-health (slug · group=TECS-L · E2)
 # atlas health audit. 🟢 audit internal-merged/drift=0 BUT 🟡 finding: binary
 # lookup ≠ source SSOT. installed `hexa atlas lookup` reads binary-builtin
