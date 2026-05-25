@@ -2,6 +2,16 @@
 
 Append-only history sister of `TECS-L.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
+
+## 2026-05-25T09:30 — M6 · 2,711 가설 코퍼스 g5 triage (카테고리)
+
+- [x] 코퍼스 = `docs/hypotheses/` 2,735 + `math/docs/hypotheses/` 339. 단일 레지스트리 아님 → **카테고리 단위** g5 분류 (전수 1행 분류 비현실적, 정직)
+- [x] 🔵 코어 = H18 (known theorem) σ(n)=2n ⟺ perfect: 첫 5개 완전수 abundancy=2 닫힌형 — σ(6)=12·σ(28)=56·σ(496)=992·σ(8128)=16256·σ(33550336)=67100672 (전부 =2n) 5/5 🔵
+- [x] + μ(6)=1 (squarefree even ω) · aliquot(6)=6 (s(n)=n 완전수 정의) 🔵 — 총 7 atom
+- [x] 🟡/🟠/⚪ 절대다수: 물리매칭(실측 인용)·의식/EEG/telepathy(scope 외)·ML(외부 compute)·생물(6=n 인용)·철학(메타포 fence). M1 유일성 잔여와 동일 처리
+- [x] 7 verdict verbatim → `.verdicts/tecs-l-hypotheses/` + CLAIMS group=TECS-L 7 entry (1:1) + triage doc
+- [x] inline 부모 세션 실행 · 격리 worktree
+
 ## 2026-05-25T09:20 — M5 · 물리상수 조립 g5 triage (τ=string-dim 발견)
 
 - [x] 🔵 HEADLINE: 첫 5개 완전수 약수개수 τ = 끈이론 임계차원 — τ(6)=4·τ(28)=6·τ(496)=10·τ(8128)=14·τ(33550336)=26 (D=10 초끈·D=26 보존끈). `hexa verify --expr tau` 5/5 일치, 신규

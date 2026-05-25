@@ -682,3 +682,62 @@
   raw    = ".verdicts/tecs-l-physics-constants/gauge_phi6.txt"
   src    = "archive-TECS-L README.md line 558 (sigma/phi=6), line 713 (Koide 2/3 = tau/P1)"
   status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal · paper-eligible."
+
+# ───────────────────────────────────────────────────────────────────────
+# TECS-L — tecs-l-hypotheses (slug · group=TECS-L · TECS-L.md M6)
+# archive-TECS-L 2,711-hypothesis corpus, g5-triaged BY CATEGORY (doc:
+# docs/tecs-l/m6-hypotheses-triage.md). Only the number-theoretic A-tier
+# core is 🔵; consciousness/ML/physics-match/biology bulk is 🟡/🟠/⚪
+# (no hexa closed-form path — same handling as M1 uniqueness residual).
+#
+# 🔵 CORE: H18 (known theorem) σ(n)=2n ⟺ n perfect — abundancy=2 verified
+# closed-form across the first 5 perfect numbers.
+
+@C tecs_l_hyp_abundancy_6 := "sigma(6) = 12 = 2*6 (H18: 2n=sigma(n) iff perfect; abundancy=2)" :: formula [slug=tecs-l-hypotheses group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr sigma 6 12"
+  raw    = ".verdicts/tecs-l-hypotheses/abundancy_sigma6.txt"
+  src    = "archive-TECS-L README.md line 1916 (H18 2n=sigma(n) iff perfect [known theorem])"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal · paper-eligible."
+
+@C tecs_l_hyp_abundancy_28 := "sigma(28) = 56 = 2*28 (abundancy=2, 2nd perfect)" :: formula [slug=tecs-l-hypotheses group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr sigma 28 56"
+  raw    = ".verdicts/tecs-l-hypotheses/abundancy_sigma28.txt"
+  src    = "archive-TECS-L README.md line 1916 (H18)"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal · paper-eligible."
+
+@C tecs_l_hyp_abundancy_496 := "sigma(496) = 992 = 2*496 (abundancy=2, 3rd perfect)" :: formula [slug=tecs-l-hypotheses group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr sigma 496 992"
+  raw    = ".verdicts/tecs-l-hypotheses/abundancy_sigma496.txt"
+  src    = "archive-TECS-L README.md line 1916 (H18)"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal · paper-eligible."
+
+@C tecs_l_hyp_abundancy_8128 := "sigma(8128) = 16256 = 2*8128 (abundancy=2, 4th perfect)" :: formula [slug=tecs-l-hypotheses group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr sigma 8128 16256"
+  raw    = ".verdicts/tecs-l-hypotheses/abundancy_sigma8128.txt"
+  src    = "archive-TECS-L README.md line 1916 (H18)"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal · paper-eligible."
+
+@C tecs_l_hyp_abundancy_33m := "sigma(33550336) = 67100672 = 2*33550336 (abundancy=2, 5th perfect)" :: formula [slug=tecs-l-hypotheses group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr sigma 33550336 67100672"
+  raw    = ".verdicts/tecs-l-hypotheses/abundancy_sigma33m.txt"
+  src    = "archive-TECS-L README.md line 1916 (H18)"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal · paper-eligible."
+
+@C tecs_l_hyp_mu6 := "mu(6) = 1 (6=2*3 squarefree, even omega; Mobius +1)" :: formula [slug=tecs-l-hypotheses group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr mu 6 1"
+  raw    = ".verdicts/tecs-l-hypotheses/hyp_mu6.txt"
+  src    = "archive-TECS-L docs/hypotheses (Review 098 — uniqueness of 6)"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal · paper-eligible."
+
+@C tecs_l_hyp_aliquot6 := "aliquot(6) = 6 (proper-divisor sum s(n)=n = perfect-number definition)" :: formula [slug=tecs-l-hypotheses group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr aliquot 6 6"
+  raw    = ".verdicts/tecs-l-hypotheses/hyp_aliquot6.txt"
+  src    = "archive-TECS-L docs/hypotheses (Review 090/123 — perfect-number master formula)"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal · paper-eligible."
