@@ -226,6 +226,33 @@ fn _nvptx_reg_s32(id: i64) -> string {
     return "%r" + to_string(id)
 }
 
+// N71-B (N70/N91 GAP-C) — FP64 warp-shuffle scratch-half register names.
+// `shfl.sync.*.b32` moves only 32 bits, so an f64 shuffle decomposes the
+// source `%fd<src>` into two `.b32` halves, shuffles each, then recomposes
+// into `%fd<dst>`. Each scratch reg is keyed on the shuffle's dst Local id
+// so concurrent shuffles in one block never clobber each other's halves.
+//   ref: NVIDIA PTX ISA §9.7.13.4 shfl.sync.
+fn _nvptx_reg_shfl_lo(id: i64) -> string {
+    return "%shfl_lo_" + to_string(id)
+}
+fn _nvptx_reg_shfl_hi(id: i64) -> string {
+    return "%shfl_hi_" + to_string(id)
+}
+fn _nvptx_reg_shfl_lo_out(id: i64) -> string {
+    return "%shfl_lo_out_" + to_string(id)
+}
+fn _nvptx_reg_shfl_hi_out(id: i64) -> string {
+    return "%shfl_hi_out_" + to_string(id)
+}
+// _nvptx_reg_shfl_mask — u32 scratch for the lane/mask operand when the
+// source Local is in the u64 bank (`%rd<id>`). `shfl.sync.*.b32`'s lane
+// operand must be `.b32`/u32; a `mask: i32` Local that the classifier
+// landed in the u64 bank (e.g. via an `i64`-typed `mask / 2`) must be
+// narrowed with `cvt.u32.u64 %shfl_mask_<dst>, %rd<mask>` first.
+fn _nvptx_reg_shfl_mask(id: i64) -> string {
+    return "%shfl_mask_" + to_string(id)
+}
+
 // _nvptx_operand_text — render one MIR Operand as a PTX operand string
 // for the FP64-arithmetic subset (RFC 055 §6.6).
 //
@@ -990,6 +1017,63 @@ fn _nvptx_lower_stmt(buf: [LInstr], s: Stmt, kinds: [PReg], shared_idx_off: [i64
         //   ref: NVIDIA PTX ISA §9.7.13.4 shfl.sync.
         if s.op == "gpu_warp_shuffle" {
             if len(s.args) >= 2 {
+                // N71-B (N70/N91 GAP-C) — FP64 source decompose/recompose.
+                // `shfl.sync.idx.b32` moves only 32 bits; an f64 value
+                // (source Local in the `%fd` bank) must be split into two
+                // `.b32` halves (`mov.b64 {%lo,%hi}, %fd<src>`), shuffle
+                // EACH half with the same idx/clamp/membermask, then
+                // recompose (`mov.b64 %fd<dst>, {%lo_out,%hi_out}`).
+                // The lane operand stays a `%r` (u32) register either way.
+                //   ref: NVIDIA PTX ISA §9.7.13.4 shfl.sync + §5.4 mov.b64.
+                let src_kind = _nvptx_lookup_kind_for_local(kinds, s.args[0].local_id)
+                if src_kind == NVPTX_RKIND_F64 {
+                    let dst_f64 = _nvptx_reg_f64(s.dst.id)
+                    let src_f64 = _nvptx_reg_f64(s.args[0].local_id)
+                    let lo = _nvptx_reg_shfl_lo(s.dst.id)
+                    let hi = _nvptx_reg_shfl_hi(s.dst.id)
+                    let lo_out = _nvptx_reg_shfl_lo_out(s.dst.id)
+                    let hi_out = _nvptx_reg_shfl_hi_out(s.dst.id)
+                    // The lane operand must be `.b32` for shfl. When the
+                    // lane Local sits in the u64 bank (`%rd`), narrow it to
+                    // the `%shfl_mask_<dst>` u32 scratch first; else use
+                    // `%r<lane>` directly.
+                    let lane_kind = _nvptx_lookup_kind_for_local(kinds, s.args[1].local_id)
+                    let mut lane_reg = _nvptx_reg_u32(s.args[1].local_id)
+                    if lane_kind == NVPTX_RKIND_U64 {
+                        lane_reg = _nvptx_reg_shfl_mask(s.dst.id)
+                        let mut c = []
+                        c.push(_nvptx_op(lane_reg))
+                        c.push(_nvptx_op(_nvptx_reg_u64(s.args[1].local_id)))
+                        out.push(_nvptx_instr("cvt.u32.u64", c, "gpu_warp_shuffle lane u64 -> u32 narrow"))
+                    }
+                    // 1. decompose f64 src into two 32-bit halves
+                    let mut d = []
+                    d.push(_nvptx_op("{" + lo + ", " + hi + "}"))
+                    d.push(_nvptx_op(src_f64))
+                    out.push(_nvptx_instr("mov.b64", d, "gpu_warp_shuffle f64 decompose"))
+                    // 2. shuffle each half with identical idx/clamp/membermask
+                    let mut slo = []
+                    slo.push(_nvptx_op(lo_out))
+                    slo.push(_nvptx_op(lo))
+                    slo.push(_nvptx_op(lane_reg))
+                    slo.push(_nvptx_op("0x1f"))
+                    slo.push(_nvptx_op("0xffffffff"))
+                    out.push(_nvptx_instr(PTX_OP_SHFL_SYNC_IDX_B32, slo, "gpu_warp_shuffle lo half"))
+                    let mut shi = []
+                    shi.push(_nvptx_op(hi_out))
+                    shi.push(_nvptx_op(hi))
+                    shi.push(_nvptx_op(lane_reg))
+                    shi.push(_nvptx_op("0x1f"))
+                    shi.push(_nvptx_op("0xffffffff"))
+                    out.push(_nvptx_instr(PTX_OP_SHFL_SYNC_IDX_B32, shi, "gpu_warp_shuffle hi half"))
+                    // 3. recompose the two shuffled halves into the f64 dst
+                    let mut r = []
+                    r.push(_nvptx_op(dst_f64))
+                    r.push(_nvptx_op("{" + lo_out + ", " + hi_out + "}"))
+                    out.push(_nvptx_instr("mov.b64", r, "gpu_warp_shuffle f64 recompose"))
+                    return out
+                }
+                // u32 source — existing single-instruction 32-bit path.
                 let dst_reg = _nvptx_lookup_reg_for_local(kinds, s.dst.id)
                 let src_reg = _nvptx_reg_u32(s.args[0].local_id)
                 let lane_reg = _nvptx_reg_u32(s.args[1].local_id)
@@ -1012,6 +1096,62 @@ fn _nvptx_lower_stmt(buf: [LInstr], s: Stmt, kinds: [PReg], shared_idx_off: [i64
         // warp-reduce (mask = 16, 8, 4, 2, 1 reduces 32 lanes pairwise).
         if s.op == "gpu_warp_shuffle_xor" {
             if len(s.args) >= 2 {
+                // N71-B (N70/N91 GAP-C) — FP64 source decompose/recompose
+                // for the XOR-butterfly mode (the warp-reduce primitive).
+                // Identical 32-bit-halves split/shuffle/recompose as the
+                // idx variant above, but with `shfl.sync.bfly.b32`. The
+                // mask operand stays a `%r` (u32) register either way.
+                //   ref: NVIDIA PTX ISA §9.7.13.4 shfl.sync + §5.4 mov.b64.
+                let src_kind = _nvptx_lookup_kind_for_local(kinds, s.args[0].local_id)
+                if src_kind == NVPTX_RKIND_F64 {
+                    let dst_f64 = _nvptx_reg_f64(s.dst.id)
+                    let src_f64 = _nvptx_reg_f64(s.args[0].local_id)
+                    let lo = _nvptx_reg_shfl_lo(s.dst.id)
+                    let hi = _nvptx_reg_shfl_hi(s.dst.id)
+                    let lo_out = _nvptx_reg_shfl_lo_out(s.dst.id)
+                    let hi_out = _nvptx_reg_shfl_hi_out(s.dst.id)
+                    // The mask operand must be `.b32` for shfl. When the
+                    // mask Local sits in the u64 bank (`%rd`), narrow it to
+                    // the `%shfl_mask_<dst>` u32 scratch first (the warp-
+                    // reduce `mask: i32` often lands in u64 via `mask / 2`);
+                    // else use `%r<mask>` directly.
+                    let mask_kind = _nvptx_lookup_kind_for_local(kinds, s.args[1].local_id)
+                    let mut mask_reg = _nvptx_reg_u32(s.args[1].local_id)
+                    if mask_kind == NVPTX_RKIND_U64 {
+                        mask_reg = _nvptx_reg_shfl_mask(s.dst.id)
+                        let mut c = []
+                        c.push(_nvptx_op(mask_reg))
+                        c.push(_nvptx_op(_nvptx_reg_u64(s.args[1].local_id)))
+                        out.push(_nvptx_instr("cvt.u32.u64", c, "gpu_warp_shuffle_xor mask u64 -> u32 narrow"))
+                    }
+                    // 1. decompose f64 src into two 32-bit halves
+                    let mut d = []
+                    d.push(_nvptx_op("{" + lo + ", " + hi + "}"))
+                    d.push(_nvptx_op(src_f64))
+                    out.push(_nvptx_instr("mov.b64", d, "gpu_warp_shuffle_xor f64 decompose"))
+                    // 2. butterfly-shuffle each half with identical mask/clamp/membermask
+                    let mut slo = []
+                    slo.push(_nvptx_op(lo_out))
+                    slo.push(_nvptx_op(lo))
+                    slo.push(_nvptx_op(mask_reg))
+                    slo.push(_nvptx_op("0x1f"))
+                    slo.push(_nvptx_op("0xffffffff"))
+                    out.push(_nvptx_instr(PTX_OP_SHFL_SYNC_BFLY_B32, slo, "gpu_warp_shuffle_xor lo half"))
+                    let mut shi = []
+                    shi.push(_nvptx_op(hi_out))
+                    shi.push(_nvptx_op(hi))
+                    shi.push(_nvptx_op(mask_reg))
+                    shi.push(_nvptx_op("0x1f"))
+                    shi.push(_nvptx_op("0xffffffff"))
+                    out.push(_nvptx_instr(PTX_OP_SHFL_SYNC_BFLY_B32, shi, "gpu_warp_shuffle_xor hi half"))
+                    // 3. recompose the two shuffled halves into the f64 dst
+                    let mut r = []
+                    r.push(_nvptx_op(dst_f64))
+                    r.push(_nvptx_op("{" + lo_out + ", " + hi_out + "}"))
+                    out.push(_nvptx_instr("mov.b64", r, "gpu_warp_shuffle_xor f64 recompose"))
+                    return out
+                }
+                // u32 source — existing single-instruction 32-bit path.
                 let dst_reg = _nvptx_lookup_reg_for_local(kinds, s.dst.id)
                 let src_reg = _nvptx_reg_u32(s.args[0].local_id)
                 let mask_reg = _nvptx_reg_u32(s.args[1].local_id)
@@ -1222,6 +1362,15 @@ pub let NVPTX_RKIND_F64: string = "fpr"     // %fd<id>   .reg .f64
 pub let NVPTX_RKIND_U32: string = "gpr32"   // %r<id>    .reg .u32
 pub let NVPTX_RKIND_U64: string = "gpr64"   // %rd<id>   .reg .u64
 pub let NVPTX_RKIND_PRED: string = "pred"   // %p<id>    .reg .pred
+// N71-B (N70/N91 GAP-C) — raw 32-bit container bank for the FP64
+// warp-shuffle decompose/recompose scratch halves. `shfl.sync.*.b32`
+// moves only 32 bits, so an f64 shuffle splits `%fd<src>` into two
+// `.b32` halves via `mov.b64 {%lo,%hi}, %fd<src>`, shuffles each, then
+// recomposes `mov.b64 %fd<dst>, {%lo_out,%hi_out}`. These scratch regs
+// hold the four halves; they are emit-only (never an operand Local), so
+// the lookup/inference helpers never need to resolve this bank.
+//   ref: NVIDIA PTX ISA §9.7.13.4 shfl.sync + §5.4 fundamental types.
+pub let NVPTX_RKIND_B32: string = "b32raw"  // %shfl_*<id>  .reg .b32
 
 // RFC 067 P1 + P2 + P3 + INSTR-EMIT LANDED — Real WMMA codegen.
 //   P1 (`F-RFC067-FRAG-WIDTH`): `NVPTX_RKIND_FRAG` emits 8 PTX regs
@@ -1349,6 +1498,8 @@ fn _nvptx_kind_to_ptx_ty(kind: string) -> string {
     if kind == NVPTX_RKIND_U32 { return ".u32" }
     if kind == NVPTX_RKIND_U64 { return ".u64" }
     if kind == NVPTX_RKIND_PRED { return ".pred" }
+    // N71-B — FP64 warp-shuffle scratch half (raw 32-bit container).
+    if kind == NVPTX_RKIND_B32 { return ".b32" }
     // RFC 055 §12 P4+ WMMA fragment scaffold — `.f16` is the placeholder
     // element type (the f16×f16→f32 family is the most common first
     // target). Precise per-fragment dtypes (`.f16` for A/B operands vs
@@ -1701,6 +1852,23 @@ fn _nvptx_classify_locals(mfn: MFunc) -> [PReg] {
                                 if ks == NVPTX_RKIND_U64 || ks == NVPTX_RKIND_U32 { kind = ks }
                             }
                         }
+                        // N71-B (N70/N91 GAP-C) — FP64 warp-shuffle dst-kind
+                        // override. `_nvptx_classify_local_for_stmt` defaults
+                        // both shuffle ops' dst to U32 (the 32-bit baseline).
+                        // When the SHUFFLED VALUE (args[0]) is an f64 Local
+                        // (classified F64 in the roster-so-far — the source
+                        // is always defined earlier in program order), the
+                        // shuffle RESULT is also f64, so the dst must land in
+                        // the `%fd` bank to match the recompose `mov.b64
+                        // %fd<dst>, {...}` the body lowering emits. The
+                        // 4 `.b32` decompose/recompose scratch halves are
+                        // declared by Pass 4 below.
+                        if s.kind == STMT_CALL && (s.op == "gpu_warp_shuffle" || s.op == "gpu_warp_shuffle_xor") {
+                            if len(s.args) >= 1 && s.args[0].kind == "local" {
+                                let kv = _nvptx_lookup_kind_for_local(regs, s.args[0].local_id)
+                                if kv == NVPTX_RKIND_F64 { kind = NVPTX_RKIND_F64 }
+                            }
+                        }
                         // RFC 067 P3 — for FRAG PRegs, stamp the role /
                         // dtype / layout from the STMT_CALL op name; for
                         // every other kind the metadata stays "" (the
@@ -1868,6 +2036,48 @@ fn _nvptx_classify_locals(mfn: MFunc) -> [PReg] {
             frag_dtype: "",
             frag_layout: ""
         })
+    }
+    // N71-B (N70/N91 GAP-C) — Pass 4: FP64 warp-shuffle scratch-half decl.
+    // `shfl.sync.*.b32` moves only 32 bits, so an f64 shuffle splits its
+    // source into two `.b32` halves (lo/hi), shuffles each, then recomposes
+    // — needing 4 private `.b32` scratch regs per f64-shuffle statement.
+    // Mirrors the Pass 3 `%rd_idxa_<id>` scratch-decl idiom: each scratch
+    // reg is keyed on the shuffle's dst Local id so concurrent shuffles
+    // never clobber each other's halves. Only triggers when the shuffled
+    // VALUE (args[0]) classifies F64 in the (now complete) roster — a u32
+    // shuffle keeps the single-instruction `.b32` path with no scratch.
+    //   ref: NVIDIA PTX ISA §9.7.13.4 shfl.sync + §5.4 mov.b64.
+    let mut bm = 0
+    while bm < len(mfn.blocks) {
+        let blk = mfn.blocks[bm]
+        let mut sm = 0
+        while sm < len(blk.stmts) {
+            let s = blk.stmts[sm]
+            if s.kind == STMT_CALL && (s.op == "gpu_warp_shuffle" || s.op == "gpu_warp_shuffle_xor") && s.dst.id >= 0 {
+                if len(s.args) >= 1 && s.args[0].kind == "local" {
+                    let kv = _nvptx_lookup_kind_for_local(regs, s.args[0].local_id)
+                    if kv == NVPTX_RKIND_F64 {
+                        regs.push(PReg { name: _nvptx_reg_shfl_lo(s.dst.id),     kind: NVPTX_RKIND_B32, frag_role: "", frag_dtype: "", frag_layout: "" })
+                        regs.push(PReg { name: _nvptx_reg_shfl_hi(s.dst.id),     kind: NVPTX_RKIND_B32, frag_role: "", frag_dtype: "", frag_layout: "" })
+                        regs.push(PReg { name: _nvptx_reg_shfl_lo_out(s.dst.id), kind: NVPTX_RKIND_B32, frag_role: "", frag_dtype: "", frag_layout: "" })
+                        regs.push(PReg { name: _nvptx_reg_shfl_hi_out(s.dst.id), kind: NVPTX_RKIND_B32, frag_role: "", frag_dtype: "", frag_layout: "" })
+                        // The u32 lane/mask narrow scratch — declared only
+                        // when the lane/mask Local actually sits in the u64
+                        // bank (else the lowering uses `%r<lane>` directly
+                        // and this reg would be unreferenced-but-harmless;
+                        // gate the decl on the real u64 case to keep PTX tidy).
+                        if len(s.args) >= 2 && s.args[1].kind == "local" {
+                            let km = _nvptx_lookup_kind_for_local(regs, s.args[1].local_id)
+                            if km == NVPTX_RKIND_U64 {
+                                regs.push(PReg { name: _nvptx_reg_shfl_mask(s.dst.id), kind: NVPTX_RKIND_U32, frag_role: "", frag_dtype: "", frag_layout: "" })
+                            }
+                        }
+                    }
+                }
+            }
+            sm = sm + 1
+        }
+        bm = bm + 1
     }
     return regs
 }

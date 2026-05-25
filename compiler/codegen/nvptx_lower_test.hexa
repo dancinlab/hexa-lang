@@ -961,6 +961,8 @@ fn main() {
     let ok_barr  = _test_barrier()
     let ok_atom  = _test_atomic_add()
     let ok_shuf  = _test_warp_shuffle()
+    let ok_shuff64 = _test_warp_shuffle_f64()
+    let ok_shufm64 = _test_warp_shuffle_f64_u64mask()
     let ok_unr   = _test_unroll_pass()
     let ok_unrn  = _test_unroll_no_match_passthrough()
     let ok_wmma  = _test_wmma_scaffold()
@@ -988,8 +990,8 @@ fn main() {
 
     println("")
     println("══════════════════════════════════════════════")
-    if ok_br && ok_cls && ok_setp && ok_intr && ok_ls && ok_part && ok_barr && ok_atom && ok_shuf && ok_unr && ok_unrn && ok_wmma && ok_mp && ok_fctN && ok_pp && ok_fw && ok_sd && ok_me && ok_np && ok_os && ok_df && ok_bm && ok_wie && ok_gkw && ok_fls && ok_fp8a && ok_fp8b && ok_i64c && ok_mm && ok_mta && ok_mtb && ok_tma && ok_tmae {
-        println("PASS: RFC 055 + RFC 067 + RFC 068 P1/P2/P3/P4-codegen + RFC 068 §3 fp8 scaffold + RFC 069 + RFC 071 P3+/P5+ + RFC 067 N202 TMA scaffold + RFC 067 N206 TMA matmul emit — 33/33 cases (incl. matmul + matmul_NT_a + matmul_NT_b + TMA codegen scaffold + TMA matmul emit)")
+    if ok_br && ok_cls && ok_setp && ok_intr && ok_ls && ok_part && ok_barr && ok_atom && ok_shuf && ok_shuff64 && ok_shufm64 && ok_unr && ok_unrn && ok_wmma && ok_mp && ok_fctN && ok_pp && ok_fw && ok_sd && ok_me && ok_np && ok_os && ok_df && ok_bm && ok_wie && ok_gkw && ok_fls && ok_fp8a && ok_fp8b && ok_i64c && ok_mm && ok_mta && ok_mtb && ok_tma && ok_tmae {
+        println("PASS: RFC 055 + RFC 067 + RFC 068 P1/P2/P3/P4-codegen + RFC 068 §3 fp8 scaffold + RFC 069 + RFC 071 P3+/P5+ + N71-B FP64 warp-shuffle (+u64 mask narrow) + RFC 067 N202 TMA scaffold + RFC 067 N206 TMA matmul emit — 35/35 cases (incl. matmul + matmul_NT_a + matmul_NT_b + FP64 warp-shuffle composition + TMA codegen scaffold + TMA matmul emit)")
     } else {
         println("FAIL: RFC 055 smoke not satisfied.")
         if !ok_br   { println("      STMT_BR FAILED") }
@@ -1001,6 +1003,8 @@ fn main() {
         if !ok_barr { println("      055-P4 gpu_barrier() FAILED") }
         if !ok_atom { println("      055-P4+ gpu_atomic_add() FAILED") }
         if !ok_shuf { println("      055-P4+ gpu_warp_shuffle() FAILED") }
+        if !ok_shuff64 { println("      N71-B FP64 gpu_warp_shuffle composition FAILED") }
+        if !ok_shufm64 { println("      N71-B FP64 shuffle u64-mask narrow FAILED") }
         if !ok_unr  { println("      055-P4+ _nvptx_unroll_pass FAILED") }
         if !ok_unrn { println("      055-P4+ unroll passthrough FAILED") }
         if !ok_wmma { println("      RFC 055 §12 P4+ WMMA scaffold FAILED") }
@@ -1027,7 +1031,7 @@ fn main() {
         if !ok_tmae { println("      RFC 067 N206 TMA matmul emit FAILED") }
     }
     println("══════════════════════════════════════════════")
-    if !(ok_br && ok_cls && ok_setp && ok_intr && ok_ls && ok_part && ok_barr && ok_atom && ok_shuf && ok_unr && ok_unrn && ok_wmma && ok_mp && ok_fctN && ok_pp && ok_fw && ok_sd && ok_me && ok_np && ok_os && ok_df && ok_bm && ok_wie && ok_gkw && ok_fls && ok_fp8a && ok_fp8b && ok_i64c && ok_mm && ok_mta && ok_mtb && ok_tma) { exit(1) }
+    if !(ok_br && ok_cls && ok_setp && ok_intr && ok_ls && ok_part && ok_barr && ok_atom && ok_shuf && ok_shuff64 && ok_shufm64 && ok_unr && ok_unrn && ok_wmma && ok_mp && ok_fctN && ok_pp && ok_fw && ok_sd && ok_me && ok_np && ok_os && ok_df && ok_bm && ok_wie && ok_gkw && ok_fls && ok_fp8a && ok_fp8b && ok_i64c && ok_mm && ok_mta && ok_mtb && ok_tma && ok_tmae) { exit(1) }
 }
 
 // ── Case 9 — 055-P4 gpu_warp_shuffle(v, lane) intrinsic ───────────────
@@ -1087,6 +1091,188 @@ fn _test_warp_shuffle() -> bool {
 
     ok = _check(ok, ptx, ".reg .u32 %r2",                                      "u32 bank for warp_shuffle dst")
     ok = _check(ok, ptx, "shfl.sync.idx.b32 %r2, %r0, %r1, 0x1f, 0xffffffff",  "shfl.sync.idx.b32 full operand list")
+    return ok
+}
+// ── Case 34 — N71-B (N70/N91 GAP-C) FP64 warp-shuffle composition ──────
+//
+// PTX `shfl.sync.*.b32` moves only 32 bits, so shuffling an f64 value must
+// decompose `%fd<src>` into two `.b32` halves (`mov.b64 {%lo,%hi},%fd<src>`),
+// shuffle EACH half with the same mode/mask/clamp/membermask, then recompose
+// (`mov.b64 %fd<dst>,{%lo_out,%hi_out}`). The earlier 32-bit-only path
+// hardcoded `%r<src>` for the value operand → an undeclared `%r` ref that
+// ptxas rejects (`Unknown symbol %r9`). This fixture builds a tiny device
+// function that produces an f64 value (binop) then warp-shuffle-xors it,
+// and asserts the decompose/shuffle×2/recompose sequence with ZERO
+// undeclared `%r` value refs in the shuffle.
+//   ref: NVIDIA PTX ISA §9.7.13.4 shfl.sync.
+fn _build_case_warp_shuffle_f64() -> MModule {
+    let a = _local(0, "a")          // f64 source operand (param-like, default f64)
+    let b = _local(1, "b")          // f64 source operand
+    let v = _local(2, "v")          // STMT_BINOP add -> F64 %fd2 (the value to shuffle)
+    let mask = _local(3, "mask")    // STMT_CALL gpu_thread_id_x -> U32 %r3
+    let r = _local(4, "r")          // gpu_warp_shuffle_xor dst — F64 (source is f64) %fd4
+
+    let mut shuf_args = []
+    shuf_args.push(_op_local(v.id))
+    shuf_args.push(_op_local(mask.id))
+
+    let mut s0 = []
+    s0.push(_stmt_binop(v, "add", _op_local(a.id), _op_local(b.id)))
+    s0.push(_stmt_call(mask, "gpu_thread_id_x"))
+    s0.push(_stmt_call_with_args(r, "gpu_warp_shuffle_xor", shuf_args))
+    s0.push(_stmt_return())
+
+    let mut blocks = []
+    blocks.push(_block(0, s0))
+
+    let mut locals = []
+    locals.push(a)
+    locals.push(b)
+    locals.push(v)
+    locals.push(mask)
+    locals.push(r)
+
+    let mf = MFunc {
+        name: "warp_shuffle_f64_smoke",
+        params: [],
+        return_local: _miss_local(),
+        locals: locals,
+        blocks: blocks,
+        entry_block: 0,
+        arena_root: 1,
+        def_line: 0,
+        gpu_kind: GPU_KIND_DEVICE
+    }
+    let mut fns = []
+    fns.push(mf)
+    return MModule { file: "case_warp_shuffle_f64.hexa", funcs: fns, globals: [] }
+}
+
+// N71-B note: substring counts use the existing `_count_substr` helper
+// (defined further down for the unroll cases) — module-global in the flatten.
+
+fn _test_warp_shuffle_f64() -> bool {
+    let mut ok = true
+    let mod_ws = _build_case_warp_shuffle_f64()
+    let ptx = codegen_emit_ptx_sm80(mod_ws)
+
+    println("")
+    println("-- emitted PTX (N71-B FP64 gpu_warp_shuffle_xor case, sm_80) --")
+    println(ptx)
+
+    // dst is the f64 bank (recompose target), NOT the 32-bit %r bank.
+    ok = _check(ok, ptx, ".reg .f64 %fd4",  "f64 bank for f64 warp_shuffle dst")
+    // 4 scratch .b32 halves declared (lo/hi/lo_out/hi_out).
+    ok = _check(ok, ptx, ".reg .b32 %shfl_lo_4",     "scratch .b32 %shfl_lo_4 declared")
+    ok = _check(ok, ptx, ".reg .b32 %shfl_hi_4",     "scratch .b32 %shfl_hi_4 declared")
+    ok = _check(ok, ptx, ".reg .b32 %shfl_lo_out_4", "scratch .b32 %shfl_lo_out_4 declared")
+    ok = _check(ok, ptx, ".reg .b32 %shfl_hi_out_4", "scratch .b32 %shfl_hi_out_4 declared")
+    // decompose: mov.b64 {%lo, %hi}, %fd2
+    ok = _check(ok, ptx, "mov.b64 {%shfl_lo_4, %shfl_hi_4}, %fd2", "decompose mov.b64 {lo,hi}, %fd2")
+    // two bfly shuffles, lo + hi, with the same mask/clamp/membermask
+    ok = _check(ok, ptx, "shfl.sync.bfly.b32 %shfl_lo_out_4, %shfl_lo_4, %r3, 0x1f, 0xffffffff", "shfl lo half")
+    ok = _check(ok, ptx, "shfl.sync.bfly.b32 %shfl_hi_out_4, %shfl_hi_4, %r3, 0x1f, 0xffffffff", "shfl hi half")
+    // recompose: mov.b64 %fd4, {%lo_out, %hi_out}
+    ok = _check(ok, ptx, "mov.b64 %fd4, {%shfl_lo_out_4, %shfl_hi_out_4}", "recompose mov.b64 %fd4, {lo_out,hi_out}")
+    // exactly two shuffle instructions in the f64 path (lo + hi).
+    if _count_substr(ptx, "shfl.sync.bfly.b32") != 2 {
+        ok = false
+        println("  FAIL: expected exactly 2 shfl.sync.bfly.b32 (lo+hi), got " + to_string(_count_substr(ptx, "shfl.sync.bfly.b32")))
+    }
+    // CRITICAL: ZERO undeclared %r value refs — the shuffle must NOT
+    // reference `%r2` (the old hardcoded u32-bank value reg for an f64
+    // source). %r3 (the mask) is the only legitimate %r in the shuffle.
+    if _count_substr(ptx, "%r2") != 0 {
+        ok = false
+        println("  FAIL: f64 shuffle must NOT reference the undeclared u32 value reg %r2 (GAP-C bug)")
+    }
+    return ok
+}
+// ── Case 35 — N71-B FP64 shuffle with a u64-bank mask (real warp-reduce) ─
+//
+// The real warp_reduce_sum fixture declares `mask: i32 = 16; mask = mask/2`
+// but the classifier lands the mask Local in the u64 bank (`%rd`) via the
+// i64-typed div. `shfl.sync.*.b32`'s lane operand must be `.b32`, so the
+// lowering must narrow the u64 mask with `cvt.u32.u64 %shfl_mask_<dst>,
+// %rd<mask>` before the shuffle — else it would reference an undeclared
+// `%r<mask>`. This case pins that narrow.
+
+fn _local_i64(id: i64, name: string) -> Local {
+    return Local { id: id, arena_id: 1, type_id: 1, name_hint: name, precision: "" }
+}
+
+fn _stmt_assign(dst: Local, op: string, a: Operand) -> Stmt {
+    let mut xs = []
+    xs.push(a)
+    return Stmt {
+        kind: STMT_ASSIGN, dst: dst, op: op, args: xs,
+        target_block: -1, target_block_else: -1
+    }
+}
+
+fn _build_case_warp_shuffle_f64_u64mask() -> MModule {
+    let a = _local(0, "a")               // f64 src operand
+    let b = _local(1, "b")               // f64 src operand
+    let v = _local(2, "v")               // STMT_BINOP add -> F64 %fd2
+    let m0 = _local_i64(3, "m0")         // i64 seed -> U64 %rd3
+    let mask = _local_i64(4, "mask")     // STMT_ASSIGN i64 div -> U64 %rd4 (mask)
+    let r = _local(5, "r")               // gpu_warp_shuffle_xor dst — F64 %fd5
+
+    let mut shuf_args = []
+    shuf_args.push(_op_local(v.id))
+    shuf_args.push(_op_local(mask.id))
+
+    let mut s0 = []
+    s0.push(_stmt_binop(v, "add", _op_local(a.id), _op_local(b.id)))
+    s0.push(_stmt_assign(m0, "assign", _op_local(a.id)))   // m0: i64 -> U64
+    s0.push(_stmt_binop(mask, "div", _op_local(m0.id), _op_local(m0.id)))  // i64 div -> U64
+    s0.push(_stmt_call_with_args(r, "gpu_warp_shuffle_xor", shuf_args))
+    s0.push(_stmt_return())
+
+    let mut blocks = []
+    blocks.push(_block(0, s0))
+
+    let mut locals = []
+    locals.push(a); locals.push(b); locals.push(v)
+    locals.push(m0); locals.push(mask); locals.push(r)
+
+    let mf = MFunc {
+        name: "warp_shuffle_f64_u64mask_smoke",
+        params: [],
+        return_local: _miss_local(),
+        locals: locals,
+        blocks: blocks,
+        entry_block: 0,
+        arena_root: 1,
+        def_line: 0,
+        gpu_kind: GPU_KIND_DEVICE
+    }
+    let mut fns = []
+    fns.push(mf)
+    return MModule { file: "case_warp_shuffle_f64_u64mask.hexa", funcs: fns, globals: [] }
+}
+
+fn _test_warp_shuffle_f64_u64mask() -> bool {
+    let mut ok = true
+    let mod_ws = _build_case_warp_shuffle_f64_u64mask()
+    let ptx = codegen_emit_ptx_sm80(mod_ws)
+
+    println("")
+    println("-- emitted PTX (N71-B FP64 shuffle + u64 mask narrow, sm_80) --")
+    println(ptx)
+
+    // The u64 mask (%rd4) must be narrowed to a u32 scratch before the shfl.
+    ok = _check(ok, ptx, ".reg .u32 %shfl_mask_5",            "u32 mask-narrow scratch declared")
+    ok = _check(ok, ptx, "cvt.u32.u64 %shfl_mask_5, %rd4",   "cvt.u32.u64 narrows u64 mask")
+    // both shfl halves use the narrowed %shfl_mask_5 (NOT %r4 — undeclared).
+    ok = _check(ok, ptx, "shfl.sync.bfly.b32 %shfl_lo_out_5, %shfl_lo_5, %shfl_mask_5, 0x1f, 0xffffffff", "shfl lo half uses narrowed mask")
+    ok = _check(ok, ptx, "shfl.sync.bfly.b32 %shfl_hi_out_5, %shfl_hi_5, %shfl_mask_5, 0x1f, 0xffffffff", "shfl hi half uses narrowed mask")
+    ok = _check(ok, ptx, "mov.b64 %fd5, {%shfl_lo_out_5, %shfl_hi_out_5}", "recompose into f64 dst")
+    // CRITICAL: NO undeclared `%r4` (the bare-u32 spelling of the u64 mask).
+    if _count_substr(ptx, "%r4,") != 0 || _count_substr(ptx, " %r4 ") != 0 {
+        ok = false
+        println("  FAIL: u64 mask must be narrowed, not spelled as undeclared %r4")
+    }
     return ok
 }
 // ── Case 8 — 055-P4+ _nvptx_unroll_pass (canonical 3-block back-edge) ─
