@@ -225,15 +225,18 @@ completely. The conventions being abandoned:
 - stage numbers baked into names — `s4_...`
 
 Vestige inventory (known; canonical names are the plan — adjust before
-the rename cycle runs if any name is contested):
+the rename cycle runs if any name is contested). The CANON campaign
+(2026-05-25, see `CANON.md`) already resolved the compiler-binary and
+`_v2`-suffix rows — marked DONE below; remaining rows belong to the
+native-codegen (정공법) cycle, not CANON:
 
 | vestige | what it is | canonical |
 |---------|------------|-----------|
-| `aprime_cc` · `tool/build_aprime.sh` | native codegen compiler + its build | `hexac` · `tool/build_hexac.sh` |
-| `hexa_v2` · `self/native/hexa_cc.c` | legacy C transpiler binary + source | `ctrans` · `ctrans.c` |
-| `self/codegen_c2.hexa` | C-backend codegen (SSOT) | `codegen_c.hexa` |
-| `tool/s4_flatc_post.py` | flatten post-processor | `tool/flatc_post.py` |
-| `self/native/*.bak.*` · `*.pre*` | dead bootstrap snapshots | delete |
+| `aprime_cc` · `tool/build_aprime.sh` | native codegen compiler + its build | `hexac` · `tool/build_hexac.sh` (정공법 cycle — pending) |
+| `hexa_v2` · `self/native/hexa_cc.c` | C transpiler binary + C seed source | **DONE (CANON M3b)** — `hexa_v2` git-removed → build artifact `build/hexa_v2`, auto-bootstrapped via `hexa cc`; `hexa_cc.c` kept as the Go-1.4-style C seed (NOT renamed) |
+| `self/codegen_c2.hexa` | C-backend codegen (SSOT) | **DONE** — renamed to `self/codegen.hexa` (PR #387); the version suffix is gone |
+| `tool/s4_flatc_post.py` | flatten post-processor | `tool/flatc_post.py` (정공법 cycle — pending) |
+| `self/native/*.bak.*` · `*.pre*` | dead bootstrap snapshots | **DONE (CANON M1/M2)** — `.bak.*` untracked + `_v2.c` generated files deleted |
 
 Execution is a SEPARATE atomic cycle — NOT folded into S1. A mass rename
 rewrites `import` paths across the whole tree; mixing it into a perf

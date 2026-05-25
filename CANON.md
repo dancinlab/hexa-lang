@@ -32,8 +32,9 @@
 - [x] **M6 — M4 polish: tool family 완성도 + `--help` 재편 마무리** — DONE PR #973 (merged). dispatch 100 verb 전수감사 → 고아 8개 발견 → 5번째 family `TOOLCHAIN` 신설(batch·typecheck·cache·daemon·convergence·tape·hxc·url·stdlib) + `n6-list`→ANNOTATOR + `loop` SCIENCE→DISCOVERY 재분류 → 5-family 전부 non-empty(고아 0·dead-entry 0). core=everyday 11개로 정리. net −5 LOC.
 - [x] **M7 — `_v2` dead-ref 스윕** — DONE PR #970 (merged). 전체 grep → DEAD-REF 1건(`COMPILER.md` vestige 표의 삭제파일 2행)만 제거. 활성 코드/빌드/CI dead-ref 0(M2가 이미 청소). LIVE(`hexa_v2` 바이너리명·`build/hexa_v2`·`hexa_cc.c` 시드·stdlib `_v2.hexa`) 보존.
 - [x] **M8 — `build_hexa_cli.hexa` install-step 자동화 (M5 deploy 갭 영구 차단)** — DONE. M5 가 진단한 M3b 갭의 근인(드라이버는 빌드되나 shim 타깃 복사 단계 부재)을 자동화. `tool/build_hexa_cli.hexa` 에 **opt-in `--install` 플래그** 추가: 빌드 성공 후에만 `build/hexa_cli_driver` 를 4개 shim 타깃(메인트리 `hxv2`+`hexa.real` + `~/.hx/bin/{hxv2,hexa.real}`)으로 복사 + Mac `codesign`. **기본 OFF** (CI/fresh-clone 무영향). `$HOME` env-우선 robust 해석 + `mkdir -p ~/.hx/bin`; `$HOME` 미해결 시 `~/.hx/bin` 타깃 graceful skip. 이제 pull 후 `tool/build_hexa_cli --install` 단일 명령으로 종결 → 갭 재발 불가.
+- [x] **M9 — 문서 surface 정확성 스윕 (M1~M8 정렬)** — DONE. README/COMPILER/RUNTIME/SPEC/GOAL/ROADMAP/CHANGELOG/INBOX/HANDOFF + `doc/**` 인벤토리 후 현재 canonical 상태와 대조. **present-tense 거짓 2건만 수정**(보수적): (1) `COMPILER.md` "vestige inventory" 표 — `self/codegen_c2.hexa`(이미 `codegen.hexa`로 rename #387)·`hexa_v2`/`hexa_cc.c`(M3b git-제거+seed 유지)·`.bak`/`_v2.c`(M1/M2 삭제) 3행에 **DONE** 주석, 미완 정공법행(aprime_cc·s4_flatc_post)은 보존. (2) `SPEC.md` L693 present-tense 설명의 `codegen_c2.hexa`→`codegen.hexa`. **보존**: README L137·SPEC L803·CHANGELOG L143·HANDOFF·RUNTIME.md cycle 로그의 `codegen_c2.hexa`/`hexa_v2`는 전부 commit-SHA 박힌 시점기록 or rename 기록이라 무손상. README 내부 링크 5/5 resolve 확인. 코드 편집 0(docs-only). net +10/−7.
 
-**✅ M1~M8 전부 DONE — CANON @goal 4축(바이너리 git 제거 · `_v2` 종결 · `hexa cc` 흡수 · verb canonical 정리) 종결 + M5 deploy 갭 자동화 follow-up 완료.**
+**✅ M1~M9 전부 DONE — CANON @goal 4축(바이너리 git 제거 · `_v2` 종결 · `hexa cc` 흡수 · verb canonical 정리) 종결 + M5 deploy 갭 자동화(M8) + 문서 정확성 스윕(M9) follow-up 완료.**
 
 ## 배포 refresh 절차 (M3b post-pull)
 

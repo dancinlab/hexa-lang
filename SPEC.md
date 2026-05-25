@@ -690,7 +690,7 @@ Resolved 2026-05-10 / 2026-05-11:
   qemu / hardware commission as the remaining gate.
 - `hexa_str_concat` runtime stub linkage (Gap 15) — moot for the `self/`
   build path: `hexa_str_concat` is defined in `self/runtime.c` and every
-  transpiled program `#include`s `runtime.c`, so `codegen_c2.hexa`'s
+  transpiled program `#include`s `runtime.c`, so `codegen.hexa`'s
   `str_concat → hexa_str_concat` mapping always resolves; no stub ever
   shipped in `self/native/*.c` (the only literal there is the symbol-name
   string inside the transpiled `hexa_cc.c`). The `compiler/` (ground-up
