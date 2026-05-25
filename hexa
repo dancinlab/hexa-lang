@@ -25,28 +25,30 @@ if [ ! -x "$__hexa_bin" ]; then
     __hexa_bin="$__hexa_dir/hexa.real"
 fi
 
-# Fork-exhaustion backstop (ref: fork EAGAIN, 2026-05-25/26).
-#   A runaway hexa fork loop — e.g. an agent campaign shelling hexa → atlas →
-#   verify without bound — can exhaust the per-uid process table.  Once that
-#   happens every fork() EAGAINs, taking down unrelated sessions and the
-#   SessionStart/PreToolUse hooks (which can no longer spawn /bin/sh).  Bound
-#   the live hexa-family process count per real-uid at a hard ceiling and
-#   refuse new front-door entry past it, so the loop breaks well before the
-#   `ulimit -u` wall instead of after.
-#   - No env / config opt-out by design: an escape hatch on a safety backstop
-#     just gets flipped to silence it (sidecar governance s11).  Ceiling is a
-#     literal; tune it here in-source if the legitimate parallel ceiling rises.
-#   - macOS ships no flock(1); a ps headcount is the portable, crash-safe
-#     primitive — dead procs leave the table on their own, so there is no
-#     stale-counter to reap.  Fails OPEN: a ps glitch must never block work.
-__hexa_cap=600
-__hexa_live="$(ps -U "$(id -u)" -o comm= 2>/dev/null | grep -c '[h]exa')"
-if [ "${__hexa_live:-0}" -ge "$__hexa_cap" ]; then
-    printf 'hexa: fork-cap reached — %s hexa-family procs for uid %s (ceiling %s); refusing new entry.\n' "$__hexa_live" "$(id -u)" "$__hexa_cap" >&2
-    printf 'hexa: this protects the process table from a runaway fork loop. Find + kill the runaway group:\n' >&2
-    printf "hexa:   ps -axo pgid,comm | grep '[h]exa' | awk '{print \$1}' | sort | uniq -c | sort -rn | head\n" >&2
-    printf 'hexa:   kill -- -<PGID>   # the big group; spares your shell + claude\n' >&2
+# Fork-exhaustion backstop — recursion-depth guard (ref: fork EAGAIN, 2026-05-25/26).
+#   The runaway was a DEEP nested shell-out chain: hexa → sh → hexa-atlas → sh →
+#   hexa → … , each bottom `hexa` re-entering this front-door via PATH lookup.
+#   Bound that nesting structurally: every entry inherits HEXA_DEPTH from its
+#   parent (the var rides through the intermediate sh / hexa-atlas / hexa-verify
+#   untouched), increments it, and refuses past a hard ceiling — so an unbounded
+#   hexa → … → hexa recursion is cut at depth N and can never reach the
+#   process-table wall.  This targets the mechanism (recursion), not the symptom
+#   (raw process count), so unlike an absolute headcount cap it does NOT penalise
+#   legitimate WIDE parallelism (many shallow hexa fanned across agents).
+#   - HEXA_DEPTH is mechanism state, not an opt-out knob (cf. make's MAKELEVEL).
+#     There is no env switch that DISABLES the guard (sidecar governance s11);
+#     resetting the counter mid-chain is the only bypass and no real code does it.
+#   - Ceiling is an in-source literal.  Legit nested dispatch is single-digit
+#     deep; 32 leaves vast headroom while still cutting an infinite loop early.
+#     Non-numeric / unset HEXA_DEPTH sanitises to 0 (fails OPEN — never blocks).
+__hexa_depth="${HEXA_DEPTH:-0}"
+case "$__hexa_depth" in ''|*[!0-9]*) __hexa_depth=0 ;; esac
+if [ "$__hexa_depth" -ge 32 ]; then
+    printf 'hexa: recursion-depth cap reached — nested hexa shell-out depth %s ≥ 32; refusing.\n' "$__hexa_depth" >&2
+    printf 'hexa: a hexa → … → hexa chain this deep is a runaway loop, not real work. Find + kill the group:\n' >&2
+    printf "hexa:   ps -axo pgid,comm | grep '[h]exa' | awk '{print \$1}' | sort | uniq -c | sort -rn | head; kill -- -<PGID>\n" >&2
     exit 1
 fi
+export HEXA_DEPTH=$((__hexa_depth + 1))
 
 exec -a hexa "$__hexa_bin" "$@"
