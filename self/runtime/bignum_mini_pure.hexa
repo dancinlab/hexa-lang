@@ -31,15 +31,16 @@
 //      bignum_from_int_pure(n)       -> [int]       int -> limbs  (n >= 0)
 //      bignum_to_string_pure(limbs)  -> string      limbs -> decimal str
 //      bignum_add_pure(a, b)         -> [int]       a + b, carry-propagate
-//      bignum_sub_pure(a, b)         -> [int]|nil   a - b, nil if a < b
+//      bignum_sub_pure(a, b)         -> [int]|[]    a - b, [] (empty) if a < b
 //      bignum_mul_int_pure(lmb, n)   -> [int]       lmb * n, n small int >= 0
 //
 //  SEMANTIC NOTES
 //  ──────────────
 //  * All inputs are assumed non-negative. Negative bignums would need a
 //    sign field; out of scope for mini. `bignum_from_int_pure(-5)`
-//    returns nil.
-//  * `bignum_sub_pure` returns nil on underflow rather than producing
+//    returns [] (empty array — the invalid/error sentinel, distinct from
+//    canonical zero [0]).
+//  * `bignum_sub_pure` returns [] (empty) on underflow rather than producing
 //    a two's-complement result. Callers should cmp first if they care.
 //  * All results are in canonical form (no trailing-zero limbs; 0 is [0]).
 //  * P50 compliant: zero use of `<<` / `>>`. All arithmetic via * / % + -.
@@ -110,10 +111,10 @@ pub fn bignum_cmp_pure(a, b) {
 
 // ── bignum_from_int_pure ────────────────────────────────────────────
 // Convert non-negative int -> little-endian radix-10 limb array.
-// Returns [0] for 0 and nil for negatives.
+// Returns [0] for 0 and [] (empty error sentinel) for negatives.
 @pure
 pub fn bignum_from_int_pure(n) {
-    if n < 0 { return nil }
+    if n < 0 { return [] }
     if n == 0 { return [0] }
     let mut out = []
     let mut x = n
@@ -169,11 +170,11 @@ pub fn bignum_add_pure(a, b) {
 }
 
 // ── bignum_sub_pure ─────────────────────────────────────────────────
-// a - b with borrow. Returns nil if a < b (we don't represent negatives).
+// a - b with borrow. Returns [] (empty) if a < b (we don't represent negatives).
 @pure
 pub fn bignum_sub_pure(a, b) {
     let cmp = bignum_cmp_pure(a, b)
-    if cmp < 0 { return nil }
+    if cmp < 0 { return [] }
     if cmp == 0 { return [0] }
     let la = len(a)
     let lb = len(b)
@@ -203,7 +204,7 @@ pub fn bignum_sub_pure(a, b) {
 // m <= 10^17 this is comfortable.
 @pure
 pub fn bignum_mul_int_pure(limbs, m) {
-    if m < 0 { return nil }
+    if m < 0 { return [] }
     if m == 0 { return [0] }
     if bignum_is_zero_pure(limbs) { return [0] }
     let n = len(limbs)
@@ -229,7 +230,7 @@ pub fn bignum_mul_int_pure(limbs, m) {
 // Net-new: enables exact 2^p for p far beyond int64's 2^62 ceiling.
 @pure
 pub fn bignum_pow2_pure(p) {
-    if p < 0 { return nil }
+    if p < 0 { return [] }
     let mut out = [1]
     let mut i = 0
     while i < p {
@@ -283,7 +284,7 @@ pub fn mersenne_perfect_sigma_pure(p) {
     let geo = bignum_geosum_pow2_pure(p)
     let pow_p = bignum_pow2_pure(p)
     let mp = bignum_sub_pure(pow_p, [1])
-    if mp == nil { return 0 }
+    if len(mp) == 0 { return 0 }    // underflow sentinel (cannot happen for p>=1)
     if bignum_cmp_pure(geo, mp) != 0 { return 0 }
     // (2) σ(P) = 2P.  σ(P) = M_p·(M_p+1) = M_p·2^p ; 2P = 2·2^(p-1)·M_p = 2^p·M_p.
     // sigma_P = M_p doubled p times.
