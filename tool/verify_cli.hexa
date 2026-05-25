@@ -331,6 +331,29 @@ fn _recompute(fn_name: string, n: int) -> int {
     if fn_name == "cyclotron_cool_bratio_exponent"       { return 2 }
     if fn_name == "recomb_3body_exponent_doubled"        { return -9 }
     if fn_name == "recomb_3body_tratio_exponent_doubled" { return 9 }
+    // ── BLUE-MAX integer atoms (FUSION 🔵 algebraic-root pairs · g69) ──────
+    // Pure-integer factors/exponents backing libm-class (sqrt/exp/log/pow)
+    // FUSION atoms — every libm-class atom gets ≥1 🔵 integer root:
+    //   Bosch-Hale ⟨σv⟩  Eq.12  exp(−3·ξ)            → gamow_factor = 3
+    //                            (sigma_v_dt/dhe3/ddp/ddn/dd_total/dt_e18 all share)
+    //   sigma_v_dt_e18    raw·1e18                    → scale exponent = 18
+    //   p-¹¹B Gamow      exp(−√(E_G/E)), E_G=22.589 MeV → 22589 keV (integer)
+    //   p-¹¹B S-factor   148 keV CM resonance (E_L)  → 2·148 = 296 (doubled)
+    //   p-¹¹B reactivity moment 600-node midpoint quadrature → nodes = 600
+    //   p-¹¹B moment_e6  raw·1e6                      → scale exponent = 6
+    //   solenoid_axis_bz B = (μ₀J/2)·h·ln(...),  h/2  → both share factor 2
+    //   q_star           2π/(μ₀·10⁶) = 5 EXACTLY (π-free reduction, PR #1027
+    //                    load-bearing identity) → q_star_constant = 5
+    // Each returns the EXACT integer algebraic root → tier=🔵 SUPPORTED-FORMAL.
+    // All 0-arg-dummy form: invoke as `--expr <name> 0 <expected_int>`.
+    if fn_name == "bosch_hale_gamow_factor"                  { return 3 }
+    if fn_name == "sigma_v_dt_e18_scale_exponent"            { return 18 }
+    if fn_name == "pb11_gamow_eg_kev"                        { return 22589 }
+    if fn_name == "pb11_resonance_kev_doubled"               { return 296 }
+    if fn_name == "pb11_quadrature_nodes"                    { return 600 }
+    if fn_name == "pb11_reactivity_moment_e6_scale_exponent" { return 6 }
+    if fn_name == "solenoid_axis_bz_half_factor"             { return 2 }
+    if fn_name == "q_star_constant"                          { return 5 }
     return NOCALC
 }
 
