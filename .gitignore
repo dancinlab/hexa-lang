@@ -125,6 +125,16 @@ shared/state/
 self/native/hexa_v2.pre_nightly_rebuild_*
 self/native/hexa_v2.pre_*
 
+# CANON M1: retired variant transpiler binaries (code-unused; doc-only refs).
+# Canonical seeds are self/native/hexa_v2 (Mac arm64) + hexa_v2_linux_x86_64
+# (Linux x86_64), both build-artifact-ized in CANON M3. These suffixed
+# variants must never re-enter git.
+self/native/hexa_v2_baseline
+self/native/hexa_v2_test
+self/native/hexa_v2_nobt71
+self/native/hexa_v2_pre71
+self/native/hexa_v2_rfc011
+
 # Compiled native shared libraries under self/native — built locally from
 # the .c/.cu sources in the same directory. Do not ship binaries.
 self/native/*.dylib
