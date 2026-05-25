@@ -244,6 +244,14 @@ fn _nvptx_reg_shfl_lo_out(id: i64) -> string {
 fn _nvptx_reg_shfl_hi_out(id: i64) -> string {
     return "%shfl_hi_out_" + to_string(id)
 }
+// _nvptx_reg_shfl_mask — u32 scratch for the lane/mask operand when the
+// source Local is in the u64 bank (`%rd<id>`). `shfl.sync.*.b32`'s lane
+// operand must be `.b32`/u32; a `mask: i32` Local that the classifier
+// landed in the u64 bank (e.g. via an `i64`-typed `mask / 2`) must be
+// narrowed with `cvt.u32.u64 %shfl_mask_<dst>, %rd<mask>` first.
+fn _nvptx_reg_shfl_mask(id: i64) -> string {
+    return "%shfl_mask_" + to_string(id)
+}
 
 // _nvptx_operand_text — render one MIR Operand as a PTX operand string
 // for the FP64-arithmetic subset (RFC 055 §6.6).
@@ -1018,7 +1026,6 @@ fn _nvptx_lower_stmt(buf: [LInstr], s: Stmt, kinds: [PReg], shared_idx_off: [i64
                 // The lane operand stays a `%r` (u32) register either way.
                 //   ref: NVIDIA PTX ISA §9.7.13.4 shfl.sync + §5.4 mov.b64.
                 let src_kind = _nvptx_lookup_kind_for_local(kinds, s.args[0].local_id)
-                let lane_reg = _nvptx_reg_u32(s.args[1].local_id)
                 if src_kind == NVPTX_RKIND_F64 {
                     let dst_f64 = _nvptx_reg_f64(s.dst.id)
                     let src_f64 = _nvptx_reg_f64(s.args[0].local_id)
@@ -1026,6 +1033,19 @@ fn _nvptx_lower_stmt(buf: [LInstr], s: Stmt, kinds: [PReg], shared_idx_off: [i64
                     let hi = _nvptx_reg_shfl_hi(s.dst.id)
                     let lo_out = _nvptx_reg_shfl_lo_out(s.dst.id)
                     let hi_out = _nvptx_reg_shfl_hi_out(s.dst.id)
+                    // The lane operand must be `.b32` for shfl. When the
+                    // lane Local sits in the u64 bank (`%rd`), narrow it to
+                    // the `%shfl_mask_<dst>` u32 scratch first; else use
+                    // `%r<lane>` directly.
+                    let lane_kind = _nvptx_lookup_kind_for_local(kinds, s.args[1].local_id)
+                    let mut lane_reg = _nvptx_reg_u32(s.args[1].local_id)
+                    if lane_kind == NVPTX_RKIND_U64 {
+                        lane_reg = _nvptx_reg_shfl_mask(s.dst.id)
+                        let mut c = []
+                        c.push(_nvptx_op(lane_reg))
+                        c.push(_nvptx_op(_nvptx_reg_u64(s.args[1].local_id)))
+                        out.push(_nvptx_instr("cvt.u32.u64", c, "gpu_warp_shuffle lane u64 -> u32 narrow"))
+                    }
                     // 1. decompose f64 src into two 32-bit halves
                     let mut d = []
                     d.push(_nvptx_op("{" + lo + ", " + hi + "}"))
@@ -1056,6 +1076,7 @@ fn _nvptx_lower_stmt(buf: [LInstr], s: Stmt, kinds: [PReg], shared_idx_off: [i64
                 // u32 source — existing single-instruction 32-bit path.
                 let dst_reg = _nvptx_lookup_reg_for_local(kinds, s.dst.id)
                 let src_reg = _nvptx_reg_u32(s.args[0].local_id)
+                let lane_reg = _nvptx_reg_u32(s.args[1].local_id)
                 let mut a = []
                 a.push(_nvptx_op(dst_reg))
                 a.push(_nvptx_op(src_reg))
@@ -1082,7 +1103,6 @@ fn _nvptx_lower_stmt(buf: [LInstr], s: Stmt, kinds: [PReg], shared_idx_off: [i64
                 // mask operand stays a `%r` (u32) register either way.
                 //   ref: NVIDIA PTX ISA §9.7.13.4 shfl.sync + §5.4 mov.b64.
                 let src_kind = _nvptx_lookup_kind_for_local(kinds, s.args[0].local_id)
-                let mask_reg = _nvptx_reg_u32(s.args[1].local_id)
                 if src_kind == NVPTX_RKIND_F64 {
                     let dst_f64 = _nvptx_reg_f64(s.dst.id)
                     let src_f64 = _nvptx_reg_f64(s.args[0].local_id)
@@ -1090,6 +1110,20 @@ fn _nvptx_lower_stmt(buf: [LInstr], s: Stmt, kinds: [PReg], shared_idx_off: [i64
                     let hi = _nvptx_reg_shfl_hi(s.dst.id)
                     let lo_out = _nvptx_reg_shfl_lo_out(s.dst.id)
                     let hi_out = _nvptx_reg_shfl_hi_out(s.dst.id)
+                    // The mask operand must be `.b32` for shfl. When the
+                    // mask Local sits in the u64 bank (`%rd`), narrow it to
+                    // the `%shfl_mask_<dst>` u32 scratch first (the warp-
+                    // reduce `mask: i32` often lands in u64 via `mask / 2`);
+                    // else use `%r<mask>` directly.
+                    let mask_kind = _nvptx_lookup_kind_for_local(kinds, s.args[1].local_id)
+                    let mut mask_reg = _nvptx_reg_u32(s.args[1].local_id)
+                    if mask_kind == NVPTX_RKIND_U64 {
+                        mask_reg = _nvptx_reg_shfl_mask(s.dst.id)
+                        let mut c = []
+                        c.push(_nvptx_op(mask_reg))
+                        c.push(_nvptx_op(_nvptx_reg_u64(s.args[1].local_id)))
+                        out.push(_nvptx_instr("cvt.u32.u64", c, "gpu_warp_shuffle_xor mask u64 -> u32 narrow"))
+                    }
                     // 1. decompose f64 src into two 32-bit halves
                     let mut d = []
                     d.push(_nvptx_op("{" + lo + ", " + hi + "}"))
@@ -1120,6 +1154,7 @@ fn _nvptx_lower_stmt(buf: [LInstr], s: Stmt, kinds: [PReg], shared_idx_off: [i64
                 // u32 source — existing single-instruction 32-bit path.
                 let dst_reg = _nvptx_lookup_reg_for_local(kinds, s.dst.id)
                 let src_reg = _nvptx_reg_u32(s.args[0].local_id)
+                let mask_reg = _nvptx_reg_u32(s.args[1].local_id)
                 let mut a = []
                 a.push(_nvptx_op(dst_reg))
                 a.push(_nvptx_op(src_reg))
@@ -2026,6 +2061,17 @@ fn _nvptx_classify_locals(mfn: MFunc) -> [PReg] {
                         regs.push(PReg { name: _nvptx_reg_shfl_hi(s.dst.id),     kind: NVPTX_RKIND_B32, frag_role: "", frag_dtype: "", frag_layout: "" })
                         regs.push(PReg { name: _nvptx_reg_shfl_lo_out(s.dst.id), kind: NVPTX_RKIND_B32, frag_role: "", frag_dtype: "", frag_layout: "" })
                         regs.push(PReg { name: _nvptx_reg_shfl_hi_out(s.dst.id), kind: NVPTX_RKIND_B32, frag_role: "", frag_dtype: "", frag_layout: "" })
+                        // The u32 lane/mask narrow scratch — declared only
+                        // when the lane/mask Local actually sits in the u64
+                        // bank (else the lowering uses `%r<lane>` directly
+                        // and this reg would be unreferenced-but-harmless;
+                        // gate the decl on the real u64 case to keep PTX tidy).
+                        if len(s.args) >= 2 && s.args[1].kind == "local" {
+                            let km = _nvptx_lookup_kind_for_local(regs, s.args[1].local_id)
+                            if km == NVPTX_RKIND_U64 {
+                                regs.push(PReg { name: _nvptx_reg_shfl_mask(s.dst.id), kind: NVPTX_RKIND_U32, frag_role: "", frag_dtype: "", frag_layout: "" })
+                            }
+                        }
                     }
                 }
             }
