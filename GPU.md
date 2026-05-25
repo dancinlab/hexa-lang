@@ -63,6 +63,22 @@
 - [x] **wiring** — `HEXA_NVPTX_UNROLL_FACTOR` env-gated codegen pipeline integration + GEMM K-loop MIR fixture (PR #179)
 - [x] **P4 silicon** — unroll=1 vs unroll=2 vec-add byte-eq on RTX 5070, `byte_mismatch=0/1024`, `F-RFC069-NUMERIC-EQ` PASS (PR #190)
 
+### 1i — Codegen correctness coverage (2026-05-26) 🛸
+
+Source-to-silicon **arithmetic/operator coverage** closure — the silent-miscompile
+class where the frontend produces an op the NVPTX codegen never wired (dst register
+left unset → garbage), or wired with a ptxas-illegal mnemonic. All verified via
+`nvptx_lower_test` compiled-path (mac arm64) + archive ptxas-ground-truth / ubu-2 fire.
+
+- [x] **wmma scaffold mnemonic grammar** (PR #1189) — `_nvptx_wmma_mnemonic` + `_family` emitted ptxas-illegal forms (`.f16.shared` state-space-after-type · long `.f32.f16.f16.f32` for f16 multiplicand). Fixed to `.shared.f16` + short `.f32.f32`/`.f16.f16`; bf16 long form kept. Test asserts had lock-in'd the buggy strings (N122 b1+b2).
+- [x] **integer `/` `%`** (PR #1193, RE-LANDED after `9652fd5e` silent-wipe) — `div.s32`/`div.s64` + `rem.s32`/`rem.s64` in `_nvptx_binop_mnemonic_for_kind`; was falling through to FP64 `div.rn.f64` (ptxas-illegal on int regs → N70 GAP-B hang).
+- [x] **integer bitwise/shift** (PR #1207) — `& | ^ << >>` → `and/or/xor.b{32,64}` · `shl.b{32,64}` · `shr.s{32,64}`. Enables masking/packing/quantization/Hilbert-d2xy bit-math @gpu_kernels.
+- [x] **FP32 division** (PR #1210) — `div_f32` → `div.rn.f32` (the documented "future codegen-side div row"). ML kernels (softmax `e/Σe`, layernorm `x/√var`). f16/bf16 div = honest stub (no native PTX mnemonic).
+- [x] **sm_120 `.version` 8.0 → 8.7** (PR #1202) — bare sm_120 declared an ISA version the RTX 5070 driver-JIT rejects for matmul/WMMA (N153-fire finding); unified with the sm_120a (TMA) 8.7 pin.
+- [ ] **GPU math intrinsics** (in flight) — `sqrt`/`rsqrt`/`max`/`min`/`exp` STMT_CALLs hit `// unsupported call` stub on the NVPTX path (latent incomplete ML kernels). Agent wiring `sqrt.rn` / `max`/`min` / `rsqrt.approx` / `ex2.approx`(exp) + silicon fire.
+
+**Remaining domain frontier (terminal / out-of-foreground-scope):** §10 production-driver E2E (`hexa build src --target=nvptx`) blocked by Mac self-host OOM (`project_compiler_selfbuild_blockers`) — codegen emit + silicon already proven (N128/N153/N71-B); SGEMM perf at documented local-optimum (64×64+Hilbert, every larger-tile/wgmma/split-K/warp-spec lever falsified); ROCm multi-vendor HW-blocked ($0 AMD inventory); whole-program-fusion sub-threshold launch-bound win (R12, live research lane).
+
 ### 1e — Continuous gates (all sessions)
 
 - [x] **F-RFC055-NO-LLVM** — zero LLVM/clang-target-nvptx linkage anywhere in the hexa→PTX→fire chain
