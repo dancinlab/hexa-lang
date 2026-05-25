@@ -46,7 +46,7 @@ fn _slice_args() -> array {
     let mut i = 1
     while i < n {
         let a = to_string(av[i])
-        if a == "lookup" || a == "dump" || a == "stats" || a == "hash" || a == "register" || a == "export" || a == "--help" || a == "-h" || a == "help" {
+        if a == "lookup" || a == "dump" || a == "stats" || a == "hash" || a == "register" || a == "export" || a == "reverify" || a == "--help" || a == "-h" || a == "help" {
             let mut out = []
             let mut j = i
             while j < n {
@@ -2125,13 +2125,15 @@ fn cmd_register(rest: array) {
         let mkx_on = drill_engine == "mk10"
         let mut all_discoveries: array = []
         let mut seed_pool: array = []
+        let mut cum_seen_ids: array = []
         let mut total_yield: i64 = 0
         let mut last_round: i64 = 0
         let mut r: i64 = 0
         while r < drill_rounds {
             r = r + 1
             last_round = r
-            let rr = round_run_with_pool(drill_seed, r, 3, 3, 1, mkx_on, seed_pool)
+            let rr = round_run_with_pool(drill_seed, r, 3, 3, 1, mkx_on, seed_pool, cum_seen_ids)
+            cum_seen_ids = rr.cum_seen_ids
             println("  round " + to_string(r) + ": smash+" + to_string(rr.yields.smash_n) +
                     " free+" + to_string(rr.yields.free_n) +
                     " abs=" + to_string(rr.yields.abs_n) +
@@ -2148,8 +2150,9 @@ fn cmd_register(rest: array) {
             }
             // Feed next round's seed pool from this round's axiom-exprs.
             seed_pool = extract_axiom_exprs(rr.discoveries)
-            // Saturation: drill's own contract.
+            // Saturation: drill's own contract — gross total OR C5 net-novel fixpoint.
             if rr.yields.total == 0 { break }
+            if r >= 2 && rr.net_novel == 0 { break }
         }
         println("  drill  = rounds=" + to_string(last_round) +
                 " total=" + to_string(total_yield) +
@@ -2246,6 +2249,165 @@ fn _today_compact() -> string {
 
 // _branch_stamp — date + millis, safe for a git branch name.
 
+// ── reverify — retroactive re-verification of frozen 🟢 nodes ──────────
+//
+// ATLAS @goal META-SIGNAL ②: registered atlas nodes are frozen at
+// registration and never re-verified — a 🟢 SUPPORTED-NUMERICAL claim
+// stays trusted forever even if the in-process calculator drifts. This
+// is the lightweight successor of the retired RFC-017 §5e retroactive
+// sweep (compiler/discover/retroactive_sweep.hexa, tombstone-based): it
+// re-RUNS the recompute over already-registered F nodes IN-PROCESS and
+// reports verdict DRIFT — it does NOT tombstone or mutate the atlas.
+//
+// Each 🟢 F node carries a fully machine-parseable header line:
+//   @F <id> = <fn>(<a0,a1,...>) = <claimed> :: formula [...]
+// We parse <fn> + the comma-arg list + <claimed>, re-run
+// _recompute_float_register on the SAME fn+args (the live mirror of
+// verify_cli's float table), and compare to <claimed> within ε=1e-9.
+// Disposition per node:
+//   MATCH         within-ε recompute == claimed (verdict confirmed)
+//   DRIFT         out-of-ε disagreement (the frozen verdict has rotted)
+//   UNVERIFIABLE  no in-process float calc path for <fn> (skip, not fail)
+
+// _rev_extract_header — first line (up to first "\n") of a node's raw.
+fn _rev_extract_header(raw: string) -> string {
+    let nl = raw.find("\n")
+    if nl < 0 { return raw }
+    return raw.substring(0, nl)
+}
+
+pub struct ReverifyParse {
+    ok: bool,
+    fn_name: string,
+    args: array,        // [string] operands (comma-split, may be empty)
+    claimed: string     // claimed value as written
+}
+
+// _rev_parse_header — parse "@F <id> = <fn>(<args>) = <claimed> :: ...".
+// Returns ok=false if the line is not in canonical numerical-F shape.
+fn _rev_parse_header(header: string) -> ReverifyParse {
+    let empty = ReverifyParse { ok: false, fn_name: "", args: [], claimed: "" }
+    // Find the first " = " (after the id) and the "(" that follows it.
+    let eq1 = header.find(" = ")
+    if eq1 < 0 { return empty }
+    let after = header.substring(eq1 + 3, len(header))
+    let lpar = after.find("(")
+    if lpar < 0 { return empty }
+    let rpar = after.find(")")
+    if rpar < 0 || rpar < lpar { return empty }
+    let fn_name = after.substring(0, lpar).trim()
+    if len(fn_name) == 0 { return empty }
+    let args_blob = after.substring(lpar + 1, rpar)
+    // Claimed value lives after ") = " and before " :: " (or EOL).
+    let tail = after.substring(rpar + 1, len(after))
+    let eq2 = tail.find("= ")
+    if eq2 < 0 { return empty }
+    let mut claimed = tail.substring(eq2 + 2, len(tail))
+    let dcol = claimed.find(" ::")
+    if dcol >= 0 { claimed = claimed.substring(0, dcol) }
+    claimed = claimed.trim()
+    if len(claimed) == 0 { return empty }
+    // Split args on comma (0-arg → empty list).
+    let mut args = []
+    if len(args_blob.trim()) > 0 {
+        let parts = args_blob.split(",")
+        let mut pi = 0
+        while pi < len(parts) {
+            args.push(to_string(parts[pi]).trim())
+            pi = pi + 1
+        }
+    }
+    return ReverifyParse { ok: true, fn_name: fn_name, args: args, claimed: claimed }
+}
+
+// cmd_reverify — walk registered 🟢 NUMERICAL F nodes, re-run the
+// in-process float recompute, and report verdict drift. Read-only
+// (no atlas mutation). Flags: --limit N (cap nodes scanned).
+fn cmd_reverify(rest: array) {
+    let mut limit = -1
+    let mut i = 0
+    while i < len(rest) {
+        let a = to_string(rest[i])
+        if a == "--limit" && i + 1 < len(rest) { limit = to_int(to_string(rest[i + 1])); i = i + 2 }
+        else if a == "--help" || a == "-h" {
+            println("usage: hexa atlas reverify [--limit N]")
+            println("  Re-runs the in-process float recompute over registered 🟢 SUPPORTED-NUMERICAL")
+            println("  F nodes and reports verdict drift (MATCH / DRIFT / UNVERIFIABLE). Read-only —")
+            println("  never tombstones or mutates the atlas. Addresses the 'frozen at registration,")
+            println("  never re-verified' gap (ATLAS @goal META-SIGNAL ②).")
+            return
+        }
+        else { i = i + 1 }
+    }
+
+    let idx = static_atlas()
+    let f_nodes = idx.f_nodes
+    let mut seen: i64 = 0
+    let mut matched: i64 = 0
+    let mut drifted: i64 = 0
+    let mut unverifiable: i64 = 0
+    let mut not_numerical: i64 = 0
+    println("hexa atlas reverify — re-running in-process float recompute over registered 🟢 F nodes")
+    println("  (ε=1e-9 · read-only · no tombstone)")
+    println("")
+    let mut ni = 0
+    while ni < len(f_nodes) {
+        if limit >= 0 && seen >= limit { break }
+        let nd = f_nodes[ni]
+        ni = ni + 1
+        // Restrict to 🟢 SUPPORTED-NUMERICAL nodes (the drift-prone tier).
+        if !nd.raw.contains("🟢 SUPPORTED-NUMERICAL") { not_numerical = not_numerical + 1; continue }
+        let header = _rev_extract_header(nd.raw)
+        let p = _rev_parse_header(header)
+        if !p.ok { unverifiable = unverifiable + 1; println("  PARSE?  @F " + nd.id + " (header not in canonical f(args)=v shape)"); continue }
+        seen = seen + 1
+        if !_is_float_fn_register(p.fn_name) {
+            unverifiable = unverifiable + 1
+            println("  UNVERIF @F " + nd.id + " — no in-process float calc path for " + p.fn_name + "()")
+            continue
+        }
+        let argc = len(p.args)
+        let mut a0 = 0.0
+        let mut a1 = 0.0
+        let mut a2 = 0.0
+        let mut a3 = 0.0
+        if argc >= 1 { a0 = _parse_float_register(to_string(p.args[0])) }
+        if argc >= 2 { a1 = _parse_float_register(to_string(p.args[1])) }
+        if argc >= 3 { a2 = _parse_float_register(to_string(p.args[2])) }
+        if argc >= 4 { a3 = _parse_float_register(to_string(p.args[3])) }
+        let claimed = _parse_float_register(p.claimed)
+        let got = _recompute_float_register(p.fn_name, a0, a1, a2, a3, argc)
+        if got == _NOCALC_F_REGISTER {
+            unverifiable = unverifiable + 1
+            println("  UNVERIF @F " + nd.id + " — " + p.fn_name + "() returned NOCALC")
+            continue
+        }
+        let diff = _fabs_register(got - claimed)
+        if diff > _VERIFY_EPS_REGISTER {
+            drifted = drifted + 1
+            println("  DRIFT   @F " + nd.id + " — " + p.fn_name + "() claimed=" + p.claimed +
+                    " recompute=" + _fstr_register(got) + " |Δ|=" + _fstr_register(diff))
+        } else {
+            matched = matched + 1
+            println("  MATCH   @F " + nd.id + " — " + p.fn_name + "() == " + p.claimed + " (within ε)")
+        }
+    }
+    println("")
+    println("reverify: numerical_seen=" + to_string(seen) +
+            " match=" + to_string(matched) +
+            " drift=" + to_string(drifted) +
+            " unverifiable=" + to_string(unverifiable) +
+            " (non-numerical_F_skipped=" + to_string(not_numerical) + ")")
+    if drifted > 0 {
+        println("  ⚠ " + to_string(drifted) + " node(s) drifted — a frozen 🟢 verdict no longer reproduces.")
+        println("    Inspect the calculator (tool/verify_cli.hexa) vs the registered value; re-register if the new value is correct.")
+        exit(1)
+    }
+    if matched == 0 && seen == 0 {
+        println("  note   = no 🟢 SUPPORTED-NUMERICAL F nodes with an in-process calc path were found.")
+    }
+}
+
 fn cmd_help() {
     println("hexa atlas — atlas SSOT surface (embedded.gen.hexa read + direct-fold write)")
     println("")
@@ -2272,6 +2434,12 @@ fn cmd_help() {
     println("export subcommand (live atlas → portable .n6; n6 is EXPORT-only, NOT the SSOT):")
     println("  export [--out PATH]     write all nodes as .n6 (default n6/atlas.n6)")
     println("")
+    println("reverify subcommand (re-run the calc over FROZEN 🟢 nodes; read-only · no tombstone):")
+    println("  reverify [--limit N]    re-run in-process float recompute over registered 🟢")
+    println("                          SUPPORTED-NUMERICAL F nodes → report MATCH / DRIFT /")
+    println("                          UNVERIFIABLE (ε=1e-9). Closes the 'frozen at registration,")
+    println("                          never re-verified' gap (META-SIGNAL ②). exit 1 if any drift.")
+    println("")
     println("SSOT: compiler/atlas/embedded.gen.hexa (set $HEXA_ATLAS_EMBED=/abs/dir to override).")
 }
 
@@ -2294,6 +2462,7 @@ fn main() {
     else if sub == "dump" { cmd_dump(rest) }
     else if sub == "register" { cmd_register(rest) }
     else if sub == "export" { cmd_export(rest) }
+    else if sub == "reverify" { cmd_reverify(rest) }
     else if sub == "help" || sub == "--help" || sub == "-h" { cmd_help() }
     else {
         println("error: unknown subcommand: " + sub)

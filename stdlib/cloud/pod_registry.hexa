@@ -17,6 +17,7 @@
 // landed below (reconcile/adopt/forget) as the PR #761 follow-up.
 
 use "stdlib/cloud/runpod"
+use "stdlib/cloud/vast"
 
 // ── paths ────────────────────────────────────────────────────────────
 
@@ -425,17 +426,39 @@ fn pod_registry_reconcile_rows(provider_ids: [str]) -> [ReconRow] {
     return out
 }
 
-// cloud_reconcile_print — fetch the provider pod list and print the
+// cloud_reconcile_print — fetch the provider pod lists and print the
 // ORPHAN/GHOST/OK reconcile table. Returns the count of ORPHAN+GHOST rows so
-// the verb can exit nonzero when the registry and provider disagree. When
-// runpodctl is unavailable the provider list is treated as empty (every
-// non-closed tracked pod then classifies GHOST — the honest "I can't see the
-// provider" degrade, distinct from a confirmed teardown).
+// the verb can exit nonzero when the registry and provider disagree.
+//
+// The registry is provider-agnostic (it tracks both runpod and vast pods),
+// so reconcile MUST union BOTH provider live-id sets before classifying — a
+// vast-provisioned pod that is RUNNING on vast.ai must not classify GHOST
+// merely because the runpod list omits it (and vice versa). Querying only
+// runpod was the GHOST-misclassification bug: every live vast instance fell
+// through to GHOST. When a provider's CLI is unavailable its set is empty
+// (the honest "I can't see that provider" degrade, distinct from a confirmed
+// teardown) — only pods absent from BOTH live sets classify GHOST.
 fn cloud_reconcile_print() -> int {
-    let lst = runpod_list_pods()
-    let provider_ids = lst.pod_ids
-    if lst.ok == 0 {
-        println("[cloud] provider list unavailable (" + lst.message + ") — reconciling against empty set")
+    let rl = runpod_list_pods()
+    let vl = vast_list_instances()
+    let mut provider_ids = []
+    let mut ri = 0
+    while ri < len(rl.pod_ids) {
+        provider_ids.push(rl.pod_ids[ri])
+        ri = ri + 1
+    }
+    let mut vi = 0
+    while vi < len(vl.instance_ids) {
+        provider_ids.push(vl.instance_ids[vi])
+        vi = vi + 1
+    }
+    if rl.ok == 0 && vl.ok == 0 {
+        println("[cloud] both provider lists unavailable (runpod: " + rl.message
+            + " · vast: " + vl.message + ") — reconciling against empty set")
+    } else if rl.ok == 0 {
+        println("[cloud] runpod list unavailable (" + rl.message + ") — vast-only provider set")
+    } else if vl.ok == 0 {
+        println("[cloud] vast list unavailable (" + vl.message + ") — runpod-only provider set")
     }
     let rows = pod_registry_reconcile_rows(provider_ids)
     if len(rows) == 0 {

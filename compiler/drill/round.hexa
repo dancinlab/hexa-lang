@@ -51,7 +51,19 @@ pub struct RoundResult {
     yields: RoundYields,
     sigma_best: string,
     overlay_lines_emitted: i64,
+    net_novel: i64,        // distinct ids NEW this round vs the cumulative union of all prior rounds (C5 novelty signal)
+    cum_seen_ids: array,   // updated cumulative distinct-id set (fed forward so the next round dedups against it)
     discoveries: array     // DiscoveryCandidate[] — fed forward as next round's seed pool
+}
+
+// Result of a cumulative-dedup flush — the lines actually appended this
+// round PLUS the grown cumulative distinct-id set. We return the set
+// (rather than mutate in place) because hexa arrays carried into a fn are
+// not guaranteed to propagate pushes back to the caller (struct_pack
+// shallow-clone aliasing class) — the drill loop reassigns from this.
+pub struct FlushResult {
+    net_novel: i64,
+    cum_seen_ids: array
 }
 
 // Convert a DiscoveryCandidate into a single .n6 overlay line. We tag
@@ -78,52 +90,55 @@ fn _cand_to_n6(c: DiscoveryCandidate) -> string {
     return parts.join("")
 }
 
-// Flush a discovery set to the overlay. Returns the number of lines
-// actually appended (zero-discoveries → no-op, preserves overlay
-// cleanliness). Dedup policy: write-time, by id. We read the current
-// overlay (cached) once and skip any candidate whose id is already
-// present. This keeps the overlay file bounded across rounds even
-// when the seed-pool feedback re-emits the same discoveries.
+// Flush a discovery set to the overlay, deduping by id against the
+// CUMULATIVE distinct-id set carried across rounds (`cum_seen_ids`).
+// Returns the grown set plus `net_novel` — the number of ids NEW this
+// round (== lines actually appended). zero-discoveries → no-op.
 //
-// Rationale: atlas_list_merged already dedups against rodata at read
-// time, but it does NOT dedup overlay-vs-overlay. Without write-time
-// dedup, round 2 re-emits round 1's full discovery set, doubling the
-// overlay; round N has O(N · avg_round_yield) lines. Write-time dedup
-// keeps the file the size of the union of distinct discoveries.
-fn _flush_discoveries(cands: array) -> i64 {
-    if len(cands) == 0 { return 0 }
-    let existing = overlay_load_cached()
+// Dedup policy: write-time, by id, cumulative across the whole drill
+// invocation. We thread the seen-id set through the round loop rather
+// than reading the disk overlay because the runtime overlay-LOAD path is
+// RETIRED (overlay_load_cached() always returns [] — see overlay.hexa
+// POLICY 2026-05-19; the live atlas is the binary built-in). Without the
+// in-process set, round N re-emits round 1's full discovery set every
+// round (verified: 6 rounds → 6072 overlay lines but only 1111 distinct
+// ids), the file grows O(N · avg_round_yield), AND the drill can never
+// observe net-novelty exhaustion.
+//
+// `net_novel == 0` is the C5 novelty-fixpoint signal: a round that
+// produced zero new distinct discoveries vs everything seen so far. The
+// drill loop uses it as a saturation stop (drill.hexa) — sharper than the
+// gross `total == 0` test, which never fires because the resonance proxy
+// and the deterministic primary-seed smash always yield > 0.
+fn _flush_discoveries_cum(cands: array, cum_seen_ids: array) -> FlushResult {
+    if len(cands) == 0 {
+        return FlushResult { net_novel: 0, cum_seen_ids: cum_seen_ids }
+    }
+    let mut seen = cum_seen_ids
     let mut lines = []
-    let mut seen_ids: array = []     // intra-batch dedup tracker
     let mut i = 0
     while i < len(cands) {
         let c = cands[i]
         // Skip if id is empty (defensive).
         if len(c.id) == 0 { i = i + 1; continue }
-        // Skip if already present in existing overlay.
+        // Skip if already in the cumulative set (prior round OR this batch).
         let mut dup = false
-        let mut j = 0
-        while j < len(existing) {
-            if existing[j].id == c.id { dup = true; break }
-            j = j + 1
-        }
-        // Skip if already queued in this batch.
-        if !dup {
-            let mut k = 0
-            while k < len(seen_ids) {
-                if to_string(seen_ids[k]) == c.id { dup = true; break }
-                k = k + 1
-            }
+        let mut k = 0
+        while k < len(seen) {
+            if to_string(seen[k]) == c.id { dup = true; break }
+            k = k + 1
         }
         if !dup {
             lines.push(_cand_to_n6(c))
-            seen_ids.push(c.id)
+            seen.push(c.id)
         }
         i = i + 1
     }
-    if len(lines) == 0 { return 0 }
+    if len(lines) == 0 {
+        return FlushResult { net_novel: 0, cum_seen_ids: seen }
+    }
     overlay_append_lines(lines)
-    return len(lines)
+    return FlushResult { net_novel: len(lines), cum_seen_ids: seen }
 }
 
 // Per-engine yield extraction. The Phase 2 absorbed engines return
@@ -178,7 +193,8 @@ fn _to_disc_lines(cands: array) -> array {
 // pick the first K (insertion order is already deterministic).
 pub fn round_run_with_pool(seed: string, round: i64, depth_smash: i64,
                             depth_free: i64, depth_res: i64, mkx_on: bool,
-                            extra_seed_exprs: array) -> RoundResult {
+                            extra_seed_exprs: array,
+                            cum_seen_ids: array) -> RoundResult {
     // ─── stage 1: smash ───
     let smash_cands = smash(seed, depth_smash)
     let s_n = _smash_yield(smash_cands)
@@ -251,8 +267,8 @@ pub fn round_run_with_pool(seed: string, round: i64, depth_smash: i64,
 
     let total = s_n + f_n + a_n + m_n + h_n + rr.count + tc_n
 
-    // ─── flush — single overlay write per round ───
-    let flushed = _flush_discoveries(all_cands)
+    // ─── flush — single overlay write per round, cumulative dedup ───
+    let fr = _flush_discoveries_cum(all_cands, cum_seen_ids)
 
     return RoundResult {
         yields: RoundYields {
@@ -266,7 +282,9 @@ pub fn round_run_with_pool(seed: string, round: i64, depth_smash: i64,
             total: total
         },
         sigma_best: rr.sigma,
-        overlay_lines_emitted: flushed,
+        overlay_lines_emitted: fr.net_novel,
+        net_novel: fr.net_novel,
+        cum_seen_ids: fr.cum_seen_ids,
         discoveries: all_cands
     }
 }
@@ -277,8 +295,9 @@ pub fn round_run_with_pool(seed: string, round: i64, depth_smash: i64,
 pub fn round_run(seed: string, round: i64, depth_smash: i64, depth_free: i64,
                  depth_res: i64, mkx_on: bool) -> RoundResult {
     let empty_pool: array = []
+    let empty_seen: array = []
     return round_run_with_pool(seed, round, depth_smash, depth_free,
-                                depth_res, mkx_on, empty_pool)
+                                depth_res, mkx_on, empty_pool, empty_seen)
 }
 
 // Helper — extract `expr` of every axiom from a discovery array. The drill
