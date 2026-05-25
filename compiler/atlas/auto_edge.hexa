@@ -1,0 +1,254 @@
+// HEXA Native Compiler — Atlas auto-edge inference (R7)
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// ATLAS R7 milestone: "auto-edge 추론". Node edges (depends_on `<-` /
+// derives `->` / equivalents `==` / verified_by `|>`) are MANUAL — R6's
+// proof-chain (#1044) reported many UNRESOLVED leaves because declared
+// edges are sparse. This module INFERS candidate edges by scanning a
+// node's raw text for references to OTHER node ids that are NOT already
+// in its declared edges, and proposes them.
+//
+// DESIGN (additive, READ-ONLY — see ATLAS.log.md):
+//   A "reference" = a real atlas id that appears as a whole identifier
+//   token inside the node's raw (header formula OR continuation lines).
+//   We tokenize raw into MAXIMAL `[A-Za-z0-9_-]` runs (the same charset
+//   the atlas id grammar uses: `n`, `phi`, `J2`, `L0-quark-flavors`,
+//   `sigma_n`, ...). Maximal-run tokenization is the FALSE-POSITIVE
+//   GUARD: `divisor_sum(6)` tokenizes to the single token `divisor_sum`,
+//   so the id `n` never matches the trailing letter of `divisor_sum`;
+//   `phi_tau` never matches the id `phi`. This is a strict word-boundary
+//   match — substring noise cannot leak through.
+//
+//   A token is a PROPOSAL iff: (a) it resolves to a real atlas node,
+//   (b) it is not the scanned node's own id (no self-edge), and (c) it
+//   is not already declared in ANY edge bucket of the node. The guessed
+//   edge kind is `depends_on` (a node's formula references its basis);
+//   the evidence is the trimmed line the token first appeared on.
+//
+//   READ-ONLY: this proposes edges, it NEVER folds them into
+//   embedded.gen.hexa (proposal surface only — a user / another round
+//   applies). Pure: no I/O beyond atlas lookups via static_index.
+//
+// PUBLIC SURFACE
+//   pub struct EdgeProposal { source, target, kind, evidence }
+//   pub fn infer_edges_for(node, id_set) -> EdgeProposal[]
+//   pub fn infer_edges(id) -> EdgeProposal[]
+//   pub fn infer_proposals_to_text(id, props) -> string
+//   pub fn infer_proposals_to_json(id, props) -> string
+//
+// Catalog/diagnostic strings: ENGLISH ONLY (repo policy).
+
+use "compiler/atlas/parser"
+use "compiler/atlas/static_index"
+
+// A single inferred candidate edge. `source` cites `target` via the
+// guessed `kind`; `evidence` is the trimmed raw line the reference was
+// found on (so the proposal is auditable before any apply).
+pub struct EdgeProposal {
+    source: string,    // the scanned node's id
+    target: string,    // the referenced (candidate-basis) node id
+    kind: string,      // guessed edge bucket — "depends_on"
+    evidence: string   // trimmed raw line the token appeared on
+}
+
+// _is_id_char — true if `c` is in the atlas-id charset (the maximal-run
+// tokenizer boundary). Letters, digits, `_`, `-`.
+fn _is_id_char(c: string) -> bool {
+    if c >= "a" && c <= "z" { return true }
+    if c >= "A" && c <= "Z" { return true }
+    if c >= "0" && c <= "9" { return true }
+    if c == "_" { return true }
+    if c == "-" { return true }
+    return false
+}
+
+fn _trim_ae(s: string) -> string {
+    let n = len(s)
+    let mut a = 0
+    while a < n {
+        let c = s.substring(a, a + 1)
+        if c != " " && c != "\t" { break }
+        a = a + 1
+    }
+    let mut b = n
+    while b > a {
+        let c = s.substring(b - 1, b)
+        if c != " " && c != "\t" { break }
+        b = b - 1
+    }
+    return s.substring(a, b)
+}
+
+// _declared_has — is `target` already present in ANY of the node's
+// declared edge buckets? (We never re-propose an existing edge.)
+fn _declared_has(e: EdgeInfo, target: string) -> bool {
+    let buckets = [e.depends_on, e.derives, e.applications,
+                   e.equivalents, e.converges, e.verified_by, e.breakthroughs]
+    let mut bi = 0
+    while bi < len(buckets) {
+        let arr = buckets[bi]
+        let mut ai = 0
+        while ai < len(arr) {
+            if to_string(arr[ai]) == target { return true }
+            ai = ai + 1
+        }
+        bi = bi + 1
+    }
+    return false
+}
+
+// _seen_target — has this target already been proposed (dedup)?
+fn _seen_target(props: array, target: string) -> bool {
+    let mut i = 0
+    while i < len(props) {
+        if to_string(props[i].source) != "" && props[i].target == target { return true }
+        i = i + 1
+    }
+    return false
+}
+
+// infer_edges_for — scan ONE enriched node's raw for id-token references,
+// proposing each real atlas id (in `id_set`) that is not the node itself
+// and not already declared. `id_set` is a map { id -> true } for O(1)
+// membership. Pure / read-only. Returns deduped EdgeProposals.
+pub fn infer_edges_for(node: AtlasNode, id_set: any) -> array {
+    let out = []
+    if len(node.raw) == 0 { return out }
+    let e = node.edges
+    let lines = node.raw.split("\n")
+    let mut li = 0
+    while li < len(lines) {
+        let line = to_string(lines[li])
+        let ev = _trim_ae(line)
+        let n = len(line)
+        // Tokenize this line into maximal id-char runs.
+        let mut i = 0
+        while i < n {
+            let c = line.substring(i, i + 1)
+            if !_is_id_char(c) { i = i + 1; continue }
+            let mut j = i
+            while j < n {
+                let cj = line.substring(j, j + 1)
+                if !_is_id_char(cj) { break }
+                j = j + 1
+            }
+            let tok = line.substring(i, j)
+            i = j
+            // Candidate filters: not self, a real id, not declared, not dup.
+            if tok != node.id {
+                if has_key(id_set, tok) {
+                    if !_declared_has(e, tok) {
+                        if !_seen_target(out, tok) {
+                            out.push(EdgeProposal {
+                                source: node.id, target: tok,
+                                kind: "depends_on", evidence: ev })
+                        }
+                    }
+                }
+            }
+        }
+        li = li + 1
+    }
+    return out
+}
+
+// _build_id_set — map { id -> true } over the whole static atlas, for
+// O(1) reference membership. Built once per CLI invocation.
+pub fn _build_id_set() -> any {
+    let m = {}
+    let all = atlas_list()
+    let mut i = 0
+    while i < len(all) {
+        let id = all[i].id
+        if len(id) > 0 { m[id] = true }
+        i = i + 1
+    }
+    return m
+}
+
+// infer_edges — convenience wrapper over the binary built-in atlas.
+// Looks up + enriches `id`, builds the id-set, and infers proposals.
+// Returns [] when `id` is not a real node (caller distinguishes via
+// atlas_lookup_enriched).
+pub fn infer_edges(id: string) -> array {
+    let node = atlas_lookup_enriched(id)
+    if node.kind == "" { return [] }
+    let id_set = _build_id_set()
+    return infer_edges_for(node, id_set)
+}
+
+// infer_proposals_to_text — human-readable rendering of the proposals.
+pub fn infer_proposals_to_text(id: string, props: array) -> string {
+    let parts = []
+    parts.push("infer-edges for ")
+    parts.push(id)
+    parts.push(" — ")
+    parts.push(to_string(len(props)))
+    parts.push(" candidate edge(s) (READ-ONLY proposals, not applied):\n")
+    let mut i = 0
+    while i < len(props) {
+        let p = props[i]
+        parts.push("  ")
+        parts.push(p.source)
+        parts.push(" <- ")
+        parts.push(p.target)
+        parts.push("  (")
+        parts.push(p.kind)
+        parts.push(")  evidence: ")
+        parts.push(p.evidence)
+        parts.push("\n")
+        i = i + 1
+    }
+    if len(props) == 0 {
+        parts.push("  (no undeclared id references found in raw)\n")
+    }
+    return parts.join("")
+}
+
+// _aej — minimal JSON string escaper (mirrors proof_chain::_pj).
+fn _aej(s: string) -> string {
+    let n = len(s)
+    let mut out = ""
+    let mut i = 0
+    while i < n {
+        let c = s.substring(i, i + 1)
+        if c == "\\" { out = out + "\\\\" }
+        else if c == "\"" { out = out + "\\\"" }
+        else if c == "\n" { out = out + "\\n" }
+        else if c == "\r" { out = out + "\\r" }
+        else if c == "\t" { out = out + "\\t" }
+        else { out = out + c }
+        i = i + 1
+    }
+    return out
+}
+
+// infer_proposals_to_json — well-formed single-object JSON:
+// { source, count, proposals: [ {source,target,kind,evidence}, ... ] }.
+pub fn infer_proposals_to_json(id: string, props: array) -> string {
+    let parts = []
+    parts.push("{\"source\":\"")
+    parts.push(_aej(id))
+    parts.push("\",\"count\":")
+    parts.push(to_string(len(props)))
+    parts.push(",\"proposals\":[")
+    let mut i = 0
+    while i < len(props) {
+        let p = props[i]
+        if i > 0 { parts.push(",") }
+        parts.push("{\"source\":\"")
+        parts.push(_aej(p.source))
+        parts.push("\",\"target\":\"")
+        parts.push(_aej(p.target))
+        parts.push("\",\"kind\":\"")
+        parts.push(_aej(p.kind))
+        parts.push("\",\"evidence\":\"")
+        parts.push(_aej(p.evidence))
+        parts.push("\"}")
+        i = i + 1
+    }
+    parts.push("]}")
+    return parts.join("")
+}

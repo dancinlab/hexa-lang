@@ -2,6 +2,119 @@
 
 Append-only step log for the theorem-atlas upgrade campaign. Newest on top.
 
+## 2026-05-25 — R7 reverify 비-F 확장 + `--fix` 자동 재등록 (READ-ONLY 기본 · opt-in MUTATION)
+
+goal(deferred): "reverify 확장(비-F kind · drift→자동 재등록 옵션)". R3 #996 `hexa atlas reverify`는
+🟢 NUMERICAL **F** 노드만 calc_dispatch float 테이블로 재검증(R4 #1023 `calc_dispatch.hexa` 108-fn
+통합). 이를 다른 재계산-가능 kind로 확장하고, drift를 full-precision 재등록하는 opt-in `--fix` 추가.
+
+**조사**: embedded.gen.hexa(16101노드) kind별 헤더 스캔 — `<fn>(<args>) = <claimed>` 머신-재계산
+헤더를 지닌 유일한 비-F kind = **@P**(foundation 공리). 7노드: `@P sigma = divisor_sum(6) = 12`·
+`euler_totient`·`divisor_count`·`mobius`(+ n6-* 미러) = 전부 정수 number-theory. @L은 bare-상수
+(`alpha_coupling = 0.014`, fn-call 無)·prose-only라 비대상. @C/@R/@X/@S/@E/@Q는 fn(args)=v 헤더
+無(grep false-positive만). 정수 재계산경로는 이미 atlas_cli에 존재: `_recompute_register`(1op:
+divisor_sum/euler_totient/divisor_count/mobius)·`_recompute2_register`·`_recompute3_register`(NOCALC
+=-999999 = 멤버십 신호). float 표(calc_is_float_fn)에는 이 7 정수 fn 부재(별개 ladder).
+
+**확장(cmd_reverify)**: (a) `idx.f_nodes` → `atlas_list()` 전체노드 워크. 헤더 파싱 후 F+
+calc_is_float_fn이면 float 경로(R3/R4 보존, 🟢 게이트), 아니면 `_rev_int_recompute`(정수 ladder)
+시도 → per-kind MATCH/DRIFT/UNVERIFIABLE. fn(args)=v 헤더 無 노드(prose C/L/R/X)는 skipped(미실패).
+정수경로 가드 `_rev_is_int_str`: prose 헤더(`@P x = capacity (Lyapunov on retrieval-result diversity`
+류)가 `(…)`+`= …`로 파싱돼 to_int abort하던 크래시 차단 — 비-정수 arg/claimed → NOCALC. (b) `--fix`
+(opt-in): 각 DRIFT를 R5 #1029 수동조치 자동화 — `_rev_fix_node`가 헤더 claimed 토큰을 재계산값으로
+치환→`_rev_drop_node_line`로 (kind,id) stale AtlasNode 라인 surgical 삭제(atomic temp+rename)→
+`_fold_into_embedded` 재폴드(kind+id+본문 보존). embed_fold_into가 dedup-skip만(replace 無)이라
+delete-then-fold 패턴 필수. 기본(--fix 없음)=zero mutation READ-ONLY.
+
+**검증(ATLAS.md method)**: `hexa parse tool/atlas_cli.hexa` 클린 · bin/hexa-atlas 빌드 PASS
+(borrowed main-repo transpiler hexa_v2 → worktree self/native gitignored · worktree-fresh
+build/hexa_module_loader · `HEXA_LANG`=worktree·`HEXA_MODULE_LOADER`=worktree·`SIDECAR_NO_POOL_ROUTE=1`
+· hyphenated 셸 우회). ★빌드 핵심: 메인-repo 워킹트리 audit.hexa가 다른세션 WIP로 `acquisition_to_*`/
+`audit_acquisition_merged` 결여(undeclared identifier link-fail) → `HEXA_LANG`을 worktree로 가리켜
+모듈 resolution을 worktree origin/main 소스로 강제(메인 워킹트리 무수정 = leak-guard 준수). 기능:
+  - `reverify`(read-only) → `recompute_seen=44 match=44 drift=0 unverifiable=0 (no_calc_path_skipped=16057)`.
+    R4 35→44(@P 7 + 정수-F ssh_winding/tknn_chern 2 추가). **7 @P 노드 신규 커버**(sigma/phi/tau/mu/
+    n6-sigma/n6-phi/n6-tau = 이전 reverify 완전 미검증) 전수 MATCH(정수경로).
+  - **drift=0 유지** — R5 #1029가 클로즈한 3 F drift(allen_dynes_tc·mcmillan_tc·bcs_gap_ratio) 전부 MATCH.
+  - `--fix` 무-drift no-op — 실 embedded.gen.hexa md5 `018b07fe…` 불변 입증(zero mutation).
+  - `--fix` MUTATION 경로 — temp 복제에 synthetic drift(@P sigma `= 12`→`= 99`) 주입→read-only
+    `DRIFT @P sigma claimed=99 recompute=12`+exit게이트 ⚠ → `--fix`→`FIXED @P sigma → 12`,
+    노드수 **16101 불변**(replace not dup)·헤더 `= 12` 복구·재실행 `drift=0 match↑`. (비-F 노드의
+    drift 탐지·자동수정 e2e 입증.)
+  - `--help` 확장 스코프+`--fix` 반영 · `--limit N` 작동 · 실 embedded.gen.hexa 무수정(git status empty).
+
+**범위**: cmd_reverify + 헬퍼(`_rev_int_recompute`·`_rev_is_int_str`·`_rev_drop_node_line`·
+`_rev_fix_node`) + cmd_help 1블록만 편집. calc_dispatch·audit·cascade·proof_chain·auto_edge·
+drill·embedded.gen.hexa 무수정. 형제 R7(infer-edges 등) dispatch ladder는 KEEP. <200 LOC additive.
+
+## 2026-05-25 — R7 auto-edge 추론 (`hexa atlas infer-edges <id>` · read-only · 미선언 edge 제안)
+
+goal(deferred 신규역량): "auto-edge 추론". 노드 edge(`<-`depends_on·`->`derives·`==`equivalents·
+`|>`verified_by)가 현재 **수동**이라 R6 proof-chain(#1044)이 많은 UNRESOLVED leaf를 보고했다(선언 edge
+sparse). auto-edge는 노드 raw를 스캔해 **이미 선언되지 않은 다른 노드 id 참조**를 찾아 후보 edge를
+제안 — proof-chain + cascade를 enrich.
+
+**조사**: 노드 모델 = `compiler/atlas/parser.hexa` `AtlasNode`(kind·id·raw·grade·`edges:EdgeInfo`).
+id charset = `[A-Za-z0-9_-]`(예: `n`·`phi`·`J2`·`L0-quark-flavors`·`sigma_n`). "참조" = 노드 raw
+(헤더 수식 OR 연속줄) 안에 다른 실제 atlas id가 **온전한 식별자 토큰**으로 등장. 예: `sigma`의 raw에
+`== phi * n` — `phi`는 실노드이나 선언 edge엔 없음(R6가 UNRESOLVED leaf로 보고한 바로 그 케이스).
+런타임 = `atlas_lookup_enriched(id)`(edge 백필) + `atlas_list()`(전노드 id-set).
+
+**설계**: raw를 **maximal `[A-Za-z0-9_-]` run**으로 토큰화 — 이것이 **false-positive guard**다.
+`divisor_sum(6)`는 단일 토큰 `divisor_sum`이 되어 id `n`이 끝 글자에 절대 매치 안 함; `phi_tau`가 id
+`phi`에 매치 안 함(strict word-boundary, 부분문자열 노이즈 차단). 제안 조건: (a) 실 atlas 노드로
+resolve, (b) 자기 id 아님(self-edge 無), (c) 어느 edge 버킷에도 미선언, (d) target dedup. 추측 kind=
+`depends_on`(수식 참조 = 기반). evidence = 토큰이 처음 나온 trimmed raw 줄. **READ-ONLY** — 제안만,
+embedded.gen.hexa에 fold 절대 안 함(proposal surface; user/다음 라운드가 apply).
+
+**구현**: `compiler/atlas/auto_edge.hexa` 신설(`EdgeProposal{source,target,kind,evidence}` +
+`infer_edges_for(node,id_set)` + `infer_edges(id)` + `infer_proposals_to_text/json`). 파서/static_index
+재사용(파서 미복제). atlas_cli 1-블록(`use auto_edge` + `cmd_infer_edges` + dispatch + help, cascade·
+proof·diff verb KEEP).
+
+**검증**: `hexa parse` OK(auto_edge + atlas_cli) → fresh `build/hexa_module_loader`(worktree
+`self/module_loader.hexa`) → `bin/hexa-atlas` LINK PASS(새 `infer_edges` 심볼 resolve) → 기능:
+(1) `infer-edges sigma` → `phi`(`== phi * n`) + 6 meta-closure id(`sm_ampere`·`perfect_number`·…) 제안,
+선언된 `n`·`sigma_sq`·`sigma_tau`·`sigma_n`은 정확히 제외 · (2) `infer-edges phi_tau`/`phi` → 0 제안
+(모든 참조 선언됨/실-id 없음 — 정확 negative) · (3) `infer-edges L0-quark-flavors` → `n`(헤더 `= n`,
+미선언) 1개(hyphenated id 올바른 토큰화) · (4) **false-positive guard**: 1글자 id `n`이 `divisor_sum`·
+`derivations`·`number`에 leak 안 됨 확인 · (5) `--format=json` python `json.load` PASS · (6) unknown id
+→ `# unknown id` + exit 1 / no-arg → usage exit 2. auto_edge.hexa 본문 g4 내 + atlas_cli 1-블록.
+embedded.gen.hexa·cascade.hexa·proof_chain.hexa·audit.hexa 무수정.
+
+## 2026-05-25 — R7 numerology 격리 tier (`hexa atlas stats --numerology` · read-only quarantine)
+
+goal(deferred): "numerology 격리 tier". g5 honesty 루브릭은 실검증(🔵/🟢)과 미지지 주장을 구분한다.
+NUMEROLOGY 노드 = 유도/인용 없이 무관 상수간 수치 우연일치(비율·등식)를 주장하는 노드. 엄밀 노드와
+silent-mix되면 안 됨 → DETECT + ISOLATE해 가시적 quarantine. READ-ONLY(노드 mutate·grade 변경 無).
+
+**조사**: 노드 모델 = `parser.hexa` `AtlasNode`(kind·id·raw·grade·edges). audit.hexa 기존 헬퍼
+재사용 — `_kind_is_cite_bearing`·`_node_has_cite`(`cite =` substring OR `|>`verified_by)·
+`_raw_has_verified`(raw `*]` 폴백)·`_extract_domain`(헤더 `:: <domain>` 토큰)·`_au_ltrim/rtrim`.
+실데이터 마이닝(16101 노드): 진짜 numerology = `MILL-V3-T4-n6-numerical-coincidence`(12/5=σ(6)/sopfr(6)
+post-hoc) + `MILL-PX-A3-ym-beta0`(σ(6)-sopfr(6)=12-5=7, COINCIDENCE_NOT_PROOF 자기태그). 둘 다 [7]·
+무인용. 함정: `coincidence`/`post-hoc`/`수치일치` 키워드가 **반증/진단** 노드에도 등장(clay
+falsifier "ticks=12 was COINCIDENCE"는 우연을 *반증* · MCSP "수치일치 패턴조차 없음"은 link *부정*).
+
+**설계(보수적 4-신호 AND)**: false-positive 평판 비용 高 → 4개 모두 충족해야 flag. (1) 우연일치 SHAPE를
+헤더 **CLAIM BODY**(`id = ` 분리자 strip 후)에 한정: `≈`·숫자 비율-등식(`/` `=` 좌측)·숫자 `=…=…`
+체인. body 한정이 토론 `=>` 엣지의 우연 언급을 제외(그들은 우연을 반증) · (2) numerolog/coincidence/
+수치일치/coincidence_not_proof 키워드(일반 유도공식 부재) · (3) 무검증([*] 아님) · (4) 무인용
+(`_node_has_cite`). **핵심 false-positive 차단**: `id = ` 분리자를 strip하지 않으면 `@R …-non-applicability
+= n=6 … 연결 없음`(정직한 link-DENIAL [10])의 `id =` + `n=6`이 `=…=…` 체인으로 오탐 → strip 후 정확히 제외.
+
+- [x] compiler/atlas/audit.hexa (+`NumerologyReport`/`NumItem` struct · `_nu_has_coinc_keyword`·
+  `_nu_header_line`·`_nu_claim_body`·`_nu_header_has_coincidence_shape`·`_nu_has_second_eq`·
+  `_nu_has_digit`·`_nu_is_verified`·`_nu_is_numerology` · `audit_numerology_with_scope/_overlay` ·
+  `numerology_to_text/_to_json`). 기존 audit/acquisition 코드 무수정 — 순수 additive.
+- [x] compiler/atlas/audit_rodata.hexa (+`audit_numerology_rodata`·`audit_numerology_merged` 래퍼 2).
+- [x] tool/atlas_cli.hexa (`--numerology` 플래그 + 1-블록 dispatch + help 1줄; audit·acquisition verb KEEP).
+- [x] 검증: `hexa parse` 3파일 clean → bin/hexa-atlas 빌드(worktree module_loader fresh build) →
+  `stats --numerology --scope=rodata` → **scanned 16101 · quarantine 정확히 2**(둘 다 진짜 우연일치·
+  무유도·무인용 cross-check) · `--format=json` python json.load PASS · 기존 모드 회귀 0(plain stats·
+  `--audit` entries 16101 · `--acquisition` 프론티어 2150 불변). false-positive 0(MCSP non-applicability·
+  clay falsifier 모두 제외 실측). g4: 순 추가 ~198 LOC(<200).
+
 ## 2026-05-25 — R6 proof-chain export (`hexa atlas proof <id>` · read-only · cascade INVERSE)
 
 goal(deferred 신규역량): "proof-chain export". 아틀라스 노드의 edge 그래프를 walk해 그 claim이

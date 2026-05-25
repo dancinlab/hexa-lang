@@ -42,3 +42,16 @@ pub fn audit_acquisition_rodata(top_k: i64) -> AcqReport {
 pub fn audit_acquisition_merged(top_k: i64) -> AcqReport {
     return audit_acquisition_with_scope("merged", atlas_list_merged(), top_k)
 }
+
+// --- R7: numerology quarantine tier (rodata-aware wrappers) ----------------
+
+// audit_numerology_rodata — quarantine scan over the frozen embedded.gen.hexa
+// rodata view. Read-only (no node mutation, no grade change).
+pub fn audit_numerology_rodata() -> NumerologyReport {
+    return audit_numerology_with_scope("rodata", atlas_list())
+}
+
+// audit_numerology_merged — quarantine scan over the union view.
+pub fn audit_numerology_merged() -> NumerologyReport {
+    return audit_numerology_with_scope("merged", atlas_list_merged())
+}
