@@ -2764,6 +2764,28 @@ fn _wakefield_lambda_um(n18: float) -> float {
     return 2.0 * pi_c * c / _wakefield_omega_p(n18) * 1000000.0
 }
 
+// CERN tabletop wakefield — sqrt-free algebraic companions (BLUE-MAX g69 intent).
+// NOTE: both verify 🟢 SUPPORTED-NUMERICAL (float path) — continuous EM physics
+// has no integer/symbolic 🔵 form; these are the algebraic ROOTS of the sqrt-
+// based 🟢 atoms above (omega_p_sq is sqrt-free; e0·λ product is n18-invariant).
+// Plasma frequency squared ω_p² [rad²/s²] = n_e e²/(ε₀ m_e) — no sqrt on the path.
+fn _wakefield_omega_p_sq(n18: float) -> float {
+    let e = 0.0000000000000000001602176634
+    let eps0 = 0.0000000000088541878128
+    let me = 0.00000000000000000000000000000091093837015
+    let n_m3 = n18 * 1000000000000000000000000.0
+    return n_m3 * e * e / (eps0 * me)
+}
+// E_0[GV/m] × λ_p[µm] = 2π m_e c² / e · 1e-3 — n18-INVARIANT closed-form constant
+// (ω_p cancels): 3210.701094600095 GV·µm/m. n18 arg accepted but ignored.
+fn _wakefield_e0_lambda_product(n18: float) -> float {
+    let pi_c = 3.141592653589793
+    let me = 0.00000000000000000000000000000091093837015
+    let c = 299792458.0
+    let e = 0.0000000000000000001602176634
+    return 2.0 * pi_c * me * c * c / e * 0.001
+}
+
 // ── thick finite-solenoid on-axis CENTER B_z — EXACT Biot-Savart closed form
 //    (FUSION gate (e) · RTSC magnet getdp parity ORACLE · 2026-05-25) ────────
 // A thick air-cored solenoid carrying a UNIFORM azimuthal engineering current
@@ -2802,6 +2824,8 @@ fn _solenoid_axis_bz(ni_at: float, a_m: float, b_m: float, h_m: float) -> float 
 fn _recompute_float(fn_name: string, a0: float, a1: float, a2: float, a3: float, argc: int) -> float {
     if fn_name == "wakefield_e0_gv_m" { return _wakefield_e0_gv_m(a0) }
     if fn_name == "wakefield_lambda_um" { return _wakefield_lambda_um(a0) }
+    if fn_name == "wakefield_omega_p_sq" { return _wakefield_omega_p_sq(a0) }
+    if fn_name == "wakefield_e0_lambda_product" { return _wakefield_e0_lambda_product(a0) }
     // ── thick finite-solenoid on-axis center B_z (FUSION gate (e) getdp parity oracle)
     if fn_name == "solenoid_axis_bz" {
         if argc < 4 { return _NOCALC_F }
