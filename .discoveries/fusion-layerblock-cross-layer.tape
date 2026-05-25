@@ -26,3 +26,13 @@
   verdict_ptr   = ".verdicts/fusion-layerblock-cross-layer/F-FUSION-LAYERBLOCK-CROSS-LAYER.txt"
   artifact      = "archive/fires/fusion_layerblock_cross_layer_2026_05_25/ {structural_oracle.c, ratio_check.hexa, block_fused_k1.ptx, block_fused_k2.ptx, result.json}"
   next_claim    = "F-FUSION-LAYERBLOCK-CROSS-LAYER-WALL  -- round-9 timed wall on ubu-2 RTX 5070: cuEvent K1+K2 pair vs PyTorch d=768 12L eager 116.286 ms (RFC 072 P1 PROXY, PR #237); rel-err <= 1e-2 vs f64 CPU; flip §10 axis-C box [ ] -> [x] if ratio >= 1 OR honest-RED if structural-moat fails to convert (axis-B precedent)."
+
+@discovery fusion_layerblock_timed_r9 := "axis C round-9 timed wall — 🔴 FALSIFIED (closed-negative)" :: gpu-fire [2026-05-26]
+  host          = "ubu-2 RTX 5070 sm_120 driver 580.159.03 / CUDA 12.0; nvidia-smi 0% util pre-fire"
+  numeric       = "🔴 FAIL n_nan_inf=3072/3072 — block_fused_k1.ptx flash-attn key-loop is an EMPTY structural stub (body only increments kj) → acc=0,l=0 → rcp(0)=+Inf → 0*Inf=NaN → whole block NaN. K2 is numerically complete (SwiGLU FFN) but fed NaN."
+  wall          = "K1=2.727 ms + K2=68351.270 ms (68.35 s ONE launch). Fused block S=4 median=68466.02 ms vs eager d=768·12L 116.286 ms = ~588× SLOWER. K2 is a naive scalar FFN (1 thread/row computes full 768×3072×768 serially)."
+  ruled_out     = "the as-merged structural-stub kernels as a timed axis-C win. R8 structural moat (3 vs 11 launches, 9.667× act-HBM) REAL but does NOT convert — axis-B precedent 'structural != wall when inner GEMMs are scalar'."
+  verdict_ptr   = ".verdicts/fusion-layerblock-cross-layer/F-FUSION-LAYERBLOCK-CROSS-LAYER-TIMED.txt"
+  artifact      = "tool/r9_walls/{lb_host.c, tk2.c, lb_result.json}"
+  section10     = "axis-C box stays [ ] (NOT flipped). closure 8/8 unchanged."
+  next_claim    = "axis-C timed win needs real flash-attn body in K1 + Tensor-Core/tiled multi-CTA inner GEMMs in K1(QKV/OUT)+K2(FFN); INBOX upstream: K1 attn key-loop is a no-op stub on main, K2 FFN is single-thread-per-row scalar."
