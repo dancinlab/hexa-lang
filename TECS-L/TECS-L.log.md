@@ -3,6 +3,16 @@
 Append-only history sister of `TECS-L.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
 
+## 2026-05-25T17:30 — 축 F 신설 (NOVEL · 기지 밖 발견 lane)
+
+- [x] 사용자 directive: "TECS-L NOVEL 축 신설 + 정의 brainstorm 고갈시까지"
+- [x] brainstorm width-first 5 라운드 → 6 mechanism family 로 수렴(고갈): (a)자가발견 (b)다축탐사 (c)외부광맥 OEIS/arxiv (d)반증사냥 (e)범위확장 beyond n=6 (f)도구확장 calc-fn gap
+- [x] 정의 = "기지(known atlas/archive) 밖을 적극 사냥하는 발견 lane" — verify 축은 *알려진* 것 재근거화, NOVEL 은 *모르는* 것을 끄집어냄
+- [x] F1~F12 마일스톤: kick · /gap · OEIS/arxiv mining · folk-claim falsify · beyond-n=6 · cross-domain bridge · g59 INBOX calc-fn pipe · micro-exp · atlas fold · paper
+- [x] project.tape `@D discovery` (상시 운전) + `@D discovery_log` (`.discoveries/<slug>.tape`) 준수
+- [ ] F1 착수 — `hexa kick --seed` seed catalogue 라운드
+
+
 ## 2026-05-25T12:42 — 축 A MF5 · Jacobi/Kronecker 이차 상호법칙 인스턴스 (13/13 🔵 + 2 QR 곱 적중)
 
 - [x] MF5 milestone = "hexa `jacobi a b`/`kronecker a b` 로 QR 인스턴스 verify (🔵)"
