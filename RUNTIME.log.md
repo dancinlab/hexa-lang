@@ -2,6 +2,20 @@
 
 Append-only history sister of `RUNTIME.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
+## 2026-05-25T13:30Z — Linux self-host arch-gate sweep (부분 진척 · 17 fn 잔여)
+
+`HXLCL_SYS_*` 매크로 + `_hxlcl_syscall*_cf` svc-trap 패밀리가 cycle 63 이후 누적적으로 `runtime.c` 전반에 사용됐으나, 정의는 `#if (__arm64__||__aarch64__) && __APPLE__` 가드 안에만 → Linux gcc(x86_64/arm64) 빌드가 모든 svc-trap 호출처에서 `HXLCL_SYS_* undeclared` 컴파일러 에러로 깨짐. **`atlas-consistency` · `bootstrap` 포함 모든 Linux CI 누적 broken.** PR #1022 `svc-trap _flock`(cycle 77) 머지 직후 처음 표면화됐으나 진짜 범위는 그 이전부터.
+
+본 라운드 — signal_flock 패턴(호출처 `#if Darwin-arm64`(svc-trap 보존) + `#else`(libc fallback, 같은 errno-set 의미))을 14 fn에 적용:
+
+- [x] **signal_flock 3 fn** — `flock-open` · `flock-close`(2 svc-trap site) · `flock` family arch gate. PR **#1079** merged · commit `__signal_flock_arch_guard__` (Mac arm64 PASS).
+- [x] **net/exec 11 fn** — `setsockopt` · `socket` · `bind` · `listen` · `accept` · `connect` · `recv` · `send` · `recvmsg` · `sendmsg` · `execve`. PR **#1099** merged. Darwin arm64 svc-trap 보존(회귀 0) + Linux libc 분기.
+- [ ] **잔여 17 fn (RUNTIME 후속 라운드)** — `read` · `write` · `open` · `close` · `mkdir` · `dup2` · `lseek` · `select` · `poll` · `nanosleep`(select-loop) · `wait4` · `getpid` · `getuid` · `kill` · `fcntl` · `ioctl` · `stat` · `fstat` · `mmap` · `gettimeofday` · `exit`. 동일 `#if Darwin-arm64 / #else libc` 패턴 반복 적용 필요. 본 잔여 fix 전까지 Linux self-host 빌드 여전히 broken (Stage 0 컴파일 미통과).
+
+**구조적 근인**: HXLCL_SYS_* 정의가 Darwin arm64 가드 안에 있는 한, 모든 svc-trap 호출처는 같은 가드 필요. cycle 63 도입 시 정의는 가드 안인데 호출은 가드 밖 → 시스템적 누적 broken. 본 fix는 패턴 정착 + 14/31 fn 적용. 다음 라운드가 같은 패턴으로 17 fn 마저 잡으면 Linux self-host 빌드 완전 unbreak (`@goal` "aprime ≤ 5 kernel syscall stubs" 의 Linux 측 게이트).
+
+**검증 path**: `gcc -O2 -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs -I self self/native/hexa_cc.c self/runtime.c -o /tmp/hexa_v2 -lm -ldl` (atlas-consistency Stage 0 재현). 현재(본 PR 후) `HXLCL_SYS_READ undeclared` 부터 새 에러 시작 → 다음 fix 가 그 첫 에러를 잡는 식으로 점진.
+
 ## 2026-05-25 — 🛸🛸🛸 cycle 76-86: Phase-1 step-1 CLOSURE — aprime_cc 29 → 0 externs (NORTH-STAR MET)
 
 `/cycle` 자율 루프 (서브에이전트 측정/discovery + 부모 INLINE 랜딩) 로 step-1 완주. `nm aprime_cc | grep ' U '` (전수 undefined) = **0**. @goal "≤5 kernel syscall stub · zero libc/libm/libsystem" 초과달성 — 모든 syscall 이 inline `svc #0x80`.
