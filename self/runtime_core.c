@@ -7664,6 +7664,10 @@ HexaVal hexa_fma(HexaVal a, HexaVal b, HexaVal c) {
 // Unreferenced (harmless) once the bootstrap regenerates and inlines them.
 static inline HexaVal __raw_idiv(HexaVal a, HexaVal b) { return hexa_int(HX_INT(a) / HX_INT(b)); }
 static inline HexaVal __raw_imod(HexaVal a, HexaVal b) { return hexa_int(HX_INT(a) % HX_INT(b)); }
+// float modulo bridge → libm-free hxlcl_fmod (fwd-declared above the runtime_core.c
+// include at self/runtime.c:983). rt_mod's float path uses this instead of the `%`
+// operator so no `_fmod` libm extern is pulled. Mirrors hexa_mod's C body.
+static inline HexaVal __raw_fmod(HexaVal a, HexaVal b) { return hexa_float(hxlcl_fmod(HX_FLOAT(a), HX_FLOAT(b))); }
 
 // RUNTIME.md Step 4 .c-none arith core op 3: under HEXA_HAS_HEXA_RT_STDLIB
 // hexa_div delegates to hexa-source rt_div (stdlib/runtime/numeric.hexa). The

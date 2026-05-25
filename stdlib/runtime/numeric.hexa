@@ -1558,8 +1558,8 @@ pub fn rt_div(a: HexaVal, b: HexaVal) -> HexaVal {
 //   any other numeric  → fmod, throw "modulo by zero" if b==0.0
 //   non-numeric        → type error throw
 // __raw_imod is the native-modulo escape (same circularity reason as rt_div).
-pub fn rt_mod_float(a: float, b: float) -> float { return a % b }
-
+// __raw_fmod routes the float path through the libm-free hxlcl_fmod (the `%`
+// operator would lower to libm fmod() and pull a `_fmod` extern).
 pub fn rt_mod(a: HexaVal, b: HexaVal) -> HexaVal {
     let ta = type_of(a)
     let tb = type_of(b)
@@ -1585,6 +1585,6 @@ pub fn rt_mod(a: HexaVal, b: HexaVal) -> HexaVal {
     let mut bf: float = 0.0
     if b_kind == 0 { bf = bi as float } else { bf = b as float }
     if bf == 0.0 { throw "modulo by zero" }
-    return rt_mod_float(af, bf)
+    return __raw_fmod(af, bf)
 }
 
