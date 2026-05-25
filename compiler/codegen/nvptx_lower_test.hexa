@@ -2624,6 +2624,17 @@ fn _test_dtype_family() -> bool {
         ["rem", NVPTX_RKIND_U32, "rem.s32"],
         ["div", NVPTX_RKIND_U64, "div.s64"],
         ["%",   NVPTX_RKIND_U64, "rem.s64"],
+        // bitwise/shift (same fall-through-to-FP64 risk as div had)
+        ["&",   NVPTX_RKIND_U32, "and.b32"],
+        ["|",   NVPTX_RKIND_U32, "or.b32"],
+        ["^",   NVPTX_RKIND_U32, "xor.b32"],
+        ["<<",  NVPTX_RKIND_U32, "shl.b32"],
+        [">>",  NVPTX_RKIND_U32, "shr.s32"],
+        ["&",   NVPTX_RKIND_U64, "and.b64"],
+        ["|",   NVPTX_RKIND_U64, "or.b64"],
+        ["^",   NVPTX_RKIND_U64, "xor.b64"],
+        ["<<",  NVPTX_RKIND_U64, "shl.b64"],
+        [">>",  NVPTX_RKIND_U64, "shr.s64"],
     ]
     for c in int_cases {
         let got = _nvptx_binop_mnemonic_for_kind(c[0], c[1])
