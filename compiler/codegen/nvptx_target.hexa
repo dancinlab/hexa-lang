@@ -617,10 +617,15 @@ fn _nvptx_gpu_intrinsic_sreg(op: string) -> string {
 // Returns "" for non-WMMA ops so the call-site can fall through to
 // the next handler (or the unsupported-call stub).
 fn _nvptx_wmma_mnemonic(op: string) -> string {
-    if op == "gpu_wmma_load_a"  { return "wmma.load.a.sync.aligned.row.m16n16k16.f16.shared" }
-    if op == "gpu_wmma_load_b"  { return "wmma.load.b.sync.aligned.col.m16n16k16.f16.shared" }
-    if op == "gpu_wmma_mma"     { return "wmma.mma.sync.aligned.row.col.m16n16k16.f32.f16.f16.f32" }
-    if op == "gpu_wmma_store_c" { return "wmma.store.d.sync.aligned.row.m16n16k16.f32.shared" }
+    // PTX ISA 7.0 §9.7.13.4 grammar: state-space token precedes the
+    // element type on load/store (`.shared.f16`, NOT `.f16.shared`); the
+    // f16×f16→f32 `wmma.mma` uses the SHORT 2-type form (`.f32.f32`) — the
+    // long 4-type form `.f32.f16.f16.f32` is reserved for non-f16
+    // multiplicands (bf16/tf32) and is ptxas-REJECTED for f16 (N122).
+    if op == "gpu_wmma_load_a"  { return "wmma.load.a.sync.aligned.row.m16n16k16.shared.f16" }
+    if op == "gpu_wmma_load_b"  { return "wmma.load.b.sync.aligned.col.m16n16k16.shared.f16" }
+    if op == "gpu_wmma_mma"     { return "wmma.mma.sync.aligned.row.col.m16n16k16.f32.f32" }
+    if op == "gpu_wmma_store_c" { return "wmma.store.d.sync.aligned.row.m16n16k16.shared.f32" }
     return ""
 }
 
@@ -1288,7 +1293,7 @@ fn _nvptx_reg_frag(id: i64) -> string {
 // tuple for a WMMA fragment Local. Per RFC 067 P1, each fragment is a
 // vector of `_nvptx_frag_width` PTX regs named `%fra<id>_e<i>`. WMMA
 // instructions consume these as curly-braced operand tuples — e.g.,
-// `wmma.load.a.sync.aligned.row.m16n16k16.f16.shared {%fra7_e0,
+// `wmma.load.a.sync.aligned.row.m16n16k16.shared.f16 {%fra7_e0,
 // %fra7_e1, ..., %fra7_e7}, [_hexa_wmma_stage+0];`.
 fn _nvptx_wmma_frag_tuple(id: i64, count: i64) -> string {
     let base = _nvptx_reg_frag(id)
@@ -1536,10 +1541,13 @@ fn _nvptx_wmma_mnemonic_family(op: string, role: string, dtype: string, layout: 
     // .f32; A/B carry .bf16 dtype. The .row × .col layout combo is
     // the canonical sm_80 m16n16k16 shape.
     if dtype == ".bf16" {
-        if op == "gpu_wmma_load_a"  { return "wmma.load.a.sync.aligned.row.m16n16k16.bf16.shared" }
-        if op == "gpu_wmma_load_b"  { return "wmma.load.b.sync.aligned.col.m16n16k16.bf16.shared" }
+        // bf16 IS a non-default multiplicand → the LONG 4-type mma form
+        // (`.f32.bf16.bf16.f32`) is correct (cf. the tf32 long form). Only
+        // the load/store state-space token order needed the `.shared.<ty>` fix.
+        if op == "gpu_wmma_load_a"  { return "wmma.load.a.sync.aligned.row.m16n16k16.shared.bf16" }
+        if op == "gpu_wmma_load_b"  { return "wmma.load.b.sync.aligned.col.m16n16k16.shared.bf16" }
         if op == "gpu_wmma_mma"     { return "wmma.mma.sync.aligned.row.col.m16n16k16.f32.bf16.bf16.f32" }
-        if op == "gpu_wmma_store_c" { return "wmma.store.d.sync.aligned.row.m16n16k16.f32.shared" }
+        if op == "gpu_wmma_store_c" { return "wmma.store.d.sync.aligned.row.m16n16k16.shared.f32" }
         return ""
     }
 
@@ -1547,19 +1555,21 @@ fn _nvptx_wmma_mnemonic_family(op: string, role: string, dtype: string, layout: 
     // precision instead of single-precision). This is the f16-acc
     // variant; load/store mnemonics share the .f16 element tag.
     if dtype == ".f16" && role == "d" {
-        // The .mma instruction emits .f16.f16.f16.f16 (D.A.B.C all half).
-        if op == "gpu_wmma_mma" { return "wmma.mma.sync.aligned.row.col.m16n16k16.f16.f16.f16.f16" }
+        // f16 multiplicands ⇒ SHORT 2-type form `.<dtype>.<ctype>` =
+        // `.f16.f16` (half output, half accumulator). The 4-type form is
+        // ptxas-REJECTED for f16 abtype (same rule as the f32-acc path).
+        if op == "gpu_wmma_mma" { return "wmma.mma.sync.aligned.row.col.m16n16k16.f16.f16" }
     }
     if dtype == ".f16" {
         // f16 A/B loads and f16 store_c reuse the canonical table's
         // .f16 element tag — only the mma instruction discriminates
         // f16-acc vs f32-acc by dtype/role.
-        if op == "gpu_wmma_load_a"  { return "wmma.load.a.sync.aligned.row.m16n16k16.f16.shared" }
-        if op == "gpu_wmma_load_b"  { return "wmma.load.b.sync.aligned.col.m16n16k16.f16.shared" }
-        if op == "gpu_wmma_store_c" { return "wmma.store.d.sync.aligned.row.m16n16k16.f16.shared" }
+        if op == "gpu_wmma_load_a"  { return "wmma.load.a.sync.aligned.row.m16n16k16.shared.f16" }
+        if op == "gpu_wmma_load_b"  { return "wmma.load.b.sync.aligned.col.m16n16k16.shared.f16" }
+        if op == "gpu_wmma_store_c" { return "wmma.store.d.sync.aligned.row.m16n16k16.shared.f16" }
         // .f16 with role != "d" on _mma falls through to the canonical
-        // f32-accumulator path (PR #150 default).
-        if op == "gpu_wmma_mma" { return "wmma.mma.sync.aligned.row.col.m16n16k16.f32.f16.f16.f32" }
+        // f32-accumulator path (PR #150 default) — SHORT 2-type `.f32.f32`.
+        if op == "gpu_wmma_mma" { return "wmma.mma.sync.aligned.row.col.m16n16k16.f32.f32" }
     }
 
     return ""
