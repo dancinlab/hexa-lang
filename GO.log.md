@@ -339,3 +339,39 @@ axis 의 첫 설계서.
 
 - [ ] R3 — (a) `hexa run` autospawn wiring (`HEXA_DAEMON_AUTOSPAWN`/socket 존재 시 daemon `compile` → 받은 binary path exec · daemon down 시 fork fallback) · (b) binary u32-LE length-prefix wire (선행: NUL-preserving `net_read_raw` 빌트인) · (c) AST/lexer/lower in-memory 유지 · (d) atlas SSOT hash flush (F-DAEMON-4) · (e) N=100 latency (F-DAEMON-2) + crash-respawn (F-DAEMON-3) + multi-uid reject.
 
+## 2026-05-25 · M12 — hexa daemon R3 (autospawn wiring + N=100 latency + crash-respawn, RFC 093 Phase 3)
+
+> M11 (PR #922) 가 R2 (`compile` 메서드 + in-mem cache) 를 ship — 하지만 `hexa run` 은 daemon 을 *자동으로* 안 씀 (수동 `hexa daemon compile` 만). M12 가 RFC § Phase plan **R3** 의 핵심 carve-out 3개를 닫음: (1) autospawn wiring · (2) net_read_raw 필요성 판단 (→ occam g0 skip) · (3) N=100 latency / crash-respawn 측정.
+
+- [x] M12 — `self/main.hexa` autospawn wiring:
+  - 신규 helper `_daemon_autospawn_path(file)` — `HEXA_DAEMON_AUTOSPAWN != "1"` 이면 즉시 `""` (opt-in · default 0 → 행동 변화 0건). socket probe (`_daemon_default_socket` → `HEXA_DAEMON_SOCKET` override 우선) → 없으면 detached `daemon start --idle-ttl <HEXA_DAEMON_IDLE_TTL|600>` spawn + 3s socket-appear 대기 → `_daemon_send_line(sock, "COMPILE " + file)` → 응답 파싱 (`HIT`/`BUILT <path>` → file_exists 시 path 반환 · ERR/no-reply/missing-bin → `""`). 모든 실패 = silent fork fallback (graceful degrade · NEVER abort). `HEXA_DAEMON_TRACE=1` 시 `[daemon]` stderr 트레이스.
+  - `cmd_run_user_direct` 에 daemon tier 삽입 — precompile probe (M2) 와 fork-mode build 사이: `if !file_exists(tmpbin) { let _dbin = _daemon_autospawn_path(file); if len(_dbin) > 0 { tmpbin = _dbin } }`. 3-tier fallback **precompile → daemon → fork-mode** 정립. (`cmd_run` = 내부 absorbed-verb 디스패치 전용이라 autospawn 미배선 — RFC §4.3 autospawn 은 user-direct `hexa run` 전용.)
+  - `_daemon_default_socket` 에 `HEXA_DAEMON_SOCKET` env override (socket isolation — 테스트가 격리 socket 타깃).
+- [x] M12 — `tests/m_daemon_r3_test.hexa` 신규 e2e (3 falsifier): F-DAEMON-R3-1 (autospawn — `HEXA_DAEMON_AUTOSPAWN=1 hexa run <x>` → daemon 자동 기동 + socket 생성 + compile + exec + trace) · F-DAEMON-R3-2 (latency — warm-daemon loop vs fork-mode loop) · F-DAEMON-R3-3 (crash-respawn — daemon stop+pkill+rm socket → 다음 autospawn run 정상 rc=0). BLOCKED row 는 명시 마커 (g3 — 날조 금지).
+- [x] M12 — RFC 093 §12 표 R3 ✅ landed + R3 honest carve-out 갱신 · GO.md M12 milestone.
+
+### 검증 결과 (mini-class arm64 Mac · fresh worktree build · `/tmp/hexac` = `hexa.real` 복사)
+
+- **R3 3 falsifier 전부 PASS** (`/tmp/m12_r3_test_bin`, HEXA_BIN=hexa-named 드라이버 복사):
+  - `[F-DAEMON-R3-1a] autospawn run exec OK PASS · [F-DAEMON-R3-1b] socket auto-created PASS · [F-DAEMON-R3-1c] daemon tier fired (trace) PASS`
+  - `[F-DAEMON-R3-2] warm-daemon faster PASS` (in-test N=20: warm 6462 ms vs fork 46281 ms = 7.16×)
+  - `[F-DAEMON-R3-3] post-crash run succeeded (rc=0, graceful) PASS`
+- **N=100 latency 측정** (별도 shell loop, 동일 드라이버):
+  | mode | N=100 total | per-call | 비고 |
+  |---|---|---|---|
+  | warm-daemon (autospawn HIT) | **9,395 ms** | 94 ms | socket round-trip + warm in-mem HIT · fork 0 |
+  | fork-mode (cold rebuild, 고유 src) | **174,933 ms** | 1,749 ms | 매 호출 `hexa build` fork |
+  | **speedup** | **18.6×** | — | 165,538 ms saved · F-DAEMON-2 gate (≤1.5×) far exceeded |
+- **R1/R2 회귀 무**: `m_daemon_r1_test` 4/4 PASS · `m_daemon_r2_test` 3/3 PASS (autospawn helper + socket override 추가에도 기존 verb backward-compat).
+- **gate**: `hexac parse self/main.hexa` (복사본) + `hexac parse tests/m_daemon_r3_test.hexa` clean. `HEXA_MAC_BUILD_OK=1 hexac build self/main.hexa` clang green (warning만).
+
+### 디자인 결정 (R3)
+
+- **net_read_raw SKIP (occam g0)** — task 의 scope escape + RFC carve-out 판단대로, R3 핵심(autospawn + latency)은 binary u32-LE wire 불필요. COMPILE 응답이 `<TAG> <path>` 한 줄이고 binary path 는 NUL 미포함 → strlen-기반 `net_read` 로 온전히 round-trip. 따라서 `net_read_raw` 빌트인 + codegen 변경은 R4 로 연기 ([[codegen 변경 검증+랜딩 레시피]] 회피 = 라운드 1 serial 비용 절약).
+- **autospawn = `cmd_run_user_direct` 만** — `cmd_run` (lsp/test/check/qrng/batch 등 내부 absorbed-verb 디스패치) 은 신뢰된 내부 스크립트를 같은 프로세스 안에서 반복 실행 → daemon 자동 spawn 부적절. RFC §4.3 autospawn 은 user-direct `hexa run` 전용.
+- **argv0-basename dispatch 함정** — 드라이버가 argv[0] basename != `hexa*` 면 shim 으로 취급 (`unknown shim command`). 테스트는 `hexa`-named 드라이버 복사본을 HEXA_BIN 으로 줘야 함 (코드 버그 아닌 호출 규약). [[reference_hexa_basename_sigkill_workaround_2026_05_19]] 친척.
+
+### 다음 (R4)
+
+- [ ] R4 — (a) binary u32-LE length-prefix wire (선행 `net_read_raw` 빌트인 + codegen) · (b) AST/lexer/lower in-memory 유지 (현 R2/R3 는 binary-path 매핑까지만) · (c) atlas SSOT hash flush (F-DAEMON-4) · (d) multi-uid reject + root refuse (F-DAEMON-5 · `getuid()` builtin 선행) · (e) prod ship — verb 안정화 · 문서 · `hexa init` 안내 · 10/10 falsifier closure.
+
