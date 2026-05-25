@@ -1,0 +1,57 @@
+{
+  "fire": "fusion-attention-roofline",
+  "date": "2026-05-25",
+  "falsifier": "F-FUSION-ATTN-ROOFLINE",
+  "round": "7 of the GPU sec10 GEMM-fusion (attention) axis",
+  "goal": "port the N204 roofline-GEMM toolkit (TMA cp.async.bulk.tensor + 128B shared-memory swizzle + double-buffered K/V tiles + large 64x64 MMA tiles + mma.sync.m16n8k16) into the fused softmax(QK^T/sqrt(d))V inner GEMMs; measure ratio vs cuBLAS-TC + % of roofline",
+  "pre_registered_target": "ratio <= 1.10 vs cuBLAS-TC (>= ~90% of cuBLAS ceiling) on at least one shape (N in {2048,4096}, d=64), AND report achieved % of sm_120 FP16-tensor-core roofline",
+  "host": "ubu-2/ubu-1 RTX 5070 sm_120 (48 SMs) -- PHASE 2 timed fire (gated on 0 compute procs)",
+  "design": {
+    "vs_round4_base": {
+      "BM_query_rows_per_cta": "16 -> 64 (N204 tile size, restores GEMM efficiency)",
+      "warps_per_cta": "1 -> 4 (full SM compute, 2x2 warp layout over 64-row tile)",
+      "inner_mma": "wmma.mma.sync m16n16k16 (16x16 frag) -> mma.sync.m16n8k16 (N204 large-tile MMA, 8/warp/K-step)",
+      "loads": "wmma.load.*.global (HBM each subtile) -> cp.async.bulk.tensor TMA SWIZZLE_128B",
+      "pipeline": "none (TMA->wait->mma) -> double-buffered K/V (slot[k+1] DMA overlaps mma[k])",
+      "Q_reuse": "re-read from HBM every K-block -> TMA-loaded ONCE into smem (resident)"
+    },
+    "tile": "per-CTA 64x64, BK=64 key block, d=64",
+    "grid": "N/64 CTAs (32 @ N=2048, 64 @ N=4096) vs 48 SMs",
+    "smem_total_bytes": 82752,
+    "smem_breakdown": "Q 8192 + K[2] 16384 + V[2] 16384 + S 16384 + P 8192 + O 16384 + m/l/c 768 + mbar 64",
+    "tma_descriptors": 3,
+    "tma_box": "[64 inner fp16=128B, 64 rows] SWIZZLE_128B",
+    "swizzle_formula": "byte = row*128 + (atom_k XOR (row&7))*16 + (k_fp16%8)*2 (N204-derived, CUTLASS Sw<3,4,3>)"
+  },
+  "ptxas_compile_only": "PENDING (PHASE 1 -- requires Linux GPU host; Mac has no ptxas)",
+  "static_review": {
+    "pure_ascii": true,
+    "non_ascii_bytes": 0,
+    "instruction_histogram_N2048": {
+      "cp.async.bulk.tensor": 5,
+      "mma.sync.aligned.m16n8k16": 64,
+      "ldmatrix": 32,
+      "mbarrier.try_wait": 2,
+      "st.global": 1,
+      "bar.sync": 8,
+      "ex2.approx": 2
+    },
+    "mma_layout": "QK^T = mma.row.col B=K via ldmatrix.trans (K^T); P.V = mma.row.col B=V non-trans (contraction over keys along smem rows)",
+    "mbarrier_double_buffer": "per-slot parity = (kb>>1)&1; prologue arrives slot0, in-loop issue-next arrives the other slot -- exactly one arrive per slot use (traced, no double-arrive, no race)",
+    "register_hygiene": "lane consts (r55/r71/r90/r91) set once + read-only; mma/scatter scratch (r74-97,r150-151) disjoint from softmax/finalize (r100-116); kb/parity dedicated named regs"
+  },
+  "numeric_gate": "rel_rowscale <= 1e-2 vs f64 CPU ref (honest per-row-scaled metric); validated by fa_mma_oracle.cu (IDENTICAL mma.sync.m16n8k16 + ldmatrix sequence, unswizzled smem) -- PENDING fire",
+  "results_per_shape": "PENDING PHASE 2 (timed fire on uncontended GPU)",
+  "invariants": {
+    "no_llvm": true,
+    "no_c_transpile_change": true,
+    "codegen_untouched": "compiler/codegen/*.hexa UNTOUCHED (hand-emit PTX path); .cu/.c are oracle/host only"
+  },
+  "artifacts": {
+    "kernel_ptx": ["flash_attn_tma_sw128_2048.ptx", "flash_attn_tma_sw128_4096.ptx"],
+    "generator": "gen_flash_attn_tma_sw128_ptx.hexa (provenance)",
+    "mma_oracle": "fa_mma_oracle.cu",
+    "host": "fa_roofline_host.c",
+    "measure": "measure.hexa (provenance runbook)"
+  }
+}

@@ -1,0 +1,61 @@
+F-FUSION-ATTN-ROOFLINE -- round 7 of the GPU sec10 GEMM-fusion (attention) axis
+================================================================================
+DATE: 2026-05-25
+GOAL: port the N204 roofline-GEMM toolkit into the fused softmax(QK^T/sqrt(d))V
+      inner GEMMs and measure how close it gets to the cuBLAS-TC ceiling.
+
+KEY INSIGHT (acted on): hexa ALREADY hits the GEMM roofline standalone -- N204
+"TMA SWIZZLE_128B" reached cuBLAS 0.978 parity @ M=8192 (PRs #333/#335). The
+fused flash-attention lost its wall (round-5 best 3.47x slower) NOT because hexa
+can't do roofline GEMM, but because the fused kernel's inner QK^T and P.V GEMMs
+were naive (single-warp, small 16x16 wmma tiles, no TMA, no double-buffer, no
+swizzle). This round transplants the proven N204 toolkit into the fused kernel.
+
+================================================================================
+PHASE 1 (NO GPU EXECUTION) -- authoring + static review
+================================================================================
+
+AUTHORED:
+  flash_attn_tma_sw128_2048.ptx  (45703 B, pure ASCII, 0 non-ascii bytes)
+  flash_attn_tma_sw128_4096.ptx  (45703 B, pure ASCII)
+  fa_mma_oracle.cu               (CUDA-C, IDENTICAL mma.sync.m16n8k16 + ldmatrix
+                                  sequence, unswizzled smem -- numeric de-risk)
+  fa_roofline_host.c             (TMA descriptors + cuBLAS-TC baseline + timing
+                                  + roofline %)
+  gen_flash_attn_tma_sw128_ptx.hexa  (PTX generator, provenance)
+  measure.hexa                   (build/fire runbook, provenance)
+
+DESIGN (vs round-4 base, attacking the binding constraint = 16x16 tile inefficiency):
+  BM query rows/CTA      16   ->  64   (N204 tile, restores GEMM efficiency)
+  warps/CTA               1   ->   4   (full SM compute, 2x2 over 64-row tile)
+  inner mma     wmma m16n16k16  ->  mma.sync.m16n8k16 (N204 large-tile, 8/warp/Kstep)
+  loads     wmma.load.global ->  cp.async.bulk.tensor TMA SWIZZLE_128B
+  pipeline           none   ->  double-buffered K/V (slot[k+1] DMA || mma[k])
+  Q reuse   HBM/block   ->  TMA-loaded ONCE into smem (resident)
+
+STATIC REVIEW (PASS):
+  - pure ASCII (0 non-ascii bytes) -- driver-JIT ptxas requirement met
+  - instruction histogram N=2048: 5 cp.async.bulk.tensor (TMA) / 64
+    mma.sync.m16n8k16 / 32 ldmatrix / 2 mbarrier.try_wait / 1 st.global (final
+    O only -- S NEVER to HBM, moat preserved) / 8 bar.sync / 2 ex2.approx
+  - mma layout: QK^T = mma.row.col with B=K via ldmatrix.trans (gives K^T,
+    matches N204 B handling); P.V = mma.row.col with B=V non-trans (contraction
+    over keys along smem rows)
+  - mbarrier double-buffer: per-slot parity = (kb>>1)&1; prologue arrives slot0,
+    in-loop issue-next arrives the OTHER slot -> exactly one arrive per slot use
+    (traced: no double-arrive, no parity race)
+  - register hygiene: lane consts (r55/r71/r90/r91) set once, read-only;
+    mma/scatter scratch (r74-97, r150-151) disjoint from softmax/finalize
+    (r100-116); kb/parity are dedicated named regs surviving the full loop
+  - smem 82752 B < 102400 B/SM (needs MaxDynamicSharedMemorySize opt-in;
+    binds occupancy to ~1 CTA/SM -- a known tradeoff, see residual analysis)
+
+ptxas COMPILE-ONLY: PENDING -- Mac has no ptxas; runs on the Linux GPU host as
+  the first step of the PHASE 2 gated fire (compilation, not a timed run).
+
+CHECKPOINT-COMMIT after kernel exists (per phasing).
+
+================================================================================
+PHASE 2 (GPU GATE) -- timed fire on uncontended GPU (0 compute procs)
+================================================================================
+[appended after the gated fire]
