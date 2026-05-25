@@ -2917,6 +2917,20 @@
   status = "🟡 KNOWN-IDENTITY SURFACE — 3 seeds → ~2000 candidates → 3 verifiable echoes all 🔵 but NON-NOVEL (domain-core M1/M3). 0 new atoms. honest dead-end for NOVEL; engine-run closure. gated OUT of /paper (no falsifier/Δ)."
 
 # ───────────────────────────────────────────────────────────────────────
+# TECS-L — tecs-l-f4-arxiv (slug · group=TECS-L · axis F · F4 · NOVEL external-vein arxiv→verify)
+# arxiv math.NT hypothesis ported to hexa verify: Ore (1948) harmonic divisor
+# number. H(n)=n·tau(n)/sigma(n) in Z <=> n is a harmonic (Ore) number.
+# Every perfect number is an Ore number; n=6 = smallest nontrivial Ore.
+# All sigma/tau components 🔵; integer-assembly H deterministic (tolerance 0).
+# ───────────────────────────────────────────────────────────────────────
+@C tecs_l_f4_arxiv := "axis F F4 NOVEL external-vein: an arxiv math.NT hypothesis (Ore 1948, harmonic divisor numbers) ported straight into the hexa verify pipeline. H(n)=n·τ(n)/σ(n) ∈ ℤ ⟺ n is a harmonic divisor (Ore) number. Verified via `hexa verify --expr` on the σ/τ components (all 🔵) + exact integer assembly (tolerance 0): H(6)=6·4/12=2, H(28)=28·6/56=3, H(496)=496·10/992=5 all ∈ ℤ (6/28/496 are Ore numbers, 6=smallest nontrivial) ; H(140)=140·12/336=5 ∈ ℤ — 140 is Ore but NOT perfect, deterministically proving Ore ⊋ perfect (harmonic class strictly contains perfect class) ; H(12)=12·6/28=18/7 ∉ ℤ 🔴 — 12 is NOT harmonic (closed-negative falsifier). Reproduces Ore's 1948 theorem 'every perfect number is an Ore number' for the first 3 perfects (closed-form: perfect σ=2n ⟹ H=τ/2, τ even ⟹ H∈ℤ). External-vein channel: a literature hypothesis grounded by hexa-native exact arithmetic, complementary to F3 (OEIS catalogue channel) — first 'arxiv→verify' instance." :: discovery [slug=tecs-l-f4-arxiv group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr {tau|sigma} {6|28|496|140|12} <v> ; integer assembly H(n)=n·tau(n)/sigma(n)"
+  raw    = ".verdicts/tecs-l-f4-arxiv/ore_harmonic.txt"
+  src    = "TECS-L axis F F4 · arxiv math.NT Ore 1948 harmonic divisor numbers (OEIS A001599) · stdlib/core/math.hexa sigma/tau · cites M5/M6 perfect-number thread"
+  status = "🔵 SUPPORTED-FORMAL — 6/28/496/140 harmonic (H∈ℤ, σ/τ components 🔵) ; Ore ⊋ perfect proven by n=140 (Ore non-perfect) ; 🔴 n=12 non-harmonic falsifier. arxiv hypothesis grounded by exact hexa arithmetic."
+
+# ───────────────────────────────────────────────────────────────────────
 # TECS-L — tecs-l-n6-exclusivity-atlas (slug · group=TECS-L · paper-track · TECS-L/TECS-L.md F12)
 # NOVEL-axis (F family) paper aggregating the closed-negative CLUSTER around the
 # {1,6} positive kernel (atlas atom tecs_l_up_theorem / M10 — σφ=nτ⟺{1,6}).
