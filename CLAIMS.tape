@@ -1528,3 +1528,69 @@
   raw    = ".verdicts/tecs-l-modform-symbols/qr_instance.txt"
   src    = "Quadratic Reciprocity: J(a,b)·J(b,a) = (-1)^((a-1)(b-1)/4) for odd coprime a,b"
   status = "🔵 SUPPORTED-FORMAL — both factors verified, product matches QR closed-form. terminal."
+
+# ───────────────────────────────────────────────────────────────────────
+# TECS-L axis B (MERSENNE) — tecs-l-mersenne-tau-2p (slug · group=TECS-L · MR5)
+# Closed form: an even perfect number P = 2^(p-1) * M_p (M_p = 2^p - 1 prime)
+# has tau(P) = 2p. Divisors of P factor uniquely as 2^a * M_p^b with
+# a in [0, p-1] (p choices) and b in {0, 1} (2 choices); total = p * 2 = 2p.
+# Verified by `hexa verify --expr tau P 2p` for the first 7 perfect numbers:
+#   p=2  -> P1=6              -> tau=4
+#   p=3  -> P2=28             -> tau=6
+#   p=5  -> P3=496            -> tau=10
+#   p=7  -> P4=8128           -> tau=14
+#   p=13 -> P5=33550336       -> tau=26
+#   p=17 -> P6=8589869056     -> tau=34   (NEW vs axis-0)
+#   p=19 -> P7=137438691328   -> tau=38   (NEW vs axis-0)
+# Axis-0 M5 (.verdicts/tecs-l-physics-constants/str_dim_p*.txt) already
+# verified P1..P5 in a different slug (referenced in src); the MR5 slug
+# re-verifies them under the closed-form 2p framing and extends to P6/P7.
+
+@C tecs_l_mersenne_tau_2p_p1 := "tau(6) = 4 = 2*2 (1st perfect number, p=2, M_2=3 prime; closed-form tau(2^(p-1)*M_p)=2p)" :: formula [slug=tecs-l-mersenne-tau-2p group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr tau 6 4"
+  raw    = ".verdicts/tecs-l-mersenne-tau-2p/tau_p1.txt"
+  src    = "Closed-form 2p for P=2^(p-1)*M_p, p=2. Axis-0 M5 str_dim_p1_tau6.txt also covers tau(6)=4 under a different slug."
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal · paper-eligible."
+
+@C tecs_l_mersenne_tau_2p_p2 := "tau(28) = 6 = 2*3 (2nd perfect number, p=3, M_3=7 prime; closed-form tau(2^(p-1)*M_p)=2p)" :: formula [slug=tecs-l-mersenne-tau-2p group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr tau 28 6"
+  raw    = ".verdicts/tecs-l-mersenne-tau-2p/tau_p2.txt"
+  src    = "Closed-form 2p for P=2^(p-1)*M_p, p=3. Axis-0 M5 str_dim_p2_tau28.txt also covers tau(28)=6 under a different slug."
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal · paper-eligible."
+
+@C tecs_l_mersenne_tau_2p_p3 := "tau(496) = 10 = 2*5 (3rd perfect number, p=5, M_5=31 prime; closed-form tau(2^(p-1)*M_p)=2p)" :: formula [slug=tecs-l-mersenne-tau-2p group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr tau 496 10"
+  raw    = ".verdicts/tecs-l-mersenne-tau-2p/tau_p3.txt"
+  src    = "Closed-form 2p for P=2^(p-1)*M_p, p=5. Axis-0 M5 str_dim_p3_tau496.txt also covers tau(496)=10 under a different slug."
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal · paper-eligible."
+
+@C tecs_l_mersenne_tau_2p_p4 := "tau(8128) = 14 = 2*7 (4th perfect number, p=7, M_7=127 prime; closed-form tau(2^(p-1)*M_p)=2p)" :: formula [slug=tecs-l-mersenne-tau-2p group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr tau 8128 14"
+  raw    = ".verdicts/tecs-l-mersenne-tau-2p/tau_p4.txt"
+  src    = "Closed-form 2p for P=2^(p-1)*M_p, p=7. Axis-0 M5 str_dim_p4_tau8128.txt also covers tau(8128)=14 under a different slug."
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal · paper-eligible."
+
+@C tecs_l_mersenne_tau_2p_p5 := "tau(33550336) = 26 = 2*13 (5th perfect number, p=13, M_13=8191 prime; closed-form tau(2^(p-1)*M_p)=2p)" :: formula [slug=tecs-l-mersenne-tau-2p group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr tau 33550336 26"
+  raw    = ".verdicts/tecs-l-mersenne-tau-2p/tau_p5.txt"
+  src    = "Closed-form 2p for P=2^(p-1)*M_p, p=13. Axis-0 M5 str_dim_p5_tau33m.txt also covers tau(33550336)=26 under a different slug."
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal · paper-eligible."
+
+@C tecs_l_mersenne_tau_2p_p6 := "tau(8589869056) = 34 = 2*17 (6th perfect number, p=17, M_17=131071 prime; closed-form tau(2^(p-1)*M_p)=2p)" :: formula [slug=tecs-l-mersenne-tau-2p group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr tau 8589869056 34"
+  raw    = ".verdicts/tecs-l-mersenne-tau-2p/tau_p6.txt"
+  src    = "Closed-form 2p for P=2^(p-1)*M_p, p=17 (NEW vs axis-0; MR2 already verified is_perfect/sigma for P6). Divisors = 2^a * M_p^b, a in [0,16], b in {0,1} -> 17*2 = 34."
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal · paper-eligible."
+
+@C tecs_l_mersenne_tau_2p_p7 := "tau(137438691328) = 38 = 2*19 (7th perfect number, p=19, M_19=524287 prime; closed-form tau(2^(p-1)*M_p)=2p)" :: formula [slug=tecs-l-mersenne-tau-2p group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr tau 137438691328 38"
+  raw    = ".verdicts/tecs-l-mersenne-tau-2p/tau_p7.txt"
+  src    = "Closed-form 2p for P=2^(p-1)*M_p, p=19 (NEW vs axis-0; MR2 already verified is_perfect/sigma for P7). Divisors = 2^a * M_p^b, a in [0,18], b in {0,1} -> 19*2 = 38."
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal · paper-eligible."

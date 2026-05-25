@@ -20,6 +20,16 @@ Append-only history sister of `TECS-L.md`. Each entry starts with `## <ISO times
 - [x] `CLAIMS.tape` group=TECS-L slug=tecs-l-modform-symbols 15 entry (13 atom 🔵 + 2 reciprocity 곱 🔵, 1:1 pointer · orphan 0)
 
 
+## 2026-05-25T12:41 — 축 B MR5 · τ(2^{p-1}·M_p)=2p 닫힌형 첫 7 완전수 전부 🔵
+
+- [x] **닫힌형 도출**: 짝완전수 P = 2^{p-1}·M_p (M_p = 2^p−1 메르센 소수) 의 약수는 2^a·M_p^b, a∈[0,p-1] (p개), b∈{0,1} (2개) → τ(P) = (p−1+1)(1+1) = **2p**. 멀티플리커티브 τ + 서로소 인수분해 + M_p 소수성에서 자동 유도
+- [x] **7개 완전수 검증** (`hexa verify --expr tau P 2p`): P_1=6→τ=4·P_2=28→τ=6·P_3=496→τ=10·P_4=8128→τ=14·P_5=33550336→τ=26·P_6=8589869056→τ=34·P_7=137438691328→τ=38 — **7/7 🔵 SUPPORTED-FORMAL** (전부 calc==expected)
+- [x] P_1..P_5 는 축 0 M5 (`.verdicts/tecs-l-physics-constants/str_dim_p{1..5}_tau*.txt`) 에서 다른 slug 로 이미 🔵 — MR5 slug 에서는 "닫힌형 2p" framing 으로 재검증 (src 명시), P_6/P_7 은 **NEW vs 축-0** (MR2 가 is_perfect/σ 만 다룸; τ 는 MR5 가 첫 검증)
+- [x] **7 verdict** → `.verdicts/tecs-l-mersenne-tau-2p/tau_p{1..7}.txt` (raw stdout, atlas-loaded 라인만 strip)
+- [x] **CLAIMS.tape**: slug=tecs-l-mersenne-tau-2p group=TECS-L 섹션 추가, 7 @C 엔트리 (method=expr · cmd · raw · src · status=🔵), 1:1 verdict 포인터 · orphan 0
+- [x] aliquot 체인 (MR5 원안 후반부) 은 별도 후속 milestone 으로 분리 — 본 milestone 은 τ=2p 닫힌형만 다룸 (single-concern)
+
+
 ## 2026-05-25T15:00 — 축 A MF4 · dim S₂ = genus 정리 falsified for hexa fn (🔴 closed-negative)
 
 - [x] MF4 milestone = "dim S₂(Γ₀(N)) = genus 일치 verify (🔵)" 의도 → **결과 🔴**: hexa `dim_cusp_forms(N,2)` 는 표준 dim S_2 가 아님. N=1..30 sweep 에서 10 우연 일치(전부 genus=0)·20 mismatch
