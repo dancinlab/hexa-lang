@@ -958,6 +958,219 @@ fn _test_tma_matmul_emit() -> bool {
     return ok
 }
 
+// ── Case — RFC 055 §13 floating-point math intrinsics ─────────────────
+//
+// Source-level `sqrt(x)` / `max(a,b)` / `min(a,b)` / `exp(x)` / `abs(x)`
+// / `rsqrt(x)` lower (hir_to_mir L1048-1245) to STMT_CALL with the bare
+// callee name in `s.op` + source args in `s.args` — the SAME shape the
+// NVPTX handler now wires. These three cases assert the emitted PTX
+// mnemonics for the f32 family (the ML / NN-stack case), the f64 family
+// (the EXACT subset), and the operand-kind inheritance path.
+
+// _local_f32_param — a scalar f32 kernel param Local (type_id=4). With
+// gpu_kind=GPU_KIND_KERNEL, Pass 0 classifies it into the F32 bank
+// (`%fs<id>`), matching how a real `@gpu_kernel fn k(x: f32)` param flows.
+fn _local_f32_param(id: i64, name: string) -> Local {
+    return Local { id: id, arena_id: 1, type_id: 4, name_hint: name, precision: "" }
+}
+
+fn _math_call(dst: Local, op: string, a: Operand) -> Stmt {
+    let mut xs = []
+    xs.push(a)
+    return Stmt {
+        kind: STMT_CALL, dst: dst, op: op, args: xs,
+        target_block: -1, target_block_else: -1
+    }
+}
+
+fn _math_call2(dst: Local, op: string, a: Operand, b: Operand) -> Stmt {
+    let mut xs = []
+    xs.push(a)
+    xs.push(b)
+    return Stmt {
+        kind: STMT_CALL, dst: dst, op: op, args: xs,
+        target_block: -1, target_block_else: -1
+    }
+}
+
+// Case M1 — f32 math family. Dst Locals carry `.f32` precision tags so
+// the classifier routes them to the F32 bank; each math intrinsic emits
+// its `.f32` PTX mnemonic. Covers EXACT (sqrt/max/min/abs) + APPROX
+// (rsqrt.approx.f32 + exp via mul.f32 premul + ex2.approx.f32).
+fn _build_case_math_f32() -> MModule {
+    let x  = _local_f32_param(0, "x")    // f32 kernel param source (Pass-0 F32 bank)
+    let y  = _local_f32_param(1, "y")
+    let r0 = _local_with_precision(2, "r0", ".f32")   // sqrt(x)
+    let r1 = _local_with_precision(3, "r1", ".f32")   // max(x,y)
+    let r2 = _local_with_precision(4, "r2", ".f32")   // min(x,y)
+    let r3 = _local_with_precision(5, "r3", ".f32")   // abs(x)
+    let r4 = _local_with_precision(6, "r4", ".f32")   // rsqrt(x)
+    let r5 = _local_with_precision(7, "r5", ".f32")   // exp(x)
+
+    let mut s0 = []
+    s0.push(_math_call(r0, "sqrt", _op_local(x.id)))
+    s0.push(_math_call2(r1, "max", _op_local(x.id), _op_local(y.id)))
+    s0.push(_math_call2(r2, "min", _op_local(x.id), _op_local(y.id)))
+    s0.push(_math_call(r3, "abs", _op_local(x.id)))
+    s0.push(_math_call(r4, "rsqrt", _op_local(x.id)))
+    s0.push(_math_call(r5, "exp", _op_local(x.id)))
+    s0.push(_stmt_return())
+
+    let mut blocks = []
+    blocks.push(_block(0, s0))
+    let mut params = []
+    params.push(x)
+    params.push(y)
+    let mut locals = []
+    locals.push(x)
+    locals.push(y)
+    locals.push(r0)
+    locals.push(r1)
+    locals.push(r2)
+    locals.push(r3)
+    locals.push(r4)
+    locals.push(r5)
+    let mf = MFunc {
+        name: "math_f32_smoke", params: params,
+        return_local: _miss_local(), locals: locals, blocks: blocks,
+        entry_block: 0, arena_root: 1, def_line: 0, gpu_kind: GPU_KIND_KERNEL
+    }
+    let mut fns = []
+    fns.push(mf)
+    return MModule { file: "case_math_f32.hexa", funcs: fns, globals: [] }
+}
+
+fn _test_math_f32() -> bool {
+    let mut ok = true
+    let ptx = codegen_emit_ptx_sm80(_build_case_math_f32())
+    println("")
+    println("── emitted PTX (RFC 055 §13 math f32 family, sm_80) ──")
+    println(ptx)
+    // EXACT ops — byte-eq verifiable (operands resolve to the f32 bank)
+    ok = _check(ok, ptx, "sqrt.rn.f32 %fs2, %fs0",       "sqrt → sqrt.rn.f32")
+    ok = _check(ok, ptx, "max.f32 %fs3, %fs0, %fs1",     "max → max.f32")
+    ok = _check(ok, ptx, "min.f32 %fs4, %fs0, %fs1",     "min → min.f32")
+    ok = _check(ok, ptx, "abs.f32 %fs5, %fs0",           "abs → abs.f32")
+    // APPROX ops
+    ok = _check(ok, ptx, "rsqrt.approx.f32 %fs6, %fs0",  "rsqrt → rsqrt.approx.f32")
+    ok = _check(ok, ptx, "mul.f32 %fs7, %fs0, 0d3FF71547652B82FE", "exp premul x*log2e")
+    ok = _check(ok, ptx, "ex2.approx.f32 %fs7, %fs7",    "exp → ex2.approx.f32")
+    // No unsupported-call stub for any wired op
+    if _contains(ptx, "unsupported call: sqrt") { println("  FAIL: sqrt left as unsupported stub"); ok = false }
+    if _contains(ptx, "unsupported call: max")  { println("  FAIL: max left as unsupported stub"); ok = false }
+    if _contains(ptx, "unsupported call: exp")  { println("  FAIL: exp left as unsupported stub"); ok = false }
+    if _contains(ptx, "unsupported call: rsqrt"){ println("  FAIL: rsqrt left as unsupported stub"); ok = false }
+    return ok
+}
+
+// Case M2 — f64 EXACT family + honest stubs for the f64 APPROX cases.
+// Plain (untagged) Locals default to F64. sqrt/max/min/abs emit their
+// `.f64` mnemonic (EXACT, byte-eq); rsqrt + exp at f64 emit an honest
+// stub comment (rsqrt.approx / ex2.approx are f32-only).
+fn _build_case_math_f64() -> MModule {
+    let x  = _local(0, "x")
+    let y  = _local(1, "y")
+    let r0 = _local(2, "r0")   // sqrt(x)
+    let r1 = _local(3, "r1")   // max(x,y)
+    let r2 = _local(4, "r2")   // min(x,y)
+    let r3 = _local(5, "r3")   // abs(x)
+    let r4 = _local(6, "r4")   // rsqrt(x) — honest stub at f64
+    let r5 = _local(7, "r5")   // exp(x)   — honest stub at f64
+
+    let mut s0 = []
+    s0.push(_math_call(r0, "sqrt", _op_local(x.id)))
+    s0.push(_math_call2(r1, "max", _op_local(x.id), _op_local(y.id)))
+    s0.push(_math_call2(r2, "min", _op_local(x.id), _op_local(y.id)))
+    s0.push(_math_call(r3, "abs", _op_local(x.id)))
+    s0.push(_math_call(r4, "rsqrt", _op_local(x.id)))
+    s0.push(_math_call(r5, "exp", _op_local(x.id)))
+    s0.push(_stmt_return())
+
+    let mut blocks = []
+    blocks.push(_block(0, s0))
+    let mut params = []
+    params.push(x)
+    params.push(y)
+    let mut locals = []
+    locals.push(x)
+    locals.push(y)
+    locals.push(r0)
+    locals.push(r1)
+    locals.push(r2)
+    locals.push(r3)
+    locals.push(r4)
+    locals.push(r5)
+    let mf = MFunc {
+        name: "math_f64_smoke", params: params,
+        return_local: _miss_local(), locals: locals, blocks: blocks,
+        entry_block: 0, arena_root: 1, def_line: 0, gpu_kind: GPU_KIND_DEVICE
+    }
+    let mut fns = []
+    fns.push(mf)
+    return MModule { file: "case_math_f64.hexa", funcs: fns, globals: [] }
+}
+
+fn _test_math_f64() -> bool {
+    let mut ok = true
+    let ptx = codegen_emit_ptx_sm80(_build_case_math_f64())
+    println("")
+    println("── emitted PTX (RFC 055 §13 math f64 family + honest stubs, sm_80) ──")
+    println(ptx)
+    ok = _check(ok, ptx, "sqrt.rn.f64 %fd2", "sqrt → sqrt.rn.f64")
+    ok = _check(ok, ptx, "max.f64 %fd3",     "max → max.f64")
+    ok = _check(ok, ptx, "min.f64 %fd4",     "min → min.f64")
+    ok = _check(ok, ptx, "abs.f64 %fd5",     "abs → abs.f64")
+    // honest stubs for the f64 APPROX cases — must be present, never a
+    // wrong mnemonic, never the generic unsupported-call stub.
+    ok = _check(ok, ptx, "rsqrt f64 honest stub", "rsqrt f64 → honest stub")
+    ok = _check(ok, ptx, "exp f64 honest stub",   "exp f64 → honest stub")
+    if _contains(ptx, "rsqrt.approx.f64") { println("  FAIL: emitted nonexistent rsqrt.approx.f64"); ok = false }
+    if _contains(ptx, "ex2.approx.f64")   { println("  FAIL: emitted nonexistent ex2.approx.f64"); ok = false }
+    return ok
+}
+
+// Case M3 — operand-kind inheritance. The math result dst is UNTAGGED
+// (would default F64) but its f32 operand drives the Pass-1 inheritance
+// so the result lands in the F32 bank — `sqrt.rn.f32`, not the mixed-bank
+// `sqrt.rn.f64 %fd, %fs` that ptxas rejects.
+fn _build_case_math_inherit() -> MModule {
+    let x  = _local_f32_param(0, "x")  // f32 kernel param source (Pass-0 F32 bank)
+    let r0 = _local(1, "r0")            // sqrt(x) — UNTAGGED dst (would default F64)
+
+    let mut s0 = []
+    s0.push(_math_call(r0, "sqrt", _op_local(x.id)))
+    s0.push(_stmt_return())
+
+    let mut blocks = []
+    blocks.push(_block(0, s0))
+    let mut params = []
+    params.push(x)
+    let mut locals = []
+    locals.push(x)
+    locals.push(r0)
+    let mf = MFunc {
+        name: "math_inherit_smoke", params: params,
+        return_local: _miss_local(), locals: locals, blocks: blocks,
+        entry_block: 0, arena_root: 1, def_line: 0, gpu_kind: GPU_KIND_KERNEL
+    }
+    let mut fns = []
+    fns.push(mf)
+    return MModule { file: "case_math_inherit.hexa", funcs: fns, globals: [] }
+}
+
+fn _test_math_inherit() -> bool {
+    let mut ok = true
+    let ptx = codegen_emit_ptx_sm80(_build_case_math_inherit())
+    println("")
+    println("── emitted PTX (RFC 055 §13 math operand-kind inheritance, sm_80) ──")
+    println(ptx)
+    // dst inherits f32 from operand → f32 bank + f32 mnemonic
+    ok = _check(ok, ptx, ".reg .f32 %fs1",      "untagged sqrt dst inherits f32 bank")
+    ok = _check(ok, ptx, "sqrt.rn.f32 %fs1, %fs0", "sqrt.rn.f32 with f32 operand (no mixed bank)")
+    if _contains(ptx, "sqrt.rn.f64 %fd1") { println("  FAIL: mixed-bank f64 dst over f32 operand"); ok = false }
+    return ok
+}
+
 // ── Driver ───────────────────────────────────────────────────────────
 
 fn main() {
@@ -1000,11 +1213,14 @@ fn main() {
     let ok_mtb   = _test_matmul_NT_b_emit()
     let ok_tma   = _test_tma_codegen_scaffold()
     let ok_tmae  = _test_tma_matmul_emit()
+    let ok_mf32  = _test_math_f32()
+    let ok_mf64  = _test_math_f64()
+    let ok_minh  = _test_math_inherit()
 
     println("")
     println("══════════════════════════════════════════════")
-    if ok_br && ok_cls && ok_setp && ok_intr && ok_ls && ok_part && ok_barr && ok_atom && ok_shuf && ok_shuff64 && ok_shufm64 && ok_unr && ok_unrn && ok_wmma && ok_mp && ok_fctN && ok_pp && ok_fw && ok_sd && ok_me && ok_np && ok_os && ok_df && ok_bm && ok_wie && ok_gkw && ok_fls && ok_fp8a && ok_fp8b && ok_i64c && ok_mm && ok_mta && ok_mtb && ok_tma && ok_tmae {
-        println("PASS: RFC 055 + RFC 067 + RFC 068 P1/P2/P3/P4-codegen + RFC 068 §3 fp8 scaffold + RFC 069 + RFC 071 P3+/P5+ + N71-B FP64 warp-shuffle (+u64 mask narrow) + RFC 067 N202 TMA scaffold + RFC 067 N206 TMA matmul emit — 35/35 cases (incl. matmul + matmul_NT_a + matmul_NT_b + FP64 warp-shuffle composition + TMA codegen scaffold + TMA matmul emit)")
+    if ok_br && ok_cls && ok_setp && ok_intr && ok_ls && ok_part && ok_barr && ok_atom && ok_shuf && ok_shuff64 && ok_shufm64 && ok_unr && ok_unrn && ok_wmma && ok_mp && ok_fctN && ok_pp && ok_fw && ok_sd && ok_me && ok_np && ok_os && ok_df && ok_bm && ok_wie && ok_gkw && ok_fls && ok_fp8a && ok_fp8b && ok_i64c && ok_mm && ok_mta && ok_mtb && ok_tma && ok_tmae && ok_mf32 && ok_mf64 && ok_minh {
+        println("PASS: RFC 055 + RFC 067 + RFC 068 P1/P2/P3/P4-codegen + RFC 068 §3 fp8 scaffold + RFC 069 + RFC 071 P3+/P5+ + N71-B FP64 warp-shuffle (+u64 mask narrow) + RFC 067 N202 TMA scaffold + RFC 067 N206 TMA matmul emit + RFC 055 §13 math intrinsics (sqrt/max/min/exp/abs/rsqrt) — 38/38 cases (incl. matmul + matmul_NT_a + matmul_NT_b + FP64 warp-shuffle composition + TMA codegen scaffold + TMA matmul emit + math f32/f64/inherit)")
     } else {
         println("FAIL: RFC 055 smoke not satisfied.")
         if !ok_br   { println("      STMT_BR FAILED") }
@@ -1042,9 +1258,12 @@ fn main() {
         if !ok_mtb  { println("      RFC 071 P5+ matmul_NT_b codegen FAILED") }
         if !ok_tma  { println("      RFC 067 N202 TMA codegen scaffold FAILED") }
         if !ok_tmae { println("      RFC 067 N206 TMA matmul emit FAILED") }
+        if !ok_mf32 { println("      RFC 055 §13 math f32 family FAILED") }
+        if !ok_mf64 { println("      RFC 055 §13 math f64 family + honest stubs FAILED") }
+        if !ok_minh { println("      RFC 055 §13 math operand-kind inheritance FAILED") }
     }
     println("══════════════════════════════════════════════")
-    if !(ok_br && ok_cls && ok_setp && ok_intr && ok_ls && ok_part && ok_barr && ok_atom && ok_shuf && ok_shuff64 && ok_shufm64 && ok_unr && ok_unrn && ok_wmma && ok_mp && ok_fctN && ok_pp && ok_fw && ok_sd && ok_me && ok_np && ok_os && ok_df && ok_bm && ok_wie && ok_gkw && ok_fls && ok_fp8a && ok_fp8b && ok_i64c && ok_mm && ok_mta && ok_mtb && ok_tma && ok_tmae) { exit(1) }
+    if !(ok_br && ok_cls && ok_setp && ok_intr && ok_ls && ok_part && ok_barr && ok_atom && ok_shuf && ok_shuff64 && ok_shufm64 && ok_unr && ok_unrn && ok_wmma && ok_mp && ok_fctN && ok_pp && ok_fw && ok_sd && ok_me && ok_np && ok_os && ok_df && ok_bm && ok_wie && ok_gkw && ok_fls && ok_fp8a && ok_fp8b && ok_i64c && ok_mm && ok_mta && ok_mtb && ok_tma && ok_tmae && ok_mf32 && ok_mf64 && ok_minh) { exit(1) }
 }
 
 // ── Case 9 — 055-P4 gpu_warp_shuffle(v, lane) intrinsic ───────────────

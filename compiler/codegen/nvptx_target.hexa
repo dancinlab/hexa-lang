@@ -544,6 +544,84 @@ fn _nvptx_binop_mnemonic_for_kind(op: string, kind: string) -> string {
     return _nvptx_binop_mnemonic(op)
 }
 
+// ── RFC 055 §13 — floating-point math intrinsics (NN-stack) ───────────
+//
+// Source-level math builtins (`sqrt(x)` / `max(a,b)` / `min(a,b)` /
+// `exp(x)` / `abs(x)` / `rsqrt(x)`) lower through `call → STMT_CALL`
+// (hir_to_mir.hexa L1048-1245) with the callee text verbatim in `s.op`
+// and the source arguments in `s.args` — the SAME path the CPU codegen
+// recognises as math builtins (`hexa_math_sqrt` / `rt_math_max_v` …;
+// self/codegen.hexa cg_math_sym). On the NVPTX target these reached the
+// `// unsupported call` stub before this cycle. softmax (exp / max),
+// RMSNorm / LayerNorm (sqrt / rsqrt), and attention (max) all need them.
+//
+// These are the SAME bare names CPU codegen maps; no @gpu_kernel frontend
+// restriction filters them (hir_to_mir.hexa::_make_mfunc lowers a kernel
+// body through the normal `_lower_hexpr` path).
+
+// _nvptx_is_math_intrinsic — does this STMT_CALL op name denote one of
+// the wired floating-point math builtins?
+fn _nvptx_is_math_intrinsic(op: string) -> bool {
+    if op == "sqrt"  { return true }
+    if op == "rsqrt" { return true }
+    if op == "max"   { return true }
+    if op == "min"   { return true }
+    if op == "exp"   { return true }
+    if op == "abs"   { return true }
+    return false
+}
+
+// _nvptx_math_arity — operand count for a math intrinsic (1 for unary
+// sqrt / rsqrt / exp / abs; 2 for binary max / min). Returns 0 for a
+// non-math op (caller should not have routed it here).
+fn _nvptx_math_arity(op: string) -> i64 {
+    if op == "max" || op == "min" { return 2 }
+    if op == "sqrt" || op == "rsqrt" || op == "exp" || op == "abs" { return 1 }
+    return 0
+}
+
+// _nvptx_math_mnemonic_for_kind — pick the EXACT-op single-instruction
+// PTX mnemonic for a math intrinsic at a given register kind. Returns ""
+// when the op needs a multi-instruction decomposition (exp) or is not
+// representable at this kind (rsqrt at f64 — `rsqrt.approx` is f32-only,
+// no native f64 mnemonic; the body lowering honest-stubs that case).
+//   sqrt  → sqrt.rn.f32 / sqrt.rn.f64    (EXACT, IEEE round-to-nearest)
+//   rsqrt → rsqrt.approx.f32 (f32 only)  (APPROX, ~2^-23 rel tol)
+//   max   → max.{f32,f64,s32,s64}        (EXACT)
+//   min   → min.{f32,f64,s32,s64}        (EXACT)
+//   abs   → abs.{f32,f64}                (EXACT)
+//   ref: PTX ISA 9.7.3 (floating-point) + 9.7.2 (integer).
+fn _nvptx_math_mnemonic_for_kind(op: string, kind: string) -> string {
+    if op == "sqrt" {
+        if kind == NVPTX_RKIND_F32 { return PTX_OP_SQRT_RN_F32 }
+        return PTX_OP_SQRT_RN_F64
+    }
+    if op == "rsqrt" {
+        // rsqrt.approx has no f64 mnemonic — only f32. F64 rsqrt is an
+        // honest stub (a `1.0/sqrt.rn.f64` decomposition is a follow-on).
+        if kind == NVPTX_RKIND_F32 { return PTX_OP_RSQRT_APPROX_F32 }
+        return ""
+    }
+    if op == "max" {
+        if kind == NVPTX_RKIND_F32 { return PTX_OP_MAX_F32 }
+        if kind == NVPTX_RKIND_U32 { return PTX_OP_MAX_S32 }
+        if kind == NVPTX_RKIND_U64 { return PTX_OP_MAX_S64 }
+        return PTX_OP_MAX_F64
+    }
+    if op == "min" {
+        if kind == NVPTX_RKIND_F32 { return PTX_OP_MIN_F32 }
+        if kind == NVPTX_RKIND_U32 { return PTX_OP_MIN_S32 }
+        if kind == NVPTX_RKIND_U64 { return PTX_OP_MIN_S64 }
+        return PTX_OP_MIN_F64
+    }
+    if op == "abs" {
+        if kind == NVPTX_RKIND_F32 { return PTX_OP_ABS_F32 }
+        return PTX_OP_ABS_F64
+    }
+    // exp has no single-instruction form (decomposed in the body lowering).
+    return ""
+}
+
 // _nvptx_cmp_mnemonic — map a MIR comparison binop opcode to the PTX
 // `setp.<cond>.f64` mnemonic. PTX condition names match the MIR opcodes
 // 1:1 (`lt` / `le` / `gt` / `ge` / `eq` / `ne`); 055-P3b uses `.f64` as
@@ -1252,6 +1330,61 @@ fn _nvptx_lower_stmt(buf: [LInstr], s: Stmt, kinds: [PReg], shared_idx_off: [i64
             }
             return out
         }
+        // RFC 055 §13 — floating-point math intrinsics. `sqrt(x)` /
+        // `max(a,b)` / `min(a,b)` / `exp(x)` / `abs(x)` / `rsqrt(x)`
+        // (the SAME bare names CPU codegen recognises as math builtins).
+        // The dst register kind (F32 / F64 / int) is read from the
+        // classifier roster — Pass 1 inherits the operand bank so a
+        // kernel over `[f32]` arrays emits the `.f32` family, `[f64]`
+        // the `.f64` family. EXACT ops byte-eq; APPROX (rsqrt / exp via
+        // ex2) within ~2^-23 rel tol.
+        if _nvptx_is_math_intrinsic(s.op) {
+            let arity = _nvptx_math_arity(s.op)
+            if len(s.args) >= arity {
+                let dst_kind = _nvptx_lookup_kind_for_local(kinds, s.dst.id)
+                let dst_reg = _nvptx_lookup_reg_for_local(kinds, s.dst.id)
+                // exp(x) — no native PTX `exp`. Decompose to
+                //   mul.f32  %ftmp, x, 0d3FF71547652B82FE;   (x * log2(e))
+                //   ex2.approx.f32  %dst, %ftmp;             (2^that = e^x)
+                // f32 only (ex2.approx is f32). F64 exp is an honest stub
+                // (needs a polynomial; deferred). The premul scratch reuses
+                // the dst reg as the intermediate (single-use, safe).
+                if s.op == "exp" {
+                    if dst_kind == NVPTX_RKIND_F32 {
+                        let x_reg = _nvptx_operand_text_kinds(s.args[0], kinds)
+                        let mut am = []
+                        am.push(_nvptx_op(dst_reg))
+                        am.push(_nvptx_op(x_reg))
+                        am.push(_nvptx_op(PTX_LOG2E_HEXF64))
+                        out.push(_nvptx_instr(PTX_OP_MUL_F32, am, "exp: x * log2(e)"))
+                        let mut ae = []
+                        ae.push(_nvptx_op(dst_reg))
+                        ae.push(_nvptx_op(dst_reg))
+                        out.push(_nvptx_instr(PTX_OP_EX2_APPROX_F32, ae, "exp: 2^(x*log2e) = e^x"))
+                        return out
+                    }
+                    out.push(_nvptx_instr("//", [],
+                        "RFC 055 §13 - exp f64 honest stub (no PTX f64 ex2; polynomial deferred): " + s.op))
+                    return out
+                }
+                // Single-instruction EXACT / APPROX ops.
+                let mnem = _nvptx_math_mnemonic_for_kind(s.op, dst_kind)
+                if len(mnem) > 0 {
+                    let mut a = []
+                    a.push(_nvptx_op(dst_reg))
+                    a.push(_nvptx_op(_nvptx_operand_text_kinds(s.args[0], kinds)))
+                    if arity >= 2 {
+                        a.push(_nvptx_op(_nvptx_operand_text_kinds(s.args[1], kinds)))
+                    }
+                    out.push(_nvptx_instr(mnem, a, "math " + s.op))
+                    return out
+                }
+                // rsqrt at f64 — no native mnemonic; honest stub.
+                out.push(_nvptx_instr("//", [],
+                    "RFC 055 §13 - rsqrt f64 honest stub (rsqrt.approx is f32-only; 1.0/sqrt.rn.f64 deferred): " + s.op))
+                return out
+            }
+        }
         out.push(_nvptx_instr("//", [], "RFC 055 055-P0 - unsupported call: " + s.op))
         return out
     }
@@ -1876,6 +2009,20 @@ fn _nvptx_classify_locals(mfn: MFunc) -> [PReg] {
                             if len(s.args) >= 1 && s.args[0].kind == "local" {
                                 let ks = _nvptx_lookup_kind_for_local(regs, s.args[0].local_id)
                                 if ks == NVPTX_RKIND_U64 || ks == NVPTX_RKIND_U32 { kind = ks }
+                            }
+                        }
+                        // RFC 055 §13 — math-intrinsic dst-kind inheritance.
+                        // sqrt/max/min/exp/abs/rsqrt return the SAME type as
+                        // their operand. The STMT_CALL classifier defaults
+                        // the dst to F64; inherit the first operand's bank so
+                        // a `[f32]` kernel emits `sqrt.rn.f32 %fs<d>, %fs<a>`
+                        // (matching reg bank) rather than the mixed-bank
+                        // `sqrt.rn.f64 %fd<d>, %fs<a>` ptxas rejects. F32 /
+                        // int (max/min on indices) inherit; F64 is the default.
+                        if s.kind == STMT_CALL && kind == NVPTX_RKIND_F64 && _nvptx_is_math_intrinsic(s.op) && len(s.dst.precision) == 0 {
+                            if len(s.args) >= 1 && s.args[0].kind == "local" {
+                                let km = _nvptx_lookup_kind_for_local(regs, s.args[0].local_id)
+                                if km == NVPTX_RKIND_F32 || km == NVPTX_RKIND_U32 || km == NVPTX_RKIND_U64 { kind = km }
                             }
                         }
                         // N71-B (N70/N91 GAP-C) — FP64 warp-shuffle dst-kind
