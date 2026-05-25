@@ -18,6 +18,12 @@ Append-only history sister of `TECS-L.md`. Each entry starts with `## <ISO times
 - [x] 🔴 불일치 0 — hexa `jacobi`/`kronecker` 가 curated 13 인스턴스 + 2 reciprocity 곱 전부에서 고전 기호와 일치
 - [x] 14 verdict 영속화 (13 atom + qr_instance.txt) → `.verdicts/tecs-l-modform-symbols/`
 - [x] `CLAIMS.tape` group=TECS-L slug=tecs-l-modform-symbols 15 entry (13 atom 🔵 + 2 reciprocity 곱 🔵, 1:1 pointer · orphan 0)
+## 2026-05-25T17:00 — 축 A MF7 (inline 대행) · first_cusp_form_weight + AL=2^ω(N)
+
+- [x] MF7 (서브에이전트 rate-limited → 부모 inline 대행): first_cusp_form_weight(N) N=1..30 전수 30/30 🔵 — 1→12, 6→4 (=τ(6) bridge), 30→2 (단조감소)
+- [x] AL involution 수 |AL(Γ₀(N))| = 2^ω(N) 닫힌형 (Atkin-Lehner 1970) — 10 sample 표 (N=1..30030, ω=0..6, AL=1..64). 🟡 citation (ω 직접 verify fn 없음, by-hand 도출)
+- [x] 5 verdict → `.verdicts/tecs-l-modform-weight-al/` + CLAIMS 5 entry (1:1 orphan 0)
+- [x] 잔여: stray worktree `/private/tmp/wt-mf7` (rate-limited 에이전트가 남김) 정리 + 공유 main 트리 leak 회수 완료
 
 
 ## 2026-05-25T12:41 — 축 B MR5 · τ(2^{p-1}·M_p)=2p 닫힌형 첫 7 완전수 전부 🔵
