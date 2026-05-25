@@ -1769,6 +1769,28 @@ opt-in via `git config core.hooksPath .githooks`) + project.tape @D
   architectural exceptions (init-order + lifetime), not unfinished
   porting work. Step 2 effectively CLOSED.
 
+### 2026-05-26 — step 2 post-close: hxlcl_atof C-body → hexa rt_str_parse_float (early-zone relocate technique)
+
+- ✅ `hxlcl_atof` (the last C-bodied parse helper) now delegates to the
+  existing hexa-source `rt_str_parse_float` (ctype.hexa cycle-73) under
+  `HEXA_HAS_HEXA_RT_STDLIB`; `#else` C fallback kept for standalone/smoke.
+  No new hexa fn (reuses cycle-73). One more helper's logic moves C → hexa.
+- 🔑 reusable technique — the EARLY bootstrap-zone helpers (~L75-330, pre-
+  HexaVal: atof/atoll/strtoll/bzero/strlen/memcmp) CANNOT delegate in-place:
+  `HexaVal`/`hexa_str`/`HX_FLOAT` are undeclared there (clang err
+  `unknown type name 'HexaVal'`). Fix = forward-decl in the early zone +
+  place the two-mode DEFINITION after the cycle-1 isalnum shim (where HexaVal
+  is declared). Applies to the other early-zone helpers when ported.
+- VERIFY (mini arm64 · build_aprime.sh): build PASS · smoke `exit(42)==42`
+  PASS · externs = **1 (`_write`), ≤5 acceptance preserved** · gen1≡gen2
+  fixpoint preserved **by construction** — `atof()` has ZERO callers in
+  codegen.hexa / main.hexa (codegen float literals parse via `strtod`, not
+  `atof`), so the `rt_str_parse_float` ULP-diff vs the C body cannot reach
+  emitted constants (off the emit path → asm unchanged). Resolves the L878
+  "atof not bit-exact may break S3 fixpoint" caveat: safe because off-path.
+- Count unchanged (atof was already libc-extern-free since cycle-48; this
+  deepens its impl C→hexa, not a new port). **Step 2 stays CLOSED.**
+
 ## Phase 3 — step 3 (runtime.c/runtime_core.c HI tier)
 
 ### 2026-05-21 — 🛸 step 3 cycle 1 POC: hexa_abs C → hexa source
