@@ -1,0 +1,95 @@
+================================================================================
+VERDICT — verify-cli V7 flatten-drop (congruence_chain_engine int fns)
+================================================================================
+date        : 2026-05-26
+worktree    : /tmp/wt-flatten  (branch verify-cli-flatten-fix-2026-05-26)
+base        : origin/main @ 68462e7d (V9 #1175)
+build host  : local macOS arm64 (/usr/bin/clang)
+transpiler  : self/native/hexa_v2 + build/hexa_v2  (May 26 04:39, md5 473b41ef...)
+              == #1170 (489af22d) regenerated transpiler  (NOT the stale 15:34 one)
+
+--------------------------------------------------------------------------------
+ROOT CAUSE — stale transpiler, NOT a source / flatten-list / pub-missing bug
+--------------------------------------------------------------------------------
+V9's INBOX note (verify_cli_congruence_engine_flatten_drop_2026_05_26.md) framed
+this as a "module-flatten layer" gap distinct from the #1170 bessel _Generic
+blocker. It is in fact the SAME stale-transpiler root cause:
+
+  * All 6 V7 int fns (is_prime_int / nth_prime / factorial_int / catalan / bell /
+    partition) are `pub fn ... -> int` in compiler/atlas/symbolic/
+    congruence_chain_engine.hexa (lines 160-262) — IDENTICAL signature shape to
+    sigma_k (131) / euler_phi (103), which built fine. So NOT pub-missing, NOT a
+    return-type discriminator, NOT a flatten-list omission (same module, same
+    `use`, same file — sigma_k flattens, so the int block flattens too).
+  * The STALE Mac transpiler (May 25 15:34 / build/hexa_v2 18:11) emitted these
+    as undeclared indirect `hexa_call1(is_prime_int, n)` — the SAME indirect-call
+    pathology #1170's verdict documents for `hexa_call1(bessel_j0, x)`.
+  * PR #1170 (489af22d, 2026-05-26 04:42) REGENERATED the Mac transpiler on mini.
+    The regenerated transpiler (self/native/hexa_v2 + build/hexa_v2, 04:39) emits
+    ALL of them as DIRECT calls with forward decls + bodies.
+
+Timeline:
+  02:08  #1150  V7 int fns land in source
+  04:36         V9's bin/hexa-verify built with STALE transpiler -> 12 undeclared
+                -> deployed binary reports V7 fns 🟠 INSUFFICIENT
+  04:42  #1170  Mac transpiler regenerated (clears the indirect-emission family)
+  05:05  #1175  V9 commits the INBOX note (built before picking up #1170's regen)
+
+V9's diagnosis was correct at its build time but its environment had the pre-#1170
+stale transpiler. At HEAD (post-#1170), a fresh module_loader + the 04:39
+transpiler produces a clean direct-call build. NO source edit is required.
+
+--------------------------------------------------------------------------------
+FIX TAKEN (minimal — g0/g33)
+--------------------------------------------------------------------------------
+None at source level — the blocker is ALREADY cleared by #1170's transpiler regen.
+The contained action: rebuild bin/hexa-verify with the HEAD (#1170) transpiler so
+the deployed binary carries the V7 fns. This verdict + the rebuilt binary + the
+VERIFY-KIT log note record that V7/V10 builds are unblocked at HEAD.
+
+--------------------------------------------------------------------------------
+BEFORE  (deployed bin/hexa-verify, 04:36 stale-transpiler build)
+--------------------------------------------------------------------------------
+$ bin/hexa-verify --expr nth_prime 5 11
+  tier   = 🟠 INSUFFICIENT   reason = calculator system has NO path for 'nth_prime'
+$ bin/hexa-verify --expr catalan 4 14
+  tier   = 🟠 INSUFFICIENT   reason = calculator system has NO path for 'catalan'
+$ bin/hexa-verify --expr is_prime 7 1
+  tier   = 🟠 INSUFFICIENT   reason = calculator system has NO path for 'is_prime'
+
+V9-reported clang failure (stale transpiler, 12 errors):
+  build/artifacts/hexa-verify.c: use of undeclared identifier
+    'is_prime_int' / 'nth_prime' / 'factorial_int' / 'catalan' / 'bell' / 'partition'
+    return __hexa_fn_arena_return(hexa_call1(is_prime_int, n));   (indirect, no decl)
+
+--------------------------------------------------------------------------------
+AFTER  (clean rebuild with #1170 transpiler — direct calls + bodies present)
+--------------------------------------------------------------------------------
+emitted build/artifacts/hexa-verify.c:
+  fwd-decls @ 103-108:  HexaVal is_prime_int(HexaVal n); ... HexaVal partition(HexaVal n);
+  bodies    @ 3957-4056: HexaVal is_prime_int(HexaVal n) { ... } ... partition { ... }
+  direct call @ 5676:   return __hexa_fn_arena_return(is_prime_int(n));
+clang: 0 undeclared-identifier errors. bin/hexa-verify links clean. smoke OK.
+
+$ bin/hexa-verify --expr nth_prime 5 11
+  tier   = 🔵 SUPPORTED-FORMAL   (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+$ bin/hexa-verify --expr catalan 4 14
+  tier   = 🔵 SUPPORTED-FORMAL
+$ bin/hexa-verify --expr partition 10 42
+  tier   = 🔵 SUPPORTED-FORMAL
+$ bin/hexa-verify --expr is_prime 7 1
+  tier   = 🔵 SUPPORTED-FORMAL
+REGRESSION:
+$ bin/hexa-verify --expr sigma 6 12
+  calc = 12 == expected 12   tier = 🔵 SUPPORTED-FORMAL
+$ bin/hexa-verify --expr gamma 5 24 --tol 1e-6   (V4 intact)
+  tier = 🟢 SUPPORTED-NUMERICAL  (hexa-native libm-class recompute, TECS-L n6-rep Tier2)
+
+--------------------------------------------------------------------------------
+RESULT
+--------------------------------------------------------------------------------
+V7 int fns flatten + link clean. 12 undeclared -> 0. V10 + all future verify_cli
+builds are UNBLOCKED at HEAD (with the #1170-regenerated transpiler). The deployed
+04:36 bin/hexa-verify must be re-installed from a HEAD-transpiler build to expose
+the V7 fns (separate g27 ship-cycle; #6471cfec / #6471... reinstall pattern).
+================================================================================

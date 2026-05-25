@@ -1,5 +1,19 @@
 # verify_cli build blocked — congruence_chain_engine.hexa int-fn block dropped by flattener (2026-05-26)
 
+## ✅ RESOLVED (2026-05-26, branch verify-cli-flatten-fix-2026-05-26 · g48 ack)
+이 블로커는 별개의 module-flatten 버그가 아니라 **#1170 이 이미 고친 stale-transpiler**
+와 동일한 뿌리였다. stale transpiler(05-25 15:34)가 6개 V7 int fn 을 미선언 indirect
+`hexa_call1(is_prime_int, n)` 로 emit → 12 undeclared. #1170(489af22d, 04:42)이 Mac
+transpiler 를 regen 하여 indirect-emission family(bessel `_Generic` 포함)를 일괄 해소.
+HEAD(#1170 transpiler, 04:39) + fresh `build/hexa_module_loader` 로 `bin/hexa-verify` 를
+재빌드하면 **clang undeclared 12 → 0** (direct call + fwd-decl + body), V7 fn 모두 🔵.
+- `pub`-missing 아님 · flatten-list 누락 아님 · int-vs-float codegen 분기 아님 — sigma_k 와
+  동일 시그너처(`pub fn … -> int`, 같은 모듈)라 sigma_k 가 flatten 되면 int 블록도 flatten.
+- 소스 편집 불필요. V7/V10 + 향후 모든 verify_cli 빌드 unblocked at HEAD.
+- verbatim: `.verdicts/verify-cli-flatten-fix/fix.txt` · `verify_calls.txt` · `before_deployed.txt`
+- 배포된 04:36 `bin/hexa-verify` 는 HEAD-transpiler 빌드로 재설치해야 V7 fn 노출(별도 g27).
+---
+
 ## Symptom
 `bash tool/build_hexa_verify.sh` (HEAD transpiler `self/native/hexa_v2` 2026-05-26
 04:39 + freshly-built `build/hexa_module_loader`, `HEXA_MODULE_LOADER` wired) fails
