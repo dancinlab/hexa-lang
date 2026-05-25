@@ -3,6 +3,29 @@
 Append-only history sister of `TECS-L.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
 
+## 2026-05-25T19:10 — 축 F F8 · cross-domain n=6 다리 스캔 (NEXUS, commons g67) — terminal 🔵+🟠
+
+- [x] F8 milestone = "GPU·CANON·RUNTIME 등 도메인과 n=6 다리 발견" → 정직하게 스캔 + 분류로 종결
+- [x] **스코프**: 19 root .md SSOTs + 8 atlas by_kind 파일 grep + spot-read
+- [x] **🔵 진짜 다리 3 개**:
+  - README.md — "n=6 perfect-number primitives" 언어 정체성 슬로건 + `@cite(L[sigma_phi_n_tau_iff_n_eq_6])` 샘플 코드 + `hexa atlas lookup L sigma_phi_n_tau_iff_n_eq_6` 인용. TECS-L M1/M3/M10 산술 커널을 hexa-lang 의 "셋째 핵심" 으로 판매 (atlas-bound theorems + 8-stage strict lint + n=6 perfect-number primitives).
+  - ATLAS.md — R7 numerology 격리 tier 가 σ(6)/sopfr(6) 우연일치 주장을 (`MILL-PX-A3-ym-beta0-rewriting` · `MILL-V3-T4-n6-numerical-coincidence-honest-miss`) quarantine. honest separation = "엄밀 🔵 vs 우연일치" 인프라적 다리.
+  - compiler/atlas/by_kind/l.gen.hexa — n=6 본문 언급 raw atom **151** L-law (+ p.gen.hexa 112, f.gen.hexa 4, e.gen.hexa 1). foundation-level 5 named:
+    - `L[DELTA0_ABSOLUTE_THEOREM]` [11*] — σφ=nτ=24 iff n=6 은 Π⁰₁ 결정가능 → Δ₀-absolute (ZFC/V=L/large cardinal 전부 invariant)
+    - `L[ULTRA_UNIFORMITY_THEOREM]` [11*] — Knuth ↑↑/↑↑↑/Conway-chain/ordinal 전 차수 invariant
+    - `L[TIME_CLOSURE_UNIQUENESS]` [10*] — n=6 만 σφ-nτ=0 (n=4:2, n=7:34, n=28:504 divergence)
+    - `L[meta_fp_universality_class]` [11*] — φ(n)/n=1/3 ⟺ n∈{2,3}-smooth, n=6 = minimal representative (Euler product closed-form)
+    - `L[ab_law_75_single_attractor]` [10*] — ANIMA Ψ_balance = TECS-L Golden Zone Upper = φ/τ@n=6 3-way 다리
+- [x] **🟡 간접 다리 1 개**: CLAUDE.md `@I` "atlas-bound theorems" — `@cite` lint 게이트가 곧 TECS-L atlas consumer
+- [x] **🟠 동음이의 (다리 아님) 3 개**: GOAL.md ③ "n=6 hex fabric" · GPU.md "n=6 lattice GPU emit" · FIRMWARE.md "lattice n=6 does not enter verification" — 전부 **육각 격자 정점 차수 6** (graph topology), TECS-L 약수합 6 과 의미 다른 동음이의. honest 분리 유지. (추후 /kick seed 후보 — degree-6 = σ(2)·τ(2) 비-자명 연결? 거의 확실히 🔴)
+- [x] **다리 없음 13 도메인** (시스템 pillar 정상 분리): RUNTIME · CANON · COMPILER · HEXA-LANG · HEXA-LANG.log · HEXA-NATIVE-ONLY · FLOW · GO · PROBE · QMIRROR · STDLIB · SPEC · ROADMAP. 컴파일러/런타임/codegen 이 n=6 산술에 종속되지 않는 게 정상 — atlas 만 종속.
+- [x] **전체 verdict**: F8 = 🔵 BRIDGED-AT-IDENTITY-LAYER + 🟠 HONESTLY-SEPARATED-AT-SYSTEMS-LAYER. 새 다리 발명 불필요 — architecture 가 이미 옳은 위치에 다리.
+- [x] **후속 후보 NOVEL queue 이월**: (1) DELTA0/ULTRA/TIME/meta_fp/ab_law_75 L-law 산술 커널 g5 재검증 → 🔵 SUPPORTED-FORMAL 영속화 (metaphor wrapper 는 🟠 유지). (2) ANIMA Ψ_balance=φ/τ@n=6=1/2 vs M7 Golden Zone 1/e closed-negative — 정량 다리. (3) chip-comb degree-6 ↔ σ(2)·τ(2)=6 speculative /kick seed.
+- [x] artifact: `.verdicts/tecs-l-cross-domain-bridge/bridge_scan.txt` (ASCII) + `TECS-L/docs/f8-cross-domain-bridge.md` (Korean detail)
+- [x] CLAIMS.tape: 신규 @C `tecs_l_cross_domain_bridge_scan` [slug=tecs-l-cross-domain-bridge group=TECS-L] method=survey · status="🔵 진짜 다리 3 + 🟡 간접 1 + 🟠 동음이의 3 + 다리 없음 13"
+- [x] 정직 게이트: method=survey, 새 산술 verify 미수행, paper_significance 불충족 (별도 falsifier 없음) → /paper 비대상 (산술 커널은 이미 M1/M3/M10 paper PAPER/tecs-l-n6-identity-locus 에 포섭)
+
+
 ## 2026-05-25T13:33 — 축 E E3 · `hexa atlas register` install-dir 해저드 + patch-to-worktree 회복 formal write-up
 
 - [x] E3 milestone = "register install-dir 해저드 + recovery 4-step 워크플로 formal 문서 (E1 hands-on + E2 audit 종합)"
