@@ -80,7 +80,7 @@ int main(int argc, char** argv){
     if(argc<3){ fprintf(stderr,"usage: %s flash_attn_tma_sw128_N.ptx N\n",argv[0]); return 2; }
     const char* ptx_path=argv[1]; int N=atoi(argv[2]); int d=64;
     if(N%64){ fprintf(stderr,"N must be multiple of 64\n"); return 2; }
-    const char* kname="flash_attn_tma_v2";
+    const char* kname=getenv("FA_KNAME")?getenv("FA_KNAME"):"flash_attn_tma_v2";
 
     FILE* fp=fopen(ptx_path,"rb"); if(!fp){perror("ptx");return 1;}
     fseek(fp,0,SEEK_END); long np=ftell(fp); fseek(fp,0,SEEK_SET);
@@ -106,7 +106,7 @@ int main(int argc, char** argv){
     printf("kernel: regs/thd=%d static_smem=%d B\n", regs, smem_static);
 
     /* dynamic smem opt-in (the kernel uses ~82.7 KB dynamic) */
-    int dyn_smem = 99136;
+    int dyn_smem = getenv("FA_SMEM")?atoi(getenv("FA_SMEM")):99136;
     CUresult sa = cuFuncSetAttribute(f, CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES, dyn_smem);
     if(sa!=CUDA_SUCCESS){ const char*s=NULL; cuGetErrorString(sa,&s); fprintf(stderr,"smem opt-in fail (%d B): %s\n", dyn_smem, s?s:"?"); }
 
