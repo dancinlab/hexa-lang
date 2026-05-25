@@ -3,6 +3,15 @@
 Append-only history sister of `TECS-L.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
 
+## 2026-05-25T12:00 — M8 · discovery_loop → hexa-native 엔진 (이미 shipped, 스모크 검증)
+
+- [x] 발견: archive `discovery_loop.py` 는 RFC 065(self-growing atlas) + RFC 080(`hexa loop --dfs`, dfs_engine.py 포트) 로 **이미 hexa-native 이식·shipped**. 옛 루트 TECS-L.md 가 바로 그 RFC 080 계획서였음
+- [x] 스모크: `hexa loop --once` → 8-stage(SCAN→LENS 36→DEDUP→GATE→FIRE→DRAFT 148→AUDIT→EXHAUST) end-to-end 완주, 153 candidate emit → `.verdicts/tecs-l-discovery-engine/loop_once_smoke.txt`
+- [x] 매핑 문서: archive 6+엔진(DFS/Convergence/Quantum/Perfect/Verify/Grow/Paper) → `hexa loop`(36 lens)·`--dfs`·`hexa kick`/`drill`·`hexa verify`·RFC065 atlas·`/paper` 1:1
+- [x] g0 Occam: 새로 짓지 않고 기존 통합 확인 (M8 = verify+document, 코드 신규 없음). CLAIMS 1 empirical entry
+- [x] 생성된 candidate 148개는 미커밋 (generated artifact). inline 부모 세션
+
+
 ## 2026-05-25T11:30 — M7 · Golden Zone (1/e) → 🔴 CLOSED-NEGATIVE
 
 - [x] milestone = "1/e 자기참조 닫힌형 유도 시도 (성공🔵/실패🔴)". 결과: EXACT 유리수 유도 **FALSIFIED 🔴**

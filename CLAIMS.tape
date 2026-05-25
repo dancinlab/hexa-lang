@@ -784,3 +784,16 @@
   raw    = ".verdicts/tecs-l-golden-zone/closed_negative_golden_zone.txt"
   src    = "archive-TECS-L Level 3->4 #1 (Golden Zone analytical proof attempt)"
   status = "🔴 FALSIFIED — closed negative (exact-rational-derivation axis ruled out). paper-eligible (paper_negative_ok)."
+
+# ───────────────────────────────────────────────────────────────────────
+# TECS-L — tecs-l-discovery-engine (slug · group=TECS-L · TECS-L/TECS-L.md M8)
+# archive discovery_loop.py ported hexa-native (RFC 065 self-growing atlas +
+# RFC 080 --dfs). M8 = smoke-verify + map the ALREADY-SHIPPED integration.
+# Doc: TECS-L/docs/m8-discovery-engine-mapping.md.
+
+@C tecs_l_discovery_engine_smoke := "hexa loop --once runs the 8-stage RFC065+080 discovery cycle end-to-end (36 lens, 153 candidates)" :: experiment [slug=tecs-l-discovery-engine group=TECS-L]
+  method = "empirical"
+  cmd    = "hexa loop --once"
+  raw    = ".verdicts/tecs-l-discovery-engine/loop_once_smoke.txt"
+  src    = "stdlib/loop/{cycle,dfs,state}.hexa · RFC 065 + RFC 080 (archive discovery_loop.py port)"
+  status = "🟢 empirical PASS — discovery engine runs hexa-native end-to-end (smoke, not an arithmetic recompute). terminal-empirical."
