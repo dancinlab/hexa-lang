@@ -193,6 +193,8 @@ fn cmd_rubric() {
     println("             lambda_eliashberg(M0)       → 2·M0                (Eliashberg λ from α²F ω⁻¹-moment, 1-arg)")
     println("             beenet_grid_bins(ω_max,Δω)  → floor(ω_max/Δω)+1   (RTSC d7 α²F grid bin count, 2-arg)")
     println("             migdal_ratio(ω_phon,E_F)    → ω/E_F               (Migdal adiabaticity, vertex-correction smallness, 2-arg)")
+    println("             lambda_anharm_suppress(⟨ω²⟩h,Δω²) → ω²h/(ω²h+Δω²)  (anharmonic λ-suppression ratio, RTSC stability↔coupling wall, 2-arg)")
+    println("             stability_coupling_margin(⟨ω²⟩a,⟨ω²⟩λ) → (a−λ)/a    (stability-coupling margin, m>0 escape / m<0 trapped, RTSC wall, 2-arg)")
     println("             allen_dynes_full(λ,ω_log,ω̄₂,μ*) → f1·f2·(ω_log/1.2)·exp(...)  (Allen-Dynes strong-coupling Tc, RTSC #1, 4-arg)")
     println("             morel_anderson_mustar(μ,E_F,ω_ph) → μ/(1+μ·ln(E_F/ω_ph))     (Morel-Anderson Coulomb pseudopotential, RTSC #5, 3-arg)")
     println("             coherence_length(Hc2)       → sqrt(Φ₀/(2π·Hc2))   (GL coherence length ξ from Hc2(0), Φ₀=2.0678e-15 Wb, RTSC #15, 1-arg)")
@@ -1187,6 +1189,68 @@ fn _pippard_coherence(v_fermi: float, tc_k: float) -> float {
     return hbar * v_fermi / (pi_p * gap0)
 }
 
+// ── Anharmonic λ-suppression ratio (RTSC stability↔coupling wall · NOVEL ──
+//    primitive · 2026-05-25). Closed-form quantifier of the binary-hydride
+//    trade-off: the SAME mean-square phonon frequency ⟨ω²⟩ sits in BOTH the
+//    McMillan-Hopfield λ denominator AND the dynamical-stability condition.
+//
+//    McMillan-Hopfield:  λ = N(Ef)·⟨I²⟩ / (M·⟨ω²⟩) = η / (M·⟨ω²⟩)
+//    where η = N(Ef)⟨I²⟩ (Hopfield parameter) is chemistry-fixed and
+//    UNCHANGED by anharmonic (SSCHA) re-quantisation — only ⟨ω²⟩ moves.
+//
+//    A soft harmonic mode (⟨ω²⟩_harm → 0⁺) inflates λ_harm → ∞ while
+//    ⟨ω²⟩_harm < 0 means a dynamical instability (imaginary phonon). SSCHA
+//    hardens the soft mode by a positive curvature renormalisation
+//    Δω² > 0:   ⟨ω²⟩_anharm = ⟨ω²⟩_harm + Δω².  Because η cancels:
+//
+//        S = λ_anharm / λ_harm = ⟨ω²⟩_harm / (⟨ω²⟩_harm + Δω²)
+//
+//    is the anharmonic λ-suppression ratio (dimensionless, 0<S≤1 for the
+//    stable hardening Δω²≥0 branch). S→1 = no hardening (no suppression),
+//    S→0 = total hardening (λ enhancement destroyed). 2-arg (⟨ω²⟩_harm,
+//    Δω²); inputs share frequency² units (ratio unit-invariant).
+//    Source/anchor: h3o N5 hydride — λ_harm=2.479 (16/16 q imaginary, soft-
+//    mode artifact) → λ_anharm≈1.00 (SSCHA, 0.52–1.48 band). With ⟨ω²⟩_harm
+//    normalised to 1.0 and Δω²=1.479: S=0.403388463090, so λ_harm·S=1.000
+//    (h3o suppression reproduced). @cite Migdal 1958 JETP 7:996 · McMillan
+//    1968 PR 167:331 · Hopfield 1969 PRB 186:443 · Allen-Dynes 1975 PRB
+//    12:905 · Errea-Calandra-Mauri 2014 PRL 111:177002 (SSCHA hydride).
+fn _lambda_anharm_suppress(omega2_harm: float, delta_omega2: float) -> float {
+    if omega2_harm <= 0.0 { return _NOCALC_F }   // soft/unstable harmonic mode: λ_harm ill-defined (⟨ω²⟩≤0)
+    let omega2_anharm = omega2_harm + delta_omega2
+    if omega2_anharm <= 0.0 { return _NOCALC_F }  // even after hardening still unstable
+    return omega2_harm / omega2_anharm
+}
+
+// ── Stability-coupling margin (RTSC wall · NOVEL primitive · 2026-05-25) ─
+//    Single closed-form margin that fuses the dynamical-stability budget
+//    with the McMillan-Hopfield coupling. For a target coupling λ_target
+//    achievable from the Hopfield parameter η at frequency² ⟨ω²⟩, the
+//    anharmonically-stabilised frequency must satisfy ⟨ω²⟩_anharm > 0 AND
+//    deliver λ_anharm = η/(M⟨ω²⟩_anharm). Define the margin as the SIGNED
+//    fractional headroom of the stabilised stiffness over the
+//    coupling-required stiffness:
+//
+//        m = (⟨ω²⟩_anharm − ⟨ω²⟩_λ) / ⟨ω²⟩_anharm
+//
+//    where ⟨ω²⟩_λ = η/(M·λ_target) is the stiffness that yields λ_target.
+//    m > 0 ⇒ the lattice is stiffer (more stable) than the coupling target
+//    demands → stability and strong-λ are COMPATIBLE (the cation-clathrate
+//    escape, e.g. CaH₆). m < 0 ⇒ achieving λ_target needs a softer lattice
+//    than the stable one ⇒ trapped in the trade-off (binary hydrides). m=0
+//    = exactly on the wall. 2-arg (⟨ω²⟩_anharm, ⟨ω²⟩_λ); same freq² units.
+//    Anchor: CaH₆ cation pre-compression raises ⟨ω²⟩_anharm so that with
+//    ⟨ω²⟩_anharm=1.0 and ⟨ω²⟩_λ=0.5 (λ_target met at half the stable
+//    stiffness) → m=0.5 > 0 (escape). Binary h3o: ⟨ω²⟩_anharm=1.0,
+//    ⟨ω²⟩_λ=2.479 (needs 2.479× softer to hit harmonic λ) → m=−1.479 < 0
+//    (trapped). @cite Hopfield 1969 PRB 186:443 · Wang-Ma 2012/Ma 2022 PRL
+//    (CaH₆ clathrate) · Errea et al. 2014 PRL 111:177002 (SSCHA).
+fn _stability_coupling_margin(omega2_anharm: float, omega2_lambda: float) -> float {
+    if omega2_anharm <= 0.0 { return _NOCALC_F }  // unstable: no margin defined
+    if omega2_lambda < 0.0 { return _NOCALC_F }   // negative required stiffness is unphysical
+    return (omega2_anharm - omega2_lambda) / omega2_anharm
+}
+
 // ── Nuclear α-decay half-life (NUCLEAR.md N7/N11 · sibling of RTSC SC) ──
 // Two Geiger-Nuttall-family closed-form log10 T₁/₂ [s] predictors,
 // VERBATIM mirror of stdlib/nuclear/sim.hexa v0.2.0 (NC1+NC2 kernels)
@@ -1794,6 +1858,17 @@ fn _recompute_float(fn_name: string, a0: float, a1: float, a2: float, a3: float,
         if argc < 2 { return _NOCALC_F }
         return _migdal_ratio(a0, a1)
     }
+    // ── Stability↔coupling wall (RTSC NOVEL · 2026-05-25) ───────────────
+    //   lambda_anharm_suppress(⟨ω²⟩_harm, Δω²)  2-arg: ω²h/(ω²h+Δω²)
+    //   stability_coupling_margin(⟨ω²⟩_anharm, ⟨ω²⟩_λ) 2-arg: (a−l)/a
+    if fn_name == "lambda_anharm_suppress" {
+        if argc < 2 { return _NOCALC_F }
+        return _lambda_anharm_suppress(a0, a1)
+    }
+    if fn_name == "stability_coupling_margin" {
+        if argc < 2 { return _NOCALC_F }
+        return _stability_coupling_margin(a0, a1)
+    }
     // ── Superconductivity tranche 1 (RTSC #1/#5/#13/#15 · 2026-05-25) ───
     //   allen_dynes_full(λ, ω_log, ω̄₂, μ*)  4-arg: f1·f2·(ω_log/1.2)·exp(...)
     //   morel_anderson_mustar(μ, E_F, ω_ph)  3-arg: μ/(1+μ·ln(E_F/ω_ph))
@@ -1995,6 +2070,8 @@ fn _is_float_fn(fn_name: string) -> bool {
         || fn_name == "allen_dynes_tc" || fn_name == "mcmillan_tc"
         || fn_name == "bcs_gap_ratio" || fn_name == "lambda_eliashberg"
         || fn_name == "beenet_grid_bins" || fn_name == "migdal_ratio"
+        // Stability↔coupling wall (RTSC NOVEL quantifier · 2026-05-25):
+        || fn_name == "lambda_anharm_suppress" || fn_name == "stability_coupling_margin"
         // Superconductivity tranche 1 (RTSC #1/#5/#13/#15 · 2026-05-25):
         || fn_name == "allen_dynes_full" || fn_name == "morel_anderson_mustar"
         || fn_name == "coherence_length" || fn_name == "isotope_exponent"
