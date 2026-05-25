@@ -1026,6 +1026,7 @@ static int hxlcl_pthread_join(void *thread, void **retval);
 #define HXLCL_SYS_LSEEK   199
 #define HXLCL_SYS_MMAP    197
 #define HXLCL_SYS_FLOCK   131
+#define HXLCL_SYS_EXECVE   59
 // RUNTIME net/exec ③④ (cycle 78): socket + message-group Darwin syscall #s.
 // NB: no SYS_recv/SYS_send on Darwin — recv/send are libc wrappers over
 // recvfrom/sendto, so we route to those with NULL addr args.
@@ -1941,11 +1942,37 @@ static int __attribute__((noinline)) hxlcl_inet_pton(int af, const char *src, vo
 // 61-64.md (Part 1, exec path).
 extern int execve(const char *path, char *const argv[], char *const envp[]);
 extern int execvp(const char *file, char *const argv[]);
+// RUNTIME net/exec ⑤ (cycle 79): svc-trap execve (59). On success it never
+// returns; on failure carry-flag -> -1 + errno via _cf.
 static int hxlcl_execve(const char *path, char *const argv[], char *const envp[]) {
-    return execve(path, argv, envp);
+    return (int)_hxlcl_syscall3_cf(HXLCL_SYS_EXECVE, (long)path, (long)argv, (long)envp);
 }
+// execvp = native PATH search over execve (no libc dependency). If file has
+// a '/', exec directly; else try each $PATH dir. Byte-loop path-join avoids
+// strcpy/memcpy/strchr re-pulling those libc externs.
 static int hxlcl_execvp(const char *file, char *const argv[]) {
-    return execvp(file, argv);
+    int has_slash = 0;
+    for (const char *q = file; *q; q++) { if (*q == '/') { has_slash = 1; break; } }
+    if (has_slash) return hxlcl_execve(file, argv, environ);
+    const char *path = hxlcl_getenv("PATH");
+    if (!path || !*path) path = "/usr/bin:/bin:/usr/local/bin";
+    size_t flen = hxlcl_strlen(file);
+    char buf[1024];
+    const char *p = path;
+    while (*p) {
+        size_t dlen = 0;
+        while (p[dlen] && p[dlen] != ':') dlen++;
+        if (dlen + 1 + flen + 1 <= sizeof(buf)) {
+            size_t k = 0;
+            for (size_t i = 0; i < dlen; i++) buf[k++] = p[i];
+            buf[k++] = '/';
+            for (size_t i = 0; i <= flen; i++) buf[k++] = file[i]; // incl. NUL
+            hxlcl_execve(buf, argv, environ);                       // returns only on failure
+        }
+        p += dlen;
+        if (*p == ':') p++;
+    }
+    return -1;
 }
 // execl is variadic; gather varargs into a char* argv[] then call execvp.
 // Mirrors libc semantics — last arg must be (char*)NULL.
@@ -1963,7 +1990,7 @@ static int hxlcl_execl(const char *path, const char *arg, ...) {
     }
     argv[HXLCL_EXECL_MAX - 1] = (char *)0;
     va_end(ap);
-    return execve(path, argv, environ);
+    return hxlcl_execve(path, argv, environ);
 }
 // hxlcl_popen — manual pipe+fork+execve replacement for libc popen.
 // Returns a "fake FILE*" compatible with hxlcl_fdopen's `(void*)(fd+1)`
