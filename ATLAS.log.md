@@ -2,6 +2,51 @@
 
 Append-only step log for the theorem-atlas upgrade campaign. Newest on top.
 
+## 2026-05-25 — R7 reverify 비-F 확장 + `--fix` 자동 재등록 (READ-ONLY 기본 · opt-in MUTATION)
+
+goal(deferred): "reverify 확장(비-F kind · drift→자동 재등록 옵션)". R3 #996 `hexa atlas reverify`는
+🟢 NUMERICAL **F** 노드만 calc_dispatch float 테이블로 재검증(R4 #1023 `calc_dispatch.hexa` 108-fn
+통합). 이를 다른 재계산-가능 kind로 확장하고, drift를 full-precision 재등록하는 opt-in `--fix` 추가.
+
+**조사**: embedded.gen.hexa(16101노드) kind별 헤더 스캔 — `<fn>(<args>) = <claimed>` 머신-재계산
+헤더를 지닌 유일한 비-F kind = **@P**(foundation 공리). 7노드: `@P sigma = divisor_sum(6) = 12`·
+`euler_totient`·`divisor_count`·`mobius`(+ n6-* 미러) = 전부 정수 number-theory. @L은 bare-상수
+(`alpha_coupling = 0.014`, fn-call 無)·prose-only라 비대상. @C/@R/@X/@S/@E/@Q는 fn(args)=v 헤더
+無(grep false-positive만). 정수 재계산경로는 이미 atlas_cli에 존재: `_recompute_register`(1op:
+divisor_sum/euler_totient/divisor_count/mobius)·`_recompute2_register`·`_recompute3_register`(NOCALC
+=-999999 = 멤버십 신호). float 표(calc_is_float_fn)에는 이 7 정수 fn 부재(별개 ladder).
+
+**확장(cmd_reverify)**: (a) `idx.f_nodes` → `atlas_list()` 전체노드 워크. 헤더 파싱 후 F+
+calc_is_float_fn이면 float 경로(R3/R4 보존, 🟢 게이트), 아니면 `_rev_int_recompute`(정수 ladder)
+시도 → per-kind MATCH/DRIFT/UNVERIFIABLE. fn(args)=v 헤더 無 노드(prose C/L/R/X)는 skipped(미실패).
+정수경로 가드 `_rev_is_int_str`: prose 헤더(`@P x = capacity (Lyapunov on retrieval-result diversity`
+류)가 `(…)`+`= …`로 파싱돼 to_int abort하던 크래시 차단 — 비-정수 arg/claimed → NOCALC. (b) `--fix`
+(opt-in): 각 DRIFT를 R5 #1029 수동조치 자동화 — `_rev_fix_node`가 헤더 claimed 토큰을 재계산값으로
+치환→`_rev_drop_node_line`로 (kind,id) stale AtlasNode 라인 surgical 삭제(atomic temp+rename)→
+`_fold_into_embedded` 재폴드(kind+id+본문 보존). embed_fold_into가 dedup-skip만(replace 無)이라
+delete-then-fold 패턴 필수. 기본(--fix 없음)=zero mutation READ-ONLY.
+
+**검증(ATLAS.md method)**: `hexa parse tool/atlas_cli.hexa` 클린 · bin/hexa-atlas 빌드 PASS
+(borrowed main-repo transpiler hexa_v2 → worktree self/native gitignored · worktree-fresh
+build/hexa_module_loader · `HEXA_LANG`=worktree·`HEXA_MODULE_LOADER`=worktree·`SIDECAR_NO_POOL_ROUTE=1`
+· hyphenated 셸 우회). ★빌드 핵심: 메인-repo 워킹트리 audit.hexa가 다른세션 WIP로 `acquisition_to_*`/
+`audit_acquisition_merged` 결여(undeclared identifier link-fail) → `HEXA_LANG`을 worktree로 가리켜
+모듈 resolution을 worktree origin/main 소스로 강제(메인 워킹트리 무수정 = leak-guard 준수). 기능:
+  - `reverify`(read-only) → `recompute_seen=44 match=44 drift=0 unverifiable=0 (no_calc_path_skipped=16057)`.
+    R4 35→44(@P 7 + 정수-F ssh_winding/tknn_chern 2 추가). **7 @P 노드 신규 커버**(sigma/phi/tau/mu/
+    n6-sigma/n6-phi/n6-tau = 이전 reverify 완전 미검증) 전수 MATCH(정수경로).
+  - **drift=0 유지** — R5 #1029가 클로즈한 3 F drift(allen_dynes_tc·mcmillan_tc·bcs_gap_ratio) 전부 MATCH.
+  - `--fix` 무-drift no-op — 실 embedded.gen.hexa md5 `018b07fe…` 불변 입증(zero mutation).
+  - `--fix` MUTATION 경로 — temp 복제에 synthetic drift(@P sigma `= 12`→`= 99`) 주입→read-only
+    `DRIFT @P sigma claimed=99 recompute=12`+exit게이트 ⚠ → `--fix`→`FIXED @P sigma → 12`,
+    노드수 **16101 불변**(replace not dup)·헤더 `= 12` 복구·재실행 `drift=0 match↑`. (비-F 노드의
+    drift 탐지·자동수정 e2e 입증.)
+  - `--help` 확장 스코프+`--fix` 반영 · `--limit N` 작동 · 실 embedded.gen.hexa 무수정(git status empty).
+
+**범위**: cmd_reverify + 헬퍼(`_rev_int_recompute`·`_rev_is_int_str`·`_rev_drop_node_line`·
+`_rev_fix_node`) + cmd_help 1블록만 편집. calc_dispatch·audit·cascade·proof_chain·auto_edge·
+drill·embedded.gen.hexa 무수정. 형제 R7(infer-edges 등) dispatch ladder는 KEEP. <200 LOC additive.
+
 ## 2026-05-25 — R7 auto-edge 추론 (`hexa atlas infer-edges <id>` · read-only · 미선언 edge 제안)
 
 goal(deferred 신규역량): "auto-edge 추론". 노드 edge(`<-`depends_on·`->`derives·`==`equivalents·
