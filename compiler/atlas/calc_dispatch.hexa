@@ -108,6 +108,10 @@ pub fn calc_is_float_fn(fn_name: string) -> bool {
         || fn_name == "sigma_v_dt" || fn_name == "sigma_v_dhe3"
         || fn_name == "sigma_v_ddp" || fn_name == "sigma_v_ddn"
         || fn_name == "sigma_v_dd_total" || fn_name == "sigma_v_dt_e18"
+        // FUSION F1 (aneutronic) — p-¹¹B Nevins-Swain framework (Nucl. Fusion 40, 865 (2000) · 2026-05-25):
+        || fn_name == "pb11_gamow_factor" || fn_name == "pb11_s_factor"
+        || fn_name == "pb11_sigma_shape" || fn_name == "pb11_reactivity_moment"
+        || fn_name == "pb11_reactivity_moment_e6"
         // FUSION F2 — Lawson triple product / 0-D Q_plasma (Lawson 1957 · 2026-05-25):
         || fn_name == "triple_product" || fn_name == "q_plasma"
         || fn_name == "ignition_margin"

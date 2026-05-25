@@ -11,7 +11,7 @@
 // operating point + the g3 honesty gate. This is the kernel sibling of
 // `kernels/plasma/plasma_metrics.hexa` under D72.
 //
-// @version 0.1.0
+// @version 0.2.0
 // @capabilities [pure]
 // @stability stage-2 substrate (closed-form Path A · libm-only). Parity
 //   anchor = Bosch & Hale's own Table VIII tabulated ⟨σv⟩ (the paper's
@@ -200,6 +200,132 @@ pub fn sigma_v_dt_m3(t_kev: float) -> float   { return sigma_v_dt(t_kev) * 1.0e-
 pub fn sigma_v_dhe3_m3(t_kev: float) -> float { return sigma_v_dhe3(t_kev) * 1.0e-6 }
 pub fn sigma_v_ddp_m3(t_kev: float) -> float  { return sigma_v_ddp(t_kev) * 1.0e-6 }
 pub fn sigma_v_ddn_m3(t_kev: float) -> float  { return sigma_v_ddn(t_kev) * 1.0e-6 }
+
+// ── F1 (aneutronic) — p-¹¹B  [¹¹B(p,α)αα]  thermonuclear reactivity ───────
+//
+// The D-T-beyond fuel axis. p-¹¹B is the canonical ANEUTRONIC reaction:
+//   p + ¹¹B → 3 α + 8.7 MeV   (no primary neutron, charged-particle output).
+// Bosch-Hale does NOT cover p-¹¹B — its ⟨σv⟩ is dominated by a BROAD/narrow
+// resonance pair (a sharp 148 keV CM resonance + the broad 0.6 MeV one), so
+// the smooth Bosch-Hale θ/ξ Padé form mis-fits it. The CITED parametrization
+// is the Nevins & Swain framework (see provenance below).
+//
+// ── PROVENANCE / CITATION (FUSION governance · NUCLEAR §3.3 honest-cite) ─
+//   Cross-section / S-factor parametrization (VERBATIM coefficients, NOT
+//   re-derived — re-derivation of a published fit = mis-cite):
+//   - W. M. Nevins & R. Swain, "The thermonuclear fusion rate coefficient
+//       for p-¹¹B reactions", Nucl. Fusion 40, 865 (2000),
+//       DOI 10.1088/0029-5515/40/4/310. Establishes the S(E)/E·exp(−√(E_G/E))
+//       astrophysical-S-factor framework + the dominant 148 keV (CM) and
+//       0.6 MeV resonances for the p-¹¹B reactivity.
+//   - The verbatim low-energy S-factor coefficients (C₀,C₁,C₂ + the 148 keV
+//       Breit-Wigner amplitude A_L / centre E_L / width δE_L), the Gamow
+//       energy E_G = 22.589 MeV, and the reduced-mass energy μc² = 859 526
+//       keV are taken from the Tentori & Belloni (Nucl. Fusion 63, 086001,
+//       2023) high-accuracy update / arXiv:2601.00241 Table I, which
+//       "preserves the physical structure of the Nevins-Swain framework"
+//       (their words) — i.e. the same S(E)/E·exp(−√(E_G/E)) parametrization.
+//       Eq. numbers: σ(E)=S(E)/E·exp(−√(E_G/E))  [their Eq. 1];
+//       S₁(E)=C₀+C₁E+C₂E²+A_L/((E−E_L)²+δE_L²)   [their Eq. 3, E≤0.4 MeV];
+//       ⟨σv⟩=√(8/π)/(μ^½(k_BT)^{3/2})·∫σ E e^{−E/k_BT}dE  [their Eq. 6].
+//
+// HONESTY (g3 / d6 — non-negotiable):
+//   • p-¹¹B is ANEUTRONIC (clean, charged-particle product) BUT it has a
+//     HIGH ignition threshold: the Maxwellian-averaged ⟨σv⟩ rises slowly and
+//     does not peak until T ≈ 250–300 keV (an order of magnitude hotter than
+//     the D-T optimum ~65 keV), and at those temperatures the plasma is
+//     bremsstrahlung-CHALLENGED (P_brem can exceed P_fus). THIS KERNEL IS
+//     REACTIVITY ONLY — it is NOT an ignition-feasibility or net-energy
+//     claim. Whether p-¹¹B can ignite is an OPEN energy-balance question
+//     (Nevins 1998; Putvinski 2019; Tentori-Belloni 2023 disagree). Any
+//     consumer keeps absorbed=false.
+//   • The closed-form, UNIT-UNAMBIGUOUS, VERBATIM verification surface here
+//     is the Gamow tunnelling factor + the S-factor (incl. the 148 keV
+//     resonance) + the relative cross-section shape σ(E)=S(E)/E·Gamow —
+//     these gate the parametrization exactly (the `--expr` atoms below).
+//     The Maxwellian-averaged ⟨σv⟩(T) below is a deterministic fixed-node
+//     quadrature OVER that verbatim cross-section (libm-only, no solver);
+//     its absolute scale carries the S-factor's published unit convention
+//     and is offered as a reactivity SHAPE, not a tabulated-value claim.
+
+/// p-¹¹B Gamow energy E_G [keV] (Nevins-Swain framework; E_G = 22.589 MeV).
+/// Sets the Coulomb-barrier tunnelling factor exp(−√(E_G/E)).
+fn _pb11_e_gamow() -> float { return 22589.0 }
+
+/// p-¹¹B reduced-mass energy μc² [keV] (Nevins-Swain framework).
+fn _pb11_mrc2() -> float { return 859526.0 }
+
+/// Gamow (Coulomb-barrier tunnelling) factor for p-¹¹B at CM energy E [keV]:
+///   P_Gamow(E) = exp(−√(E_G/E)) ,  E_G = 22 589 keV  (Nevins-Swain Eq. 1).
+/// Closed-form, exact, unit-unambiguous. E ≤ 0 → 0.0 sentinel.
+pub fn pb11_gamow_factor(e_kev: float) -> float {
+    if e_kev <= 0.0 { return 0.0 }
+    return exp(0.0 - sqrt(_pb11_e_gamow() / e_kev))
+}
+
+/// p-¹¹B astrophysical S-factor S₁(E) for the low-energy branch E ≤ 400 keV
+/// (Tentori-Belloni Table I / Nevins-Swain framework, Eq. 3, VERBATIM):
+///   S₁(E) = C₀ + C₁·E + C₂·E² + A_L / ((E−E_L)² + δE_L²)
+///   C₀ = 197, C₁ = 0.240, C₂ = 2.31e-4 ,
+///   A_L = 1.82e4, E_L = 148 keV (the dominant CM resonance), δE_L = 2.35.
+/// E in keV. The Lorentzian term is the verbatim 148 keV Breit-Wigner
+/// resonance that gives p-¹¹B its (narrow) reactivity peak. E ≤ 0 → 0.0.
+pub fn pb11_s_factor(e_kev: float) -> float {
+    if e_kev <= 0.0 { return 0.0 }
+    let de = e_kev - 148.0
+    let lorentz = 1.82e4 / (de * de + 2.35 * 2.35)
+    return 197.0 + 0.240 * e_kev + 2.31e-4 * e_kev * e_kev + lorentz
+}
+
+/// p-¹¹B (relative) cross-section shape σ(E) = S(E)/E · exp(−√(E_G/E))
+/// (Nevins-Swain Eq. 1), low-energy branch (E ≤ 400 keV S-factor). Closed-
+/// form, carries the published S-factor units (a reactivity SHAPE input,
+/// not an absolute barn value). E ≤ 0 → 0.0 sentinel.
+pub fn pb11_sigma_shape(e_kev: float) -> float {
+    if e_kev <= 0.0 { return 0.0 }
+    return pb11_s_factor(e_kev) / e_kev * pb11_gamow_factor(e_kev)
+}
+
+/// p-¹¹B Maxwellian-averaged thermonuclear reactivity ⟨σv⟩(T) — deterministic
+/// fixed-node midpoint quadrature of Nevins-Swain Eq. 6 over the verbatim
+/// low-energy cross-section shape σ(E)=S(E)/E·exp(−√(E_G/E)):
+///   ⟨σv⟩ ∝ (k_BT)^{-3/2} · ∫₀^{∞} σ(E)·E·exp(−E/k_BT) dE
+/// T in keV. N = 600 nodes out to 50·T (the Maxwellian tail is exp-killed).
+/// Returns the integral moment in the kernel's NATIVE relative units (the
+/// √(8/π)/√μc² prefactor and the S-factor unit convention are folded into
+/// the scaled views). Resonance-dominated → rises slowly, peaks ≈250-300 keV
+/// (the high-threshold honesty note above applies). T ≤ 0 → 0.0 sentinel.
+pub fn pb11_reactivity_moment(t_kev: float) -> float {
+    if t_kev <= 0.0 { return 0.0 }
+    let e_max = 50.0 * t_kev
+    let n = 600
+    let h = e_max / 600.0
+    let mut acc = 0.0
+    let mut i = 0
+    while i < n {
+        let e = (to_float(i) + 0.5) * h           // midpoint node [keV]
+        let integrand = pb11_sigma_shape(e) * e * exp(0.0 - e / t_kev)
+        acc = acc + integrand * h
+        i = i + 1
+    }
+    // (k_BT)^{-3/2} Maxwellian normalization (T in keV).
+    return acc * pow(t_kev, 0.0 - 1.5)
+}
+
+/// p-¹¹B reactivity moment scaled ×1e6 — magnified convenience view. NOTE:
+/// the RAW `pb11_reactivity_moment` is ALREADY O(1e-4 .. 5e-2) in native
+/// units — far above the absolute ε=1e-9 floor — so the raw moment is the
+/// discriminating, full-precision verify gate at ALL T (it is 🟢 at
+/// T=50/100/123/300 keV). This ×1e6 view lifts the low-T tail to O(100)
+/// for human-readable parity tables, but the moment grows ~500× from
+/// T=50→300 keV, so at high T the ×1e6 value O(5e4) sits at the ABSOLUTE-ε
+/// float-floor (|Δ|/value ~1e-12 ⇒ |Δ| ~1e-8 > 1e-9): use the RAW moment as
+/// the gate for T ≳ 100 keV. The quadrature is deterministic either way.
+/// T ≤ 0 → 0.0 sentinel.
+pub fn pb11_reactivity_moment_e6(t_kev: float) -> float {
+    if t_kev <= 0.0 { return 0.0 }
+    return pb11_reactivity_moment(t_kev) * 1.0e6
+}
 
 // ── F2 — Lawson triple product / 0-D power balance / Q_plasma ────────────
 //

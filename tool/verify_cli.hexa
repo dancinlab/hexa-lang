@@ -245,6 +245,11 @@ fn cmd_rubric() {
     println("             sigma_v_ddn(T)              → Bosch-Hale D(d,n)³He    (Bosch-Hale D-D n-branch ⟨σv⟩[cm³/s], T[keV], FUSION F1, 1-arg)")
     println("             sigma_v_dd_total(T)         → ddp+ddn                 (Bosch-Hale D-D total ⟨σv⟩[cm³/s], T[keV], FUSION F1, 1-arg)")
     println("             sigma_v_dt_e18(T)           → sigma_v_dt·1e18          (D-T ⟨σv⟩×1e18 — discriminating-ε view, FUSION F1, 1-arg)")
+    println("             pb11_gamow_factor(E)        → exp(−√(E_G/E))          (p-¹¹B Gamow factor, E_G=22589keV, Nevins-Swain, FUSION F1, 1-arg)")
+    println("             pb11_s_factor(E)            → C₀+C₁E+C₂E²+A_L/Lorentz (p-¹¹B S-factor incl. 148keV resonance, Nevins-Swain, FUSION F1, 1-arg)")
+    println("             pb11_sigma_shape(E)         → S(E)/E·exp(−√(E_G/E))   (p-¹¹B cross-section shape σ(E), Nevins-Swain, FUSION F1, 1-arg)")
+    println("             pb11_reactivity_moment(T)   → ∫σ E e^−E/kT dE·(kT)^−1.5 (p-¹¹B Maxwellian ⟨σv⟩ moment, aneutronic, FUSION F1, 1-arg)")
+    println("             pb11_reactivity_moment_e6(T)→ moment·1e6              (p-¹¹B ⟨σv⟩ moment ×1e6 — discriminating-ε view, FUSION F1, 1-arg)")
     println("             triple_product(n,T,τ)       → n·T·τ_E                 (Lawson triple product [m⁻³·keV·s], FUSION F2, 3-arg)")
     println("             q_plasma(Pfus,Pheat)        → P_fus/P_heat            (0-D plasma energy gain Q; design-feasibility, FUSION F2, 2-arg)")
     println("             ignition_margin(Pf,W,τ,fα)  → (fα·Pf)/(W/τ_E)         (Lawson ignition margin; ≥1 ⇒ 0-D ignition, FUSION F2, 4-arg)")
@@ -1974,6 +1979,90 @@ fn _sigma_v_dt_e18(t_kev: float) -> float {
     return raw * 1.0e18
 }
 
+// ── FUSION F1 (aneutronic) — p-¹¹B [¹¹B(p,α)αα] reactivity (kernel mirror) ─
+//
+// The D-T-beyond fuel axis. Bosch-Hale does NOT cover p-¹¹B (resonance-
+// dominated). CITED parametrization = the Nevins & Swain framework:
+//   W. M. Nevins & R. Swain, Nucl. Fusion 40, 865 (2000),
+//   DOI 10.1088/0029-5515/40/4/310 — S(E)/E·exp(−√(E_G/E)) astrophysical-S
+//   framework + the dominant 148 keV (CM) p-¹¹B resonance. Verbatim low-E
+//   S-factor coefficients + E_G=22.589 MeV + μc²=859526 keV taken from the
+//   Tentori-Belloni high-accuracy update (Nucl. Fusion 63, 086001, 2023;
+//   arXiv:2601.00241 Table I) which "preserves the Nevins-Swain framework".
+//   Eqs.: σ(E)=S(E)/E·exp(−√(E_G/E)) [Eq.1]; S₁(E)=C₀+C₁E+C₂E²+A_L/((E−E_L)²
+//   +δE_L²) [Eq.3, E≤0.4 MeV]; ⟨σv⟩=√(8/π)/(μ^½(k_BT)^{3/2})∫σ E e^{−E/k_BT}
+//   dE [Eq.6]. VERBATIM mirror of stdlib/kernels/fusion_reactivity.
+//
+// HONESTY (g3/d6): p-¹¹B is ANEUTRONIC but HIGH-threshold — ⟨σv⟩ peaks only
+// at T≈250-300 keV and is bremsstrahlung-challenged there. REACTIVITY ONLY,
+// NOT an ignition-feasibility claim. absorbed=false.
+
+// p-¹¹B Gamow tunnelling factor exp(−√(E_G/E)), E_G=22589 keV. 1-arg
+// (E_cm [keV]). Closed-form, exact, unit-unambiguous (the load-bearing
+// verbatim verify surface). E ≤ 0 → _NOCALC_F.
+// Reference: E=50 keV → 5.875163556e-10, E=100 keV → 2.969692059e-07,
+//            E=148 keV → 4.311236387e-06, E=300 keV → 1.703994466e-04.
+fn _pb11_gamow_factor(e_kev: float) -> float {
+    if e_kev <= 0.0 { return _NOCALC_F }
+    return exp(0.0 - sqrt(22589.0 / e_kev))
+}
+
+// p-¹¹B astrophysical S-factor S₁(E) (E ≤ 400 keV, Tentori-Belloni Table I
+// / Nevins-Swain Eq.3, VERBATIM): C₀=197, C₁=0.240, C₂=2.31e-4, A_L=1.82e4,
+// E_L=148 (CM resonance), δE_L=2.35. 1-arg (E_cm [keV]). The Lorentzian is
+// the verbatim 148 keV Breit-Wigner resonance. E ≤ 0 → _NOCALC_F.
+// Reference: E=50 keV → 211.471, E=148 keV → 3533.1886967931187 (peak),
+//            E=200 keV → 260.957.
+fn _pb11_s_factor(e_kev: float) -> float {
+    if e_kev <= 0.0 { return _NOCALC_F }
+    let de = e_kev - 148.0
+    let lorentz = 1.82e4 / (de * de + 2.35 * 2.35)
+    return 197.0 + 0.240 * e_kev + 2.31e-4 * e_kev * e_kev + lorentz
+}
+
+// p-¹¹B (relative) cross-section shape σ(E)=S(E)/E·exp(−√(E_G/E))
+// (Nevins-Swain Eq.1, low-E branch). 1-arg (E_cm [keV]). Carries the
+// published S-factor units (a reactivity SHAPE input). E ≤ 0 → _NOCALC_F.
+// Reference: E=148 keV → 1.0292214e-04 (resonance peak), E=300 → 1.65048e-04.
+fn _pb11_sigma_shape(e_kev: float) -> float {
+    if e_kev <= 0.0 { return _NOCALC_F }
+    return _pb11_s_factor(e_kev) / e_kev * _pb11_gamow_factor(e_kev)
+}
+
+// p-¹¹B Maxwellian reactivity moment ⟨σv⟩(T) — deterministic 600-node
+// midpoint quadrature of Nevins-Swain Eq.6 over the verbatim σ(E) shape,
+// ×(k_BT)^{-3/2}. 1-arg (T_i [keV]). Closed-form (no solver), libm-only.
+// Resonance-dominated → peaks ≈250-300 keV. Native relative units (scale
+// view ×1e6 is the discriminating gate). T ≤ 0 → _NOCALC_F.
+fn _pb11_reactivity_moment(t_kev: float) -> float {
+    if t_kev <= 0.0 { return _NOCALC_F }
+    let e_max = 50.0 * t_kev
+    let n = 600
+    let h = e_max / 600.0
+    let mut acc = 0.0
+    let mut i = 0
+    while i < n {
+        let e = (to_float(i) + 0.5) * h
+        let integrand = _pb11_sigma_shape(e) * e * exp(0.0 - e / t_kev)
+        acc = acc + integrand * h
+        i = i + 1
+    }
+    return acc * pow(t_kev, 0.0 - 1.5)
+}
+
+// p-¹¹B reactivity moment scaled ×1e6 — magnified convenience view. The RAW
+// pb11_reactivity_moment is ALREADY O(1e-4..5e-2) ≫ abs ε=1e-9, so the raw
+// moment is the discriminating full-precision gate at ALL T (🟢 at
+// 50/100/123/300 keV). ×1e6 lifts the low-T tail to O(100) for parity
+// tables; at high T (O(5e4)) it sits at the abs-ε float-floor — use RAW for
+// T ≳ 100 keV. Deterministic quadrature. 1-arg (T_i [keV]). T ≤ 0 → _NOCALC_F.
+// Reference (low-T, gate-clean): T=50 keV → 110.495511019.
+fn _pb11_reactivity_moment_e6(t_kev: float) -> float {
+    let raw = _pb11_reactivity_moment(t_kev)
+    if raw == _NOCALC_F { return _NOCALC_F }
+    return raw * 1.0e6
+}
+
 // ── FUSION F2 — Lawson triple product / 0-D Q_plasma (kernel mirror) ─────
 //
 // Classic 0-D D-T power balance. VERBATIM mirror of the ①a kernel
@@ -2764,6 +2853,27 @@ fn _recompute_float(fn_name: string, a0: float, a1: float, a2: float, a3: float,
     }
     if fn_name == "sigma_v_dt_e18" {
         return _sigma_v_dt_e18(a0)
+    }
+    // ── FUSION F1 (aneutronic) — p-¹¹B Nevins-Swain framework (NF 40, 865) ─
+    //   pb11_gamow_factor(E)          1-arg: exp(−√(E_G/E)), E_G=22589 keV
+    //   pb11_s_factor(E)              1-arg: S₁(E) incl. 148 keV resonance
+    //   pb11_sigma_shape(E)           1-arg: σ(E)=S(E)/E·Gamow (shape)
+    //   pb11_reactivity_moment(T)     1-arg: Maxwellian ⟨σv⟩ moment
+    //   pb11_reactivity_moment_e6(T)  1-arg: ⟨σv⟩ moment ×1e6 (gate view)
+    if fn_name == "pb11_gamow_factor" {
+        return _pb11_gamow_factor(a0)
+    }
+    if fn_name == "pb11_s_factor" {
+        return _pb11_s_factor(a0)
+    }
+    if fn_name == "pb11_sigma_shape" {
+        return _pb11_sigma_shape(a0)
+    }
+    if fn_name == "pb11_reactivity_moment" {
+        return _pb11_reactivity_moment(a0)
+    }
+    if fn_name == "pb11_reactivity_moment_e6" {
+        return _pb11_reactivity_moment_e6(a0)
     }
     // ── FUSION F2 — Lawson triple product / 0-D Q_plasma (Lawson 1957) ──
     //   triple_product(n_i, T, τ_E)   3-arg: n·T·τ_E [m⁻³·keV·s]
