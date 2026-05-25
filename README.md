@@ -499,3 +499,7 @@ MIT License. Copyright (c) 2026 dancinlab. See [`LICENSE`](LICENSE).
 Strict lint is the contract. Every PR runs through S0–S5 + S8. The only opt-out is `@grace(HXxxxx, until=, reason=)` on a single item, and every `@grace` emits HX9000 at every compile. CI fails the merge unless `Acked-grace: HXxxxx by <reviewer>` rides along.
 
 Pointers: `gate/` for build gates, `proposals/` for active RFCs, `SPEC.yaml` for decisions, `doc/` for runbooks and audits. Diagnostics, error messages, `hexa explain`, stdlib docs are ENGLISH ONLY (Decision 3).
+
+---
+
+🕸️ **재사용 격자 SSOT** → 루트 [`NEXUS.tape`](NEXUS.tape) (commons @D g67 + g68 · hexa-lang = shared substrate hub)
