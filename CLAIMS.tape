@@ -253,6 +253,25 @@
   status = "🟠 QUANTIFIED-PARTIAL — correct multi-CTA fused, gap closed ~3-8x but still 1.3-5.0x slower than cuBLAS-TC. NOT a >=30% win. NOT paper-eligible (paper_gate forbids partials). sec10 box stays [x] via launch-amort only."
 
 # ───────────────────────────────────────────────────────────────────────
+# GPU — fusion-attention-decomp-sweep (slug · group=GPU · GPU.md §10 · round 5)
+# Full dimensional-decomposition sweep (Bq x kv_split x BK x N) of fused flash-
+# attn. Tests the KV-SPLIT (flash-decoding gridDim.z) hypothesis. 153 configs.
+
+@C fusion_attn_decomp_kvsplit := "KV-SPLIT (flash-decoding gridDim.z) CLOSES the small-N occupancy gap — N=512 Bq16: 32->128 CTAs, 0.146->0.058 ms (intra-framework 2.53x), reaching parity with the round-4 single-kernel (0.0568 ms); benefit saturates at ctas_partial>=~48 SMs (kv=8/16 regress)" :: measurement [slug=fusion-attention-decomp-sweep group=GPU]
+  method = "silicon-fire"
+  cmd    = "ubu-2 RTX 5070 (clean, 0 procs) fa_decomp_oracle (CUDA-C nvcuda::wmma flash-decoding 2-kernel partial+LSE-merge) vs fa_cublas_tc_baseline, cuEvent 20 warmup + 200 timed median, 153 configs N{512,1024,2048,4096} x Bq{16,32,64} x kv_split{1,2,4,8,16} x BK{64,128,256} d=64, ALL numeric PASS (rel_rowscale<=1e-2 vs f64 ref)"
+  raw    = ".verdicts/fusion-attention-decomp-sweep/F-FUSION-ATTN-DECOMP-WALL.txt"
+  src    = "archive/fires/fusion_attention_decomp_2026_05_25/{fa_decomp_oracle.cu,sweep_raw.txt}"
+  status = "🟢 SUPPORTED-NUMERICAL — KV-split closes the small-N occupancy gap (measured 2.53x at N=512, 32->128 CTAs). terminal-numerical. (occupancy claim only; NOT a cuBLAS win.)"
+
+@C fusion_attn_decomp_wall := "CLOSED-NEGATIVE: no dimensional decomposition of hand-PTX flash-attn beats cuBLAS-TC (best ratio 3.47x @ N=512); KV-split is a SMALL-N-ONLY lever — its occupancy benefit saturates once N alone fills the 48 SMs while its partial-O HBM round-trip cost grows O(N*split*d), net-negative at N>=2048 (decomp-best 0.668ms vs round-4 single-kernel 0.245ms @N=2048). The GEMM-tile-efficiency wall is fundamental." :: measurement [slug=fusion-attention-decomp-sweep group=GPU]
+  method = "silicon-fire"
+  cmd    = "ubu-2 RTX 5070 (clean) fa_decomp_oracle 153-config sweep vs fa_cublas_tc_baseline; optimum per shape N512 3.47x / N1024 5.88x / N2048 10.82x / N4096 13.17x; round-4 single-kernel cross-reference reproduced"
+  raw    = ".verdicts/fusion-attention-decomp-sweep/F-FUSION-ATTN-DECOMP-WALL.txt"
+  src    = "archive/fires/fusion_attention_decomp_2026_05_25/{fa_decomp_oracle.cu,sweep_raw.txt}"
+  status = "🟠 QUANTIFIED-PARTIAL / closed-negative — KV-split closes the small-N gap (parity w/ round-4) but no decomposition beats cuBLAS; GEMM-tile-efficiency wall confirmed fundamental. sec10 box stays [x], NOT flipped. NOT paper-eligible as a 30% win, but a clean closed-negative on the decomposition axis."
+
+# ───────────────────────────────────────────────────────────────────────
 # TECS-L — tecs-l-dedekind-psi-uniqueness (slug · group=TECS-L · TECS-L/TECS-L.md M3)
 # Dedekind-ψ discrepancy, re-grounded hexa-native via `hexa verify` g5.
 #
@@ -956,6 +975,49 @@
   cmd    = "hexa verify --expr gamma0_index 30 72"
   raw    = ".verdicts/tecs-l-modform-index/idx_n30.txt"
   src    = "MODFORM MF1"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal."
+
+# ───────────────────────────────────────────────────────────────────────
+# TECS-L axis A (MODFORM) — tecs-l-modform-genus (slug · group=TECS-L · MF3)
+# Gamma_0(N) genus recomputed by gamma0_genus. The classical genus-0 set is
+# exactly N in {1,2,3,4,5,6,7,8,9,10,12,13,16,18,25} (15 levels, all g=0 🔵);
+# off that list the genus rises (N=11/14/15/17/19 -> g=1, N=22/23 -> g=2).
+# hexa's gamma0_genus AGREES with every classical/known value (no 🔴). Bridge:
+# Gamma_0(6) genus = 0 (X_0(6) is genus-0 — n=6 modular-curve bridge).
+
+@C tecs_l_mf_genus_sweep := "gamma0_genus(N) = 0 for all 15 classical genus-0 levels N in {1..10,12,13,16,18,25} (15/15 closed-form)" :: experiment [slug=tecs-l-modform-genus group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr gamma0_genus N 0  for N in {1,2,3,4,5,6,7,8,9,10,12,13,16,18,25}"
+  raw    = ".verdicts/tecs-l-modform-genus/genus_sweep.txt"
+  src    = "MODFORM axis MF3 (Gamma_0(N) classical genus-0 set); calc fn gamma0_genus"
+  status = "🔵 SUPPORTED-FORMAL — 15/15 genus=0, verdicts persisted verbatim. terminal."
+
+@C tecs_l_mf_genus_boundary := "gamma0_genus rises off the classical list: N=11/14/15/17/19 -> 1, N=22/23 -> 2 (genus>=1 boundary, 7/7)" :: experiment [slug=tecs-l-modform-genus group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr gamma0_genus N g  for (N,g) in {(11,1),(14,1),(15,1),(17,1),(19,1),(22,2),(23,2)}"
+  raw    = ".verdicts/tecs-l-modform-genus/genus_sweep.txt"
+  src    = "MODFORM MF3 (off-classical genus>=1; matches well-known X_0(N) genus)"
+  status = "🔵 SUPPORTED-FORMAL — 7/7 match known genus values, verdicts persisted verbatim. terminal."
+
+@C tecs_l_mf_genus_n6 := "gamma0_genus(6) = 0 (X_0(6) is genus-0 — n=6 modular-curve bridge, axis 0 M4)" :: formula [slug=tecs-l-modform-genus group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr gamma0_genus 6 0"
+  raw    = ".verdicts/tecs-l-modform-genus/genus_n6.txt"
+  src    = "MODFORM MF6 bridge (axis 0 M4: Gamma_0(6) genus=0)"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal."
+
+@C tecs_l_mf_genus_n1 := "gamma0_genus(1) = 0 (Gamma_0(1) = SL2(Z), X_0(1) = j-line, genus 0)" :: formula [slug=tecs-l-modform-genus group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr gamma0_genus 1 0"
+  raw    = ".verdicts/tecs-l-modform-genus/genus_n1.txt"
+  src    = "MODFORM MF3"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal."
+
+@C tecs_l_mf_genus_n11 := "gamma0_genus(11) = 1 (first genus-1 level — X_0(11) is the conductor-11 elliptic curve)" :: formula [slug=tecs-l-modform-genus group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr gamma0_genus 11 1"
+  raw    = ".verdicts/tecs-l-modform-genus/genus_n11.txt"
+  src    = "MODFORM MF3 (first level off the classical genus-0 list)"
   status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal."
 
 # ───────────────────────────────────────────────────────────────────────

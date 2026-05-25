@@ -1,0 +1,35 @@
+F-FUSION-ATTN-DECOMP-WALL — round-5 dimensional-decomposition sweep (KV-split hypothesis)
+host: ubu-2 RTX 5070 sm_120 (48 SMs, 12GB), clean (0% util, 5 MiB, 0 compute procs), $0 LOCAL
+toolchain: nvcc/ptxas 12.0.140, build arch sm_90a -> JIT sm_120 at load
+note: hexa verify (g5) BROKEN on both ubu hosts; correctness via compiled f64-ref harness.
+
+build:
+  nvcc -O2 -arch=sm_90a -o fa_decomp_oracle fa_decomp_oracle.cu -lcuda      [rc=0]
+  nvcc -O2 -arch=sm_90a -x cu -o fa_cublas_tc_baseline fa_cublas_tc_baseline.c -lcublas -lcudart  [rc=0]
+  nvcc -O2 -o fa_wmma_host fa_wmma_host.c -lcuda  (round-4 single-kernel cross-ref) [rc=0]
+
+sweep: N{512,1024,2048,4096} x Bq{16,32,64} x kv_split{1,2,4,8,16} x BK{64,128,256}, d=64
+  = 153 unique configs (BK auto-clamped to N/kv_split chunk), ALL numeric PASS (rel_rowscale<=1e-2).
+  raw per-config WALL lines: sweep_raw.txt
+
+cuBLAS-TC 3-launch baseline (denominator), median ms:
+  N=512 0.016608 · N=1024 0.030656 · N=2048 0.061696 · N=4096 0.188672
+
+round-4 single-kernel reference (BQ16 BK256, reproduced this fire), median ms:
+  N=512 0.056768 · N=1024 0.115520 · N=2048 0.245184 · N=4096 0.957216  (all numeric PASS)
+
+KV-split smoke (kv_split=1 == round-4 algorithm EXACTLY, max_abs 4.02796e-05 identical):
+  N=512 Bq16 kv1 BK256 occ=32  fused=0.145760  PASS
+  N=512 Bq16 kv2 BK256 occ=64  fused=0.084352  PASS
+  N=512 Bq16 kv4 BK128 occ=128 fused=0.057600  PASS  <- parity w/ round-4 single-kernel 0.0568
+
+optimum per shape (vs cuBLAS-TC):
+  N512  Bq16 kv4 BK128  3.47x  (best overall)
+  N1024 Bq32 kv4 BK256  5.88x
+  N2048 Bq64 kv4 BK256 10.82x
+  N4096 Bq16 kv8 BK256 13.17x
+
+VERDICT: ORANGE -> closed-negative. KV-split CLOSES the small-N occupancy gap (CONFIRMED,
+2.53x @ N=512) but is small-N-only (saturates at ~48-SM occupancy; partial-O HBM tax
+O(N*split*d) net-negative at N>=2048). No decomposition beats cuBLAS (best 3.47x). The
+GEMM-tile-efficiency wall (round-4) is confirmed fundamental. section10 NOT flipped. No paper.

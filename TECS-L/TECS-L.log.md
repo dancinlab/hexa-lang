@@ -14,6 +14,17 @@ Append-only history sister of `TECS-L.md`. Each entry starts with `## <ISO times
 - [ ] MR3 abundancy 닫힌형 일반화 · MR4 Lucas-Lehmer hexa-native · MR6 합성 M_p 표본 (다음 라운드)
 
 
+## 2026-05-25T14:30 — 축 A MODFORM · MF3 Γ₀(N) genus 고전 genus-0 전수
+
+- [x] 고전 genus-0 15개 N∈{1,2,3,4,5,6,7,8,9,10,12,13,16,18,25} `gamma0_genus`=0 verify **15/15 🔵** (`genus_sweep.txt`)
+- [x] genus≥1 경계 7/7 🔵: N=11/14/15/17/19→1, N=22/23→2 — 고전 리스트 밖에서 genus 상승 실증
+- [x] hexa `gamma0_genus` 가 모든 고전/기지값과 **완전 일치 — 🔴 불일치 0** (강제맞춤 불필요, 정직 판정)
+- [x] **헤드라인: Γ₀(6) genus=0** (X₀(6) genus-0 — n=6 모듈러곡선 bridge, 축 0 M4 연계). 헤드라인 개별 verdict N=6→0 · N=11→1 · N=1→0
+- [x] CLAIMS slug=tecs-l-modform-genus 6 entry (sweep + boundary + 4 headline, 1:1 포인터). 22 raw verdict 영속화
+- [x] `hexa verify` 게이트 미적용 (로컬 실행 성공) — verify-ran (게이트 caveat 불필요)
+- [ ] MF2 cusp 수 · MF4 dim S₂=genus 관계 · MF5 Jacobi/Kronecker (다음 라운드)
+
+
 ## 2026-05-25T14:00 — 축 A MODFORM · MF1 Γ₀(N) index (영구 엔진 첫 전진)
 
 - [x] ψ(N)=N∏_{p|N}(1+1/p) 닫힌형 = hexa `gamma0_index`: **N=1..30 전수 30/30 🔵** (`index_sweep_1_30.txt`)
