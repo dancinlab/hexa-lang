@@ -380,6 +380,15 @@ fn _recompute(fn_name: string, n: int) -> int {
     if fn_name == "cyclotron_cool_bratio_exponent"       { return 2 }
     if fn_name == "recomb_3body_exponent_doubled"        { return -9 }
     if fn_name == "recomb_3body_tratio_exponent_doubled" { return 9 }
+    // ── BLUE-MAX completion — 4 missing 🔵 pairs (h1s2s + penning) · g69 11/11 ──
+    // Honest 🔵 algebraic roots backing the remaining sqrt-using ANTIMATTER atoms:
+    //   h1s2s_rydberg = (3/4)·R∞·c          → numerator 3 (level-diff 1−1/4=3/4)
+    //   penning ω_c/2 + sqrt(D)             → split-denom 2 (the /2 in half-cyclotron)
+    //   penning_invariance ω_c²=Σω²         → exponent 2 (the squaring · pure algebraic id)
+    if fn_name == "h1s2s_rydberg_factor_numerator"  { return 3 }
+    if fn_name == "penning_omega_plus_denominator"  { return 2 }
+    if fn_name == "penning_omega_minus_denominator" { return 2 }
+    if fn_name == "penning_invariance_exponent"     { return 2 }
     // ── BLUE-MAX integer atoms (FUSION 🔵 algebraic-root pairs · g69) ──────
     // Pure-integer factors/exponents backing libm-class (sqrt/exp/log/pow)
     // FUSION atoms — every libm-class atom gets ≥1 🔵 integer root:
