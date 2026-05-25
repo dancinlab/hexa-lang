@@ -80,7 +80,7 @@ int main(int argc, char** argv){
     if(argc<3){ fprintf(stderr,"usage: %s flash_attn_tma_sw128_N.ptx N\n",argv[0]); return 2; }
     const char* ptx_path=argv[1]; int N=atoi(argv[2]); int d=64;
     if(N%64){ fprintf(stderr,"N must be multiple of 64\n"); return 2; }
-    const char* kname="flash_attn_tma_sw128";
+    const char* kname="flash_attn_tma_v2";
 
     FILE* fp=fopen(ptx_path,"rb"); if(!fp){perror("ptx");return 1;}
     fseek(fp,0,SEEK_END); long np=ftell(fp); fseek(fp,0,SEEK_SET);
@@ -106,7 +106,7 @@ int main(int argc, char** argv){
     printf("kernel: regs/thd=%d static_smem=%d B\n", regs, smem_static);
 
     /* dynamic smem opt-in (the kernel uses ~82.7 KB dynamic) */
-    int dyn_smem = 82752;
+    int dyn_smem = 99136;
     CUresult sa = cuFuncSetAttribute(f, CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES, dyn_smem);
     if(sa!=CUDA_SUCCESS){ const char*s=NULL; cuGetErrorString(sa,&s); fprintf(stderr,"smem opt-in fail (%d B): %s\n", dyn_smem, s?s:"?"); }
 
@@ -133,9 +133,9 @@ int main(int argc, char** argv){
 
     /* TMA descriptors: Q/K/V are row-major [N x 64] fp16. Box [64 inner fp16=128B, 64 rows]. */
     CUtensorMap tq,tk,tv;
-    if(build_tma(&tq,dq,(unsigned)d,(unsigned)N,64,64,CU_TENSOR_MAP_SWIZZLE_128B)) return 1;
-    if(build_tma(&tk,dk,(unsigned)d,(unsigned)N,64,64,CU_TENSOR_MAP_SWIZZLE_128B)) return 1;
-    if(build_tma(&tv,dv,(unsigned)d,(unsigned)N,64,64,CU_TENSOR_MAP_SWIZZLE_128B)) return 1;
+    if(build_tma(&tq,dq,(unsigned)d,(unsigned)N,64,64,CU_TENSOR_MAP_SWIZZLE_NONE)) return 1;
+    if(build_tma(&tk,dk,(unsigned)d,(unsigned)N,64,64,CU_TENSOR_MAP_SWIZZLE_NONE)) return 1;
+    if(build_tma(&tv,dv,(unsigned)d,(unsigned)N,64,64,CU_TENSOR_MAP_SWIZZLE_NONE)) return 1;
 
     unsigned grid=(unsigned)(N/64), block=128;
     void* args[]={ &tq,&tk,&tv,&dO,&N,&scale };
