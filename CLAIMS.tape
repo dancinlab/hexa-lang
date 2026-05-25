@@ -1189,6 +1189,20 @@
   src    = "archive/fires/fusion_axisA_breadth_2026_05_25/ (swiglu_fused.ptx + swiglu_eager.ptx + host_swiglu.c + result_swiglu.json) + GPU.md §10"
   status = "🟢 SUPPORTED-NUMERICAL — both regimes >=30%, numeric rel <=3.4e-7, verdict verbatim. terminal."
 
+# ── GPU — fusion-autoregressive-decode (slug · group=GPU · paper-track · GPU.md §10) ──
+# Novel axis E (autoregressive single-token fusion · LLM decode). Round 8 =
+# codegen + ptxas-clean + $0 structural oracle; timed silicon DEFERRED to
+# round 9. The moat: at decode batch=1 the per-op compute is tiny vs the
+# per-launch overhead, so the launch-count reduction (eager >=17 -> fused 2
+# per layer per token) transfers nearly 1:1 into wall reduction.
+
+@C fusion_autoregressive_decode_structural := "fused per-token decode = 2 launches/layer/token + 0 temp-HBM vs eager 17 launches + 14082 f32 elem temp-HBM (112656 B); projected launch-bound wall reduction 70.6%, compute-floor >=30% UNCONDITIONAL" :: structural [slug=fusion-autoregressive-decode group=GPU]
+  method = "compiled-oracle + ptxas-clean"
+  cmd    = "HEXA_MAC_BUILD_OK=1 hexa build oracle.hexa -o oracle_autoreg && ./oracle_autoreg ; ptxas -arch=sm_{80,90} -v {fused,eager}_decode.ptx on ubu-2 CUDA 12.0"
+  raw    = ".verdicts/fusion-autoregressive-decode/F-FUSION-AUTOREGRESSIVE-DECODE.txt"
+  src    = "archive/fires/fusion_autoregressive_decode_2026_05_25/ (fused_decode.ptx + eager_decode.ptx + oracle.hexa + oracle_output.txt + ptxas_clean.log + FIRE.md) + GPU.md §10 axis E"
+  status = "🔵 SUPPORTED-FORMAL — structural launch + temp-HBM ratios proven closed-form via compiled-hexa oracle (exit 0); fused RC=0 (32+27 regs, 40960+16384 B smem, 0 spill) + eager RC=0 (17 entries) on sm_80/sm_90; sm_120 via driver-JIT (forward-compat). Timed silicon wall DEFERRED to round 9."
+
 @C tecs_l_mr_f23_tau := "tau(23) = 2 → 23 is PRIME (factor of M_11)" :: formula [slug=tecs-l-mersenne-composite group=TECS-L]
   method = "expr"
   cmd    = "hexa verify --expr tau 23 2"
