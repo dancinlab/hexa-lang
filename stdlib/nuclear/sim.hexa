@@ -1,6 +1,6 @@
 // HEXA Standard Library — nuclear/sim
 //
-// @version 0.8.0
+// @version 0.9.0
 // @capabilities [pure, io]
 //
 // NUCLEAR.md §6 Phase 4 #1 — N7 hot closed-form post-processing,
@@ -32,6 +32,7 @@
 //   pub fn n11_alpha_cell_checked(Z,N,A,Q_α,lo,hi) -> NuclideScore  // G1 (A=Z+N guard)
 //   pub fn n11_island_cell_checked(Z,N,A,Q_α,lo,hi,σ) -> IslandScore// G1 (A=Z+N guard)
 //   (internal) _write_n11_she_topk — G3 PREDICTED-Q_α Z=119/120 top-K emit
+//   (internal) _write_n11_novel_topk — G4 PREDICTED-ONLY novel top-K emit
 //
 // Source formulas (closed-form algebraic identities, not solvers):
 //   - Viola-Seaborg 1966 / Sobiczewski-Parkhomenko 2005 refit
@@ -1389,6 +1390,131 @@ fn _write_n11_she_topk(out_dir: string, sigma: float) -> string {
     return path
 }
 
+// ── 4e. G4 — PREDICTED-ONLY novel top-K view (discovery-priority) ───────
+//
+// The G3 `top_k_she.json` (above) is the FULL view — it mixes the three
+// already-KNOWN measured anchors (Lv-293/Og-294/Fl-289, synthesized
+// 1998–2012) with the genuinely NOVEL cited-predicted Z=119/120 cells.
+// After PR1 recovered the measured α-dominant anchors, those KNOWN cells
+// now LEAD the full ranking (Lv-293 0.4326 is #1), which obscures the
+// novel candidates — yet the novel ones are the actual @goal output
+// (rank novel Z>118 candidates for accelerator DISCOVERY priority).
+//
+// G4 is a purely-additive PREDICTED-ONLY slice: it emits top_k_novel.json
+// = ONLY the cells with predicted_input=true, ranked by descending
+// composite_score, carrying the SAME honest provenance the full view does
+// (Q_alpha_source="PREDICTED via <arxiv>", model_validity_flag,
+// absorbed=false). The full top_k_she.json is KEPT intact — G4 does not
+// remove it; the full view is still valid for cross-anchor calibration.
+//
+// HONEST FRAMING (R4 · §3.3 · @D d2):
+//   - These are PREDICTED-Q_α candidates — "Z=119/120 후보일 가능성",
+//     NEVER "후보임" and NEVER "발견됨". predicted_input != measurement.
+//   - absorbed=false 永久. A predicted-input ranking is an accelerator
+//     beam-time priority HINT, not a discovery claim.
+//   - Same honest-skip set as G3 (293-120 / 298-120 / Z=121,122 — no
+//     cited numeric Q_α band → out-of-scope != impossible, @D d2).
+//
+// Rows pre-ordered by DESCENDING composite_score (from the [G3] demo
+// panel, σ=6.0):
+//   295-119 0.0462 > 297-120 0.0306 > 293-119 0.00172 > 295-120 0.0
+//   (295-120 collapses to c_total=0 under the Ren-Xu in-band SF guard;
+//    it is the honest tail, NOT a removed cell — @D d2).
+fn _write_n11_novel_topk(out_dir: string, sigma: float) -> string {
+    let path = out_dir + "/top_k_novel.json"
+
+    // PREDICTED-ONLY (predicted_input=true) cells. NO measured anchors.
+    // Ordering = descending composite_score (G3 demo panel, σ=6.0).
+    let rows: [string] = [
+        _she_cell_json("295-119", 119, 176, 295, 12.95, sigma, 1,
+            "PREDICTED via arxiv:2604.19325, arxiv:2311.07145, NOT measured",
+            "12.5-13.4 (mass-model band; mid 12.95)"),
+        _she_cell_json("297-120", 120, 177, 297, 13.20, sigma, 1,
+            "PREDICTED via arxiv:2604.09287, arxiv:2601.21317, NOT measured",
+            "12.9-13.5 (mass-model band; mid 13.20)"),
+        _she_cell_json("293-119", 119, 174, 293, 13.20, sigma, 1,
+            "PREDICTED via arxiv:2604.19325, arxiv:2511.18337, NOT measured",
+            "12.8-13.6 (mass-model band; mid 13.20)"),
+        _she_cell_json("295-120", 120, 175, 295, 13.35, sigma, 1,
+            "PREDICTED via arxiv:2604.09287, arxiv:2601.21317, NOT measured",
+            "13.0-13.7 (mass-model band; mid 13.35)"),
+    ]
+    let mut body = "[\n"
+    let mut i = 0
+    while i < len(rows) {
+        body = body + rows[i]
+        if i + 1 < len(rows) { body = body + "," }
+        body = body + "\n"
+        i = i + 1
+    }
+    body = body + "  ]"
+
+    let json = "{\n" +
+        "  \"domain\": \"nuclear\",\n" +
+        "  \"verb\": \"verify\",\n" +
+        "  \"kind\": \"n11_zn_funnel_novel_predicted_only\",\n" +
+        "  \"producer\": \"sim.hexa@nuclear-N11-G4\",\n" +
+        "  \"absorbed\": false,\n" +
+        "  \"gate_type\": \"nuclear-novel-discovery-simulation\",\n" +
+        "  \"provisional\": true,\n" +
+        "  \"view\": \"predicted-input-only (novel Z=119/120 discovery " +
+        "candidates); full mixed view kept at top_k_she.json\",\n" +
+        "  \"query\": { \"Z_range\": [119, 122], \"N_range\": [170, 184], " +
+        "\"accelerator_band_log10_s\": [-6.0, 3.0], " +
+        "\"island_sigma\": " + to_string(sigma) + ", " +
+        "\"magic_Z\": [82, 114, 120, 126], \"magic_N\": [126, 184], " +
+        "\"filter\": \"predicted_input == true\" },\n" +
+        "  \"predicted_input_targets\": [\"295-119\", \"297-120\", " +
+        "\"293-119\", \"295-120\"],\n" +
+        "  \"excluded_known_anchors\": [\"Lv-293 (synth 2000)\", " +
+        "\"Og-294 (synth 2006)\", \"Fl-289 (synth 1998)\"],\n" +
+        "  \"honest_skipped\": [\n" +
+        "    \"293-120 (Z=120,N=173): research note §3 rank7 gives 'Q_α " +
+        "높음' QUALITATIVE only — no numeric band → honest-skip (§3.3).\",\n" +
+        "    \"298-120 (Z=120,N=178): 'N=178 deformed magic', NO Q_α band " +
+        "in note → honest-skip (no fabrication).\",\n" +
+        "    \"Z=121, Z=122: NO cited Q_α anywhere in the research note → " +
+        "honest-skip. Out-of-scope != impossible (@D d2); re-enter when a " +
+        "cited Q_α band exists.\"\n" +
+        "  ],\n" +
+        "  \"top_k_candidates\": " + body + ",\n" +
+        "  \"scope_caveats\": [\n" +
+        "    \"(s1) PREDICTED-ONLY view: EVERY cell is predicted_input=true " +
+        "— a CITED Q_α band MIDPOINT from arxiv mass-model literature, NOT " +
+        "measurement. This is sim-composed-with-sim (predicted Q_α → semi-" +
+        "empirical T). 'Z=119/120 후보일 가능성' != '후보임' != '발견됨'.\",\n" +
+        "    \"(s2) Q_α is mass-model dependent (ΔQ_α ~0.3-1.0 MeV across " +
+        "FRDM/WS4/SkyHFB/KTUY/BSk; note §3.1). The band width IS the honest " +
+        "uncertainty; only the midpoint is scored. @D d6: no forced number.\",\n" +
+        "    \"(s3) All Z=119/120 cells are odd-A or odd-odd; they carry " +
+        "model_validity_flag=odd-A-hindrance-not-modeled (G2), so a low/zero " +
+        "composite is an honest hindrance-uncaptured signal, NOT a true SF " +
+        "collapse. 295-120 c_total=0 is the Ren-Xu in-band SF tail (@D d2).\",\n" +
+        "    \"(s4) absorbed=false 永久 (R4). 2026-05 현재 Z=119/120 confirmed " +
+        "discovery 0건 (RIKEN/Berkeley/JINR 모두 진행중/착수예정; note §2). " +
+        "This is an accelerator beam-time PRIORITY hint, not a discovery.\"\n" +
+        "  ],\n" +
+        "  \"citations\": [\n" +
+        "    \"arxiv:2604.19325 — Z=119 Q_α/σ estimates (Ca,Ti,V,Cr beams)\",\n" +
+        "    \"arxiv:2311.07145 — 51V+248Cm Z=119 optimal energy (DNS)\",\n" +
+        "    \"arxiv:2604.09287 — element 120 DNS synthesis (PC-PK1)\",\n" +
+        "    \"arxiv:2511.18337 — systematic SHE formation 5 mass models\",\n" +
+        "    \"arxiv:2601.21317 — Z=120 competing decay modes (RMF/NL3,PCM)\",\n" +
+        "    \"arxiv:2405.07704 — odd-Z 119 shell structure (def. RHB)\",\n" +
+        "    \"Viola-Seaborg 1966 · Royer 2000 · Ren-Xu PRC71 014309 (kernels)\",\n" +
+        "    \"demiurge research note 2026-05-25-she-driplinelit.md §3 (Q_α bands)\"\n" +
+        "  ],\n" +
+        "  \"recommendation\": \"G4 PREDICTED-ONLY accelerator beam-time " +
+        "priority shortlist — the genuinely NOVEL Z=119/120 discovery " +
+        "candidates with the known anchors removed. absorbed=true requires " +
+        "GSI/JINR/RIKEN beam + SHIP/DGFRS/GARIS detection + IUPAC priority — " +
+        "none from sim (NUCLEAR.md 7). '가능성' != '임'.\"\n" +
+        "}\n"
+
+    write_file(path, json)
+    return path
+}
+
 // G3 demo row: SHE cell with predicted/measured tag (composite for ranking).
 fn _emit_she(name: string, Z: int, N: int, A: int, Q_alpha_MeV: float,
              sigma: float, predicted: int) {
@@ -1568,6 +1694,9 @@ fn main() {
     println("[nuclear+verify · C2] wrote island top-K record → " + island_path)
     let she_path = _write_n11_she_topk(n11_out, 6.0)
     println("[nuclear+verify · G3] wrote SHE predicted-Q_α top-K → " + she_path)
+    let novel_path = _write_n11_novel_topk(n11_out, 6.0)
+    println("[nuclear+verify · G4] wrote PREDICTED-ONLY novel top-K → " +
+            novel_path + " (Z=119/120 only; known anchors excluded)")
 
     println("[nuclear+verify] absorbed=false (R4 invariant; " +
             "NUCLEAR.md §7 wet-lab dependency permanent — Geiger-Nuttall " +
