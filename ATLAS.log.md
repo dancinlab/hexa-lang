@@ -2,6 +2,21 @@
 
 Append-only step log for the theorem-atlas upgrade campaign. Newest on top.
 
+## 2026-05-25 — R5 drift 보정 (rounded-literal 3노드 full-precision 재등록 · META-SIGNAL ②)
+
+R3 reverify가 실측한 `numerical_seen=36 match=32 drift=3` 의 3 DRIFT 노드를 full-precision 재등록해 drift=0 클로즈. 등록 시 6 sig-fig 반올림 리터럴로 동결되어 in-process full-precision 재계산과 ε=1e-9 초과 불일치했던 registration-hygiene drift.
+
+**재현(reverify)**: HEXA_ATLAS_EMBED=worktree compiler/atlas, bin/hexa-atlas(borrowed main-repo transpiler · `SIDECAR_NO_POOL_ROUTE=1` · `HEXA_MODULE_LOADER`=main build/hexa_module_loader · hexa_v2=main repo copy into worktree self/native, gitignored). `reverify` = 3 DRIFT 확정:
+  - `verified-allen_dynes_tc-num` = allen_dynes_tc(2.5,1100.0,0.1): claimed=181.157 |Δ|=1.81689e-4
+  - `verified-mcmillan_tc-num` = mcmillan_tc(2.5,1100.0,0.1): claimed=149.923 |Δ|=1.1588e-4
+  - `verified-bcs_gap_ratio-num` = bcs_gap_ratio(): claimed=3.52775 |Δ|=3.97772e-6
+
+**full-precision 값(IEEE-754 double, libm exp)**: 181.15681831111502 · 149.92288411954345 · 3.527753977724091. `hexa verify --expr <fn> <args> <v>` 로 사전 검증 — 3개 모두 `|Δ|=0.0 ≤ ε=1e-9 → 🟢 SUPPORTED-NUMERICAL`.
+
+**REPLACE 보장**: register fold dedup(kind,id, #948)은 skip-on-dup(REPLACE 아님 — `embed_is_skip`). 따라서 동명 stale 노드 3개를 embedded.gen.hexa에서 먼저 삭제 후 `hexa atlas register --from-verify`(@D g20 `hexa verify --expr` shell-out 위임)로 fresh full-precision 노드 fold. 결과 = 각 ID 정확히 1회 출현 · 노드수 16101 불변(REPLACE, not ADD).
+
+**검증**: `reverify` → `numerical_seen=35 match=35 drift=0 unverifiable=0`(R4 calc_dispatch가 float 테이블을 99-fn로 확장해 이전 1 UNVERIFIABLE도 흡수, 35 전수 MATCH) · `lookup` 3노드 full-precision 표시 확인 · bin/hexa-atlas 재빌드 PASS. SSOT(embedded.gen.hexa) diff는 data-only(3 노드 라인 교체 + 직전 노드 trailing comma) — 로직 무변경.
+
 ## 2026-05-25 — R5 falsifier 구조화 accessor + cascade 무효화 query (additive·read-only)
 
 goal(deferred): "falsifier 구조화 필드 + cascade 무효화". 노드가 claim을 반증하는 조건
