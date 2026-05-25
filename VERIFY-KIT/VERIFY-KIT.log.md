@@ -286,3 +286,28 @@
 
 ### 결과
 - V5 (V5.1 promote + V5.2 wire + V5.3 calibrate) **完 DONE**. faithful-Φ proxy 가 독립 same-substrate ref 에 calibrated(|Δ|=1.67e-06) + canonical IIT(PyPhi 2.3125)과의 substrate-divergence 가 정직하게 문서화됨. ARXIV A2(PyPhi 1712.09644) verify-able-candidate 가 이제 앵커됨.
+
+## 2026-05-26 — stale Mac transpiler regen (V4 bessel `_Generic` blocker CLEARED · ops swap)
+
+V5.2/V5.3 노트가 예고한 blocker — *"full `bin/hexa-verify` clang link 은 기존 V4 bessel_j0/j1 `_Generic` 충돌(stale Mac transpiler)... fix 는 HEAD `self/native/hexa_v2` regen(pool host)"* — 를 닫는다.
+
+### 진단
+- 운영 transpiler `/Users/ghost/core/hexa-lang/{self/native,build}/hexa_v2` (May 25 15:34 / 18:11) 가 V4 codegen 매핑 미보유 (`hexa_math_j0`/`hexa_math_tgamma` strings count = **0**). HEAD `self/codegen.hexa::cg_math_sym` 는 `bessel_j0→hexa_math_j0` · `gamma→hexa_math_tgamma` 로 매핑(libm `j0`/`j1` `_Generic` 충돌 회피)되어 있으나 BUILT 바이너리만 stale. `.hexa` 소스는 정상.
+- 결과: stale transpiler 로 빌드한 `bin/hexa-verify` 는 gamma/bessel `--tol` 경로를 인식 못함(`error: to_int: trailing garbage in "--tol"`).
+
+### regen + swap (ops, not a PR)
+- build host = **mini** (arm64 macOS 26.5, Apple clang 21.0.0). pool-route 가 로컬 heavy clang 차단 → fresh `/tmp` clone off origin/main (`c2154a15`).
+- recipe = `clang -O2 -c self/runtime.c -o runtime.o` → `clang -O2 -I . -I self self/native/hexa_cc.c runtime.o -o build/hexa_v2` (= `self/main.hexa::cmd_cc` macOS branch; transpiler SSOT = **self/native/hexa_cc.c**). 양 경로(self/native + build)에 배치.
+- built sha = `114768bf...` · 1923096 B · Mach-O arm64 · V4 strings count=2. mini 에서 `bin/hexa-verify` e2e 빌드 PASS (bessel `_Generic` 충돌 0, link clean).
+- atomic `mv -f` swap → `/Users/ghost/core/hexa-lang/{self/native,build}/hexa_v2` (875e2ad5/df736592 → 114768bf). backup = `/tmp/transpiler-bak-20260525T193344Z/`.
+
+### verify (instrument-first, mini + 로컬 양쪽 verbatim)
+- `gamma 5 24 --tol 1e-6` → **🟢 SUPPORTED-NUMERICAL** (24.0, |Δ|=0.0 ≤ ε=1e-9)
+- `bessel_j0 0 1 --tol 1e-6` → **🟢 SUPPORTED-NUMERICAL** (1.0, |Δ|=0.0 ≤ ε=1e-9)
+- `sigma 6 12` → **🔵 SUPPORTED-FORMAL** (12)
+- verbatim 전문 = `.verdicts/transpiler-reinstall/reinstall.txt` (before link-fail / regen / after × 2 / swap / disposition).
+
+### disposition
+- `self/native/hexa_v2` + `build/hexa_v2` 는 **둘 다 gitignore build-output** (`git check-ignore` 확인) → 커밋 대상 아님 = **ops swap**. 이 노트 + verdict 만 커밋(.verdicts/ 는 tracked).
+- rollback 불요(verify 양쪽 PASS). 필요 시 backup 복원 1줄.
+- V8/V9 bootstrap-free: swapped transpiler 가 HEAD `self/main.hexa` 전체(9827-line C) + 5개 V4 special fn 을 bootstrap loop 없이 컴파일 — fresh-clone 의 `hexa_cc.c` 단일 clang 자족. 향후 regen 도 동일 1-clang.
