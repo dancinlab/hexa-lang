@@ -84,6 +84,8 @@ static int  hxlcl_stat(const char *path, void *buf);
 static int  hxlcl_open_sys(const char *path, int flags, ...);
 static void hxlcl_exit(int code) __attribute__((noreturn));
 static void *hxlcl_mmap(void *addr, unsigned long len, int prot, int flags, int fd, long off);
+static void *hxlcl_malloc(size_t n);  /* cycle 73: route pre-#define helpers off libc malloc */
+static void  hxlcl_free(void *p);     /* cycle 73: noop free — keeps _free extern out */
 static int  hxlcl_clock_gettime(int clk, void *ts);  /* re-decl: cycle 65 syscall body overrides cycle 62 stub */
 static int  hxlcl_darwin_check_fd_set_overflow(int fd, const void *p, int n);
 
@@ -180,7 +182,7 @@ static char *__attribute__((noinline)) hxlcl_strdup(const char *s) {
     if (!s) return NULL;
     size_t n = 0;
     while (((const volatile char *)s)[n]) n++;
-    char *out = (char *)malloc(n + 1);
+    char *out = (char *)hxlcl_malloc(n + 1);
     if (!out) return NULL;
     for (size_t i = 0; i < n; i++) out[i] = s[i];
     out[n] = '\0';
@@ -190,7 +192,7 @@ static char *__attribute__((noinline)) hxlcl_strndup(const char *s, size_t cap) 
     if (!s) return NULL;
     size_t n = 0;
     while (n < cap && ((const volatile char *)s)[n]) n++;
-    char *out = (char *)malloc(n + 1);
+    char *out = (char *)hxlcl_malloc(n + 1);
     if (!out) return NULL;
     for (size_t i = 0; i < n; i++) out[i] = s[i];
     out[n] = '\0';
@@ -665,13 +667,13 @@ static int __attribute__((noinline)) hxlcl_vfprintf_fd(int fd, const char *fmt, 
     /* formatted output exceeds the 4096-byte stack buffer — reformat on
        the heap so large output (e.g. println of a multi-KB string) is
        written in full instead of being truncated at 4095 bytes. */
-    char *big = (char *)malloc((size_t)n + 1);
+    char *big = (char *)hxlcl_malloc((size_t)n + 1);
     if (!big) { va_end(ap2); return (int)hxlcl_write(fd, buf, sizeof(buf) - 1); }
     int n2 = hxlcl_vsnprintf(big, (size_t)n + 1, fmt, ap2);
     va_end(ap2);
     if (n2 < 0) n2 = 0;
     int w = (int)hxlcl_write(fd, big, (size_t)n2);
-    free(big);
+    hxlcl_free(big);
     return w;
 }
 static int __attribute__((noinline)) hxlcl_printf(const char *fmt, ...) {

@@ -100,7 +100,10 @@ int term_raw_enter(void) {
     if (hxlcl_tcgetattr(STDIN_FILENO, &_term_saved) != 0) {
         return -1;
     }
-    struct termios raw = _term_saved;
+    // cycle 73: struct-init copy reverse-libcalls to memcpy; declare then
+    // copy via the memcpy macro (-> hxlcl_memcpy) so no _memcpy extern.
+    struct termios raw;
+    memcpy(&raw, &_term_saved, sizeof(raw));
     cfmakeraw(&raw);
     /* Per kick spec: deliver byte-at-a-time without echo, but keep
      * SIGINT/SIGQUIT/SIGTSTP active so Ctrl-C reaches our handler. */

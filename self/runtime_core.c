@@ -3391,7 +3391,8 @@ HexaVal hexa_valstruct_set_by_key(HexaVal v, const char* key, HexaVal val) {
         cow = (HexaValStruct*)malloc(sizeof(HexaValStruct));
         if (!cow) { fprintf(stderr, "OOM in valstruct COW\n"); exit(1); }
     }
-    *cow = *orig;
+    // cycle 73: aggregate struct copy -> memcpy macro (-> hxlcl_memcpy)
+    memcpy(cow, orig, sizeof(HexaValStruct));
     cow->from_arena = use_arena;
     HexaVal out = v;
     HX_SET_VS(out, cow);
@@ -4075,7 +4076,10 @@ HexaVal hexa_val_heapify(HexaVal v) {
                 #undef HX_SCALAR_TAG
                 HexaValStruct* hcow = (HexaValStruct*)malloc(sizeof(HexaValStruct));
                 if (hcow) {
-                    *hcow = *HX_VS(v);
+                    // cycle 73: aggregate `*dst = *src` reverse-libcalls
+                    // to libc memcpy below the #define layer; route via the
+                    // memcpy macro (-> hxlcl_memcpy) so no _memcpy extern.
+                    memcpy(hcow, HX_VS(v), sizeof(HexaValStruct));
                     hcow->from_arena = 0;
                     hcow->str_val      = hexa_val_heapify(hcow->str_val);
                     hcow->char_val     = hexa_val_heapify(hcow->char_val);
