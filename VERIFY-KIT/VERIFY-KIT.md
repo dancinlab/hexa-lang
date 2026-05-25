@@ -11,7 +11,7 @@
 
 ## 1 · 로드맵 (P0-P5)
 
-- [ ] V1 (P0a) — 미러 통합: `tool/verify_cli.hexa` ↔ `tool/atlas_cli.hexa` recompute 2미러 → 단일 home (기존 INBOX desync · d4/g20)
+- [x] V1 (P0a) — 미러통합: register delegation → allen_dynes_tc atlas 흡수 가능 (INBOX RTSC unblock). root fix(proposal a) — `register --from-verify` 가 `hexa verify --expr … --compute` 로 위임(atlas 미러 의존 0); float `cmd_expr_float` 에 value-less COMPUTE mode 추가 + `cmd_register` 가 value-bearing 🟠(arity miss)→compute auto-route + 명시 `--compute`. 흡수 acceptance 통과: allen_dynes_tc(0.615,591.18,0.1)=14.5511 🟢 (was 🟠). RTSC 3-arg 16-fn class unblock.
 - [x] V2 (P0b) — value-less compute mode: `hexa verify --expr <fn> <n>` (값 생략) = 계산+출력 (B1 unblock · OEIS O3) ← 이번 PR
 - [ ] V3 (P1a) — tolerance verify: `--approx <fn> <x> <v> <eps>` 연속값 ε 비교 (🟢)
 - [ ] V4 (P1b) — 특수함수 stdlib `stdlib/special/`: gamma·erf·bessel·zeta (libm 기반) → DLMF 재개
