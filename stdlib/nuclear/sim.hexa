@@ -1,6 +1,6 @@
 // HEXA Standard Library — nuclear/sim
 //
-// @version 0.4.0
+// @version 0.5.0
 // @capabilities [pure, io]
 //
 // NUCLEAR.md §6 Phase 4 #1 — N7 hot closed-form post-processing,
@@ -191,18 +191,41 @@ pub fn royer_log10_t(Z: int, A: int, Q_alpha_MeV: float) -> float {
 // from Python `None`).
 
 struct ConsensusAlpha {
-    mean:       float,
-    min:        float,
-    max:        float,
-    spread_dex: float,
-    n:          int,
+    mean:         float,
+    min:          float,
+    max:          float,
+    spread_dex:   float,
+    n:            int,
+    outlier_count: int,    // members with |x − mean| > 3·spread (Byzantine guard)
+    robust_mean:  float,   // mean of the in-bound members (outliers excluded)
 }
 
+// ── NC3 outlier (Byzantine-formula) guard ──────────────────────────────
+//
+// gap-audit top-3 (b): the consensus is an UNWEIGHTED mean across the
+// formula ensemble, so a single Byzantine formula (a mis-typed coefficient,
+// a wrong-domain refit, a future 3rd predictor that diverges in the SHE
+// extrapolation region) silently skews the mean. We FLAG a member whose
+// deviation from the consensus of the OTHERS exceeds 3× the OTHERS' spread,
+// and report both the count and a robust_mean over the surviving members.
+//
+// LEAVE-ONE-OUT scale (not |x − global_mean| > 3·global_spread, which is
+// mathematically unreachable: a member always sits within ±spread of the
+// global mean). For member i: peer_spread = max_{j≠i} − min_{j≠i};
+// peer_mean = mean_{j≠i}; flag i iff |x_i − peer_mean| > 3·peer_spread. This
+// is robust because the Byzantine member can't inflate the scale it's judged
+// against. With n=2 every member's "peers" are a single point (peer_spread=0)
+// so no honest outlier call is possible → outlier_count=0 (the current VS,
+// Royer pair is never trimmed). The guard activates at n≥3, exactly when one
+// Byzantine member could otherwise outvote the 2-member majority. It NEVER
+// silently drops a value: robust_mean falls back to the plain mean when no
+// member is flagged or when every member would be flagged (n_in=0).
 pub fn consensus_alpha(values: [float]) -> ConsensusAlpha {
     let n = len(values)
     if n == 0 {
         return ConsensusAlpha { mean: 0.0, min: 0.0, max: 0.0,
-                                spread_dex: 0.0, n: 0 }
+                                spread_dex: 0.0, n: 0,
+                                outlier_count: 0, robust_mean: 0.0 }
     }
     let nf = to_float(n)
     let mut sum: float = 0.0
@@ -217,8 +240,55 @@ pub fn consensus_alpha(values: [float]) -> ConsensusAlpha {
         i = i + 1
     }
     let mean = sum / nf
+    let spread = hi - lo
+    // Leave-one-out Byzantine flag (n≥3). For each member, recompute the
+    // peers' mean + spread and test |x_i − peer_mean| > 3·peer_spread.
+    let mut n_out = 0
+    let mut in_sum: float = 0.0
+    let mut n_in = 0
+    if n < 3 {
+        // too few members to identify an outlier honestly — all in-bound.
+        return ConsensusAlpha { mean: mean, min: lo, max: hi,
+                                spread_dex: spread, n: n,
+                                outlier_count: 0, robust_mean: mean }
+    }
+    let mut a = 0
+    while a < n {
+        // peers = all members except a.
+        let mut psum: float = 0.0
+        let mut plo: float = 0.0
+        let mut phi: float = 0.0
+        let mut seen = 0
+        let mut b = 0
+        while b < n {
+            if b != a {
+                let pv = values[b]
+                psum = psum + pv
+                if seen == 0 { plo = pv  phi = pv }
+                plo = _fmin(plo, pv)
+                phi = _fmax(phi, pv)
+                seen = seen + 1
+            }
+            b = b + 1
+        }
+        let peer_mean = psum / to_float(seen)
+        let peer_spread = phi - plo
+        let xa = values[a]
+        if _fabs(xa - peer_mean) > 3.0 * peer_spread {
+            n_out = n_out + 1
+        } else {
+            in_sum = in_sum + xa
+            n_in = n_in + 1
+        }
+        a = a + 1
+    }
+    let mut rmean = mean
+    if n_out > 0 {
+        if n_in > 0 { rmean = in_sum / to_float(n_in) }
+    }
     return ConsensusAlpha { mean: mean, min: lo, max: hi,
-                            spread_dex: hi - lo, n: n }
+                            spread_dex: spread, n: n,
+                            outlier_count: n_out, robust_mean: rmean }
 }
 
 // ── 4. C1 — Spontaneous-fission (SF) competition closed-form ───────────
@@ -274,6 +344,40 @@ fn _sf_seniority(Z: int, N: int) -> float {
     let n_even = (N % 2) == 0
     if z_even && n_even { return 0.0 }
     return 2.0
+}
+
+// ── model_validity_flag — odd-A hindrance / domain classifier ──────────
+//
+// gap-audit top-3 (a): the α formulas (Viola-Seaborg, Royer) are fit to
+// EVEN-EVEN emitters, and the Ren-Xu SF ν=2 seniority term OVER-PREDICTS SF
+// dominance for odd-A nuclei. So an odd-A cell whose C2 composite collapses
+// to score=0 is INDISTINGUISHABLE from a true SF-dominant even-even cell —
+// the Lv-293 / Fl-289 collapse in the funnel output is the symptom. This
+// classifier surfaces WHY a score is what it is, as an explicit per-cell
+// model-validity flag (NUCLEAR.md §3.4 / s4 odd-A self-caveat).
+//
+// Codes / strings:
+//   0 = "nominal"                       even-even (Z,N both even) — formulas
+//                                       are in-domain; score is trustworthy.
+//   1 = "odd-A-hindrance-not-modeled"   odd A (Z,N differ in parity) — α
+//                                       hindrance + Ren-Xu ν=2 SF over-
+//                                       prediction NOT modeled; a score=0 may
+//                                       be a MODEL artifact, not true SF dom.
+//   2 = "out-of-domain"                 odd-odd (Z,N both odd) — double
+//                                       hindrance; furthest from the even-even
+//                                       fit domain (worst-case reliability).
+fn _model_validity_code(Z: int, N: int) -> int {
+    let z_even = (Z % 2) == 0
+    let n_even = (N % 2) == 0
+    if z_even && n_even { return 0 }   // even-even — nominal
+    if z_even != n_even { return 1 }   // odd-A — hindrance not modeled
+    return 2                            // odd-odd — out-of-domain
+}
+
+fn _model_validity_str(code: int) -> string {
+    if code == 0 { return "nominal" }
+    if code == 1 { return "odd-A-hindrance-not-modeled" }
+    return "out-of-domain"
 }
 
 // Ren-Xu 2005 spontaneous-fission log10 T₁/₂ [s] from (Z, A). N = A − Z.
@@ -752,6 +856,16 @@ fn _island_cell_json(name: string, Z: int, A: int, Q_alpha_MeV: float,
     let N = A - Z
     let mut dom = "alpha"
     if s.sf_dominates == 1 { dom = "SF" }
+    // G2(a) model-validity flag: distinguishes a model-artifact score=0
+    // (odd-A Ren-Xu ν=2 SF over-prediction) from a true even-even SF
+    // dominance — the Lv-293 / Fl-289 funnel collapse (gap-audit top-3a).
+    let mv = _model_validity_code(Z, N)
+    // G2(b) α-formula ensemble health: outlier_count flags a Byzantine
+    // member in the unweighted consensus (0 for the current VS,Royer pair).
+    let vs = viola_seaborg_log10_t(Z, Q_alpha_MeV)
+    let ro = royer_log10_t(Z, A, Q_alpha_MeV)
+    let cv: [float] = [vs, ro]
+    let ca = consensus_alpha(cv)
     return "    {\n" +
         "      \"name\": \"" + name + "\",\n" +
         "      \"Z\": " + to_string(Z) +
@@ -764,11 +878,15 @@ fn _island_cell_json(name: string, Z: int, A: int, Q_alpha_MeV: float,
         "      \"prediction\": { \"log10_T_total_s_alpha_sf\": " +
         to_string(s.log10_T_total_s) +
         ", \"alpha_branching\": " + to_string(s.alpha_branching) +
-        ", \"dominant_channel\": \"" + dom + "\" },\n" +
+        ", \"dominant_channel\": \"" + dom + "\"" +
+        ", \"alpha_consensus_outlier_count\": " + to_string(ca.outlier_count) +
+        " },\n" +
         "      \"scores\": { \"c_total_score\": " +
         to_string(s.c_total_score) +
         ", \"island_weight\": " + to_string(s.island_weight) +
-        ", \"composite_score\": " + to_string(s.composite_score) + " }\n" +
+        ", \"composite_score\": " + to_string(s.composite_score) +
+        ", \"model_validity_flag\": \"" + _model_validity_str(mv) + "\"" +
+        " }\n" +
         "    }"
 }
 
@@ -844,11 +962,32 @@ fn _write_n11_island_topk(out_dir: string, sigma: float) -> string {
 // C2 demo row: island weight + C1-total composite.
 fn _emit_island(name: string, Z: int, A: int, Q_alpha_MeV: float, sigma: float) {
     let s = n11_island_cell(Z, A, Q_alpha_MeV, 0.0 - 6.0, 3.0, sigma)
+    let mv = _model_validity_code(Z, A - Z)
     println("  · " + name +
             ": L_total=" + to_string(s.log10_T_total_s) +
             "  c_total=" + to_string(s.c_total_score) +
             "  island_w=" + to_string(s.island_weight) +
-            "  composite=" + to_string(s.composite_score))
+            "  composite=" + to_string(s.composite_score) +
+            "  model_validity=" + _model_validity_str(mv))
+}
+
+// G2 demo: model-validity classifier + α-consensus outlier count.
+fn _emit_mv(name: string, Z: int, N: int) {
+    let code = _model_validity_code(Z, N)
+    println("  · " + name + " (Z=" + to_string(Z) + ", N=" + to_string(N) +
+            "): model_validity_flag=" + _model_validity_str(code))
+}
+
+// G2(b) demo: feed a 3-formula ensemble with one Byzantine member to show
+// the leave-one-out outlier guard activating (outlier_count + robust_mean).
+fn _emit_outlier(name: string, v: [float]) {
+    let c = consensus_alpha(v)
+    println("  · " + name +
+            ": n=" + to_string(c.n) +
+            "  mean=" + to_string(c.mean) +
+            "  spread=" + to_string(c.spread_dex) +
+            "  outlier_count=" + to_string(c.outlier_count) +
+            "  robust_mean=" + to_string(c.robust_mean))
 }
 
 fn main() {
@@ -918,6 +1057,28 @@ fn main() {
     _emit_guard("Og-294  Z↔N swap (Z=176, N=118, A=294)", 176, 118, 294, 11.65)
     _emit_guard("bad N≤0  (Z=118, N=0,   A=118)", 118, 0, 118, 11.65)
     _emit_guard("bad Q≤0  (Z=118, N=176, A=294)", 118, 176, 294, 0.0)
+
+    // ── G2(a) model-validity classifier (odd-A hindrance / domain) ──────
+    // A score=0 from an odd-A cell may be a MODEL artifact (Ren-Xu ν=2 SF
+    // over-prediction), NOT true SF dominance — the Lv-293/Fl-289 collapse.
+    // The flag makes the two distinguishable (gap-audit top-3a).
+    println("[nuclear+verify · G2a] model_validity_flag (even-even=nominal)")
+    _emit_mv("Og-294  even-even", 118, 176)
+    _emit_mv("Fl-289  odd-A    ", 114, 175)
+    _emit_mv("Lv-293  odd-A    ", 116, 177)
+    _emit_mv("Mc-288  odd-odd  ", 115, 173)
+
+    // ── G2(b) consensus outlier (Byzantine-formula) guard ───────────────
+    // Leave-one-out: a member far from the OTHERS' consensus is flagged so
+    // one bad formula can't silently skew the unweighted mean (gap-audit
+    // top-3b). n=2 (the live VS,Royer pair) is never trimmed.
+    println("[nuclear+verify · G2b] consensus outlier guard (leave-one-out 3σ)")
+    let pair: [float] = [0.0 - 2.82183, 0.0 - 3.03993]
+    _emit_outlier("VS+Royer pair (live, n=2 → no trim)", pair)
+    let clean3: [float] = [0.0 - 2.82, 0.0 - 3.04, 0.0 - 2.93]
+    _emit_outlier("3 in-bound (no outlier)            ", clean3)
+    let byz: [float] = [0.0 - 2.82, 0.0 - 3.04, 42.0]
+    _emit_outlier("3 w/ Byzantine member (42.0)       ", byz)
 
     // Emit the REAL N11 top-K JSON record (NUCLEAR.md §6.1 schema).
     let n11_out = "/tmp/nuclear_n11"
