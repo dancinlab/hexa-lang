@@ -2,6 +2,19 @@
 
 Append-only history sister of `OEIS.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
+## 2026-05-26T00:50Z — O3 per-hit verify (336 K=20 survivors)
+
+- [x] O2 의 **336 K=20 survivor** 를 candidate fn 별로 그룹핑 → distinct (fn, oeis_id) 별로 `hexa verify --expr` (VERIFY-KIT V2-era CLI) 로 재확인 + tier 분류. 3-arg VERIFY (`--expr <fn> <n> <expected>`) + V2 value-less COMPUTE (`--expr <fn> <n>`) 둘 다 사용.
+  - **8 🔵 DIRECT** (canonical-source 정수론 fn · hexa-native recompute 가 OEIS a(n) 재현 · sample-verified PASS):
+    - sigma↔A000203 [n=3(4)·4(7)·6(12) + COMPUTE n=7=8] · tau↔A000005 [n=6(4)·10(4)] · sigma_0↔A000005 (≡ tau, 같은 `len(divisors)` fn) · phi↔A000010 [n=9(6)] · mu↔A008683 [n=6(1)] · aliquot↔A001065 [n=8(7)] · sigma_2↔A001157 [n=9(91)] · sigma_3↔A001158 [sigma_k(9,3)=757, 2-op route]
+    - → **7 DISTINCT theorem** (sigma_0/tau 가 A000005 위에서 동일 hexa fn = 8 pair 가 7 로 collapse)
+  - **41 🟡 CITATION** — canonical 과 첫 20항이 일치하는 alias OEIS id (hexa fn 이 값은 재현하나 OEIS 정의가 다름 → catalogue-identity cite, fold 보류). sigma_0/tau 각 14 · sigma 5 · mu 4 · aliquot 3 · phi 1.
+  - **287 🟠 NO-PATH** — verify-CLI `_recompute` 에 경로 없는 다항/trivial fn → `🟠 INSUFFICIENT (calculator-gap)`: n×190 · prime×67 · odd×12 · triangular×7 · two_n×3 · n_squared×2 · catalan/factorial/fibonacci/n_cubed/pronic/two_to_n 각 1. (poly fn 은 closed-form recompute 미등록 — `_recompute` 확장 후보.)
+  - 영속: `.verdicts/oeis-perhit-verify/tier_ledger.txt` (전체 distinct-pair 분류 + aggregate) + headline verbatim verdict 3개 (`sigma_A000203.txt`·`tau_A000005.txt`·`phi_A000010.txt`) + `CLAIMS.tape` @C slug=oeis-perhit-verify.
+  - 솔직성: 336 개별 verdict 파일 대신 distinct (fn↔oeis) tier ledger 로 집계 (중복 alias 다수 — 같은 hexa fn 의 같은 recompute). 🔵 family 는 sample index 3-5 개만 확인 (전 인덱스 sweep 아님, 문서화됨).
+  - 설치된 `~/.hx/bin/hexa.real` (5/25) 가 V2 COMPUTE + 3-arg VERIFY 둘 다 지원 확인 (`COMPUTE: sigma(7) = 8` · `sigma(6)=12 🔵`). verify 호출은 worktree 무변경 (absorb default = idempotent-skip, atlas 미수정).
+  - **다음 = O4**: verified-만 atlas auto-fold. well-defined fold scope = **7 distinct 🔵 theorem** (기존 ~16K atlas node 와 dedup). 🟡 41 = OEIS attribution cite 로 보류, 🟠 287 = `_recompute` 확장 전까지 scope 밖.
+
 ## 2026-05-25T15:29Z — O2 full sweep
 
 - [x] O1 scanner → O2 full sweep 확장: `OEIS/tool/full_sweep.hexa` (hexa-native; POC 의 "첫 1000" → 전체 stripped.gz 덤프 sweep). 후보 K=20 테이블은 OEIS catalogue-verbatim (offset-correct) — POC 의 offset 불일치(n²/n!/Fib 등이 n=1 부터 시작해 덤프의 offset-0 윈도우 miss) 동시 수정.
