@@ -26,6 +26,40 @@
 // support; clients that ask for extras (e.g., completionProvider) will
 // see them absent and degrade gracefully.
 
+// ─── stdin framing (LSP wire) ──────────────────────────
+// read_stdin_n_c reads EXACTLY n bytes from fd 0 (runtime.c, raw read(2)) and
+// returns the C buffer pointer; from_cstring copies it into a hexa string.
+// Header lines come via input() — both use the unbuffered, one-byte stdin
+// path, so the body read begins exactly after the blank line's terminating
+// newline (no buffered over-read across the header/body boundary).
+extern fn read_stdin_n_c(n: int) -> int
+
+// lsp_read_message — read ONE LSP-framed message body from stdin.
+// Frame: header lines, a blank line, then Content-Length bytes of UTF-8 JSON.
+// Returns the raw JSON body, or "" at clean EOF (stdin closed → no more
+// messages). A real streaming reader, so a long-lived server loops per message.
+pub fn lsp_read_message() -> string {
+    let mut content_length = -1
+    let mut saw_header = false
+    while true {
+        let line = input("")
+        if line == "" {
+            // blank line ends the header block; before any header it is EOF.
+            if saw_header { break }
+            return ""
+        }
+        saw_header = true
+        let key = "Content-Length:"
+        let ix = line.index_of(key)
+        if ix >= 0 {
+            let v = line.substring(ix + len(key), len(line)).trim_start()
+            content_length = to_int(v)
+        }
+    }
+    if content_length <= 0 { return "" }
+    return from_cstring(read_stdin_n_c(content_length))
+}
+
 // ─── 메시지 파싱 (regex-like substring) ────────────────
 // 정식 JSON parser 는 후속. 현재는 LSP 메시지의 단순 패턴 매칭.
 
