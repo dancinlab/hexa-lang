@@ -1678,6 +1678,28 @@
   status = "🟡 SUPPORTED-BY-CITATION — divergence is out-of-band (atlas audit clean on its own; binary≠source observed). flagged to INBOX upstream (g59)."
 
 # ───────────────────────────────────────────────────────────────────────
+# TECS-L axis B (MERSENNE) — tecs-l-mersenne-euclid-euler (slug · group=TECS-L · MR1)
+# Euclid-Euler synthesis: n is an even perfect number  <=>  n = 2^(p-1) * M_p
+# with M_p = 2^p - 1 a Mersenne prime. Euclid IX.36 (sufficiency, c. 300 BCE)
+# + Euler 1849 (necessity for evens). Odd perfect: OPEN — deferred to MR7.
+#
+# MR1 is a SYNTHESIS milestone — no new arithmetic verifies introduced. All
+# per-P_k anchor atoms (is_perfect · sigma=2n · tau=2p · Lucas-Lehmer for
+# M_p prime) are already 🔵 SUPPORTED-FORMAL under prior slugs across axis 0
+# (M5/M6) and axis B (MR2/MR4/MR5/MR6). MR1 unifies them into one statement
+# + cross-reference table (same pattern as M10 closed-form proof closure of
+# M1/M3/M9 residuals). Artifact = a single reasoned-synthesis text file with
+# the theorem statement, the first-7 P_k table, per-P_k atom pointers, and
+# the M_11 composite counterexample showing p prime =/=> M_p prime.
+
+@C tecs_l_mersenne_euclid_euler := "Euclid-Euler: even n perfect <=> n = 2^(p-1)*M_p with M_p = 2^p-1 a Mersenne prime; first 7 P_k tabulated, all anchor atoms (is_perfect, sigma=2n, tau=2p, LL) already 🔵 elsewhere; odd perfect deferred to MR7" :: synthesis [slug=tecs-l-mersenne-euclid-euler group=TECS-L]
+  method = "synthesis"
+  cmd    = "reasoned synthesis over pre-existing 🔵 atoms (no new arith verifies); see artifact for per-P_k cross-reference table"
+  raw    = ".verdicts/tecs-l-mersenne-euclid-euler/euclid_euler_statement.txt"
+  src    = "axis B MR1 — Euclid-Euler unified statement; anchors in tecs-l-n6-identity (M1), tecs-l-n6-characterizations (M4), tecs-l-physics-constants (M5), tecs-l-hypotheses (M6), tecs-l-mersenne-perfect (MR2), tecs-l-mersenne-lucas-lehmer (MR4), tecs-l-mersenne-tau-2p (MR5), tecs-l-mersenne-composite (MR6). Reverse direction M_11=23*89 closed-negative (MR6). Sister synthesis: tecs-l-mersenne-abundancy-closed (MR3) provides the closed-form derivation of the sigma=2n anchor cited here."
+  status = "🟢 SUPPORTED-NUMERICAL — reasoned synthesis closure of MR1 on top of pre-existing 🔵 anchor atoms (no new verifies); first 7 P_k (k=1..7, p in {2,3,5,7,13,17,19}) covered; odd perfect → MR7 (🟠 deferred · honest scope · paper_significance preserved). terminal · paper-eligible (MR8)."
+
+# ───────────────────────────────────────────────────────────────────────
 # TECS-L axis B (MERSENNE) — tecs-l-mersenne-abundancy-closed (slug · group=TECS-L · MR3)
 # Closed-form derivation: for P = 2^(p-1) * M_p with M_p = 2^p - 1 prime,
 #   sigma(P) = sigma(2^(p-1)) * sigma(M_p)            [sigma multiplicative · gcd(2^(p-1),M_p)=1]
