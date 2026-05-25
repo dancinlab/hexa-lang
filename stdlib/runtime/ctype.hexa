@@ -162,6 +162,41 @@ pub fn rt_str_last_index_of(s: string, sub: string) -> int {
 // (no digits consumed OR trailing non-whitespace). Empty/whitespace-only
 // → 0 (matches C body's defensive fallback for env-var/optional-argv
 // parsing — comment says 812 callsites depend on this shape).
+// RUNTIME.md step-2 — lenient atoll/atoi replacement (no-throw, decimal only).
+// Mirrors the C hxlcl_atoll body: skip ws (space/tab/newline) + optional sign +
+// base-10 digit loop; returns 0 on no-digits, NEVER throws. Distinct from
+// rt_str_parse_int below (which throws on garbage + accepts 0x hex). hxlcl_atoi
+// stays C as (int)hxlcl_atoll.
+pub fn rt_atoll(s: string) -> int {
+    let n = byte_len(s)
+    let mut i = 0
+    while i < n {
+        let b = s.byte_at(i)
+        if b == 32 || b == 9 || b == 10 {
+            i = i + 1
+        } else {
+            break
+        }
+    }
+    let mut sign = 1
+    if i < n {
+        let b = s.byte_at(i)
+        if b == 45 { sign = -1; i = i + 1 }
+        else if b == 43 { i = i + 1 }
+    }
+    let mut v = 0
+    while i < n {
+        let b = s.byte_at(i)
+        if b >= 48 && b <= 57 {
+            v = v * 10 + (b - 48)
+            i = i + 1
+        } else {
+            break
+        }
+    }
+    return sign * v
+}
+
 pub fn rt_str_parse_int(s: string) -> int {
     let n = byte_len(s)
     let mut i = 0

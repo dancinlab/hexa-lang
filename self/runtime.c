@@ -218,20 +218,10 @@ static char *__attribute__((noinline)) hxlcl_strndup(const char *s, size_t cap) 
     return out;
 }
 // Cycle 48 batch — numeric parse + bzero.
-static long long __attribute__((noinline)) hxlcl_atoll(const char *s) {
-    if (!s) return 0;
-    size_t i = 0;
-    while (s[i] == ' ' || s[i] == '\t' || s[i] == '\n') i++;
-    int sign = 1;
-    if (s[i] == '-') { sign = -1; i++; }
-    else if (s[i] == '+') i++;
-    unsigned long long n = 0;
-    while (s[i] >= '0' && s[i] <= '9') {
-        n = n * 10ULL + (unsigned long long)(s[i] - '0');
-        i++;
-    }
-    return (long long)((sign < 0) ? -(long long)n : (long long)n);
-}
+// RUNTIME.md step-2 — hxlcl_atoll forward-decl; the two-mode DEFINITION
+// (delegating to hexa-source rt_atoll) lives below, after the cycle-5 atof
+// def — this early helper zone is pre-HexaVal (same relocate technique as atof).
+static long long __attribute__((noinline)) hxlcl_atoll(const char *s);
 static int __attribute__((noinline)) hxlcl_atoi(const char *s) {
     return (int)hxlcl_atoll(s);
 }
@@ -1742,6 +1732,34 @@ static double __attribute__((noinline)) hxlcl_atof(const char *s) {
         else n *= mul;
     }
     return (sign < 0) ? -n : n;
+}
+#endif
+
+// RUNTIME.md step-2 — hxlcl_atoll DEFINITION (forward-declared in the early
+// helper zone ~L221). Under HEXA_HAS_HEXA_RT_STDLIB delegate to hexa-source
+// rt_atoll (ctype.hexa, lenient decimal); #else C fallback (bit-for-bit).
+// hxlcl_atoi (= (int)hxlcl_atoll, pure C, no HexaVal) stays at its early site.
+// Same early-zone relocate technique as the cycle-5 atof port.
+#ifdef HEXA_HAS_HEXA_RT_STDLIB
+extern HexaVal rt_atoll(HexaVal s);
+static long long __attribute__((noinline)) hxlcl_atoll(const char *s) {
+    if (!s) return 0;
+    return (long long)HX_INT(rt_atoll(hexa_str((char *)s)));
+}
+#else
+static long long __attribute__((noinline)) hxlcl_atoll(const char *s) {
+    if (!s) return 0;
+    size_t i = 0;
+    while (s[i] == ' ' || s[i] == '\t' || s[i] == '\n') i++;
+    int sign = 1;
+    if (s[i] == '-') { sign = -1; i++; }
+    else if (s[i] == '+') i++;
+    unsigned long long n = 0;
+    while (s[i] >= '0' && s[i] <= '9') {
+        n = n * 10ULL + (unsigned long long)(s[i] - '0');
+        i++;
+    }
+    return (long long)((sign < 0) ? -(long long)n : (long long)n);
 }
 #endif
 
