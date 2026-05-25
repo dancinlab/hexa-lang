@@ -376,6 +376,69 @@ pub fn pippard_coherence(v_fermi: float, tc_K: float) -> float {
     return hbar * v_fermi / (pi_p * gap0)
 }
 
+// ── 4k. Anharmonic λ-suppression ratio (stability↔coupling wall) ───────
+//
+// NOVEL closed-form quantifier of the binary-hydride stability↔coupling
+// trade-off. The McMillan-Hopfield coupling is
+//
+//   λ = N(Ef)·⟨I²⟩ / (M·⟨ω²⟩) = η / (M·⟨ω²⟩)
+//
+// where the Hopfield parameter η = N(Ef)⟨I²⟩ is chemistry-fixed and
+// UNCHANGED by anharmonic (SSCHA) re-quantisation — only the mean-square
+// phonon frequency ⟨ω²⟩ moves. The SAME ⟨ω²⟩ governs BOTH λ (denominator)
+// AND dynamical stability (⟨ω²⟩>0 required). A soft harmonic mode
+// (⟨ω²⟩_harm→0⁺) inflates λ_harm while ⟨ω²⟩_harm<0 IS the instability.
+// SSCHA hardens by a positive curvature Δω²: ⟨ω²⟩_anharm = ⟨ω²⟩_harm+Δω².
+// Because η cancels in the ratio,
+//
+//   S = λ_anharm/λ_harm = ⟨ω²⟩_harm / (⟨ω²⟩_harm + Δω²)   (0 < S ≤ 1)
+//
+// is the anharmonic λ-suppression ratio. S→1 = no hardening (no
+// suppression); S→0 = full hardening (λ enhancement destroyed). Returns
+// 0.0 when ⟨ω²⟩_harm ≤ 0 (soft/unstable harmonic mode: λ_harm ill-defined)
+// or when the stabilised stiffness stays ≤ 0.
+//
+// @cite Migdal 1958 JETP 7:996 · McMillan 1968 PR 167:331 · Hopfield 1969
+//       PRB 186:443 · Allen-Dynes 1975 PRB 12:905 · Errea-Calandra-Mauri
+//       2014 PRL 111:177002 (SSCHA anharmonic hydride).
+// Anchor: h3o N5 hydride λ_harm=2.479 (16/16 q imaginary) → λ_anharm≈1.00;
+//       ⟨ω²⟩_harm=1.0, Δω²=1.479 → S=0.403388463090, λ_harm·S=1.000.
+pub fn lambda_anharm_suppress(omega2_harm: float, delta_omega2: float) -> float {
+    if omega2_harm <= 0.0 { return 0.0 }
+    let omega2_anharm = omega2_harm + delta_omega2
+    if omega2_anharm <= 0.0 { return 0.0 }
+    return omega2_harm / omega2_anharm
+}
+
+// ── 4l. Stability-coupling margin (cation-clathrate escape discriminant) ─
+//
+// NOVEL single-number discriminant of whether a phonon-mediated material is
+// TRAPPED in the stability↔coupling trade-off (binary hydrides) or ESCAPES
+// it (cation-stuffed ternary clathrates, e.g. CaH₆). The anharmonically-
+// stabilised stiffness ⟨ω²⟩_anharm (>0 for stability) must also be soft
+// enough to deliver the target coupling λ_target = η/(M·⟨ω²⟩). The
+// stiffness that yields λ_target is ⟨ω²⟩_λ = η/(M·λ_target). The signed
+// fractional headroom is
+//
+//   m = (⟨ω²⟩_anharm − ⟨ω²⟩_λ) / ⟨ω²⟩_anharm
+//
+// m > 0 ⇒ the STABLE lattice is already stiffer than the coupling target
+// requires → stability and strong-λ are COMPATIBLE (escape; the cation
+// chemically pre-compresses the H sublattice, raising ⟨ω²⟩_anharm while
+// N(Ef) stays H-derived). m < 0 ⇒ hitting λ_target needs a softer lattice
+// than the stable one → TRAPPED. m = 0 = exactly on the wall. Returns 0.0
+// on unstable (⟨ω²⟩_anharm ≤ 0) or unphysical (⟨ω²⟩_λ < 0) input.
+//
+// @cite Hopfield 1969 PRB 186:443 · Wang et al. 2012 PNAS / Ma et al. 2022
+//       (CaH₆ clathrate, 215 K) · Errea et al. 2014 PRL 111:177002.
+// Anchor: CaH₆ escape ⟨ω²⟩_anharm=1.0, ⟨ω²⟩_λ=0.5 → m=0.5>0; h3o trapped
+//       ⟨ω²⟩_anharm=1.0, ⟨ω²⟩_λ=2.479 → m=−1.479<0.
+pub fn stability_coupling_margin(omega2_anharm: float, omega2_lambda: float) -> float {
+    if omega2_anharm <= 0.0 { return 0.0 }
+    if omega2_lambda < 0.0 { return 0.0 }
+    return (omega2_anharm - omega2_lambda) / omega2_anharm
+}
+
 // ── 5. inverse-variance consensus + σ-from-spread ──────────────────────
 //
 // Ported from cross_code_dft.py `_compute_consensus` (Phase 4 cohort #1,
