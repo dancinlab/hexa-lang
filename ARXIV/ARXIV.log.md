@@ -2,6 +2,23 @@
 
 Append-only history sister of `ARXIV.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
+## 2026-05-26 — A4 PHANES axis 흡수 (자율발견 10편 + phanes 4표면 핸드오프 g60)
+
+- [x] A4 ingest — PHANES axis 본격 흡수 (자율발견 SaaS phanes 의 OUROBOROS 루프가 필요로 하는 self-improving agent / AI-Scientist / verifier-driven RL / open-endedness / QD / LLM-진화탐색 논문)
+  - fetch = arXiv API (`export.arxiv.org/api/query`, https — `/research:arxiv` skill) — **8 query** (=8 cap)
+  - query: autonomous-scientific-discovery-agent · ti:AI-Scientist+automated-research · self-improving+agent+LM · verifier+RL+reasoning+LM · quality-diversity+open-ended · open-endedness+foundation-model · AutoML-Zero/evolving-algos-scratch · LLM+evolutionary+discovery+mathematical
+  - **10 on-topic 흡수** (off-topic drop: 도메인-특화 AI-Scientist 인스턴스 astro/medical/ecosystem · QD 응용 robot/Lenia/NLG-eval · RLVR/critic/PRM 변형 · open-ended TEXT 생성(다른 의미) · MADRL/active-learning/MORL 등 — verdict 참조)
+  - **3-class triage** (a) verify-able / (b) 🟡 citation / (c) handoff→phanes:
+    - **(a) verify-able = 0 (정직·예상대로)** — **A2 ANIMA 와 동형, A3 DEMIURGE 와 정반대**. PHANES 는 systems/SaaS 축이라 `hexa verify --expr` 에 폐형해 atom 부재. HEAD grep 확인: `tool/verify_cli.hexa` 에 phanes/ouroboros/loop/saturation/novelty primitive 0개; `compiler/drill/{drill,round}.hexa` 가 OUROBOROS 엔진 보유(`drill_run`·`_honesty_gate`·`_verifier_run`·`_flush_discoveries_cum`)하나 이는 루프 오케스트레이션이지 스칼라 recompute 아님.
+    - **(b) 🟡 citation = 5** — 2406.04268(OE-essential-for-ASI) · 2306.01711(OMNI) · 2003.03384(AutoML-Zero) · 2502.14297(Sakana-AI-Scientist-eval) · 2602.11549(Native-Reasoning-unverifiable-data). 다수 dual citation+handoff.
+    - **(c) handoff→phanes = 10** — 10편 전부 phanes 컴포넌트 cross-link 보유.
+  - **핵심 대응**: phanes OUROBOROS 엔진이 흡수 논문들의 루프를 **이미 구현** — 6단계 라운드 체인→saturation(round yield 0) = open-endedness/novelty 소진; `round.hexa net_novel==0` = **C5 novelty-fixpoint signal** = literal novelty-search/QD 정지 기준; pluggable verifier + `_honesty_gate` = verifier-driven RL/RLVR/VLM-as-judge; overlay 누적 = provenance/catalog; job `{seed,verifier_ref,rounds_cap}` = AI-Scientist tenant-objective.
+  - **phanes 4표면 cross-link (10 handoff g60)**: OUROBOROS 발견 루프=2406.04268/2003.03384/2511.02864(AlphaEvolve **직접 analog**)/2504.05108 · pluggable verifier 게이트=2405.15568(OMNI-EPIC verifier-as-code)/2602.11549(unverifiable frontier, P2.6) · provenance/catalog=2508.15126(aiXiv)/2511.02864 · tenant-objective=2306.01711(OMNI interestingness=next-seed)/2502.14297(honest-scope guard)/2504.21024(WebEvolver self-improve).
+  - **미래 verify-able-CANDIDATE (현재 🟢 아님)**: net-novelty-rate / saturation-round 폐형해 — `round.hexa` 가 이미 `net_novel` 계산 → 엔진-instrumentation lane 에서 `hexa verify --expr` atom 후보(엔진 작업, arxiv-인용 수학 아님 → A4 verify 로 세지 않음).
+  - 영속: `.verdicts/arxiv-phanes-absorb/triage_a4.txt` (ASCII triage 표) + `docs/a4-phanes-axis.md` (한글) + `CLAIMS.tape` @C slug=arxiv-phanes-absorb (🟡 10 papers + 10 handoffs · 0 verify-able honest).
+- [x] phanes 핸드오프 filing (g60, 실제 filing) — `~/core/phanes/INBOX.log.md` **생성**(기존 부재) slug `arxiv-a4-autonomous-discovery-ingest` append (stub-first, dedup). **주의**: phanes working tree 가 feature 브랜치(`domain/init-phanes`, 1 ahead/4 behind origin/main, clean 하지만 non-main) 위 → A2/A3 패턴 + memory `feedback_closure` 에 따라 working-copy edit 만 (non-main phanes 트리 commit 금지) → **parent action: phanes 세션 commit + domain/init-phanes reconcile 필요**.
+- [x] honesty — **A4 = A2 동형(0 verify-able, 정직)** (A3 만 verify-native). verify 수치 0 은 정직한 결과 — PHANES 는 OUROBOROS 엔진 소비자이지 폐형해 도메인 아님. A4 가치 = citation + phanes cross-pollination(4표면 맵). sibling V5-IIT lane 동시 진행 (CLAIMS.tape/ARXIV.md 충돌 시 merge keep-both).
+
 ## 2026-05-26 — A3 DEMIURGE axis 흡수 (반물질 공장 12편 + demiurge 7공정 핸드오프 g60)
 
 - [x] A3 ingest — DEMIURGE axis 본격 흡수 (반물질 공장 antihydrogen factory 7공정 물리 논문)
