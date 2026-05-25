@@ -3,6 +3,22 @@
 Append-only history sister of `INBOX.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
 
+## 2026-05-25T15:29Z — `hexa verify --expr <fn> <n>` 에 value-less COMPUTE mode 부재 (catalogue sweep / O3 per-hit verify 차단)
+
+OEIS O2 full sweep (PR pending · slug=oeis-full-sweep) 에서 발견. `hexa verify --expr <fn> <n> <v>` 는 expected value `<v>` 를 **3번째 인자로 사전요구** 하고 그 값과 calc 를 비교(re-confirm)만 한다 — **fresh 값을 emit 하는 경로가 없다**.
+
+- 실증 (origin/main 빌드): `hexa verify --expr sigma 7` (2-arg, 값 생략) → `error: usage: hexa verify --expr <fn> <n> <v> | <fn> <a> <b> <v> [--absorb]` (compute mode 없음). `hexa verify --expr sigma 7 8` (3-arg) → `calc = 8 == expected 8 · 🔵` (값을 내부적으로 계산하지만 비교용으로만 쓰고 standalone emit 안 함).
+- 영향: catalogue sweep / discovery loop 이 `σ(7)=?` 를 CLI 로 얻을 수 없음 → 값은 하드코드 하거나 외부 소스에서 가져와야 함. O2 는 OEIS catalogue-verbatim 테이블을 하드코드 해 우회 (offset-correct). **O3 (per-hit fresh verify) 와 모든 generative discovery 가 이 gap 에 막힘** — "compute-then-verify" loop 불가.
+- **DISTINCT from** 2026-05-25T08:45Z verify_cli whitelist 항목 (L126-136): 그건 특정 fn (lambert_w/wheeler 등) 이 whitelist 밖이라 `--from-verify` recompute 불가 ("no calculator path"). **본 gap 은 whitelist 에 이미 있는 fn (sigma/tau/phi) 조차** value-less compute 경로가 없다는 점 — calculator 가 있어도 값을 안 내준다. 직교 gap.
+
+- [ ] **제안 (a · 선호)**: `hexa compute <fn> <n>` verb 신설 — 계산된 값만 emit (verify 비교 없음). discovery loop 의 1급 입력.
+- [ ] **제안 (b · 대안)**: `hexa verify --expr <fn> <n>` (2-arg) 가 계산값을 **print AND self-verify** (값 출력 + 🔵 self-consistent tier). 기존 3-arg 의미 보존, 2-arg 만 새 동작.
+- [ ] 둘 중 어느 쪽이든 O3 의 "compute-then-verify" loop 을 unblock — sweep 이 K=10 hit 의 a(n) 을 CLI 로 직접 재계산 → OEIS dump 값과 대조 → 🔵/🟡 tier 자동 분류 가능.
+- [ ] **Tier (honest)**: `🟠 INSUFFICIENT · gap="no value-less compute path in verify CLI"`. severity: medium (O3 + generative discovery 의 구조적 차단; O2 는 catalogue 하드코드로 우회 성공).
+- [ ] cross-link: OEIS O2 (slug=oeis-full-sweep · `.verdicts/oeis-full-sweep/`) → O3 (per-hit verify, 본 gap 해소 후 진행). 출처: OEIS/OEIS.md O2/O3.
+- [ ] Status: open · proposed-by:agent · awaits:hexa-lang fix
+
+
 ## 2026-05-25T23:30Z — `hexa cloud nohup --early-life-check` — 조기-사망 launch 감지 (anima cloud handoff Option C 해소)
 
 anima patch `inbox/patches/cloud-launch-trainer-script-arg-missing.md` (PR #1110 으로 filing) 수신. F-CURRICULA-1 fire (A100 SXM $1.49/hr) 가 `dispatch_p21h_v3.hexa:365` 의 argv 누락으로 `launch_trainer_p21h.sh` 의 `exec python3 -u "$@"` 가 script-path 없이 `python3 -u qwen 1337` 실행 → 즉사. pod 는 RUNNING 유지·과금, train 0 → **158분 idle burn ($3.92)**. dispatcher 는 `cloud_nohup` 이 pid 만 반환하면 즉시 리턴해서 원격 즉사를 못 봄 = silent class-1 실패.

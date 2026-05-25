@@ -2,6 +2,19 @@
 
 Append-only history sister of `OEIS.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
+## 2026-05-25T15:29Z — O2 full sweep
+
+- [x] O1 scanner → O2 full sweep 확장: `OEIS/tool/full_sweep.hexa` (hexa-native; POC 의 "첫 1000" → 전체 stripped.gz 덤프 sweep). 후보 K=20 테이블은 OEIS catalogue-verbatim (offset-correct) — POC 의 offset 불일치(n²/n!/Fib 등이 n=1 부터 시작해 덤프의 offset-0 윈도우 miss) 동시 수정.
+  - **374047** OEIS seq sweep (≥K=10 terms) · **20** candidate fn · K=10 hash-intersect
+  - **1707** hit (K=10) — POC 6 → 1707 (full sweep + offset 수정 효과)
+  - K=20 2차 패스로 first-K coincidence 필터: **336 survive** · **1334 coincidence 제거** · **37 na** (<20 terms)
+  - canonical coincidence: **A000926 (Idoneal numbers)** ↔ `n` — 첫 10항 일치하나 term ≤20 에서 divergence → `k20_survives=no` (POC 가 예고한 falsifier 가 K=20 에서 자동 확정)
+  - O1 POC 6 hit 전부 재현: tau↔A000005 · sigma_0↔A000005 · phi↔A000010 · n↔A000027 · sigma↔A000203 (5개 K=20 survive) + n↔A000926 (coincidence 로 정확히 flagged)
+  - survive=yes 상위 fn: n(190) · prime(67) · tau/sigma_0(15) · odd(12) · triangular(7) · sigma(6) · mu(5) …
+  - 영속: `.verdicts/oeis-full-sweep/ledger.json` (g65 typed · 1707 hits + 1334 coincidences) + `sweep_log.txt` (verbatim stdout · ASCII) + `hits.tsv` (full match table) + `CLAIMS.tape` @C slug=oeis-full-sweep
+  - wall: stripped.gz 1회 캐시 (~32MB→81MB). awk hash-intersect (374K 라인 × 20 fn)= 수 초. 전체 run 은 interp orchestration overhead 로 느림 (compiled build 는 pool-route heavy-refuse → interp 사용). 측정 자체는 빠름.
+- [x] g59 INBOX filing — `hexa verify --expr <fn> <n>` value-less COMPUTE mode 부재 gap (O3 + generative discovery 차단). verify_cli whitelist 항목과 직교 (whitelist 에 있는 sigma/tau/phi 조차 값 emit 안 함). 제안: `hexa compute <fn> <n>` verb OR 2-arg verify print+self-verify.
+
 ## 2026-05-25 — 도메인 개시 + O1 scanner POC
 
 - [x] 도메인 SSOT `OEIS/OEIS.md` 작성 — @title + @goal + O1-O8 roadmap + 거버넌스
