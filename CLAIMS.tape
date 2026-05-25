@@ -2384,3 +2384,20 @@
   raw    = ".verdicts/oeis-atlas-fold/fold_ledger.txt"
   src    = "compiler/atlas/embedded.gen.hexa (3 @F: oeis-A001065 · oeis-A001157 · oeis-A001158, each source=\"OEIS Annnnnn\" + url=https://oeis.org/Annnnnn) · .verdicts/oeis-perhit-verify/tier_ledger.txt (O3 8 🔵) · OEIS A000203/A000005/A000010/A008683/A001065/A001157/A001158 (CC-BY-SA)"
   status = "🔵 7 verified theorems atlas-linked (5 already-present + attribution · 3 newly-folded). Dedup vs 16K confirmed: sigma/tau/phi/mu @P HIT (no dup); aliquot/sigma_2/sigma_3 MISS → folded with OEIS CC-BY-SA provenance. O4 = mostly-attribution (the value is the verified OEIS↔hexa-fn link, not node count). Terminal · O5-ready (TECS-L F11 cross-link)."
+
+# ───────────────────────────────────────────────────────────────────────
+# OEIS — oeis-tecs-crosslink (slug · group=OEIS · O5)
+# Cross-link of the 7 O4 OEIS↔hexa-fn provenance links to TECS-L axis-F F11
+# ("OEIS reuse cite" — TECS-L is the downstream consumer of OEIS-domain
+# provenance). g67 intra-project reuse lattice: OEIS PROVIDES verified
+# arithmetic-fn provenance; TECS-L REUSES it (n=6 identity σφ=nτ + M4 μ +
+# F3 σ_2 cite the now-OEIS-attributed sigma/tau/phi/mu). Reuse edge
+# `TECS-L --reuses--> OEIS` recorded in repo-root NEXUS.tape §3b. Docs+NEXUS
+# only — no atlas fold (O4 owns the fold; embedded.gen.hexa untouched).
+
+@C oeis_tecs_crosslink := "OEIS O5 TECS-L cross-link: the 7 O4 OEIS↔hexa-fn provenance links (sigma↔A000203 · tau↔A000005 · phi↔A000010 · mu↔A008683 @P builtins + aliquot↔A001065 · sigma_2↔A001157 · sigma_3↔A001158 @F folds) cross-linked to TECS-L axis-F F11 'OEIS reuse cite'. TECS-L M1-M10 (n=6 identity σφ=nτ ⟺ n∈{1,6}) + M4 (μ characterization) + F3 (σ_2 reverse-lookup) consume these arithmetic fns, which now carry OEIS canonical-source attribution → TECS-L = downstream consumer. g67 intra-project reuse edge `TECS-L --reuses--> OEIS` recorded in repo-root NEXUS.tape §3b (domain-node OEIS/TECS-L + domain-reuse-edge de1). O5 = docs+NEXUS only; no new atlas fold (O4 owns embedded.gen.hexa)." :: synthesis [slug=oeis-tecs-crosslink group=OEIS]
+  method = "crosslink"
+  cmd    = "synthesis (no new hexa verify) — links sourced from .verdicts/oeis-atlas-fold/fold_ledger.txt (O4); edge recorded in NEXUS.tape §3b"
+  raw    = ".verdicts/oeis-tecs-crosslink/crosslink.txt"
+  src    = "NEXUS.tape (§3b: domain-node d_oeis/d_tecsl + reuse-edge de1) · TECS-L/TECS-L.md (F11 [x] closure) · OEIS/docs/o5-tecs-crosslink.md · .verdicts/oeis-atlas-fold/fold_ledger.txt (O4, 7 links)"
+  status = "🟢 7 OEIS↔hexa provenance links cross-linked to TECS-L F11 + NEXUS.tape reuse edge (g67). TECS-L F11 closed (OEIS reuse cite); OEIS O5 closed. Docs+NEXUS only — no atlas fold."

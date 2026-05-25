@@ -86,6 +86,27 @@
 @X c3 := "stdlib (other families) -> consumer" :: reuse-candidate [proposed draft]
   note = "alloc · aura · aws · booksim · bot · brain · cert · ... — provides exist, downstream edges pending"
 
+# === 3b. intra-project domain reuse lattice (g67) — nodes=domains, edges=reuse (additive) ===
+# Distinct from the cross-repo STAR hub above (g68): these are WITHIN hexa-lang,
+# one in-repo domain reusing another in-repo domain's verified output. ASCII-only (g3).
+
+@X d_oeis := "OEIS domain (catalogue mirror)" :: domain-node [active]
+  provides  = "verified arithmetic-fn provenance — 7 OEIS<->hexa-fn links (O4 / PR #1138)"
+  links     = "sigma<->A000203 · tau<->A000005 · phi<->A000010 · mu<->A008683 (4 @P builtins) + aliquot<->A001065 · sigma_2<->A001157 · sigma_3<->A001158 (3 @F folds, CC-BY-SA)"
+  ssot      = "OEIS/OEIS.md · ledger .verdicts/oeis-atlas-fold/fold_ledger.txt"
+
+@X d_tecsl := "TECS-L domain (n=6 identity engine)" :: domain-node [active]
+  reused    = "OEIS sigma/tau/phi/mu provenance for n=6 identity work (M1-M10 sigma*phi=n*tau locus)"
+  note      = "TECS-L's M1-M10 + axes A/B rely on sigma/tau/phi/mu, which now carry OEIS canonical-source attribution"
+  ssot      = "TECS-L/TECS-L.md (F11 = OEIS reuse cite, closed by O5)"
+
+@X de1 := "TECS-L --reuses--> OEIS" :: domain-reuse-edge [active]
+  provider  = "OEIS (verified arithmetic-fn provenance — 7 OEIS<->hexa links)"
+  reused_by = "TECS-L (downstream consumer; n=6 identity sigma*phi=n*tau cites the OEIS-attributed sigma/tau/phi/mu)"
+  links     = "7 provenance links: A000203/A000005/A000010/A008683 (builtins) + A001065/A001157/A001158 (folds)"
+  closes    = "TECS-L axis-F F11 (OEIS reuse cite) · OEIS O5 (cross-link)"
+  evidence  = "OEIS/docs/o5-tecs-crosslink.md · .verdicts/oeis-tecs-crosslink/crosslink.txt · PR #1138 (O4 fold)"
+
 # === 4. notes — atlas live · consumer star · usage protocol ===
 
 @N n1 := "atlas live registry — auto-updating discovery surface" :: note [active]
