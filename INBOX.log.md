@@ -2,6 +2,17 @@
 
 Append-only history sister of `INBOX.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
+## 2026-05-25T09:40Z — hexa cloud vast provisioning 3 구체 버그픽스 (rent 빈-offer · cpu_ram 단위 · direct-IP ssh identity · d8)
+
+demiurge RTSC Mg₂XH₆/LaBeH₈ vast 캠페인(2 agent 실증, pod 37753444)에서 발견한 hexa cloud vast 경로의 구체적 결함 3건 + 수정. lifecycle 부재(#989)·오라우팅(#967)·ssh-255(#976)와 별개의 actionable 1-라인급 픽스.
+
+- [ ] **(1) `cloud_cli.hexa rent vast` 가 항상 빈 offer 반환** — `stdlib/cloud/vast.hexa:138 _vast_build_query` 가 `reliability2>=0.95` 를 prepend 하는데 현재 vastai 가 `reliability2` 를 미인식 필드로 거부 → offer set 빈값 → rent 무조건 실패(이게 "rent 안 됨"의 1차 원인, 에이전트들이 raw `vastai create` 로 폴백한 이유). **FIX: `reliability` (no trailing `2`)**.
+- [ ] **(2) cpu_ram 필터 단위 = GB (MB 아님)** — vast offer query 의 `cpu_ram` 은 **GB** 단위. 64GB 노리며 `cpu_ram>=64000` (MB 가정) 주면 0 offer. `cpu_ram>=64` 가 정답. rent query 빌더/문서가 MB 로 넘기면 빈 결과. (실증: `vastai search offers 'cpu_cores>=24 cpu_ram>=64 dph<0.30 rentable=true'` 정상; `>=64000` 빈값.)
+- [ ] **(3) direct-IP ssh identity 미제시 → `Permission denied (publickey)`** — cloud-guard 가 `.vast.ai` proxy 호스트를 raw-ssh 로 오탐(#967)해 우회로 **direct IP** 를 쓰면, raw IP 가 `~/.ssh/config` 에 Host 블록이 없어 vast identity 키를 안 내밀어 `hexa cloud run` 이 publickey 거부로 실패. **FIX: rent/adopt 시 IP:port → `IdentityFile ~/.ssh/id_vast*` Host 블록 자동 주입**, 또는 `hexa cloud run --insecure` 가 vast identity 를 명시적으로 `-i` 로 제시. (실증: labeh8-paw pod 37753444 가 Host 블록 추가 후 정상 구동 — 키 지문 일치 확인.)
+- [ ] **종합** — hexa cloud 의 vast provisioning(rent/adopt/run)이 위 3개를 내장 처리하면 raw vastai/수동 ssh-config 0 → lifecycle PR #989 와 합쳐 진짜 single-surface 완결. (1)(2)는 `vast.hexa` query 빌더 즉시 수정 가능.
+
+Status: open · proposed-by:agent · severity:high ((1)은 정식 rent 경로 전면 차단 · 1-라인 픽스) · source:demiurge RTSC vast 세션 (2 agent · pod 37753444 실증) · awaits:hexa-lang fix
+
 ## 2026-05-25 — cloud INBOX FULL CLOSURE: pool-route 0.6.10 ships both cross-repo items
 
 직전 entry 들에서 pool-route 플러그인 소관으로 재분류했던 2건이 실제로 shipped. cloud INBOX open = 0.
