@@ -1097,6 +1097,9 @@ fn resolve_hxroot() {
 fn cmd_cc() {
     println("=== Rebuilding hexa_cc (transpiler) ===")
     let __hxroot = resolve_hxroot()
+    // CANON M3: the transpiler is a build artifact under build/, not a
+    // committed binary. Ensure the output dir exists.
+    let _ = exec("mkdir -p '" + __hxroot + "/build'")
     // OS 분기: Linux 에서는 glibc 의 POSIX/GNU 확장(strdup, getline 등)을
     //          사용하기 위해 `-D_GNU_SOURCE` 가 필요하고, 수학 심볼 참조
     //          (fmod/sqrt 등) 는 `-lm` 로 링크해야 한다. macOS 는 두 플래그
@@ -1127,11 +1130,11 @@ fn cmd_cc() {
     }
     let mut cmd = ""
     if uname == "Linux" {
-        cmd = "clang -O2 -D_GNU_SOURCE -I '" + __hxroot + "' -I '" + __hxroot + "/self' '" + __hxroot + "/self/native/hexa_cc.c' '" + rt_o + "' -o '" + __hxroot + "/self/native/hexa_v2' -lm 2>&1"
+        cmd = "clang -O2 -D_GNU_SOURCE -I '" + __hxroot + "' -I '" + __hxroot + "/self' '" + __hxroot + "/self/native/hexa_cc.c' '" + rt_o + "' -o '" + __hxroot + "/build/hexa_v2' -lm 2>&1"
     } else {
         // macOS (Darwin) — libSystem 이 libm 자동 포함, _GNU_SOURCE 무의미.
         // 단, `-I self` 는 runtime.h 경로 해석에 반드시 필요.
-        cmd = "clang -O2 -I '" + __hxroot + "' -I '" + __hxroot + "/self' '" + __hxroot + "/self/native/hexa_cc.c' '" + rt_o + "' -o '" + __hxroot + "/self/native/hexa_v2' 2>&1"
+        cmd = "clang -O2 -I '" + __hxroot + "' -I '" + __hxroot + "/self' '" + __hxroot + "/self/native/hexa_cc.c' '" + rt_o + "' -o '" + __hxroot + "/build/hexa_v2' 2>&1"
     }
     println("  " + cmd)
     let r = exec(cmd)
@@ -1851,25 +1854,41 @@ fn _pick_hexa_v2_in_dir(native_dir) {
     return ""
 }
 
+// _pick_hexa_v2_with_build: CANON M3 — given a repo root, prefer the
+// cc-built transpiler artifact at <root>/build/hexa_v2; fall back to the
+// committed <root>/self/native binary (legacy/arch-specific) until M3b
+// removes the committed seeds entirely. The build/ artifact is per-machine
+// (built by `hexa cc`) so it is never arch-mismatched — this is what closes
+// the committed-binary arch-leak class.
+fn _pick_hexa_v2_with_build(root) {
+    let build_bin = root + "/build/hexa_v2"
+    let build_chk = exec("test -x '" + build_bin + "' && printf yes || printf no")
+    if build_chk == "yes" {
+        return build_bin
+    }
+    return _pick_hexa_v2_in_dir(root + "/self/native")
+}
+
 fn resolve_hexa_v2() {
-    // 1) argv[0] 기반 — 가장 우선. 설치 디렉토리와 `./hexa` 실행 경로가 같은
-    //    서브트리라는 성질 이용 (dirname(./hexa) + /self/native/<arch-bin>).
+    // CANON M3: each probe root resolves build/hexa_v2 (cc-built artifact)
+    // FIRST, then the committed self/native binary as fallback.
+    // 1) argv[0] 기반 — 가장 우선 (dirname(./hexa) = repo root).
     let inst = install_dir_from_argv0()
     if len(inst) > 0 {
-        let argv_bin = _pick_hexa_v2_in_dir(inst + "/self/native")
+        let argv_bin = _pick_hexa_v2_with_build(inst)
         if len(argv_bin) > 0 {
             return argv_bin
         }
     }
-    // 2) cwd-relative — 리포 루트에서 실행 시 기존 동작 유지.
-    let cwd_bin = _pick_hexa_v2_in_dir("./self/native")
+    // 2) cwd-relative — 리포 루트에서 실행 시.
+    let cwd_bin = _pick_hexa_v2_with_build(".")
     if len(cwd_bin) > 0 {
         return cwd_bin
     }
-    // 3) $HOME fallback — 개발 기본 위치.
-    let home_root = exec("printf '%s' \"$HEXA_LANG/self/native\"")
+    // 3) $HEXA_LANG fallback — 개발 기본 위치.
+    let home_root = exec("printf '%s' \"$HEXA_LANG\"")
     if len(home_root) > 0 {
-        let home_bin = _pick_hexa_v2_in_dir(home_root)
+        let home_bin = _pick_hexa_v2_with_build(home_root)
         if len(home_bin) > 0 {
             return home_bin
         }
