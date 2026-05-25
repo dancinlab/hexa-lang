@@ -2,6 +2,19 @@
 
 Append-only history sister of `CANON.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
+## 2026-05-25T17:30Z — M9 문서 surface 정확성 스윕 (M1~M8 정렬 · docs-only)
+
+M1~M8 canonical 정렬 후 docs가 옛 상태를 present-tense로 주장하는지 전수 스윕. 격리 worktree `agent-a6405bae7b439bd08` (base origin/main). CANON.md/log·ATLAS*·RUNTIME.log.md(도메인 SSOT) 미접촉.
+
+- [x] **인벤토리** — `README*.md`·`COMPILER.md`·`RUNTIME.md`·`INBOX.md`·top-level `*.md`·`doc/**/*.md` 전체. canonical 기준 = (1) 컴파일러 바이너리 git-제거→`build/hexa_v2` 산출물·`hexa cc` 부트스트랩 (2) `_v2.c` 4개 M2 삭제·라이브=`hexa_cc.c` (3) CLI core + `hexa tool` 5-family 드로어.
+- [x] **핵심 발견** — `self/codegen_c2.hexa`는 이미 `self/codegen.hexa`로 rename(PR #387, CANON-前) → 파일 부재. 옛 docs가 이를 SSOT로 present-tense 참조.
+- [x] **수정(보수적 2건)** — (1) `COMPILER.md` "Naming — drop the bootstrap vestiges" 표: `hexa_v2`/`hexa_cc.c`(M3b)·`codegen_c2.hexa`(#387 rename)·`.bak`/`_v2.c`(M1/M2) 3행에 **DONE** 주석 + intro에 "CANON이 이미 해소" 명시. 미완 정공법행(`aprime_cc`·`s4_flatc_post`)은 native-codegen 도메인이라 보존. (2) `SPEC.md` L693 present-tense 설명 `codegen_c2.hexa`→`codegen.hexa`.
+- [x] **보존(시점기록)** — README L137·SPEC L803(commit `41ecfb97`)·CHANGELOG L143(rename 기록)·HANDOFF(2026-05-19 frozen)·RUNTIME.md 의 `codegen_c2.hexa`/`hexa_v2` 다수는 전부 날짜·SHA 박힌 cycle 로그 → 작성 시점엔 정확 → 무손상. GOAL/ROADMAP `hexa_v2`는 라이브 부트스트랩 transpiler명이라 정확.
+- [x] **링크 검증** — README 내부 링크(SPEC.yaml·doc/atlas_lint_easy_explainer.md·COMPILE-SPEED.{tape,log.tape}·stdlib/flame/PLAN.md) 5/5 resolve. 삭제 `_v2.c` 4개 present-tense live-doc 참조 0건 재확인(M7이 이미 청소).
+- [x] **랜딩** — docs-only(코드 0). net +10/−7(COMPILER.md +10/−7·SPEC.md 1줄). stacked PR base origin/main.
+
+**교훈**: docs 스윕은 "파일 존재" + "present-tense vs 날짜박힌 시점기록" 2축 게이트가 핵심. `codegen_c2.hexa`처럼 CANON-前에 이미 rename된 잔재가 vestige 표에 *plan*으로 남아 거짓이 됨 — 시점기록(SHA/날짜)은 보존, 라이브 plan/procedure 표만 수정. RUNTIME.md cycle 로그는 도메인 SSOT라 in-flight 충돌 회피 위해서도 보존이 안전.
+
 ## 2026-05-25T16:00Z — M6 `hexa tool` 서랍 완전 커버리지 + core↔tool 경계 정리 (M4 polish)
 
 PR #964(M4)의 후속 polish. 격리 worktree `agent-a119c1b3b270d14f8` (base origin/main). 편집 범위 = `self/main.hexa`의 `cmd_help`/`cmd_tool_list`만 (`resolve_or_bootstrap_hexa_v2`는 M5 세션 소유라 미접촉).
