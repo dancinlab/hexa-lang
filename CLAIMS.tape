@@ -2431,3 +2431,20 @@
   raw    = ".verdicts/oeis-tecs-crosslink/crosslink.txt"
   src    = "NEXUS.tape (§3b: domain-node d_oeis/d_tecsl + reuse-edge de1) · TECS-L/TECS-L.md (F11 [x] closure) · OEIS/docs/o5-tecs-crosslink.md · .verdicts/oeis-atlas-fold/fold_ledger.txt (O4, 7 links)"
   status = "🟢 7 OEIS↔hexa provenance links cross-linked to TECS-L F11 + NEXUS.tape reuse edge (g67). TECS-L F11 closed (OEIS reuse cite); OEIS O5 closed. Docs+NEXUS only — no atlas fold."
+
+# OEIS — oeis-closure (slug · group=OEIS · O7)
+# Catalogue-mirror closure synthesis of O1-O6 + paper-gate eval. Funnel:
+# 374,047 swept → 1,707 K=10 hit → 336 K=20 survive / 1,334 coincidence / 37 na
+# → 🔵 8 (7 distinct) / 🟡 41 / 🟠 287 → 7 atlas-linked NT-fn provenance.
+# K=20 second-pass exposes 78.1% (1334/1707) of K=10 matches as first-K artifacts.
+# paper_significance eval: candidate (b) the 78% coincidence rate meets the gate
+# (pre-registered falsifier from O1 A000926↔n + 374K real measurement + closed-
+# negative ruling out "K=10 prefix-match as a sequence-identity test") → O8 TRIGGER.
+# candidates (a) A000926 anecdote + (c) sibling-locus (uniqueness unproven) = SKIP.
+
+@C oeis_closure := "OEIS O7 catalogue-mirror closure (synthesis of O1-O6) + paper-gate eval. FUNNEL: 374,047 swept seq × 20 hexa NT/poly fn → 1,707 K=10 hash-intersect hit → K=20 second-pass: 336 survive / 1,334 coincidence / 37 na → O3 per-hit hexa verify: 🔵 8 DIRECT (7 distinct theorem) / 🟡 41 catalogue-cite / 🟠 287 calculator-gap → O4: 7 atlas-linked (4 @P sigma/tau/phi/mu present + 1 alias sigma_0==tau + 3 new @F aliquot A001065/sigma_2 A001157/sigma_3 A001158). selectivity 5.3e-5 (verify-gated, not naive dump). K=20 filter exposes 78.1% (1334/1707) of K=10 matches as first-K artifacts. LIMITS: 🟠 287 = 100% calculator-gap (no _recompute path for n×190/prime×67/poly), convertible by VERIFY-KIT V7 mutual-feed (mostly to 🟡 trivial-alias cites, not new theorems); O6 DLMF closed-negative (pattern not portable). PAPER-GATE: candidate (b) 78%-coincidence-rate MEETS paper_significance — pre-registered falsifier (O1 scanner registered A000926↔n 'diverge at term 11, O3 falsifier' = H 'K=10 prefix-match ⟹ sequence identity') + real 374K measurement + closed-negative finding (H FALSIFIED at 78.1%, ruled-out axis = short-prefix-as-identity-test; paper_negative_ok). CAVEAT (must appear in §finding): candidate-set-relative (20 low-entropy fns) + single K=10→20 pair. candidates (a) A000926 anecdote + (c) sibling-locus n·φ=σ⟺{1,6} (F3, uniqueness UNPROVEN, hand-sweep n=1..8) = SKIP (fail gate, not forced). VERDICT: O7 closure GREEN; O8 paper-gate = TRIGGER (slug oeis-prefix-collision-falsifier)." :: synthesis [slug=oeis-closure group=OEIS]
+  method = "synthesis"
+  cmd    = "closure (no new hexa verify) — aggregates O1-O6 verdict ledgers; paper_significance eval per commons paper_gate/paper_negative_ok"
+  raw    = ".verdicts/oeis-closure/closure_report.txt"
+  src    = ".verdicts/oeis-full-sweep/ledger.json (O2 374K) · .verdicts/oeis-perhit-verify/tier_ledger.txt (O3) · .verdicts/oeis-atlas-fold/fold_ledger.txt (O4) · .verdicts/oeis-tecs-crosslink/crosslink.txt (O5) · OEIS/docs/o6-dlmf-feasibility.md (O6) · OEIS/docs/o7-catalogue-closure.md"
+  status = "🟢 catalogue closure: 374K→1707→336→7 funnel + 78% coincidence-filter 측정 + paper-gate eval = TRIGGER O8 (closed-negative 'K=10 prefix-match is not a sequence-identity test', pre-registered falsifier + 374K measurement; candidates a/c = SKIP, not forced)."

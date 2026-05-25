@@ -1,0 +1,108 @@
+# OEIS O7 -- CATALOGUE-MIRROR CLOSURE REPORT (O1-O6 synthesis + paper-gate eval)
+# method: synthesis / closure  (no new hexa verify; aggregates O1-O6 verdict ledgers)
+# date: 2026-05-26 (UTC)  | ASCII-only (commons g3) | docs+verdict+CLAIMS only (atlas untouched)
+
+=== FUNNEL (verbatim from ledgers) ===
+        OEIS stripped.gz bulk dump (CC-BY-SA)
+                      |
+                      v
+   374,047  swept seq (>=K=10 terms)  x 20 candidate hexa NT/poly fn
+                      |  K=10 hash-intersect (O(N), 수 초)
+                      v
+     1,707  K=10 hit
+                      |  K=20 second-pass coincidence filter
+        +-------------+-------------------------------+
+        v             v                               v
+      336           1,334                             37
+   K=20 survive   COINCIDENCE (first-K artifact)     na (<20 terms)
+                  = 78.1% of 1,707 all hits
+                  = 79.9% of 1,670 disprovable
+        |
+        v  O3 per-hit hexa verify --expr (g5)
+     BLUE 8 DIRECT   YELLOW 41 CITATION   ORANGE 287 NO-PATH
+     (7 distinct)    (alias prefix)       (n*190 prime*67 poly/trivial)
+        |
+        v  O4 verified-only atlas fold (dedup vs ~16K)
+     7 atlas-linked = 4 @P present (sigma/tau/phi/mu)
+                     + 1 alias (sigma_0==tau, A000005)
+                     + 3 newly-folded @F (aliquot A001065 / sigma_2 A001157 / sigma_3 A001158)
+                       net +3 (16134 -> 16137)
+        |
+        v  O5 cross-link
+   TECS-L axis-F F11 (downstream cite) + NEXUS.tape sec3b reuse edge (g67)
+
+   [O6 sister-probe] DLMF as-is reuse -> RED FALSIFIED (closed-negative; pattern not portable)
+
+   selectivity: 374,047 -> 7 = 5.3e-5 (verify-gated, NOT naive dump)
+
+=== STAGE TABLE ===
+O1 POC scan    : 899 seq (first 1000)  -> 6 hit (~0.67%, offset bug)        [oeis-scanner-poc]
+O2 full sweep  : 374,047 seq x 20 fn   -> 1,707 K=10 hit                    [oeis-full-sweep]
+O2 K=20 filter : 1,707 hit             -> 336 survive / 1,334 coinc / 37 na [ledger.json]
+O3 per-hit     : 336 survivor          -> BLUE 8 (7 distinct) / YEL 41 / ORG 287 [tier_ledger.txt]
+O4 fold        : 7 distinct BLUE       -> 7 atlas-linked (4 @P + 1 alias + 3 @F) [fold_ledger.txt]
+O5 cross-link  : 7 link                -> TECS-L F11 + NEXUS g67             [crosslink.txt]
+O6 DLMF        : pattern portability   -> RED FALSIFIED (closed-negative)   [o6-dlmf-feasibility.md]
+
+=== 7 VERIFIED OEIS<->HEXA PROVENANCE LINKS ===
+sigma   A000203  @P present  [sum of divisors]            n=3,4,6 + COMPUTE 7
+tau     A000005  @P present  [number of divisors]         n=6,10
+sigma_0 A000005  alias-of-tau (same len(divisors))        == tau
+phi     A000010  @P present  [Euler totient]              n=9
+mu      A008683  @P present  [Mobius]                     n=6
+aliquot A001065  @F new fold [aliquot sum sigma(n)-n]      n=8(7)
+sigma_2 A001157  @F new fold [sum sq of divisors]          n=9(91)
+sigma_3 A001158  @F new fold [sum cube of divisors,2-op]   sigma_k(9,3)=757
+
+=== LIMITS (honest) ===
+- ORANGE 287 = 100% calculator-gap: _recompute has no path for n/prime/odd/triangular/poly.
+  VERIFY-KIT V7 (combinatorial/prime fns) would convert these (mostly to YELLOW catalogue-cite,
+  not new theorems -- they are n/prime trivial-identity aliases). Mutual-feed loop: OEIS sweep
+  measures the missing recompute -> VERIFY-KIT adds it -> OEIS re-sweep flips ORANGE->BLUE/YELLOW.
+- 5 of 7 atlas-links are mostly-attribution (@P builtins already present). Pure-new fold = 3.
+- O6 DLMF closed-negative: exact-integer hash-intersect does NOT generalize (P1 no-bulk-corpus
+  + P3 no-special-fns). Ruled-out axis = pattern portability to symbolic-identity catalogues.
+
+=== PAPER-GATE EVAL (paper_significance, STRICT) ===
+gate = pre-registered falsifier + real measurement + finding(Delta vs baseline OR closed-negative axis)
+
+candidate (a) A000926 Idoneal<->n coincidence
+  -> SKIP: single anecdote, no dedicated falsifier, no Delta/ruled-out finding.
+candidate (c) sibling-locus n*phi(n)=sigma(n) <=> n in {1,6} (A002618, F3)
+  -> SKIP: uniqueness <=> UNPROVEN (F3 ledger: hand-sweep n=1..8 only, no closed form).
+            non-terminal (YELLOW/ORANGE) -> fails paper_gate; "<=>" would over-claim (claim_verify).
+candidate (b) 78% coincidence rate
+  -> TRIGGER:
+     pre-registered falsifier (O1): scanner POC registered "A000926 first-10 coincide; diverge
+       at term 11; O3 falsifier" = H "K=10 prefix-match => sequence identity" pre-registered.
+     real measurement (O2): 374,047-seq full sweep; 1,334/1,707 = 78.1% (or 1,334/1,670 = 79.9%
+       of disprovable) of K=10 matches collapse at K=20.
+     finding (closed-negative): H FALSIFIED at ~78%. Ruled-out axis = short-prefix(K=10) tuple-
+       match as a sequence-identity test. matches paper_negative_ok.
+     CAVEAT (must appear in paper §finding, else paper_violation):
+       (1) candidate-set-relative -- 20 simple NT/poly fns biased toward low-entropy prefixes
+           (n*190, prime*67 dominate); 78% is "for THIS candidate set", not a universal constant.
+       (2) single (K=10 -> K=20) prefix-pair; K-dependence not swept.
+
+=== O8 RECOMMENDATION: TRIGGER ===
+slug = oeis-prefix-collision-falsifier (named by finding; not a fixed domain bucket)
+statement  : H = "K=10 integer-tuple prefix-match => OEIS sequence identity" (pre-registered O1).
+method     : 374K stripped.gz full sweep, K=10 hash-intersect -> K=20 verbatim 2-pass; 20 fn (bias noted).
+verification: .verdicts/oeis-full-sweep/ledger.json (1707/336/1334/37) + hits.tsv A000926 row = "n A000926 1..10 no".
+finding    : H FALSIFIED -- 78.1% (1334/1707) first-K artifacts -> ruled-out axis = short-prefix-as-identity.
+             CAVEAT: candidate-set-relative + single prefix-pair.
+g51        : >=10 pages + >=1 fal.ai figure (funnel diagram + coincidence histogram).
+
+=== HONEST ASSESSMENT ===
+- The catalogue cross-check (O1-O5) is solid ENGINEERING closure: 7 verified provenance links,
+  a 78%-effective coincidence filter, clean dedup vs 16K atlas, TECS-L reuse cite.
+- The ONE publishable FINDING is the closed-negative (b): short-prefix tuple-match is NOT a
+  reliable identity test, measured at ~78% false-positive over a 374K sweep, with an O1-pre-
+  registered falsifier. It is modest (quantifies a known caveat for a specific candidate set)
+  but it cleanly meets paper_significance + paper_negative_ok -> O8 TRIGGER.
+- No FORCED paper: candidates (a)/(c) honestly fail the gate and are recorded as SKIP.
+
+=== VERDICT ===
+O7 catalogue closure: GREEN. Funnel 374K -> 1707 -> 336 -> 7 closed deterministically.
+O8 paper-gate: TRIGGER -- closed-negative "K=10 prefix-match is not a sequence-identity test"
+               (78.1% false-positive, pre-registered falsifier, 374K measurement).
