@@ -623,6 +623,37 @@ repr floor remains." NOT blocked at arithmetic (de-risked). Campaign continues
 per-op, fixpoint-verified, event-driven — number-parse family (atof #1201 ·
 atoll/atoi #1205) was the warm-up; arithmetic core is next.
 
+### 2026-05-26 — `.c none` arithmetic core 4/5 LANDED (−·×·÷·% · ÷·% via new `__raw_*` intrinsic 4-surface)
+
+shape-2 (full dispatch-in-hexa) 채택. 산술 코어 5op 중 4개가 hexa-source
+`rt_*` (stdlib/runtime/numeric.hexa) 로 포팅 + runtime_core.c two-mode 위임 완료:
+
+| op | PR | 메커니즘 |
+|----|----|----|
+| `−` sub | #1217 | `rt_sub_int -> int` / `rt_sub_float -> float` typed-helper (bare-scalar-return 버그 회피, return-boxing) + `type_of` dispatch |
+| `×` mul | #1219 | 동일 패턴 |
+| `÷` div | #1224 | 신규 `__raw_idiv` intrinsic (int-divide 순환 회피) · pure int/int·float/float zero-throw · mixed IEEE |
+| `%` mod | #1224 | 신규 `__raw_imod` + `__raw_fmod` (libm-free `hxlcl_fmod`, `_fmod` extern 회피) |
+
+**÷·% 의 int-divide 순환**: codegen 은 known-int `/`·`%` 를 (div-by-zero throw
+위해) hexa_div/hexa_mod 로 라우팅 → `rt_div` 안의 `a / b` 가 무한재귀. raw
+intrinsic 으로 끊음. 이 과정에서 **새 `__` codegen intrinsic = 4-surface
+동시 등록** 규약 확립 (메모리 `reference_new_codegen_intrinsic_4_surface`):
+
+1. `self/codegen.hexa` gen2_expr emit chain (inline C)
+2. `self/codegen.hexa` `_is_builtin_name` (codegen purity-analysis — resolver 아님)
+3. `self/runtime_core.c` `static inline` 브리지 (구 bootstrap 의 `hexa_call2(__x,…)` fp-form resolve · clang inline)
+4. **`compiler/check/bind.hexa`** free-call builtin 리스트 (resolver HX2001 면제 — `self/` 밖이라 grep 함정 · 누락 시 regen 후 self-build time-bomb)
+
+검증 (mini arm64): build exit 0 · smoke 42 · **ext=1** (`_write`만 — zero-libm
+유지) · **byte-identity** (NEW vs BASELINE aprime_cc 가 gcd/`%`/`/` 프로그램을
+동일 emit → aprime_cc 내부 rt_div/rt_mod ≡ C, fixpoint-safe).
+
+**남은 arith (next)**: `+` add (hexa_add_slow — float native·array concat·string
+은 `str_concat()` 빌트인이 hexa_str_concat 직결이라 `+` 순환 회피 가능) ·
+`fma` (FUSED 하드웨어 FMA = `@asm`/codegen floor). 그 다음 string ops →
+irreducible HexaVal-repr/arena/GC core (terminal floor).
+
 ### 2026-05-26 — `.c none` arithmetic-core PRECISE BLOCKER (rt_sub attempt FAILED build — codegen typed→HexaVal-return boxing prerequisite)
 
 First arithmetic-core op attempt (`hexa_sub` → hexa `rt_sub`, full-polymorphic:
