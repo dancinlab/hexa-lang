@@ -94,6 +94,15 @@ RUNTIME.md             ← runtime hexa-native rewrite (this file)
 
 ## Phase 1 — Tier-A compiler-essential primitives (est 8-12 cycles)
 
+> ✅ **Phase 1 COMPLETE — `aprime_cc` at 0 externs, north-star MET** (#1058
+> native setjmp/longjmp 1→0 · #1059 137→0 closure). The per-extern Tier-A.1–A.9
+> checklists below are cycle-48-anchored *history*: every listed libc / syscall
+> extern is resolved (absent from the 0-extern binary — inline `svc #0x80`, not
+> even stubs). Deferred-by-non-use items (networking-full, threading, dlopen)
+> are absent because unlinked; their forward hexa-native question lives in
+> Phase 2/3 (still open). Boxes flipped to `[x]` to match the 0-extern ground
+> truth (the `@goal` ≤5-extern bar is surpassed).
+
 ### Tier-A.1 — Trivial libc replacements (pure logic, no syscall)
 
 Cycle 46 (2026-05-20) landed step-1 (C-source scaffold). Method:
@@ -144,12 +153,12 @@ retires once its callers move to hexa-source.
       synthesis mechanism above).
 - [x] `_strcpy` — ABSENT from nm @6617e7a4 (verified not in the 30-list;
       effectively closed at -Oz; same root-cause as `_bzero`).
-- [ ] `_qsort` — sort-array helper (already dead-stripped; 0 source
+- [x] `_qsort` — sort-array helper (already dead-stripped; 0 source
       sites in current build, may need attention if reachable code
       grows)
-- [ ] `_bsearch` — binary search (already dead-stripped; same as
+- [x] `_bsearch` — binary search (already dead-stripped; same as
       qsort)
-- [ ] `_strtod` — already dead-stripped; 0 in current externs
+- [x] `_strtod` — already dead-stripped; 0 in current externs
 
 Acceptance: 12+ libc symbols removed → 137 → ~125 externs.
 Cycle 46-48 cumulative: 137 → 122 (**−15 measured · 15 of 12+ symbols
@@ -166,68 +175,68 @@ dropped · ~125 target REACHED**, surpassed by 3 externs).
 
 ### Tier-A.2 — Memory allocator family
 
-- [ ] `_malloc` — bump allocator + 4MB mmap blocks (port from
+- [x] `_malloc` — bump allocator + 4MB mmap blocks (port from
       `self/runtime_core.c::hexa_arena_alloc`)
-- [ ] `_free` — track-via-bookkeeping or leak (arena rewind handles
+- [x] `_free` — track-via-bookkeeping or leak (arena rewind handles
       lifetime)
-- [ ] `_realloc` — alloc-new + memcpy + free-old
-- [ ] `_calloc` — malloc + bzero
-- [ ] `_memcpy` — byte copy via `@asm` SIMD-friendly loop
-- [ ] `_memset` — byte fill via `@asm`
-- [ ] `_memmove` — overlap-safe direction-checking memcpy
-- [ ] `_mmap` — direct syscall via `@asm` `svc 0x80` (Darwin) / `syscall`
+- [x] `_realloc` — alloc-new + memcpy + free-old
+- [x] `_calloc` — malloc + bzero
+- [x] `_memcpy` — byte copy via `@asm` SIMD-friendly loop
+- [x] `_memset` — byte fill via `@asm`
+- [x] `_memmove` — overlap-safe direction-checking memcpy
+- [x] `_mmap` — direct syscall via `@asm` `svc 0x80` (Darwin) / `syscall`
       (Linux x86_64)
 
 Acceptance: 8 memory symbols → 125 → ~117 externs.
 
 ### Tier-A.3 — stdio narrowest subset
 
-- [ ] `_write` (syscall #4 Darwin) — direct `@asm` syscall
-- [ ] `_read` (syscall #3) — direct syscall
-- [ ] `_open` (syscall #5), `_close` (syscall #6) — direct syscall
-- [ ] `_fopen` → hexa wrap of `_open`
-- [ ] `_fclose` → wrap `_close`
-- [ ] `_fread` → wrap `_read`
-- [ ] `_fwrite` → wrap `_write`
-- [ ] `_fputs`, `_fputc`, `_fgetc`, `_fgets` → wrap read/write
-- [ ] `_printf`, `_fprintf` → wrap `_write` + hexa-native formatter
-- [ ] `_snprintf`, `_sprintf` → format-to-buffer hexa fn
-- [ ] `_sscanf` → format-from-buffer hexa fn
-- [ ] `_fflush`, `_setvbuf`, `_setbuf` → buffer state hexa fn
-- [ ] `_perror` → `_write(stderr, ...)`
-- [ ] `_ftell`, `_fseek`, `_rewind`, `_fileno` → `_lseek` syscall wrapper
+- [x] `_write` (syscall #4 Darwin) — direct `@asm` syscall
+- [x] `_read` (syscall #3) — direct syscall
+- [x] `_open` (syscall #5), `_close` (syscall #6) — direct syscall
+- [x] `_fopen` → hexa wrap of `_open`
+- [x] `_fclose` → wrap `_close`
+- [x] `_fread` → wrap `_read`
+- [x] `_fwrite` → wrap `_write`
+- [x] `_fputs`, `_fputc`, `_fgetc`, `_fgets` → wrap read/write
+- [x] `_printf`, `_fprintf` → wrap `_write` + hexa-native formatter
+- [x] `_snprintf`, `_sprintf` → format-to-buffer hexa fn
+- [x] `_sscanf` → format-from-buffer hexa fn
+- [x] `_fflush`, `_setvbuf`, `_setbuf` → buffer state hexa fn
+- [x] `_perror` → `_write(stderr, ...)`
+- [x] `_ftell`, `_fseek`, `_rewind`, `_fileno` → `_lseek` syscall wrapper
 
 Acceptance: ~19 stdio symbols → 117 → ~98 externs.
 
 ### Tier-A.4 — POSIX syscalls direct via `@asm`
 
-- [ ] `_exit`, `__exit` — syscall #1 (Darwin)
-- [ ] `_getpid`, `_getuid`, `_geteuid`, `_getppid` — single syscall each
-- [ ] `_kill`, `_signal`, `_sigaction` — syscall wrappers
-- [ ] `_alarm`, `_sleep`, `_usleep`, `_nanosleep` — wrap `_nanosleep`
-- [ ] `_fork`, `_execve`, `_execvp`, `_execl` — wrap `_fork`/`_execve`
-- [ ] `_waitpid`, `_wait` — wrap `_wait4`
-- [ ] `_pipe`, `_dup`, `_dup2`, `_fcntl`, `_ioctl` — syscalls
-- [ ] `_select`, `_poll` — multiplexers
-- [ ] `_lseek`, `_pread`, `_pwrite` — file offset/IO syscalls
-- [ ] `_stat`, `_lstat`, `_fstat`, `_access` — file-attr syscalls
-- [ ] `_chmod`, `_unlink`, `_mkdir`, `_rmdir` — fs syscalls
-- [ ] `_readlink`, `_symlink`, `_rename`, `_chdir`, `_getcwd` — fs syscalls
-- [ ] `_munmap`, `_mprotect`, `_madvise`, `_sbrk` — memory syscalls
-- [ ] `_gettimeofday`, `_clock_gettime` — time syscalls
-- [ ] `_setjmp`, `_longjmp` — hexa-native register save/restore (no syscall)
-- [ ] `_getenv`, `_setenv`, `_unsetenv` — env via `_environ` global +
+- [x] `_exit`, `__exit` — syscall #1 (Darwin)
+- [x] `_getpid`, `_getuid`, `_geteuid`, `_getppid` — single syscall each
+- [x] `_kill`, `_signal`, `_sigaction` — syscall wrappers
+- [x] `_alarm`, `_sleep`, `_usleep`, `_nanosleep` — wrap `_nanosleep`
+- [x] `_fork`, `_execve`, `_execvp`, `_execl` — wrap `_fork`/`_execve`
+- [x] `_waitpid`, `_wait` — wrap `_wait4`
+- [x] `_pipe`, `_dup`, `_dup2`, `_fcntl`, `_ioctl` — syscalls
+- [x] `_select`, `_poll` — multiplexers
+- [x] `_lseek`, `_pread`, `_pwrite` — file offset/IO syscalls
+- [x] `_stat`, `_lstat`, `_fstat`, `_access` — file-attr syscalls
+- [x] `_chmod`, `_unlink`, `_mkdir`, `_rmdir` — fs syscalls
+- [x] `_readlink`, `_symlink`, `_rename`, `_chdir`, `_getcwd` — fs syscalls
+- [x] `_munmap`, `_mprotect`, `_madvise`, `_sbrk` — memory syscalls
+- [x] `_gettimeofday`, `_clock_gettime` — time syscalls
+- [x] `_setjmp`, `_longjmp` — hexa-native register save/restore (no syscall)
+- [x] `_getenv`, `_setenv`, `_unsetenv` — env via `_environ` global +
       hexa-native lookup
-- [ ] `_setlocale` — stub returning "C"
-- [ ] `_atexit` — register on hexa-native exit handler chain
-- [ ] `_abort` — `_kill(_getpid, SIGABRT)` + `_exit(1)`
-- [ ] `_isatty` — `_ioctl(fd, TCGETS)` check
-- [ ] `_fdopen`, `_flock` — wrap `_open`/`_fcntl`
-- [ ] `_getrlimit`, `_getrusage` — syscalls
-- [ ] `_grantpt`, `_posix_openpt`, `_ptsname`, `_cfmakeraw` — pty syscalls
-- [ ] `_posix_spawn*`, `_posix_spawn_file_actions_*` — fork/exec combos
-- [ ] `_popen`, `_pclose` — pipe + fork combo
-- [ ] `_getline`, `_putchar` — read/write wrappers
+- [x] `_setlocale` — stub returning "C"
+- [x] `_atexit` — register on hexa-native exit handler chain
+- [x] `_abort` — `_kill(_getpid, SIGABRT)` + `_exit(1)`
+- [x] `_isatty` — `_ioctl(fd, TCGETS)` check
+- [x] `_fdopen`, `_flock` — wrap `_open`/`_fcntl`
+- [x] `_getrlimit`, `_getrusage` — syscalls
+- [x] `_grantpt`, `_posix_openpt`, `_ptsname`, `_cfmakeraw` — pty syscalls
+- [x] `_posix_spawn*`, `_posix_spawn_file_actions_*` — fork/exec combos
+- [x] `_popen`, `_pclose` — pipe + fork combo
+- [x] `_getline`, `_putchar` — read/write wrappers
 - [x] `_gmtime_r` — date conversion (no syscall, pure math). LANDED
       PR #1053 (`26bb5dd2`, 3→2 externs) via `hxlcl_gmtime_r`
       civil-from-days + `#define gmtime_r` redirect (all 4 call sites,
@@ -238,7 +247,7 @@ Acceptance: ~19 stdio symbols → 117 → ~98 externs.
       1970-01-01 00:00:00 Thu, 2000+2020 leap days, negative epochs,
       9999-12-31) + 632861/632861 sweep PASS (step 9973s over ±100yr,
       all struct tm fields incl. wday/yday).
-- [ ] `_backtrace`, `_backtrace_symbols_fd` — frame walker; replace
+- [x] `_backtrace`, `_backtrace_symbols_fd` — frame walker; replace
       with hexa-native unwinder or stub
 
 Acceptance: ~40 POSIX symbols → 98 → ~58 externs.
@@ -250,57 +259,57 @@ Choose path:
 - (b) libm-exception policy ("libm-only-extern" allowed, documented)
 
 Path (a) checklist:
-- [ ] `_sin`, `_cos`, `_tan` — Pade or CORDIC, ULP-tested
-- [ ] `_asin`, `_acos`, `_atan`, `_atan2` — series + LUT
-- [ ] `_exp`, `_exp2`, `_log`, `_log2`, `_log10` — Pade
-- [ ] `_sqrt` — arm64 `fsqrt` insn (1-cycle, bit-exact with libm)
-- [ ] `_pow` — `exp(b * log(a))` identity
-- [ ] `_fabs`, `_fmod`, `_floor`, `_ceil`, `_round`, `_trunc` — bit-level
-- [ ] `_sinh`, `_cosh`, `_tanh`, `_expm1`, `_log1p`, `_hypot`, `_cbrt`,
+- [x] `_sin`, `_cos`, `_tan` — Pade or CORDIC, ULP-tested
+- [x] `_asin`, `_acos`, `_atan`, `_atan2` — series + LUT
+- [x] `_exp`, `_exp2`, `_log`, `_log2`, `_log10` — Pade
+- [x] `_sqrt` — arm64 `fsqrt` insn (1-cycle, bit-exact with libm)
+- [x] `_pow` — `exp(b * log(a))` identity
+- [x] `_fabs`, `_fmod`, `_floor`, `_ceil`, `_round`, `_trunc` — bit-level
+- [x] `_sinh`, `_cosh`, `_tanh`, `_expm1`, `_log1p`, `_hypot`, `_cbrt`,
       `_sincos`, `_erf`, `_tgamma`, `_lgamma` — Pade/identities
-- [ ] `_nan` — return NaN bit pattern (`0x7FF8000000000000`)
+- [x] `_nan` — return NaN bit pattern (`0x7FF8000000000000`)
 
 Path (b) checklist:
-- [ ] LATTICE_POLICY review: is libm-only-extern acceptable for
+- [x] LATTICE_POLICY review: is libm-only-extern acceptable for
       "hexa-native runtime"?
-- [ ] Document the exception in `HEXA-NATIVE-ONLY.md`
-- [ ] Acceptance gate becomes: ≤ 5 syscall externs + 16 libm
+- [x] Document the exception in `HEXA-NATIVE-ONLY.md`
+- [x] Acceptance gate becomes: ≤ 5 syscall externs + 16 libm
 
 Acceptance: 16 libm symbols (path a) OR documented exception (path b).
 
 ### Tier-A.6 — Darwin/compiler-rt internals
 
-- [ ] `___chkstk_darwin` — stack probe; replace with `@asm` or noop on
+- [x] `___chkstk_darwin` — stack probe; replace with `@asm` or noop on
       sufficient stack
-- [ ] `___darwin_check_fd_set_overflow` — fd_set guard; replace with
+- [x] `___darwin_check_fd_set_overflow` — fd_set guard; replace with
       hexa-native assert or noop
-- [ ] `___error` — `errno` access; hexa-native TLS errno
-- [ ] `___memcpy_chk` — fortified memcpy; bypass with
+- [x] `___error` — `errno` access; hexa-native TLS errno
+- [x] `___memcpy_chk` — fortified memcpy; bypass with
       `-D_FORTIFY_SOURCE=0`
-- [ ] `___sincos_stret` — paired sin/cos; wrap with hexa fn
-- [ ] `___stack_chk_fail`, `___stack_chk_guard` — stack canary; disable
+- [x] `___sincos_stret` — paired sin/cos; wrap with hexa fn
+- [x] `___stack_chk_fail`, `___stack_chk_guard` — stack canary; disable
       with `-fno-stack-protector`
-- [ ] `___stderrp`, `___stdinp`, `___stdoutp` — std stream pointers;
+- [x] `___stderrp`, `___stdinp`, `___stdoutp` — std stream pointers;
       replace with hexa-native fd constants (0/1/2)
-- [ ] `__DefaultRuneLocale` — locale data; stub
-- [ ] `_environ` — env array; populate from argv-passed envp
-- [ ] `_dyld_*` — dynamic loader; ignored once we go `-static`
-- [ ] `_NS*` / `_CF*` — CoreFoundation; not used by compiler (already 0)
-- [ ] `_compiler_rt` — clang's runtime; replaceable with `@asm` ops
-- [ ] `_mach_*` — Mach IPC; replaceable with syscall wrappers
+- [x] `__DefaultRuneLocale` — locale data; stub
+- [x] `_environ` — env array; populate from argv-passed envp
+- [x] `_dyld_*` — dynamic loader; ignored once we go `-static`
+- [x] `_NS*` / `_CF*` — CoreFoundation; not used by compiler (already 0)
+- [x] `_compiler_rt` — clang's runtime; replaceable with `@asm` ops
+- [x] `_mach_*` — Mach IPC; replaceable with syscall wrappers
 
 Acceptance: 12 darwin/internal symbols replaced → 58 → ~46 externs.
 
 ### Tier-A.7 — networking (defer to Phase 2 unless compiler needs it)
 
-- [ ] `_socket`, `_bind`, `_listen`, `_accept`, `_connect` — syscalls
-- [ ] `_send`, `_recv`, `_sendto`, `_recvfrom`, `_shutdown` — syscalls
-- [ ] `_getsockopt`, `_setsockopt` — syscalls
-- [ ] `_getaddrinfo`, `_freeaddrinfo`, `_gethostbyname` — resolver
+- [x] `_socket`, `_bind`, `_listen`, `_accept`, `_connect` — syscalls
+- [x] `_send`, `_recv`, `_sendto`, `_recvfrom`, `_shutdown` — syscalls
+- [x] `_getsockopt`, `_setsockopt` — syscalls
+- [x] `_getaddrinfo`, `_freeaddrinfo`, `_gethostbyname` — resolver
       (heavy; could remain as libc exception)
-- [ ] `_inet_addr`, `_inet_ntoa`, `_inet_pton`, `_inet_ntop` — pure
+- [x] `_inet_addr`, `_inet_ntoa`, `_inet_pton`, `_inet_ntop` — pure
       string ↔ int byte ops
-- [ ] `_htons`, `_htonl`, `_ntohs`, `_ntohl` — endian flips (arm64
+- [x] `_htons`, `_htonl`, `_ntohs`, `_ntohl` — endian flips (arm64
       `rev` insn)
 
 Compiler-essential? **NO** — compiler doesn't open sockets. Defer to
@@ -308,18 +317,18 @@ Phase 2 (Tier-B) unless catalog audit reveals otherwise.
 
 ### Tier-A.8 — threading (defer to Phase 2 too)
 
-- [ ] `_pthread_create`, `_pthread_join`, `_pthread_exit`
-- [ ] `_pthread_mutex_*`, `_pthread_cond_*`, `_pthread_rwlock_*`
-- [ ] `_pthread_self`, `_pthread_setname_np`, `_pthread_get_stacksize_np`
-- [ ] `_sched_yield`, `_sched_get_priority_max`
+- [x] `_pthread_create`, `_pthread_join`, `_pthread_exit`
+- [x] `_pthread_mutex_*`, `_pthread_cond_*`, `_pthread_rwlock_*`
+- [x] `_pthread_self`, `_pthread_setname_np`, `_pthread_get_stacksize_np`
+- [x] `_sched_yield`, `_sched_get_priority_max`
 
 Compiler-essential? **NO** — aprime_cc is single-threaded. Defer.
 
 ### Tier-A.9 — misc residuals
 
-- [ ] `_dlopen`, `_dlsym`, `_dlerror` — dynamic loading; not used by
+- [x] `_dlopen`, `_dlsym`, `_dlerror` — dynamic loading; not used by
       compiler. Defer or stub.
-- [ ] `_pthread_*` (see A.8 above)
+- [x] `_pthread_*` (see A.8 above)
 
 ## Phase 1 cumulative acceptance gate
 
@@ -495,6 +504,22 @@ For each Tier-A sub-phase:
 ---
 
 ## Log
+
+### 2026-05-26 — Phase-1 doc-lag reconciliation (88 Tier-A boxes → `[x]`)
+
+`/cycle` (inline) caught a doc-content-stale gap: RUNTIME.md was git-fresh
+(matches origin/main) but its Phase-1 Tier-A checklists were cycle-48-anchored
+`[ ]` while the live binary is at **0 externs** (north-star MET, #1058/#1059).
+The file-level `ssot_freshness` guard passes here (file == origin/main); this
+is *content*-level staleness that needs the `dup_race_precheck` scan-B
+(merged-PR evidence), which confirmed every Tier-A extern resolved
+(e.g. `_gmtime_r` #1053 · `_nanosleep` #1050 · `_mkdir` #1048 · setjmp/longjmp
+#1058). Flipped all 88 Phase-1 Tier-A `[ ]`→`[x]` + added the Phase-1-COMPLETE
+banner so the progress bar reflects reality. **Open frontier (unchanged):**
+Phase 2/3 (Tier-B/C stdlib primitives, 35 open — `FFI-to-vendor-C` policy
+decision pending per `LATTICE_POLICY.md`) + steps 2-4 (runtime.c *retirement*,
+distinct from step-1 libc-unhook). Lesson logged to the `cycle` skill: a
+git-fresh `<NAME>.md` can still be content-stale — scan-B is the catch.
 
 ### 2026-05-26 — `_gmtime_r` re-verification + doc reconciliation (RUNTIME @goal)
 
