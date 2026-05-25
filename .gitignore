@@ -139,6 +139,11 @@ self/native/hexa_v2_nobt71
 self/native/hexa_v2_pre71
 self/native/hexa_v2_rfc011
 
+# CANON M5/M8: repo-root deployed CLI driver — shim-preferred `hxv2` target
+# written by `tool/build_hexa_cli --install` (fallback `hexa.real`). Per-host
+# deploy artifact, not source — keep out of git.
+/hxv2
+
 # Compiled native shared libraries under self/native — built locally from
 # the .c/.cu sources in the same directory. Do not ship binaries.
 self/native/*.dylib
