@@ -2610,3 +2610,16 @@
   raw    = ".verdicts/oeis-full-sweep/ledger.json + sweep_log.txt + hits.tsv + .verdicts/oeis-perhit-verify/tier_ledger.txt"
   src    = "PAPER/oeis-prefix-collision-falsifier/main.tex (§statement falsifier H · §method 374K sweep · §verification funnel + A000926↔n exemplar · §finding 78.1% H FALSIFIED · §caveat candidate-set-relative). Data verbatim from O2 ledger (.verdicts/oeis-full-sweep/) — not re-measured. fal.ai gpt-image-2 figure figures/fig01_funnel.png."
   status = "🔴 closed-negative: K=10 prefix-match ⊯ identity, 78.1% false-pos / 374K (candidate-set-relative). Terminal (paper_negative_ok). Paper PAPER/oeis-prefix-collision-falsifier/ — 10 pp + fal figure (g51)."
+
+# ───────────────────────────────────────────────────────────────────────
+# VERIFY-KIT — verify-kit-iit-promote (slug · group=VERIFY-KIT · V5.1 promote)
+# V5 first slice: anima faithful-Φ engine (H_278 small-N exact MIP-EI) promoted
+# to hexa-lang stdlib/consciousness/iit4/ as the shared SSOT (g61/g68). Promote
+# only — verify_cli wiring = V5.2 · PyPhi calibration = V5.3 (not terminal yet).
+# ───────────────────────────────────────────────────────────────────────
+@C verify_kit_iit_promote := "anima faithful-Φ engine (H_278 small-N exact MIP-EI, n<=8) promoted byte-faithful to hexa-lang stdlib/consciousness/iit4/faithful_phi.hexa — self-contained (zero anima-local deps; bundles RFC 036 pure-hexa MI estimator). pub surface: iit4_faithful_phi / iit4_faithful_phi_from_mi / iit4_build_mi_matrix. NEXUS.tape p_iit4 provide recorded (g68 cross-repo fold). Promote only — verify_cli wire = V5.2, PyPhi calibrate = V5.3." :: empirical [slug=verify-kit-iit-promote group=VERIFY-KIT]
+  method = "promote"
+  cmd    = "promote anima HEXAD/LIFE H_278 faithful-Φ → stdlib/consciousness/iit4/faithful_phi.hexa (parse-gate OK)"
+  raw    = ".verdicts/verify-kit-iit-promote/v5_1.txt"
+  src    = "stdlib/consciousness/iit4/faithful_phi.hexa (promoted from anima HEXAD/LIFE state/h278_faithful_phi_2026_05_25/run_h278.hexa) · NEXUS.tape p_iit4"
+  status = "🟡 anima Φ engine promoted to stdlib/consciousness/iit4 (wire+calibrate → V5.2/V5.3)"

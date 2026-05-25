@@ -4,6 +4,31 @@
 
 ---
 
+## 2026-05-26 — V5.1 (P2) anima Φ 엔진 → `stdlib/consciousness/iit4/` promote (g61/g68)
+
+### 목표 (V5 의 첫 슬라이스 — promote 만)
+- V5 (IIT Φ 엔진 n≤8 exact)는 통째로 두 번 rate-limit 에 죽었음. V5.1 = 가장 작은 슬라이스 = 새 알고리즘 빌드 없이 anima 의 faithful-Φ 엔진을 hexa-lang stdlib 로 promote 만. verify_cli 배선(V5.2)·PyPhi 캘리브레이트(V5.3)는 별도.
+
+### Locate (READ-ONLY grep)
+- anima 의 canonical Φ 소스 = `~/core/anima/HEXAD/LIFE/lib/phi_native.hexa` (zero import, RFC 036 spatial-Φ MIP-EI · 이미 hexa-lang `stdlib/consciousness/phi_spatial.hexa` 로 promote 됨).
+- H_278 "faithful exact MIP-EI Φ n=8" = `~/core/anima/.../state/h278_faithful_phi_2026_05_25/run_h278.hexa` (608줄 run-harness · `fn main()` + CA 실험 포함). 재사용 가능 엔진 코어 = `_build_mi_matrix`·`_cross_cut`·`_size_a`·`_faithful_phi_from_mi`. anima-local 의존 = `c_phi_mi_pair` builtin + `life_phi_nbins()` (phi_helper ← c_lib).
+
+### Promote (g61/g68)
+- 신규 `stdlib/consciousness/iit4/faithful_phi.hexa` — H_278 faithful 코어를 byte-faithful 로 promote. anima-local 의존 제거를 위해 `phi_native.hexa` 의 순수-hexa MI estimator(`_iit4_mi_pair`/`_iit4_bin_values`/`_iit4_entropy`)를 번들 → ZERO 외부 의존(builtin·anima import 둘 다 없음). n_bins 는 명시 인자.
+- pub 표면: `iit4_faithful_phi(state, n, dim, n_bins)` (byte-faithful entry · n≤8 exact, n>8 panic) · `iit4_faithful_phi_from_mi(mi, n)` · `iit4_build_mi_matrix(...)`.
+- provenance 헤더 1줄 = `# promoted from anima HEXAD/LIFE state/h278_faithful_phi_2026_05_25/run_h278.hexa (g61 shared substrate)`.
+- parse-gate PASS (`hexa parse ... OK`).
+
+### Record reuse edge (g68 star form)
+- `NEXUS.tape` §1 provides[] 에 `@X p_iit4` 추가 — hub 가 이제 `stdlib/consciousness/iit4` 를 PROVIDES (anima H_278 fold · g68 cross-repo · g61 shared substrate). consumers = VERIFY-KIT V5 · ARXIV A2 (배선 = V5.2).
+
+### V5.2/V5.3 readiness (남은 작업)
+- V5.2 wire: `tool/verify_cli.hexa` 의 `_recompute` 경로에 `iit4_faithful_phi` 배선 + farr-입력 인터페이스(현 verify CLI 는 스칼라 args; Φ 는 flat state farr 필요 → 입력 어댑터 설계 필요). H_278 의 `c_phi_mi_pair` builtin 은 이미 hexa-lang 런타임에 있으므로 builtin 경로로도 배선 가능(번들 버전과 byte-eq 확인 권장).
+- V5.3 calibrate: PyPhi 와 수치 대조 (n≤8 substrate). H_278 의 honest carve-out — faithful = exact-MIP-EI small-N 이지 full per-mechanism IIT 4.0 (= `stdlib/consciousness/iit4_bigphi.hexa`) 아님.
+
+### tier
+- 🟡 promote-only (anima Φ 엔진을 stdlib 로 promote; wire+calibrate = V5.2/V5.3). V5 `[ ]` 미플립 (promote 만 done).
+
 ## 2026-05-26 — V6 (P3a) `register --source <attribution>` → provenance 필드 자동 (OEIS O4 hand-fold 제거)
 
 ### 목표 (OEIS O4 가 손으로 fold 한 이유 제거)
