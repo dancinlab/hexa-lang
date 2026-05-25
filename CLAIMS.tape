@@ -57,6 +57,22 @@
   status = "STUB — terminal verdict NOT persisted (md5/byte-diff evidence is md-only). gated OUT of /paper until claim_verify writes a closure verdict to .verdicts/."
 
 # ───────────────────────────────────────────────────────────────────────
+# GPU — fusion-epilogue-gemm-bias-gelu (slug · group=GPU · paper-track)
+# Whole-program-fusion epilogue: a single hexa-emit kernel computing
+# GeLU(A@B + bias) fuses the GEMM + bias-add + GeLU into one launch with the
+# M x N result written to HBM ONCE — vs a cuBLAS-using stack (cublasSgemm →
+# bias-add kernel → GeLU kernel) = 3 launches + 3x M x N HBM C-write traffic.
+# Structural launch+HBM advantage proven closed-form (deterministic oracle,
+# compiled hexa) AND ptxas-clean (sm_80). Timed wall DEFERRED (serial).
+
+@C fusion_epilogue_gemm_bias_gelu := "fused GeLU(A@B+bias) = 1 launch + 1x M*N HBM C-write vs cuBLAS 3 + 3x = 66.667% reduction both axes" :: fixpoint [slug=fusion-epilogue-gemm-bias-gelu group=GPU]
+  method = "fixpoint"
+  cmd    = "tool/fusion_epilogue_structural_oracle.hexa (compiled hexa, deterministic launch/byte count) + ptxas -arch=sm_80 fused_gemm_bias_gelu.ptx"
+  raw    = ".verdicts/fusion-epilogue-gemm-bias-gelu/fusion_epilogue_structural.txt"
+  src    = "archive/fires/fusion_epilogue_gemm_bias_gelu_2026_05_25/ (fused_gemm_bias_gelu.ptx md5 1d738055… · oracle_run.log · ptxas.log) + GPU.md section 10"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim (oracle PASS 66.667% launch AND HBM reduction · ptxas RC=0 sm_80 0-spill). terminal · paper-eligible. Timed wall DEFERRED to serial follow-up; GPU.md section 10 >=30% box stays [ ]."
+
+# ───────────────────────────────────────────────────────────────────────
 # TECS-L — tecs-l-n6-identity (slug · group=TECS-L · paper-track · TECS-L.md M1)
 # archive-TECS-L core identity, re-grounded hexa-native via `hexa verify` g5.
 #
