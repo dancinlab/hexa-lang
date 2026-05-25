@@ -2571,15 +2571,24 @@ fn _nvptx_target_tag_for_sm_arch(sm_arch: string) -> string {
 // _nvptx_ptx_version_for_sm_arch — RFC 071 P2.2. Per-arch PTX ISA
 // version string for the `.version` header directive. sm_80 (Ampere)
 // requires PTX 7.0+, sm_90 (Hopper) requires PTX 7.8+, sm_120
-// (Blackwell consumer) requires PTX 8.0+ (driver-JIT only — standalone
-// ptxas in CUDA 12.0 does not yet recognise sm_120; see
+// (Blackwell consumer) requires PTX 8.7+ (driver-JIT only — standalone
+// ptxas in CUDA 12.0 does not recognise sm_120; see
 // `reference_gpu_fire_infra.md`). Unknown arch defaults to "7.8" —
 // matches the legacy `_NVPTX_PTX_VERSION` constant so the existing
 // `_emit_ptx_header` byte-output is preserved for any caller that does
 // not route through the per-arch path.
+//
+// N153-fire finding (2026-05-26): the matmul/WMMA source-to-silicon E2E
+// emitted `.version 8.0` for bare sm_120 → RTX 5070 sm_120 driver-JIT
+// REJECTED it (the fire had to hand-patch `.version` to 8.7 to launch).
+// The matmul kernel's instruction set needs PTX ISA 8.7 on Blackwell,
+// matching the sm_120a (TMA) path which already pins 8.7 (N206/N196).
+// Bumped bare sm_120 → "8.7" — the consumer-Blackwell driver supports
+// it (TMA path proves so), and a higher `.version` is a no-op for the
+// simpler vec-add/f16 kernels that previously passed at 8.0.
 fn _nvptx_ptx_version_for_sm_arch(sm_arch: string) -> string {
     if sm_arch == NVPTX_ARCH_SM80   { return "7.0" }
-    if sm_arch == NVPTX_ARCH_SM120  { return "8.0" }
+    if sm_arch == NVPTX_ARCH_SM120  { return "8.7" }
     // RFC 067 N206 — sm_120a requires PTX ISA 8.7+ (N196 finding).
     if sm_arch == NVPTX_ARCH_SM120A { return NVPTX_PTX_VERSION_SM120A }
     return "7.8"
