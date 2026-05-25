@@ -13,10 +13,11 @@ SSOT = `compiler/atlas/embedded.gen.hexa` (런타임 TEXT-parse). 등록 = `hexa
 - [ ] R2: drill `--rounds≥2` SIGSEGV triage+fix + C5 novelty-fixpoint(net-novel 포화) 착지 — compiler/drill/*
 - [x] R2: audit domain-coverage 축 — `:: <domain>` 파싱 → domain×kind 매트릭스 + 0-cell 플래그 (#958)
 - [x] R2: wigner_stabilizer_sn 미러 발산 fix — atlas_cli register 미러를 verify_cli 실제 소수 sieve와 일치(d>13) (#957)
+- [x] R3: re-verify-🟢 부활 — `hexa atlas reverify [--limit N]` read-only drift 리포트(35노드 중 3 DRIFT 실측). 동결 등록 verdict in-process 재계산 (META-SIGNAL ② 첫 슬라이스)
 
 ## deferred (다음 라운드)
 
-calc_dispatch.hexa 미러 단일화(최우선·serial·link-fragility 위험) · re-verify-🟢 + retroactive_sweep 부활 · falsifier 구조화 필드 + cascade 무효화 · numerology 격리 tier · active-acquisition 랭킹(Q/🟡/🟠) · lookup on-disk offset 색인 · 신규역량(MCP/API·시맨틱검색·proof-chain export·auto-edge 추론·atlas diff)
+calc_dispatch.hexa 미러 단일화(최우선·serial·link-fragility 위험) · falsifier 구조화 필드 + cascade 무효화 · numerology 격리 tier · active-acquisition 랭킹(Q/🟡/🟠) · lookup on-disk offset 색인 · reverify 확장(비-F kind · drift→자동 재등록) · 신규역량(MCP/API·시맨틱검색·proof-chain export·auto-edge 추론·atlas diff)
 
 ## 방법
 
