@@ -1634,3 +1634,31 @@
   raw    = ".verdicts/tecs-l-modform-weight-al/al_2pow_omega.txt"
   src    = "MF7 — classical Atkin-Lehner theorem (Atkin-Lehner 1970)"
   status = "🟡 SUPPORTED-BY-CITATION — closed-form theorem, ω derivation by-hand (no direct hexa fn). non-terminal for /paper."
+
+# ───────────────────────────────────────────────────────────────────────
+# TECS-L axis E — tecs-l-atlas-health (slug · group=TECS-L · E2)
+# atlas health audit. 🟢 audit internal-merged/drift=0 BUT 🟡 finding: binary
+# lookup ≠ source SSOT. installed `hexa atlas lookup` reads binary-builtin
+# (frozen at last build = 16101 entries, 74 verified-*, 0 of E1's 6 nodes
+# findable). origin/main source embedded.gen.hexa HAS the 6 E1 nodes.
+
+@C tecs_l_atlas_audit := "hexa atlas stats --audit reports merged·clean (16101 entries · drift 0 internal)" :: experiment [slug=tecs-l-atlas-health group=TECS-L]
+  method = "empirical"
+  cmd    = "hexa atlas stats --audit"
+  raw    = ".verdicts/tecs-l-atlas-health/audit.txt"
+  src    = "axis E E2 — atlas health audit (binary-builtin internal consistency)"
+  status = "🟢 empirical PASS — audit reports clean·merged. internal consistency OK."
+
+@C tecs_l_atlas_hash := "ATLAS_HASH snapshot 663698a0… (binary-builtin frozen state)" :: experiment [slug=tecs-l-atlas-health group=TECS-L]
+  method = "empirical"
+  cmd    = "hexa atlas hash"
+  raw    = ".verdicts/tecs-l-atlas-health/hash.txt"
+  src    = "axis E E2 — for future audit diff"
+  status = "🟢 empirical — hash captured for diff baseline. ATLAS_HASH = binary-builtin state at last hexa build."
+
+@C tecs_l_atlas_binary_vs_source := "binary lookup (16101 entries, 0/6 E1 nodes findable) ≠ source SSOT (6/6 nodes present) — E1 fold not propagated to lookup until hexa binary rebuild" :: experiment [slug=tecs-l-atlas-health group=TECS-L]
+  method = "empirical+diff"
+  cmd    = "compare 'hexa atlas lookup --prefix=verified-' (binary) vs git show origin/main:compiler/atlas/embedded.gen.hexa (source)"
+  raw    = ".verdicts/tecs-l-atlas-health/binary_vs_source_divergence.txt"
+  src    = "axis E E2 — confirms axis E E3 complement: register hazard (install-dir) + lookup staleness (binary-builtin)"
+  status = "🟡 SUPPORTED-BY-CITATION — divergence is out-of-band (atlas audit clean on its own; binary≠source observed). flagged to INBOX upstream (g59)."

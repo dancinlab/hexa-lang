@@ -3,6 +3,23 @@
 Append-only history sister of `INBOX.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
 
+## 2026-05-25T18:00Z — atlas binary-builtin lookup vs source embedded.gen.hexa divergence
+
+TECS-L 축 E E2 audit 발견. `hexa atlas register --from-verify` 가 source `compiler/atlas/embedded.gen.hexa` 에 직접 splice 하지만, installed `hexa atlas lookup` 은 **binary-builtin (frozen at last hexa build)** 을 읽음. 결과:
+
+- source (origin/main:compiler/atlas/embedded.gen.hexa): E1-folded `verified-{tau-33550336,tau-496,tau-8128,is_perfect-8589869056,gamma0_genus-6,gamma0_cusps-6}` 6개 모두 존재
+- binary lookup (hexa atlas lookup --prefix=verified-): 74 hits (타 에이전트분), 내 E1 6개 = **0 findable**
+- audit (hexa atlas stats --audit): 16101 entries, merged·clean (binary 내부 정합성은 OK)
+
+원인: 메모리상 atlas SSOT는 `compiler/atlas/embedded.gen.hexa` (TEXT-parse), HEXA_ATLAS_EMBED 로 overlay 가능하다 했으나 실제 lookup 은 binary-builtin 우선/단독. 결과: register fold 가 query 에 반영되려면 hexa 재빌드 필요.
+
+- [ ] `hexa atlas lookup` 이 HEXA_ATLAS_EMBED env 또는 cwd `compiler/atlas/embedded.gen.hexa` 를 binary-builtin 보다 우선 읽도록 동작 명세 정리/수정
+- [ ] OR `hexa atlas register --from-verify` 가 source fold 후 binary-builtin 상태에도 in-memory 반영 (현재는 source 만 갱신)
+- [ ] OR register 가 자동으로 `hexa cc --regen` 트리거 옵션 제공 (heavy, off by default)
+- [ ] 참고: `.verdicts/tecs-l-atlas-health/binary_vs_source_divergence.txt` — 정량 데이터
+- [ ] cross-link: TECS-L 축 E E3 (register install-dir leak) 와 짝 — register hazard + query staleness 양면
+
+
 ## 2026-05-25T15:00Z — hexa `dim_cusp_forms(N,2)` 가 표준 dim S₂(Γ₀(N))=genus 와 불일치
 
 TECS-L 축 A MF4 발견 (PR pending). 고전 정리 `dim S_2(Γ_0(N)) = genus(X_0(N))` 를 hexa 의 `dim_cusp_forms`/`gamma0_genus` 두 fn 으로 N=1..30 교차검증한 결과:
