@@ -3,6 +3,16 @@
 Append-only history sister of `TECS-L.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
 
+## 2026-05-25T11:30 — M7 · Golden Zone (1/e) → 🔴 CLOSED-NEGATIVE
+
+- [x] milestone = "1/e 자기참조 닫힌형 유도 시도 (성공🔵/실패🔴)". 결과: EXACT 유리수 유도 **FALSIFIED 🔴**
+- [x] 결정적 논증: σ(6)·τ(6)·φ(6) 정수 → 유한 산술조합 전부 유리수; 1/e 초월수(Hermite 1873); 유리수≠초월수 → exact n=6 유리수 ≠ 1/e
+- [x] 최근접 후보 🔵: τ(6)/σ(6)=4/12=1/3 (|Δ|9.39%) · 3/8 (archive WEINBERG-001 🟧, |Δ|1.94%). 아카이브 Review 010 이미 "1/3 ❌" self-refute
+- [x] 3 🔵 atom (τ/σ/φ) + 1 🔴 reasoned closed-negative artifact → `.verdicts/tecs-l-golden-zone/` + CLAIMS 4 entry
+- [x] publishable negative (paper_negative_ok): "n=6 산술은 1/e 근사는 가능, exact 유도는 불가" — 초월성이 'all is n=6 ratio' 프로그램의 한계
+- [x] `TECS-L/docs/m7-golden-zone-closed-negative.md` · inline 부모 세션
+
+
 ## 2026-05-25T11:00 — M9 · /paper 승격 (10p + fal.ai 그림)
 
 - [x] `PAPER/tecs-l-n6-identity-locus/` arxiv-style 논문 "The {1,6} Identity Locus" — paper_gate 통과(모든 섹션 claim terminal 🔵/🔴)
