@@ -1,6 +1,6 @@
 // HEXA Standard Library — nuclear/sim
 //
-// @version 0.2.1
+// @version 0.3.0
 // @capabilities [pure, io]
 //
 // NUCLEAR.md §6 Phase 4 #1 — N7 hot closed-form post-processing,
@@ -22,6 +22,8 @@
 //   pub fn c_gate_total_cell(Z, A, Q_alpha_MeV) -> DecayTotal      // C1 (one-shot)
 //   pub fn c_gate_window_score(mean_log10_T, lo, hi) -> float       // N11
 //   pub fn n11_alpha_cell(Z, A, Q_alpha_MeV, lo, hi) -> NuclideScore// N11
+//   pub fn island_weight(Z, N, sigma) -> float                     // C2 (weight)
+//   pub fn n11_island_cell(Z,A,Q_α,lo,hi,σ) -> IslandScore         // C2 (composite)
 //
 // Source formulas (closed-form algebraic identities, not solvers):
 //   - Viola-Seaborg 1966 / Sobiczewski-Parkhomenko 2005 refit
@@ -373,6 +375,128 @@ pub fn n11_alpha_cell(Z: int, A: int, Q_alpha_MeV: float,
                           c_gate_score: score, valid: 1 }
 }
 
+// ── 4c. C2 — shell-gap-aware island-of-stability weighting ─────────────
+//
+// NUCLEAR.md §6.2 (N11 composite) + NOVEL probe C2 (exports/nuclear_
+// discovery/novel/2026-05-25-novel-probe.md). The landed N11 composite is
+// a FLAT (a)(c) average; C2 replaces the flat weighting with a magic-
+// number-distance Gaussian so candidates near the predicted island of
+// stability rank higher, AND sources the (c)-score from C1's α⊕SF T_total
+// (not α-only) so SF-dominated SHE are honestly down-weighted.
+//
+// ── Shell-closure magic numbers (cited) ────────────────────────────────
+//
+//   Proton magic Z ∈ {82, 114, 120, 126}   Neutron magic N ∈ {126, 184}
+//
+//   Z=82 / N=126 are the established (²⁰⁸Pb doubly-magic) closures. The SHE
+//   proton-closure candidates Z=114 (macro-micro / FRDM Möller-Nix), Z=120
+//   & Z=126 (self-consistent RMF/HFB) are MODEL-DEPENDENT PREDICTIONS — no
+//   consensus on which is the true proton magic number. N=184 is the
+//   strong-consensus neutron closure. The canonical doubly-magic island
+//   candidate is ²⁹⁸Fl (Z=114, N=184).
+//   Refs: Sobiczewski & Pomorski 2007, Prog. Part. Nucl. Phys. 58, 292
+//         (arxiv:nucl-th/0610090, shell-closure review);
+//         Samanta 2008 "Superheavy elements in the magic islands"
+//         (arxiv:0803.4151); Oganessian 2017 IPAC island-of-stability
+//         (proceedings.jacow.org/ipac2017/fryaa1). Z=120/126 RMF/HFB:
+//         Bender/Rutz/Reinhard/Maruhn 1999, PRC 60, 034304.
+//
+// Honest scope (NOVEL C2 caveats · §3.3 · §7 · @D d2):
+//   - The proton magic number itself is a model-dependent PREDICTION
+//     (Z=114 vs 120 vs 126 is unresolved) — the weight is a *proximity
+//     hint*, NEVER "near the island ⇒ this nuclide is discovered/stable".
+//   - σ (Gaussian width) is a HYPERPARAMETER (default 6.0 in (Z,N)-space
+//     shell units); a different σ reorders mid-field candidates. Caller may
+//     override. The weight is bounded (0,1]; it RE-RANKS, never gates.
+//   - absorbed=false 永久 (R4). The composite is an accelerator-priority
+//     heuristic, not a stability claim.
+
+let _MAGIC_N_184: float = 184.0
+let _MAGIC_N_126: float = 126.0
+let _MAGIC_Z_82:  float =  82.0
+let _MAGIC_Z_114: float = 114.0
+let _MAGIC_Z_120: float = 120.0
+let _MAGIC_Z_126: float = 126.0
+let _ISLAND_SIGMA_DEFAULT: float = 6.0
+
+// nearest |x − magic| over a 4-element proton magic set.
+fn _min_dist_z(Zf: float) -> float {
+    let d82  = _fabs(Zf - _MAGIC_Z_82)
+    let d114 = _fabs(Zf - _MAGIC_Z_114)
+    let d120 = _fabs(Zf - _MAGIC_Z_120)
+    let d126 = _fabs(Zf - _MAGIC_Z_126)
+    return _fmin(_fmin(d82, d114), _fmin(d120, d126))
+}
+
+// nearest |x − magic| over the 2-element neutron magic set.
+fn _min_dist_n(Nf: float) -> float {
+    let d126 = _fabs(Nf - _MAGIC_N_126)
+    let d184 = _fabs(Nf - _MAGIC_N_184)
+    return _fmin(d126, d184)
+}
+
+// Island-of-stability proximity weight ∈ (0,1]: a 2-D Gaussian on the
+// shell-distance d² = dZ² + dN² (dZ/dN = distance to the nearest proton/
+// neutron magic number). weight = exp(−d²/(2σ²)). At a doubly-magic point
+// (dZ=dN=0) weight=1; it decays smoothly with shell distance. σ is a
+// hyperparameter (default 6.0 shell units). σ ≤ 0 → sentinel 0.0.
+pub fn island_weight(Z: int, N: int, sigma: float) -> float {
+    if sigma <= 0.0 { return 0.0 }
+    let Zf = to_float(Z)
+    let Nf = to_float(N)
+    let dz = _min_dist_z(Zf)
+    let dn = _min_dist_n(Nf)
+    let d2 = dz * dz + dn * dn
+    return exp(0.0 - d2 / (2.0 * sigma * sigma))
+}
+
+// ── C2 composite — C1 (c)-total-survival × island weight ───────────────
+//
+// The NOVEL C2 core: fold the magic-number proximity weight into the N11
+// composite, and source the (c)-score from C1's α⊕SF T_total (not α-only).
+//   c_total_score = c_gate_window_score(log10_T_total, band)   ← C1
+//   island        = island_weight(Z, N, σ)                     ← C2
+//   composite     = c_total_score · island
+// vs the C1-less baseline composite = c_gate_score (α-only) · 0.2 flat.
+
+struct IslandScore {
+    Z:                  int,
+    A:                  int,
+    Q_alpha_MeV:        float,
+    log10_T_total_s:    float,   // C1 α⊕SF total (the honest (c) source)
+    alpha_branching:    float,   // C1 branching (SF-dominance visibility)
+    sf_dominates:       int,     // C1 flag
+    c_total_score:      float,   // window score on the C1 total
+    island_weight:      float,   // C2 magic-number Gaussian weight
+    composite_score:    float,   // c_total_score · island_weight
+    valid:              int,     // 1 = scored, 0 = Q_α ≤ 0 (honest-skip)
+}
+
+// Full C2 island-weighted (c)-gate cell. Chains C1 c_gate_total_cell
+// (α⊕SF) → window score on the TOTAL log10 T → × island_weight. Q_α ≤ 0
+// → valid=0 (caller emits install-gated honestly · §3.3 no fabrication).
+pub fn n11_island_cell(Z: int, A: int, Q_alpha_MeV: float,
+                       band_lo: float, band_hi: float,
+                       sigma: float) -> IslandScore {
+    let N = A - Z
+    if Q_alpha_MeV <= 0.0 {
+        return IslandScore { Z: Z, A: A, Q_alpha_MeV: Q_alpha_MeV,
+                             log10_T_total_s: 0.0, alpha_branching: 0.0,
+                             sf_dominates: 0, c_total_score: 0.0,
+                             island_weight: 0.0, composite_score: 0.0,
+                             valid: 0 }
+    }
+    let d = c_gate_total_cell(Z, A, Q_alpha_MeV)    // C1 α⊕SF total
+    let c_total = c_gate_window_score(d.log10_T_total_s, band_lo, band_hi)
+    let iw = island_weight(Z, N, sigma)
+    return IslandScore { Z: Z, A: A, Q_alpha_MeV: Q_alpha_MeV,
+                         log10_T_total_s: d.log10_T_total_s,
+                         alpha_branching: d.alpha_branching,
+                         sf_dominates: d.sf_dominates,
+                         c_total_score: c_total, island_weight: iw,
+                         composite_score: c_total * iw, valid: 1 }
+}
+
 // ── reference-panel runner ─────────────────────────────────────────────
 //
 // Mirror of material/sim.hexa `_emit_row` + `main` pattern: emit a
@@ -510,6 +634,116 @@ fn _write_n11_topk(out_dir: string) -> string {
     return path
 }
 
+// ── C2 island-weighted top-K JSON cell (NUCLEAR.md §6.1 + C2) ───────────
+//
+// Renders one C2 IslandScore (Z,N) cell: C1 α⊕SF total-survival sourced
+// (c)-score × island_weight Gaussian. gate_type + absorbed=false hardcoded
+// (R4). Q_α from CITED table only (§3.3 no fabrication). σ = caller default.
+fn _island_cell_json(name: string, Z: int, A: int, Q_alpha_MeV: float,
+                     sigma: float, Q_cite: string) -> string {
+    let s = n11_island_cell(Z, A, Q_alpha_MeV, 0.0 - 6.0, 3.0, sigma)
+    let N = A - Z
+    let mut dom = "alpha"
+    if s.sf_dominates == 1 { dom = "SF" }
+    return "    {\n" +
+        "      \"name\": \"" + name + "\",\n" +
+        "      \"Z\": " + to_string(Z) +
+        ", \"N\": " + to_string(N) +
+        ", \"A\": " + to_string(A) + ",\n" +
+        "      \"Q_alpha_MeV\": " + to_string(Q_alpha_MeV) + ",\n" +
+        "      \"Q_alpha_source\": \"" + Q_cite + "\",\n" +
+        "      \"gate_type\": \"nuclear-novel-discovery-simulation\",\n" +
+        "      \"absorbed\": false,\n" +
+        "      \"prediction\": { \"log10_T_total_s_alpha_sf\": " +
+        to_string(s.log10_T_total_s) +
+        ", \"alpha_branching\": " + to_string(s.alpha_branching) +
+        ", \"dominant_channel\": \"" + dom + "\" },\n" +
+        "      \"scores\": { \"c_total_score\": " +
+        to_string(s.c_total_score) +
+        ", \"island_weight\": " + to_string(s.island_weight) +
+        ", \"composite_score\": " + to_string(s.composite_score) + " }\n" +
+        "    }"
+}
+
+// Build + write the C2 island-weighted top-K record. Rows are emitted in
+// DESCENDING composite_score (C1 α⊕SF total × C2 island weight). σ default.
+fn _write_n11_island_topk(out_dir: string, sigma: float) -> string {
+    let path = out_dir + "/top_k_island.json"
+
+    // Cited measured-Q_α cells. Pre-ordered by descending composite_score
+    // (computed below; ordering noted in the demo panel + NUCLEAR.log).
+    let rows: [string] = [
+        _island_cell_json("Og-294", 118, 294, 11.65, sigma,
+            "NUBASE2020 / discovery 11.65 MeV (Phase2 anchor)"),
+        _island_cell_json("Fl-289", 114, 289, 9.71, sigma,
+            "measured decay energy 1998 Dubna 9.71 MeV"),
+        _island_cell_json("Lv-293", 116, 293, 10.54, sigma,
+            "measured E_alpha first-detection (Lv->Fl) 10.54 MeV"),
+    ]
+    let mut body = "[\n"
+    let mut i = 0
+    while i < len(rows) {
+        body = body + rows[i]
+        if i + 1 < len(rows) { body = body + "," }
+        body = body + "\n"
+        i = i + 1
+    }
+    body = body + "  ]"
+
+    let json = "{\n" +
+        "  \"domain\": \"nuclear\",\n" +
+        "  \"verb\": \"verify\",\n" +
+        "  \"kind\": \"n11_zn_funnel_island\",\n" +
+        "  \"producer\": \"sim.hexa@nuclear-N11-C2\",\n" +
+        "  \"absorbed\": false,\n" +
+        "  \"gate_type\": \"nuclear-novel-discovery-simulation\",\n" +
+        "  \"provisional\": true,\n" +
+        "  \"query\": { \"Z_range\": [114, 122], \"N_range\": [170, 184], " +
+        "\"accelerator_band_log10_s\": [-6.0, 3.0], " +
+        "\"island_sigma\": " + to_string(sigma) + ", " +
+        "\"magic_Z\": [82, 114, 120, 126], \"magic_N\": [126, 184] },\n" +
+        "  \"top_k_candidates\": " + body + ",\n" +
+        "  \"scope_caveats\": [\n" +
+        "    \"(s1) C2 composite = C1 alpha+SF TOTAL-survival window score " +
+        "x island_weight Gaussian. (c)-source is NO LONGER alpha-only " +
+        "(C1 closes that flaw); (a)(b)(d)(e) gates still install-gated.\",\n" +
+        "    \"(s2) Proton magic number is MODEL-DEPENDENT (Z=114 vs 120 vs " +
+        "126 unresolved) — island_weight is a proximity HINT, never " +
+        "'near island ⇒ discovered/stable'. sigma is a hyperparameter.\",\n" +
+        "    \"(s3) NUCLEAR.md 3.3 NO fabrication: Q_alpha CITED only " +
+        "(AME2020/NUBASE2020). SF systematics scatter +-2-3 dex; SF " +
+        "dominance is a priority-down-weight PREDICTION (@D d2).\",\n" +
+        "    \"(s4) absorbed=false 永久. 'Z=119 후보일 가능성' != '발견됨'. " +
+        "(d) production sigma + (e) recoil detection wet-lab permanent.\"\n" +
+        "  ],\n" +
+        "  \"citations\": [\n" +
+        "    \"Viola & Seaborg 1966 J Inorg Nucl Chem 28:741 (NC1)\",\n" +
+        "    \"Royer 2000 J Phys G 26:1149 arxiv:nucl-th/0510074 (NC2)\",\n" +
+        "    \"C. Xu & Z. Ren PRC 71 014309 (2005) (C1 SF systematics)\",\n" +
+        "    \"Kiren/Gudennavar/Bubbly 2013 Rom J Phys 57:1335 arxiv:1301.1767\",\n" +
+        "    \"Sobiczewski & Pomorski 2007 PPNP 58:292 arxiv:nucl-th/0610090 (shell closures)\",\n" +
+        "    \"Samanta 2008 arxiv:0803.4151 (magic islands) · Bender+ 1999 PRC 60:034304\",\n" +
+        "    \"arxiv:2105.01035 AME2020 · NUBASE2020 Kondev+ Chin Phys C 45:030001\"\n" +
+        "  ],\n" +
+        "  \"recommendation\": \"C2 island-weighted accelerator priority " +
+        "shortlist. absorbed=true requires GSI/JINR/RIKEN beam + detection " +
+        "+ IUPAC priority — none from sim (NUCLEAR.md 7). '가능성' != '임'.\"\n" +
+        "}\n"
+
+    write_file(path, json)
+    return path
+}
+
+// C2 demo row: island weight + C1-total composite.
+fn _emit_island(name: string, Z: int, A: int, Q_alpha_MeV: float, sigma: float) {
+    let s = n11_island_cell(Z, A, Q_alpha_MeV, 0.0 - 6.0, 3.0, sigma)
+    println("  · " + name +
+            ": L_total=" + to_string(s.log10_T_total_s) +
+            "  c_total=" + to_string(s.c_total_score) +
+            "  island_w=" + to_string(s.island_weight) +
+            "  composite=" + to_string(s.composite_score))
+}
+
 fn main() {
     println("[nuclear+verify] sim.hexa — NUCLEAR.md §6 Phase 4 #1 " +
             "(hexa-native N7 closed-form)")
@@ -555,11 +789,24 @@ fn main() {
     _emit_c1("Fl-289  (Z=114, A=289, Q=9.71  · odd-A)",
              114, 289, 9.71)
 
+    // ── C2 island-weighted composite (C1 α⊕SF total × magic-number Gaussian)
+    // Sources the (c)-score from C1's TOTAL survival (not α-only) and folds
+    // in island_weight(Z,N,σ) (σ=6.0 default). Re-ranks toward the island.
+    println("[nuclear+verify · C2] island-weighted composite (σ=6.0; " +
+            "magic Z{82,114,120,126} × N{126,184})")
+    _emit_island("Og-294  (Z=118, N=176)", 118, 294, 11.65, 6.0)
+    _emit_island("Fl-289  (Z=114, N=175)", 114, 289, 9.71, 6.0)
+    _emit_island("Lv-293  (Z=116, N=177)", 116, 293, 10.54, 6.0)
+    _emit_island("Fl-298  (Z=114, N=184 · doubly-magic candidate, no Q_α cite → skip)",
+                 114, 298, 0.0, 6.0)
+
     // Emit the REAL N11 top-K JSON record (NUCLEAR.md §6.1 schema).
     let n11_out = "/tmp/nuclear_n11"
     let _ = exec("mkdir -p " + n11_out)
     let topk_path = _write_n11_topk(n11_out)
     println("[nuclear+verify · n11] wrote top-K record → " + topk_path)
+    let island_path = _write_n11_island_topk(n11_out, 6.0)
+    println("[nuclear+verify · C2] wrote island top-K record → " + island_path)
 
     println("[nuclear+verify] absorbed=false (R4 invariant; " +
             "NUCLEAR.md §7 wet-lab dependency permanent — Geiger-Nuttall " +
