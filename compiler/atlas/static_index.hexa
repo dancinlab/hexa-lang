@@ -167,6 +167,45 @@ fn _extract_raw_blocks(text: string) -> string {
     return parts.join("")
 }
 
+// --- process-lifetime parse cache (mirrors parser.hexa RFC 072 Option A) ----
+//
+// static_atlas() text-parses the full ~9.7 MB / 16 k-node embedded.gen.hexa on
+// every call. Every query verb (lookup_static / atlas_lookup / atlas_prefix_* /
+// atlas_list) calls static_atlas() fresh, so the whole corpus is re-parsed per
+// query (~10^4x waste; the overlapping subproblem IS the parsed index). The
+// parsed AtlasIndex is a pure function of embedded.gen.hexa's bytes, and that
+// file is frozen for the process lifetime — `register`/fold writes it then the
+// CLI exits (a one-shot subcommand; no register-then-static_atlas re-read in any
+// path: drill emits to the OVERLAY, not the embed — see compiler/drill/round.hexa).
+// So we cache the index ONCE per process, exactly as enrich_node caches enriched
+// nodes. Invalidation = process exit (the embed is rebuilt → fresh process).
+//
+// Cache keyed on the RESOLVED path so a within-process HEXA_ATLAS_EMBED change
+// (env points at a different embed dir) re-parses rather than serving the wrong
+// corpus. Same-path repeat → cache hit. Empty-index loads are NOT cached so a
+// transient read failure does not pin an empty atlas (a later same-path call
+// retries the parse).
+let mut _g_atlas_index: any = 0
+let mut _g_atlas_loaded: bool = false
+let mut _g_atlas_path: string = ""
+let mut _g_atlas_cache_hits: i64 = 0
+let mut _g_atlas_cache_misses: i64 = 0
+
+// atlas_cache_stats — observability hook (mirrors enrich_cache_stats). Returns
+// (hits, misses) over the process lifetime; a hit means a re-parse was avoided.
+pub fn atlas_cache_stats() -> [i64] {
+    return [_g_atlas_cache_hits, _g_atlas_cache_misses]
+}
+
+// atlas_cache_reset — test-only escape hatch. Production never resets within a
+// process; binary rebuild handles invalidation (process exit IS the TTL).
+pub fn atlas_cache_reset() {
+    _g_atlas_loaded = false
+    _g_atlas_path = ""
+    _g_atlas_cache_hits = 0
+    _g_atlas_cache_misses = 0
+}
+
 pub fn static_atlas() -> AtlasIndex {
     // SSOT = compiler/atlas/embedded.gen.hexa (the binary-builtin atlas).
     // Read it as TEXT at load, extract each AtlasNode.raw (.n6 block), parse
@@ -175,6 +214,13 @@ pub fn static_atlas() -> AtlasIndex {
     // writes embedded.gen.hexa directly; n6/atlas.n6 is now an EXPORT-only
     // artifact (`hexa atlas export`), no longer the runtime SSOT.
     let path = _resolve_embedded_path()
+    // Process-lifetime cache: serve the parsed index if the same path was
+    // already loaded this process (the file is frozen — see cache note above).
+    if _g_atlas_loaded && _g_atlas_path == path {
+        _g_atlas_cache_hits = _g_atlas_cache_hits + 1
+        return _g_atlas_index
+    }
+    _g_atlas_cache_misses = _g_atlas_cache_misses + 1
     let text = read_file(path)
     let n6_stream = _extract_raw_blocks(text)
     let nodes = parse_atlas_string(n6_stream, "embedded.gen.hexa")
@@ -182,6 +228,11 @@ pub fn static_atlas() -> AtlasIndex {
     let n = len(nodes)
     if n > 0 {
         println("atlas: loaded " + to_string(n) + " nodes from embedded.gen.hexa")
+        // Cache only non-empty loads (a transient read failure must not pin an
+        // empty atlas — a later same-path call should retry the parse).
+        _g_atlas_index = idx
+        _g_atlas_path = path
+        _g_atlas_loaded = true
     } else {
         eprintln("atlas: no nodes parsed from embedded.gen.hexa at " + path + " — serving EMPTY index")
         eprintln("atlas: set HEXA_ATLAS_EMBED=/abs/dir-containing-embedded.gen.hexa to override")
