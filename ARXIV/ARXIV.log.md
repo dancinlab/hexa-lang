@@ -2,6 +2,19 @@
 
 Append-only history sister of `ARXIV.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
+## 2026-05-26 — A6 cross-repo handoff 메커니즘 정립 + 3 handoff debt 정산 (g48/g60)
+
+- [x] A6 메커니즘 정본화 — g60 cross-repo handoff flow 정립: ingest → 3-class triage → target-repo `INBOX.log.md` 분배(slug 앵커·stub-first·dedup) → target 세션 commit+소비+ack(g48). INBOX = 비동기 비파괴 mailbox (ARXIV 는 hexa-lang authoring, finding 소비자는 sibling repo → 직접 sibling SSOT 편집 시 authoring 권위 충돌 → INBOX decouple).
+- [x] 4-axis 패턴 정리 — **3 cross-repo handoff + 1 self-absorb null case**: A2 ANIMA(6 H_xxx) · A3 DEMIURGE(12 7공정) · A4 PHANES(10 4표면) = sibling-repo handoff ; **A5 HEXA-LANG = IN-REPO null/identity 케이스**(self 에게 handoff = in-repo atlas fold `compiler/atlas/embedded.gen.hexa`, INBOX hop 없음 = 항등원).
+- [x] dirty-tree commit hazard 정식화 — A2/A3/A4 가 핸드오프를 **filing** 했으나 **commit 불가**: target repo 3개 전부 non-main feature 브랜치 + dirty 트리 위(anima `ops/f-curricula-1-orphan-recover`·demiurge `feat/rtsc-magnet-wheeler-v2`+`M INBOX.log.md`·phanes `domain/init-phanes` non-main). 공유 dirty 트리 직접 commit = 무관 WIP 끌어들임/main 미도달/8세션 git-object race (`shared-worktree-branch-hazard`+`feedback-closure-is-physical-limit`). → **resolution = target repo 별 격리 worktree off origin/main**.
+- [x] **3 handoff debt 정산 (g48 ack 완료)** — 각 repo 격리 worktree(off origin/main)로 핸드오프 항목 commit:
+  - **anima** `arxiv-a2-iit-empirical-ingest` (6 H_xxx + effective_information seed) → `~/core/anima/INBOX.log.md`. main protected(review 1, enforce_admins=false) → PR #576 → admin squash-merge `4618d7c9`. ✅
+  - **demiurge** `arxiv-a3-antimatter-factory-ingest` (7공정 map) → `~/core/demiurge/INBOX.log.md`. main unprotected → 직접 push `10f909ca`. ✅ (구 working-copy edit `M INBOX.log.md` 가 격리 worktree 로 main 정산; 남의 dirty 트리 미접촉)
+  - **phanes** `arxiv-a4-autonomous-discovery-ingest` (AlphaEvolve analog) → `~/core/phanes/INBOX.log.md` (파일 신규 생성). main unprotected → 직접 push `22414be4`. ✅
+- [x] verify-density 상관 정식화 — handoff-axis verify-ability ∝ target-repo 폐형해 밀도: DEMIURGE(5 물리상수 🔵, RFC-045 fn wired) + HEXA-LANG(16 fn·30+ recompute 🔵, self) = verify-native **producer** / ANIMA(0, IIT primitive 부재) + PHANES(0, OUROBOROS 소비자/SaaS) = **consumer**(정직, 실패 아님). 상관은 시간 가변 — A2 의 4 candidate 가 V5 IIT 엔진 랜딩 시 🟢 로 승격(ANIMA 밀도 0→양수). A2-A5 측정 표가 실증.
+- [x] 영속 — `docs/a6-crossrepo-handoff.md` (한글 §1 메커니즘·§2 4-axis+null case·§3 dirty-tree hazard+격리 worktree resolution+3-debt 표·§4 verify-density 상관 A2-A5 측정 표·§5 거버넌스·§6 A7 readiness) + `CLAIMS.tape` @C slug=arxiv-handoff-mechanism (🟢) + ARXIV.md A6 `[x]`.
+- [x] 다음 = A7 (catalogue closure report + reuse edge g67 NEXUS.tape + 4-repo 흡수 ledger). verify-density 상관이 A7 ledger 의 producer/consumer 분류 축.
+
 ## 2026-05-26 — A5 HEXA-LANG axis 흡수 (컴파일러/수론 13편 · math.NT verify-native · IN-REPO)
 
 - [x] A5 ingest — HEXA-LANG axis 본격 흡수 (흡수 repo 자체 = 대상; IN-REPO, A2/A3/A4 sibling-repo handoff 와 달리 cross-repo handoff 없음)
