@@ -384,14 +384,26 @@ axis 의 첫 설계서.
   - 신규 helper `_daemon_atlas_hash()` — SSOT content hash (`sha256_file`) 의 short-form (앞 16 hex). SSOT 부재 시 `""` (= unknown).
   - serve-loop 에 throttled flush 삽입 — COMPILE 처리 직전, 2 s throttle 윈도우당 1회 `_daemon_atlas_hash()` 호출 → 직전 `last_atlas_hash` 와 다르면 (둘 다 non-empty) `cache_keys`/`cache_bins` 전체 flush + cache_bins 의 모든 `~/.hexa-cache` disk-mirror 바이너리 `rm -f` (키 불변이라 disk HIT 도 stale → unlink 필수) → 다음 COMPILE 이 새 atlas 로 re-build. `""` current-hash = never flush (transient miss thrash 방지). 첫 관측값 = baseline 기록.
   - `daemon help` 텍스트 R2 → R2/R4 + F-DAEMON-4 설명 갱신.
-- [x] M14 — `tests/m_daemon_r4_atlas_flush_test.hexa` 신규 e2e (3 falsifier). 임시 `$HEXA_LANG` 에 작은 fake `compiler/atlas/embedded.gen.hexa` 를 두고 fake 파일을 rewrite 해 fold 시뮬 (10 MB 실 SSOT 안 건드림 · daemon 의 fork build 는 install_dir hexa 사용 → 실 compile 정상). F-DAEMON-4-1 (atlas 불변 + > throttle gap → 2nd compile HIT, 무spurious-flush) · F-DAEMON-4-2 (fake SSOT content 변경 → 다음 compile flush → re-BUILT, NOT stale HIT) · F-DAEMON-4-3 (안정화 후 → HIT 복귀 = flush 는 change-edge one-shot).
+- [x] M14 — throttle 는 `HEXA_DAEMON_ATLAS_THROTTLE_MS` env override (default 2000ms · 0 = 매 COMPILE 체크). 테스트가 0 으로 띄워 flush 를 wall-clock sleep 무관하게 deterministic 하게 만듦.
+- [x] M14 — `tests/m_daemon_r4_atlas_flush_test.hexa` 신규 e2e (3 falsifier). 임시 `$HEXA_LANG` 에 작은 fake `compiler/atlas/embedded.gen.hexa` 를 두고 fake 파일을 rewrite 해 fold 시뮬 (10 MB 실 SSOT 안 건드림 · daemon 의 fork build 는 install_dir hexa 사용 → 실 compile 정상). 데몬은 `HEXA_DAEMON_ATLAS_THROTTLE_MS=0` 으로 spawn → 매 COMPILE atlas hash 체크. F-DAEMON-4-1 (atlas 불변 → 2nd compile HIT, 무spurious-flush) · F-DAEMON-4-2 (fake SSOT content 변경 → 다음 compile flush → re-BUILT, NOT stale HIT) · F-DAEMON-4-3 (안정화 후 → HIT 복귀 = flush 는 change-edge one-shot).
 - [x] M14 — RFC 093 §12 표 R4(c) ✅ landed + R4(c) honest carve-out (Option A/B/C 비교 · flush 신호 = SSOT 파일 hash · disk unlink · throttle · "" never-flush) · GO.md M14 milestone.
 
 ### 디자인 결정 (R4(c))
 
 - **Option B 선택** — Option A (cache key 에 `…_<atlas[0:8]>` 추가) 는 daemon 키를 `cmd_run`/`hexa build`/precompile 키와 divergence → M7 drift-guard 위반 + M2 precompile lookup 깨짐 (scope 큼, `cmd_run` 동시 수정 필요). Option B 는 키 불변 유지 + daemon-local invalidation → drift-guard/precompile 무영향 (occam g0). Option C (mtime) 는 `touch` false-positive → content hash 채택.
 - **disk-mirror 도 unlink** — 키가 atlas fold 로 안 바뀌므로 in-mem flush 만으로는 다음 COMPILE 이 `~/.hexa-cache/hexa_run.<key>` disk HIT 으로 여전히 stale. flush 시 cache_bins disk 바이너리 전부 `rm -f`.
-- **2 s throttle** — hot-path 에서 매 COMPILE 마다 `sha256_file` (최대 10 MB) 읽기 회피. fold 감지 지연 ≤ 2 s ≪ RFC §7 F-DAEMON-4 gate "60 s 내 flush".
+- **2 s throttle (`HEXA_DAEMON_ATLAS_THROTTLE_MS` override)** — hot-path 에서 매 COMPILE 마다 `sha256_file` (최대 10 MB) 읽기 회피. fold 감지 지연 ≤ 2 s ≪ RFC §7 F-DAEMON-4 gate "60 s 내 flush". 0 = 매 COMPILE 체크 (테스트용).
+- **테스트 함정 (별개 runtime 버그 2개)** — (1) compiled `sleep_ms` 가 ~0ms no-op (mono_ns delta 측정 = 1000ns) → throttle 윈도우를 sleep 으로 못 넘김 → throttle env=0 으로 우회. (2) build-host (mini) 에서 `hexa*`-prefix argv0 SIGKILL (rc=137) — `hexac` 는 통과, `hexa-vertest` 는 kill ([[reference_hexa_basename_sigkill_workaround_2026_05_19]] 변종, 매처가 더 광범위). 둘 다 daemon 로직과 무관 — 테스트 하네스 이슈. 검증: `hexac` 드라이버 + throttle=0 으로 ALL 3 PASS.
+
+### 검증 결과 (mini arm64 Mac · fresh worktree build)
+
+- **R4 3 falsifier 전부 PASS** (`HEXA_BIN=/tmp/hexac` 드라이버 · `HEXA_DAEMON_ATLAS_THROTTLE_MS=0`):
+  - `[F-DAEMON-4-1a] BUILT · [F-DAEMON-4-1b] atlas 불변 → HIT (무spurious-flush) PASS`
+  - `[F-DAEMON-4-2] atlas fold → cache flushed → re-BUILT (no stale HIT) PASS` ← F-DAEMON-4 핵심
+  - `[F-DAEMON-4-3] 안정화 후 HIT 복귀 (flush = one-shot edge) PASS`
+- **daemon log 증거**: `hexa daemon: atlas SSOT changed (bb8058b8... -> 19538e40...) — flushing in-memory cache (1 entries)` (수동 repro 로그).
+- **R1/R2/R3 회귀 무**: r1 4/4 · r2 3/3 · r3 3/3 PASS (atlas-flush 삽입에도 기존 falsifier 불변).
+- **gate**: `hexa parse self/main.hexa` + `hexa parse tests/m_daemon_r4_atlas_flush_test.hexa` clean. `hexa build self/main.hexa` clang green (warning만).
 
 ### 다음 (R4 잔여)
 

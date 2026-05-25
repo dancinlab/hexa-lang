@@ -4901,7 +4901,16 @@ fn cmd_daemon_start(sock_path, idle_ttl_str) {
     // keeps the sha256_file read off the hot path for back-to-back COMPILEs.
     let mut last_atlas_hash = _daemon_atlas_hash()
     let mut last_atlas_check_ns = mono_ns()
-    let atlas_check_throttle_ns = 2 * ns_per_sec
+    // Throttle = 2 s default; `HEXA_DAEMON_ATLAS_THROTTLE_MS` env override (0 =
+    // check every COMPILE — used by the F-DAEMON-4 test so the flush is
+    // deterministic regardless of `sleep_ms` granularity). Production keeps the
+    // sha256_file read off the hot path for back-to-back COMPILEs.
+    let mut atlas_check_throttle_ns = 2 * ns_per_sec
+    let _atlas_thr_env = env_var("HEXA_DAEMON_ATLAS_THROTTLE_MS")
+    if len(_atlas_thr_env) > 0 {
+        let _thr_ms = parse_int_str(_atlas_thr_env)
+        if _thr_ms >= 0 { atlas_check_throttle_ns = _thr_ms * 1000000 }
+    }
     while !shutdown {
         // Wait up to 1 second for an incoming connection.
         let ready = net_select([listen_fd], 1000)
@@ -5039,6 +5048,8 @@ fn cmd_daemon(args) {
         println("  R4 (F-DAEMON-4): atlas SSOT hash flush — a fold into")
         println("  compiler/atlas/embedded.gen.hexa auto-flushes the in-mem cache")
         println("  (+ disk mirror) on the next COMPILE so no stale binary is served.")
+        println("  HEXA_DAEMON_ATLAS_THROTTLE_MS env: atlas-check throttle (default")
+        println("  2000 ms; 0 = check every COMPILE).")
         return
     }
 

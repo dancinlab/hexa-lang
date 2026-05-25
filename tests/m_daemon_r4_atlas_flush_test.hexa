@@ -17,9 +17,9 @@
 //
 // Falsifiers (RFC 093 § R4 acceptance):
 //   F-DAEMON-4-1 (no-flush HIT)   — atlas UNCHANGED: same source compiled
-//                                   twice (with a > throttle gap so the 2nd
-//                                   COMPILE does run the atlas check) → 2nd is
-//                                   an in-memory HIT (normal cache works).
+//                                   twice → the per-COMPILE atlas check sees an
+//                                   unchanged hash → 2nd is an in-memory HIT
+//                                   (normal cache works, no spurious flush).
 //   F-DAEMON-4-2 (flush on fold)  — atlas SSOT CONTENT changed (simulated fold)
 //                                   → next COMPILE of the SAME source flushes
 //                                   the cache → returns BUILT (a fresh build),
@@ -35,6 +35,9 @@
 // fold. This exercises the exact flush logic without touching (or rebuilding
 // against) the 10 MB committed SSOT — fast and non-destructive. The hexa build
 // binary itself is still resolved from install_dir, so real compiles work.
+// The daemon is spawned with HEXA_DAEMON_ATLAS_THROTTLE_MS=0 so it checks the
+// atlas hash on EVERY COMPILE (production default = 2 s throttle), making the
+// flush deterministic without depending on inter-request wall-clock sleeps.
 //
 // Exit codes: 0 — all 3 falsifiers PASS · 1 — any FAIL.
 // No nc/socat dependency: client + server driven via the `hexa daemon` CLI.
@@ -141,8 +144,12 @@ pub fn main() -> i32 {
 
     // ── start the daemon (bg) with HEXA_LANG pointed at the fake root ──────
     // idle-ttl 120 so the test's > throttle sleeps don't time it out.
+    // HEXA_DAEMON_ATLAS_THROTTLE_MS=0 → the daemon checks the atlas SSOT hash
+    // on EVERY COMPILE (not the production 2 s throttle), so the flush is
+    // deterministic without relying on wall-clock sleeps between requests
+    // (the compiled-runtime `sleep_ms` granularity is not load-bearing here).
     let log_path = sock + ".log"
-    let _spawn = _exec("HEXA_LANG=" + _shq(fake_root) + " nohup " + _shq(bin) + " daemon start --socket " + _shq(sock) + " --idle-ttl 120 > " + _shq(log_path) + " 2>&1 &")
+    let _spawn = _exec("HEXA_LANG=" + _shq(fake_root) + " HEXA_DAEMON_ATLAS_THROTTLE_MS=0 nohup " + _shq(bin) + " daemon start --socket " + _shq(sock) + " --idle-ttl 120 > " + _shq(log_path) + " 2>&1 &")
     let started = _wait_for_socket(sock, 4000)
     if !started {
         let log_tail = _trim(_exec("tail -20 " + _shq(log_path) + " 2>/dev/null"))
@@ -170,9 +177,8 @@ pub fn main() -> i32 {
         println("  [F-DAEMON-4-1a] FAIL: 1st reply='" + r1 + "' (expected 'BUILT <path>')")
         f1 = false
     }
-    // Sleep past the 2 s atlas-check throttle so the 2nd compile DOES run the
-    // atlas check — then assert it's still a HIT (atlas content unchanged).
-    sleep_ms(2500)
+    // 2nd compile: atlas content unchanged → the per-COMPILE atlas check sees
+    // the same hash → no flush → in-memory HIT (normal cache works).
     let r2 = _compile(bin, src, sock)
     let tag2 = _reply_tag(r2)
     let path2 = _reply_rest(r2)
@@ -186,11 +192,10 @@ pub fn main() -> i32 {
 
     // ── F-DAEMON-4-2 (flush on fold — atlas content changed) ──────────────
     // Rewrite the fake atlas SSOT to a DIFFERENT content (simulated fold) →
-    // its sha256 changes → the next COMPILE (past the throttle) must flush
-    // the cache and return a fresh BUILT, NOT a stale HIT.
+    // its sha256 changes → the next COMPILE must flush the cache (+ unlink the
+    // disk-mirror binary) and return a fresh BUILT, NOT a stale HIT.
     let atlas_v2 = "pub let ATLAS_HASH: string = \"bbbbbbbbbbbbbbbb\"\n// fake atlas SSOT v2 — simulated fold (test)\n// extra node line to change the content hash\n"
     let _wa2 = write_file(atlas_ssot, atlas_v2)
-    sleep_ms(2500) // clear the throttle window so the atlas check fires
     let r3 = _compile(bin, src, sock)
     let tag3 = _reply_tag(r3)
     let path3 = _reply_rest(r3)
@@ -207,7 +212,6 @@ pub fn main() -> i32 {
     // Atlas is stable again (no further edit) → the following compile of the
     // same source is a HIT again (the rebuilt binary is re-memoized; the flush
     // does not repeat while the atlas hash holds steady).
-    sleep_ms(2500)
     let r4 = _compile(bin, src, sock)
     let tag4 = _reply_tag(r4)
     let path4 = _reply_rest(r4)
