@@ -2,6 +2,17 @@
 
 Append-only history sister of `INBOX.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
+## 2026-05-26T08:00Z — 🐛 verify_cli 빌드-해소 4건 (UFO atom fold #1222 중 발견 · from demiurge UFO)
+
+> demiurge UFO 4-atom fold(`#1222` 머지)를 mini 에서 진행하며 verify_cli 빌드를 살리는 과정에서 확인. codegen `_Generic`/bessel 증상 자체는 ↓06:30Z · ✅07:40Z(#1198) 에 등재됨 — 본 엔트리는 그와 별개의 **빌드-해소(resolution) 갭 4건**. 모두 워크어라운드로 #1222 는 랜딩 완료.
+
+- [ ] **install `build/hexa_v2` ≠ `self/native/hexa_v2`** — `hexa cc --regen` 이 `~/.hx/bin/self/native/hexa_v2`(fixed)만 갱신하고 `~/.hx/bin/build/hexa_v2`(stale)는 그대로 둠. mini 기본 빌드는 `build/` 를 집어 codegen-fixed 가 안 먹음. 워크어라운드: `cp self/native/hexa_v2 build/hexa_v2`. → regen 이 둘 다 갱신하거나 빌드가 `self/native/` 우선 resolve 해야.
+- [ ] **verify_cli 빌드캐시가 import 변경을 무효화 안 함** — `compiler/atlas/calc_dispatch.hexa` 편집해도 cache key(`hexa_run.c1ee70da…`) 고정 → stale 빌드(편집 미반영). `rm ~/.hexa-cache/hexa_run.<key>*` 강제 후 반영. cache key 에 flattened-import 해시 포함 필요.
+- [ ] **`hexa verify` 엔트리 = 설치본 `~/.hx/bin/tool/verify_cli.hexa` 고정** — HEXA_LANG 은 import(calc_dispatch/embedded)만 리다이렉트, verify_cli 엔트리는 설치본 사용. → worktree 의 verify_cli 편집은 설치본에 copy 해야 반영. HEXA_LANG 이 tool/ 엔트리도 우선 resolve 하면 worktree-isolated verify 개발 가능.
+- [ ] **pool-route 가 `hexa`-word Bash 를 ubu 로 로드밸런싱** — mini-local `/tmp`·`~/core/*` worktree 빌드가 ubu(다른 트리·segfault)로 가 깨짐. verify-host=mini 핀이 `/Users/` abs-path 바이너리로만 됨(env opt-out 부재). heavy-word 라우터가 mini-local-path 명령은 핀해야.
+
+owner = hexa-lang 빌드/툴체인 세션.
+
 ## 2026-05-26T07:40Z — ✅ RESOLVED — verify/atlas-register 재빌드 차단 (21:13Z #1188) — #1198 + `build_hexa_module_loader.sh` 로 복구 · h3as Tc 🟢 fold 검증 · from demiurge RTSC
 
 > 21:13Z(#1188) "stale binary 재빌드뿐" blocker 를 demiurge RTSC 가 **직접 ubu-1 에서 복구 완료**. 클린 worktree(origin/main, #1198 포함)에서 2단 fix 로 `hexa verify --expr … --compute` + `hexa atlas register --from-verify` 가 다시 작동.
