@@ -48,32 +48,53 @@ __device__ __forceinline__ uint32_t smem_u32(const void* p){
  * a_base/b_base = smem byte addr of the warp's tile (row 0, col 0).
  * s_idx in 0..3 (covers K-cols [s_idx*16 .. s_idx*16+15]).
  * b_trans: 1 -> ldmatrix.trans (K^T) ; 0 -> non-trans (V).
+ *
+ * UNSWIZZLED CANONICAL ldmatrix.x4 addressing for a 16x16 fp16 tile (row-major,
+ * 128 B/row): lane i supplies the address of row (i & 15), col-half (i>>4)*8.
+ *   ldmatrix.x4 non-trans -> the 4 result regs are the 16x16 tile distributed in
+ *     the m16k16 A-fragment layout (or m16n16 B for V).
+ *   ldmatrix.x4 trans -> transposes each 8x8 (used for K^T).
+ * The warp owns 32 A-rows (2 stacked 16x16) and 32 B-cols. For the A operand the
+ * two 16-row halves load into ra[0..3] (rows 0-15) and ra[4..7] (rows 16-31).
+ * For the B operand the K-contraction tile is 16x16 too; we load two 16-col
+ * halves rbl (cols 0-15) and rbh (cols 16-31) of the n-direction.
  */
 __device__ __forceinline__ void mma_kstep(float acc[32], uint32_t a_base,
         uint32_t b_base, int s_idx, int lane, int b_trans) {
-    int row_idx = (lane & 7) + ((lane>>4)&1)*8;
-    int atom_off = (lane>>3)&1;
-    int atom_k = s_idx*2 + atom_off;       /* 8-fp16 atom index in K direction */
-    /* unswizzled: byte = full_row*128 + atom_k*16 ; top half rows 0..15, bot +16 */
-    uint32_t a_top = a_base + row_idx*128 + atom_k*16;
-    uint32_t a_bot = a_top + 16*128;
-    uint32_t b_top = b_base + row_idx*128 + atom_k*16;
-    uint32_t b_bot = b_top + 16*128;
+    int k_byte = s_idx * 16 * 2;     /* K-col group start byte (16 fp16 = 32 B) */
+    int r15 = lane & 15;
+    int chalf = (lane >> 4) * 8;     /* 0 or 8 (fp16 col within the 16) */
+    /* A operand: contraction (K) along columns. Tile A[row, k_col].
+     *   row = r15 (+0 / +16 for the two 16-row halves)
+     *   col within the 16-K group = chalf .. chalf+7
+     *   addr = a_base + row*128 + (k_byte + chalf*2)  */
+    uint32_t a_lo = a_base + r15*128 + k_byte + chalf*2;          /* rows 0-15 */
+    uint32_t a_hi = a_base + (r15+16)*128 + k_byte + chalf*2;     /* rows 16-31 */
     uint32_t ra[8], rbl[4], rbh[4];
     asm volatile("ldmatrix.sync.aligned.m8n8.x4.shared.b16 {%0,%1,%2,%3}, [%4];"
-        : "=r"(ra[0]),"=r"(ra[1]),"=r"(ra[2]),"=r"(ra[3]) : "r"(a_top));
+        : "=r"(ra[0]),"=r"(ra[1]),"=r"(ra[2]),"=r"(ra[3]) : "r"(a_lo));
     asm volatile("ldmatrix.sync.aligned.m8n8.x4.shared.b16 {%0,%1,%2,%3}, [%4];"
-        : "=r"(ra[4]),"=r"(ra[5]),"=r"(ra[6]),"=r"(ra[7]) : "r"(a_bot));
+        : "=r"(ra[4]),"=r"(ra[5]),"=r"(ra[6]),"=r"(ra[7]) : "r"(a_hi));
     if (b_trans) {
+        /* QK^T: B = K stored [keys x d] row-major; need K^T (contraction d).
+         * For mma .col operand with ldmatrix.trans, lane i addresses key-row
+         * (i&15) at d-col group (k_byte + chalf). Two 16-key halves -> rbl/rbh. */
+        uint32_t b_lo = b_base + r15*128 + k_byte + chalf*2;          /* keys 0-15 */
+        uint32_t b_hi = b_base + (r15+16)*128 + k_byte + chalf*2;     /* keys 16-31 */
         asm volatile("ldmatrix.sync.aligned.m8n8.x4.trans.shared.b16 {%0,%1,%2,%3}, [%4];"
-            : "=r"(rbl[0]),"=r"(rbl[1]),"=r"(rbl[2]),"=r"(rbl[3]) : "r"(b_top));
+            : "=r"(rbl[0]),"=r"(rbl[1]),"=r"(rbl[2]),"=r"(rbl[3]) : "r"(b_lo));
         asm volatile("ldmatrix.sync.aligned.m8n8.x4.trans.shared.b16 {%0,%1,%2,%3}, [%4];"
-            : "=r"(rbh[0]),"=r"(rbh[1]),"=r"(rbh[2]),"=r"(rbh[3]) : "r"(b_bot));
+            : "=r"(rbh[0]),"=r"(rbh[1]),"=r"(rbh[2]),"=r"(rbh[3]) : "r"(b_hi));
     } else {
+        /* P.V: B = V stored [keys x d] row-major, contraction = keys (along rows).
+         * mma .col operand non-trans: lane i addresses k-row (i&15) at n-col
+         * group. n-col halves -> rbl (cols 0-15), rbh (cols 16-31). */
+        uint32_t b_lo = b_base + r15*128 + k_byte + chalf*2;
+        uint32_t b_hi = b_base + r15*128 + k_byte + chalf*2 + 16*2;   /* +16 cols */
         asm volatile("ldmatrix.sync.aligned.m8n8.x4.shared.b16 {%0,%1,%2,%3}, [%4];"
-            : "=r"(rbl[0]),"=r"(rbl[1]),"=r"(rbl[2]),"=r"(rbl[3]) : "r"(b_top));
+            : "=r"(rbl[0]),"=r"(rbl[1]),"=r"(rbl[2]),"=r"(rbl[3]) : "r"(b_lo));
         asm volatile("ldmatrix.sync.aligned.m8n8.x4.shared.b16 {%0,%1,%2,%3}, [%4];"
-            : "=r"(rbh[0]),"=r"(rbh[1]),"=r"(rbh[2]),"=r"(rbh[3]) : "r"(b_bot));
+            : "=r"(rbh[0]),"=r"(rbh[1]),"=r"(rbh[2]),"=r"(rbh[3]) : "r"(b_hi));
     }
     /* 8 mma.m16n8k16: [top16|bot16] rows x [n0 n1 n2 n3] (8-col) -> acc groups 0..7
      * matching the PTX emit order. */
