@@ -185,3 +185,23 @@
 ### downstream
 - OEIS O3 라인 cross-link: V2 compute mode 가 per-hit fresh verify unblock.
 - 다음: V1 (미러 통합) · V3 (tolerance verify) · V4 (특수함수 stdlib → DLMF 재개).
+
+---
+
+## 2026-05-26 — OPS: 설치 드라이버 HEAD 재설치 (g27 ship-cycle · V*-stale 블로커 종결)
+
+### 문제
+- 설치된 verify 경로(`$install/bin/hexa-verify`, install_dir = `/Users/ghost/core/hexa-lang`)가 #1148(V4 특수함수 `--tol`)·#1150(V7 nth_prime/catalan)·#1152 이전 빌드여서, `hexa verify --expr gamma … --tol`/`nth_prime …` 호출이 실패. V6/V7 작업마다 mini-bootstrap / local HEAD-rebuild + /tmp PATH wrapper 로 우회해 옴.
+- 정정: `hexa verify --expr` 는 verify_cli 를 JIT 재빌드하지 않음 — driver(self/main.hexa sub=="verify")가 미리 컴파일된 `bin/hexa-verify` 를 우선 사용. 따라서 stale 한 진짜 컴포넌트 = `bin/hexa-verify` (driver 바이너리도 함께 갱신).
+
+### 조치 (atomic · reversible)
+- build host = **mini** (arm64 mac pool, local-arch 일치). `/tmp/wt-driver-head` 에 HEAD(e7c15ec1) fresh clone → `hexa_v2` transpiler + `hexa_module_loader` + `bin/hexa-verify` + driver(`build/hexa_darwin_arm64`) 빌드 → scp back.
+- atomic replace (same-fs temp + `mv -f`): `bin/hexa-verify`(757664B) · `~/.hx/bin/hxv2`(808192B) · `~/.hx/bin/hexa.real`(808192B). 백업 보존(`*.bak-1779729853/…907/…211`).
+
+### 검증 (instrument-first · 설치 드라이버 통과 verbatim → `.verdicts/driver-reinstall/reinstall.txt`)
+- `hexa verify --expr gamma 5 24 --tol 1e-6` : `error: to_int: trailing garbage in "--tol"` → **🟢 SUPPORTED-NUMERICAL** (V4)
+- `hexa verify --expr nth_prime 5 11` : 🟠 INSUFFICIENT(no path) → **🔵 SUPPORTED-FORMAL** (V7)
+- `hexa verify --expr sigma 6 12` : 🔵 → **🔵** (회귀 무손상)
+
+### 결과
+- driver reinstalled to HEAD — V4/V7 심볼이 이제 설치된 `bin/hexa-verify` 에 들어가, 향후 V* 빌드는 per-build bootstrap 불요(bootstrap-free). rollback 불요(3/3 PASS).
