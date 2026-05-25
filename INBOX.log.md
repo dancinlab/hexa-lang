@@ -2,6 +2,17 @@
 
 Append-only history sister of `INBOX.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
+## 2026-05-25T21:13Z — 🔁 VERIFY-KIT V1 SOURCE는 완비 — blocker는 오직 stale 설치 binary 재빌드 (hexa_v2 segfault + `hexa cc --regen` .o-as-.c) · from demiurge RTSC h3as atlas-absorb
+
+> **정밀 갱신** (기존 transpiler-segfault 엔트리 보강). demiurge RTSC 가 h3as 결정적 결과(λ_BZ=1.65 강결합 stable 폴리모프, Tc≈56K)를 atlas 흡수하려다 막힘. 추적 결과 **소스는 이미 맞고, 막힌 건 binary 재빌드뿐**임을 확정.
+
+- [x] **SOURCE는 V1 완비** (origin/main 7b1b6fcd~e2cb1478): `tool/verify_cli.hexa` — allen_dynes_tc dispatch arm(L3013, `_allen_dynes_tc` L1295) + `cmd_expr_float_compute`(L3652) + `COMPUTE: <fn> = <val>` 출력(L3697) + `_has_compute`(L70) 라우팅(L3718) 모두 존재. `tool/atlas_cli.hexa` — allen_dynes_tc register arm(L1429) + `_adapt_verify_compute`(L2064, value-less COMPUTE-and-fold) + `_parse_compute_value`(L2042) 존재. 즉 register→verify `--compute`→COMPUTE파싱→fold 체인이 소스상 완결 (g20 single calc home). **verify_cli/atlas_cli 엔 고칠 것 없음.**
+- [ ] **blocker = 설치 binary stale** (V1 이전): `hexa verify --expr allen_dynes_tc 1.6489 450.40 0.10 --compute` 가 신형 `COMPUTE:` 라인 대신 구형 `calc=55.8985 ≠ expected -0.0` + 🔴 출력 → `_adapt_verify_compute` 의 `_parse_compute_value` 가 빈 문자열 받아 register 실패(🟠/🔴). 즉 흡수 차단은 desync(이미 V1로 해소)도 arity gap(해소)도 아닌 **stale binary** 단일 원인.
+- [ ] **재빌드 차단 1 — hexa_v2 segfault**: `hexa run|build <any.hexa>` → `[1/2] HEXA_MEM_CAP_MB=4096 …/hexa_v2 tmp.hexa out.c` → **Segmentation fault (core dumped)** → "transpile failed — C file not produced". trivial 1-fn .hexa 도 동일. pool-wide (ubu-1/ubu-2). 기존 2026-05-26T00:45Z 엔트리와 동일 근본.
+- [ ] **재빌드 차단 2 — `hexa cc --regen` 빌드시스템 회귀** (ubu-2/summer): regen이 gcc에 `self/runtime.o`(컴파일된 ELF object)를 **C 소스로** 넘김 → `runtime.o:1:N: warning: null character ignored`(ELF 바이트를 소스로 읽음) 다발 → `compiled=no` → `hexa_cc.c` ≠ `hexa_cc.c.new` (Phase C MVP concat merge, no symbol resolution). 즉 transpiler self-rebuild 경로도 깨짐.
+- [ ] **영향**: g5 verify (`hexa verify --expr`) + atlas register (`--from-verify`) 가 신형 fn(allen_dynes_tc 등 3-arg + V1 COMPUTE)에 대해 설치 binary 기준 전면 차단. demiurge RTSC/NUCLEAR 의 검증·흡수 파이프라인 정지. (h3as 결과는 `RTSC.log.md` + `exports/material_discovery/rtsc_h3as_fullbz_elph_20260526.json` 에 durable 봉합 — binary 복구 즉시 `register --from-verify allen_dynes_tc 1.6489 450.40 0.10` 한 줄로 fold 가능.)
+- [ ] **fix 후보**: (a) 회귀 bisect — "어제 아침 정상 → origin/main 회귀"(00:45Z) → 깨진 codegen 커밋 revert. (b) known-good `self/native/hexa_v2` binary 복원(회귀 이전 캐시/git). (c) 클린 clone 재빌드(ubu 체크아웃 .o 혼선 회피). (d) `hexa cc --regen` 의 .o-as-.c 입력 버그 분리 수정(object를 source-list에서 제외). — 04:30Z `exec_stream` SIGSEGV 와 동일 transpiler 회귀일 가능성.
+
 ## 2026-05-26T04:30Z — 🐛 `exec_stream(cmd, on_line)` SIGSEGV in a `hexa build` standalone binary (callback fn-pointer path) · from this-session cloud-tail
 
 > **severity: medium** — `exec_stream` is the documented streaming primitive (per-line callback, runtime `_IOLBF` flush). It works in the bootstrapped `hexa` driver but **segfaults immediately (exit 139)** in any program compiled with `hexa build` — even a trivial `exec_stream("printf 'a\\nb\\n'", on_line)`. Discovered while building `hexa cloud tail`; worked around with `exec_replace` (no callback) so the verb shipped, but the gap stands. Same family as `exec_argv not codegen-wired`.
