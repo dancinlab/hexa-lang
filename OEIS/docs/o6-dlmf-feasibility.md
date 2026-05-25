@@ -164,3 +164,42 @@ laguerre | sin( | cos(   →   ZERO MATCHES
 - WebFetch: `dlmf.nist.gov/about`, `dlmf.nist.gov/help` (2026-05-25) — bulk download/API/dataset 부재 확인.
 - `hexa verify rubric` — calc-fn / float-fn 레지스트리 (특수함수 0개).
 - OEIS 패턴 출처: `OEIS/OEIS.md` §0–§3, `OEIS/tool/scanner.hexa` (O1 POC), `CLAIMS.tape` slug=oeis-scanner-poc.
+
+---
+
+## §6 · 사후 갱신 — VERIFY-KIT V4 가 blocker (2) 를 (부분) 해소 (2026-05-26)
+
+> ⚠ **이것은 O6 의 재오픈(reopen) 이 아니다.** O6 의 closed-negative verdict
+> (🔴 FALSIFIED) 는 **그대로 유효**하다. 아래는 두 blocker 중 **(2) hexa
+> 특수함수 부재** 가 VERIFY-KIT V4 로 (일부) 풀렸음을 정직하게 기록할 뿐이다.
+
+VERIFY-KIT V4 (`CLAIMS.tape` slug=verify-kit-special) 가 `hexa verify` 에
+**native libm 특수함수 primitive** 를 추가했다:
+
+| fn | libm | 비고 |
+|----|------|------|
+| `gamma(x)` | `tgamma` | Γ(x). gamma(5)=24, gamma(0.5)=√π |
+| `erf(x)` | `erf` | Gauss 오차함수. erf(1)=0.84270 |
+| `bessel_j0(x)` | `j0` | Bessel J₀. j0(0)=1 (STRETCH) |
+| `bessel_j1(x)` | `j1` | Bessel J₁. j1(0)=0 (STRETCH) |
+| `erfc`/`tgamma`/`lgamma` | libm | 언어-레벨 primitive (lgamma 는 V4 이전부터) |
+
+→ §5 의 "hexa verify 특수함수 ZERO" 점검은 **{gamma, erf, bessel} 에 한해 더 이상
+참이 아니다.** blocker (P3 / 본문 (2)) 가 그만큼 해소됐다.
+
+### 그럼에도 DLMF 흡수는 여전히 GATED — 정직한 경계
+
+V4 는 **primitive 만** 제공한다 (DLMF 재흡수가 **아니다**). §4 미래경로 (i)–(iii)
+중 **(i) 만 부분 충족**:
+
+- **(i) hexa 특수함수 라이브러리** — gamma/erf/bessel landed. **zeta·직교다항식·
+  Airy·초기하·타원적분 등은 미구현** (libm ζ 부재 → Euler-Maclaurin 빌드 리스크로
+  V4 defer). 부분 충족.
+- **(ii) numeric 샘플링 + tolerance 매칭 harness** — 미구현. (V3 `--tol` 가 단일-값
+  tolerance 는 주지만, x-grid 샘플링 harness 는 아님.)
+- **(iii) DLMF bulk corpus** — **여전히 부재** (blocker (1) = P1). DLMF 는 bulk
+  download/API/dataset 없음 (§2). 이건 V4 가 건드리지 못한다 = **DLMF-specific**.
+
+**결론:** blocker (1) bulk-corpus 가 OPEN 인 한 DLMF as-is 흡수는 계속 불가능하다.
+V4 는 (2) 를 좁혀 미래 "DLMF" 자매 도메인의 선행조건 스택 (i) 을 진척시켰을 뿐,
+O6 closed-negative 를 뒤집지 않는다.

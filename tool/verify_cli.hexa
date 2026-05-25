@@ -303,6 +303,10 @@ fn cmd_rubric() {
     println("             arr(p_control,p_treat)      → p_control-p_treat   (Absolute Risk Reduction, percentage points, 2-arg)")
     println("             ln_hr_to_hr(ln_hr)          → exp(ln_hr)          (log-HR → HR, Cox-PH back-transform, 1-arg)")
     println("             ln(x)                       → natural log         (CLM init-CE floor = ln(vocab), 1-arg)")
+    println("             gamma(x)                    → Γ(x) (libm tgamma)  (VERIFY-KIT V4 special fn · gamma(5)=24 · gamma(0.5)=√π · use --tol, 1-arg)")
+    println("             erf(x)                      → Gauss error fn      (VERIFY-KIT V4 special fn · erf(0)=0 · erf(1)=0.84270 · use --tol, 1-arg)")
+    println("             bessel_j0(x)                → J₀(x) (libm j0)     (VERIFY-KIT V4 special fn · J₀(0)=1 · use --tol, 1-arg)")
+    println("             bessel_j1(x)                → J₁(x) (libm j1)     (VERIFY-KIT V4 special fn · J₁(0)=0 · use --tol, 1-arg)")
     println("             hill(L,Kd,n)                → L^n/(Kd^n+L^n)      (Hill receptor binding, M3 IC50, 3-arg)")
     println("             cheng_prusoff(IC50,S,Km)    → IC50/(1+S/Km)       (Cheng-Prusoff Ki conversion, 3-arg)")
     println("             fick1(D,dC,dx)              → -D*dC/dx            (Fick's first law of diffusion, 3-arg)")
@@ -1149,6 +1153,36 @@ fn _ln_hr_to_hr(ln_hr: float) -> float {
 // CLAIMS chat_init_ce_floor: ln(151936) = 11.931214658529285.
 fn _ln(x: float) -> float {
     return ln(x)
+}
+
+// ── VERIFY-KIT V4 — special-function primitives (2026-05-26) ───────────
+// All route through native libm (tgamma/erf/j0/j1) per CLAUDE.md
+// stdlib_trig_libm — IEEE-correct, codegen-stable, NOT hand-rolled Taylor.
+// Values are irrational (Γ, erf, Bessel J), so `--expr <fn> <v>` verifies
+// 🟢 SUPPORTED-NUMERICAL through the V3 `--tol <eps>` gate — never exact 🔵.
+
+// gamma(x) — Euler Gamma function Γ(x) = (x−1)! for positive integers.
+//   gamma(5) = 4! = 24 · gamma(0.5) = √π = 1.7724538509...
+fn _gamma(x: float) -> float {
+    return gamma(x)
+}
+
+// erf(x) — Gauss error function (2/√π)∫₀ˣ e^(−t²)dt.
+//   erf(0) = 0 · erf(1) = 0.8427007929... · erf(∞) = 1.
+fn _erf(x: float) -> float {
+    return erf(x)
+}
+
+// bessel_j0(x) — Bessel function of the first kind, order 0 (libm j0).
+//   bessel_j0(0) = 1.
+fn _bessel_j0(x: float) -> float {
+    return bessel_j0(x)
+}
+
+// bessel_j1(x) — Bessel function of the first kind, order 1 (libm j1).
+//   bessel_j1(0) = 0.
+fn _bessel_j1(x: float) -> float {
+    return bessel_j1(x)
 }
 
 // ── Bio-physical Phase 2 (demiurge cross-domain V2 unlock) ─────────
@@ -2794,6 +2828,22 @@ fn _recompute_float(fn_name: string, a0: float, a1: float, a2: float, a3: float,
     }
     if fn_name == "ln" {
         return _ln(a0)
+    }
+    // ── VERIFY-KIT V4 — special-function primitives (native libm) ──────
+    //   gamma(x)=Γ(x) · erf(x) · bessel_j0(x) · bessel_j1(x). All 1-arg,
+    //   routed through libm tgamma/erf/j0/j1 (CLAUDE.md stdlib_trig_libm;
+    //   NOT hand-rolled Taylor). Values irrational => 🟢 NUMERICAL via --tol.
+    if fn_name == "gamma" {
+        return _gamma(a0)
+    }
+    if fn_name == "erf" {
+        return _erf(a0)
+    }
+    if fn_name == "bessel_j0" {
+        return _bessel_j0(a0)
+    }
+    if fn_name == "bessel_j1" {
+        return _bessel_j1(a0)
     }
     // ── Bio-physical Phase 2 (demiurge cross-domain V2 unlock) ─────────
     //   hill(L, Kd, n)              3-arg: L^n / (Kd^n + L^n)

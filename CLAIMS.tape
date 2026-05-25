@@ -2431,3 +2431,23 @@
   raw    = ".verdicts/oeis-tecs-crosslink/crosslink.txt"
   src    = "NEXUS.tape (§3b: domain-node d_oeis/d_tecsl + reuse-edge de1) · TECS-L/TECS-L.md (F11 [x] closure) · OEIS/docs/o5-tecs-crosslink.md · .verdicts/oeis-atlas-fold/fold_ledger.txt (O4, 7 links)"
   status = "🟢 7 OEIS↔hexa provenance links cross-linked to TECS-L F11 + NEXUS.tape reuse edge (g67). TECS-L F11 closed (OEIS reuse cite); OEIS O5 closed. Docs+NEXUS only — no atlas fold."
+
+# ───────────────────────────────────────────────────────────────────────
+# VERIFY-KIT — verify-kit-special (slug · group=VERIFY-KIT · V4 · P1b)
+# Special-function PRIMITIVES added to `hexa verify` via native libm. Mirrors
+# the EXISTING lgamma exposure mechanism (self/codegen.hexa cg_math_sym +
+# self/runtime.c hexa_math_* + runtime.h decl) — NOT hand-rolled Taylor
+# (CLAUDE.md stdlib_trig_libm). Transpiler regenerated via `hexa cc --regen`
+# (codegen change → hexa_cc.c → build/hexa_v2 promote). Values irrational →
+# 🟢 SUPPORTED-NUMERICAL through the V3 `--tol <eps>` gate, never exact 🔵.
+# SCOPE: gamma·erf landed (PRIMARY) + bessel_j0·bessel_j1 (STRETCH, libm clean).
+# zeta DEFERRED — no libm ζ (Euler-Maclaurin = build risk, out of V4 scope).
+# HONEST: V4 fixes DLMF blocker (2) hexa-coverage for {gamma,erf,bessel} ONLY;
+# blocker (1) bulk-corpus stays open → DLMF absorption still gated (NOT reopened).
+
+@C verify_kit_special := "VERIFY-KIT V4 special-function primitives via native libm: gamma(x)=Γ(x) (libm tgamma), erf(x) (Gauss error fn), bessel_j0/j1(x) (libm j0/j1) added to `hexa verify --expr`. gamma(5)=24 (4!) 🟢 · gamma(0.5)=1.7724538509 (√π) --tol 1e-6 🟢 (|Δ|=5.5e-12) · erf(0)=0 compute 🟢 · erf(1)=0.8427007929 --tol 1e-6 🟢 (|Δ|=5e-11) · bessel_j0(0)=1 --tol 1e-6 🟢 · bessel_j1(0)=0 --tol 1e-6 🟢. Mechanism MIRRORS existing lgamma (self/codegen.hexa cg_math_sym gamma→hexa_math_tgamma/erf→hexa_math_erf/bessel_j0→hexa_math_j0/bessel_j1→hexa_math_j1 + self/runtime.c hexa_math_tgamma/erf/erfc/j0/j1 + runtime.h decls; transpiler regenerated via hexa cc --regen). Native libm per CLAUDE.md stdlib_trig_libm — NOT hand-rolled Taylor. Irrational → 🟢 NUMERICAL via V3 --tol (never 🔵). zeta DEFERRED (no libm ζ). Resolves DLMF blocker (2) hexa-coverage for {gamma,erf,bessel}; blocker (1) bulk-corpus stays open (DLMF absorption NOT reopened — primitives, not re-absorption)" :: formula [slug=verify-kit-special group=VERIFY-KIT]
+  method = "libm"
+  cmd    = "hexa verify --expr gamma 5 24 --tol 1e-6  ·  hexa verify --expr erf 1 0.8427007929 --tol 1e-6  ·  hexa verify --expr bessel_j0 0 1 --tol 1e-6  (build = worktree-regenerated build/hexa_v2 + bin/hexa-verify)"
+  raw    = ".verdicts/verify-kit-special/v4_special.txt"
+  src    = "self/codegen.hexa (cg_math_sym + 1-arg call-emit + _is_float_returning_call: gamma/tgamma/erf/erfc/bessel_j0/bessel_j1) · self/runtime.c (hexa_math_tgamma/erf/erfc/j0/j1) · self/runtime.h (decls) · compiler/atlas/calc_dispatch.hexa (calc_is_float_fn) · tool/verify_cli.hexa (_gamma/_erf/_bessel_j0/_bessel_j1 + _recompute_float dispatch + help). Transpiler regenerated (hexa cc --regen → hexa_cc.c → build/hexa_v2). bin/hexa-verify rebuilt mac arm64; 7-row --tol matrix tested verbatim."
+  status = "🟢 SUPPORTED-NUMERICAL — 4 special fns landed via native libm (gamma·erf PRIMARY + bessel_j0·bessel_j1 STRETCH), all 🟢 through --tol. zeta DEFERRED (no libm, Euler-Maclaurin build risk). Terminal · resolves DLMF blocker(2) {gamma,erf,bessel} coverage; blocker(1) bulk-corpus open (HONEST — primitives not DLMF re-absorption)."

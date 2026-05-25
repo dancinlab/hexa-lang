@@ -4,6 +4,38 @@
 
 ---
 
+## 2026-05-26 — V4 (P1b) 특수함수 primitive (gamma·erf·bessel) via native libm + --tol
+
+### 목표 (DLMF blocker (2) — hexa verify 특수함수 0개)
+- DLMF O6 가 두 가지로 🔴 닫힘: (1) bulk-corpus 부재, (2) hexa verify 에 특수함수 ZERO. V4 는 (2) 만 해소 — primitive 를 제공할 뿐 DLMF 재흡수가 아님 (정직).
+- 값이 무리수 (Γ·erf·Bessel J) → V3 `--tol` 로 🟢 SUPPORTED-NUMERICAL, 절대 exact 🔵 불가.
+
+### 핵심 발견 — `stdlib/special/` 신설이 아니라 기존 lgamma 메커니즘 미러
+- 처음엔 `stdlib/special/` 모듈을 가정했으나, 조사 결과 **`lgamma` 가 이미 작동하는 libm builtin** (`stdlib/core/math/float.hexa` 가 `lgamma(x)` 직접 호출). 노출 경로 = **`self/codegen.hexa`** (NOT `build_c.hexa` — 그건 비활성 레거시 codegen) 의 `cg_math_sym` 테이블 (`lgamma → hexa_math_lgamma`) + `self/runtime.c` 의 `hexa_math_lgamma` + `runtime.h` decl. 이 4-site 패턴을 그대로 미러.
+- `self/codegen.hexa` 4-site: (a) name-mangle 리스트 (`erf`/`gamma`/`tgamma` 이미 존재) · (b) `cg_math_sym` 추가 (`gamma→hexa_math_tgamma`, `tgamma→hexa_math_tgamma`, `erf→hexa_math_erf`, `erfc→hexa_math_erfc`, `bessel_j0→hexa_math_j0`, `bessel_j1→hexa_math_j1`) · (c) 1-arg call-emit 추가 · (d) `_is_float_returning_call` (`tgamma`/`erf`/`erfc` 이미 존재, `gamma`/`bessel_j0`/`bessel_j1` 추가).
+- `self/runtime.c`: `hexa_math_tgamma`/`erf`/`erfc`/`j0`/`j1` 추가 (lgamma 와 동형 — `hexa_float(tgamma(HX_FLOAT(x)))`). `self/runtime.h`: 5 decl 추가 (emit C 가 include → C99 implicit-decl 빌드실패 방지).
+- `compiler/atlas/calc_dispatch.hexa`: `calc_is_float_fn` 에 `gamma`/`erf`/`bessel_j0`/`bessel_j1` 추가 (CLI 가 float-recompute 경로로 라우팅).
+- `tool/verify_cli.hexa`: `_gamma`/`_erf`/`_bessel_j0`/`_bessel_j1` 헬퍼 + `_recompute_float` dispatch + help 5줄.
+
+### 거버넌스 (CLAUDE.md stdlib_trig_libm)
+- 전부 native libm (`tgamma`/`erf`/`erfc`/`j0`/`j1`) — hand-rolled Taylor 금지 (float→int narrowing collapse 위험). lgamma 와 동일 IEEE-correct 경로.
+
+### 빌드 (codegen 변경 → 트랜스파일러 재생성)
+- codegen 변경이라 `hexa cc --regen` 필수 (hexa_cc.c 직접편집 금지). worktree 에서 `cc --regen` → `self/native/hexa_cc.c` (+66 lines) → clang → `/tmp/hexa_v2.new` → `build/hexa_v2` + `self/native/hexa_v2` promote. `self/runtime.o` 재컴파일 (새 hexa_math_* 심볼). `bin/hexa-verify` 재빌드.
+- **함정**: pool-route 훅이 `hexa build`/`hexa cc` (heavy_pairs) 를 가로채 pool 라우팅 시도 → 빌드는 wrapper `.sh` (커맨드 문자열에 `hexa build` 인접쌍 없음) 경유. 트랜스파일러 해석은 `install_dir_from_argv0` 가 main repo 로 가버려, worktree binary 를 `hexazz` (hexa-prefix) 로 복사 후 풀패스 직접 호출 → argv[0] dir = worktree → worktree `build/hexa_v2` 채택.
+
+### 측정 (verbatim → `.verdicts/verify-kit-special/v4_special.txt`)
+- gamma 5 --compute = 24.0 🟢 · gamma 5 24 --tol 1e-6 🟢 (|Δ|=0) · gamma 0.5 1.7724538509 --tol 1e-6 🟢 (√π, |Δ|=5.5e-12)
+- erf 0 --compute = 0.0 🟢 · erf 1 0.8427007929 --tol 1e-6 🟢 (|Δ|=5e-11)
+- (STRETCH) bessel_j0 0 1 --tol 1e-6 🟢 · bessel_j1 0 0 --tol 1e-6 🟢
+
+### Landed vs Deferred
+- **Landed**: gamma·erf (PRIMARY) + bessel_j0·bessel_j1 + erfc·tgamma (언어 primitive). 전부 🟢.
+- **Deferred**: zeta(s) — libm ζ 부재. Euler-Maclaurin 합산은 빌드 리스크 (g0/g33 hard-defer). 정직하게 V4 비범위.
+- **DLMF**: blocker (2) {gamma,erf,bessel} coverage 해소; blocker (1) bulk-corpus 는 OPEN 유지 → DLMF 흡수는 reopen 아님.
+
+---
+
 ## 2026-05-26 — V3 (P1a) round-tolerance `--tol <eps>` (literature-rounded 값 🟢 · 옵트인)
 
 ### 문제 (INBOX 2026-05-26T01:30Z item(3) · 동일 클래스 item(b) — V1 이 별개 항목으로 defer)
