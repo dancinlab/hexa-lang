@@ -5659,7 +5659,12 @@ fn gen2_expr(node) {
                 return "(HX_SET_ARR_CAP(" + gen2_expr(node.args[0]) + ", (int)HX_INT(" + gen2_expr(node.args[1]) + ")), hexa_void())"
             }
             if name == "__fd_write_bytes" {
-                return "hexa_int((int64_t)write((int)HX_INT(" + gen2_expr(node.args[0]) + "), HX_STR(" + gen2_expr(node.args[1]) + "), (size_t)HX_STRLEN(" + gen2_expr(node.args[1]) + ")))"
+                // cycle 72 — route through hxlcl_write (carry-flag svc trap
+                // in self/runtime.c, cycle 70) instead of bare libc write().
+                // Eliminates the last codegen-layer `_write` extern: rt_print/
+                // rt_println/rt_eprint/rt_eprintln (stdlib/runtime/io.hexa) all
+                // funnel stdout/stderr through __fd_write_bytes.
+                return "hexa_int((int64_t)hxlcl_write((int)HX_INT(" + gen2_expr(node.args[0]) + "), HX_STR(" + gen2_expr(node.args[1]) + "), (size_t)HX_STRLEN(" + gen2_expr(node.args[1]) + ")))"
             }
             // Free-function form of `s.byte_at(i)` — raw byte (0..255) at a
             // byte offset, -1 OOB. The method form is already mapped; this
