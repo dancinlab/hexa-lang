@@ -1682,5 +1682,27 @@
   method = "synthesis"
   cmd    = "reasoned synthesis over pre-existing 🔵 atoms (no new arith verifies); see artifact for per-P_k cross-reference table"
   raw    = ".verdicts/tecs-l-mersenne-euclid-euler/euclid_euler_statement.txt"
-  src    = "axis B MR1 — Euclid-Euler unified statement; anchors in tecs-l-n6-identity (M1), tecs-l-n6-characterizations (M4), tecs-l-physics-constants (M5), tecs-l-hypotheses (M6), tecs-l-mersenne-perfect (MR2), tecs-l-mersenne-lucas-lehmer (MR4), tecs-l-mersenne-tau-2p (MR5), tecs-l-mersenne-composite (MR6). Reverse direction M_11=23*89 closed-negative (MR6)."
+  src    = "axis B MR1 — Euclid-Euler unified statement; anchors in tecs-l-n6-identity (M1), tecs-l-n6-characterizations (M4), tecs-l-physics-constants (M5), tecs-l-hypotheses (M6), tecs-l-mersenne-perfect (MR2), tecs-l-mersenne-lucas-lehmer (MR4), tecs-l-mersenne-tau-2p (MR5), tecs-l-mersenne-composite (MR6). Reverse direction M_11=23*89 closed-negative (MR6). Sister synthesis: tecs-l-mersenne-abundancy-closed (MR3) provides the closed-form derivation of the sigma=2n anchor cited here."
   status = "🟢 SUPPORTED-NUMERICAL — reasoned synthesis closure of MR1 on top of pre-existing 🔵 anchor atoms (no new verifies); first 7 P_k (k=1..7, p in {2,3,5,7,13,17,19}) covered; odd perfect → MR7 (🟠 deferred · honest scope · paper_significance preserved). terminal · paper-eligible (MR8)."
+
+# ───────────────────────────────────────────────────────────────────────
+# TECS-L axis B (MERSENNE) — tecs-l-mersenne-abundancy-closed (slug · group=TECS-L · MR3)
+# Closed-form derivation: for P = 2^(p-1) * M_p with M_p = 2^p - 1 prime,
+#   sigma(P) = sigma(2^(p-1)) * sigma(M_p)            [sigma multiplicative · gcd(2^(p-1),M_p)=1]
+#            = (2^p - 1)        * (M_p + 1)
+#            = M_p              * 2^p
+#            = (2^p - 1) * 2^p
+#            = 2 * 2^(p-1) * M_p
+#            = 2P.
+# Equivalently, abundancy(P) = sigma(P)/P = 2 (defn of perfect).
+# 7-perfect anchor table (P1..P7) cites pre-existing 🔵 sigma atoms:
+#   axis-0 M6 (P1..P5: 6/28/496/8128/33550336)  +  MR2 (P6/P7).
+# No new arithmetic verify added — MR3 = reasoned synthesis (method=synthesis).
+# Honest scope: even perfects ONLY (Euclid-Euler form). Odd perfects OPEN (MR7 🟠).
+
+@C tecs_l_mersenne_abundancy_closed_form := "sigma(P)=2P closed-form for P=2^(p-1)*M_p with M_p Mersenne prime (sigma multiplicative ⊗ gcd(2^(p-1),M_p)=1 ⊗ sigma(M_p)=2^p ⊗ sigma(2^(p-1))=M_p → sigma(P)=(2^p-1)*2^p=2P); 7 perfects P1..P7 anchored to existing 🔵 sigma atoms (axis-0 M6 + MR2)" :: synthesis [slug=tecs-l-mersenne-abundancy-closed group=TECS-L]
+  method = "synthesis"
+  cmd    = "reasoned — 4-step elementary derivation (sigma multiplicativity + coprime 2^(p-1)/M_p + prime-power sigma + prime sigma); no new hexa verify"
+  raw    = ".verdicts/tecs-l-mersenne-abundancy-closed/abundancy_closed_form.txt"
+  src    = "axis B MR3 — TECS-L/docs/mr3-abundancy-closed-form.md. Anchors: axis-0 M6 (.verdicts/tecs-l-hypotheses/abundancy_sigma{6,28,496,8128,33m}.txt 🔵) + MR2 (.verdicts/tecs-l-mersenne-perfect/sigma_p{6,7}.txt 🔵). Honest scope: even perfects only; odd-perfect open → MR7 🟠."
+  status = "🟢 reasoned — derivation by elementary number theory; cites 7 pre-existing 🔵 SUPPORTED-FORMAL sigma atoms (P1..P7). No new arithmetic verify. terminal for axis B MR3."

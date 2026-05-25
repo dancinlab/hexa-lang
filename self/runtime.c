@@ -1843,8 +1843,14 @@ static int hxlcl_setenv(const char *name, const char *val, int overwrite) {
 // Prototype from the top-of-file <sys/socket.h> include.
 static int __attribute__((noinline)) hxlcl_setsockopt(int sockfd, int level, int optname, const void *optval, unsigned int optlen) {
     // net/exec ③: svc-trap setsockopt (105), 5 args -> sc6_cf (6th unused).
+    // ARCH GATE: HXLCL_SYS_* + _hxlcl_syscall*_cf are Darwin arm64 only.
+    // Linux/other arches fall back to libc (same errno-set semantics).
+#if (defined(__arm64__) || defined(__aarch64__)) && defined(__APPLE__)
     return (int)_hxlcl_syscall6_cf(HXLCL_SYS_SETSOCKOPT, (long)sockfd, (long)level,
                                    (long)optname, (long)optval, (long)optlen, 0);
+#else
+    return setsockopt(sockfd, level, optname, optval, (socklen_t)optlen);
+#endif
 }
 static int hxlcl_grantpt(int fd) { (void)fd; return (int)HX_INT(rt_posix_ok()); }
 static int hxlcl_unlockpt(int fd) { (void)fd; return (int)HX_INT(rt_posix_ok()); }
@@ -1985,34 +1991,73 @@ static void *hxlcl_gmtime_r(const void *tp, void *out) {
 // Plain BSD syscalls — same shape as the already-trapped read/write/open;
 // _cf translates the carry-set error path to -1 + errno. accept returns a
 // new fd on success (positive = fd, handled by _cf).
+// ARCH GATE for the BSD socket family: svc-trap path is Darwin arm64 only;
+// Linux/other arches fall through to libc (same prototypes from <sys/socket.h>).
 static int __attribute__((noinline)) hxlcl_socket(int d, int t, int p) {
+#if (defined(__arm64__) || defined(__aarch64__)) && defined(__APPLE__)
     return (int)_hxlcl_syscall3_cf(HXLCL_SYS_SOCKET, (long)d, (long)t, (long)p);
+#else
+    return socket(d, t, p);
+#endif
 }
 static int __attribute__((noinline)) hxlcl_bind(int s, const void *addr, unsigned int len) {
+#if (defined(__arm64__) || defined(__aarch64__)) && defined(__APPLE__)
     return (int)_hxlcl_syscall3_cf(HXLCL_SYS_BIND, (long)s, (long)addr, (long)len);
+#else
+    return bind(s, (const struct sockaddr *)addr, (socklen_t)len);
+#endif
 }
 static int __attribute__((noinline)) hxlcl_listen(int s, int backlog) {
+#if (defined(__arm64__) || defined(__aarch64__)) && defined(__APPLE__)
     return (int)_hxlcl_syscall2_cf(HXLCL_SYS_LISTEN, (long)s, (long)backlog);
+#else
+    return listen(s, backlog);
+#endif
 }
 static int __attribute__((noinline)) hxlcl_accept(int s, void *addr, unsigned int *len) {
+#if (defined(__arm64__) || defined(__aarch64__)) && defined(__APPLE__)
     return (int)_hxlcl_syscall3_cf(HXLCL_SYS_ACCEPT, (long)s, (long)addr, (long)len);
+#else
+    return accept(s, (struct sockaddr *)addr, (socklen_t *)len);
+#endif
 }
 static int __attribute__((noinline)) hxlcl_connect(int s, const void *addr, unsigned int len) {
+#if (defined(__arm64__) || defined(__aarch64__)) && defined(__APPLE__)
     return (int)_hxlcl_syscall3_cf(HXLCL_SYS_CONNECT, (long)s, (long)addr, (long)len);
+#else
+    return connect(s, (const struct sockaddr *)addr, (socklen_t)len);
+#endif
 }
 // net/exec ④ (cycle 78): message-group svc-trap. recv/send have no Darwin
 // syscall — route to recvfrom(29)/sendto(133) with NULL addr (= recv/send).
+// ARCH GATE for message-group family (same Darwin arm64 only).
 static long __attribute__((noinline)) hxlcl_recv(int s, void *b, unsigned long n, int f) {
+#if (defined(__arm64__) || defined(__aarch64__)) && defined(__APPLE__)
     return _hxlcl_syscall6_cf(HXLCL_SYS_RECVFROM, (long)s, (long)b, (long)n, (long)f, 0, 0);
+#else
+    return (long)recv(s, b, (size_t)n, f);
+#endif
 }
 static long __attribute__((noinline)) hxlcl_send(int s, const void *b, unsigned long n, int f) {
+#if (defined(__arm64__) || defined(__aarch64__)) && defined(__APPLE__)
     return _hxlcl_syscall6_cf(HXLCL_SYS_SENDTO, (long)s, (long)b, (long)n, (long)f, 0, 0);
+#else
+    return (long)send(s, b, (size_t)n, f);
+#endif
 }
 static long __attribute__((noinline)) hxlcl_recvmsg(int s, void *m, int f) {
+#if (defined(__arm64__) || defined(__aarch64__)) && defined(__APPLE__)
     return _hxlcl_syscall3_cf(HXLCL_SYS_RECVMSG, (long)s, (long)m, (long)f);
+#else
+    return (long)recvmsg(s, (struct msghdr *)m, f);
+#endif
 }
 static long __attribute__((noinline)) hxlcl_sendmsg(int s, const void *m, int f) {
+#if (defined(__arm64__) || defined(__aarch64__)) && defined(__APPLE__)
     return _hxlcl_syscall3_cf(HXLCL_SYS_SENDMSG, (long)s, (long)m, (long)f);
+#else
+    return (long)sendmsg(s, (const struct msghdr *)m, f);
+#endif
 }
 // RUNTIME net/exec ① (cycle 77): hexa-native inet_pton — drops the libc
 // _inet_pton extern. AF_INET only (the sole call site, net.c, passes
@@ -2057,7 +2102,11 @@ extern int execvp(const char *file, char *const argv[]);
 // RUNTIME net/exec ⑤ (cycle 79): svc-trap execve (59). On success it never
 // returns; on failure carry-flag -> -1 + errno via _cf.
 static int hxlcl_execve(const char *path, char *const argv[], char *const envp[]) {
+#if (defined(__arm64__) || defined(__aarch64__)) && defined(__APPLE__)
     return (int)_hxlcl_syscall3_cf(HXLCL_SYS_EXECVE, (long)path, (long)argv, (long)envp);
+#else
+    return execve(path, argv, envp);
+#endif
 }
 // execvp = native PATH search over execve (no libc dependency). If file has
 // a '/', exec directly; else try each $PATH dir. Byte-loop path-join avoids
