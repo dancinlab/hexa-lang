@@ -2,7 +2,7 @@
 
 - status: draft (Phase A-G landed, F-partial, H test written, I docs, J pending)
 - author: hexa loop campaign, 2026-05-22
-- SSOT companion: `TECS-L.md` (repo root — 18-axis brainstorm + 13 risks + plan)
+- SSOT companion: this RFC is the canonical plan; the former root `TECS-L.md` (18-axis brainstorm + 13 risks) was repurposed 2026-05-25 (PR #994) to the n=6 number-theory domain — RFC-080 content survives here + git history
 - supersedes nothing; extends RFC 065 (`hexa loop` self-growing atlas)
 - branch: `rfc-080-dfs` (worktree `/Users/ghost/core/hexa-lang-rfc080`)
 

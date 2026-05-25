@@ -3,6 +3,15 @@
 Append-only history sister of `TECS-L.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
 
+## 2026-05-25T09:45 — 도메인 폴더 정리 (별도 `TECS-L/` 통합)
+
+- [x] `TECS-L.md` · `TECS-L.log.md` → `TECS-L/` 이동 (도메인 스킬 folder-nested 해석 지원: `<NAME>/<NAME>.md`)
+- [x] `docs/tecs-l/*.md` (m3·m5·m6·n6-char triage 4종) → `TECS-L/docs/` 이동
+- [x] 경로 참조 갱신: `TECS-L.md` 내부 + `CLAIMS.tape` 코멘트 (docs/tecs-l → TECS-L/docs, TECS-L.md → TECS-L/TECS-L.md)
+- [x] #994 잔여 stale-ref 정리: `stdlib/loop/dfs.hexa` · RFC-080 문서가 옛 `TECS-L.md §5`(RFC 내용) 참조 → 정본 `docs/rfc/.../rfc_080_hexa_loop_dfs.md §5` 로 repoint
+- [x] `.verdicts/tecs-l-*` + `CLAIMS.tape` 는 루트 유지 — ATLAS·CANON·COMPILER 와 공유하는 repo-wide 감사 SSOT (분리 시 인덱스 파편화)
+
+
 ## 2026-05-25T09:30 — M6 · 2,711 가설 코퍼스 g5 triage (카테고리)
 
 - [x] 코퍼스 = `docs/hypotheses/` 2,735 + `math/docs/hypotheses/` 339. 단일 레지스트리 아님 → **카테고리 단위** g5 분류 (전수 1행 분류 비현실적, 정직)

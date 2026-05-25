@@ -92,7 +92,7 @@
   status = "🔵/🟢 SUPPORTED — structural closed-form (launch 1<5 · HBM 3<11) + numerical projection (>=30% unconditional). REAL verdict persisted verbatim. terminal · paper-eligible. Timed silicon wall DEFERRED-to-serial (§10 >=30% box stays [ ])."
 
 # ───────────────────────────────────────────────────────────────────────
-# TECS-L — tecs-l-n6-identity (slug · group=TECS-L · paper-track · TECS-L.md M1)
+# TECS-L — tecs-l-n6-identity (slug · group=TECS-L · paper-track · TECS-L/TECS-L.md M1)
 # archive-TECS-L core identity, re-grounded hexa-native via `hexa verify` g5.
 #
 #   σ(n)·φ(n) = n·τ(n)    ⟺    n ∈ {1, 6}      (TECS-L n6-rep Tier 1)
@@ -206,7 +206,7 @@
   status = "🔴 CLOSED-NEGATIVE — wall >=30% FALSIFIED, ruled-out axis (fusion alone insufficient; needs Tensor-Core inner GEMMs). REAL verdict persisted verbatim. terminal · paper-eligible."
 
 # ───────────────────────────────────────────────────────────────────────
-# TECS-L — tecs-l-dedekind-psi-uniqueness (slug · group=TECS-L · TECS-L.md M3)
+# TECS-L — tecs-l-dedekind-psi-uniqueness (slug · group=TECS-L · TECS-L/TECS-L.md M3)
 # Dedekind-ψ discrepancy, re-grounded hexa-native via `hexa verify` g5.
 #
 #   D(n) = σ(n)·φ(n) − n·τ(n)     D(n) = 0   ⟺   n ∈ {1, 6}
@@ -388,7 +388,7 @@
   status = "🟡 SUPPORTED-BY-CITATION — unbounded claim cited (archive); finite sweep 1..100 is the terminal witness. residual gated OUT of /paper. do NOT over-claim full proof from finite sweep."
 
 # ───────────────────────────────────────────────────────────────────────
-# TECS-L — tecs-l-n6-characterizations (slug · group=TECS-L · TECS-L.md M4)
+# TECS-L — tecs-l-n6-characterizations (slug · group=TECS-L · TECS-L/TECS-L.md M4)
 # archive-TECS-L "206 n=6 characterizations" g5 triage (M4). The headline 206
 # is the archive's numbered series #1…#206 (math/README.md line 4437); the
 # overwhelming majority are SYMBOLIC uniqueness claims (f(n)=g(n) ⟺ n=6) with
@@ -397,7 +397,7 @@
 # now: the n=6 GROUND arithmetic values each characterization is built from,
 # plus the modular-curve values the catalogue cites (X₀(6) index=σ, cusps=τ,
 # genus 0). 15 atoms recomputed closed-form (each 🔵). Triage doc:
-# docs/tecs-l/n6-characterizations-triage.md (verifiable / citation / deferred
+# TECS-L/docs/n6-characterizations-triage.md (verifiable / citation / deferred
 # counts, honest per M4 method §3). Quality over quantity (method §2 cap).
 
 @C tecs_l_n6char_sigma := "sigma(6) = 12 (divisor sum; shared factor of σφ=nτ #1, σ=nφ #81, 2σ=nτ #60, X₀(36) cusps=σ)" :: formula [slug=tecs-l-n6-characterizations group=TECS-L]
@@ -506,7 +506,7 @@
   status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal · paper-eligible."
 
 # ───────────────────────────────────────────────────────────────────────
-# TECS-L — tecs-l-arith-stdlib (slug · group=TECS-L · TECS-L.md M2)
+# TECS-L — tecs-l-arith-stdlib (slug · group=TECS-L · TECS-L/TECS-L.md M2)
 # hexa-native arithmetic stdlib module σ/τ/φ/sopfr (stdlib/core/math.hexa),
 # replacing archive-TECS-L Python model_utils.py. Each public function's
 # known value at n∈{1,6,12,28} is cross-checked against the authoritative
@@ -602,12 +602,12 @@
   status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim."
 
 # ───────────────────────────────────────────────────────────────────────
-# TECS-L — tecs-l-physics-constants (slug · group=TECS-L · TECS-L.md M5)
+# TECS-L — tecs-l-physics-constants (slug · group=TECS-L · TECS-L/TECS-L.md M5)
 # archive-TECS-L physical-constant assembly, g5-triaged. Only EXACT
 # number-theoretic identities (both sides exact) are 🔵; measured-value
 # matches (fermion masses 1.9%, Koide 5ppm, 1/α≈137) stay 🟡 (citation);
 # experiment-dependent (CERN, nuclear magic) are 🟠. Triage doc:
-# docs/tecs-l/m5-physics-constants-triage.md.
+# TECS-L/docs/m5-physics-constants-triage.md.
 #
 # HEADLINE 🔵: τ(perfect_k) reproduces the string-theory critical dimensions
 #   τ(6)=4 · τ(28)=6 · τ(496)=10 · τ(8128)=14 · τ(33550336)=26
@@ -684,9 +684,9 @@
   status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal · paper-eligible."
 
 # ───────────────────────────────────────────────────────────────────────
-# TECS-L — tecs-l-hypotheses (slug · group=TECS-L · TECS-L.md M6)
+# TECS-L — tecs-l-hypotheses (slug · group=TECS-L · TECS-L/TECS-L.md M6)
 # archive-TECS-L 2,711-hypothesis corpus, g5-triaged BY CATEGORY (doc:
-# docs/tecs-l/m6-hypotheses-triage.md). Only the number-theoretic A-tier
+# TECS-L/docs/m6-hypotheses-triage.md). Only the number-theoretic A-tier
 # core is 🔵; consciousness/ML/physics-match/biology bulk is 🟡/🟠/⚪
 # (no hexa closed-form path — same handling as M1 uniqueness residual).
 #
