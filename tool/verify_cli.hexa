@@ -245,6 +245,9 @@ fn cmd_rubric() {
     println("             f_reactivity_coverage(σv,ref) → clamp01(σv/ref)        (F-funnel (a) reactivity coverage [0,1], FUSION F-funnel, 2-arg)")
     println("             f_margin_coverage(margin)   → clamp01(margin)         (F-funnel (b) Lawson/Q margin coverage [0,1], FUSION F-funnel, 1-arg)")
     println("             f_funnel_composite(a,b)     → a·b                     (F-funnel (a)×(b) composite coverage product [0,1], FUSION F-funnel, 2-arg)")
+    println("             beta_max_pct(βN,Ip,a,B)     → βN·Ip/(a·B)             (Troyon ideal-MHD β-limit [%]; linear ideal-MHD only, FUSION F4, 4-arg)")
+    println("             beta_n(β%,Ip,a,B)           → β%·a·B/Ip               (inverse Troyon — achieved normalized β_N, FUSION F4, 4-arg)")
+    println("             q_star(a,B,R,Ip)            → 2π a²B/(μ0 R Ip)        (cylindrical edge safety factor q*; q95>2 ⇒ kink-stable, FUSION F4, 4-arg)")
 }
 
 let NOCALC: int = -999999
@@ -1954,6 +1957,48 @@ fn _f_funnel_composite(a_reactivity_cov: float, b_margin_cov: float) -> float {
     return a_reactivity_cov * b_margin_cov
 }
 
+// ── FUSION F4 — ideal-MHD β-limit / q* / kink (gate (d)) ─────────────────
+//
+// VERBATIM mirror of the ①a kernel
+// stdlib/kernels/mhd_stability/beta_limit.hexa. LINEAR IDEAL-MHD ONLY —
+// NOT turbulence / disruption / resistive-tearing / Grad-Shafranov.
+// Provenance: Troyon et al. 1984 (Plasma Phys. Control. Fusion 26, 209) for
+// the β-limit; Wesson "Tokamaks" 4th ed. §3.6/§7.6 for the cylindrical q*
+// + Kruskal-Shafranov kink threshold. Published scalings/identities, not a
+// fit; a PASS is a stability PREDICTION, never "stable device".
+
+// Troyon β-limit [%] = β_N · I_p[MA] / (a[m]·B[T]). 4-arg. a ≤ 0 / B ≤ 0 →
+// _NOCALC_F. Reference: beta_max_pct(2.8, 15.0, 2.0, 5.3) = 3.96226415…%.
+fn _beta_max_pct(beta_n_co: float, ip_ma: float, a_m: float, b_t: float) -> float {
+    if a_m <= 0.0 { return _NOCALC_F }
+    if b_t <= 0.0 { return _NOCALC_F }
+    return beta_n_co * ip_ma / (a_m * b_t)
+}
+
+// Inverse Troyon: β_N = β[%]·a[m]·B[T] / I_p[MA]. 4-arg. I_p ≤ 0 →
+// _NOCALC_F. Reference: beta_n(3.9622641509433962, 15.0, 2.0, 5.3) = 2.8.
+fn _beta_n(beta_pct: float, ip_ma: float, a_m: float, b_t: float) -> float {
+    if ip_ma <= 0.0 { return _NOCALC_F }
+    return beta_pct * a_m * b_t / ip_ma
+}
+
+// Cylindrical edge safety factor q* = 2π a² B / (μ0 R I_p). 4-arg
+// (a [m], B [T], R [m], I_p [MA]). R ≤ 0 / I_p ≤ 0 → _NOCALC_F. Cylindrical
+// (circular) approximation — omits elongation/shaping (under-estimates q95).
+// EXACT unit-reduction with I_p in MA: 2π/(μ0·1e6) = 2π/(4π×10⁻⁷·1e6) = 5
+// EXACTLY (the π cancels analytically), so q* = 5·a²·B/(R·I_p[MA]). This
+// π-free identity form is used for FULL float precision — the literal-μ0
+// chain would re-introduce a 4π constant fold and lose ~1e-6 (cancellation
+// noise), so the identity (mathematically the same Wesson cylindrical q*)
+// is the verification surface.
+// Reference: q_star(1.0, 2.0, 4.0, 1.0) = 2.5; q_star(2.0,5.3,6.2,15.0) =
+// 1.1397849462365592.
+fn _q_star(a_m: float, b_t: float, r_m: float, ip_ma: float) -> float {
+    if r_m <= 0.0 { return _NOCALC_F }
+    if ip_ma <= 0.0 { return _NOCALC_F }
+    return 5.0 * a_m * a_m * b_t / (r_m * ip_ma)
+}
+
 // ── Bio-physical Phase 3 (demiurge cross-domain V2 closure) ─────────
 // Three remaining identities from the inbox patch — Higuchi sustained
 // release (2-arg, simple form) · Tafel overpotential (3-arg, log10 path)
@@ -2640,6 +2685,22 @@ fn _recompute_float(fn_name: string, a0: float, a1: float, a2: float, a3: float,
     if fn_name == "f_funnel_composite" {
         if argc < 2 { return _NOCALC_F }
         return _f_funnel_composite(a0, a1)
+    }
+    // ── FUSION F4 — ideal-MHD β-limit / q* / kink (Troyon 1984, gate (d)) ─
+    //   beta_max_pct(β_N, I_p, a, B)   4-arg: Troyon β-limit [%]
+    //   beta_n(β[%], I_p, a, B)        4-arg: inverse Troyon (achieved β_N)
+    //   q_star(a, B, R, I_p)           4-arg: cylindrical edge safety factor
+    if fn_name == "beta_max_pct" {
+        if argc < 4 { return _NOCALC_F }
+        return _beta_max_pct(a0, a1, a2, a3)
+    }
+    if fn_name == "beta_n" {
+        if argc < 4 { return _NOCALC_F }
+        return _beta_n(a0, a1, a2, a3)
+    }
+    if fn_name == "q_star" {
+        if argc < 4 { return _NOCALC_F }
+        return _q_star(a0, a1, a2, a3)
     }
     // ── Bio-physical Phase 3 (demiurge cross-domain V2 closure) ─────────
     //   higuchi(k_H, t)                   2-arg: k_H * sqrt(t)
