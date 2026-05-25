@@ -2,6 +2,13 @@
 
 Append-only history sister of `INBOX.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
+## 2026-05-25 — cloud INBOX all-closure: reconcile vast GHOST FIX + preflight 재분류
+
+직전 triage(아래)에서 남긴 진짜-open 2건을 닫음.
+
+- [x] **06:37Z reconcile vast GHOST 오분류 — FIXED (이 PR)**. `pod_registry.hexa::cloud_reconcile_print` 가 `runpod_list_pods().pod_ids` 만 cross-ref → vast pod 전부 GHOST 였음. fix = `vast_list_instances().instance_ids` 와 union (provider-agnostic). **Falsifier (live vast 데이터)**: INBOX 가 지목한 인스턴스 `37618320`·`37619639` 가 fix 전 GHOST → fix 후 **OK** (둘 다 `cloud list` 의 live vast set 에 존재). 진짜-gone pod(`37610503` 등)는 양쪽 set 부재로 GHOST 유지 = 정상. `reconcile_test.hexa` 7/7 PASS (provider-union 멤버십 contract guard).
+- [ ] **08:10Z(a) preflight worktree-path fallback — awaits 타겟 교정 (hexa-lang ✗ → pool-route 플러그인)**. `hexa cloud preflight`(preflight.hexa `preflight_run`)는 `--params/--gpu/...` 에 대한 순수 closed-form GPU-mem 예산 계산 — workdir/path 의존 0. "workdir missing" 실패는 **pool-route 플러그인**의 preflight `test -d`(0.6.5 `_pool_route.hexa` L11-12·503·584)에서 발생 → 격리 worktree path 가 원격 호스트에 없어 fail. routing 건(06:37Z)과 동일 소관. hexa-lang 코드 변경 아님 → pool-route 플러그인 fix(`/ship` 대상).
+
 ## 2026-05-25 — cloud INBOX 코드-대조 정정 (resolved-flip + awaits-타겟 교정 · this-session triage)
 
 아래 미해소 cloud 항목들을 origin/main(47f5191d) 코드와 대조 → 일부가 이미 landed인데 `open`으로 남아 있어 정정. 표기만 갱신(코드 변경 없음).
@@ -9,7 +16,7 @@ Append-only history sister of `INBOX.md`. Each entry starts with `## <ISO timest
 - [x] **09:30Z ssh exit-255 fast-fail — RESOLVED by #976** (`9e3426a7`). `cloud.hexa` `_ssh_capture_status` 가 로컬 ssh exit-code 를 반환 + `ConnectTimeout=8` → 도달불가 호스트가 ~8s 만에 exit-255 로 fast-fail + precise diagnostic. 제안(a) landed; (b) auto-down·(c) reachability-probe 는 잔존(별 entry 유지).
 - [x] **07:35Z / 06:37Z provider-truth·lifecycle verb — PARTIALLY RESOLVED by #798** (`4706d857`). `cloud_cli.hexa` 에 `rent`/`up`/`down`/`destroy`/`list`/`status` lifecycle verb landed (L542·561·580·592). `list`/`status` 가 `vast_list_instances`/`runpod_list_pods` wire → provider-truth 조회 verb 존재. 잔존 = 제안(b) installed-binary 승격(sign-gate 우회 self-provisioning).
 - [ ] **06:37Z pool-route 오라우팅 — awaits 타겟 교정 (hexa-lang ✗ → pool-route 플러그인)**. classifier `_pool_route.hexa` 는 hexa-lang repo 가 아닌 `~/.claude/plugins/cache/sidecar/pool-route/` (현 0.6.5)에 있음. 제안(a) `hexa cloud *` local-bound 조기 `_allow()` 는 그 플러그인의 fix (`/ship` 대상). hexa-lang 코드 변경 아님.
-- [ ] **잔존 (진짜 open)** — (1) 06:37Z reconcile vast GHOST 오분류 — reconcile 는 `runpod_list_pods` 만 cross-ref → vast pod 전부 GHOST (cloud_cli.hexa:771 주석 확인). (2) 08:10Z(a) preflight worktree-path canonical-root fallback 부재.
+- [x] **잔존 2건 → CLOSED (위 all-closure entry 참조)** — (1) 06:37Z reconcile vast GHOST → `cloud_reconcile_print` 가 vast+runpod union 으로 FIXED (live 37618320/37619639 GHOST→OK). (2) 08:10Z(a) preflight worktree fallback → pool-route 플러그인 소관으로 재분류 (hexa cloud preflight 는 path 의존 0).
 
 ## 2026-05-25T07:35Z — hexa cloud lifecycle verb 부재 → raw vastai/runpodctl 직접 호출 강제 (orphan 양산 근원 · d8)
 
