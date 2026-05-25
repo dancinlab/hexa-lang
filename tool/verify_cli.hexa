@@ -246,6 +246,7 @@ fn cmd_rubric() {
     println("             nnt(arr_pp)                 → 100/arr_pp          (Number Needed to Treat, ARR in pct points, 1-arg)")
     println("             arr(p_control,p_treat)      → p_control-p_treat   (Absolute Risk Reduction, percentage points, 2-arg)")
     println("             ln_hr_to_hr(ln_hr)          → exp(ln_hr)          (log-HR → HR, Cox-PH back-transform, 1-arg)")
+    println("             ln(x)                       → natural log         (CLM init-CE floor = ln(vocab), 1-arg)")
     println("             hill(L,Kd,n)                → L^n/(Kd^n+L^n)      (Hill receptor binding, M3 IC50, 3-arg)")
     println("             cheng_prusoff(IC50,S,Km)    → IC50/(1+S/Km)       (Cheng-Prusoff Ki conversion, 3-arg)")
     println("             fick1(D,dC,dx)              → -D*dC/dx            (Fick's first law of diffusion, 3-arg)")
@@ -1083,6 +1084,15 @@ fn _arr(p_control: float, p_treat: float) -> float {
 // (consistent with exp_release / beer_lambert above).
 fn _ln_hr_to_hr(ln_hr: float) -> float {
     return exp(ln_hr)
+}
+
+// Natural log (CLM untrained init-CE floor = ln(vocab_size)):
+//   init_CE >= ln(V)  for a uniform-over-vocab untrained softmax.
+// 1-arg libm-class log; routes through native ln() so the ε=1e-9 gate
+// handles libm-class drift (consistent with _ln_hr_to_hr above).
+// CLAIMS chat_init_ce_floor: ln(151936) = 11.931214658529285.
+fn _ln(x: float) -> float {
+    return ln(x)
 }
 
 // ── Bio-physical Phase 2 (demiurge cross-domain V2 unlock) ─────────
@@ -2725,6 +2735,9 @@ fn _recompute_float(fn_name: string, a0: float, a1: float, a2: float, a3: float,
     }
     if fn_name == "ln_hr_to_hr" {
         return _ln_hr_to_hr(a0)
+    }
+    if fn_name == "ln" {
+        return _ln(a0)
     }
     // ── Bio-physical Phase 2 (demiurge cross-domain V2 unlock) ─────────
     //   hill(L, Kd, n)              3-arg: L^n / (Kd^n + L^n)
