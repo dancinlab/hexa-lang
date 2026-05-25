@@ -1840,9 +1840,32 @@ static int hxlcl_time(int *t) {
 // family); pass through so the requested sleep actually elapses. EINTR is
 // surfaced to callers (return -1, errno set) which loop on `rem` to finish
 // the remaining time.
-extern int nanosleep(const struct timespec *req, struct timespec *rem);
-static int hxlcl_nanosleep(const void *req, void *rem) {
-    return nanosleep((const struct timespec *)req, (struct timespec *)rem);
+// RUNTIME tail (cycle 83): nanosleep has NO direct Darwin BSD syscall (libc
+// implements it over __semwait_signal). Reimplement on select(2) (svc 93,
+// already trapped): select(0, NULL, NULL, NULL, &tv) with a NULL fd-set and
+// a timeout is a precise sleep. EINTR is absorbed internally by recomputing
+// the remaining interval from the clock, so we always sleep the full
+// duration and return 0 (rem zeroed). Drops the libc _nanosleep extern.
+static int hxlcl_nanosleep(const void *req_, void *rem_) {
+    const struct timespec *req = (const struct timespec *)req_;
+    long long total_ns = (long long)req->tv_sec * 1000000000LL + (long long)req->tv_nsec;
+    if (rem_) { ((struct timespec *)rem_)->tv_sec = 0; ((struct timespec *)rem_)->tv_nsec = 0; }
+    if (total_ns <= 0) return 0;
+    struct timespec start; hxlcl_clock_gettime(CLOCK_MONOTONIC, &start);
+    for (;;) {
+        struct timespec now; hxlcl_clock_gettime(CLOCK_MONOTONIC, &now);
+        long long elapsed = ((long long)now.tv_sec - start.tv_sec) * 1000000000LL
+                          + ((long long)now.tv_nsec - start.tv_nsec);
+        long long left = total_ns - elapsed;
+        if (left <= 0) return 0;
+        struct timeval tv;
+        tv.tv_sec  = (long)(left / 1000000000LL);
+        tv.tv_usec = (int)((left % 1000000000LL) / 1000);
+        long r = _hxlcl_syscall6_cf(HXLCL_SYS_SELECT, 0, 0, 0, 0, (long)&tv, 0);
+        if (r == 0) return 0;          // timeout elapsed -> full sleep done
+        if (errno == EINTR) continue;   // signal: recompute remaining, retry
+        return -1;                      // genuine error
+    }
 }
 static int hxlcl_tcgetattr(int fd, void *termios) {
     (void)fd;
