@@ -3,7 +3,7 @@
 // provider-claude-cli poll loop). Replaces the old shell-out throttle
 // (`sleep 0.1` via the shell, ~5-8ms fork overhead per tick). Runs
 // identically on the interp path (`hexa run`) and the codegen/AOT path
-// (`hexa_v2 -> clang`).
+// (`hexat -> clang`).
 //
 // Coverage:
 //   1. sleep_ms(120)  — elapsed ~120ms (> 109, < 250 — generous upper

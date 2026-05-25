@@ -726,7 +726,7 @@ pub fn ag_rmsnorm_mh(tape: int, x: int, g: int, T: int, d: int) -> int {
 // __global__ kernel on a CUDA build (the gap(d) host→GPU wall
 // offload), or the BYTE-IDENTICAL `_hx_farr_rope_cpu` fallback on a
 // no-CUDA build. Reachable from `hexa build` WITHOUT a transpiler
-// bootstrap rebuild: the committed hexa_v2 codegen emits the bare
+// bootstrap rebuild: the committed hexat codegen emits the bare
 // `farr_rope_gpu(...)`, which links to runtime.c's bare wrapper via
 // the runtime.h prototype (mirrors farr_matmul_gpu). CPU-fallback
 // formula == the prior nn_rope_apply per-row loop → Tests 9/13/14/17

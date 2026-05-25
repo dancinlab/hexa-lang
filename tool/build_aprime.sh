@@ -3,8 +3,8 @@
 #
 # aprime_cc = the native arm64-asm hexa-lang compiler — the direct-asm
 # codegen path (compiler/main.hexa
-# transpiled by hexa_v2 → C → clang → a self-contained Mach-O that emits
-# arm64 .s directly, no further hexa_v2 dependency at compile time).
+# transpiled by hexat → C → clang → a self-contained Mach-O that emits
+# arm64 .s directly, no further hexat dependency at compile time).
 #
 # This script canonicalises the recipe formerly kept only at
 # /tmp/arm64_feasible.sh so the build is reproducible from the repo.
@@ -14,7 +14,7 @@
 #
 #   -o OUT       output binary path        (default: build/aprime_cc)
 #   -r REPO      repo root to build from   (default: cwd; must hold compiler/)
-#   -v HEXA_V2   hexa_v2 transpiler path    (default: <repo>/self/native/hexa_v2)
+#   -v HEXA_V2   hexat transpiler path    (default: <repo>/self/native/hexat)
 #
 # Exit codes:
 #   0  aprime_cc built + smoke (exit(6*7)==42) PASS
@@ -24,7 +24,7 @@
 # Pipeline (5 stages — mirrors n1 self-hosted-toolchain note):
 #   1. flatten compiler/main.hexa import+use closure; stub embedded.gen.hexa
 #      (empty ATLAS_* — avoids the O(n^2) array-literal transpile hang).
-#   2. hexa_v2 transpile flat .hexa -> .c
+#   2. hexat transpile flat .hexa -> .c
 #   3. tool/s4_flatc_post.py + sed fixups (sha256_hex/list_dir builtins,
 #      runtime.h -> runtime.c inline so the single-TU build links).
 #   4. clang -O1 -arch arm64 ap_post.c -> aprime_cc.
@@ -46,8 +46,8 @@ done
 
 cd "$REPO" || { echo "build_aprime: bad repo '$REPO'" >&2; exit 1; }
 [ -f compiler/main.hexa ] || { echo "build_aprime: no compiler/main.hexa under $REPO" >&2; exit 1; }
-[ -z "$HEXA_V2" ] && HEXA_V2="$REPO/self/native/hexa_v2"
-[ -x "$HEXA_V2" ] || { echo "build_aprime: hexa_v2 missing/not-executable: $HEXA_V2" >&2; exit 1; }
+[ -z "$HEXA_V2" ] && HEXA_V2="$REPO/self/native/hexat"
+[ -x "$HEXA_V2" ] || { echo "build_aprime: hexat missing/not-executable: $HEXA_V2" >&2; exit 1; }
 
 TMP="$(mktemp -d -t aprime_build.XXXXXX)"
 trap 'rm -rf "$TMP"' EXIT
@@ -55,7 +55,7 @@ FLAT="$TMP/ap_flat.hexa"
 APC="$TMP/ap.c"
 APPOST="$TMP/ap_post.c"
 
-echo "=== build_aprime: repo=$REPO  hexa_v2=$HEXA_V2 ==="
+echo "=== build_aprime: repo=$REPO  hexat=$HEXA_V2 ==="
 echo "HEAD: $(git log --oneline -1 2>/dev/null || echo '(not a git repo)')"
 
 # ── stage 1: flatten ───────────────────────────────────────────────

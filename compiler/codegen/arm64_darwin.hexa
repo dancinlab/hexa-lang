@@ -2130,7 +2130,7 @@ fn _arm64_lower_func(mf: MFunc, st: ArmStrTab, modhash: string) -> LFunc {
     // first parameter HexaVal (tag flipped MAP→STR), surfacing as
     // `map key 'items'/'children'/... not found` + a 1032-wide spurious
     // HX2001 cascade when the self-hosted compiler (ap2) compiled the
-    // full compiler. ap1 (hexa_v2 C path) computes frames correctly so
+    // full compiler. ap1 (hexat C path) computes frames correctly so
     // the bug was masked until the asm codegen self-hosted. Same value-
     // across-call-boundary class as #25/#26, distinct site (frame sizer,
     // not arena runtime). 16-aligned already (max_overflow*16 is a
@@ -2165,7 +2165,7 @@ fn _arm64_lower_func(mf: MFunc, st: ArmStrTab, modhash: string) -> LFunc {
     // Entry argv wiring. `_main` is the C-ABI process entry (Darwin
     // `_start` → `main(argc, argv, envp)`): x0=argc, x1=argv on entry.
     // The hexa `fn main()` takes no params, so x0/x1 are otherwise
-    // unused — but `args()` / `hexa_args()` need them stashed. hexa_v2's
+    // unused — but `args()` / `hexa_args()` need them stashed. hexat's
     // C path emits `int main(argc,argv){ hexa_set_args(argc,argv); … }`;
     // the direct-asm path must do the same or every aprime_cc-built
     // program sees an empty argv (self-host blocker — the 2nd-gen
@@ -2520,7 +2520,7 @@ fn _str_to_hex_bytes(s: string) -> string {
     // parity-gate t45b). _byte_code(cs[i]) only returns the FIRST BYTE
     // of each multi-byte codepoint, dropping continuation bytes. That
     // truncated em-dashes / box-drawing chars / arrows in string
-    // literals → gen1.s (aprime via hexa_v2→C→clang) preserved them
+    // literals → gen1.s (aprime via hexat→C→clang) preserved them
     // via clang's static rodata, but gen2.s (hexac via aprime emit-asm
     // → asm path) lost them through this pool. Use `s.bytes()` which
     // returns per-byte i64 entries (raw 0..255), preserving UTF-8.

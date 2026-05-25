@@ -18,7 +18,7 @@
 //     point under HEXA_HAS_HEXA_RT_STDLIB routes to rt_print, and
 //     codegen single-arg `print(v)` emits `hexa_print(v)` (future
 //     regen) — but the activation path that fires on the SHIPPED
-//     hexa_v2 binary is a #ifdef hook inside hexa_print_val itself
+//     hexat binary is a #ifdef hook inside hexa_print_val itself
 //     (the symbol the stale binary already calls).
 //
 // Pre-existing context (cycle-101): RUNTIME.md cycles 89-99 closure
@@ -26,7 +26,7 @@
 // codegen builtin (Tier-A.6 syscall layer architectural mismatch).
 // Step 5 #4 (re-landed 2026-05-22 commit 61c7eb8d) wired that builtin
 // in self/codegen_c2.hexa + self/bind.hexa. The shipped self/native/
-// hexa_v2 binary is still stale (regen pipeline has known Phase C.2
+// hexat binary is still stale (regen pipeline has known Phase C.2
 // merge limitations — see self/main.hexa cmd_regen_cc trailing
 // comment), but the interpreter-style emit `hexa_call2(__fd_write_bytes,
 // fd, s)` routes via runtime_core.c's _Generic dispatcher

@@ -126,7 +126,7 @@ fn _const_float_op_with_text(v: f64, text: string) -> Operand {
 // lowering stage. Codegen (arm64_darwin.hexa) recognises this kind and
 // emits the TAG_VOID/payload-0 pair. Bind list at compiler/check/bind.hexa
 // already accepts `nil` as a known name; this provides the value-level
-// translation. Mirrors the hexa_v2 codegen_c2 path
+// translation. Mirrors the hexat codegen_c2 path
 // (self/codegen_c2.hexa:3262 `if node.name == "nil" → hexa_void()`).
 fn _const_void_op() -> Operand {
     return Operand {
@@ -818,7 +818,7 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
         // TAG_CHAR. The runtime represents chars as single-char strings
         // (`s.chars()` / hexa_str_chars yields TAG_STR elements), so a
         // char literal must also be TAG_STR for `cs[i] != '.'` to compare
-        // equal — mirrors the hexa_v2 reference codegen (self/codegen_c2
+        // equal — mirrors the hexat reference codegen (self/codegen_c2
         // .hexa:3247 "char literals must also be TAG_STR for hexa_eq").
         // e.text is the already-escape-decoded single-char body (parser
         // ExprKind::LiteralChar). Previously _const_int_op(0) made EVERY
@@ -834,7 +834,7 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
         // _mir_lookup/_mir_lookup_global don't define a value for it so
         // it would fall through to _emit_hx1101 + _no_value (TAG_INT 0,
         // producing `type_of(nil) == "int"` instead of "void"). Mirror
-        // the hexa_v2 codegen_c2 fast-path (self/codegen_c2.hexa:3262).
+        // the hexat codegen_c2 fast-path (self/codegen_c2.hexa:3262).
         if e.text == "nil" {
             return _value(ctx, _const_void_op())
         }

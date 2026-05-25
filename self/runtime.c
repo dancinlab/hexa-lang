@@ -2381,7 +2381,7 @@ static int hexa_ffi_extract_libname(const char* path, char* out_name, size_t out
     return 1;
 }
 
-/* PHASE 1.5 (2026-05-15): de-staticized. hexa_v2 emits direct calls to
+/* PHASE 1.5 (2026-05-15): de-staticized. hexat emits direct calls to
  * hexa_ffi_dlopen/dlsym from user.c for FFI shim setup; runtime.h-built
  * user.c needs cross-TU access. */
 void* hexa_ffi_dlopen(const char* lib_name) {
@@ -3253,7 +3253,7 @@ HexaVal hexa_random(void) {
 
 HexaVal hexa_char_code(HexaVal s, HexaVal idx);
 // Bootstrap shim (same rationale as `join` above): SSOT modules use
-// `char_code(s, i)` free-fn idiom which old hexa_v2 emits as
+// `char_code(s, i)` free-fn idiom which old hexat emits as
 // `hexa_call2(char_code, ...)`. Shim binds the bare identifier to TAG_FN.
 static HexaVal char_code;
 // Step-3 cycle 72 port — hexa_char_code dispatch.
@@ -3281,14 +3281,14 @@ static HexaVal chr;
 // RFC 030 (2026-05-12): bytes_to_str_raw([int]) — see implementation
 // below near hexa_from_char_code. Declared here so it's reachable as
 // a bare C identifier from `hexa_call1(bytes_to_str_raw, arr)` emitted
-// by precompiled hexa_v2 (which doesn't have the codegen entry yet).
+// by precompiled hexat (which doesn't have the codegen entry yet).
 HexaVal hexa_bytes_to_str_raw(HexaVal arr);
 static HexaVal bytes_to_str_raw;
 
 // 2026-05-12 (RFC 030 sibling fix): farr_* primitive shims. The
 // codegen.hexa entries route `farr_zeros / get / set / len / free`
 // to their hexa_farr_* C impls (added recently), but the currently
-// shipped hexa_v2 binary predates those entries, so transpiles of the
+// shipped hexat binary predates those entries, so transpiles of the
 // interpreter dispatch handlers (hexa_full.hexa:~10700) emit bare
 // `hexa_call1(farr_zeros, ...)` lookups against undeclared symbols.
 // Declare the static carriers so the resulting C compiles;
@@ -3400,7 +3400,7 @@ static HexaVal farr32_free;
 static HexaVal farr32_matmul_shim;
 static HexaVal farr32_matmul_NT_b_shim;
 static HexaVal farr32_matmul_NT_a_shim;
-// hexa_v2 (bootstrap transpiler) emits direct C calls for ≥5 args
+// hexat (bootstrap transpiler) emits direct C calls for ≥5 args
 // (no `hexa_callN` indirection exists past N=4). The dispatch in
 // hexa_full.hexa::call_builtin uses `farr_matmul(...)` literally —
 // provide an inline wrapper so that compiles to a single jump.
@@ -3417,7 +3417,7 @@ static inline HexaVal farr_matmul(HexaVal a, HexaVal ar, HexaVal ac,
 }
 // RFC 050 L1 slice 1 — bare-wrapper seam for the forge dispatcher.
 // codegen.hexa registers `forge_dispatch_matmul` as a 5-arg builtin
-// lowering to hexa_forge_dispatch_matmul, but the deployed hexa_v2
+// lowering to hexa_forge_dispatch_matmul, but the deployed hexat
 // bootstrap (not yet rebuilt from that SSOT codegen) emits the bare
 // `forge_dispatch_matmul(...)` call literally — same ≥5-arg direct-C
 // path as farr_matmul above. The generated user.c TU only #includes
@@ -3432,7 +3432,7 @@ HexaVal forge_dispatch_matmul(HexaVal a, HexaVal m, HexaVal k,
     return hexa_forge_dispatch_matmul(a, m, k, b, n);
 }
 // RFC 050 PERF-INHERITANCE — bare-wrapper seam for the BF16 FFN dispatch.
-// Same pattern as forge_dispatch_matmul above: the deployed hexa_v2
+// Same pattern as forge_dispatch_matmul above: the deployed hexat
 // bootstrap emits a literal `forge_dispatch_ffn_fp64_via_bf16(...)` call
 // (7-arg ≥5-arg direct-C path); the generated user.c only sees
 // runtime.h, so this extern wrapper + the prototype below link-resolve
@@ -3490,7 +3490,7 @@ HexaVal hexa_ad_grad(HexaVal param_v);
 HexaVal hexa_adamw_step(HexaVal p_v, HexaVal g_v, HexaVal m_v, HexaVal v_v,
                         HexaVal n_v, HexaVal lr_v, HexaVal b1_v, HexaVal b2_v,
                         HexaVal eps_v, HexaVal wd_v, HexaVal t_v);
-// External linkage (NOT static): the committed hexa_v2 codegen lowers
+// External linkage (NOT static): the committed hexat codegen lowers
 // these via the generic fallback — `hexa_call0(ad_tape_begin)` /
 // `hexa_call1(ad_backward, …)` / `hexa_call4(ad_softmax_cross_entropy,
 // …)` for ≤4-arg (needs a visible HexaVal carrier), and bare
@@ -8942,7 +8942,7 @@ HexaVal hexa_farr_matmul_gpu(HexaVal a_v, HexaVal ar_v, HexaVal ac_v,
 }
 
 // ── Callable shims (≤4-arg `hexa_callN(<carrier>,…)` + 5-arg bare) ─────
-// hexa_v2 codegen's generic fallback lowers `cuda_available()` etc. to
+// hexat codegen's generic fallback lowers `cuda_available()` etc. to
 // `hexa_call0(cuda_available)` (and 1-arg → `hexa_call1(name, ...)`),
 // which needs a visible HexaVal carrier with that exact identifier.
 // `farr_matmul_gpu` (5-arg, past the hexa_callN ceiling) gets a bare-
@@ -11001,7 +11001,7 @@ HexaVal hexa_time_ms(void) {
 // (`time_now_ms`, `__builtin_time_now_ms`, etc.). The hexa-side wrappers
 // in self/std_time.hexa get `extern` forward declarations in the generated
 // C; without these symbols defined, link fails. Cheaper than the codegen
-// intercept (which also exists in codegen.hexa) — no hexa_v2 rebuild
+// intercept (which also exists in codegen.hexa) — no hexat rebuild
 // needed; just runtime.c recompile (every wilson build picks it up).
 // Filed at incoming/patches/wilson-needs-time-now-ms-builtin.md.
 // Wilson 2026-05-13 — TAG_FN globals for std_time.hexa wrapper names.
@@ -11053,7 +11053,7 @@ HexaVal hexa_dict_keys(HexaVal m) {
 // Step 5 #4 (2026-05-22): __fd_write_bytes(fd, s) — POSIX write(2) thin shim.
 // Companion to the codegen.hexa inline-emit handler. The SSOT codegen
 // branch returns `hexa_int((int64_t)write(...))` inline; the shipped
-// hexa_v2 binary still emits this builtin as a hexa_call2() reference
+// hexat binary still emits this builtin as a hexa_call2() reference
 // (binary regen pending — Phase C.2 merge gap, see self/main.hexa
 // cmd_regen_cc() trailing comment). The _Generic dispatcher in
 // runtime_core.c routes `hexa_call2(__fd_write_bytes, ...)` to
@@ -12270,7 +12270,7 @@ static HexaVal _bt73_base64_encode_w(HexaVal s) { return hexa_base64_encode(s); 
 static HexaVal _bt73_base64_decode_w(HexaVal s) { return hexa_base64_decode(s); }
 // RFC 6455 WebSocket handshake (2026-05-23): bare-ident bootstrap bridge
 // for `sha1` / `sha1_bytes`. The codegen.hexa sha1 arm emits hexa_sha1(...)
-// directly AFTER a hexa_v2 regen; until then the baked transpiler emits
+// directly AFTER a hexat regen; until then the baked transpiler emits
 // hexa_call1(sha1, ...) (generic bare-ident fallback), so these TAG_FN
 // globals let the linker resolve the symbol meanwhile — exactly the
 // pattern base64_encode uses. hexa_sha1 / hexa_sha1_bytes live in
@@ -12281,14 +12281,14 @@ HexaVal hexa_sha1(HexaVal s_val);
 HexaVal hexa_sha1_bytes(HexaVal s_val);
 static HexaVal _bt73_sha1_w(HexaVal s) { return hexa_sha1(s); }
 static HexaVal _bt73_sha1_bytes_w(HexaVal s) { return hexa_sha1_bytes(s); }
-// interp bootstrap gap: hexa_v2 (already-baked transpiler) doesn't know
+// interp bootstrap gap: hexat (already-baked transpiler) doesn't know
 // about setenv / exec_capture, so the interpreter dispatch in hexa_full.hexa
 // resolves bare `setenv(...)` through hexa_call2 / `exec_capture(...)` via
 // hexa_call1. Shim these as TAG_FN globals so the linker finds them.
 static HexaVal _w_setenv(HexaVal n, HexaVal v) { return hexa_setenv(n, v); }
 static HexaVal _w_exec_capture(HexaVal c) { return hexa_exec_capture(c); }
 // PROBE r8 3-tuple bridge: codegen.hexa emits hexa_exec_with_status3(...)
-// AFTER a hexa_v2 regen; until then the baked transpiler resolves bare
+// AFTER a hexat regen; until then the baked transpiler resolves bare
 // `exec_with_status3(...)` through hexa_call1, so this TAG_FN global lets
 // the linker resolve the symbol meanwhile (same pattern as sha1 / exec_capture).
 HexaVal hexa_exec_with_status3(HexaVal cmd);
@@ -12478,18 +12478,18 @@ static void _hexa_init_fn_shims(void) {
     hx_exec_capture = hexa_fn_new((void*)_w_exec_capture, 1);
     // PROBE r8 3-tuple bridge (regen-gated codegen fallback).
     exec_with_status3 = hexa_fn_new((void*)_w_exec_with_status3, 1);
-    // hxa-004 ext: bare `push(arr, v)` emitted by legacy hexa_v2 as hexa_call2
+    // hxa-004 ext: bare `push(arr, v)` emitted by legacy hexat as hexa_call2
     hx_push         = hexa_fn_new((void*)_w_push,         2);
     // Cycle 55 recovery — stdlib/fs builtins. codegen.hexa maps the
     // bare names `fs_append_atomic/fs_stat/fs_rotate_if_over/fs_mkdir_p`
-    // to rt_fs_* C names, but the bootstrap hexa_v2 binary hasn't been
+    // to rt_fs_* C names, but the bootstrap hexat binary hasn't been
     // re-deployed with that mapping. Bridge via bt73-style TAG_FN.
     fs_append_atomic    = hexa_fn_new((void*)rt_fs_append_atomic,    2);
     fs_stat             = hexa_fn_new((void*)rt_fs_stat,             1);
     fs_rotate_if_over   = hexa_fn_new((void*)rt_fs_rotate_if_over,   3);
     fs_mkdir_p          = hexa_fn_new((void*)rt_fs_mkdir_p,          1);
     // std::net free-fn shims — bridges transpiler bootstrap gap for
-    // net_connect / net_read / net_write until hexa_v2 learns the
+    // net_connect / net_read / net_write until hexat learns the
     // direct-lowering for these names (see native/net.c comment).
     _hexa_init_net_fn_shims();
     // stdlib/os signal + flock free-fn shims (roadmap 62, 2026-04-22)

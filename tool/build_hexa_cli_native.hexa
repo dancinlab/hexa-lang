@@ -9,7 +9,7 @@
 //
 //     git clone https://github.com/dancinlab/hexa-lang.git
 //     cd hexa-lang
-//     HEXA_LANG=$(pwd) hexa cc                     # build hexa_v2 (transpiler)
+//     HEXA_LANG=$(pwd) hexa cc                     # build hexat (transpiler)
 //     hexa tool/build_hexa_cli_native.hexa         # build hexa.real (CLI driver)
 //
 //  After that you can either symlink the output into PATH, or set
@@ -30,7 +30,7 @@
 //                                     build/hexa_darwin_arm64
 //
 //  Pipeline:
-//    1. self/native/hexa_v2 self/main.hexa build/stage1/main_native.c
+//    1. self/native/hexat self/main.hexa build/stage1/main_native.c
 //       (regenerates the dispatch C from current main.hexa)
 //    2. <native cc> -O2 -D_GNU_SOURCE -I self <main.c> -o <out>
 //                   -lpthread -lm   (dynamic link, no -static)
@@ -130,7 +130,7 @@ let _uname_m = exec_with_status("uname -m")[0].trim()
 if _out_path == "" { _out_path = _default_native_out(_repo_root) }
 let _cc = _default_native_cc()
 let _extra_cflags = env("EXTRA_CFLAGS")
-let _hexa_v2 = _repo_root + "/self/native/hexa_v2"
+let _hexat = _repo_root + "/self/native/hexat"
 let _main_hexa = _repo_root + "/self/main.hexa"
 let _stage1_c = _repo_root + "/build/stage1/main_native.c"
 let _inc = _repo_root + "/self"
@@ -141,8 +141,8 @@ println("  dispatch : " + _stage1_c)
 println("  output   : " + _out_path)
 println("  cc       : " + _cc)
 
-if !file_exists(_hexa_v2) {
-    eprintln("error: self/native/hexa_v2 missing — run `hexa cc` first to bootstrap the transpiler")
+if !file_exists(_hexat) {
+    eprintln("error: self/native/hexat missing — run `hexa cc` first to bootstrap the transpiler")
     exit(1)
 }
 if !file_exists(_main_hexa) {
@@ -164,7 +164,7 @@ _run_ok("mkdir -p '" + _out_dir_pair[0].trim() + "'")
 // Step 1: transpile main.hexa → C.
 println("")
 println("[1/2] transpile main.hexa → stage1/main_native.c")
-_run_ok(_hexa_v2 + " " + _main_hexa + " " + _stage1_c)
+_run_ok(_hexat + " " + _main_hexa + " " + _stage1_c)
 
 // Step 2: native dynamic compile. -D_GNU_SOURCE for the POSIX/Linux extras
 // runtime.c expects (unshare, setns, posix_openpt, etc. — macOS clang

@@ -10,7 +10,7 @@
 //
 //  Strategy:
 //    (1) Compile a synthetic module with 10+ Field accesses via
-//        `self/native/hexa_v2` (the current on-disk interp that
+//        `self/native/hexat` (the current on-disk interp that
 //        this ROI is trying to unblock).
 //    (2) Scan the emitted C output and assert every `&__hexa_ic_N`
 //        reference has a matching `static HexaIC __hexa_ic_N = {0};`
@@ -127,14 +127,14 @@ fn main() {
     let out_path = "/tmp/roi152_out.c"
     write_file(fixture_path, fixture)
 
-    // Invoke on-disk hexa_v2 (the binary this ROI is meant to unblock).
-    // Fall back to ./hexa if hexa_v2 absent (CI without native path).
-    let v2 = "./self/native/hexa_v2"
+    // Invoke on-disk hexat (the binary this ROI is meant to unblock).
+    // Fall back to ./hexa if hexat absent (CI without native path).
+    let v2 = "./self/native/hexat"
     let cmd = v2 + " " + fixture_path + " " + out_path + " 2>/tmp/roi152_err.log"
     exec(cmd)
 
     if !file_exists(out_path) {
-        eprintln("[FAIL] hexa_v2 did not produce output " + out_path)
+        eprintln("[FAIL] hexat did not produce output " + out_path)
         exit(1)
     }
 
@@ -188,7 +188,7 @@ fn main() {
     println("[PASS.quick] ROI#152 IC-slot regen: decls=" + to_string(decl_count) + " refs=" + to_string(ref_count) + " missing=0")
 
     // ── Extended scale test ─────────────────────────────────
-    // Compile self/codegen.hexa (9K+ LOC, 900+ IC slots) via hexa_v2.
+    // Compile self/codegen.hexa (9K+ LOC, 900+ IC slots) via hexat.
     // This is the exact module that regressed historically — it is BOTH
     // the victim (its compiled output drops IC decls) AND the compiler
     // (its source holds the fix), so it's the right stress case.
@@ -201,7 +201,7 @@ fn main() {
     let big_out = "/tmp/roi152_big_out.c"
     exec(v2 + " " + big_src + " " + big_out + " 2>/tmp/roi152_big_err.log")
     if !file_exists(big_out) {
-        eprintln("[FAIL.big] hexa_v2 did not produce " + big_out)
+        eprintln("[FAIL.big] hexat did not produce " + big_out)
         exit(1)
     }
     // Avoid reading the full .c into hexa-land — interpreter substring ops

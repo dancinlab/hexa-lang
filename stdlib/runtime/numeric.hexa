@@ -271,7 +271,7 @@ pub fn rt_format_float_f(v: float, prec: int) -> string {
 }
 
 // Step 3 cycle 59 — array sort, float fast-path. Insertion sort (O(n²))
-// avoiding recursion (cf. the hexa_v2 transpile recursion trap noted at
+// avoiding recursion (cf. the hexat transpile recursion trap noted at
 // cycles 30 + 52). Builds a new sorted array each pass; acceptable
 // trade-off for arrays expected to be small in the hot self-host path.
 // Stable: equal keys preserve original order via `sorted[k] <= v` test.
@@ -1234,7 +1234,7 @@ pub fn rt_len(v: HexaVal) -> int {
 // shadowing guard (`_is_known_int_name` L7117 → `_gen2_name_in_cur_lets`),
 // so `ai == bi` STILL lowers to `hexa_eq(ai, bi)`. Transpile-verified:
 // the local-let body recursion-traps. (The cycle-76 typed-int-param fast
-// path is also not active in the current hexa_v2 binary.)
+// path is also not active in the current hexat binary.)
 //
 // Recursion-safe formulation: express equality with ORDERED comparisons,
 // which lower to `hexa_cmp_le`/`hexa_cmp_ge` (codegen_c2.hexa:4071-4074).
@@ -1278,7 +1278,7 @@ pub fn rt_eq_bool(a: HexaVal, b: HexaVal) -> bool {
 // port (잔여 #2 fully discharged). C wrapper _hexa_to_string_rec dispatches
 // TAG_ARRAY → rt_to_string_array, TAG_MAP → rt_to_string_map (depth + NULL
 // guards stay C). @no_arena: caller not arena-wrapped, share scope. Uses
-// len() fallback (Mac hexa_v2 stale on __arr_raw_len). 6/6 byte-eq mini.
+// len() fallback (Mac hexat stale on __arr_raw_len). 6/6 byte-eq mini.
 @no_arena
 pub fn rt_to_string_array(arr: HexaVal, depth: int) -> HexaVal {
     if depth >= 8 { return "[...]" }

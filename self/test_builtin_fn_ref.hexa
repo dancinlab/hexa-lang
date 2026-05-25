@@ -3,7 +3,7 @@
 // referencing a bare (undeclared) C identifier `trim` — clang error
 // "use of undeclared identifier ". Codegen now emits a TAG_FN wrapping a
 // static thunk `__hxthunk_<name>` that forwards to the canonical lowering.
-// NB: requires the codegen path (self/native/hexa_v2 → clang); the tree-walk
+// NB: requires the codegen path (self/native/hexat → clang); the tree-walk
 // interpreter (`hexa run`) does not bind bare builtin/method names as values.
 fn apply1(f, x) { return f(x) }
 fn apply2(f, a, b) { return f(a, b) }

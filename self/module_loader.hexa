@@ -962,7 +962,7 @@ fn ml_parse_from_import_path(line) {
 fn ml_strip_and_clean(src) {
     let mut s = src
     // 2026-04-26 perf-32 — strip `#!hexa …` shebang from inlined files.
-    // hexa interp parses shebangs as pragma comments, but hexa_v2 transpiler
+    // hexa interp parses shebangs as pragma comments, but hexat transpiler
     // chokes on them (treats `#!hexa strict` as `!hexa` + `strict` exprs).
     // When module_loader's output is fed to AOT compile (cmd_run AOT path),
     // unstripped shebangs at the start of inlined sub-files break clang.
@@ -1298,7 +1298,7 @@ fn load_module(path) {
         // own `fn main` (e.g. compiler/smash/smash.hexa, honesty/check.hexa
         // — pulled transitively by the discovery-engine family
         // drill/kick/omega/chain/molt/forge/canon/…) flatten 7+ `fn main`
-        // bodies; hexa_v2 keeps the FIRST, so the entry's main is dropped
+        // bodies; hexat keeps the FIRST, so the entry's main is dropped
         // and the binary silently runs smash's CLI ("usage: hexa smash …")
         // instead of drill's discovery loop. Neutralize every NON-entry
         // `fn main` to a unique inert name (dead code — never called) so

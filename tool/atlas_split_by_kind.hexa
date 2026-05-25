@@ -5,7 +5,7 @@
 //
 // Kinds emitted: P, L, E, F, R, S, X, Q  (8 of 9).
 //                C is DEFERRED to B-1b (HXC sidecar) per RFC 066 §5.3
-//                A+B hybrid (C's 6201 entries exceeds 4 GB hexa_v2
+//                A+B hybrid (C's 6201 entries exceeds 4 GB hexat
 //                user-time memcap on its own).
 //
 // Usage:

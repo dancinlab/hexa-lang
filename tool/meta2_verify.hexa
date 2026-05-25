@@ -210,7 +210,7 @@ fn _relink_round2() {
 
 fn _measure_fixpoint() {
     let v3_bin = "build/hexa_interp.real"
-    let v4_bin = "self/native/hexa_v2"
+    let v4_bin = "self/native/hexat"
     let fp_tool = "tool/fixpoint_compare.hexa"
 
     // Fall back to the shim if .real is absent (rare — freeze guarantees it).

@@ -47,7 +47,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
 
 // NOTE: stdlib/future.hexa contents inlined here so the test stays
-// single-file (works with both flatten-aware and bare hexa_v2 transpile).
+// single-file (works with both flatten-aware and bare hexat transpile).
 // Mirror of stdlib/future.hexa Future struct + future_resolve.
 
 pub struct Future {

@@ -1435,7 +1435,7 @@ fn vm_dispatch() {
             // ── FFI builtins ────────────────────────────────
             // Wire host_ffi_open / host_ffi_sym / host_ffi_call_6 from
             // self/runtime.c so the VM can dispatch @link externs at runtime.
-            // The VM runs inside hexa_v2 (native binary) which links runtime.c,
+            // The VM runs inside hexat (native binary) which links runtime.c,
             // so these calls resolve directly to the C implementations.
             // hexa_host_ffi_unwrap in runtime.c handles ValStruct unwrapping
             // automatically, so we pass VM Val values through directly.

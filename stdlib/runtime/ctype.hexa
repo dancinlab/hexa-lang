@@ -3,7 +3,7 @@
 // Hexa-source replacements for C-side `hxlcl_isalnum`/`hxlcl_isalpha`
 // helpers in self/runtime.c (cycle 59). The C-side wrappers thin-shim
 // onto these hexa fns via the standard HexaVal calling convention
-// (every hexa pub fn emits `HexaVal name(HexaVal ...)` after hexa_v2
+// (every hexa pub fn emits `HexaVal name(HexaVal ...)` after hexat
 // transpile).
 //
 // This is the first proof of step 2 of RUNTIME.md's 4-step path:

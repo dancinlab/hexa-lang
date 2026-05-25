@@ -645,7 +645,7 @@ fn _usage() {
     eprintln("EXAMPLE (fixpoint workflow)")
     eprintln("  ./hx fixpoint check                       # scaffold drift report")
     eprintln("  ./hx fixpoint verify                      # 3x compile fixpoint gate")
-    eprintln("  ./hx fixpoint archive                     # snapshot current hexa_v2")
+    eprintln("  ./hx fixpoint archive                     # snapshot current hexat")
     eprintln("  ./hx fixpoint bisect <good> <bad>         # locate first drift commit")
     eprintln("  ./hx fixpoint promote <rule> <status>     # apply raw_all promotion")
 }

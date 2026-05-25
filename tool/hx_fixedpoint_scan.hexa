@@ -1,10 +1,10 @@
 // tool/hx_fixedpoint_scan.hexa — 자호스팅 부동점 witness (nexus 메타 FP 개념).
 //
 // 배경: nexus atlas C3 convergence witness 의 hexa-lang 판.
-//   - α: self_compile — interp / hexa_v2 / hexa(driver) SHA-256 스냅샷.
+//   - α: self_compile — interp / hexat / hexa(driver) SHA-256 스냅샷.
 //   - β: interp_aot_isom — regression.hexa 를 interp 경로 (HEXA_CACHE=0) 와
 //        AOT 경로로 각각 돌려서 PASS/FAIL 라인 정렬-비교. 동일하면 동형.
-//   - γ: self_host_determinism — hexa_v2 로 self/hexa_full.hexa 를 다시
+//   - γ: self_host_determinism — hexat 로 self/hexa_full.hexa 를 다시
 //        transpile + clang 한 결과가 현재 build/hexa_interp 과 byte-identical.
 //        bootstrap 수렴의 fixed point 실측.
 // 결과를 state/hx_fixedpoint.json 에 기록. 이후 build 마다 호출하면 drift
@@ -49,13 +49,13 @@ fn main() {
 
     let root = env_var("HEXA_LANG")
     let interp_h = _hash_file(root + "/build/hexa_interp")
-    let hexa_v2_h = _hash_file(root + "/self/native/hexa_v2")
+    let hexat_h = _hash_file(root + "/self/native/hexat")
     let driver_h = _hash_file(root + "/hexa")
     let now = _sh("date -u +'%Y-%m-%dT%H:%M:%SZ'")
 
     println("[fp-scan] hashing…")
     println("  interp: " + interp_h)
-    println("  hexa_v2: " + hexa_v2_h)
+    println("  hexat: " + hexat_h)
     println("  driver: " + driver_h)
 
     println("[fp-scan] interp vs AOT regression…")
@@ -76,7 +76,7 @@ fn main() {
     // 생성한 뒤 비교 후 삭제. cwd, -I, source, -o 네 개 path 모두 원본 build
     // 와 동일하게 맞춰야 byte-identical 판정 가능.
     println("[fp-scan] self-host determinism rebuild…")
-    let _ = _sh("cd '" + root + "' && ./self/native/hexa_v2 self/hexa_full.hexa /tmp/hx_fp_regen.c && clang -O2 -std=c11 -Wno-trigraphs -I self -o build/hexa_interp_pending /tmp/hx_fp_regen.c && codesign --force --sign - build/hexa_interp_pending 2>&1")
+    let _ = _sh("cd '" + root + "' && ./self/native/hexat self/hexa_full.hexa /tmp/hx_fp_regen.c && clang -O2 -std=c11 -Wno-trigraphs -I self -o build/hexa_interp_pending /tmp/hx_fp_regen.c && codesign --force --sign - build/hexa_interp_pending 2>&1")
     let rebuilt_h = _hash_file(root + "/build/hexa_interp_pending")
     let deterministic = rebuilt_h == interp_h
     let _rm = _sh("rm -f '" + root + "/build/hexa_interp_pending' /tmp/hx_fp_regen.c 2>&1")
@@ -93,7 +93,7 @@ fn main() {
         + "  \"axes\": {\n"
         + "    \"self_compile\": {\n"
         + "      \"interp_sha256\": \"" + interp_h + "\",\n"
-        + "      \"hexa_v2_sha256\": \"" + hexa_v2_h + "\",\n"
+        + "      \"hexat_sha256\": \"" + hexat_h + "\",\n"
         + "      \"driver_sha256\": \"" + driver_h + "\"\n"
         + "    },\n"
         + "    \"interp_aot_isom\": {\n"

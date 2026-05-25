@@ -1,6 +1,6 @@
 // build_native.hexa — hexa -> C -> native binary pipeline
 //
-// Uses hexa_v2 (self-hosted compiler) to transpile a .hexa source file
+// Uses hexat (self-hosted compiler) to transpile a .hexa source file
 // to C, then compiles with clang to a native binary. This is the same
 // pipeline that produced the 1,922x vocoder result.
 //
@@ -43,7 +43,7 @@ let av = argv()
 let script_path = av[1]
 let hexa_dir = exec("cd \"$(dirname '" + script_path + "')/../\" && pwd").trim()
 let build_dir = hexa_dir + "/build/native_tmp"
-let mut hexa_v2_path = if env("HEXA_V2") != "" { env("HEXA_V2") } else { hexa_dir + "/self/native/hexa_v2" }
+let mut hexat_path = if env("HEXA_V2") != "" { env("HEXA_V2") } else { hexa_dir + "/self/native/hexat" }
 let cc = if env("CC") != "" { env("CC") } else { "clang" }
 let uname = exec("uname -s").trim()
 
@@ -96,9 +96,9 @@ if output_arg != "" {
 }
 
 // ── preflight checks ─────────────────────────────────────────
-let v2_check = exec_with_status("test -x " + hexa_v2_path)
+let v2_check = exec_with_status("test -x " + hexat_path)
 if v2_check[1] != 0 {
-    die("hexa_v2 compiler not found at " + hexa_v2_path)
+    die("hexat compiler not found at " + hexat_path)
 }
 
 let cc_check = exec_with_status("command -v " + cc + " >/dev/null 2>&1")
@@ -134,23 +134,23 @@ if file_exists(native_dir + "/net.c") {
     }
 }
 
-// ── step 1: hexa_v2 transpile ────────────────────────────────
+// ── step 1: hexat transpile ────────────────────────────────
 let gen_c = build_dir + "/gen.c"
 let input_basename = exec("basename " + input).trim()
-info("transpile: " + hexa_v2_path + " " + input_basename + " -> gen.c")
-let transpile_result = exec_with_status(hexa_v2_path + " " + input + " " + gen_c)
+info("transpile: " + hexat_path + " " + input_basename + " -> gen.c")
+let transpile_result = exec_with_status(hexat_path + " " + input + " " + gen_c)
 if transpile_result[1] != 0 {
-    die("hexa_v2 transpile failed")
+    die("hexat transpile failed")
 }
 if !file_exists(gen_c) {
-    die("hexa_v2 produced no output")
+    die("hexat produced no output")
 }
 
 let gen_size = to_int(exec("wc -c < " + gen_c + " | tr -d ' '").trim())
 info("generated C: " + human_size(gen_size))
 
 // ── step 1b: NaN-boxing FFI pointer fix ──────────────────────
-// Until hexa_v2 is rebuilt with the HX_INT_U codegen change,
+// Until hexat is rebuilt with the HX_INT_U codegen change,
 // post-process generated C to use unsigned pointer extraction
 // in FFI dispatch lines. Fixes ARM64 cstring() corruption.
 let hx_int_u_check = exec_with_status("grep -q 'HX_INT_U' " + build_dir + "/runtime.c 2>/dev/null")

@@ -8,7 +8,7 @@
  *   0.62 s → 0.08 s; see COMPILE-SPEED.log.tape @phase_1_2_smoke).
  *
  *   FINDING from first cut: PHASE 1.1 audit was INCOMPLETE — many `hexa_*`
- *   call sites in hexa_v2-emitted user.c are MACROS (e.g. `hexa_add` at
+ *   call sites in hexat-emitted user.c are MACROS (e.g. `hexa_add` at
  *   runtime.c:4757) that expand to internal `static` helpers (`hexa_add_slow`
  *   at runtime.c:4731). To make those macros work via this header, the
  *   helpers must be de-staticized in runtime.c. Tracked as PHASE 1.2 follow-up.
@@ -27,12 +27,12 @@
 
 #include <stdint.h>
 #include <stddef.h>
-#include <stdio.h>     /* hexa_v2-emitted main() calls fflush(stdout/stderr) */
+#include <stdio.h>     /* hexat-emitted main() calls fflush(stdout/stderr) */
 #include <ctype.h>     /* user.c may call isalpha/isalnum/isdigit directly */
 #include <stdlib.h>    /* exit, atoi, getenv from try/catch lowering */
 #include <setjmp.h>    /* try/catch lowers to setjmp/longjmp + __hexa_try_* */
-#include <math.h>      /* hexa_v2 emits direct log/sin/cos/exp calls for math intrinsics */
-#include <sys/stat.h>  /* hexa_v2 emits bare mkdir(path,0755) for stdlib mkdir_p */
+#include <math.h>      /* hexat emits direct log/sin/cos/exp calls for math intrinsics */
+#include <sys/stat.h>  /* hexat emits bare mkdir(path,0755) for stdlib mkdir_p */
 
 /* ── Tagged value layout (mirrors runtime.c lines 908–996) ── */
 
@@ -175,7 +175,7 @@ typedef struct HexaIC {
 /* Step 3 cycle 100 — pointer-eq inline builtins for hexa_eq TAG_VALSTRUCT
  * + TAG_MAP branches (RUNTIME.md 잔여 #4, 4 of 9 branches ported). The
  * aprime_cc codegen inlines these to `hexa_bool(HX_VS(a)==HX_VS(b))` etc
- * directly at the call site (self/codegen.hexa near pow). The hexa_v2
+ * directly at the call site (self/codegen.hexa near pow). The hexat
  * bootstrap transpiler is unaware of the inline lowering and emits
  * `hexa_call2(__vs_ptr_eq, a, b)`; the static-inline defs below satisfy
  * that indirect-call path (resolved via the `hexa_call2` _Generic
@@ -421,7 +421,7 @@ HexaVal hexa_net_close(HexaVal fd);                      /* native/net.c:168 */
 
 /* ── Additional native/*.c forward-decls (auto-generated 2026-05-15) ──
  * Sourced from grep of self/native/*.c hexa_* definitions; ensures user.c
- * compiled by hexa_v2 codegen never relies on implicit-decl. Link only
+ * compiled by hexat codegen never relies on implicit-decl. Link only
  * the platform-applicable .o files (gated by HEXA_HAS_* macros). */
 /* native/crypto_sodium.c */
 HexaVal hexa_ed25519_keypair(void);     /* native/crypto_sodium.c:118 */
@@ -597,7 +597,7 @@ HexaVal hexa_sum(HexaVal a);                                                    
  * fn-pointer references across the runtime.o TU boundary. */
 extern HexaVal hx_setenv;                                                          /* runtime.c:12099 */
 extern HexaVal hx_exec_capture;                                                    /* runtime.c:12100 */
-extern HexaVal exec_with_status3;                                                  /* runtime.c - PROBE r8 3-tuple bare-ident bridge (regen-gated; pre-regen hexa_v2 emits hexa_call1(exec_with_status3,...)) */
+extern HexaVal exec_with_status3;                                                  /* runtime.c - PROBE r8 3-tuple bare-ident bridge (regen-gated; pre-regen hexat emits hexa_call1(exec_with_status3,...)) */
 extern HexaVal hx_pipe_spawn;                                                      /* native/persistent_pipe.c:415 */
 extern HexaVal hx_pipe_send_line;                                                  /* native/persistent_pipe.c:416 */
 extern HexaVal hx_pipe_recv_line;                                                  /* native/persistent_pipe.c:417 */
@@ -713,7 +713,7 @@ HexaVal hexa_map_set(HexaVal m, const char* key, HexaVal val); /* runtime.c:2254
 HexaVal hexa_map_get(HexaVal m, const char* key);       /* runtime.c:2319 */
 
 /* Hot-path inline-cache map lookup — MACRO that mirrors runtime.c:2409.
- * Required for hexa_v2-emitted user.c (1294 calls in hexa_cc.c alone).
+ * Required for hexat-emitted user.c (1294 calls in hexa_cc.c alone).
  * Depends on these statics being de-staticized in runtime.c (PHASE 1.2.A.2
  * follow-up patches — without them, link fails with undefined refs):
  *   - g_hexa_ic_hits             runtime.c:2350
@@ -892,7 +892,7 @@ static inline HexaVal hexa_call4(HexaVal f, HexaVal a1, HexaVal a2, HexaVal a3, 
 }
 
 /* ── exec_stream wrappers (declared after hexa_fn_new is in scope) ──
- * Mirrors runtime.c:4262-4272. The hexa_v2 codegen emits
+ * Mirrors runtime.c:4262-4272. The hexat codegen emits
  *   `hexa_exec_stream(cmd, on_line_ident)` with a raw C fn-pointer as the
  * second arg; _Generic picks the wrap that boxes it into a TAG_FN HexaVal
  * before forwarding to hexa_exec_stream_impl. */
@@ -965,7 +965,7 @@ HexaVal farr_rope_bwd_gpu(HexaVal t, HexaVal cos, HexaVal sin,
  * inline include so forge_tier_dispatch_v1 is in scope. */
 HexaVal hexa_forge_dispatch_matmul(HexaVal a_v, HexaVal m_v, HexaVal k_v,
                                    HexaVal b_v, HexaVal n_v);          /* runtime.c — RFC 050 */
-/* Bare-symbol seam: the deployed hexa_v2 bootstrap emits the builtin as
+/* Bare-symbol seam: the deployed hexat bootstrap emits the builtin as
  * a literal `forge_dispatch_matmul(...)` call (≥5-arg direct-C path),
  * the generated user.c TU only sees runtime.h — declare the bare form
  * too so it links to runtime.c's extern wrapper without a bootstrap
@@ -984,7 +984,7 @@ HexaVal forge_dispatch_matmul(HexaVal a_v, HexaVal m_v, HexaVal k_v,
  * OOM, dispatch failure, shape mismatch).
  *
  * Same bare-symbol seam as forge_dispatch_matmul above — the deployed
- * hexa_v2 emits a literal forge_dispatch_ffn_fp64_via_bf16(...) call,
+ * hexat emits a literal forge_dispatch_ffn_fp64_via_bf16(...) call,
  * and these two prototypes resolve it to the runtime.c wrapper.
  * Body (SSOT): self/runtime.c. State design doc:
  *   state/forge_rfc050_perf_inherit_2026_05_19/design.md.            */
@@ -1006,7 +1006,7 @@ HexaVal forge_dispatch_ffn_fp64_via_bf16(HexaVal x_v, HexaVal w1_v,
  * no-CUDA: byte-identical CPU oracle (mirrors spiking_lib.hexa
  * flame_stdp_pair scalar order). Returns 0 on success, -1 on error.
  * Same bare-symbol seam as forge_dispatch_matmul / _ffn above — the
- * deployed hexa_v2 emits a literal forge_dispatch_stdp_pair(...) call,
+ * deployed hexat emits a literal forge_dispatch_stdp_pair(...) call,
  * these prototypes resolve it to the runtime.c wrappers without a
  * bootstrap rebuild. Body (SSOT): self/runtime.c + self/cuda/
  * runtime_cuda.c. Patch SSOT:
@@ -1059,7 +1059,7 @@ HexaVal hexa_ad_grad(HexaVal param_v);                                 /* runtim
 HexaVal hexa_adamw_step(HexaVal p_v, HexaVal g_v, HexaVal m_v, HexaVal v_v,
                         HexaVal n_v, HexaVal lr_v, HexaVal b1_v, HexaVal b2_v,
                         HexaVal eps_v, HexaVal wd_v, HexaVal t_v);      /* runtime.c — RFC 034 */
-/* Generic-fallback symbols the CURRENT committed hexa_v2 codegen emits
+/* Generic-fallback symbols the CURRENT committed hexat codegen emits
  * (no codegen branch needed): ≤4-arg → hexa_callN(<carrier>, …) needs
  * a visible HexaVal carrier; ≥5-arg → bare ad_matmul(…)/adamw_step(…)
  * direct call needs a visible function. External linkage in runtime.c.
@@ -1171,7 +1171,7 @@ extern HexaVal farr_device_free;                                       /* runtim
 HexaVal farr_matmul_gpu(HexaVal a, HexaVal ar, HexaVal ac,
                         HexaVal b, HexaVal bc);                         /* runtime.c — RFC 040 (5-arg direct) */
 /* RFC 041 Phase B forge RoPE — bare 6-arg direct wrappers (runtime.c
- * L11965/L11978). Declared here so the COMMITTED hexa_v2 codegen
+ * L11965/L11978). Declared here so the COMMITTED hexat codegen
  * (which emits the bare name `farr_rope_gpu(...)`, unprefixed) links
  * WITHOUT a transpiler bootstrap rebuild. CUDA build → RFC 041
  * __global__ kernel; no-CUDA → byte-identical `_hx_farr_rope_cpu`

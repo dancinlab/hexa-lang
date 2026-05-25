@@ -27,7 +27,7 @@
 //     a binary with exactly one `HexaVal u_main(void)` definition.
 //   - Binary output contains `[anima_bug1_3float_return] ALL 13/13 PASS`.
 //   - `hexa run` also produces the same banner.
-// Actual (pre-fix, 2026-04-18 hexa_v2):
+// Actual (pre-fix, 2026-04-18 hexat):
 //   - `hexa build` fails with clang errors on front-truncated u_main copies.
 //   - `hexa run` prints 13/13 PASS (interpreter side unaffected).
 

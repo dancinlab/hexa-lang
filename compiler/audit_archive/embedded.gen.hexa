@@ -127,7 +127,7 @@ pub let AUDIT_LOG_TAIL: [AuditLogEntry] = [
     AuditLogEntry { ts: "2026-04-18T15:08:49Z", caller: "unknown", subcmd: "free", args: "tau=4 HEXA-IR codegen_c2 _ic_def_parts type alignment", exit_code: 0, duration_ms: 0 },
     AuditLogEntry { ts: "2026-04-18T15:10:02Z", caller: "unknown", subcmd: "roadmap", args: "nexus", exit_code: 0, duration_ms: 0 },
     AuditLogEntry { ts: "2026-04-18T15:10:34Z", caller: "unknown", subcmd: "roadmap", args: "nexus", exit_code: 0, duration_ms: 0 },
-    AuditLogEntry { ts: "2026-04-18T15:14:45Z", caller: "unknown", subcmd: "smash", args: "anima training ALM CLM H100 pod hexa_v2 native compile flash_attn cublas rms_norm safetensors checkpoint serialize forward backward gradient step", exit_code: 0, duration_ms: 0 },
+    AuditLogEntry { ts: "2026-04-18T15:14:45Z", caller: "unknown", subcmd: "smash", args: "anima training ALM CLM H100 pod hexat native compile flash_attn cublas rms_norm safetensors checkpoint serialize forward backward gradient step", exit_code: 0, duration_ms: 0 },
     AuditLogEntry { ts: "2026-04-18T15:14:50Z", caller: "unknown", subcmd: "free", args: "anima inference serving kv_cache decode forward_pass tokenizer bpe metal_matmul serve_alm checkpoint_load safetensors_read", exit_code: 0, duration_ms: 0 },
     AuditLogEntry { ts: "2026-04-18T15:17:54Z", caller: "unknown", subcmd: "roadmap", args: "nexus", exit_code: 0, duration_ms: 0 },
     AuditLogEntry { ts: "2026-04-18T15:18:06Z", caller: "unknown", subcmd: "roadmap", args: "nexus", exit_code: 0, duration_ms: 0 },

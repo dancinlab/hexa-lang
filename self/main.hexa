@@ -26,7 +26,7 @@ use "compiler/codegen/nvptx_target"
 //    hexa help                    도움말
 //
 //  빌드 체인 (go/rust 부트스트랩 패턴):
-//    dispatch = hexa_v2 self/main.hexa -> main.c -> clang -> 루트 ./hexa
+//    dispatch = hexat self/main.hexa -> main.c -> clang -> 루트 ./hexa
 //    stage2 = ./hexa build self/main.hexa -> stage2 비교 (fixpoint)
 //
 //  골화 레지스트리: $ANIMA/shared/hexa/hexa_toolchain.json
@@ -609,7 +609,7 @@ fn cmd_status() {
     println("  version:     " + version_str())
     let hexa_bin = exec("ls -la hexa 2>&1 | head -1 | tr -d '\\n'")
     println("  ./hexa:      " + hexa_bin)
-    let cc_bin = exec("ls -la build/hexa_v2 2>&1 | head -1 | tr -d '\\n'")
+    let cc_bin = exec("ls -la build/hexat 2>&1 | head -1 | tr -d '\\n'")
     println("  hexa_cc:     " + cc_bin)
     let self_cnt = exec("ls self/*.hexa 2>/dev/null | wc -l | tr -d ' \\n'")
     println("  SSOT .hexa:  " + self_cnt + " files")
@@ -1301,11 +1301,11 @@ fn cmd_cc() {
     }
     let mut cmd = ""
     if uname == "Linux" {
-        cmd = "clang -O2 -D_GNU_SOURCE -I '" + __hxroot + "' -I '" + __hxroot + "/self' '" + __hxroot + "/self/native/hexa_cc.c' '" + rt_o + "' -o '" + __hxroot + "/build/hexa_v2' -lm 2>&1"
+        cmd = "clang -O2 -D_GNU_SOURCE -I '" + __hxroot + "' -I '" + __hxroot + "/self' '" + __hxroot + "/self/native/hexa_cc.c' '" + rt_o + "' -o '" + __hxroot + "/build/hexat' -lm 2>&1"
     } else {
         // macOS (Darwin) — libSystem 이 libm 자동 포함, _GNU_SOURCE 무의미.
         // 단, `-I self` 는 runtime.h 경로 해석에 반드시 필요.
-        cmd = "clang -O2 -I '" + __hxroot + "' -I '" + __hxroot + "/self' '" + __hxroot + "/self/native/hexa_cc.c' '" + rt_o + "' -o '" + __hxroot + "/build/hexa_v2' 2>&1"
+        cmd = "clang -O2 -I '" + __hxroot + "' -I '" + __hxroot + "/self' '" + __hxroot + "/self/native/hexa_cc.c' '" + rt_o + "' -o '" + __hxroot + "/build/hexat' 2>&1"
     }
     println("  " + cmd)
     let r = exec(cmd)
@@ -1539,7 +1539,7 @@ fn dispatch_absorbed(verb, ab_args) {
             // short-lived verb CLIs — the arena's only benefit (multi-GB
             // self-compile RSS) is irrelevant here; correctness wins. The
             // deep runtime root-fix (arena-escape heapify / IC ptr revalidation)
-            // is fixpoint-critical (aprime_cc/hexa_v2 map-IC) → tracked
+            // is fixpoint-critical (aprime_cc/hexat map-IC) → tracked
             // separately; this is the sound integration-layer fix.
             let mut cmd = "HEXA_VAL_ARENA=0 " + cli_q
             let mut ai = 0
@@ -1582,21 +1582,21 @@ fn dispatch_absorbed(verb, ab_args) {
 }
 
 fn regen_one_module(src, out_c) {
-    // hexa_v2 SSOT → C 변환 한 모듈. 성공이면 "ok", 실패면 exec 출력.
-    // buglist#5: resolve_hexa_v2() 경유 — cwd 무관 install_dir 기반 탐색.
-    let v2 = resolve_or_bootstrap_hexa_v2()
+    // hexat SSOT → C 변환 한 모듈. 성공이면 "ok", 실패면 exec 출력.
+    // buglist#5: resolve_hexat() 경유 — cwd 무관 install_dir 기반 탐색.
+    let v2 = resolve_or_bootstrap_hexat()
     if len(v2) == 0 {
-        println("  [transpile] error: hexa_v2 not found")
+        println("  [transpile] error: hexat not found")
         return false
     }
     // Phase C.2 (2026-05-22): force HEXA_VAL_ARENA=0 for the regen transpile.
-    // The bootstrap hexa_v2 binaries are built with the arena reclaim path
+    // The bootstrap hexat binaries are built with the arena reclaim path
     // wired but never opted-in; new binaries (e.g. one freshly built from
     // self/native/hexa_cc.c) default arena=ON (S7-B) and SIGSEGV when
     // transpiling the larger SSOT modules (lexer, codegen). Pinning the
     // env OFF makes the transpile deterministic across binary vintages and
-    // matches the hexa_v2 force-OFF default. Measured on ubu-2: without the
-    // pin, /tmp/hexa_v2.committed segfaults on lexer.hexa + codegen.hexa;
+    // matches the hexat force-OFF default. Measured on ubu-2: without the
+    // pin, /tmp/hexat.committed segfaults on lexer.hexa + codegen.hexa;
     // with it, all 4 modules transpile cleanly and the merge links + reaches
     // bootstrap fixpoint (gen-N codegen == gen-N+1 codegen byte-identical).
     let cmd = "HEXA_VAL_ARENA=0 " + v2 + " " + src + " " + out_c + " 2>&1"
@@ -1616,7 +1616,7 @@ fn merge_modules_awk(out_path) {
     //   [3] 커스텀 main(argc, argv) dispatcher
     let script_path = "/tmp/_hexa_cc_merge.awk"
     // awk: each module's top-level init code lives inside its own
-    // `int main(int argc, char** argv)` block after hexa_v2 transpile.
+    // `int main(int argc, char** argv)` block after hexat transpile.
     // We can't strip it (globals like `_known_fn_globals`, `p_max_errors`
     // etc. would remain uninitialized and the merged binary emits empty
     // identifiers). Instead rename it to `_MOD_init(int, char**)` and
@@ -1707,15 +1707,15 @@ fn cmd_regen_cc() {
     // $HEXA_LANG > install_dir_from_argv0() > ./self — not cwd. `.` when
     // run from the repo root, so behavior there is unchanged.
     let __hxroot = resolve_hxroot()
-    // preflight — buglist#5: resolve_hexa_v2() 로 cwd/$HOME/argv[0] 모두 탐색.
-    let v2 = resolve_or_bootstrap_hexa_v2()
+    // preflight — buglist#5: resolve_hexat() 로 cwd/$HOME/argv[0] 모두 탐색.
+    let v2 = resolve_or_bootstrap_hexat()
     if len(v2) == 0 {
-        println("error: hexa_v2 not found — run `hexa cc` first")
+        println("error: hexat not found — run `hexa cc` first")
         return
     }
-    // Step 1-4: hexa_v2 transpile each SSOT → /tmp/_*.c
+    // Step 1-4: hexat transpile each SSOT → /tmp/_*.c
     println("")
-    println("[1/4] transpiling SSOT modules via hexa_v2")
+    println("[1/4] transpiling SSOT modules via hexat")
     let ok1 = regen_one_module(__hxroot + "/self/lexer.hexa", "/tmp/_lexer.c")
     let ok2 = regen_one_module(__hxroot + "/self/parser.hexa", "/tmp/_parser.c")
     let ok3 = regen_one_module(__hxroot + "/self/type_checker.hexa", "/tmp/_tc.c")
@@ -1744,9 +1744,9 @@ fn cmd_regen_cc() {
     let old_ln = exec("wc -l < '" + __hxroot + "/self/native/hexa_cc.c' | tr -d ' \\n'")
     println("  hexa_cc.c      bytes=" + old_sz + "  lines=" + old_ln)
     println("  hexa_cc.c.new  bytes=" + new_sz + "  lines=" + new_ln)
-    // Step 6: clang hexa_cc.c.new → /tmp/hexa_v2.new  (실패 허용)
+    // Step 6: clang hexa_cc.c.new → /tmp/hexat.new  (실패 허용)
     println("")
-    println("[3/4] clang compile hexa_cc.c.new → /tmp/hexa_v2.new (failure tolerated)")
+    println("[3/4] clang compile hexa_cc.c.new → /tmp/hexat.new (failure tolerated)")
     // `-x c` forces C language since `.new` extension is unrecognized.
     // `-I self` mirrors the standard hexa_cc.c build (runtime.c lives in self/).
     // bt 54: int→ptr / implicit-fn 근본 해소 — 플래그 제거. -Wno-trigraphs만 유지.
@@ -1768,7 +1768,7 @@ fn cmd_regen_cc() {
     // that translation unit) and then linking the two objects mirrors the
     // real two-TU rebuild and gives a truthful smoke result. Measured on
     // ubu-2: the merged regen C now compiles to .o with ZERO errors and the
-    // link produces a working hexa_v2 that emits `__arr_raw_len` INLINE
+    // link produces a working hexat that emits `__arr_raw_len` INLINE
     // (HX_ARR_LEN) instead of the stale hexa_call1(__arr_raw_len, ...).
     let cc_obj = "clang -O2 " + os_clang_cflags() + "-I '" + __hxroot + "/self' -x c -c -Wno-trigraphs -fbracket-depth=4096 " + out_new + " -o /tmp/hexa_cc.new.o 2>&1 | head -40"
     println("  " + cc_obj)
@@ -1776,14 +1776,14 @@ fn cmd_regen_cc() {
     if len(cc_obj_out) > 0 { println(cc_obj_out) }
     let obj_ok = exec("test -f /tmp/hexa_cc.new.o && printf yes || printf no")
     if obj_ok == "yes" {
-        let cc_link = "clang -O2 /tmp/hexa_cc.new.o '" + __hxroot + "/self/runtime.o' -o /tmp/hexa_v2.new" + os_clang_ldflags() + " 2>&1 | head -40"
+        let cc_link = "clang -O2 /tmp/hexa_cc.new.o '" + __hxroot + "/self/runtime.o' -o /tmp/hexat.new" + os_clang_ldflags() + " 2>&1 | head -40"
         println("  " + cc_link)
         let cc_link_out = exec(cc_link)
         if len(cc_link_out) > 0 { println(cc_link_out) }
     } else {
         println("  (skip link — merged C failed to compile)")
     }
-    let built = exec("test -x /tmp/hexa_v2.new && printf yes || printf no")
+    let built = exec("test -x /tmp/hexat.new && printf yes || printf no")
     println("  compiled=" + built)
     // Step 7: diff report
     println("")
@@ -1796,16 +1796,16 @@ fn cmd_regen_cc() {
     println("  - main() stripped via awk brace-depth (single-line `}` assumed)")
     // Phase C.2 RESOLVED (2026-05-22, ubu-2): the awk merge + per-module
     // string-literal-aware rename is sufficient — the merged C compiles
-    // and links cleanly when the DRIVING hexa_v2 is current (i.e. emits
+    // and links cleanly when the DRIVING hexat is current (i.e. emits
     // rt_str_* / rt_read_file / inline HX_ARR_LEN rather than the legacy
     // hexa_str_* / hexa_call1 forms). The earlier "needs static namespacing"
     // caveat was a misdiagnosis: the real blocker was a STALE bootstrap
-    // binary — a build/hexa_v2_linux predating the runtime rt_* rename +
+    // binary — a build/hexat_linux predating the runtime rt_* rename +
     // __arr_raw_len inline branch. Driving the regen with a binary freshly
     // built from self/native/hexa_cc.c (HEXA_VAL_ARENA=0) yields a clean
     // link AND reaches bootstrap fixpoint: gen-N codegen == gen-N+1 codegen
     // byte-identical. Remaining manual step: rebuild + promote the shipped
-    // build/hexa_v2_linux from the freshly-linked binary (deploy ceremony).
+    // build/hexat_linux from the freshly-linked binary (deploy ceremony).
 }
 
 fn basename_stem(path) {
@@ -1910,25 +1910,25 @@ fn codesign_if_macos(exe) {
     }
 }
 
-// ── T28 / buglist#5: hexa_v2 binary path resolution ──────
-// 목적: `hexa build` / `hexa parse` 가 cwd 무관하게 hexa_v2 트랜스파일러를
-//       찾을 수 있도록 한다. 과거에는 `./self/native/hexa_v2` (cwd 의존)
+// ── T28 / buglist#5: hexat binary path resolution ──────
+// 목적: `hexa build` / `hexa parse` 가 cwd 무관하게 hexat 트랜스파일러를
+//       찾을 수 있도록 한다. 과거에는 `./self/native/hexat` (cwd 의존)
 //       하드코딩이라, hexa-lang 리포 바깥에서 실행하면 바이너리 미발견
 //       상태에서도 exec 가 빈 파일/실패 출력을 찍고 조용히 exit 0 하는
 //       silent-failure 회귀가 있었다 (T28).
 //
 // buglist#5 (hetzner airgenome 재현): cwd=airgenome 에서 `hexa build ...` →
-//       "sh: 1: ./self/native/hexa_v2: not found". cwd 기반 탐색도, $HOME
+//       "sh: 1: ./self/native/hexat: not found". cwd 기반 탐색도, $HOME
 //       기반 탐색도 airgenome 사용자 경로에서는 hexa-lang 리포를 못 찾음.
 //       해법: args()[0] 즉 `./hexa` 실행 파일 자체의 절대 경로에서 install
-//       디렉토리(dirname(exe))를 도출 → `<install_dir>/self/native/hexa_v2`.
+//       디렉토리(dirname(exe))를 도출 → `<install_dir>/self/native/hexat`.
 //       이것이 가장 신뢰할 수 있는 경로 (`./hexa` 와 `./self/...` 는 같은
 //       하위 트리). 심볼릭 링크는 `cd $(dirname ..) && pwd -P` 로 해결.
 //
 // 탐색 순서:
 //   1) argv[0] 기반 install_dir (최우선 — cwd / $HOME 와 독립)
-//   2) ./self/native/hexa_v2 (cwd — 리포 안에서 실행 시 기존 동작 유지)
-//   3) $HEXA_LANG/self/native/hexa_v2 (개발 fallback — bench 와 동일)
+//   2) ./self/native/hexat (cwd — 리포 안에서 실행 시 기존 동작 유지)
+//   3) $HEXA_LANG/self/native/hexat (개발 fallback — bench 와 동일)
 //   4) /proc/self/exe (Linux container fallback — argv[0] 빈/empty 일 때)
 // 넷 다 없으면 빈 문자열 반환. 호출자가 명시 오류 + exit(1) 처리.
 fn install_dir_from_argv0() {
@@ -1987,33 +1987,33 @@ fn install_dir_from_argv0() {
     return pd
 }
 
-// ── F-LIVE-DISPATCH (2026-05-24): multiarch hexa_v2 selection ──────────
-// The committed transpiler binary is platform-specific: `self/native/hexa_v2`
+// ── F-LIVE-DISPATCH (2026-05-24): multiarch hexat selection ──────────
+// The committed transpiler binary is platform-specific: `self/native/hexat`
 // is the Mac arm64 Mach-O (legacy name, preserved to avoid churning the
-// build chain), and `self/native/hexa_v2_linux_x86_64` is the Linux x86_64
-// ELF (added PR #554). The runtime cmd_* path (cmd_build → resolve_hexa_v2)
-// previously hardcoded the legacy `hexa_v2` name at all three probe sites, so
+// build chain), and `self/native/hexat_linux_x86_64` is the Linux x86_64
+// ELF (added PR #554). The runtime cmd_* path (cmd_build → resolve_hexat)
+// previously hardcoded the legacy `hexat` name at all three probe sites, so
 // a `hexa drill` (→ dispatch_absorbed → cmd_run → hexa build → cmd_build)
 // dispatched to a Linux pool host invoked the Mac arm64 binary on Linux →
 // SIGSEGV ("Segmentation fault (core dumped)" on the [1/2] transpile step).
 //
 // This is the runtime-side counterpart of tool/build_hexa_cli.hexa's
-// _pick_hexa_v2(): same (os, arch) → basename mapping, same graceful
+// _pick_hexat(): same (os, arch) → basename mapping, same graceful
 // fallback to the legacy name when the arch-specific binary isn't committed
 // yet (older clones). Kept as a sibling here (rather than imported) because
 // self/main.hexa is the self-host dispatcher root and must stay flatten-clean
 // without a cross-tool `use` edge into tool/.
 // See [[reference_ubu_arch_transpiler_constraint]].
-// _pick_hexa_v2_with_build: CANON M3b — the transpiler is a per-machine
-// build artifact at <root>/build/hexa_v2, built by `hexa cc` from hexa_cc.c
+// _pick_hexat_with_build: CANON M3b — the transpiler is a per-machine
+// build artifact at <root>/build/hexat, built by `hexa cc` from hexa_cc.c
 // (Go 1.4 C-seed model), never a committed binary — so it is always
 // arch-correct (this closes the committed-binary arch-leak class). Returns
 // the artifact path if executable, else "" (caller bootstraps via cmd_cc).
-// The committed-binary multiarch picker (_hexa_v2_basename /
-// _pick_hexa_v2_in_dir) was removed when M3b dropped self/native/hexa_v2 +
-// hexa_v2_linux_x86_64 from git.
-fn _pick_hexa_v2_with_build(root) {
-    let build_bin = root + "/build/hexa_v2"
+// The committed-binary multiarch picker (_hexat_basename /
+// _pick_hexat_in_dir) was removed when M3b dropped self/native/hexat +
+// hexat_linux_x86_64 from git.
+fn _pick_hexat_with_build(root) {
+    let build_bin = root + "/build/hexat"
     let build_chk = exec("test -x '" + build_bin + "' && printf yes || printf no")
     if build_chk == "yes" {
         return build_bin
@@ -2021,26 +2021,26 @@ fn _pick_hexa_v2_with_build(root) {
     return ""
 }
 
-fn resolve_hexa_v2() {
-    // CANON M3: each probe root resolves build/hexa_v2 (cc-built artifact)
+fn resolve_hexat() {
+    // CANON M3: each probe root resolves build/hexat (cc-built artifact)
     // FIRST, then the committed self/native binary as fallback.
     // 1) argv[0] 기반 — 가장 우선 (dirname(./hexa) = repo root).
     let inst = install_dir_from_argv0()
     if len(inst) > 0 {
-        let argv_bin = _pick_hexa_v2_with_build(inst)
+        let argv_bin = _pick_hexat_with_build(inst)
         if len(argv_bin) > 0 {
             return argv_bin
         }
     }
     // 2) cwd-relative — 리포 루트에서 실행 시.
-    let cwd_bin = _pick_hexa_v2_with_build(".")
+    let cwd_bin = _pick_hexat_with_build(".")
     if len(cwd_bin) > 0 {
         return cwd_bin
     }
     // 3) $HEXA_LANG fallback — 개발 기본 위치.
     let home_root = exec("printf '%s' \"$HEXA_LANG\"")
     if len(home_root) > 0 {
-        let home_bin = _pick_hexa_v2_with_build(home_root)
+        let home_bin = _pick_hexat_with_build(home_root)
         if len(home_bin) > 0 {
             return home_bin
         }
@@ -2048,23 +2048,23 @@ fn resolve_hexa_v2() {
     return ""
 }
 
-// resolve_or_bootstrap_hexa_v2: CANON M3b — resolve the transpiler artifact,
+// resolve_or_bootstrap_hexat: CANON M3b — resolve the transpiler artifact,
 // bootstrapping it from hexa_cc.c via cmd_cc if absent. This is the go-build
-// model: a fresh clone with no build/hexa_v2 self-bootstraps on first use
-// instead of erroring out. cmd_cc never calls resolve_hexa_v2, so the
+// model: a fresh clone with no build/hexat self-bootstraps on first use
+// instead of erroring out. cmd_cc never calls resolve_hexat, so the
 // bootstrap is non-recursive.
-fn resolve_or_bootstrap_hexa_v2() {
-    let v2 = resolve_hexa_v2()
+fn resolve_or_bootstrap_hexat() {
+    let v2 = resolve_hexat()
     if len(v2) > 0 {
         return v2
     }
-    println("  [bootstrap] build/hexa_v2 absent — building transpiler via hexa cc")
+    println("  [bootstrap] build/hexat absent — building transpiler via hexa cc")
     cmd_cc()
-    return resolve_hexa_v2()
+    return resolve_hexat()
 }
 
 // S5 native-codegen campaign: resolve the native compiler binary
-// (compiler/main.hexa → built as `aprime_cc`). Mirrors resolve_hexa_v2()'s
+// (compiler/main.hexa → built as `aprime_cc`). Mirrors resolve_hexat()'s
 // probe order: env override > <install>/build/aprime_cc > ./build/aprime_cc
 // > $HEXA_LANG/build/aprime_cc. Returns "" when no binary is found — the
 // caller (cmd_build, HEXA_BACKEND=native) then fails LOUD, never silently
@@ -2194,7 +2194,7 @@ fn module_loader_env_prefix() {
     // fails on `SessionStartData` undeclared etc.). 2026-05-13 fix: raise
     // the cap for the child module_loader so flatten completes for any
     // realistic project size. The parent `hexa build` keeps the default cap
-    // because hexa_v2 (the actual transpiler) is much lighter than the
+    // because hexat (the actual transpiler) is much lighter than the
     // flatten step. If a future bundle grows past 4 GB this needs revisit.
     //
     // Operator override: HEXA_MEM_CAP_MB=<N> (parent) is propagated; if
@@ -2216,15 +2216,15 @@ fn module_loader_env_prefix() {
 }
 
 // 실패 메시지 공통화 — silent exit 0 회귀 재발 방지.
-fn die_no_hexa_v2() {
-    println("error: hexa_v2 transpiler binary not found")
+fn die_no_hexat() {
+    println("error: hexat transpiler binary not found")
     println("       searched:")
     let inst = install_dir_from_argv0()
     if len(inst) > 0 {
-        println("         " + inst + "/self/native/hexa_v2  (from argv[0])")
+        println("         " + inst + "/self/native/hexat  (from argv[0])")
     }
-    println("         ./self/native/hexa_v2  (cwd)")
-    println("         $HEXA_LANG/self/native/hexa_v2  (dev fallback)")
+    println("         ./self/native/hexat  (cwd)")
+    println("         $HEXA_LANG/self/native/hexat  (dev fallback)")
     println("       run `hexa cc` (inside hexa-lang repo) to build it")
     exit(1)
 }
@@ -2380,7 +2380,7 @@ fn cmd_build(src, out, c_only, target, shared) {
     //       - mv 는 동일 파일시스템 rename(2) → 원자성 보장.
     //       - 마지막으로 rename 한 쪽이 승자. 두 프로세스 모두 exit 0, exe 유효.
     //
-    // T28: 소스 파일 존재 확인 + hexa_v2 경로 resolve. 둘 중 하나라도 실패하면
+    // T28: 소스 파일 존재 확인 + hexat 경로 resolve. 둘 중 하나라도 실패하면
     //      이전처럼 clang 호출 → mv → OK 를 찍으며 exit 0 하는 silent-failure 대신
     //      명시 오류 + exit(1) 로 실패하도록 한다.
     let src_exists = exec("test -f '" + src + "' && printf yes || printf no")
@@ -2462,9 +2462,9 @@ fn cmd_build(src, out, c_only, target, shared) {
             exit(1)
         }
     }
-    let v2 = resolve_or_bootstrap_hexa_v2()
+    let v2 = resolve_or_bootstrap_hexat()
     if len(v2) == 0 {
-        die_no_hexa_v2()
+        die_no_hexat()
     }
     println("=== Building " + src + " -> " + out + " ===")
     // #12 (wilson-needs-hexa-build-out-of-tree): mirror cmd_run's flatten
@@ -2530,7 +2530,7 @@ fn cmd_build(src, out, c_only, target, shared) {
     }
     // ─── S5 native-codegen backend selector ────────────────────────────
     // HEXA_BACKEND=native → after the flatten step above, dispatch CODEGEN
-    // to the native compiler (aprime_cc) instead of the hexa_v2 transpiler.
+    // to the native compiler (aprime_cc) instead of the hexat transpiler.
     // ADDITIVE + env-gated: HEXA_BACKEND unset or =c is the default and runs
     // the C path below COMPLETELY UNCHANGED.
     //
@@ -2666,9 +2666,9 @@ fn cmd_build(src, out, c_only, target, shared) {
     //   trans 출력만 캡처하고 .c 미생성 여부를 검사하지 않아, clang 이 존재
     //   하지 않는 .c 를 컴파일하려 → mv 실패 → 그래도 "OK: built" 출력하는
     //   false-positive exit 0 회귀가 있었다. 이제 .c existence 를 명시 체크.
-    // 산출물 디렉토리 선제 생성 (없으면 hexa_v2 가 stderr 로 실패).
+    // 산출물 디렉토리 선제 생성 (없으면 hexat 가 stderr 로 실패).
     let _mk_art = exec("mkdir -p build/artifacts 2>/dev/null")
-    // hexa_v2 (transpiler) also runs into the 768 MB default RSS cap for
+    // hexat (transpiler) also runs into the 768 MB default RSS cap for
     // large downstream programs (wilson v0.5.x peaks ~900 MB during the
     // AST → C codegen pass). Same propagation pattern as module_loader.
     let mut v2_env = ""
@@ -2679,7 +2679,7 @@ fn cmd_build(src, out, c_only, target, shared) {
     println("  [1/2] " + trans)
     let r1 = exec(trans)
     if len(r1) > 0 { println("    " + r1) }
-    // 파싱 실패는 hexa_v2 가 stdout 에 "Parse error" 로 찍고도 exit 0 인
+    // 파싱 실패는 hexat 가 stdout 에 "Parse error" 로 찍고도 exit 0 인
     // 특성이 있어(cmd_parse 주석 참고), 출력 문자열 + .c 파일 존재로 2중 판정.
     // r1 을 셸 명령에 보간하면 출력 안의 백틱 / `$()` / `$VAR` 가 재평가되어
     // 가짜 `sh:` 진단이 새어 나온다 — `.contains` 로 in-process 판정.
@@ -3590,7 +3590,7 @@ fn cmd_batch(files) {
 //       wall_s, RSS(KB), HEXA_ALLOC_STATS 카운터를 수집하고
 //       median/min/max 표 또는 JSON을 출력한다. --compare 모드는
 //       동일 파일을 두 바이너리로 돌려 delta % 를 보여줌으로써
-//       interp vs hexa_v2/v3, 또는 빌드 전/후 회귀 확인 용도.
+//       interp vs hexat/v3, 또는 빌드 전/후 회귀 확인 용도.
 //
 // 설계:
 //   - 측정은 외부 `/usr/bin/time` 에 위임 — 인터프리터 외부에서
@@ -3686,7 +3686,7 @@ fn median_str(values) {
         i = i + 1
     }
     let mid = n / 2 + 1
-    // hexa_v2 트랜스파일러는 builtin `str()` dispatch 가 없어
+    // hexat 트랜스파일러는 builtin `str()` dispatch 가 없어
     // 빈 문자열 + int 를 통한 implicit hexa_to_string 으로 변환.
     let mid_s = "" + mid
     let cmd = "printf '%s' '" + joined + "' | sort -g | sed -n '" + mid_s + "p' | tr -d ' \\n'"
@@ -3717,7 +3717,7 @@ fn max_str(values) {
     return m
 }
 
-// 결과는 hexa_v2 트랜스파일러가 map 리터럴을 지원하지 않아
+// 결과는 hexat 트랜스파일러가 map 리터럴을 지원하지 않아
 // 11-원소 배열로 반환 (인덱스 컨벤션 — bench_idx_* 헬퍼).
 //
 // idx 의미:
@@ -3783,7 +3783,7 @@ fn bench_print_table(bin, file, runs, r) {
 fn bench_print_json(file, runs, r) {
     // 수동 직렬화 — 키 순서 고정, 값은 숫자 그대로 (인용 없음).
     // file 만 문자열로 quote. 외부 jq/python json.load 로 검증 가능.
-    // hexa_v2 트랜스파일러가 다중행 `+` 연결을 지원하지 않아 한 줄 누적.
+    // hexat 트랜스파일러가 다중행 `+` 연결을 지원하지 않아 한 줄 누적.
     let mut s = "{"
     s = s + "\"file\":\"" + file + "\","
     s = s + "\"runs\":" + runs + ","
@@ -3842,7 +3842,7 @@ fn parse_int_str(s) {
     // awk 가 "23" 식으로 돌려주지만 hexa 에서 int 타입으로 끌어와야 한다.
     // sequence of `case ${s} in 1*) printf 1 ;; ...` 식의 1자리 검사로
     // string→int 변환을 우회한다. interp 에서는 직접 변환 가능.
-    // hexa_v2 트랜스파일러는 빈 string match 를 정확히 처리 못하므로
+    // hexat 트랜스파일러는 빈 string match 를 정확히 처리 못하므로
     // grep -c 로 카운트 비교를 통한 0/N 확인.
     //
     // MVP: cleaned 가 "1".."99999" 범위면 길이별로 분기, awk 로 cumulative
@@ -3944,7 +3944,7 @@ fn cmd_bench(file, runs, json_mode, compare_bin) {
 //       "Parse error" 라인 존재 여부로 exit code 를 결정한다.
 //
 // 구현 메모:
-//   - hexa_v2 는 파싱 실패를 stdout 에 "Parse error at L:C: ..." 로 찍고도
+//   - hexat 는 파싱 실패를 stdout 에 "Parse error at L:C: ..." 로 찍고도
 //     exit 0 하는 특성이 있어 (codegen best-effort), 출력 문자열에 "Parse error"
 //     포함 여부로 판정한다. parser hard-fail (auto-invoke 충돌 `exit(1)` 등) 은
 //     비정상 종료 코드로 잡는다 — exec_with_status 로 (출력, rc) 동시 취득.
@@ -4834,7 +4834,7 @@ fn _daemon_compute_key(file) {
 
 fn _daemon_key_index(keys, key) {
     // Linear scan of the in-memory key array. Returns the matching index
-    // or -1. Parallel arrays (keys/bins) over a runtime map: hexa_v2
+    // or -1. Parallel arrays (keys/bins) over a runtime map: hexat
     // codegen doesn't reliably support map literals (see L3459), and the
     // cache is small (one entry per distinct source seen this session).
     let mut i = 0
@@ -5329,7 +5329,7 @@ fn argv0_or_hexa() {
     return "hexa"
 }
 
-// PROBE r14 wiring (#453 follow-up): `hexa typecheck <file>` runs hexa_v2 with
+// PROBE r14 wiring (#453 follow-up): `hexa typecheck <file>` runs hexat with
 // the HEXA_TYPECHECK env set so the emitted hexa-cc main runs type_check_and_emit
 // between parse and codegen. The .c output is sent to /tmp and discarded — the
 // user-visible signal is the stderr warn/error stream (1322-warning corpus until
@@ -5340,9 +5340,9 @@ fn cmd_typecheck(src) {
         println("error: source file not found: " + src)
         exit(1)
     }
-    let v2 = resolve_or_bootstrap_hexa_v2()
+    let v2 = resolve_or_bootstrap_hexat()
     if len(v2) == 0 {
-        die_no_hexa_v2()
+        die_no_hexat()
     }
     let tmp_c = exec("printf '/tmp/hexa_typecheck.%s.c' \"$$\"")
     let trans = "HEXA_TYPECHECK=1 " + v2 + " '" + src + "' '" + tmp_c + "' 2>&1"
@@ -5366,9 +5366,9 @@ fn cmd_parse(src) {
         println("error: source file not found: " + src)
         exit(1)
     }
-    let v2 = resolve_or_bootstrap_hexa_v2()
+    let v2 = resolve_or_bootstrap_hexat()
     if len(v2) == 0 {
-        die_no_hexa_v2()
+        die_no_hexat()
     }
     // /tmp/hexa_parse_check.<PID>.c — 셸 PID 로 충돌 회피.
     let tmp_c = exec("printf '/tmp/hexa_parse_check.%s.c' \"$$\"")
@@ -5379,7 +5379,7 @@ fn cmd_parse(src) {
     // 정리 — 생성되었든 안 되었든 best-effort.
     let _rm = exec("rm -f '" + tmp_c + "' 2>/dev/null")
     // 파서 실패 판정 — in-process, 셸 아웃 금지:
-    //   · hexa_v2 는 "Parse error" 를 찍어도 exit 0 (codegen best-effort) 하므로
+    //   · hexat 는 "Parse error" 를 찍어도 exit 0 (codegen best-effort) 하므로
     //     출력 문자열로 판정한다.
     //   · parser hard-fail (auto-invoke 충돌 `exit(1)` 등) 은 비정상 종료
     //     코드로 잡는다.
@@ -5434,7 +5434,7 @@ if len(av) > 0 {
     }
     let av0_base = if slash >= 0 { av0.substring(slash + 1, len(av0)) } else { av0 }
     // self-name 스킵 — hexa 바이너리 본인 이름 계열.
-    // 1) "hexa" prefix — hexa, hexa_v2, hexa_new, hexa.bak...
+    // 1) "hexa" prefix — hexa, hexat, hexa_new, hexa.bak...
     // 2) common aliases — "main" only ("interp" removed post-R7,
     //    [[feedback_no_interp_use_compiled]]: build/hexa_interp 미빌드 →
     //    argv0 basename 가 "interp" 일 수 없음).
@@ -5629,7 +5629,7 @@ if len(av) < 3 {
             println("error: 'bench' requires <file>")
             cmd_verb_help("bench")
         } else {
-            // hexa_v2 트랜스파일러: dispatch 블록 내부에서 `let mut` 시퀀스의
+            // hexat 트랜스파일러: dispatch 블록 내부에서 `let mut` 시퀀스의
             // 일부 HexaVal decl 이 누락되는 회귀가 확인됨(원인 추적은 별도
             // 작업). 회피책: 모든 인자를 단일 배열 `bopts` 에 담아 cmd_bench 로
             // 한 번에 위임. 배열 push/index 는 정상.
@@ -5733,7 +5733,7 @@ if len(av) < 3 {
             // CANON M10: focused per-verb help instead of the full catalog.
             cmd_verb_help("build")
         } else {
-            // hexa_v2 트랜스파일러 회귀: dispatch 블록 내부 `let src = av[3]`
+            // hexat 트랜스파일러 회귀: dispatch 블록 내부 `let src = av[3]`
             // decl 이 누락되어 cmd_build(src, ...) 가 undeclared 오류. bench
             // 와 동일한 패턴으로 배열 래핑 우회 —
             //   bopts[0]=src, [1]=out, [2]=c_only, [3]=target (ROADMAP #20),

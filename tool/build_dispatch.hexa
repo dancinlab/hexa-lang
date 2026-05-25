@@ -1,7 +1,7 @@
 // build_dispatch.hexa — dispatch CLI dispatcher (`./hexa`) 빌드 스크립트
 //
 // 목적: build/stage1/main.c 를 clang 으로 컴파일하여 루트 `./hexa` 생성.
-//       build/stage1/main.c 는 SSOT self/main.hexa 를 hexa_v2 로 트랜스파일한
+//       build/stage1/main.c 는 SSOT self/main.hexa 를 hexat 로 트랜스파일한
 //       산출물(기 생성). 본 스크립트는 순수 compile-only 단계.
 //
 // 사용:
@@ -38,7 +38,7 @@ let clang = if env("CLANG") != "" { env("CLANG") } else { "clang" }
 
 if !file_exists(src) {
     eprintln("error: dispatch source missing: " + src)
-    eprintln("       run: " + hexa_dir + "/self/native/hexa_v2 " + hexa_dir + "/self/main.hexa " + src)
+    eprintln("       run: " + hexa_dir + "/self/native/hexat " + hexa_dir + "/self/main.hexa " + src)
     exit(1)
 }
 
@@ -70,8 +70,8 @@ if uname == "Linux" {
     ldflags = ""
 }
 
-// 2026-05-16: hexa_v2 model drift — older transpile emitted self-contained
-// `#include "runtime.c"` (single-TU, links alone); current hexa_v2 emits
+// 2026-05-16: hexat model drift — older transpile emitted self-contained
+// `#include "runtime.c"` (single-TU, links alone); current hexat emits
 // decl-only `#include "runtime.h"` and expects runtime.c to be a separate
 // TU. Detect & adapt (robust to BOTH emission models — no dup symbols):
 //   src has `#include "...runtime.c"`  → single-TU, link src alone (old)
