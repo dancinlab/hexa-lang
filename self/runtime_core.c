@@ -7607,6 +7607,13 @@ HexaVal hexa_sub(HexaVal a, HexaVal b) {
     return hexa_float(__hx_to_double(a) - __hx_to_double(b));
 }
 #endif
+// RUNTIME.md step-4 / .c-none — arith core op 2 moved C → hexa. Under
+// HEXA_HAS_HEXA_RT_STDLIB hexa_mul delegates to hexa-source rt_mul (numeric.hexa,
+// same shape as rt_sub #1217); #else C body kept. Emit-path → byte-identity gated.
+#ifdef HEXA_HAS_HEXA_RT_STDLIB
+extern HexaVal rt_mul(HexaVal a, HexaVal b);
+HexaVal hexa_mul(HexaVal a, HexaVal b) { return rt_mul(a, b); }
+#else
 HexaVal hexa_mul(HexaVal a, HexaVal b) {
     _HX_COERCE_BOOL(a, b);
     if (HX_IS_INT(a) && HX_IS_INT(b)) return hexa_int(HX_INT(a) * HX_INT(b));
@@ -7625,6 +7632,7 @@ HexaVal hexa_mul(HexaVal a, HexaVal b) {
     }
     return hexa_float(__hx_to_double(a) * __hx_to_double(b));
 }
+#endif
 // FMA: fused multiply-add — fma(a,b,c) = a*b + c
 // For floats uses C99 fma() (single rounding, hardware FMA on modern CPUs).
 // For pure ints falls back to a*b+c with int arithmetic.
