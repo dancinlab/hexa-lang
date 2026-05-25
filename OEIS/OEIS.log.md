@@ -2,6 +2,18 @@
 
 Append-only history sister of `OEIS.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
+## 2026-05-26T02:40Z — O8 paper SHIPPED (prefix-collision falsifier · 78.1% closed-negative · g51)
+
+- [x] O8 — **paper_on_discovery**: O1-O7 가 surface 한 닫힌-부정(closed-negative) 발견을 arxiv 스타일 논문으로 ship. 격리 worktree `/tmp/wt-oeis-o8` (origin/main). `PAPER/oeis-prefix-collision-falsifier/`.
+  - **발견 (🔴 FALSIFIED · paper_negative_ok)**: 사전등록 가설 **H = "K=10 정수-튜플 prefix 일치 ⟹ OEIS sequence identity"** 가 FALSIFIED. O1 scanner POC ledger 가 full sweep **전에** A000926(Idoneal)↔`n` (첫 10항 일치, 11항부터 diverge) 를 falsifier 로 사전등록. O2 full sweep 측정 = 374,047 seq × 20 저-엔트로피 산술 후보함수 → 1,707 K=10 hit → K=20 2차패스 → **1,334/1,707 = 78.1%** 가 first-K 우연일치 (1,334/1,670 = 79.9% of disprovable ≥20-term seq).
+  - **배제 축**: short-prefix(K=10) 튜플매치를 단독 identity 증거로 쓰는 것 — 본 후보셋 기준 ~78% false-positive.
+  - **필수 caveat** (paper_violation 회피): 78% 는 **candidate-set-relative** — 20개 저-엔트로피 산술함수 + 단일 K=10→K=20 prefix-pair. OEIS prefix 충돌 보편 주장 아님. §5 에 전문 기술.
+  - **g51 lint PASS**: `main.pdf` = **10 페이지** (pdfinfo 확인) + **1 fal.ai gpt-image-2 figure** (`figures/fig01_funnel.png`, /imagine 스킬 생성, page 3 embed 확인). 구조 = §abstract·§1 statement(falsifier H)·§2 method(374K sweep·20-fn·K=10 hash-intersect + K=20 2차패스)·§3 verification(funnel 표 verbatim + A000926↔n exemplar)·§4 finding(78.1% H FALSIFIED·배제축)·§5 caveats·§6 related·부록 A-E(후보fn 정의·funnel·per-fn breakdown·sample collision list·7 genuine survivor).
+  - **데이터 verbatim · 재측정 안 함**: 모든 funnel 카운트는 O2 ledger (`.verdicts/oeis-full-sweep/ledger.json`·`hits.tsv`·`sweep_log.txt`) + O3 tier ledger (`.verdicts/oeis-perhit-verify/tier_ledger.txt`) 에서 그대로 인용.
+  - 영속: `PAPER/oeis-prefix-collision-falsifier/{main.tex,main.pdf,references.bib,Makefile,README.md(한글),figures/fig01_funnel.png}` + `CLAIMS.tape` @C slug=oeis-prefix-collision-falsifier group=OEIS (🔴 closed-negative, paper="paper"/sweep, verdict ptr → O2/O3 ledger).
+  - **scope**: paper/docs only — verify_cli·embedded.gen.hexa 미접촉 (동시 sibling 세션 VERIFY-KIT-V4·ARXIV-A2 와 분리).
+  - **OEIS 도메인 closure**: O1(scanner)·O2(sweep)·O3(per-hit verify)·O4(atlas fold)·O5(TECS-L crosslink)·O6(DLMF 🔴)·O8(paper 🔴) 완료.
+
 ## 2026-05-26T02:10Z — O5 TECS-L F11 cross-link (7 provenance link → TECS-L cite · NEXUS reuse edge g67)
 
 - [x] O4(PR #1138)가 확보한 **7 OEIS↔hexa-fn provenance link** 을 자매 도메인 **TECS-L** 의 축 F **F11("OEIS reuse cite")** 에 교차연결 + repo-root `NEXUS.tape` 에 intra-project reuse edge 등록 (commons @D g67). 격리 worktree `/tmp/wt-oeis-o5` (origin/main).

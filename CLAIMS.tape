@@ -2431,3 +2431,13 @@
   raw    = ".verdicts/oeis-tecs-crosslink/crosslink.txt"
   src    = "NEXUS.tape (§3b: domain-node d_oeis/d_tecsl + reuse-edge de1) · TECS-L/TECS-L.md (F11 [x] closure) · OEIS/docs/o5-tecs-crosslink.md · .verdicts/oeis-atlas-fold/fold_ledger.txt (O4, 7 links)"
   status = "🟢 7 OEIS↔hexa provenance links cross-linked to TECS-L F11 + NEXUS.tape reuse edge (g67). TECS-L F11 closed (OEIS reuse cite); OEIS O5 closed. Docs+NEXUS only — no atlas fold."
+
+# ───────────────────────────────────────────────────────────────────────
+# OEIS — oeis-prefix-collision-falsifier (slug · group=OEIS · O8 paper · closed-negative)
+# ───────────────────────────────────────────────────────────────────────
+@C oeis_prefix_collision_falsifier := "OEIS O8 closed-negative: K=10 integer-tuple prefix-match does NOT imply OEIS sequence identity. Pre-registered falsifier H (O1 ledger: A000926 Idoneal ↔ `n` — first 10 terms coincide, diverge at term 11 — set BEFORE the full sweep). Measured (O2 full sweep): 374047 OEIS seq × 20 low-entropy arithmetic candidate fn → 1707 K=10 hits → K=20 second pass → 1334/1707 = 78.1% are first-K coincidences (1334/1670 = 79.9% of the disprovable ≥20-term seqs). H FALSIFIED. Ruled-out axis = short-prefix (K=10) tuple-match as a standalone sequence-identity test, at ~78% false-positive over a 374K sweep. CAVEAT (candidate-set-relative): the 78% is for THIS 20-fn low-entropy candidate set + single K=10→K=20 prefix-pair — NOT a universal claim about OEIS prefix collisions. Paper PAPER/oeis-prefix-collision-falsifier/ (10 pages + 1 fal.ai figure, g51)." :: empirical [slug=oeis-prefix-collision-falsifier group=OEIS]
+  method = "paper"
+  cmd    = "sweep (O2) → K=20 coincidence filter → 1334/1707 = 78.1% closed-negative; paper compiled pdflatex ×3 (10 pp)"
+  raw    = ".verdicts/oeis-full-sweep/ledger.json + sweep_log.txt + hits.tsv + .verdicts/oeis-perhit-verify/tier_ledger.txt"
+  src    = "PAPER/oeis-prefix-collision-falsifier/main.tex (§statement falsifier H · §method 374K sweep · §verification funnel + A000926↔n exemplar · §finding 78.1% H FALSIFIED · §caveat candidate-set-relative). Data verbatim from O2 ledger (.verdicts/oeis-full-sweep/) — not re-measured. fal.ai gpt-image-2 figure figures/fig01_funnel.png."
+  status = "🔴 closed-negative: K=10 prefix-match ⊯ identity, 78.1% false-pos / 374K (candidate-set-relative). Terminal (paper_negative_ok). Paper PAPER/oeis-prefix-collision-falsifier/ — 10 pp + fal figure (g51)."
