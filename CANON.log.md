@@ -2,6 +2,18 @@
 
 Append-only history sister of `CANON.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
+## 2026-05-25T17:00Z — M8 `build_hexa_cli.hexa` install-step 자동화 (M5 deploy 갭 영구 차단)
+
+M5 가 진단한 M3b 갭의 근인 = **install-step 부재**(`build_hexa_cli.hexa` 가 `build/hexa_cli_driver` 를 만들지만 shim 타깃으로 복사 안 함 → pull 후 배포 hexa stale 잔존). M8 = 이 단계 자동화. 격리 worktree `agent-a4a1b1bbd04ed0b61` (base origin/main).
+
+- [x] **opt-in `--install` 플래그** — `tool/build_hexa_cli.hexa` 에 `_want_install()`(argv 전체 스캔, 위치 무관 robust) + `_home()`(env_var("HOME") 우선, fallback `echo $HOME`) + `_deploy_one(driver, dst, uname)`(cp + Mac codesign) + `_install_driver(repo_root, uname)` 추가. `main()` 은 `_do_build` 성공 후 `_want_install()` 일 때만 install. **기본 OFF** — bare 빌드(CI·fresh-clone)는 shim 타깃 미접촉(CANON not-goal 준수, 빌드 동작 무변).
+- [x] **4개 shim 타깃** — M5 절차와 동일: 메인트리 `hxv2`(shim 우선 해석)+`hexa.real`(fallback) + `~/.hx/bin/{hxv2,hexa.real}`. `mkdir -p ~/.hx/bin` 선행. `$HOME` 미해결 시 `~/.hx/bin` 2 타깃 graceful skip(메인트리 2개는 진행).
+- [x] **검증(compiled-path only)** — `hexa parse tool/build_hexa_cli.hexa` → `parses cleanly` RC=0 (worktree-local 드라이버, 메인트리 무영향). install 로직을 standalone harness 로 추출 → `hexa build`(RC=0) → fake HOME sandbox 실행: 4 타깃 전부 드라이버 content 수령 확인 · 실제 Mach-O 드라이버로 codesign 후 `codesign --verify` PASS · `env -i`(빈 HOME) 시 `~/.hx/bin` graceful skip + 경고만(crash X). interp(`hexa run`) 미사용.
+- [x] **docs** — CANON.md M8 milestone `- [x]` DONE + "배포 refresh 절차" 2번을 `tool/build_hexa_cli --install` 단일 명령으로 갱신(3번=수동 fallback). 1세션 1파일 코드편집(`build_hexa_cli.hexa`)만 — `self/main.hexa` 무접촉(타 세션 충돌 회피).
+- [x] **랜딩** — stacked PR base origin/main, <200 LOC(g4). 빌드 산출물(`build/`)은 gitignore — leak 없음.
+
+**핵심**: M3b→M5(반응적 1회 수동 fix)→M8(능동적 자동화). 이제 pull 후 `tool/build_hexa_cli --install` 단일 verb 로 배포 종결 → install-step 부재 클래스 영구 종결. opt-in 게이트로 CI/fresh-clone surprise 0.
+
 ## 2026-05-25T16:00Z — M6 `hexa tool` 서랍 완전 커버리지 + core↔tool 경계 정리 (M4 polish)
 
 PR #964(M4)의 후속 polish. 격리 worktree `agent-a119c1b3b270d14f8` (base origin/main). 편집 범위 = `self/main.hexa`의 `cmd_help`/`cmd_tool_list`만 (`resolve_or_bootstrap_hexa_v2`는 M5 세션 소유라 미접촉).

@@ -31,8 +31,9 @@
 - [x] **M5 — M3b deploy 갭 종결** — DONE. 진단 결과 **소스 dispatch 는 정상**(origin/main `self/main.hexa` 에 `resolve_or_bootstrap_hexa_v2` 존재, auto-bootstrap e2e PASS) — 갭은 순수 **배포 측**: 배포 바이너리(`~/.hx/bin/hexa` shim → 메인트리 `hexa.real`/`hxv2`)가 M3b-前이라 `self/native/hexa_v2` 만 찾고 auto-bootstrap 안 함. 코드 변경 불요. 처방 = 아래 **배포 refresh 절차** 문서화 + 로컬 배포 바이너리 M3b+ 로 1회 refresh. fresh clone/CI 는 이미 build/ 모델이라 무영향.
 - [x] **M6 — M4 polish: tool family 완성도 + `--help` 재편 마무리** — DONE PR #973 (merged). dispatch 100 verb 전수감사 → 고아 8개 발견 → 5번째 family `TOOLCHAIN` 신설(batch·typecheck·cache·daemon·convergence·tape·hxc·url·stdlib) + `n6-list`→ANNOTATOR + `loop` SCIENCE→DISCOVERY 재분류 → 5-family 전부 non-empty(고아 0·dead-entry 0). core=everyday 11개로 정리. net −5 LOC.
 - [x] **M7 — `_v2` dead-ref 스윕** — DONE PR #970 (merged). 전체 grep → DEAD-REF 1건(`COMPILER.md` vestige 표의 삭제파일 2행)만 제거. 활성 코드/빌드/CI dead-ref 0(M2가 이미 청소). LIVE(`hexa_v2` 바이너리명·`build/hexa_v2`·`hexa_cc.c` 시드·stdlib `_v2.hexa`) 보존.
+- [x] **M8 — `build_hexa_cli.hexa` install-step 자동화 (M5 deploy 갭 영구 차단)** — DONE. M5 가 진단한 M3b 갭의 근인(드라이버는 빌드되나 shim 타깃 복사 단계 부재)을 자동화. `tool/build_hexa_cli.hexa` 에 **opt-in `--install` 플래그** 추가: 빌드 성공 후에만 `build/hexa_cli_driver` 를 4개 shim 타깃(메인트리 `hxv2`+`hexa.real` + `~/.hx/bin/{hxv2,hexa.real}`)으로 복사 + Mac `codesign`. **기본 OFF** (CI/fresh-clone 무영향). `$HOME` env-우선 robust 해석 + `mkdir -p ~/.hx/bin`; `$HOME` 미해결 시 `~/.hx/bin` 타깃 graceful skip. 이제 pull 후 `tool/build_hexa_cli --install` 단일 명령으로 종결 → 갭 재발 불가.
 
-**✅ M1~M7 전부 DONE — CANON @goal 4축(바이너리 git 제거 · `_v2` 종결 · `hexa cc` 흡수 · verb canonical 정리) 종결.** 남은 follow-up = `build_hexa_cli.hexa` install-step 자동화(M5 노트, pull 후 단일 verb refresh — optional polish).
+**✅ M1~M8 전부 DONE — CANON @goal 4축(바이너리 git 제거 · `_v2` 종결 · `hexa cc` 흡수 · verb canonical 정리) 종결 + M5 deploy 갭 자동화 follow-up 완료.**
 
 ## 배포 refresh 절차 (M3b post-pull)
 
@@ -40,11 +41,11 @@ origin/main pull 이 컴파일러 바이너리를 떨어뜨리면(M3b), **배포
 
 1. **부트스트랩** — `build/hexa_v2` 를 hexa_cc.c amalgam 으로 시드 (Go 1.4 식 C-seed):
    `sed 's|#include "runtime.h"|#include "runtime.c"|' self/native/hexa_cc.c > build/_amalgam.c && clang -O2 -fbracket-depth=2048 -I . -I self build/_amalgam.c -o build/hexa_v2`
-2. **드라이버 빌드** — `hexa tool/build_hexa_cli.hexa` (또는 1번이 만든 `build/hexa_v2` 로 module_loader → flatten → main 트랜스파일 → `build/hexa_cli_driver`). Mac 은 `LOCAL_BUILD=1`, pool-route 회피는 `SIDECAR_NO_POOL_ROUTE=1`.
-3. **배포** — `build/hexa_cli_driver` 를 shim 이 가리키는 바이너리로 복사: 메인트리 `hxv2`(shim 우선 해석) + `hexa.real`(fallback) + `~/.hx/bin/{hxv2,hexa.real}`; Mac 은 `codesign --force --sign -`.
+2. **드라이버 빌드 + 배포 (M8 자동화)** — `tool/build_hexa_cli --install` (1번이 만든 `build/hexa_v2` 로 module_loader → flatten → main 트랜스파일 → `build/hexa_cli_driver`, 빌드 성공 후 `--install` 이 4개 shim 타깃에 자동 복사 + Mac codesign). Mac 은 `LOCAL_BUILD=1`, pool-route 회피는 `SIDECAR_NO_POOL_ROUTE=1`.
+3. **(수동 fallback)** — `--install` 없이 빌드만 했다면 `build/hexa_cli_driver` 를 직접 복사: 메인트리 `hxv2`(shim 우선 해석) + `hexa.real`(fallback) + `~/.hx/bin/{hxv2,hexa.real}`; Mac 은 `codesign --force --sign -`.
 4. **검증** — `build/hexa_v2` 제거 후 `hexa build <tiny>.hexa <out>` → `[bootstrap] build/hexa_v2 absent — building transpiler via hexa cc` → `OK: hexa_cc rebuilt` → `OK: built` 가 뜨면 종결. (정상 dispatch 면 build/hexa_v2 가 자동 재생성됨.)
 
-향후 자동화 후보: `build_hexa_cli.hexa` 에 install 단계(shim 타깃 복사)를 추가하면 pull 후 단일 verb 로 종결 (M3b 의 install-step 부재가 본 갭의 근인).
+**M8 종결**: install 단계가 `build_hexa_cli.hexa` 에 opt-in `--install` 플래그로 추가됨 (기본 OFF — CI/fresh-clone 무영향). pull 후 2번 단일 명령으로 종결 → install-step 부재였던 본 갭 재발 불가.
 
 ## not-goal (의도적 제외)
 
