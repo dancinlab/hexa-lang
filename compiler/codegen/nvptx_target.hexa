@@ -480,6 +480,14 @@ fn _nvptx_binop_mnemonic(op: string) -> string {
     if op == "add_f32"  { return "add.f32" }
     if op == "sub_f32"  { return "sub.f32" }
     if op == "mul_f32"  { return "mul.f32" }
+    // FP32 division — the "future codegen-side div row" that hir_to_mir's
+    // `_op_with_precision` already emits `div_f32` for. PTX `div.rn.f32`
+    // is IEEE round-to-nearest full-precision (matches the FP64
+    // `div.rn.f64` default). Needed by ML kernels (softmax `e/Σe`,
+    // layernorm `x/√var`). f16/bf16 div has NO native PTX mnemonic
+    // (requires cvt-up → div.rn.f32 → cvt-down) → left as an honest ""
+    // stub — SAFE (no wrong-mnemonic silent miscompile, just unsupported).
+    if op == "div_f32"  { return "div.rn.f32" }
     return ""
 }
 
