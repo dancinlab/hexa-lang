@@ -293,12 +293,12 @@ fn main() {
         // failure we fall back to the closed-form estimate (never fabricate).
         let solved = _drive_rtsc_field_solve(out_dir)
         if solved > 0.0 {
-            field_path = "rtsc_getdp_substrate"
+            field_path = "getdp"
             b_peak = solved
             backend = "getdp@" + _getdp_version()
-            producer = "fusion-f5-magnet-gate via rtsc/getdp_hts.py"
+            producer = "fusion-f5-magnet-gate via rtsc/getdp_solenoid_solve.hexa"
             gate_type = "fusion-design-feasibility"
-            substrate_note = "RTSC GetDP A-φ substrate (stdlib/rtsc/getdp_hts.py) driven out-of-process for the higher-fidelity coil B_peak; F5 consumed the substrate field number. Closed-form 1/R estimate retained alongside for cross-check."
+            substrate_note = "RTSC GetDP A-φ substrate (stdlib/rtsc/getdp_solenoid_solve.hexa driving stdlib/rtsc/decks/solenoid_axisym.{geo,pro}) driven out-of-process for the higher-fidelity coil B_peak; F5 consumed the substrate field number (HEXA-PORT P2 parity oracle, FEM B_z(0)=1.4817 T vs closed-form 1.48265 T, Δ=-0.064% mesh-converged). Closed-form 1/R estimate retained alongside for cross-check."
             run_note = "RTSC substrate field-solve path taken (GetDP A-φ present). B_peak from the substrate solve; closed-form 1/R kept as b_peak_closed_form_T for cross-check."
         } else {
             // Substrate present but solve produced no usable field — honest
@@ -431,26 +431,46 @@ fn main() {
 // back to the closed-form estimate. Mirror of f3's _run_freegs_solve
 // out-of-process driver discipline.
 //
-// NOTE: the RTSC getdp_hts.py producer currently lands the GATE (it emits
-// a record-only verify gate; the full A-φ B_peak readback is a multi-week
-// HTS H-/A-φ scope per RTSC.md §9). So on a host WITH getdp this driver
-// invokes the substrate but, until the substrate emits a parseable peak-
-// field token, returns -1.0 → honest closed-form fallback. This keeps F5
-// strictly off the RTSC files: it CONSUMES the substrate, never edits it.
+// NOTE (2026-05-25 · FUSION (e) F5 promote landed): the GATE-level
+// `getdp_hts.py` adapter remains untouched (per-project hexa-native
+// constraint on .py Writes). The actual A-φ solve-driver is the SIBLING
+// hexa-native producer `stdlib/rtsc/getdp_solenoid_solve.hexa`, which:
+//   1) probes gmsh + getdp on PATH (silent skip if either absent),
+//   2) meshes + solves the validated stdlib/rtsc/decks/solenoid_axisym
+//      .{geo,pro} deck (HEXA-PORT P2 reference coil NI=2e6, a=0.50,
+//      b=0.70, h=1.20; FEM B_z(0)=1.4817 T vs closed-form 1.48265 T,
+//      Δ=-0.064% mesh-converged on ubu-1 getdp 3.5.0),
+//   3) emits one stdout line `B_peak → <value>` (value in Tesla).
+// On any failure (binary absent / mesh fail / solve fail / sweep
+// unreadable) the driver emits NOTHING → this function returns -1.0 →
+// caller honestly falls back to the closed-form 1/R estimate. The
+// driver is strictly a CONSUMER of the RTSC deck; magnet_gate is
+// strictly a CONSUMER of the driver — F5 never edits the RTSC files
+// it depends on (apart from this one bridge wire).
 fn _drive_rtsc_field_solve(out_dir: str) -> float {
     let sub_out = out_dir + "/_rtsc_substrate"
     let _ = exec("mkdir -p '" + sub_out.replace("'", "'\\''") + "' 2>/dev/null")
-    // Invoke the RTSC substrate producer (it writes its own verify record
-    // under sub_out). We then look for a peak-field token in its output.
-    let cmd = "python3 stdlib/rtsc/getdp_hts.py '" + sub_out.replace("'", "'\\''") + "' 2>/dev/null; grep -ho '\"B_peak[^,}]*' '" + sub_out.replace("'", "'\\''") + "'/*.json 2>/dev/null | head -1"
+    // Drive the hexa-native solve-driver and grep the parseable token.
+    // `head -n1` defends against multi-line stdout (we expect exactly
+    // one `B_peak →` line; the leading invocation may add its own logs
+    // depending on the hexa runtime).
+    let cmd = "hexa run stdlib/rtsc/getdp_solenoid_solve.hexa '" + sub_out.replace("'", "'\\''") + "' 2>/dev/null | grep -E '^B_peak ' | head -n1"
     let res = exec(cmd).trim()
-    // Parse a numeric field from the token, if any. The current RTSC
-    // substrate gate-record emits no B_peak token → res is empty → -1.0.
     if res.len() == 0 { return -1.0 }
-    // Extract the number after the last ':' (best-effort).
-    let colon = res.find(":")
-    if colon < 0 { return -1.0 }
-    let numstr = res.substring(colon + 1, res.len()).trim()
+    // Extract the number after the arrow (`B_peak → <value>`). We tolerate
+    // either an ASCII `->` or a UTF-8 `→`; locate the LAST whitespace and
+    // take the trailing token (the value).
+    let arrow_pos = res.find("→")
+    let alt_pos = res.find("->")
+    let mut tail_start = -1
+    if arrow_pos >= 0 {
+        // skip the multi-byte arrow (the UTF-8 `→` is 3 bytes in hexa string)
+        tail_start = arrow_pos + 3
+    } else if alt_pos >= 0 {
+        tail_start = alt_pos + 2
+    }
+    if tail_start < 0 { return -1.0 }
+    let numstr = res.substring(tail_start, res.len()).trim()
     if numstr.len() == 0 { return -1.0 }
     let v = to_float(numstr)
     if v <= 0.0 { return -1.0 }
