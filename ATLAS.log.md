@@ -2,6 +2,41 @@
 
 Append-only step log for the theorem-atlas upgrade campaign. Newest on top.
 
+## 2026-05-25 — R7 auto-edge 추론 (`hexa atlas infer-edges <id>` · read-only · 미선언 edge 제안)
+
+goal(deferred 신규역량): "auto-edge 추론". 노드 edge(`<-`depends_on·`->`derives·`==`equivalents·
+`|>`verified_by)가 현재 **수동**이라 R6 proof-chain(#1044)이 많은 UNRESOLVED leaf를 보고했다(선언 edge
+sparse). auto-edge는 노드 raw를 스캔해 **이미 선언되지 않은 다른 노드 id 참조**를 찾아 후보 edge를
+제안 — proof-chain + cascade를 enrich.
+
+**조사**: 노드 모델 = `compiler/atlas/parser.hexa` `AtlasNode`(kind·id·raw·grade·`edges:EdgeInfo`).
+id charset = `[A-Za-z0-9_-]`(예: `n`·`phi`·`J2`·`L0-quark-flavors`·`sigma_n`). "참조" = 노드 raw
+(헤더 수식 OR 연속줄) 안에 다른 실제 atlas id가 **온전한 식별자 토큰**으로 등장. 예: `sigma`의 raw에
+`== phi * n` — `phi`는 실노드이나 선언 edge엔 없음(R6가 UNRESOLVED leaf로 보고한 바로 그 케이스).
+런타임 = `atlas_lookup_enriched(id)`(edge 백필) + `atlas_list()`(전노드 id-set).
+
+**설계**: raw를 **maximal `[A-Za-z0-9_-]` run**으로 토큰화 — 이것이 **false-positive guard**다.
+`divisor_sum(6)`는 단일 토큰 `divisor_sum`이 되어 id `n`이 끝 글자에 절대 매치 안 함; `phi_tau`가 id
+`phi`에 매치 안 함(strict word-boundary, 부분문자열 노이즈 차단). 제안 조건: (a) 실 atlas 노드로
+resolve, (b) 자기 id 아님(self-edge 無), (c) 어느 edge 버킷에도 미선언, (d) target dedup. 추측 kind=
+`depends_on`(수식 참조 = 기반). evidence = 토큰이 처음 나온 trimmed raw 줄. **READ-ONLY** — 제안만,
+embedded.gen.hexa에 fold 절대 안 함(proposal surface; user/다음 라운드가 apply).
+
+**구현**: `compiler/atlas/auto_edge.hexa` 신설(`EdgeProposal{source,target,kind,evidence}` +
+`infer_edges_for(node,id_set)` + `infer_edges(id)` + `infer_proposals_to_text/json`). 파서/static_index
+재사용(파서 미복제). atlas_cli 1-블록(`use auto_edge` + `cmd_infer_edges` + dispatch + help, cascade·
+proof·diff verb KEEP).
+
+**검증**: `hexa parse` OK(auto_edge + atlas_cli) → fresh `build/hexa_module_loader`(worktree
+`self/module_loader.hexa`) → `bin/hexa-atlas` LINK PASS(새 `infer_edges` 심볼 resolve) → 기능:
+(1) `infer-edges sigma` → `phi`(`== phi * n`) + 6 meta-closure id(`sm_ampere`·`perfect_number`·…) 제안,
+선언된 `n`·`sigma_sq`·`sigma_tau`·`sigma_n`은 정확히 제외 · (2) `infer-edges phi_tau`/`phi` → 0 제안
+(모든 참조 선언됨/실-id 없음 — 정확 negative) · (3) `infer-edges L0-quark-flavors` → `n`(헤더 `= n`,
+미선언) 1개(hyphenated id 올바른 토큰화) · (4) **false-positive guard**: 1글자 id `n`이 `divisor_sum`·
+`derivations`·`number`에 leak 안 됨 확인 · (5) `--format=json` python `json.load` PASS · (6) unknown id
+→ `# unknown id` + exit 1 / no-arg → usage exit 2. auto_edge.hexa 본문 g4 내 + atlas_cli 1-블록.
+embedded.gen.hexa·cascade.hexa·proof_chain.hexa·audit.hexa 무수정.
+
 ## 2026-05-25 — R6 proof-chain export (`hexa atlas proof <id>` · read-only · cascade INVERSE)
 
 goal(deferred 신규역량): "proof-chain export". 아틀라스 노드의 edge 그래프를 walk해 그 claim이
