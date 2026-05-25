@@ -5559,24 +5559,26 @@ static pid_t hexa_spawn_no_shell(const char* cmd, FILE** out_fp) {
     int pipefd[2];
     if (hxlcl_pipe(pipefd) != 0) { free(argv[0]); free(argv); return 0; }
 
-    posix_spawn_file_actions_t fa;
-    if (posix_spawn_file_actions_init(&fa) != 0) {
+    // RUNTIME net/exec ⑦ (cycle 81): replace posix_spawnp + the 4
+    // posix_spawn_file_actions_* libc orchestrators with the proven
+    // fork+dup2+execvp primitives (all svc-trapped). Drops 5 libc externs;
+    // the no-shell behavior is preserved (execvp does the 'p' PATH search,
+    // matching posix_spawnp). Mirrors the hxlcl_popen child pattern.
+    pid_t pid = hxlcl_fork();
+    if (pid < 0) {
         hxlcl_close(pipefd[0]); hxlcl_close(pipefd[1]);
         free(argv[0]); free(argv); return 0;
     }
-    posix_spawn_file_actions_addclose(&fa, pipefd[0]);
-    posix_spawn_file_actions_adddup2(&fa, pipefd[1], STDOUT_FILENO);
-    posix_spawn_file_actions_addclose(&fa, pipefd[1]);
-
-    pid_t pid = 0;
-    int rc = posix_spawnp(&pid, argv[0], &fa, NULL, argv, environ);
-    posix_spawn_file_actions_destroy(&fa);
-    free(argv[0]); free(argv);
-
-    if (rc != 0) {
-        hxlcl_close(pipefd[0]); hxlcl_close(pipefd[1]);
-        return 0;
+    if (pid == 0) {
+        // child: wire pipe write-end to stdout, exec argv via PATH search
+        hxlcl_dup2(pipefd[1], STDOUT_FILENO);
+        hxlcl_close(pipefd[0]);
+        hxlcl_close(pipefd[1]);
+        hxlcl_execvp(argv[0], argv);
+        _exit(127); // exec failed
     }
+    // parent
+    free(argv[0]); free(argv);
     hxlcl_close(pipefd[1]);
     FILE* fp = fdopen(pipefd[0], "r");
     if (!fp) { hxlcl_close(pipefd[0]); return 0; }
