@@ -212,6 +212,28 @@
   status = "🔴 CLOSED-NEGATIVE — wall >=30% FALSIFIED, ruled-out axis (fusion alone insufficient; needs Tensor-Core inner GEMMs). REAL verdict persisted verbatim. terminal · paper-eligible."
 
 # ───────────────────────────────────────────────────────────────────────
+# GPU — fusion-attention-wmma (slug · group=GPU · paper-track · GPU.md §10)
+# Round 3 of the flash-attention moat wall: the Tensor-Core successor to the
+# naive-scalar round-1 kernel (which lost the wall 1.4-1.5x). The inner QK^T +
+# P.V GEMMs now run on wmma.mma.sync m16n16k16 (f16 mul, f32 acc), S tile in
+# SHARED memory (never HBM). Codegen + ptxas-clean + $0 structural oracle this
+# round; the timed wall (clause b) is DEFERRED to the round-3 silicon fire.
+
+@C fusion_attn_wmma_structural := "Tensor-Core fused flash-attention emits + ptxas-clean (sm_80/90/120) + structural moat preserved (1 launch, 0 S-HBM) + 5 wmma.mma.sync inner GEMMs vs round-1 0 scalar; 48 regs/5824 B smem/0 spill" :: fixpoint [slug=fusion-attention-wmma group=GPU]
+  method = "fixpoint"
+  cmd    = "hexa build structural_oracle.hexa && ./oracle ; ptxas -arch=sm_80/sm_90 rc=0 ; jit_load_probe sm_120 rc=0 (ubu-2 RTX 5070)"
+  raw    = ".verdicts/fusion-attention-wmma/F-FUSION-ATTN-WMMA-WALL.txt"
+  src    = "archive/fires/fusion_attention_wmma_2026_05_25/{flash_attn_wmma.ptx,structural_oracle.hexa,jit_load_probe.c}"
+  status = "🔵 SUPPORTED-FORMAL — codegen + structural + Tensor-Core inner GEMMs PASS; compiled-hexa oracle (g5 broken on ubu) verbatim. terminal · paper-eligible."
+
+@C fusion_attn_wmma_wall := "wall clause: does TC-fused flash-attention beat cuBLAS-batched-TC-GEMM+softmax by >=30% wall? — DEFERRED to round-3 timed silicon fire (harness ready, NOT claimed won)" :: measurement [slug=fusion-attention-wmma group=GPU]
+  method = "fixpoint"
+  cmd    = "ROUND 3 (deferred): ubu-2 RTX 5070 fa_wmma_host vs fa_cublas_tc_baseline, cuEvent 20 warmup 200 timed median (parent runs serially, uncontended GPU)"
+  raw    = ".verdicts/fusion-attention-wmma/F-FUSION-ATTN-WMMA-WALL.txt"
+  src    = "archive/fires/fusion_attention_wmma_2026_05_25/{fa_wmma_host.c,fa_cublas_tc_baseline.c}"
+  status = "🟠 DEFERRED — wall clause (b) is the round-3 silicon-fire §finding; harness nvcc -c clean. NOT terminal until the timed fire runs."
+
+# ───────────────────────────────────────────────────────────────────────
 # TECS-L — tecs-l-dedekind-psi-uniqueness (slug · group=TECS-L · TECS-L/TECS-L.md M3)
 # Dedekind-ψ discrepancy, re-grounded hexa-native via `hexa verify` g5.
 #
