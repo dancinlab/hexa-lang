@@ -2,6 +2,19 @@
 
 Append-only history sister of `INBOX.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
+## 2026-05-25T06:37Z — pool-route 가 `hexa cloud` 를 ubu 로 오라우팅 (remote argv heavy-word 트립 · cloud verb 는 Mac-local-only · d8)
+
+죽은-맥 복구 세션(demiurge RTSC)에서 발견 — `hexa cloud exec/run <pod>` 의 **remote argv** 에 heavy-word 가 들면 pool-route(0.6.9) classifier 가 전체 명령을 heavy 로 판정 → ubu-1/ubu-2 로 ssh 라우팅. 그러나 `hexa cloud` 는 Mac-local-only (로컬 hexa 빌드 + `stdlib/cloud/cloud_cli.hexa` 필요) → ubu 에서 `unknown subcommand 'cloud'`(ubu-2) / `source file not found: stdlib/cloud/cloud_cli.hexa`(ubu-1) 로 실패. 위 09:30Z exit-255 와 별개 — 이건 라우팅이 애초에 잘못된 호스트로 가는 문제.
+
+- [ ] **증상** — `hexa cloud exec <pod> -- ... nvidia-smi ...` 또는 `... tail .../train.log` 가 비결정적으로 ubu 로 라우팅돼 실패. 같은 점검 작업이 어떤 땐 로컬(성공) 어떤 땐 ubu(실패) — round-robin + argv 내용 의존.
+- [ ] **원인** — classifier(`bin/_pool_route.hexa`)가 `hexa cloud ... -- <remote-argv>` 의 **remote argv 까지** heavy-word 스캔. `nvidia-smi`·`train`·`make` 등(heavy_words L521)이 argv 에 있으면 트립. 특히 `train` 은 word-bounded 라 `train.log`(앞 `/`·뒤 `.` 경계) 가 매칭됨 (`train_cell_off.log` 은 뒤 `_` 가 word-char 라 비매칭 → 비결정성의 정체). `hexa cloud` 는 heavy_pairs 에 없어 자체로는 안 트립하지만 argv 우연 매칭으로 샘.
+- [ ] **영향** — vast/runpod pod 점검·harvest·재시작이 비결정적 차단. 죽은-맥 복구 시 GPU util(nvidia-smi)·train.log tail 이 반복 실패 → 우회(heavy-word 제거)로만 진행 가능. `hexa cloud` 가 원격 dispatch 도구인데 pool-route 가 이중 라우팅하는 구조적 모순.
+- [ ] **제안 (a · 선호)** — pool-route 가 `hexa cloud *` (cloud/exec/run/nohup/poll/copy-*/reconcile/orphans) 를 **local-bound 로 조기 `_allow()`** (git/gh L421 와 동일 패턴). 이미 원격 dispatch 도구라 이중 라우팅 불가능 → 결정적·단순. toks[0]=="hexa" && toks[1]=="cloud" 체크 1줄.
+- [ ] **제안 (b · 대안)** — classifier 가 `--` delimiter 이후 remote argv 를 heavy-word 스캔에서 제외 (delimiter-aware). cloud 외 다른 wrapper 에도 일반 적용되나 (a) 보다 복잡.
+- [ ] **부가 gap — `hexa cloud reconcile` GHOST 오분류** — vast 라이브 인스턴스(37618320·37619639)를 `vastai show instances` 로 RUNNING 확인했으나 reconcile 은 둘 다 GHOST(=provider 부재)로 표기. reconcile 의 vast provider cross-ref 가 실제 조회를 못 하는 정황. provider-truth inventory verb (`hexa cloud list`/`ps` — vast/runpod 라이브+과금 직접 조회) 부재로 raw curl 우회 시 cloud-guard 가 차단 → 정상 점검 경로 공백. provider-direct list verb 필요.
+
+Status: open · proposed-by:agent · severity:medium-high (복구·점검 작업 비결정적 차단 + provider-truth 점검 경로 공백) · source:demiurge 죽은-맥 RTSC 복구 세션 · awaits:hexa-lang fix
+
 ## 2026-05-25T09:30Z — hexa cloud vast ssh-transport exit-255 outage 감지/fail-fast 부재 (h3o SSCHA · d8)
 
 h3o SSCHA agent 가 발견 — vast pod 37670312 (+ 다른 2 pod) 전부 `hexa cloud run/exec/scp` 시 `ssh exit 255`. 3 pod 동시 실패 = tool-wide vast.ai transport outage (pod-specific 아님). pod 는 alive+billing 인데 usable connection 0. `hexa cloud` 가 ssh-transport 실패를 감지/재시도/fail-fast 못 함 (d8 — Vast finding → INBOX).
