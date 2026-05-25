@@ -11,8 +11,8 @@ SSOT = `compiler/atlas/embedded.gen.hexa` (런타임 TEXT-parse). 등록 = `hexa
 - [x] R1: 표현 일관성 CI — embedded↔n6-export 노드수 동등 게이트 (#946)
 - [x] R1: static_atlas() 프로세스-수명 파싱 캐시 — 파싱 9→1/proc (#950)
 - [ ] R2: drill `--rounds≥2` SIGSEGV triage+fix + C5 novelty-fixpoint(net-novel 포화) 착지 — compiler/drill/*
-- [ ] R2: audit domain-coverage 축 — `:: <domain>` 파싱 → domain×kind 매트릭스 + 0-cell 플래그 — compiler/atlas/audit.hexa
-- [ ] R2: wigner_stabilizer_sn 미러 발산 fix — atlas_cli register 미러를 verify_cli 실제 소수 sieve와 일치(d>13) — tool/atlas_cli.hexa
+- [x] R2: audit domain-coverage 축 — `:: <domain>` 파싱 → domain×kind 매트릭스 + 0-cell 플래그 (#958)
+- [x] R2: wigner_stabilizer_sn 미러 발산 fix — atlas_cli register 미러를 verify_cli 실제 소수 sieve와 일치(d>13) (#957)
 
 ## deferred (다음 라운드)
 
