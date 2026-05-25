@@ -2699,3 +2699,65 @@
   raw    = ".verdicts/verify-kit-iit-promote/v5_1.txt"
   src    = "stdlib/consciousness/iit4/faithful_phi.hexa (promoted from anima HEXAD/LIFE state/h278_faithful_phi_2026_05_25/run_h278.hexa) · NEXUS.tape p_iit4"
   status = "🟡 anima Φ engine promoted to stdlib/consciousness/iit4 (wire+calibrate → V5.2/V5.3)"
+
+# ───────────────────────────────────────────────────────────────────────
+# TECS-L — tecs-l-closed-neg-miner (slug · group=TECS-L · axis F · F5 · paper_negative_ok)
+# 7 closed-negatives: each a plausible "n=6-like" conjecture computed EXACTLY and
+# shown to FAIL deterministically (🔴 = ruled-out axis). Cites M10 (σφ=nτ⟺{1,6})
+# + F6 (D(n)≠0 off {1,6}) — not redone. All falsifiers exact integer arithmetic.
+# ───────────────────────────────────────────────────────────────────────
+@C tecs_l_closed_neg_miner := "axis F closed-negative miner: 7 plausible n=6-like conjectures (amicable aliquot fixed-point · quasi-perfect σ=2n+1 · multiply-perfect 120 abundancy-2 · n·φ=σ off {1,6} at 12 and 28 · μ 6-periodicity · perfect=superperfect) each computed exactly and FALSIFIED deterministically — 7 ruled-out axes around the n=6 identity. Consistent with M10 (σφ=nτ⟺{1,6}) + F6 (D≠0 off {1,6}): the n=6 identities are EXCLUSIVE." :: empirical [slug=tecs-l-closed-neg-miner group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr {aliquot,sigma,phi,mu} <n> <conjectured-v> (7 falsifiers + truth anchors)"
+  raw    = ".verdicts/tecs-l-closed-neg-miner/miner_summary.txt"
+  src    = "TECS-L/TECS-L.md F5 · cites M10 (tecs_l_up_theorem) + F6 (tecs-l-beyond-n6) · HEAD verify driver #1153"
+  status = "🔴 7 closed-negatives mined — each deterministically rules out one n=6-like axis. terminal · paper_negative_ok."
+
+@C tecs_l_cn1_amicable_aliquot := "CN1: amicable member is NOT an aliquot fixed-point — aliquot(220)≠220 (true 284, the partner). Rules out aliquot(n)=n ⟺ amicable membership; amicable = 2-cycle of the aliquot map." :: empirical [slug=tecs-l-closed-neg-miner group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr aliquot 220 220"
+  raw    = ".verdicts/tecs-l-closed-neg-miner/cn1_aliquot220_falsifier.txt"
+  src    = "axis 0 M6 (is_perfect/aliquot) · OEIS A001065 (aliquot) · A063990 (amicable)"
+  status = "🔴 FALSIFIED — calc 284 ≠ 220. ruled-out axis."
+
+@C tecs_l_cn2_quasiperfect := "CN2: no quasi-perfect σ(n)=2n+1 in [1,50] — σ(12)≠25, exhaustive sweep zero hits. Rules out quasi-perfect existence in the n=6 neighbourhood (none known below 10^35)." :: empirical [slug=tecs-l-closed-neg-miner group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr sigma 12 25"
+  raw    = ".verdicts/tecs-l-closed-neg-miner/cn2_quasiperfect_falsifier.txt"
+  src    = "axis 0 M2 (sigma) · OEIS A000203"
+  status = "🔴 FALSIFIED — calc 28 ≠ 25; n=1..50 sweep empty. ruled-out axis."
+
+@C tecs_l_cn3_multiplyperfect := "CN3: 3-perfect 120 does NOT satisfy abundancy-2 — σ(120)≠240 (true 360=3n). Rules out σ=2n at the smallest multiply-perfect number; perfect/3-perfect loci disjoint." :: empirical [slug=tecs-l-closed-neg-miner group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr sigma 120 240"
+  raw    = ".verdicts/tecs-l-closed-neg-miner/cn3_mpf_abundancy2_falsifier.txt"
+  src    = "axis 0 M6 H18 (σ=2n⟺perfect) · OEIS A005820 (3-perfect)"
+  status = "🔴 FALSIFIED — calc 360 ≠ 240 (σ(120)=3·120). ruled-out axis."
+
+@C tecs_l_cn4_nphi_off16 := "CN4: n·φ(n)=σ(n) FAILS off {1,6} at n=12 — σ(12)≠48 (=12·φ(12)). Sibling to M10 σφ=nτ⟺{1,6}; A002618 sibling-locus is {1,6}-only (sweep n=1..40 hits only 6)." :: empirical [slug=tecs-l-closed-neg-miner group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr sigma 12 48"
+  raw    = ".verdicts/tecs-l-closed-neg-miner/cn4_nphi_sigma12_falsifier.txt"
+  src    = "axis F F3 (oeis A002618 n·φ=σ at {1,6}) · cites M10 (tecs_l_up_theorem)"
+  status = "🔴 FALSIFIED — calc 28 ≠ 48. ruled-out axis."
+
+@C tecs_l_cn4b_nphi_perfect := "CN4b: n·φ(n)=σ(n) FAILS even at 2nd perfect number n=28 — σ(28)≠336 (=28·φ(28)). Perfectness does NOT rescue the sibling-identity; {1,6}-exclusive, independent of perfect locus." :: empirical [slug=tecs-l-closed-neg-miner group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr sigma 28 336"
+  raw    = ".verdicts/tecs-l-closed-neg-miner/cn4b_nphi_sigma28_falsifier.txt"
+  src    = "axis F F3 sibling · axis 0 M1 (n=28 closed-negative) · cites M10"
+  status = "🔴 FALSIFIED — calc 56 ≠ 336. ruled-out axis."
+
+@C tecs_l_cn5_mu_periodic := "CN5: μ is NOT 6-periodic — μ(12)≠μ(6)=1 (true 0; 12=2²·3 squareful). Rules out a multiple of 6 inheriting μ(6); μ(6)=1 is an accident of 6=2·3, not period-6 structure." :: empirical [slug=tecs-l-closed-neg-miner group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr mu 12 1"
+  raw    = ".verdicts/tecs-l-closed-neg-miner/cn5_mu_periodic_falsifier.txt"
+  src    = "axis 0 M4 (mu ground value) · OEIS A008683"
+  status = "🔴 FALSIFIED — calc 0 ≠ 1. ruled-out axis."
+
+@C tecs_l_cn6_perfect_superperfect := "CN6: perfect numbers are NOT superperfect — σ(σ(6))=28≠12=2·6. Rules out perfect⟹superperfect; perfect locus {6,28,…} and superperfect locus {2,4,16,64,…} are disjoint." :: empirical [slug=tecs-l-closed-neg-miner group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr sigma 12 12  (σ(σ(6))=σ(12); superperfect would need 12)"
+  raw    = ".verdicts/tecs-l-closed-neg-miner/cn6_perfect_superperfect_falsifier.txt"
+  src    = "axis 0 M5/M6 (perfect locus) · OEIS A019279 (superperfect)"
+  status = "🔴 FALSIFIED — σ(σ(6))=σ(12)=28 ≠ 12. ruled-out axis."
