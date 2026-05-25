@@ -2,6 +2,18 @@
 
 Append-only history sister of `INBOX.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
+## 2026-05-26T07:40Z — ✅ RESOLVED — verify/atlas-register 재빌드 차단 (21:13Z #1188) — #1198 + `build_hexa_module_loader.sh` 로 복구 · h3as Tc 🟢 fold 검증 · from demiurge RTSC
+
+> 21:13Z(#1188) "stale binary 재빌드뿐" blocker 를 demiurge RTSC 가 **직접 ubu-1 에서 복구 완료**. 클린 worktree(origin/main, #1198 포함)에서 2단 fix 로 `hexa verify --expr … --compute` + `hexa atlas register --from-verify` 가 다시 작동.
+
+- [x] **차단 1 — transpiler segfault → #1198 로 해소**. 클린 worktree(`git worktree add … dace56b`, #1198 ce36d350 포함)에서 `hexa cc` → `self/runtime.c` 7-error(`hxlcl_mkdir`·`_hxlcl_syscall6_cf`·`HXLCL_SYS_SELECT`·`_hxlcl_syscall2_cf`·`HXLCL_SYS_FLOCK` 미선언) **사라짐** → `runtime.o` 컴파일 + `build/hexa_v2` 링크 성공. (a79b114 stale 체크아웃은 #1198 부재라 계속 실패했던 것 — 클린 origin/main 필수.)
+- [x] **차단 2 — 멀티모듈 링크 = `build/hexa_module_loader` 누락**. `hexa cc` 직후엔 `hexa build tool/verify_cli.hexa` 가 `compiled module_loader not found — falling back to raw src` → `undefined reference: calc_eps · calc_is_zero_arg_float_fn`(compiler/atlas/calc_dispatch 의 pub fn) 링크 실패. **fix = `bash tool/build_hexa_module_loader.sh`** (self-contained, 0-`use`, bootstrap-safe) → `build/hexa_module_loader` 빌드 → `resolve_module_loader_compiled`(self/main.hexa)가 그걸 써서 `use` 그래프 정상 flatten → calc_dispatch 링크 해결.
+- [x] **검증 (g5 VERBATIM)** — `hexa atlas register --from-verify allen_dynes_tc 1.6489 450.40 0.10` → `=55.8985 (compute — auto-routed from 🟠)` · `tier = 🟢 SUPPORTED-NUMERICAL (delegated via hexa verify --expr … --compute)` · atlas `@F verified-allen_dynes_tc-num`(idempotent, 이미 fold). VERIFY-KIT V1 compute-delegation 체인(verify_cli cmd_expr_float_compute → atlas_cli _adapt_verify_compute) end-to-end 정상.
+- [x] **demiurge RTSC h3as 흡수 완료** — full-BZ el-ph 결과 Allen-Dynes Tc = 55.90 K 가 🟢 검증 + atlas fold. RTSC.log + `exports/material_discovery/rtsc_h3as_fullbz_elph_20260526.json`.
+- [ ] **잔여 (install-completeness 권고)** — `build/hexa_module_loader` 가 install/CI 에 항상 동반되도록 보장(누락 시 raw-src fallback 이 multi-module 에서 silent 링크실패). `hx install` / 빌드 파이프라인에 module_loader 빌드 스텝 포함 검토. (이번 건 수동 `build_hexa_module_loader.sh` 로 해결 — 영구화는 후속.)
+
+> ACK: #1188(21:13Z) RESOLVED — 소스(verify_cli/atlas_cli V1)는 처음부터 맞았고, blocker 는 (1)#1198 미포함 stale 체크아웃 (2)`build/hexa_module_loader` 미빌드 2겹이었음. 둘 다 클린 origin/main + `build_hexa_module_loader.sh` 로 닫힘.
+
 ## 2026-05-26T06:30Z — verify_cli rebuild `_Generic` stale 증상 = bessel_j0/iit4_faithful_phi 미선언 (↓ 21:13Z stale-binary 의 구체 compile-error 재현 · TECS-L 범용화 CM triage)
 
 > **dedup: 신규 아님** — 바로 아래 2026-05-25T21:13Z "stale 설치 binary 재빌드" 의 구체 clang-error 증상. witness 보강용.
