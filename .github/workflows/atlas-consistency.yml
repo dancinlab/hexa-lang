@@ -1,0 +1,118 @@
+# atlas-consistency.yml — atlas representation drift gate.
+#   FAILS if `hexa atlas export`'s live node count does not round-trip the
+#   `hexa atlas stats` total node count (embedded.gen.hexa SSOT vs n6 export);
+#   WARNS (non-fatal) if any by_kind/*.gen.hexa shard is older than
+#   embedded.gen.hexa. Build steps mirror bootstrap.yml's linux-x86_64 job
+#   verbatim (gcc -lm -ldl + module_loader flatten). One runner suffices —
+#   atlas content is platform-independent.
+
+name: atlas-consistency
+
+on:
+  push:
+    paths:
+      - 'compiler/atlas/**'
+      - 'n6/**'
+  pull_request:
+    paths:
+      - 'compiler/atlas/**'
+      - 'n6/**'
+
+permissions:
+  contents: read
+
+jobs:
+  atlas-consistency:
+    name: atlas consistency (embedded ↔ n6-export)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      # ── build the hexa CLI (mirrors bootstrap.yml linux-x86_64) ──
+      - name: Stage 0 — compile self-hosted transpiler (hexa_v2)
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p self/native build/stage1
+          gcc -O2 -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs \
+              -I self self/native/hexa_cc.c self/runtime.c \
+              -o self/native/hexa_v2 \
+              -lm -ldl
+          file self/native/hexa_v2
+
+      - name: Stage 1 — flatten + transpile + compile CLI (./hexa)
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./self/native/hexa_v2 self/module_loader.hexa build/stage1/module_loader.c
+          gcc -O2 -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs \
+              -I self build/stage1/module_loader.c self/runtime.c \
+              -o build/hexa_module_loader \
+              -lm -ldl
+          ./build/hexa_module_loader self/main.hexa build/stage1/main_expanded.hexa
+          ./self/native/hexa_v2 build/stage1/main_expanded.hexa build/stage1/main.c
+          gcc -O2 -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs \
+              -I self build/stage1/main.c self/runtime.c \
+              -o hexa \
+              -lm -ldl
+          file hexa
+
+      # ── the gate ──────────────────────────────────────────────
+      - name: Gate — embedded total == n6-export node count
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # (2) live SSOT count + hash from `hexa atlas stats`
+          ./hexa atlas stats | tee /tmp/atlas_stats.txt
+          EMB_COUNT="$(awk '/^total nodes/ {print $NF}'  /tmp/atlas_stats.txt)"
+          ATLAS_HASH="$(awk '/^ATLAS_HASH/  {print $NF}'  /tmp/atlas_stats.txt)"
+
+          # (3) export the live atlas, then count nodes two ways:
+          #     · the CLI's self-reported "wrote N nodes"
+          #     · independent @-header sigil count of the written file
+          ./hexa atlas export --out /tmp/live.n6 | tee /tmp/atlas_export.txt
+          EXPORT_REPORTED="$(awk '{for(i=1;i<=NF;i++) if($i=="wrote"){print $(i+1); exit}}' /tmp/atlas_export.txt)"
+          N6_COUNT="$(grep -cE '^@[A-Z]' /tmp/live.n6 || true)"
+
+          echo "════════════════════════════════════════════"
+          echo "ATLAS_HASH       : ${ATLAS_HASH}"
+          echo "EMB_COUNT        : ${EMB_COUNT}   (hexa atlas stats · total nodes)"
+          echo "EXPORT_REPORTED  : ${EXPORT_REPORTED}   (hexa atlas export · wrote N)"
+          echo "N6_COUNT         : ${N6_COUNT}   (@-header sigils in /tmp/live.n6)"
+          echo "════════════════════════════════════════════"
+
+          # (4) FAIL if export does not round-trip the live SSOT count
+          if [[ "${EMB_COUNT}" != "${N6_COUNT}" ]]; then
+            echo "::error::atlas drift: EMB_COUNT=${EMB_COUNT} != N6_COUNT=${N6_COUNT} (export must round-trip the live node count)"
+            exit 1
+          fi
+          if [[ "${EMB_COUNT}" != "${EXPORT_REPORTED}" ]]; then
+            echo "::error::atlas drift: stats total=${EMB_COUNT} != export-reported=${EXPORT_REPORTED}"
+            exit 1
+          fi
+          echo "✓ round-trip OK: ${EMB_COUNT} nodes (embedded == n6 export)"
+
+      # ── staleness signal (WARN only, never fails) ─────────────
+      - name: Warn — by_kind shards older than embedded.gen.hexa
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          EMB="compiler/atlas/embedded.gen.hexa"
+          [[ -f "$EMB" ]] || { echo "(no $EMB — skipping staleness check)"; exit 0; }
+          stale=0
+          for shard in compiler/atlas/by_kind/*.gen.hexa; do
+            [[ -e "$shard" ]] || continue
+            if [[ "$shard" -ot "$EMB" ]]; then
+              echo "::warning file=${shard}::stale: ${shard} is older than ${EMB} (atlas shard may be behind the SSOT)"
+              stale=$((stale + 1))
+            fi
+          done
+          if [[ "$stale" -gt 0 ]]; then
+            echo "⚠ ${stale} by_kind shard(s) older than embedded.gen.hexa (warning only)"
+          else
+            echo "✓ no by_kind shards older than embedded.gen.hexa"
+          fi
