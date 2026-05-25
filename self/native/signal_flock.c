@@ -230,7 +230,11 @@ HexaVal hexa_os_flock_open(HexaVal path_val, HexaVal mode_val) {
     int fd = hxlcl_open_sys(path, O_RDWR | O_CREAT | O_CLOEXEC, 0644);
     if (fd < 0) return hexa_int(-errno);
 
-    if (flock(fd, op) < 0) {
+    // RUNTIME net/exec ② (cycle 77): svc-trap flock (syscall 131) via the
+    // carry-flag helper — drops the libc _flock extern. Was a real libc
+    // call here (after the #undef flock); _hxlcl_syscall2_cf sets errno
+    // on the carry path, so the errno read below is still valid.
+    if (_hxlcl_syscall2_cf(HXLCL_SYS_FLOCK, fd, op) < 0) {
         int e = errno;
         hxlcl_close(fd);
         return hexa_int(-e);
@@ -243,7 +247,7 @@ HexaVal hexa_os_flock_close(HexaVal fd_val) {
     int fd = (int)HX_INT(fd_val);
     if (fd < 0) return hexa_int(-EINVAL);
     /* Best-effort unlock; close always runs. */
-    (void)flock(fd, LOCK_UN);
+    (void)_hxlcl_syscall2_cf(HXLCL_SYS_FLOCK, fd, LOCK_UN);
     if (hxlcl_close(fd) < 0) return hexa_int(-errno);
     return hexa_int(0);
 }

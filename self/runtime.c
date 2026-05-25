@@ -1025,6 +1025,7 @@ static int hxlcl_pthread_join(void *thread, void **retval);
 #define HXLCL_SYS_STAT    338
 #define HXLCL_SYS_LSEEK   199
 #define HXLCL_SYS_MMAP    197
+#define HXLCL_SYS_FLOCK   131
 
 static inline long _hxlcl_syscall1(long nr, long a0) {
     register long x0 __asm__("x0") = a0;
@@ -1879,8 +1880,33 @@ static long __attribute__((noinline)) hxlcl_recvmsg(int s, void *m, int f) {
 static long __attribute__((noinline)) hxlcl_sendmsg(int s, const void *m, int f) {
     return sendmsg(s, (const struct msghdr *)m, f);
 }
+// RUNTIME net/exec ① (cycle 77): hexa-native inet_pton — drops the libc
+// _inet_pton extern. AF_INET only (the sole call site, net.c, passes
+// AF_INET); AF_INET6 returns -1 (= unsupported af) per the libc contract.
+// Returns 1 = parsed, 0 = malformed, -1 = unsupported af.
 static int __attribute__((noinline)) hxlcl_inet_pton(int af, const char *src, void *dst) {
-    return inet_pton(af, src, dst);
+    if (af != AF_INET) return -1;
+    unsigned char b[4];
+    int oct = 0, val = -1;
+    const char *p = src;
+    for (;;) {
+        char c = *p++;
+        if (c >= '0' && c <= '9') {
+            val = (val < 0 ? 0 : val) * 10 + (c - '0');
+            if (val > 255) return 0;
+        } else if (c == '.' || c == '\0') {
+            if (val < 0 || oct >= 4) return 0;
+            b[oct++] = (unsigned char)val;
+            val = -1;
+            if (c == '\0') break;
+        } else {
+            return 0;
+        }
+    }
+    if (oct != 4) return 0;
+    unsigned char *d = (unsigned char *)dst;
+    d[0] = b[0]; d[1] = b[1]; d[2] = b[2]; d[3] = b[3];
+    return 1;
 }
 // cycle 66 — restore real exec/popen bodies. Cycle 61 dropped these as
 // noop stubs with rationale "aprime_cc never spawns children". But the
