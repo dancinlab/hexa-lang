@@ -88,14 +88,25 @@ struct SshCapture {
 // tokens. ConnectTimeout=8 bounds the connect attempt so an unreachable host
 // fails in ~8s with exit 255 instead of hanging on the kernel's default TCP
 // timeout (minutes); BatchMode=yes keeps ssh from blocking on an auth prompt.
-fn _ssh_capture_status(host: str, ssh_opts: [str], remote: str) -> SshCapture {
-    let mut cmd = "ssh -o BatchMode=yes -o ConnectTimeout=8"
+// _ssh_cmd — build the LOCAL ssh command string for `remote` on `host` with
+// extra `ssh_opts`, every token POSIX-quoted for the local `/bin/sh -c`.
+// Shared by the capture path (_ssh_capture_status) and the streaming path
+// (cloud_tail_cmd_opts) so the ssh prefix / quoting stays identical. The
+// keep-alive opts bound a silent transport drop: ServerAliveInterval=15 +
+// CountMax=4 tears a dead/hung connection down in ~60s (so a long `tail -F`
+// over a pod that vanished returns instead of hanging forever).
+fn _ssh_cmd(host: str, ssh_opts: [str], remote: str) -> str {
+    let mut cmd = "ssh -o BatchMode=yes -o ConnectTimeout=8 -o ServerAliveInterval=15 -o ServerAliveCountMax=4"
     let mut i = 0
     while i < len(ssh_opts) {
         cmd = cmd + " " + _shq(ssh_opts[i])
         i = i + 1
     }
-    cmd = cmd + " " + _shq(host) + " " + _shq(remote)
+    return cmd + " " + _shq(host) + " " + _shq(remote)
+}
+
+fn _ssh_capture_status(host: str, ssh_opts: [str], remote: str) -> SshCapture {
+    let cmd = _ssh_cmd(host, ssh_opts, remote)
     // exec_capture returns [stdout, stderr, local_exit_code]; the remote
     // command merges its own stderr into stdout (2>&1), so element 0
     // carries everything including the __CLOUD_*__ marker line. Element 2 is
@@ -410,6 +421,51 @@ fn cloud_poll_opts(host: str, ssh_opts: [str], pid: int) -> int {
 // cloud_poll — cloud_poll_opts with no extra ssh flags.
 fn cloud_poll(host: str, pid: int) -> int {
     return cloud_poll_opts(host, [], pid)
+}
+
+// cloud_tail_cmd_opts — build the LOCAL command that live-streams a remote
+// `logfile` over ssh, so a harness (Monitor) can attach to a remote job's
+// progress without polling. The remote side is a `tail -F | sed -E -un`
+// pipeline:
+//   - `tail -F -n +1` replays the file from the top then follows new lines
+//     (so a job that already finished is handled idempotently);
+//   - `sed -E -un` runs a terminal-FIRST program: on a line matching the
+//     `until_re` ERE it prints then `q`uits (closing the pipe → `tail -F`
+//     gets SIGPIPE → ssh returns: a clean single completion, never an
+//     unbounded stream); otherwise it prints the line when it matches
+//     `grep_re` (empty = every line). The terminal line always surfaces
+//     even if it would fail the grep filter.
+//   - `-u` makes sed line-buffered/unbuffered. This matters: the stock awk
+//     on a pod is mawk, which block-buffers its STDIN when the upstream pipe
+//     stays open (a following `tail -F`) and so never processes lines until
+//     EOF — and `stdbuf` cannot fix it (mawk uses its own read buffer). sed
+//     `-u` reads + emits line by line, so each log line reaches the local
+//     end immediately.
+// The caller runs the returned string through `exec_replace` (execvp, NOT
+// exec_capture / exec_stream) so the process inherits this stdout fd and
+// forwards each line live with zero buffering. `grep_re` / `until_re` are
+// sed ERE addresses — a literal `/` in a pattern must be backslash-escaped
+// (markers like "JOB DONE|Traceback" need no escaping).
+fn cloud_tail_cmd_opts(host: str, ssh_opts: [str], logfile: str, grep_re: str, until_re: str) -> str {
+    // Terminal-first sed program: `/until/{p;q}` precedes the filter so a
+    // terminal line both surfaces and stops the stream. The whole program is
+    // _shq-quoted for the remote shell (it has no single quotes of its own).
+    let mut prog = ""
+    if len(until_re) > 0 {
+        prog = "/" + until_re + "/{p;q}; "
+    }
+    if len(grep_re) > 0 {
+        prog = prog + "/" + grep_re + "/p"
+    } else {
+        prog = prog + "p"
+    }
+    let remote = "tail -F -n +1 " + _shq(logfile) + " 2>/dev/null | sed -E -un " + _shq(prog)
+    return _ssh_cmd(host, ssh_opts, remote)
+}
+
+// cloud_tail_cmd — cloud_tail_cmd_opts with no extra ssh flags.
+fn cloud_tail_cmd(host: str, logfile: str, grep_re: str, until_re: str) -> str {
+    return cloud_tail_cmd_opts(host, [], logfile, grep_re, until_re)
 }
 
 // ── file transfer ────────────────────────────────────────────────────
