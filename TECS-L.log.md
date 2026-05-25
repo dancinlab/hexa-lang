@@ -14,6 +14,20 @@ Append-only history sister of `TECS-L.md`. Each entry starts with `## <ISO times
 - [x] 격리 worktree `/tmp/wt-tecs-m3` (branch `tecs-l-m3-dedekind-psi-2026-05-25`) — 공유 트리 race 회피
 - [ ] **SCOPE 명시**: finite 스윕 1..100 = terminal (🔵 zeros {1,6} + 🔴 D≠0 elsewhere). 전칭(unbounded) D(n)=0 ⟺ n∈{1,6} 은 아카이브 해석 논증이 필요 → 🟡 SUPPORTED-BY-CITATION 잔여 (finite 스윕으로 전칭 증명 over-claim 금지)
 
+## 2026-05-25T16:00 — M4 · 206 n=6 characterizations g5 triage + 검증 부분집합 15 atom
+
+- [x] 출처 = archive-TECS-L `math/README.md` (numbered #1…#206 시리즈; line 4437 `🎯 206 CHARACTERIZATIONS!` `+42 (#165-206)` 가 206 도달 마일스톤) + master-summary box (line ~70-218) + `characterization_verifier.py` `KNOWN_CHARS`
+- [x] triage 문서 `docs/tecs-l/n6-characterizations-triage.md` (한국어) — tier 표 + 정직한 헤드라인 카운트 + 검증 한계 주석
+- [x] 🔵 verifiable-now 15 atom 전부 `hexa verify --expr` → 🔵 SUPPORTED-FORMAL · 판정문 verbatim → `.verdicts/tecs-l-n6-characterizations/<id>.txt`
+  - 산술 ground 값: σ(6)=12 · τ(6)=4 · φ(6)=2 · μ(6)=1 · is_perfect(6)=1 · aliquot(6)=6 · σ₀(6)=4 · σ₂(6)=50 · σ₃(6)=252
+  - modular: Γ₀(6) index=12=σ · cusps=4=τ · genus=0 (perfect 중 유일 genus-0) · first_cusp_form_weight=4 · dim S₂(Γ₀(6))=0 · conductor=n²=36
+- [x] `CLAIMS.tape` `[slug=tecs-l-n6-characterizations group=TECS-L]` 15 `@C` entry — raw 포인터 15 파일과 1:1 (orphan 없음)
+- [x] C13 정직성: 아카이브 line 1550 "first cusp form weight=lcm(4,6)=12" ≠ calc fn (=4). calc 가 실제 계산하는 값만 🔵 주장 (over-claim 금지 g3)
+- [x] 격리 worktree `/tmp/wt-tecs-m4` (branch `tecs-l-m4-n6-characterizations-2026-05-25`) — 공유 트리 race 회피
+- [ ] 🟡 잔여: numbered #1…#206 절대다수 = "f(n)=g(n) ⟺ n=6" 심볼릭 유일성 → hexa 전역(`[2,N]`) recompute 경로 없음 (아카이브 Python brute-force 가 하던 일) → M1 σφ=nτ 유일성과 동일하게 🟡 citation 처리
+- [ ] 🟡 근사 물리 (페르미온 질량 1.9% · Koide δ=2/9 5ppm · m_μ/m_e≈206.89) → M5 에서 `hexa verify --expr` 🟢 NUMERICAL 시도
+- [ ] 🟠 deferred: CERN 5.26σ · 핵 magic number → 외부 실측 데이터 의존
+
 ## 2026-05-25T08:55 — M1 CLOSED · n=6 정체성 σ·φ=n·τ g5 재근거화
 
 - [x] σ(6)=12 · φ(6)=2 · τ(6)=4 → `hexa verify --expr` 전부 🔵 SUPPORTED-FORMAL (σφ=24=nτ, 정체성 n=6 HOLDS)
