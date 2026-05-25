@@ -25,7 +25,7 @@ precompute + hash 교집합 (O(N), 수 초) 으로 wall-time 절감. fold scope 
 - [x] O5 — TECS-L F11 cross-link: 7 OEIS↔hexa provenance links → TECS-L cite + NEXUS.tape reuse edge (g67). 4 @P 빌트인(sigma↔A000203·tau↔A000005·phi↔A000010·mu↔A008683) + 3 @F fold(aliquot↔A001065·sigma_2↔A001157·sigma_3↔A001158)이 TECS-L M1-M10/M4/F3 의 downstream cite 가 됨. reuse edge `TECS-L --reuses--> OEIS` 를 repo-root NEXUS.tape §3b 에 등록. docs `OEIS/docs/o5-tecs-crosslink.md` · ledger `.verdicts/oeis-tecs-crosslink/crosslink.txt`. docs+NEXUS only (atlas fold 은 O4 소유). 다음 = O7 (catalogue closure report).
 - [x] O6 — DLMF feasibility: 🔴 FALSIFIED (closed-negative). OEIS exact-integer hash-intersect 패턴은 DLMF 로 일반화 안 됨 — structurally incompatible (P1 bulk 수치 corpus 부재 + P3 hexa 고전 특수함수 0개, 2개 독립 fail). sampling-intersect 도 메커니즘 다르고 hexa 특수함수 라이브러리 부재로 차단. docs/o6-dlmf-feasibility.md.
 - [ ] O7 — catalogue closure report + 미러 unique pattern 발견 시 closed-negative / closed-positive paper
-- [ ] O8 — paper (paper_on_discovery: catalogue mirror 가 새 identity 를 surface 한 경우만)
+- [x] O8 — paper SHIPPED: oeis-prefix-collision-falsifier (78.1% closed-negative, g51 ≥10p + fal figure). OEIS 도메인 closure.
 
 ## 2 · 거버넌스
 

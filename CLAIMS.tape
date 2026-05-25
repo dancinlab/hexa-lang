@@ -1203,6 +1203,17 @@
   src    = "archive/fires/fusion_autoregressive_decode_2026_05_25/ (fused_decode.ptx + eager_decode.ptx + oracle.hexa + oracle_output.txt + ptxas_clean.log + FIRE.md) + GPU.md §10 axis E"
   status = "🔵 SUPPORTED-FORMAL — structural launch + temp-HBM ratios proven closed-form via compiled-hexa oracle (exit 0); fused RC=0 (32+27 regs, 40960+16384 B smem, 0 spill) + eager RC=0 (17 entries) on sm_80/sm_90; sm_120 via driver-JIT (forward-compat). Timed silicon wall DEFERRED to round 9."
 
+# ── GPU — fusion-autoregressive-complete (slug · group=GPU · GPU.md §10 axis E · round 12) ──
+# Round 8/9 deferred the TIMED wall; R9 stub (single-CTA single-thread-per-row)
+# was 40x SLOWER body. R12 = the COMPLETE, properly multi-CTA-parallelized fused
+# 2-mega-kernel decode, TIMED vs a FAIR eager 18-launch baseline. Verdict ORANGE.
+@C fusion_autoregressive_complete := "COMPLETE multi-CTA fused 2-mega-kernel decode (RMSNorm+QKV-GEMV+KV-append+flash-masked-attn+O-proj+SwiGLU) wins the LAUNCH-BOUND regime over a FAIR eager 18-launch decode (+6.4% L=64 · +10.8% L=512 · +11.1% L=1024) but does NOT clear the 30% gate; crossover to loss at L~1536 (-18.9%) — numeric PASS all L (rel<=3.2e-5, nan_inf=0)" :: measurement [slug=fusion-autoregressive-complete group=GPU]
+  method = "silicon-fire"
+  cmd    = "ubu-2 RTX 5070 (clean) decode_fused_host decode_fused.ptx (cuLaunchCooperativeKernel, 2 launches/layer) vs decode_eager_baseline (18 per-op kernels, each parallel/coalesced), f64 CPU autoregressive ref, per-row rel<=1e-2 + NaN/Inf gate, cuEvent 20 warmup + 200 median (median-of-3), L in {64..4096} GPT-2-small d=768"
+  raw    = ".verdicts/fusion-autoregressive-complete/F-FUSION-AUTOREGRESSIVE-COMPLETE.txt"
+  src    = "archive/fires/fusion_autoregressive_complete_2026_05_26/ (decode_fused.ptx + decode_fused_kernels.cu + decode_fused_host.cu + decode_eager_baseline.cu + fire.log + result.json) + GPU.md §10 axis E"
+  status = "🟠 SUB-THRESHOLD launch-bound WIN — COMPLETE kernel + FAIR baseline (strawman attn_av caught + fixed 10x) + honest per-row metric + measured wall. Fusion wins launch-bound regime L<=1024 (+3..+11%, best +11.1% @ L=1024) but realized saving ~8.2us = ~40% of net-theoretical 20.4us/layer (gross launch 28.9us − grid.sync 8.5us); body slightly slower than sum of eager per-op kernels (serial flash-merge + 10 grid.sync serialize phases). NOT >=30% at any L. paper NOT triggered (@D paper_gate requires 🟢). §10 axis-E decode row stays [ ]."
+
 @C tecs_l_mr_f23_tau := "tau(23) = 2 → 23 is PRIME (factor of M_11)" :: formula [slug=tecs-l-mersenne-composite group=TECS-L]
   method = "expr"
   cmd    = "hexa verify --expr tau 23 2"
@@ -2451,3 +2462,13 @@
   raw    = ".verdicts/verify-kit-special/v4_special.txt"
   src    = "self/codegen.hexa (cg_math_sym + 1-arg call-emit + _is_float_returning_call: gamma/tgamma/erf/erfc/bessel_j0/bessel_j1) · self/runtime.c (hexa_math_tgamma/erf/erfc/j0/j1) · self/runtime.h (decls) · compiler/atlas/calc_dispatch.hexa (calc_is_float_fn) · tool/verify_cli.hexa (_gamma/_erf/_bessel_j0/_bessel_j1 + _recompute_float dispatch + help). Transpiler regenerated (hexa cc --regen → hexa_cc.c → build/hexa_v2). bin/hexa-verify rebuilt mac arm64; 7-row --tol matrix tested verbatim."
   status = "🟢 SUPPORTED-NUMERICAL — 4 special fns landed via native libm (gamma·erf PRIMARY + bessel_j0·bessel_j1 STRETCH), all 🟢 through --tol. zeta DEFERRED (no libm, Euler-Maclaurin build risk). Terminal · resolves DLMF blocker(2) {gamma,erf,bessel} coverage; blocker(1) bulk-corpus open (HONEST — primitives not DLMF re-absorption)."
+
+# ───────────────────────────────────────────────────────────────────────
+# OEIS — oeis-prefix-collision-falsifier (slug · group=OEIS · O8 paper · closed-negative)
+# ───────────────────────────────────────────────────────────────────────
+@C oeis_prefix_collision_falsifier := "OEIS O8 closed-negative: K=10 integer-tuple prefix-match does NOT imply OEIS sequence identity. Pre-registered falsifier H (O1 ledger: A000926 Idoneal ↔ `n` — first 10 terms coincide, diverge at term 11 — set BEFORE the full sweep). Measured (O2 full sweep): 374047 OEIS seq × 20 low-entropy arithmetic candidate fn → 1707 K=10 hits → K=20 second pass → 1334/1707 = 78.1% are first-K coincidences (1334/1670 = 79.9% of the disprovable ≥20-term seqs). H FALSIFIED. Ruled-out axis = short-prefix (K=10) tuple-match as a standalone sequence-identity test, at ~78% false-positive over a 374K sweep. CAVEAT (candidate-set-relative): the 78% is for THIS 20-fn low-entropy candidate set + single K=10→K=20 prefix-pair — NOT a universal claim about OEIS prefix collisions. Paper PAPER/oeis-prefix-collision-falsifier/ (10 pages + 1 fal.ai figure, g51)." :: empirical [slug=oeis-prefix-collision-falsifier group=OEIS]
+  method = "paper"
+  cmd    = "sweep (O2) → K=20 coincidence filter → 1334/1707 = 78.1% closed-negative; paper compiled pdflatex ×3 (10 pp)"
+  raw    = ".verdicts/oeis-full-sweep/ledger.json + sweep_log.txt + hits.tsv + .verdicts/oeis-perhit-verify/tier_ledger.txt"
+  src    = "PAPER/oeis-prefix-collision-falsifier/main.tex (§statement falsifier H · §method 374K sweep · §verification funnel + A000926↔n exemplar · §finding 78.1% H FALSIFIED · §caveat candidate-set-relative). Data verbatim from O2 ledger (.verdicts/oeis-full-sweep/) — not re-measured. fal.ai gpt-image-2 figure figures/fig01_funnel.png."
+  status = "🔴 closed-negative: K=10 prefix-match ⊯ identity, 78.1% false-pos / 374K (candidate-set-relative). Terminal (paper_negative_ok). Paper PAPER/oeis-prefix-collision-falsifier/ — 10 pp + fal figure (g51)."
