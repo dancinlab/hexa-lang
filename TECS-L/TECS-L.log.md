@@ -3,6 +3,17 @@
 Append-only history sister of `TECS-L.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
 
+## 2026-05-26 · TECS-L 범용 다영역 발견 엔진으로 격상 (n=6 = 축 0) + MILLENNIUM 통합
+
+- [x] **정체성 재정의** (사용자 지시): TECS-L = n=6 전용 수론 엔진 → **범용 우주-법칙 다영역 발견 엔진**. n=6 완전수 lattice 는 여러 축 중 하나(축 0)일 뿐 — 첫 좌표계이지 유일 대상 아님. ("TECS-L 범용화 · n=6 한 축 · 물리·수학·우주·생명 축 추가 · MILLENNIUM 별도 말고")
+- [x] @title/@goal/§0/§3 범용 재정의: 대축(major axis) 구조 — MATH(MODFORM A·MERSENNE B·NOVEL F·MILLENNIUM G)·PHYSICS·COSMOS·LIFE + 메타(Atlas-LLM C·Atlas E).
+- [x] **신규 대축 3 + 축 G**: PHYSICS(PH1 — 축 0 M5 물리상수 승격)·COSMOS(CO1 — 우주론 상수, honest 🟠 예상)·LIFE(LF1 — 생명/정보 수학·IIT Φ, anima LIFE + stdlib/consciousness/iit4 cross-link)·MILLENNIUM(축 G, CM0-CM7 — Clay 7 흡수).
+- [x] **MILLENNIUM 별도 도메인 폐지** → TECS-L 수학 대축 통합. `MILLENNIUM/` → `TECS-L/millennium/` (콘텐츠 59 paths · 7 난제 폴더 + LATTICE_POLICY/LIMIT_BREAKTHROUGH 유지), 도메인 SSOT(MILLENNIUM.md/log.md) 삭제. 원본 repo=archive-hexa-millennium(private).
+- [x] 비범위 갱신: consciousness verify-가능 수학 layer(IIT Φ)는 LIFE scope 내 재포함 (EEG/telepathy 원시데이터는 scope 외 유지). candidate ≠ proof (over-claim 금지, g3/g5).
+- 출처: archive-TECS-L(`dancinlab/archive-TECS-L`, private) "Consciousness Continuity Engine · 375+ hypotheses · math/n6/PureField" 다영역 코퍼스.
+- ⚠ verify infra 별건: `verify_cli.hexa` rebuild 가 `bessel_j0`/`iit4_faithful_phi` `_Generic` stale mismatch (runtime.h) 로 compile error — deployed hexa 재설치 INBOX 후속 필요 (CM/PH/CO/LF verify 차단 요인).
+- 격리 worktree `/tmp/wt-tecs-gen` (branch `tecs-l-generalize-2026-05-26`).
+
 ## 2026-05-26 · 축 F · F4 NOVEL external-vein — arxiv Ore 조화약수 → hexa verify (foreground)
 
 - [x] F4 — arxiv math.NT 가설(Ore 1948, harmonic divisor numbers)을 hexa verify pipeline 에 직접 태움. background agent throttle-storm 회피 위해 **foreground 진행** (부모가 직접 verify 실행).
