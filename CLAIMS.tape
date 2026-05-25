@@ -71,3 +71,95 @@
   raw    = ".verdicts/fusion-epilogue-gemm-bias-gelu/fusion_epilogue_structural.txt"
   src    = "archive/fires/fusion_epilogue_gemm_bias_gelu_2026_05_25/ (fused_gemm_bias_gelu.ptx md5 1d738055… · oracle_run.log · ptxas.log) + GPU.md section 10"
   status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim (oracle PASS 66.667% launch AND HBM reduction · ptxas RC=0 sm_80 0-spill). terminal · paper-eligible. Timed wall DEFERRED to serial follow-up; GPU.md section 10 >=30% box stays [ ]."
+
+# ───────────────────────────────────────────────────────────────────────
+# TECS-L — tecs-l-n6-identity (slug · group=TECS-L · paper-track · TECS-L.md M1)
+# archive-TECS-L core identity, re-grounded hexa-native via `hexa verify` g5.
+#
+#   σ(n)·φ(n) = n·τ(n)    ⟺    n ∈ {1, 6}      (TECS-L n6-rep Tier 1)
+#
+# Components recomputed closed-form (each 🔵). Identity = exact integer
+# arithmetic over the verified σ/φ/τ values:
+#   n=1 : σφ = 1·1 = 1   nτ = 1·1 = 1   → HOLDS  ✓
+#   n=6 : σφ = 12·2 = 24  nτ = 6·4 = 24  → HOLDS  ✓
+#   n=28: σφ = 56·12 = 672 nτ = 28·6 = 168 → 672 ≠ 168  → FAILS  ✗
+#
+# FINDING (terminal 🔴 CLOSED-negative): n=28 is the 2nd PERFECT number
+# (is_perfect(28)=1, 🔵) yet the identity FAILS there — so σφ=nτ is NOT a
+# perfect-number property; it singles out {1,6}, not the perfect numbers.
+# Full ⟺{1,6} uniqueness over all n = 🟡 SUPPORTED-BY-CITATION (archive
+# complete proof) — a residual gated OUT of /paper; the n=28 closed-negative
+# is the terminal discriminator that is paper-eligible.
+
+# — n=6 : identity HOLDS (σφ = 24 = nτ) —
+@C tecs_l_n6_sigma := "sigma(6) = 12 (identity LHS factor, σ·φ=n·τ at n=6)" :: formula [slug=tecs-l-n6-identity group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr sigma 6 12"
+  raw    = ".verdicts/tecs-l-n6-identity/n6_sigma.txt"
+  src    = "archive-TECS-L perfect_number_engine.py + CLAUDE.md @I (σ·φ=n·τ) + atlas @P sigma"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal · paper-eligible."
+
+@C tecs_l_n6_phi := "phi(6) = 2 (identity LHS factor, σ·φ=n·τ at n=6)" :: formula [slug=tecs-l-n6-identity group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr phi 6 2"
+  raw    = ".verdicts/tecs-l-n6-identity/n6_phi.txt"
+  src    = "archive-TECS-L perfect_number_engine.py + CLAUDE.md @I (σ·φ=n·τ)"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal · paper-eligible."
+
+@C tecs_l_n6_tau := "tau(6) = 4 (identity RHS factor, σ·φ=n·τ at n=6)" :: formula [slug=tecs-l-n6-identity group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr tau 6 4"
+  raw    = ".verdicts/tecs-l-n6-identity/n6_tau.txt"
+  src    = "archive-TECS-L perfect_number_engine.py + CLAUDE.md @I (σ·φ=n·τ)"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal · paper-eligible."
+
+# — n=1 : identity HOLDS (σφ = 1 = nτ) — the other member of {1,6} —
+@C tecs_l_n1_sigma := "sigma(1) = 1 (identity at n=1, the other member of {1,6})" :: formula [slug=tecs-l-n6-identity group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr sigma 1 1"
+  raw    = ".verdicts/tecs-l-n6-identity/n1_sigma.txt"
+  src    = "archive-TECS-L (σ·φ=n·τ ⟺ n∈{1,6} uniqueness)"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal · paper-eligible."
+
+@C tecs_l_n1_phi := "phi(1) = 1 (identity at n=1)" :: formula [slug=tecs-l-n6-identity group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr phi 1 1"
+  raw    = ".verdicts/tecs-l-n6-identity/n1_phi.txt"
+  src    = "archive-TECS-L (σ·φ=n·τ ⟺ n∈{1,6} uniqueness)"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal · paper-eligible."
+
+@C tecs_l_n1_tau := "tau(1) = 1 (identity at n=1)" :: formula [slug=tecs-l-n6-identity group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr tau 1 1"
+  raw    = ".verdicts/tecs-l-n6-identity/n1_tau.txt"
+  src    = "archive-TECS-L (σ·φ=n·τ ⟺ n∈{1,6} uniqueness)"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal · paper-eligible."
+
+# — n=28 : identity FAILS even though 28 IS perfect (the discriminator) —
+@C tecs_l_n28_isperfect := "is_perfect(28) = 1 (28 is the 2nd perfect number)" :: formula [slug=tecs-l-n6-identity group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr is_perfect 28 1"
+  raw    = ".verdicts/tecs-l-n6-identity/n28_isperfect.txt"
+  src    = "archive-TECS-L perfect_number_engine.py (n∈{6,28,496,8128})"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal · paper-eligible."
+
+@C tecs_l_n28_sigma := "sigma(28) = 56 (→ σφ=672, identity LHS at n=28)" :: formula [slug=tecs-l-n6-identity group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr sigma 28 56"
+  raw    = ".verdicts/tecs-l-n6-identity/n28_sigma.txt"
+  src    = "archive-TECS-L (σ·φ=n·τ closed-negative at 2nd perfect number)"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal · paper-eligible."
+
+@C tecs_l_n28_phi := "phi(28) = 12 (→ σφ=672, identity LHS at n=28)" :: formula [slug=tecs-l-n6-identity group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr phi 28 12"
+  raw    = ".verdicts/tecs-l-n6-identity/n28_phi.txt"
+  src    = "archive-TECS-L (σ·φ=n·τ closed-negative at 2nd perfect number)"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal · paper-eligible."
+
+@C tecs_l_n28_tau := "tau(28) = 6 (→ nτ=168 ≠ σφ=672, identity FAILS at n=28)" :: formula [slug=tecs-l-n6-identity group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr tau 28 6"
+  raw    = ".verdicts/tecs-l-n6-identity/n28_tau.txt"
+  src    = "archive-TECS-L (σ·φ=n·τ closed-negative at 2nd perfect number)"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal · paper-eligible."
