@@ -208,6 +208,7 @@ fn cmd_rubric() {
     println("             sf_log10_t(Z,A)             → 21.08+ΣCᵢxⁱ/A           (Ren-Xu 2005 SF log10 T₁/₂[s], NUCLEAR C1, 2-arg)")
     println("             total_halflife_log10(Lα,Lsf) → −log10(10^−Lα+10^−Lsf) (α⊕SF total log10 T₁/₂[s], NUCLEAR C1, 2-arg)")
     println("             alpha_sf_branching(Lα,Lsf)  → 10^−Lα/(10^−Lα+10^−Lsf) (α branching ratio b_α, NUCLEAR C1, 2-arg)")
+    println("             island_weight(Z,N,σ)        → exp(−(dZ²+dN²)/2σ²)     (island-of-stability magic-distance weight, NUCLEAR C2, 3-arg)")
 }
 
 let NOCALC: int = -999999
@@ -1267,6 +1268,36 @@ fn _alpha_sf_branching(l_alpha: float, l_sf: float) -> float {
     return r_alpha / (r_alpha + r_sf)
 }
 
+// ── NUCLEAR C2 — island-of-stability weight (sim.hexa mirror) ───────────
+//
+// Magic-number-distance 2-D Gaussian proximity weight ∈ (0,1] (NUCLEAR.md
+// §6.2 C2 · NOVEL probe C2). Mirror of stdlib/nuclear/sim.hexa
+// island_weight. Proton magic {82,114,120,126} · neutron magic {126,184}
+// (Sobiczewski & Pomorski 2007 arxiv:nucl-th/0610090; Samanta 2008
+// arxiv:0803.4151; Bender+ 1999 PRC 60 034304 for Z=120/126 RMF/HFB).
+//   d² = min_z(Z)² + min_n(N)²   weight = exp(−d²/(2σ²))
+// 3-arg (Z, N, σ). Reference: Z=114, N=184 (²⁹⁸Fl doubly-magic), σ=6 → 1.0
+// (dZ=0 to Z=114, dN=0 to N=184). σ ≤ 0 → 0.0 sentinel.
+fn _island_weight(zf: float, nf: float, sigma: float) -> float {
+    if sigma <= 0.0 { return _NOCALC_F }
+    // nearest proton magic
+    let dz82 = _fabs(zf - 82.0)
+    let dz114 = _fabs(zf - 114.0)
+    let dz120 = _fabs(zf - 120.0)
+    let dz126 = _fabs(zf - 126.0)
+    let mut dz = dz82
+    if dz114 < dz { dz = dz114 }
+    if dz120 < dz { dz = dz120 }
+    if dz126 < dz { dz = dz126 }
+    // nearest neutron magic
+    let dn126 = _fabs(nf - 126.0)
+    let dn184 = _fabs(nf - 184.0)
+    let mut dn = dn126
+    if dn184 < dn { dn = dn184 }
+    let d2 = dz * dz + dn * dn
+    return exp(0.0 - d2 / (2.0 * sigma * sigma))
+}
+
 // ── Bio-physical Phase 3 (demiurge cross-domain V2 closure) ─────────
 // Three remaining identities from the inbox patch — Higuchi sustained
 // release (2-arg, simple form) · Tafel overpotential (3-arg, log10 path)
@@ -1764,6 +1795,12 @@ fn _recompute_float(fn_name: string, a0: float, a1: float, a2: float, a3: float,
         if argc < 2 { return _NOCALC_F }
         return _alpha_sf_branching(a0, a1)
     }
+    // ── Nuclear C2 — island-of-stability weight (NUCLEAR.md §6.2 · C2) ──
+    //   island_weight(Z, N, σ)            3-arg: exp(−(dZ²+dN²)/(2σ²))
+    if fn_name == "island_weight" {
+        if argc < 3 { return _NOCALC_F }
+        return _island_weight(a0, a1, a2)
+    }
     // ── Bio-physical Phase 3 (demiurge cross-domain V2 closure) ─────────
     //   higuchi(k_H, t)                   2-arg: k_H * sqrt(t)
     //   tafel(a, b, j)                    3-arg: a + b * log10(j)
@@ -1879,6 +1916,8 @@ fn _is_float_fn(fn_name: string) -> bool {
         // Nuclear C1 — SF competition (NUCLEAR.md §4.2 · NOVEL C1 · 2026-05-25):
         || fn_name == "sf_log10_t" || fn_name == "total_halflife_log10"
         || fn_name == "alpha_sf_branching"
+        // Nuclear C2 — island-of-stability weight (NUCLEAR.md §6.2 · 2026-05-25):
+        || fn_name == "island_weight"
         // Bio-physical Phase 3 (demiurge cross-domain V2 closure):
         || fn_name == "higuchi" || fn_name == "tafel" || fn_name == "hagen_poiseuille"
         // TTR-ORAL / TTR-LAC bundle (topical PK + laser optics · INBOX T22:35Z):
