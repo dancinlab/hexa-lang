@@ -586,6 +586,43 @@ primitives at the bottom (large; likely a closed-negative on the repr
 circularity) — otherwise the C core IS the honest bootstrap floor. This is the
 terminal state, not a failure: the portable layer reached its physical limit.
 
+### 2026-05-26 — `.c none` feasibility roadmap (arithmetic core DE-RISKED portable — refines the floor note above)
+
+User goal `.c none closure` = runtime.c (13.6K L) + runtime_core.c (7.9K L) →
+hexa, zero linked `.c` in aprime_cc (Go-1.5 model · `@asm` floor only). This
+REFINES the floor note above: the arithmetic core is NOT the floor I flagged —
+it is PORTABLE.
+
+**De-risk (the key finding):** codegen has known-int / known-float operand
+propagation (codegen.hexa ~L5098-5121) — when BOTH operands are known-int/float,
+the binary op lowers to a NATIVE C op, BYPASSING `hexa_add/sub/mul/div/mod`
+dispatch. So a hexa `rt_add/sub/...` written with typed / `as`-cast operands
+emits native `iadd`/`fadd` — **no operator circularity** (the feared
+"hexa's `+` IS hexa_add" trap is escaped by typed-native-lowering). With
+`type_of` dispatch (cycle-75) for the int-vs-float polymorphic branch, all 6
+arithmetic ops are portable. Exception: `hexa_fma` needs FUSED hardware FMA for
+the flame byte-eq contract (`feedback-flame-transcendental-byteeq-hazard`) →
+keep a tiny `@asm`/intrinsic fma at the floor, not C-source.
+
+**The feasible path (multi-session · fixpoint-critical):**
+1. arithmetic (add/sub/mul/div/mod) → hexa via `type_of` + typed-native-lowering.
+   EACH is emit-path → MUST verify `gen1≡gen2` per op (a subtle semantic drift
+   breaks the self-host fixpoint — this is the high-stakes constraint).
+2. string hot-path (`hexa_str_concat`, `hexa_to_string`) → hexa.
+3. arena allocator + GC → hexa + `@asm` memory primitives (mmap/atomics at the
+   bottom — Go-style: GC in the language, unsafe/asm at the floor).
+4. HexaVal tagged-union REPR — the deepest sub-floor: the value type codegen
+   emits. Either codegen keeps emitting it (C struct = irreducible) OR a
+   codegen-unbox rearchitecture. The genuine `.c none` decision point.
+
+**Terminal (closure-is-physical-limit):** `.c none` is FEASIBLE down to an
+`@asm` floor (syscall `svc` + fused-fma + memory primitives) — Go's exact
+end-state shape (zero `.c`, but `.s` asm + compiler-emitted value types). The
+honest `.c none` = "zero C-SOURCE-logic; an irreducible `@asm` + codegen-emitted-
+repr floor remains." NOT blocked at arithmetic (de-risked). Campaign continues
+per-op, fixpoint-verified, event-driven — number-parse family (atof #1201 ·
+atoll/atoi #1205) was the warm-up; arithmetic core is next.
+
 ### 2026-05-26 — Phase-1 doc-lag reconciliation (88 Tier-A boxes → `[x]`)
 
 `/cycle` (inline) caught a doc-content-stale gap: RUNTIME.md was git-fresh
