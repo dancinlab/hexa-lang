@@ -1,6 +1,6 @@
 // HEXA Standard Library — nuclear/sim
 //
-// @version 0.3.0
+// @version 0.4.0
 // @capabilities [pure, io]
 //
 // NUCLEAR.md §6 Phase 4 #1 — N7 hot closed-form post-processing,
@@ -24,6 +24,8 @@
 //   pub fn n11_alpha_cell(Z, A, Q_alpha_MeV, lo, hi) -> NuclideScore// N11
 //   pub fn island_weight(Z, N, sigma) -> float                     // C2 (weight)
 //   pub fn n11_island_cell(Z,A,Q_α,lo,hi,σ) -> IslandScore         // C2 (composite)
+//   pub fn n11_alpha_cell_checked(Z,N,A,Q_α,lo,hi) -> NuclideScore  // G1 (A=Z+N guard)
+//   pub fn n11_island_cell_checked(Z,N,A,Q_α,lo,hi,σ) -> IslandScore// G1 (A=Z+N guard)
 //
 // Source formulas (closed-form algebraic identities, not solvers):
 //   - Viola-Seaborg 1966 / Sobiczewski-Parkhomenko 2005 refit
@@ -69,6 +71,62 @@ fn _fabs(x: float) -> float { if x < 0.0 { return -x } return x }
 fn _fmin(a: float, b: float) -> float { if a < b { return a } return b }
 
 fn _fmax(a: float, b: float) -> float { if a > b { return a } return b }
+
+// Finite-value guard (no native is_nan/is_finite builtin). NaN fails the
+// self-equality test; ±inf exceeds the double magnitude ceiling. Used to
+// reject a non-finite Q_α before it silently propagates through the kernels.
+fn _is_finite(x: float) -> bool {
+    if x != x { return false }                 // NaN ≠ itself
+    if x > 1.0e308 { return false }            // +inf
+    if x < 0.0 - 1.0e308 { return false }      // -inf
+    return true
+}
+
+// ── (Z,N,A,Q_α) input-consistency guard ────────────────────────────────
+//
+// gap-audit top-2 silent-failure: a TRANSPOSED (Z,N) — e.g. passing N where
+// Z is expected — keeps A=Z+N self-consistent only if the caller also flips
+// A, but a partial transpose (Z↔N with A held) violates A=Z+N, and the
+// Geiger-Nuttall log10 T scales ~linearly in Z, so a Z↔N swap flips log10 T
+// by ≈10× UNDETECTED. We reject any cell whose declared A ≠ Z+N (or Z≤0 /
+// N≤0 / non-finite-or-≤0 Q_α) with an honest reason CODE instead of silently
+// computing a physically-meaningless number (NUCLEAR.md §3.3 no fabrication).
+//
+// Reason codes (0 = pass):
+//   0 = ok
+//   1 = A_N_mismatch          (A ≠ Z + N — likely a transposed/garbled cell)
+//   2 = nonpositive_Z_or_N    (Z ≤ 0 or N ≤ 0 — not a physical nuclide)
+//   3 = nonfinite_or_nonpos_Q (Q_α NaN/±inf or ≤ 0 — α not energetically allowed)
+//   4 = Z_out_of_range        (Z > 130 — catches a FULL Z↔N transpose whose
+//                              swapped sum still happens to equal A; no real
+//                              element / SHE-funnel cell exceeds Z=130)
+//
+// The cell scorers below return valid=0 + this reason code; the Python
+// orchestrator maps a nonzero reason to an honest error_record / install-
+// gated skip rather than emitting a fabricated half-life. (Z, N, A) are
+// all passed INDEPENDENTLY so a transposed/stale triple is caught — the
+// kernels otherwise derive N=A−Z internally and could never see the
+// inconsistency.
+let _Z_FUNNEL_MAX: int = 130
+
+fn _anz_reason(Z: int, N: int, A: int, Q_alpha_MeV: float) -> int {
+    if A != Z + N { return 1 }      // declared A inconsistent with declared (Z,N)
+    if Z <= 0 { return 2 }
+    if N <= 0 { return 2 }
+    if !_is_finite(Q_alpha_MeV) { return 3 }
+    if Q_alpha_MeV <= 0.0 { return 3 }
+    if Z > _Z_FUNNEL_MAX { return 4 }  // full Z↔N transpose w/ A self-consistent
+    return 0
+}
+
+// Human-readable honest reason for a nonzero _anz_reason code (record text).
+fn _anz_reason_str(code: int) -> string {
+    if code == 1 { return "A_N_mismatch" }
+    if code == 2 { return "nonpositive_Z_or_N" }
+    if code == 3 { return "nonfinite_or_nonpositive_Q_alpha" }
+    if code == 4 { return "Z_out_of_range" }
+    return "ok"
+}
 
 // ── 1. NC1 — Viola-Seaborg log10 T₁/₂ [s] ──────────────────────────────
 //
@@ -339,7 +397,8 @@ struct NuclideScore {
     mean_log10_T_s:  float,
     spread_dex:      float,
     c_gate_score:    float,
-    valid:           int,    // 1 = scored, 0 = Q_α ≤ 0 (caller honest-skips)
+    valid:           int,    // 1 = scored, 0 = invalid (caller honest-skips)
+    reason:          int,    // _anz_reason code (0=ok; 1/2/3 honest-skip cause)
 }
 
 // (c)-gate priority window score for log10 T₁/₂ [s] vs. an accelerator
@@ -363,7 +422,7 @@ pub fn n11_alpha_cell(Z: int, A: int, Q_alpha_MeV: float,
     if Q_alpha_MeV <= 0.0 {
         return NuclideScore { Z: Z, A: A, Q_alpha_MeV: Q_alpha_MeV,
                               mean_log10_T_s: 0.0, spread_dex: 0.0,
-                              c_gate_score: 0.0, valid: 0 }
+                              c_gate_score: 0.0, valid: 0, reason: 3 }
     }
     let vs = viola_seaborg_log10_t(Z, Q_alpha_MeV)
     let ro = royer_log10_t(Z, A, Q_alpha_MeV)
@@ -372,7 +431,23 @@ pub fn n11_alpha_cell(Z: int, A: int, Q_alpha_MeV: float,
     let score = c_gate_window_score(c.mean, band_lo, band_hi)
     return NuclideScore { Z: Z, A: A, Q_alpha_MeV: Q_alpha_MeV,
                           mean_log10_T_s: c.mean, spread_dex: c.spread_dex,
-                          c_gate_score: score, valid: 1 }
+                          c_gate_score: score, valid: 1, reason: 0 }
+}
+
+// (Z,N,A)-EXPLICIT validated N11 (c)-gate cell. Runs the _anz_reason guard
+// (A=Z+N consistency · positive Z,N · finite positive Q_α) FIRST; on any
+// nonzero reason it returns an honest valid=0 record carrying the reason
+// code instead of silently computing on a transposed/garbled triple
+// (gap-audit top-2). On reason=0 it delegates to n11_alpha_cell.
+pub fn n11_alpha_cell_checked(Z: int, N: int, A: int, Q_alpha_MeV: float,
+                              band_lo: float, band_hi: float) -> NuclideScore {
+    let reason = _anz_reason(Z, N, A, Q_alpha_MeV)
+    if reason != 0 {
+        return NuclideScore { Z: Z, A: A, Q_alpha_MeV: Q_alpha_MeV,
+                              mean_log10_T_s: 0.0, spread_dex: 0.0,
+                              c_gate_score: 0.0, valid: 0, reason: reason }
+    }
+    return n11_alpha_cell(Z, A, Q_alpha_MeV, band_lo, band_hi)
 }
 
 // ── 4c. C2 — shell-gap-aware island-of-stability weighting ─────────────
@@ -469,7 +544,8 @@ struct IslandScore {
     c_total_score:      float,   // window score on the C1 total
     island_weight:      float,   // C2 magic-number Gaussian weight
     composite_score:    float,   // c_total_score · island_weight
-    valid:              int,     // 1 = scored, 0 = Q_α ≤ 0 (honest-skip)
+    valid:              int,     // 1 = scored, 0 = invalid (honest-skip)
+    reason:             int,     // _anz_reason code (0=ok; 1/2/3 skip cause)
 }
 
 // Full C2 island-weighted (c)-gate cell. Chains C1 c_gate_total_cell
@@ -484,7 +560,7 @@ pub fn n11_island_cell(Z: int, A: int, Q_alpha_MeV: float,
                              log10_T_total_s: 0.0, alpha_branching: 0.0,
                              sf_dominates: 0, c_total_score: 0.0,
                              island_weight: 0.0, composite_score: 0.0,
-                             valid: 0 }
+                             valid: 0, reason: 3 }
     }
     let d = c_gate_total_cell(Z, A, Q_alpha_MeV)    // C1 α⊕SF total
     let c_total = c_gate_window_score(d.log10_T_total_s, band_lo, band_hi)
@@ -494,7 +570,26 @@ pub fn n11_island_cell(Z: int, A: int, Q_alpha_MeV: float,
                          alpha_branching: d.alpha_branching,
                          sf_dominates: d.sf_dominates,
                          c_total_score: c_total, island_weight: iw,
-                         composite_score: c_total * iw, valid: 1 }
+                         composite_score: c_total * iw, valid: 1, reason: 0 }
+}
+
+// (Z,N,A)-EXPLICIT validated C2 island cell. Runs the _anz_reason guard
+// (A=Z+N consistency · positive Z,N · finite positive Q_α) FIRST; on any
+// nonzero reason it returns an honest valid=0 record carrying the reason
+// code instead of silently computing on a transposed/garbled triple
+// (gap-audit top-2). On reason=0 it delegates to n11_island_cell.
+pub fn n11_island_cell_checked(Z: int, N: int, A: int, Q_alpha_MeV: float,
+                               band_lo: float, band_hi: float,
+                               sigma: float) -> IslandScore {
+    let reason = _anz_reason(Z, N, A, Q_alpha_MeV)
+    if reason != 0 {
+        return IslandScore { Z: Z, A: A, Q_alpha_MeV: Q_alpha_MeV,
+                             log10_T_total_s: 0.0, alpha_branching: 0.0,
+                             sf_dominates: 0, c_total_score: 0.0,
+                             island_weight: 0.0, composite_score: 0.0,
+                             valid: 0, reason: reason }
+    }
+    return n11_island_cell(Z, A, Q_alpha_MeV, band_lo, band_hi, sigma)
 }
 
 // ── reference-panel runner ─────────────────────────────────────────────
@@ -537,6 +632,18 @@ fn _emit_c1(name: string, Z: int, A: int, Q_alpha_MeV: float) {
             "  L_total=" + to_string(d.log10_T_total_s) +
             "  b_alpha=" + to_string(d.alpha_branching) +
             "  dominant=" + dom)
+}
+
+// Guard demo row: (Z,N,A)-explicit checked cell — shows valid + reason for
+// a transposed/inconsistent triple vs. a clean one (gap-audit top-2).
+fn _emit_guard(name: string, Z: int, N: int, A: int, Q_alpha_MeV: float) {
+    let s = n11_island_cell_checked(Z, N, A, Q_alpha_MeV, 0.0 - 6.0, 3.0, 6.0)
+    println("  · " + name +
+            ": Z=" + to_string(Z) + " N=" + to_string(N) + " A=" + to_string(A) +
+            "  valid=" + to_string(s.valid) +
+            "  reason=" + to_string(s.reason) +
+            " (" + _anz_reason_str(s.reason) + ")" +
+            "  composite=" + to_string(s.composite_score))
 }
 
 // ── N11 top-K JSON record emit (NUCLEAR.md §6.1 schema) ─────────────────
@@ -799,6 +906,18 @@ fn main() {
     _emit_island("Lv-293  (Z=116, N=177)", 116, 293, 10.54, 6.0)
     _emit_island("Fl-298  (Z=114, N=184 · doubly-magic candidate, no Q_α cite → skip)",
                  114, 298, 0.0, 6.0)
+
+    // ── (Z,N,A) consistency guard demo (gap-audit top-2 silent-failure) ─
+    // A transposed (Z,N) or stale A keeps A=Z+N self-consistent ONLY if the
+    // caller flips ALL three; a partial transpose violates A=Z+N. Since
+    // log10 T scales ~linearly in Z, an undetected Z↔N swap flips the answer
+    // by ≈10×. n11_*_cell_checked rejects it honestly (valid=0 + reason).
+    println("[nuclear+verify · guard] (Z,N,A) consistency — reject before compute")
+    _emit_guard("Og-294  clean (Z=118, N=176, A=294)", 118, 176, 294, 11.65)
+    _emit_guard("Og-294  A typo  (Z=118, N=176, A=295)", 118, 176, 295, 11.65)
+    _emit_guard("Og-294  Z↔N swap (Z=176, N=118, A=294)", 176, 118, 294, 11.65)
+    _emit_guard("bad N≤0  (Z=118, N=0,   A=118)", 118, 0, 118, 11.65)
+    _emit_guard("bad Q≤0  (Z=118, N=176, A=294)", 118, 176, 294, 0.0)
 
     // Emit the REAL N11 top-K JSON record (NUCLEAR.md §6.1 schema).
     let n11_out = "/tmp/nuclear_n11"
