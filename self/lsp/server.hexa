@@ -30,7 +30,7 @@ use "self/lsp/handlers"
 let mut doc_store = #{}
 
 fn doc_get(uri: string) -> string {
-    if doc_store[uri] != null { return doc_store[uri] }
+    if doc_store[uri] != None { return doc_store[uri] }
     return ""
 }
 
@@ -43,23 +43,11 @@ fn doc_remove(uri: string) {
 }
 
 // ─── 메인 루프 ────────────────────────────────────────────
-// LSP 표준 framing: Content-Length: N\r\n\r\n<N bytes JSON>
-// 단순화: 스켈레톤은 stdin 한 번 read 후 parse (실제 server 는 stream).
-// 후속: fd-level read + partial buffer 관리 필요.
+// protocol.lsp_read_message 가 헤더(input 한 줄씩) + 본문(read_stdin_n_c 으로
+// 정확히 Content-Length 바이트)을 읽어 본문 JSON 만 돌려준다.
 
 fn read_message() -> string {
-    // placeholder — 전체 stdin read
-    let raw = to_string(exec("cat"))
-    // Content-Length 헤더 제거
-    let idx = raw.index_of("\r\n\r\n")
-    if idx >= 0 {
-        return raw.substring(idx + 4, len(raw))
-    }
-    let idx2 = raw.index_of("\n\n")
-    if idx2 >= 0 {
-        return raw.substring(idx2 + 2, len(raw))
-    }
-    return raw
+    return lsp_read_message()
 }
 
 fn write_message(body: string) {
@@ -111,15 +99,16 @@ fn dispatch(msg: string) -> string {
     return ""
 }
 
-// ─── 스켈레톤 모드 ─────────────────────────────────────────
-// Step 2 는 단발성 — 한 메시지 읽고 처리 후 종료.
-// 진짜 LSP server 는 exit notif 까지 무한 루프.
+// ─── 서버 루프 ─────────────────────────────────────────────
+// exit notif (dispatch 내부) 또는 stdin EOF 까지 메시지를 연속 처리한다.
 
-fn run_once() {
-    let msg = read_message()
-    if len(msg) == 0 { exit(0) }
-    let resp = dispatch(msg)
-    if len(resp) > 0 { write_message(resp) }
+fn serve() {
+    while true {
+        let msg = read_message()
+        if len(msg) == 0 { exit(0) }   // clean EOF — client closed stdin
+        let resp = dispatch(msg)
+        if len(resp) > 0 { write_message(resp) }
+    }
 }
 
 // CLI entry
@@ -158,4 +147,4 @@ if len(cli_args) > 0 && cli_args[0] == "--test" {
     exit(0)
 }
 
-run_once()
+serve()

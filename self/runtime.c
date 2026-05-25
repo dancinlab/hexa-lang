@@ -11011,6 +11011,40 @@ HexaVal hexa_read_stdin(void) {
     return hexa_str_own(buf);
 }
 
+// read_stdin_n_c(n): read EXACTLY n bytes from fd 0 (block until n bytes are
+// read or EOF). Returns the C buffer pointer (NUL-terminated, may hold < n
+// bytes at EOF); the caller turns it into a hexa string via from_cstring().
+// Plain C ABI for the `extern fn read_stdin_n_c(n: int) -> int` FFI surface —
+// the LSP framing layer reads a Content-Length-delimited JSON body with it.
+// Uses the raw read(2) wrapper (stdin is a fake FILE* in this runtime), the
+// same primitive as hexa_input / hexa_read_stdin, so it composes byte-exactly
+// with hexa_input()'s one-byte-at-a-time header reads: no buffered over-read,
+// the body begins exactly after the header block's terminating newline.
+// The pointer is a reused, grown-on-demand static buffer — from_cstring copies
+// it immediately, so the next call may overwrite it (no leak, no aliasing). An
+// embedded NUL truncates; LSP JSON bodies are NUL-free UTF-8, so that is safe.
+const char* read_stdin_n_c(int n) {
+    static char* rsn_buf = NULL;
+    static size_t rsn_cap = 0;
+    if (n < 0) n = 0;
+    if ((size_t)n + 1 > rsn_cap) {
+        size_t nc = (size_t)n + 1;
+        char* nb = (char*)realloc(rsn_buf, nc);
+        if (!nb) return "";
+        rsn_buf = nb;
+        rsn_cap = nc;
+    }
+    size_t got = 0;
+    while (got < (size_t)n) {
+        long r = hxlcl_read(0, rsn_buf + got, (size_t)n - got);
+        if (r < 0) { if (errno == EINTR) continue; break; }
+        if (r == 0) break;                 // EOF before n bytes
+        got += (size_t)r;
+    }
+    rsn_buf[got] = 0;
+    return rsn_buf;
+}
+
 // sleep_s(n): sleep n seconds (int or float). Wraps nanosleep for
 // sub-second precision. Returns void.
 HexaVal hexa_sleep_s(HexaVal n) {
