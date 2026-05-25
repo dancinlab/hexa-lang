@@ -241,6 +241,9 @@ fn cmd_rubric() {
     println("             triple_product(n,T,τ)       → n·T·τ_E                 (Lawson triple product [m⁻³·keV·s], FUSION F2, 3-arg)")
     println("             q_plasma(Pfus,Pheat)        → P_fus/P_heat            (0-D plasma energy gain Q; design-feasibility, FUSION F2, 2-arg)")
     println("             ignition_margin(Pf,W,τ,fα)  → (fα·Pf)/(W/τ_E)         (Lawson ignition margin; ≥1 ⇒ 0-D ignition, FUSION F2, 4-arg)")
+    println("             f_reactivity_coverage(σv,ref) → clamp01(σv/ref)        (F-funnel (a) reactivity coverage [0,1], FUSION F-funnel, 2-arg)")
+    println("             f_margin_coverage(margin)   → clamp01(margin)         (F-funnel (b) Lawson/Q margin coverage [0,1], FUSION F-funnel, 1-arg)")
+    println("             f_funnel_composite(a,b)     → a·b                     (F-funnel (a)×(b) composite coverage product [0,1], FUSION F-funnel, 2-arg)")
 }
 
 let NOCALC: int = -999999
@@ -1908,6 +1911,47 @@ fn _ignition_margin(p_fus_density_w: float, w_density_j: float,
     return (alpha_fraction * p_fus_density_w) / p_loss
 }
 
+// ── F-FUNNEL — design-point (a)×(b) composite scoring (FUSION.md §2.1) ───
+//
+// VERBATIM mirror of the F-funnel scoring functions in
+// stdlib/fusion/funnel.hexa (the consumer of the F1/F2 kernel). The
+// composite is (a)×(b) ONLY — (a) fuel reactivity coverage × (b) Lawson/Q
+// margin coverage; (c) Grad-Shafranov / (d) MHD / (f) TBR are NOT folded
+// in (NOT a 6-gate composite). These atoms gate the funnel's own
+// closed-form scoring identities (clamp / ratio / product), independent of
+// the floating Bosch-Hale ⟨σv⟩ value.
+
+// clamp a raw score to [0,1].
+fn _clamp01_f(x: float) -> float {
+    if x < 0.0 { return 0.0 }
+    if x > 1.0 { return 1.0 }
+    return x
+}
+
+// (a) fuel-reactivity coverage = clamp01(σv / σv_ref). 2-arg. σv_ref ≤ 0
+// or σv ≤ 0 → 0.0 (NOT _NOCALC_F — a 0.0 coverage is a meaningful score).
+// Reference: σv=2.73993e-16, ref=8.94083e-16 → 0.30645... (T=15 keV cell).
+fn _f_reactivity_coverage(sigma_v: float, sigma_v_ref: float) -> float {
+    if sigma_v_ref <= 0.0 { return 0.0 }
+    if sigma_v <= 0.0 { return 0.0 }
+    return _clamp01_f(sigma_v / sigma_v_ref)
+}
+
+// (b) Lawson/Q margin coverage = clamp01(ignition_margin). 1-arg. margin
+// ≥ 1 ⇒ saturates at 1.0 (0-D ignition criterion crossed; DESIGN
+// feasibility, NOT "ignition achieved"). margin ≤ 0 → 0.0.
+// Reference: margin=0.994145 → 0.994145; margin=1.89446 → 1.0 (saturated).
+fn _f_margin_coverage(ignition_margin_val: float) -> float {
+    return _clamp01_f(ignition_margin_val)
+}
+
+// (a)×(b) composite coverage product = a·b. 2-arg. The F-funnel ranking
+// key. HONEST: 2-gate (a)×(b) coverage ONLY (FUSION.md §2.1).
+// Reference: a=0.484318, b=1.0 → 0.484318; a=0.127076, b=0.994145 → 0.126332.
+fn _f_funnel_composite(a_reactivity_cov: float, b_margin_cov: float) -> float {
+    return a_reactivity_cov * b_margin_cov
+}
+
 // ── Bio-physical Phase 3 (demiurge cross-domain V2 closure) ─────────
 // Three remaining identities from the inbox patch — Higuchi sustained
 // release (2-arg, simple form) · Tafel overpotential (3-arg, log10 path)
@@ -2580,6 +2624,21 @@ fn _recompute_float(fn_name: string, a0: float, a1: float, a2: float, a3: float,
         if argc < 4 { return _NOCALC_F }
         return _ignition_margin(a0, a1, a2, a3)
     }
+    // ── F-FUNNEL — design-point (a)×(b) composite scoring (FUSION.md §2.1) ─
+    //   f_reactivity_coverage(σv, σv_ref)  2-arg: (a) clamp01(σv/σv_ref)
+    //   f_margin_coverage(margin)          1-arg: (b) clamp01(margin)
+    //   f_funnel_composite(a, b)           2-arg: (a)×(b) = a·b
+    if fn_name == "f_reactivity_coverage" {
+        if argc < 2 { return _NOCALC_F }
+        return _f_reactivity_coverage(a0, a1)
+    }
+    if fn_name == "f_margin_coverage" {
+        return _f_margin_coverage(a0)
+    }
+    if fn_name == "f_funnel_composite" {
+        if argc < 2 { return _NOCALC_F }
+        return _f_funnel_composite(a0, a1)
+    }
     // ── Bio-physical Phase 3 (demiurge cross-domain V2 closure) ─────────
     //   higuchi(k_H, t)                   2-arg: k_H * sqrt(t)
     //   tafel(a, b, j)                    3-arg: a + b * log10(j)
@@ -2748,6 +2807,9 @@ fn _is_float_fn(fn_name: string) -> bool {
         // FUSION F2 — Lawson triple product / 0-D Q_plasma (Lawson 1957 · 2026-05-25):
         || fn_name == "triple_product" || fn_name == "q_plasma"
         || fn_name == "ignition_margin"
+        // FUSION F-funnel — design-point (a)×(b) composite scoring (FUSION.md §2.1 · 2026-05-25):
+        || fn_name == "f_reactivity_coverage" || fn_name == "f_margin_coverage"
+        || fn_name == "f_funnel_composite"
         // Bio-physical Phase 3 (demiurge cross-domain V2 closure):
         || fn_name == "higuchi" || fn_name == "tafel" || fn_name == "hagen_poiseuille"
         // TTR-ORAL / TTR-LAC bundle (topical PK + laser optics · INBOX T22:35Z):
