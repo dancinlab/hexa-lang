@@ -5248,6 +5248,16 @@ HexaVal hexa_math_lgamma(HexaVal x)   { return hexa_float(lgamma(HX_FLOAT(x))); 
 extern HexaVal rt_lgamma(HexaVal x);
 HexaVal hexa_math_lgamma(HexaVal x)   { return rt_lgamma(hexa_float(HX_FLOAT(x))); }
 #endif
+// VERIFY-KIT V4 2026-05-26 — special-function primitives via native libm.
+// CLAUDE.md stdlib_trig_libm: native libm (tgamma/erf/erfc/j0/j1), NOT
+// hand-rolled Taylor (float->int narrowing collapse). Same shape as
+// hexa_math_lgamma above; codegen cg_math_sym maps gamma/tgamma/erf/erfc/
+// bessel_j0/bessel_j1 to these. Values irrational => verify --tol gate.
+HexaVal hexa_math_tgamma(HexaVal x)   { return hexa_float(tgamma(HX_FLOAT(x))); }
+HexaVal hexa_math_erf(HexaVal x)      { return hexa_float(erf(HX_FLOAT(x))); }
+HexaVal hexa_math_erfc(HexaVal x)     { return hexa_float(erfc(HX_FLOAT(x))); }
+HexaVal hexa_math_j0(HexaVal x)       { return hexa_float(j0(HX_FLOAT(x))); }
+HexaVal hexa_math_j1(HexaVal x)       { return hexa_float(j1(HX_FLOAT(x))); }
 #ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal hexa_math_isnan(HexaVal x)    { return hexa_bool(isnan(HX_FLOAT(x)) ? 1 : 0); }
 HexaVal hexa_math_isinf(HexaVal x)    { return hexa_bool(isinf(HX_FLOAT(x)) ? 1 : 0); }

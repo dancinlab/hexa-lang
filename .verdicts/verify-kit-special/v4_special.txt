@@ -1,0 +1,47 @@
+VERIFY-KIT V4 — special-function primitives (gamma/erf/bessel) via native libm + --tol
+binary: bin/hexa-verify (rebuilt 2026-05-26 from regenerated transpiler)
+governance: CLAUDE.md stdlib_trig_libm — native libm tgamma/erf/j0/j1, NOT hand-rolled Taylor
+============================================================================
+
+$ hexa verify --expr gamma 5 --compute
+COMPUTE: gamma(5.0) = 24.0
+  tier   = 🟢 SUPPORTED-NUMERICAL  (hexa-native libm-class compute, self-verified deterministic · g_self_verify · TECS-L n6-rep Tier2)
+
+$ hexa verify --expr gamma 5 24 --tol 1e-6
+verify --expr gamma(5.0)=24.0
+  calc   = 24.0  ≈ expected 24.0  (|Δ|=0.0 ≤ ε=1e-9)
+  tier   = 🟢 SUPPORTED-NUMERICAL  (hexa-native libm-class recompute, TECS-L n6-rep Tier2)
+  absorb = ⚠ atlas register did NOT confirm fold; invocation:
+           hexa atlas register --from-verify gamma 5 24
+
+$ hexa verify --expr gamma 0.5 1.7724538509 --tol 1e-6   (sqrt(pi))
+verify --expr gamma(0.5)=1.77245
+  calc   = 1.77245  ≈ expected 1.77245  (|Δ|=5.51625e-12 ≤ ε=1e-9)
+  tier   = 🟢 SUPPORTED-NUMERICAL  (hexa-native libm-class recompute, TECS-L n6-rep Tier2)
+  absorb = ⚠ atlas register did NOT confirm fold; invocation:
+           hexa atlas register --from-verify gamma 0.5 1.7724538509
+
+$ hexa verify --expr erf 0 --compute
+COMPUTE: erf(0.0) = 0.0
+  tier   = 🟢 SUPPORTED-NUMERICAL  (hexa-native libm-class compute, self-verified deterministic · g_self_verify · TECS-L n6-rep Tier2)
+
+$ hexa verify --expr erf 1 0.8427007929 --tol 1e-6
+verify --expr erf(1.0)=0.842701
+  calc   = 0.842701  ≈ expected 0.842701  (|Δ|=4.97147e-11 ≤ ε=1e-9)
+  tier   = 🟢 SUPPORTED-NUMERICAL  (hexa-native libm-class recompute, TECS-L n6-rep Tier2)
+  absorb = ⚠ atlas register did NOT confirm fold; invocation:
+           hexa atlas register --from-verify erf 1 0.8427007929
+
+$ hexa verify --expr bessel_j0 0 1 --tol 1e-6   (stretch)
+verify --expr bessel_j0(0.0)=1.0
+  calc   = 1.0  ≈ expected 1.0  (|Δ|=0.0 ≤ ε=1e-9)
+  tier   = 🟢 SUPPORTED-NUMERICAL  (hexa-native libm-class recompute, TECS-L n6-rep Tier2)
+  absorb = ⚠ atlas register did NOT confirm fold; invocation:
+           hexa atlas register --from-verify bessel_j0 0 1
+
+$ hexa verify --expr bessel_j1 0 0 --tol 1e-6   (stretch)
+verify --expr bessel_j1(0.0)=0.0
+  calc   = 0.0  ≈ expected 0.0  (|Δ|=0.0 ≤ ε=1e-9)
+  tier   = 🟢 SUPPORTED-NUMERICAL  (hexa-native libm-class recompute, TECS-L n6-rep Tier2)
+  absorb = ⚠ atlas register did NOT confirm fold; invocation:
+           hexa atlas register --from-verify bessel_j1 0 0

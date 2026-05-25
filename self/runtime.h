@@ -470,6 +470,12 @@ HexaVal hexa_utc_compact_now(void);                                             
 HexaVal hexa_utc_iso_now(void);                                                    /* runtime.c:11116 */
 HexaVal hexa_null_coal(HexaVal a, HexaVal b);                                      /* runtime.c:1339 */
 HexaVal hexa_math_lgamma(HexaVal x);                                               /* runtime.c:7963 */
+/* VERIFY-KIT V4 2026-05-26 — special-function primitives via native libm. */
+HexaVal hexa_math_tgamma(HexaVal x);
+HexaVal hexa_math_erf(HexaVal x);
+HexaVal hexa_math_erfc(HexaVal x);
+HexaVal hexa_math_j0(HexaVal x);
+HexaVal hexa_math_j1(HexaVal x);
 /* Forward-decls exposed by interp regen (hexa_full → C → clang) — same
  * "defined-but-not-declared" class as the AOT path additions above. */
 HexaVal hexa_array_truncate(HexaVal arr, HexaVal new_len_v);                       /* runtime.c:2037 */

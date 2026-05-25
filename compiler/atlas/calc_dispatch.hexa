@@ -138,6 +138,11 @@ pub fn calc_is_float_fn(fn_name: string) -> bool {
         || fn_name == "solenoid_axis_bz"
         // natural log (CLM init-CE floor = ln(vocab) · CLAIMS chat_init_ce_floor · 1-arg):
         || fn_name == "ln"
+        // VERIFY-KIT V4 — special-function primitives via native libm (2026-05-26):
+        //   gamma(x)=Γ(x)·tgamma · erf(x) · bessel_j0/j1=libm j0/j1. All 1-arg,
+        //   irrational => 🟢 SUPPORTED-NUMERICAL via --tol (never exact 🔵).
+        || fn_name == "gamma" || fn_name == "erf"
+        || fn_name == "bessel_j0" || fn_name == "bessel_j1"
 }
 
 // calc_is_zero_arg_float_fn — is fn_name a 0-arg closed-form constant?
