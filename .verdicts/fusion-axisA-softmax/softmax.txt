@@ -1,0 +1,45 @@
+F-FUSION-AXISA-SOFTMAX — verdict (verbatim, g5 / claim_verify)
+==============================================================
+slug   : fusion-axisA-softmax
+group  : GPU
+method : compiled f64-ref host harness (cuLaunchKernel + cuEvent, 20 warmup
+         + 200 timed median) — `hexa verify` (g5) BROKEN on both ubu hosts,
+         correctness settled via compiled f64-ref harness per task spec.
+         HONEST per-row-scaled RMS rel metric (softmax probs go near zero —
+         naive |err|/(|want|+eps) would explode; per-row RMS is the right gate).
+date   : 2026-05-25
+host   : ubu-2 RTX 5070 (sm_120 via driver-JIT forward-compat) · CUDA 12.0
+falsifier: a single fused softmax kernel (1 launch) beats the eager 4-launch
+         {row-max, exp, row-sum, div} stack by >=30% wall on a transformer-
+         shaped tensor. FALSIFIED if it does not reach >=30%.
+
+--------------------------------------------------------------------------------
+ptxas-clean (ptxas -arch=sm_90 -v on ubu-2, CUDA 12.0) — all entries 0 spill:
+  softmax_fused : Used 16 registers, 1024 bytes smem, 0 spill
+  k1_row_max    : 0 spill (1024 bytes smem)
+  k2_exp        : 0 spill
+  k3_row_sum    : 0 spill (1024 bytes smem)
+  k4_div        : 0 spill
+
+--------------------------------------------------------------------------------
+VERBATIM host stdout (./host_softmax fused.ptx eager.ptx <rows> <d> 200):
+--------------------------------------------------------------------------------
+=== LARGE 4096x4096 (bandwidth-bound) ===
+F-FUSION-AXISA-SOFTMAX rows=4096 d=4096 reps=200
+  STRUCTURAL: launches fused=1 eager=4 (ratio 4.0x)
+  STRUCTURAL: HBM/elem fused=3R+1W=4 eager=4R+2W=6 (traffic ratio 1.50x)
+  NUMERIC PASS: max_row_rel=1.84284e-07 global_rms_rel=6.75766e-08 max_abs=5.11197e-10 tol=0.01
+  TIMED: fused_med=0.23808 ms (std 0.00110) eager_med=0.69837 ms (std 0.00190) speedup=2.933x faster=65.9% gate(>=30%) PASS
+
+=== SMALL 256x512 (launch-bound) ===
+F-FUSION-AXISA-SOFTMAX rows=256 d=512 reps=200
+  STRUCTURAL: launches fused=1 eager=4 (ratio 4.0x)
+  STRUCTURAL: HBM/elem fused=3R+1W=4 eager=4R+2W=6 (traffic ratio 1.50x)
+  NUMERIC PASS: max_row_rel=1.48688e-07 global_rms_rel=6.98464e-08 max_abs=3.51899e-09 tol=0.01
+  TIMED: fused_med=0.00557 ms (std 0.00120) eager_med=0.01274 ms (std 0.00222) speedup=2.287x faster=56.3% gate(>=30%) PASS
+
+--------------------------------------------------------------------------------
+VERDICT: F-FUSION-AXISA-SOFTMAX PASS (numeric + >=30% wall, both regimes)
+  launch 1<4, HBM 4<6; pct_faster large=65.9% small=56.3% (both >=30%)
+  numeric HONEST per-row-scaled RMS rel <= 1.9e-7 (well under 1e-2 tol)
+  TIER: green (numerical, timed silicon)
