@@ -2134,3 +2134,17 @@
   raw    = ".verdicts/tecs-l-novel-inbox-pipe/pipe_workflow.txt"
   src    = "axis F family (f) F9 — TECS-L/docs/f9-inbox-pipe-novel-verify-infra.md. Anchors: (1) axis A MF4 PR #1083 slug tecs-l-modform-dim-genus + .verdicts/tecs-l-modform-dim-genus/ + TECS-L/docs/mf4-dim-genus-mismatch.md + INBOX.log.md 2026-05-25T15:00Z entry. (2) axis E E2 PR #1096 slug tecs-l-atlas-health + .verdicts/tecs-l-atlas-health/ + INBOX.log.md 2026-05-25T18:00Z entry. Governance: CLAUDE.md @D claim_verify + commons g59/g60 INBOX upstream reflex."
   status = "🟢 empirical workflow — 2 입증 케이스 (MF4 PR #1083, E2 PR #1096). terminal-empirical. NOVEL = verify-infra growth driver canonical pipeline documented. paper_significance NOT satisfied (workflow doc; no new falsifier) → /paper 비대상."
+
+# ───────────────────────────────────────────────────────────────────────
+# OEIS — oeis-scanner-poc (slug · group=OEIS · O1)
+# New catalogue-mirror domain (broad/shallow sister to TECS-L narrow/deep).
+# Scanner POC: precompute 20 candidate fn × K=10 + hash-intersect first 1000
+# OEIS sequences -> 6 matches / 899 ≥K=10 lines (~0.67%). Empirical scanner
+# verdict; per-hit hexa verify --expr fn n v re-confirmation deferred to O3.
+
+@C oeis_scanner_poc := "OEIS scanner POC (O1): 20 candidate hexa-native fn (sigma/tau/phi/mu/sigma_0/sigma_2/sigma_3/aliquot/is_perfect/n/n^2/2^n/n^3/n!/Fibonacci/triangular/2n/odd/Catalan/pronic) precomputed for K=10 + hash-intersected against stripped.gz first 1000 A-lines (899 with >=K terms). Result = 6 match: tau<->A000005 + sigma_0<->A000005 (alias) + phi<->A000010 + n<->A000027 + sigma<->A000203 + n<->A000926 (first-10 coincidence, falsifier expected at term 11)" :: empirical [slug=oeis-scanner-poc group=OEIS]
+  method = "poc-intersect"
+  cmd    = "hexa OEIS/tool/scanner.hexa  → .verdicts/oeis-scanner-poc/scan_log.txt"
+  raw    = ".verdicts/oeis-scanner-poc/scan_log.txt"
+  src    = "OEIS/tool/scanner.hexa (stripped.gz bulk dump + exec_with_status awk hash-intersect). Per-hit hexa verify --expr re-confirm deferred to O3. CC-BY-SA upstream cited per OEIS/OEIS.md §2 governance."
+  status = "🟢 empirical scanner — 6/899 hit (0.67%) on first 1000 OEIS A-lines, K=10 hash-intersect against 20 candidate hexa-native fn. Reproducible. NOT terminal arithmetic claim (per-hit verify = O3 milestone)."
