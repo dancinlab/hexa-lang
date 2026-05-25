@@ -5939,7 +5939,9 @@ void hexa_throw(HexaVal err) {
     __hexa_error_val = err;
     if (__hexa_try_top > 0) {
         __hexa_try_top--;
-        longjmp(*__hexa_try_stack[__hexa_try_top], 1);
+        // RUNTIME tail (cycle 86): native longjmp (drops libc _longjmp). The
+        // matching save is the codegen's `bl _hxlcl_setjmp` into the same slot.
+        hxlcl_longjmp((void *)*__hexa_try_stack[__hexa_try_top], 1);
     }
     // hxa-20260423-013: print the error value on uncaught throw so tests
     // (T34) and users can see what failed. Falls back to generic label
