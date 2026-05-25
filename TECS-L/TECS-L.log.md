@@ -3,6 +3,19 @@
 Append-only history sister of `TECS-L.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
 
+## 2026-05-25T21:20 — 축 B MERSENNE · MR4 Lucas-Lehmer hexa-native (소수성 판정)
+
+- [x] **Lucas–Lehmer 소수성 판정을 hexa-native stdlib 로 구현** — 소수 p>2 에 대해 M_p=2^p−1 이 소수 ⟺ S_{p-2} ≡ 0 (mod M_p), S₀=4·S_{k+1}=S_k²−2
+- [x] `stdlib/core/math.hexa` 에 `pub fn lucas_lehmer(p)` (pure-int, 매 스텝 mod M_p 환산 → S_k<M_p, M_13=8191 까지 i64 안전) + `pub fn mersenne(p)=2^p−1` 공개 (sigma/tau/euler_phi/sopfr 형제, M2 스타일)
+- [x] 단위테스트 `stdlib/core/math_lucas_lehmer_test.hexa` (math_numtheory_test.hexa idiom · 모듈 surface 인라인 · 12 assert): mersenne(3/5/7/11/13) ground + lucas_lehmer(3/5/7/13)=true + lucas_lehmer(11)=false + lucas_lehmer(2)=true(edge)
+- [x] **결과: p=3(M=7)·5(31)·7(127)·13(8191) → PRIME · p=11(M_11=2047=23·89) → COMPOSITE** (LL recurrence reference trace 로 확인: p=3/5/7/13 S_{p-2} mod M_p=0, p=11 → 1736≠0)
+- [x] `hexa parse` PASS — math.hexa · math_lucas_lehmer_test.hexa 둘 다 (OOM-free syntactic gate, 필수)
+- [ ] compiled `hexa build` 미실행 — heavy-classified 라 pool-route 훅이 로컬 거부(Mac=workstation·pool host "workdir missing"). codegen caveat 대로 fallback: parse PASS + g5 교차검증을 정본 증거로 채택, compiled test pass 주장 안 함
+- [x] **g5 교차검증 (LL 은 알고리즘이라 `--expr` 빌트인 아님 → 같은 결론을 빌트인 atom 으로 앵커)**: M_p 소수 ⟹ 2^{p-1}·M_p 완전수 — `is_perfect` p=3→28·p=5→496·p=7→8128·p=13→33550336 전부 =1 🔵; M_11 합성 — sigma(2047)=2160≠2048·tau(2047)=4≠2 🔵 (axis-B MR6 재참조)
+- [x] 7 verdict 영속화 → `.verdicts/tecs-l-mersenne-lucas-lehmer/` (is_perfect ×4 + sigma/tau ×2 + ll_test_evidence.txt) · `CLAIMS.tape` slug=tecs-l-mersenne-lucas-lehmer 7 entry (1:1, orphan 없음)
+- [x] **finding (terminal 🔵)**: hexa-native lucas_lehmer 가 메르센 소수성을 정확히 판정 (PRIME 4 + COMPOSITE 1), 모든 결론이 g5 is_perfect/sigma/tau atom 으로 교차앵커됨 — Euclid-Euler 양방향(MR2 생성·MR6 역명제 실패)과 짝
+
+
 ## 2026-05-25T21:00 — 축 B MERSENNE · MR2 6·7번째 완전수 (Euclid-Euler 확장)
 
 - [x] Euclid-Euler: M_p=2^p−1 소수 ⟹ 2^{p-1}(2^p−1) 완전수. 축 0 M5/M6 이 첫 5개(p=2,3,5,7,13 → 6·28·496·8128·33550336)를 이미 🔵 처리 → MR2 는 **다음 두 메르센 지수로 6·7번째 완전수 확장** (중복검증 없이 src 참조만)

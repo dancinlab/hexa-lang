@@ -1,0 +1,31 @@
+Lucas-Lehmer hexa-native LL test — evidence record (TECS-L MR4)
+================================================================
+
+[1] hexa parse gate (mandatory, OOM-free syntactic) — PASS:
+OK: stdlib/core/math.hexa parses cleanly
+OK: stdlib/core/math_lucas_lehmer_test.hexa parses cleanly
+
+[2] compiled run path — NOT RUN:
+    `hexa build` is heavy-classified; the pool-route hook refuses it
+    locally (Mac=workstation, pool hosts report "workdir missing").
+    Per the codegen caveat, fallback = parse PASS + g5 cross-checks.
+    No compiled test pass is claimed.
+
+[3] LL recurrence reference trace (S_0=4, S_{k+1}=S_k^2-2 mod M_p),
+    identical pure-integer arithmetic to `fn lucas_lehmer(p)`:
+      p=3   M_p=7        S_{p-2} mod M_p=0      -> LL=PRIME
+      p=5   M_p=31       S_{p-2} mod M_p=0      -> LL=PRIME
+      p=7   M_p=127      S_{p-2} mod M_p=0      -> LL=PRIME
+      p=11  M_p=2047     S_{p-2} mod M_p=1736   -> LL=COMPOSITE
+      p=13  M_p=8191     S_{p-2} mod M_p=0      -> LL=PRIME
+
+[4] g5 cross-check anchors (the SAME conclusions via builtin atoms):
+    M_p prime => 2^(p-1)*M_p perfect:
+      p=3  -> is_perfect(28)=1        (ll_p3_is_perfect.txt)
+      p=5  -> is_perfect(496)=1       (ll_p5_is_perfect.txt)
+      p=7  -> is_perfect(8128)=1      (ll_p7_is_perfect.txt)
+      p=13 -> is_perfect(33550336)=1  (ll_p13_is_perfect.txt)
+    M_11 composite:
+      sigma(2047)=2160 != 2048        (ll_p11_composite_sigma.txt)
+      tau(2047)=4 != 2                (ll_p11_composite_tau.txt)
+    (axis-B MR6 .verdicts/tecs-l-mersenne-composite/ holds the same M_11 atoms.)
