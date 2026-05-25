@@ -22,14 +22,17 @@ inside runtime.c by adding `hxlcl_*` C-source helpers, so runtime.c
 actually grows during step 1. runtime.c retirement requires steps 2-4.
 
 ```
-step 1 (NOW — Phase 1)    libc extern 제거. runtime.c 안에서 libc →
-                          C-source helper 치환. binary 가 libc 안 부르
-                          지만 runtime.c (C) 는 살아있음.
-                          진척: 137 → 29 externs · cycle 46-75 (HEAD
-                          6617e7a4 + PR #988 _getuid drop = 29 측정)
-                          잔여: 29 externs — net/exec/spawn 은 r16 /
-                          GO-domain 에서 의도적 real-libc 복원, 진짜
-                          미포팅은 ~9 개 (아래 acceptance 섹션 참조)
+step 1 (✅ DONE — Phase 1)  libc extern 제거. runtime.c 안에서 libc →
+                          C-source helper / inline svc 치환. binary 가
+                          libc 를 전혀 안 부름 (runtime.c (C) 는 살아있음).
+                          🛸 진척: 137 → **0 externs** · cycle 46-86
+                          (`nm aprime_cc | grep ' U '` 전수 = 0).
+                          @goal "≤5 kernel syscall stub" 초과달성 —
+                          모든 syscall 이 inline `svc #0x80`, stub 조차
+                          없음. 마무리 PR 체인: #988 #997 #1008 #1022
+                          #1024 #1043 #1045 #1047 #1048 #1050 #1053
+                          #1057 #1058 (각 g5 verbatim nm + standalone
+                          correctness). runtime.c 폐기는 step 2-4 별개.
 
 step 2 (Phase 2 part-A)   `hxlcl_*` 47 helpers 를 stdlib/runtime/
                           <name>.hexa 로 포팅 + codegen `_builtin_

@@ -2,6 +2,26 @@
 
 Append-only history sister of `RUNTIME.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
+## 2026-05-25 — 🛸🛸🛸 cycle 76-86: Phase-1 step-1 CLOSURE — aprime_cc 29 → 0 externs (NORTH-STAR MET)
+
+`/cycle` 자율 루프 (서브에이전트 측정/discovery + 부모 INLINE 랜딩) 로 step-1 완주. `nm aprime_cc | grep ' U '` (전수 undefined) = **0**. @goal "≤5 kernel syscall stub · zero libc/libm/libsystem" 초과달성 — 모든 syscall 이 inline `svc #0x80`.
+
+- [x] `_getuid` svc-trap (24) — PR #988 (30→29)
+- [x] `_backtrace` + `_backtrace_symbols_fd` → hexa-native stub — PR #997 (29→27)
+- [x] `___darwin_check_fd_set_overflow` (asm-label, latent return-0 bug fix) + `___chkstk_darwin` (naked page-probe) — PR #1008 (27→25)
+- [x] `_inet_pton` (hexa-native IPv4 parser, 12/12 PASS) + `_flock` (svc 131, fake-lock fix) — PR #1022 (25→23)
+- [x] socket group `_socket _bind _listen _accept _connect _setsockopt` + msg group `_recv→recvfrom29 _send→sendto133 _recvmsg _sendmsg` (carry-flag svc, socketpair roundtrip PASS) — PR #1024 (23→13)
+- [x] `_execve` (svc 59) + `_execvp` (native PATH search) — PR #1043 (13→11)
+- [x] `_fork` (Darwin BSD pair-return, x1==1 child disambig) — PR #1045 (11→10)
+- [x] posix_spawn family ×5 eliminated via fork+execvp (closed-negative) — PR #1047 (10→5)
+- [x] `_mkdir` (svc 136) — PR #1048 (5→4)
+- [x] `_nanosleep` (no Darwin syscall → select(2) timeout + EINTR-absorb, 100ms→105ms PASS) — PR #1050 (4→3)
+- [x] `_gmtime_r` (civil-from-days, 10/10 vs libc incl. leap/neg-epoch) — PR #1053 (3→2)
+- [x] `_environ` (priority-101 constructor envp capture) — PR #1057 (2→1)
+- [x] `_longjmp` (native setjmp/longjmp pair, naked arm64 asm + codegen `bl _hxlcl_setjmp`, try/catch e2e exit 17 PASS) — PR #1058 (1→**0**)
+- [ ] step 2-4 (runtime.c → hexa-source 포팅) — 별개 north-star, 미착수
+- [ ] hexac (다른 바이너리) + Linux branch 동일 0-extern — follow-up
+
 ## 2026-05-25 — cycle 75: doc-sync to 29-extern ground-truth + -Oz builtin-trap root-cause 반증
 
 - [x] Ground-truth 재측정 — `nm aprime_cc | grep ' U _'` @ HEAD `6617e7a4` = **30 externs**, PR #988 (`_getuid` svc-trap drop) 머지 후 = **29**. 이게 live baseline (doc 상단 Tier-A 체크박스는 cycle 48 anchored = ~25 cycle stale)
