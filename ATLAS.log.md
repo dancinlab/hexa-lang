@@ -2,6 +2,18 @@
 
 Append-only step log for the theorem-atlas upgrade campaign. Newest on top.
 
+## 2026-05-25 — R6 cascade CLI verb 노출 (`hexa atlas cascade <id>` · read-only)
+
+R5 #1026이 라이브러리 surface(`compiler/atlas/cascade.hexa` — `cascade_candidates`/`cascade_candidates_static`/`cascade_to_text`/`node_falsifier`)만 랜딩하고 CLI verb는 dispatch가 당시 sibling 소유 `atlas_cli.hexa`라 DEFERRED했던 것을 이번 라운드에서 wire.
+
+**조사**: cascade.hexa 공개 API = `cascade_candidates(falsified_id, nodes)` (enrich된 노드 배열 받아 `_scan_one`로 depends_on→verified_by→equivalents→derives edge 인용 first-hit 분류, self-cite 제외) + `cascade_candidates_static(id)` (atlas_list→atlas_enrich 자체 수행) + `cascade_to_text`. R5는 hexa 구조체 리터럴이 누락 필드 default 안 함(codegen `missing_field` 컴파일 에러)을 회피하려 스키마 변경 0 · `raw` 기반 구조화 accessor 채택.
+
+**wire(atlas_cli.hexa, additive)**: (1) `use "compiler/atlas/cascade"`, (2) `_slice_args` 키워드 목록에 `cascade` 추가, (3) `cmd_cascade(rest)` — `<id>` + `--format=json`/`--format=text` 파싱; 정적 아틀라스를 `atlas_list`→`atlas_enrich` 1회만 enrich(edge 백필)하며 동일 패스에서 id 존재 확인 → `cascade_candidates(id, enriched)` 질의(static 래퍼 재사용 안 함 — 존재 확인과 enrich 중복 회피), (4) `main` dispatch 1-블록, (5) help 섹션. cascade.hexa 무수정.
+
+**엣지케이스**: unknown id → `# unknown id: <id> (no such node in the atlas)` + exit 1 (json: `{"found":false,...}`) · 0-citer → `cascade: if <id> were FALSIFIED, no cascade candidates (0 nodes cite it).` · no-arg → usage + exit 2.
+
+**검증**: `hexa parse tool/atlas_cli.hexa` 클린 · bin/hexa-atlas 재빌드 PASS (worktree self-built `build/hexa_module_loader`로 빌드 — stale main-repo 로더는 `acquisition_to_*`/`round_run_with_pool` 미해결로 실패 → worktree fresh 로더가 정답 · `SIDECAR_NO_POOL_ROUTE=1` · hyphenated 셸 우회). 기능: `cascade n`→**26 노드 인용**(R5 측정 일치, P/C/L/F/R/X 혼합) · `--format=json`→python `json.load` PASS(count=26, candidates len=26) · unknown id→exit 1 + 클린 메시지(json found=false) · 0-citer(`xpoll-n-material`·`six_carbon_consciousness`·`n6-bt-1392`)→"no cascade candidates" · no-arg→usage exit 2.
+
 ## 2026-05-25 — R5 drift 보정 (rounded-literal 3노드 full-precision 재등록 · META-SIGNAL ②)
 
 R3 reverify가 실측한 `numerical_seen=36 match=32 drift=3` 의 3 DRIFT 노드를 full-precision 재등록해 drift=0 클로즈. 등록 시 6 sig-fig 반올림 리터럴로 동결되어 in-process full-precision 재계산과 ε=1e-9 초과 불일치했던 registration-hygiene drift.
