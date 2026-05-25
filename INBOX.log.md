@@ -23,9 +23,13 @@ Append-only history sister of `INBOX.md`. Each entry starts with `## <ISO timest
   - (d) [진단] auth 실패 시 실제 ssh stderr(`Permission denied (publickey)`)를 surface — transport-fail 과 auth-fail 을 구분(현재 둘 다 "no exit-code marker" 로 합쳐져 오진 유발).
 - [ ] **cloud-guard 상호작용 주의**: bare-IP raw ssh 는 cloud-guard(g8)가 pod-host 로 플래그 안 해 통과됨(= 본 우회가 가능했던 이유). 하지만 이는 사용자를 sanctioned `hexa cloud` 경로 **밖으로** 밀어내는 갭. 근본 해결은 hexa cloud identity 수정(위 a/b/c)이며, 그래야 g8 준수 상태로 복귀. (역으로 guard 만 조이고 cloud 키를 안 고치면 vast 도달 수단이 0이 됨 — 동시 수정 필요.)
 
-## 2026-05-26T00:45Z — 🔥 hexa_v2 transpiler SEGFAULT on ALL .hexa (pool-wide regression) · from demiurge CERN BLUE-MAX
+## 2026-05-26T05:15Z — ✅ CORRECTION: 위 #1137 은 origin/main 회귀 아님 — ubu-1 호스트-특정 (로컬 Mac 정상)
 
-> **severity: blocker** — `hexa run <any.hexa>` 가 transpile 단계에서 `self/native/hexa_v2` Segmentation fault → C 파일 미생성. file-specific 아님 (3400줄 `tool/verify_cli.hexa` 와 40줄 `stdlib/cern/plasma_wakefield.hexa` 둘 다 동일 크래시). **오늘 아침(2026-05-25)엔 ubu-1 에서 정상 동작**했음 → 이후 origin/main 회귀. `hexa verify --expr` (g5 verdict) 전면 차단.
+> **재진단 (demiurge CERN BLUE-MAX 후속)**: 아래 entry 의 "origin/main 회귀" 결론은 **오진**. 로컬 Mac 에서 `hexa verify --expr chsh_tsirelson 2.8284271247461903` → 정상 🟢 verdict, `hexa verify --expr wakefield_omega_p_sq 1.0 …` → 정상 🟢. 즉 origin/main 소스/툴체인은 멀쩡. 실제 원인은 **호스트-특정 환경**: ubu-1 `hexa_v2` 바이너리 segfault (재빌드 필요) · ubu-2 무네트워크 + HEAD stale(9b0a01a) + hexa_v2/verify_cli 로컬수정 · mini-pool stale checkout. **fix = 각 pool 호스트 `hexa cc` 재빌드 + origin/main sync** (origin/main bisect 불필요 — 시간낭비 방지). 교훈: `hexa verify` 는 로컬 Mac 직접 실행이 정답, pool/route 경유 금지.
+
+## 2026-05-26T00:45Z — 🔥 hexa_v2 transpiler SEGFAULT (ubu-1 host-specific · ⚠ "pool-wide regression" 표현은 위 CORRECTION 참조) · from demiurge CERN BLUE-MAX
+
+> **severity: host-specific (NOT origin/main)** — `hexa run <any.hexa>` 가 transpile 단계에서 ubu-1 의 `self/native/hexa_v2` Segmentation fault → C 파일 미생성. file-specific 아님 (3400줄 `tool/verify_cli.hexa` 와 40줄 `stdlib/cern/plasma_wakefield.hexa` 둘 다 동일 크래시). **로컬 Mac 은 정상** (위 2026-05-26T05:15Z CORRECTION) — ubu-1 바이너리 재빌드로 해소. `hexa verify --expr` 는 로컬에서 정상 동작.
 
 - [ ] **repro**: ubu-1 `cd ~/core/hexa-lang && hexa run stdlib/cern/plasma_wakefield.hexa` → `[1/2] hexa_v2 … tmp.hexa build/artifacts/…c` → `Segmentation fault (core dumped)` → `transpile failed — C file not produced`
 - [ ] **선행 증상**: 처음엔 `runtime.c:1954: call to undeclared function '_hxlcl_syscall3_cf'` (ubu-1 stale `self/runtime.c`) → `git checkout origin/main -- self/runtime.c` 로 선언(1112행)은 복구됐으나 그 후 transpiler 가 segfault 로 회귀 (별개 2차 버그)
