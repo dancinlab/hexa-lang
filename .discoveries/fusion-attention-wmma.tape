@@ -26,4 +26,6 @@
   verdict_ptr  = ".verdicts/fusion-attention-wmma/F-FUSION-ATTN-WMMA-WALL.txt"
   artifact     = "archive/fires/fusion_attention_wmma_2026_05_25/ (flash_attn_wmma.ptx + .sm80.ptx + jit_load_probe.c + structural_oracle.hexa + fa_wmma_host.c + fa_cublas_tc_baseline.c + result.json + fire.log)"
   invariants   = "@F f1 no LLVM · @F f2 no C-transpile changes (compiler/codegen/*.hexa UNTOUCHED — hand-emit PTX following RFC 067 WMMA cookbook + _nvptx_wmma_mnemonic emit family)"
-  next_claim   = "round 3: timed silicon fire — does the TC-fused flash-attention beat cuBLAS-batched-TC-GEMM+softmax by >=30% wall at N in {512,1024,2048,4096}, d=64? (parent runs serially, uncontended GPU)"
+  round3_wall  = "🔴 FALSIFIED 2026-05-25 (ubu-2 RTX 5070 uncontended, 20 warmup + 200 timed median, d=64): fused single-CTA wmma kernel 9.4-15.5x SLOWER than cuBLAS-TC 3-launch (N=512 9.4x · N=1024 10.8x · N=2048 13.3x · N=4096 15.5x) AND numeric FAIL (max_rel 2.6-4.8 > 1e-2; max_abs ~3-6e-5). Verdict .verdicts/fusion-attention-wmma-wall/F-FUSION-ATTN-WMMA-WALL.txt"
+  ruled_out    = "Tensor-Core INSTRUCTIONS alone do not win — the kernel is single-CTA (S/P/O+48regs in one block smem) so uses ~1/48 of the RTX 5070 SMs while cuBLAS launches thousands of CTAs. The 1-launch/0-S-HBM structural moat is real but dominated by the 47/48-SMs-idle parallelism deficit."
+  next_claim   = "round 4: multi-CTA flash-attention (one CTA per query-block x head) + correctness fix, THEN re-time vs cuBLAS-TC — does cuBLAS-grade occupancy + the fusion moat together beat >=30%?"

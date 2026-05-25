@@ -226,9 +226,9 @@
   src    = "archive/fires/fusion_attention_wmma_2026_05_25/{flash_attn_wmma.ptx,structural_oracle.hexa,jit_load_probe.c}"
   status = "🔵 SUPPORTED-FORMAL — codegen + structural + Tensor-Core inner GEMMs PASS; compiled-hexa oracle (g5 broken on ubu) verbatim. terminal · paper-eligible."
 
-@C fusion_attn_wmma_wall := "wall clause: does TC-fused flash-attention beat cuBLAS-batched-TC-GEMM+softmax by >=30% wall? — DEFERRED to round-3 timed silicon fire (harness ready, NOT claimed won)" :: measurement [slug=fusion-attention-wmma group=GPU]
-  method = "fixpoint"
-  cmd    = "ROUND 3 (deferred): ubu-2 RTX 5070 fa_wmma_host vs fa_cublas_tc_baseline, cuEvent 20 warmup 200 timed median (parent runs serially, uncontended GPU)"
+@C fusion_attn_wmma_wall := "FALSIFIED round-3: single-CTA TC-fused flash-attention 9.4-15.5x SLOWER than cuBLAS-TC 3-launch (N=512..4096 d=64) + numeric FAIL — ruled-out axis = TC instructions w/o multi-CTA occupancy (uses ~1/48 SMs)" :: measurement [slug=fusion-attention-wmma group=GPU]
+  method = "silicon-fire"
+  cmd    = "ubu-2 RTX 5070 (uncontended) fa_wmma_host vs fa_cublas_tc_baseline, cuEvent 20 warmup + 200 timed median, N in {512,1024,2048,4096} d=64"
   raw    = ".verdicts/fusion-attention-wmma/F-FUSION-ATTN-WMMA-WALL.txt"
   src    = "archive/fires/fusion_attention_wmma_2026_05_25/{fa_wmma_host.c,fa_cublas_tc_baseline.c}"
   status = "🟠 DEFERRED — wall clause (b) is the round-3 silicon-fire §finding; harness nvcc -c clean. NOT terminal until the timed fire runs."
