@@ -2415,6 +2415,27 @@ fn _test_dtype_family() -> bool {
         println("  ok: f16xf16 -> f16       -> " + mnem_f16acc)
     }
 
+    // ─── Sub-case A2 — integer div/rem mnemonics (N71-C) ───────────────
+    // Integer `/` and `%` on a u32/u64 dst bank must resolve to signed
+    // integer PTX (`div.s32`/`div.s64`/`rem.s32`/`rem.s64`), NOT fall
+    // through to the FP64 `div.rn.f64` (ptxas-illegal on int regs).
+    let int_cases = [
+        ["div", NVPTX_RKIND_U32, "div.s32"],
+        ["/",   NVPTX_RKIND_U32, "div.s32"],
+        ["rem", NVPTX_RKIND_U32, "rem.s32"],
+        ["div", NVPTX_RKIND_U64, "div.s64"],
+        ["%",   NVPTX_RKIND_U64, "rem.s64"],
+    ]
+    for c in int_cases {
+        let got = _nvptx_binop_mnemonic_for_kind(c[0], c[1])
+        if got != c[2] {
+            println("  FAIL: int binop " + c[0] + " on " + c[1] + " → got `" + got + "` want `" + c[2] + "`")
+            ok = false
+        } else {
+            println("  ok: int " + c[0] + " (" + c[1] + ") -> " + got)
+        }
+    }
+
     // ─── Sub-case B — PReg metadata round-trip via classifier ──────────
 
     // Synthesize an MFunc whose first STMT_CALL is gpu_wmma_load_a so the
