@@ -99,15 +99,15 @@ jobs:
           mkdir -p self/native build/stage1 build
           gcc ${{ env.CFLAGS_COMMON }} \
               -I self self/native/hexa_cc.c \
-              -o self/native/hexa_v2 \
+              -o build/hexa_v2 \
               -lm -ldl
-          file self/native/hexa_v2
+          file build/hexa_v2
 
       - name: Stage 1 — transpile + compile CLI dispatcher (static)
         shell: bash
         run: |
           set -euo pipefail
-          ./self/native/hexa_v2 self/main.hexa build/stage1/main.c
+          ./build/hexa_v2 self/main.hexa build/stage1/main.c
           # -static for distroless drop-in.  glibc-static is preinstalled
           # on ubuntu-latest / ubuntu-24.04-arm runners.
           gcc ${{ env.CFLAGS_COMMON }} -static \
@@ -120,7 +120,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          ./self/native/hexa_v2 self/hexa_full.hexa /tmp/hexa_full_regen.c
+          ./build/hexa_v2 self/hexa_full.hexa /tmp/hexa_full_regen.c
           # runtime.c is included as a sibling header by the transpiled C.
           cp self/runtime.c /tmp/runtime.c
           gcc ${{ env.CFLAGS_COMMON }} -static \
@@ -139,7 +139,7 @@ jobs:
               println("ok")
           }
           HEXA_EOF
-          ./self/native/hexa_v2 /tmp/hexa_ci/hi.hexa /tmp/hexa_ci/hi.c
+          ./build/hexa_v2 /tmp/hexa_ci/hi.hexa /tmp/hexa_ci/hi.c
           gcc ${{ env.CFLAGS_COMMON }} -static \
               -I self /tmp/hexa_ci/hi.c -o /tmp/hexa_ci/hi \
               -lm -ldl

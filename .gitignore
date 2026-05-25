@@ -125,10 +125,14 @@ shared/state/
 self/native/hexa_v2.pre_nightly_rebuild_*
 self/native/hexa_v2.pre_*
 
-# CANON M1: retired variant transpiler binaries (code-unused; doc-only refs).
-# Canonical seeds are self/native/hexa_v2 (Mac arm64) + hexa_v2_linux_x86_64
-# (Linux x86_64), both build-artifact-ized in CANON M3. These suffixed
-# variants must never re-enter git.
+# CANON M3: the transpiler is a build artifact (build/hexa_v2), built
+# per-machine from the arch-neutral C seed self/native/hexa_cc.c via
+# `hexa cc` (Go 1.4 C-seed model). No transpiler binary lives in git —
+# build/hexa_v2 is always arch-correct, closing the committed-binary
+# arch-leak class. M1 retired the suffixed variants; M3b dropped the
+# committed seeds (hexa_v2 / hexa_v2_linux_x86_64). All must stay out of git.
+self/native/hexa_v2
+self/native/hexa_v2_linux_x86_64
 self/native/hexa_v2_baseline
 self/native/hexa_v2_test
 self/native/hexa_v2_nobt71
