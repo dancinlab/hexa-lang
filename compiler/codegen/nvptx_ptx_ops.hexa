@@ -88,6 +88,35 @@ pub let PTX_OP_FMA_RN_F64: string     = "fma.rn.f64"   // round-to-nearest FMA
 // `div.approx.f64` / `div.full.f64` do NOT exist (those are FP32-only).
 pub let PTX_OP_DIV_RN_F64: string     = "div.rn.f64"
 
+// ── PTX floating-point math intrinsics (RFC 055 §13 — NN-stack math) ──
+// PTX ISA 9.7.3 floating-point ops. The EXACT ones (sqrt.rn / max / min /
+// abs) are IEEE round-to-nearest → byte-eq verifiable against the CPU
+// libm reference. The APPROX ones (rsqrt.approx.f32, ex2.approx.f32) are
+// hardware-approximation units → validated within a relative tolerance
+// (~2^-23) rather than byte-eq. These close the softmax (exp / max),
+// RMSNorm / LayerNorm (sqrt / rsqrt), and attention (max) math gaps for
+// the `@gpu_kernel` source-to-silicon path.
+pub let PTX_OP_SQRT_RN_F32: string    = "sqrt.rn.f32"   // EXACT — IEEE round-to-nearest sqrt (f32)
+pub let PTX_OP_SQRT_RN_F64: string    = "sqrt.rn.f64"   // EXACT — IEEE round-to-nearest sqrt (f64)
+pub let PTX_OP_RSQRT_APPROX_F32: string = "rsqrt.approx.f32"  // APPROX — fast reciprocal-sqrt (f32 only; ~2^-23 rel)
+pub let PTX_OP_MAX_F32: string        = "max.f32"       // EXACT — IEEE max (f32)
+pub let PTX_OP_MAX_F64: string        = "max.f64"       // EXACT — IEEE max (f64)
+pub let PTX_OP_MIN_F32: string        = "min.f32"       // EXACT — IEEE min (f32)
+pub let PTX_OP_MIN_F64: string        = "min.f64"       // EXACT — IEEE min (f64)
+pub let PTX_OP_MAX_S32: string        = "max.s32"       // EXACT — signed-int max (s32)
+pub let PTX_OP_MAX_S64: string        = "max.s64"       // EXACT — signed-int max (s64)
+pub let PTX_OP_MIN_S32: string        = "min.s32"       // EXACT — signed-int min (s32)
+pub let PTX_OP_MIN_S64: string        = "min.s64"       // EXACT — signed-int min (s64)
+pub let PTX_OP_ABS_F32: string        = "abs.f32"       // EXACT — abs (f32)
+pub let PTX_OP_ABS_F64: string        = "abs.f64"       // EXACT — abs (f64)
+pub let PTX_OP_MUL_F32: string        = "mul.f32"       // f32 multiply (used in exp decomposition premul)
+pub let PTX_OP_EX2_APPROX_F32: string = "ex2.approx.f32"  // APPROX — 2^x hardware unit (f32; basis of exp via x*log2e)
+// log2(e) = 1.4426950408889634, the premul factor that converts e^x into
+// 2^(x·log2e) so the hardware `ex2.approx.f32` unit can evaluate it.
+// Hex-float literal form (0d<16 hex digits>) is the PTX-canonical way to
+// embed an exact f64 immediate — the assembler decodes it bit-for-bit.
+pub let PTX_LOG2E_HEXF64: string      = "0d3FF71547652B82FE"  // log2(e) as IEEE-754 f64 bits
+
 // ── PTX integer index arithmetic (loop / addressing) ──────────
 pub let PTX_OP_MOV_U32: string        = "mov.u32"      // read sreg / move
 pub let PTX_OP_ADD_S32: string        = "add.s32"
