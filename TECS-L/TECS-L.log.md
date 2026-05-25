@@ -3,6 +3,17 @@
 Append-only history sister of `TECS-L.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
 
+## 2026-05-26 · 축 F · F4 NOVEL external-vein — arxiv Ore 조화약수 → hexa verify (foreground)
+
+- [x] F4 — arxiv math.NT 가설(Ore 1948, harmonic divisor numbers)을 hexa verify pipeline 에 직접 태움. background agent throttle-storm 회피 위해 **foreground 진행** (부모가 직접 verify 실행).
+  - 가설: H(n)=n·τ(n)/σ(n) ∈ ℤ ⟺ n 은 조화약수(Ore) 수. 모든 완전수 ⊂ Ore, n=6 = 최소 비자명 Ore. OEIS A001599.
+  - 검증: component σ/τ 전부 🔵 (`hexa verify --expr`) + exact 정수조립 (tolerance 0):
+    - H(6)=6·4/12=2 ∈ ℤ (1st perfect · 최소 비자명 Ore) · H(28)=28·6/56=3 ∈ ℤ (2nd) · H(496)=496·10/992=5 ∈ ℤ (3rd)
+    - **H(140)=140·12/336=5 ∈ ℤ — 140 은 Ore but 非완전 → Ore ⊋ perfect 결정적 증명** (조화클래스가 완전클래스를 진부분집합 포함)
+    - **H(12)=12·6/28=18/7 ∉ ℤ 🔴** — 12 非Ore (closed-negative falsifier)
+  - finding: "모든 완전수 ⊂ Ore 수"(Ore 1948) 를 첫 3 완전수로 hexa-native 재근거 (닫힌형: perfect σ=2n → H=τ/2, τ 짝수 → ℤ) + Ore ⊋ perfect 를 n=140 으로 결정적 증명 + 非Ore 반례. external-vein 채널 = 문헌 가설을 self-generated 아닌 hexa exact 산술로 grounding (F3 OEIS catalogue-channel 과 상보, "arxiv→verify" 첫 입증).
+  - 산출물: `.verdicts/tecs-l-f4-arxiv/ore_harmonic.txt` (10 verify + assembly) · `CLAIMS.tape` slug=tecs-l-f4-arxiv 1 @C · `TECS-L/docs/f4-arxiv-ore-harmonic.md`. TECS-L.md F4 [ ]→[x]. 격리 worktree `/tmp/wt-tecs-fg` (branch `tecs-l-f2f4-fg-2026-05-26`).
+
 ## 2026-05-26T05:30Z — 축 F F7 · 다른 modular curve군 (Γ₀ 너머 Γ₁(N)/X(N) index) — 🔵 components + 🟡 indices + 🔴 n=6 closed-negative
 
 - [x] F7 milestone = "다른 modular curve군: Γ₁(N)·X(N)·Shimura — hexa fn 가용 영역 매핑" → `- [ ]`→`- [x]`. MODFORM 축 A 는 Γ₀(N)-only 였고, F7 이 modular-curve 탑을 Γ₁(N)·전레벨 X(N)=Γ(N) 로 확장.
