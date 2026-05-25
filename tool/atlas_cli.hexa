@@ -29,6 +29,7 @@
 use "compiler/atlas/parser"
 use "compiler/atlas/merger"
 use "compiler/atlas/static_index"
+use "compiler/atlas/atlas_diff"    // cmd_diff — diff two atlas sources (R6)
 use "compiler/atlas/embed_fold"    // embed_fold_into (kind,id dedup + atomic write)
 use "compiler/atlas/calc_dispatch" // calc_eps / calc_is_float_fn — float-recompute SSOT (shared w/ verify_cli)
 use "self/stdlib/fs"               // read_file_safe (used by cmd_append_witness)
@@ -47,7 +48,7 @@ fn _slice_args() -> array {
     let mut i = 1
     while i < n {
         let a = to_string(av[i])
-        if a == "lookup" || a == "dump" || a == "stats" || a == "hash" || a == "register" || a == "export" || a == "reverify" || a == "--help" || a == "-h" || a == "help" {
+        if a == "lookup" || a == "dump" || a == "stats" || a == "hash" || a == "register" || a == "export" || a == "diff" || a == "reverify" || a == "--help" || a == "-h" || a == "help" {
             let mut out = []
             let mut j = i
             while j < n {
@@ -333,6 +334,33 @@ fn cmd_export(rest: array) {
     }
     write_file(out, parts.join(""))
     println("hexa atlas export: wrote " + to_string(count) + " nodes → " + out)
+}
+
+// cmd_diff — `hexa atlas diff <A> <B>` (R6). READ-ONLY comparison of two
+// atlas sources keyed on (kind, id): nodes only-in-A (removed), only-in-B
+// (added), in-both-but-raw-differs (changed). A / B are file paths — either
+// a plain .n6 export or an embedded.gen.hexa file (auto-detected by the
+// loader). --format=json / --json emits machine-readable id lists + counts.
+fn cmd_diff(rest: array) {
+    let mut paths = []
+    let mut json_mode = false
+    let mut i = 0
+    while i < len(rest) {
+        let a = to_string(rest[i])
+        if a == "--format=json" || a == "--json" { json_mode = true }
+        else if a == "--format=text" { json_mode = false }
+        else { paths.push(a) }
+        i = i + 1
+    }
+    if len(paths) < 2 {
+        eprintln("usage: hexa atlas diff <A> <B> [--format=json]")
+        eprintln("  A / B = .n6 export OR embedded.gen.hexa file (auto-detected)")
+        exit(2)
+    }
+    let a_nodes = load_atlas_source(to_string(paths[0]))
+    let b_nodes = load_atlas_source(to_string(paths[1]))
+    let d = diff_atlas(a_nodes, b_nodes)
+    if json_mode { diff_report_json(d) } else { diff_report_text(d) }
 }
 
 // `hexa atlas register` — the ONE absorption verb. Each `--from-<verb>` arm
@@ -2403,6 +2431,11 @@ fn cmd_help() {
     println("export subcommand (live atlas → portable .n6; n6 is EXPORT-only, NOT the SSOT):")
     println("  export [--out PATH]     write all nodes as .n6 (default n6/atlas.n6)")
     println("")
+    println("diff subcommand (READ-ONLY compare of two atlas sources, keyed on (kind,id)):")
+    println("  diff <A> <B> [--format=json]")
+    println("                          A/B = .n6 export OR embedded.gen.hexa (auto-detected);")
+    println("                          reports removed (only-A) / added (only-B) / changed (raw differs)")
+    println("")
     println("reverify subcommand (re-run the calc over FROZEN 🟢 nodes; read-only · no tombstone):")
     println("  reverify [--limit N]    re-run in-process float recompute over registered 🟢")
     println("                          SUPPORTED-NUMERICAL F nodes → report MATCH / DRIFT /")
@@ -2431,6 +2464,7 @@ fn main() {
     else if sub == "dump" { cmd_dump(rest) }
     else if sub == "register" { cmd_register(rest) }
     else if sub == "export" { cmd_export(rest) }
+    else if sub == "diff" { cmd_diff(rest) }
     else if sub == "reverify" { cmd_reverify(rest) }
     else if sub == "help" || sub == "--help" || sub == "-h" { cmd_help() }
     else {

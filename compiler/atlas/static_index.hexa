@@ -133,7 +133,9 @@ fn _unescape_hx(s: string) -> string {
 // O(n²) = ~300s/lookup; this is sub-second.) `raw: "` opens; the next UNESCAPED
 // `"` on the line closes (even backslash run before it = real close). OOM-safe:
 // a text scan, never a compile-time `use` const load.
-fn _extract_raw_blocks(text: string) -> string {
+// pub so `compiler/atlas/atlas_diff.hexa` can reuse the embed→.n6 extraction
+// for the `hexa atlas diff` verb (load an embedded.gen.hexa file as nodes).
+pub fn _extract_raw_blocks(text: string) -> string {
     let lines = text.split("\n")
     let nl = len(lines)
     let marker = "raw: \""
