@@ -2,6 +2,18 @@
 
 Append-only history sister of `INBOX.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
+## 2026-05-26T06:30Z — verify_cli rebuild `_Generic` stale 증상 = bessel_j0/iit4_faithful_phi 미선언 (↓ 21:13Z stale-binary 의 구체 compile-error 재현 · TECS-L 범용화 CM triage)
+
+> **dedup: 신규 아님** — 바로 아래 2026-05-25T21:13Z "stale 설치 binary 재빌드" 의 구체 clang-error 증상. witness 보강용.
+
+격리 `/tmp/wt-*` worktree 에서 `hexa verify --expr <any>` 캐시 miss → `verify_cli.hexa` rebuild → clang: `use of undeclared identifier 'bessel_j0'/'bessel_j1'` (codegen `hexa_call1(bessel_j0,…)` 생성, 정의는 `_bessel_j0` 언더스코어; `runtime.h:846` `_Generic` dispatch prefix mismatch) + `iit4_faithful_phi` undeclared (hexa_call4). 2 warnings + 11 errors → binary 미생성.
+- [ ] 재현: TECS-L MILLENNIUM CM triage `hexa verify --expr sopfr 6 5` → verify_cli rebuild → 위 error. sigma/tau/phi 연쇄 동일. F4(이전 worktree) 는 캐시 hit 으로 통과 → 캐시 무효 후 노출.
+- root: VERIFY-KIT V작업(special-fns `bessel_*` + phi_demo `iit4_faithful_phi` 추가) 후 verify_cli 가 그 fn 호출하나 **deployed runtime.h `_Generic` 미동기** (= 21:13Z stale binary). transpiler codegen 의 `_` prefix 누락 의심.
+- 영향: 격리 worktree g5 verify 차단 → TECS-L 새 대축(CM/PH/CO/LF) verify 막힘.
+- 우회(현): main working tree cwd 캐시 hit 시도 / independent `.hexa` `hexa build` (함수값만, verdict tier 아님).
+- fix: deployed hexa 재설치 (verify_cli + runtime.h `_Generic` 재생성 동기, mini pool) = 21:13Z 와 동일 처방.
+- proposed-by: agent (TECS-L 범용 격상 후속, 2026-05-26)
+
 ## 2026-05-25T21:13Z — 🔁 VERIFY-KIT V1 SOURCE는 완비 — blocker는 오직 stale 설치 binary 재빌드 (hexa_v2 segfault + `hexa cc --regen` .o-as-.c) · from demiurge RTSC h3as atlas-absorb
 
 > **정밀 갱신** (기존 transpiler-segfault 엔트리 보강). demiurge RTSC 가 h3as 결정적 결과(λ_BZ=1.65 강결합 stable 폴리모프, Tc≈56K)를 atlas 흡수하려다 막힘. 추적 결과 **소스는 이미 맞고, 막힌 건 binary 재빌드뿐**임을 확정.
