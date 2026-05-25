@@ -1906,6 +1906,7 @@ static int hxlcl_nanosleep(const void *req_, void *rem_) {
                           + ((long long)now.tv_nsec - start.tv_nsec);
         long long left = total_ns - elapsed;
         if (left <= 0) return 0;
+#ifdef HXLCL_SYS_SELECT
         struct timeval tv;
         tv.tv_sec  = (long)(left / 1000000000LL);
         tv.tv_usec = (int)((left % 1000000000LL) / 1000);
@@ -1913,6 +1914,18 @@ static int hxlcl_nanosleep(const void *req_, void *rem_) {
         if (r == 0) return 0;          // timeout elapsed -> full sleep done
         if (errno == EINTR) continue;   // signal: recompute remaining, retry
         return -1;                      // genuine error
+#else
+        // non-Apple (Linux / Intel): HXLCL_SYS_SELECT is the Apple-arm64-only
+        // raw-syscall number; everywhere else use libc nanosleep (POSIX, present
+        // in every _GNU_SOURCE build). Same EINTR-resume + full-sleep semantics.
+        struct timespec ts;
+        ts.tv_sec  = (long)(left / 1000000000LL);
+        ts.tv_nsec = (long)(left % 1000000000LL);
+        int r = nanosleep(&ts, NULL);
+        if (r == 0) return 0;          // full sleep done
+        if (errno == EINTR) continue;   // signal: recompute remaining, retry
+        return -1;                      // genuine error
+#endif
     }
 }
 static int hxlcl_tcgetattr(int fd, void *termios) {
