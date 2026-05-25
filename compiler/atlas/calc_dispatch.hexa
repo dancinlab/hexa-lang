@@ -110,6 +110,8 @@ pub fn calc_is_float_fn(fn_name: string) -> bool {
         // FUSION F-funnel — design-point (a)×(b) composite scoring (FUSION.md §2.1 · 2026-05-25):
         || fn_name == "f_reactivity_coverage" || fn_name == "f_margin_coverage"
         || fn_name == "f_funnel_composite"
+        // FUSION F4 — ideal-MHD β-limit / q* / kink (Troyon 1984 · gate (d) · 2026-05-25):
+        || fn_name == "beta_max_pct" || fn_name == "beta_n" || fn_name == "q_star"
         // Bio-physical Phase 3 (demiurge cross-domain V2 closure):
         || fn_name == "higuchi" || fn_name == "tafel" || fn_name == "hagen_poiseuille"
         // TTR-ORAL / TTR-LAC bundle (topical PK + laser optics · INBOX T22:35Z):

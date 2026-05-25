@@ -17,6 +17,85 @@ R3 reverify가 실측한 `numerical_seen=36 match=32 drift=3` 의 3 DRIFT 노드
 
 **검증**: `reverify` → `numerical_seen=35 match=35 drift=0 unverifiable=0`(R4 calc_dispatch가 float 테이블을 99-fn로 확장해 이전 1 UNVERIFIABLE도 흡수, 35 전수 MATCH) · `lookup` 3노드 full-precision 표시 확인 · bin/hexa-atlas 재빌드 PASS. SSOT(embedded.gen.hexa) diff는 data-only(3 노드 라인 교체 + 직전 노드 trailing comma) — 로직 무변경.
 
+## 2026-05-25 — R5 falsifier 구조화 accessor + cascade 무효화 query (additive·read-only)
+
+goal(deferred): "falsifier 구조화 필드 + cascade 무효화". 노드가 claim을 반증하는 조건
+(falsifier)을 운반 + 어떤 노드가 falsified되면 그것을 인용하는 파생 노드를 cascade-플래그.
+
+조사: 노드 모델 = `compiler/atlas/parser.hexa` 단일 `struct AtlasNode`(kind·id·raw·source_file·
+source_line·grade·edges). edges=`EdgeInfo`(depends_on `<-`·derives `->`·applications `=>`·
+equivalents `==`·converges `~>`·verified_by `|>`·breakthroughs `!!`) — **인용/의존 메커니즘 이미 존재**.
+falsifier는 현재 비구조화 prose: 코퍼스 427 "falsifier" 히트 대부분 노드 id/도메인명
+(`F19_F23_falsifier_expansion_*`), 실제 클로즈는 `=> "...falsifier:..."` 설명 prose 안 2건뿐
+(구조화 `falsifier:` 연속줄 = 0). `falsifier_wellformed_audit.hexa`는 raw 전체 substring-anywhere로
+@? 노드만 감사. RETIRED `compiler/discover/cascade.hexa`(RFC-017 §5e) = atlas.n6 디스크 읽기 +
+normalized_form substring 휴리스틱 + tombstone/manifest write(fs_write·중량) — out of scope 유지.
+
+**스키마-광역 위험 실측**: hexa 구조체 리터럴은 누락 필드를 default 하지 **않음** — codegen이
+`hexa_codegen_error__missing_field__Foo__c` 의도적 컴파일 에러 방출(테스트 빌드로 확인). 따라서
+`AtlasNode`에 필드 1개라도 추가 = embedded.gen.hexa의 16101 리터럴 + ~20 생성 파일 전부 재작성
+강제(데이터 파일 편집 금지 위반). → **스키마 변경 0**으로 결정. additive accessor 패턴 채택:
+
+- [x] compiler/atlas/cascade.hexa (신규 ~260줄, 코드+주석; 코드 본문 g4 내) —
+  (1) `node_falsifier(node)->string` = `raw` 연속줄에서 `falsifier:`/`falsifier = `/`falsifier=` +
+  quoted-prose 래핑을 구조화 추출(필드 없이 타입드 surface · 부재 시 "" · `=>` 설명 prose는 의도적
+  非매칭 = false-positive 방지) · `node_has_falsifier` 술어.
+  (2) `CascadeHit{id·kind·via}` + `cascade_candidates(falsified_id, nodes)` = 기존 edge 재사용,
+  falsified-id를 depends_on/verified_by/equivalents/derives로 인용하는 他노드 read-only 리스트
+  (self-cascade 제외 · 강한-의존 우선 probe 순). `cascade_candidates_static(id)` = atlas_list+enrich
+  래퍼. `cascade_to_text` 렌더. **read-only — tombstone/mutate/PR/I-O 無**.
+- [x] compiler/atlas/cascade_test.hexa (신규) — 19/19 PASS(node_falsifier 3형식+quoted+부재·
+  cascade 4-edge-type 후보·self/lonely 제외·empty/unknown id→0·render count).
+- 검증: `hexa parse` 양파일 clean · 격리 worktree 빌드(차용 transpiler symlink + 메인
+  HEXA_MODULE_LOADER + SIDECAR_NO_POOL_ROUTE=1) PASS. **16101 노드 byte-identical 로드**
+  (corpus harness: `loaded 16101` · `n`→kind=P · `sigma`→kind=P 불변) · 실데이터 cascade
+  (`n` falsified 가정 → 26 노드 인용: sigma depends_on, n6-* 등) · 기존 parser_test 재빌드 PASS
+  (파서 무손상). **스키마/데이터/sibling 파일(atlas_cli·audit) 미변경 — git status = 신규 2파일만.**
+- 결론: structured falsifier 필드는 hexa no-default-field 의미론 + 16k 동결 데이터 때문에 깨끗한
+  additive 슬라이스 아님(스키마 강제 안 함). accessor+cascade-query로 동일 목표(구조화 surface +
+  cascade 무효화 후보)를 read-only·byte-preserving 달성. 현 코퍼스 structured-falsifier=0 = 정직한
+  상태(이 마일스톤이 채울 갭). cascade CLI verb 노출은 atlas_cli sibling rebase 후 deferred.
+
+## 2026-05-25 — R5 active-acquisition 랭킹 (Q / 🟡 / 🟠 프론티어 우선순위)
+
+audit 축은 코퍼스를 **측정**만 했다. R5는 그 측정을 **우선순위 to-acquire 리스트**로 전환 —
+동결-but-미검증/open 노드 중 "다음에 검증/획득할 최고가치 타깃"을 랭킹. 순수 read-only
+(노드 무변경 · fold 없음). `compiler/atlas/audit.hexa` 소유 라운드.
+
+**verdict-tier 매핑 (ATLAS.md 모델)**:
+- 🟠 INSUFFICIENT — cite-bearing kind(F/L/P/R) · 인용증거 無(`cite=`/`|>`) · 검증등급[*] 無.
+  가장 깊은 갭: provenance도 재계산도 없는 공식 주장.
+- 🟡 CITATION-ONLY — cite-bearing & 인용有 but [*]-미검증. 등록됐으나 재계산 안 됨.
+- Q OPEN-QUESTION — kind "Q" open question (discovery 프론티어).
+- verified[*](🔵/🟢)는 프론티어 아님 → 제외.
+
+**defensible composite priority** = tier_weight + domain_gap_weight + kind_weight:
+- tier: 🟠=300 🟡=200 Q=100 (깊은 갭 우선). domain_gap: clamp(60-domain_size,0,60) —
+  sparse 도메인(#958 coverage 축 활용) 우선 = 거기 획득이 under-covered 도메인을 더 움직임.
+  kind: F=8 L=6 P=4 R=2 Q=0. 동률은 id-순(오래된=foundational 우선).
+
+**구현(additive·minimal)**:
+- [x] compiler/atlas/audit.hexa — `AcqItem`/`AcqReport` struct + `audit_acquisition_with_scope`
+  (2패스: 도메인 sibling-count → 프론티어 아이템+priority, selection-sort desc, top_k slice) +
+  `audit_acquisition_overlay` + `acquisition_to_text`/`acquisition_to_json`. 기존 헬퍼
+  (`_kind_is_cite_bearing`/`_node_has_cite`/`_extract_domain`/`_bucket_bump`) 재사용.
+- [x] compiler/atlas/audit_rodata.hexa — `audit_acquisition_rodata`/`_merged` rodata-aware 래퍼
+  (`audit_rodata`/`_merged` 패턴 미러).
+- [x] tool/atlas_cli.hexa — `cmd_stats`에 `--acquisition`/`--top=N` 플래그 + 1-블록 dispatch
+  (`--audit` 분기 前 early-return, 기존 경로 무회귀) + help 2줄. (sibling R5가 같은 파일
+  소유 → rebase 시 KEEP BOTH 예상).
+
+**검증**: parse-gate 3파일 OK. bin/hexa-atlas 빌드 PASS(borrowed transpiler ·
+`SIDECAR_NO_POOL_ROUTE=1` · HEXA_MODULE_LOADER 명시). 기능 실측(rodata):
+- 프론티어 2152 = 🟠 1709 + 🟡 360 + Q 83 (서브카운트 합 = frontier_count ✓).
+- 불변식: 🟡(360) ⊆ cite_present(458) · 🟠(1709) ⊆ cite_missing(8194) ·
+  verified F/L/P/R 6583 정확히 제외 · priority 단조감소(sort 정합) · JSON well-formed.
+- overlay scope = 0 clean-degrade · default=merged · `--audit`/plain stats 무회귀.
+- top-1 = 🟠 F:L6-genetics-mutation-rate p=367 dom=genetics_applied(1) — sparse-domain
+  미검증 공식이 정확히 최상위로 surface.
+
+후속(이월): domain×tier 매트릭스 · 프론티어 → drill seed 자동 공급 (acquire 루프 클로즈).
+
 ## 2026-05-25 — R4 calc_dispatch SSOT (verify↔atlas float 미러 단일화 · META-SIGNAL ①)
 
 float-recompute 미러 이중화가 drift 뿌리(R3 reverify 3노드 drift · wigner #957 동일 클래스).
