@@ -957,3 +957,37 @@
   raw    = ".verdicts/tecs-l-modform-index/idx_n30.txt"
   src    = "MODFORM MF1"
   status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal."
+
+# ───────────────────────────────────────────────────────────────────────
+# TECS-L axis A (MODFORM) — tecs-l-modform-cusps (slug · group=TECS-L · MF2)
+# Gamma_0(N) cusp count c(N) = sum_{d|N} phi(gcd(d, N/d)), recomputed by
+# gamma0_cusps for N=1..30 (all 🔵). Closed-form modular-curve cusp count.
+# Headline bridge: Gamma_0(6) cusps = 4 = tau(6) (n=6, axis-0 M4 connection).
+
+@C tecs_l_mf_cusps_sweep := "gamma0_cusps(N) = sum_{d|N} phi(gcd(d,N/d)) for all N in 1..30 (Gamma_0(N) cusp count, 30/30 closed-form)" :: experiment [slug=tecs-l-modform-cusps group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr gamma0_cusps N c(N)  for N=1..30"
+  raw    = ".verdicts/tecs-l-modform-cusps/cusps_sweep_1_30.txt"
+  src    = "MODFORM axis MF2 (Gamma_0(N) cusp-count formula); calc fn gamma0_cusps"
+  status = "🔵 SUPPORTED-FORMAL — 30/30 closed-form, verdicts persisted verbatim. terminal."
+
+@C tecs_l_mf_cusps_n6 := "gamma0_cusps(6) = 4 = tau(6) (n=6 bridge: modular curve cusp count = divisor count)" :: formula [slug=tecs-l-modform-cusps group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr gamma0_cusps 6 4"
+  raw    = ".verdicts/tecs-l-modform-cusps/cusps_n6.txt"
+  src    = "MODFORM MF6 bridge (axis 0 M4: Gamma_0(6) cusps=tau(6))"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal."
+
+@C tecs_l_mf_cusps_n1 := "gamma0_cusps(1) = 1 (Gamma_0(1) = SL2(Z), single cusp at infinity)" :: formula [slug=tecs-l-modform-cusps group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr gamma0_cusps 1 1"
+  raw    = ".verdicts/tecs-l-modform-cusps/cusps_n1.txt"
+  src    = "MODFORM MF2"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal."
+
+@C tecs_l_mf_cusps_n12 := "gamma0_cusps(12) = 6 (divisors 1,2,3,4,6,12; sum phi(gcd(d,12/d)) = 6)" :: formula [slug=tecs-l-modform-cusps group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr gamma0_cusps 12 6"
+  raw    = ".verdicts/tecs-l-modform-cusps/cusps_n12.txt"
+  src    = "MODFORM MF2"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal."
