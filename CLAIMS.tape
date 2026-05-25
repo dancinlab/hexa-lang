@@ -2377,6 +2377,25 @@
   status = "🟢 empirical pipeline — 12 IIT-Phi papers triaged: 0 verify-able / 5 🟡 citation / 7 anima-handoff. Proves the arxiv ingest+triage FLOW works (PIPELINE POC), NOT a big absorption. 0 verify-able is the honest/expected outcome (no in-tree Phi primitive — mirrors OEIS-O6 P3 hexa-coverage). NOT a terminal arithmetic claim (per-paper verify = A2+ milestone)."
 
 # ───────────────────────────────────────────────────────────────────────
+# ARXIV — arxiv-anima-absorb (slug · group=ARXIV · A2)
+# A2 = ANIMA axis absorption (DISTINCT from A1's 12 IIT-core papers). Widens
+# into EMPIRICAL consciousness measures (PCI / LZc / entropy), causal-emergence
+# / effective-information, and the AI-consciousness theory cluster (GWT /
+# Conscious Turing Machine / indicator-properties). 8 arXiv-API queries -> 11
+# on-topic papers -> 3-class triage. 0 directly verify-able (hexa verify --expr
+# exposes NO IIT primitive: no Phi / EMD / PCI / effective-information; same P3
+# hexa-coverage blocker as A1 + OEIS-O6). 4 verify-able-CANDIDATEs deferred to
+# V5 (concurrent V5-IIT lane) / LIFE axis-C. A2 value = CITATION + anima LIFE
+# cross-pollination (g60): 6 H_xxx handoffs FILED to ~/core/anima INBOX.log.md.
+
+@C arxiv_anima_absorb := "ARXIV A2 (ANIMA axis): arXiv-API 8 queries -> 11 on-topic consciousness/IIT papers (q-bio.NC/cs.AI/cs.IT, ALL distinct from A1's 12) -> 3-class triage. Result: 0 verify-able (hexa verify --expr exposes NO IIT primitive — no Phi/EMD/PCI/effective-information/cause-effect-repertoire; same P3 hexa-coverage blocker as A1 + OEIS-O6; 4 deferred verify-able-CANDIDATEs -> V5/LIFE-axis-C = 2405.09207 exact-EI linear-Gaussian closed-form + 1011.5334 neural-complexity graph closed-form + 1608.08450 ETC compression-complexity proxy + 2011.09850 Conscious-Turing-Machine) / 7 🟡 citation (1608.08450, 1701.07061, 2509.10891, 2410.11407, 2308.08708, 2011.09850, 1011.5334, 2405.09207 dual) / 11 handoff->anima (ALL 11 carry a concrete anima LIFE H_xxx cross-link). 6 H handoffs FILED to ~/core/anima INBOX.log.md (g60): H_239 alt-Phi-metric <- 1608.08450/1701.07061/1011.5334; H_209 EEG-1/f <- 2509.19254/1701.07061; H_222/H_244 anesthesia-sleep <- 1604.00002; H_275 causal-DAG-Phi <- 2405.09207/2201.10154; H_002 Phi-scale-variant <- 2509.10891; H_277 turing-completeness <- 2011.09850. First true 🟢 = effective_information(TPM) recompute (2405.09207 exact EI) once V5 IIT engine lands" :: empirical [slug=arxiv-anima-absorb group=ARXIV]
+  method = "ingest-triage"
+  cmd    = "arXiv API (export.arxiv.org/api/query, https) x8 queries → 11 papers → 3-class triage → ARXIV/.verdicts/arxiv-anima-absorb/triage_a2.txt"
+  raw    = "ARXIV/.verdicts/arxiv-anima-absorb/triage_a2.txt"
+  src    = "ARXIV/docs/a2-anima-axis.md (Korean — 11-paper table + 6-H cross-link map + V5-engine seed) + ARXIV/ARXIV.md (A2 milestone). anima LIFE cross-link: ~/core/anima/LIFE.md + HEXAD/LIFE/README.md (H_239/H_209/H_222/H_244/H_275/H_002/H_277). arXiv open-access; attribution = arxiv id + authors + title. Per-paper hexa verify recompute deferred to V5 (no in-tree IIT primitive — concurrent V5-IIT lane). Handoffs APPENDED to ~/core/anima/INBOX.log.md as working-copy edit (anima tree on dirty orphan-recover branch → anima session must commit; not committed in shared dirty tree)."
+  status = "🟡 11 papers + 6 anima handoffs (verify-able→V5) — 0 verify-able / 7 🟡 citation / 11 anima-handoff. Honest/expected: no in-tree IIT primitive (mirrors A1 + OEIS-O6 P3 hexa-coverage). A2 deliverable = citation + anima LIFE cross-pollination (g60), NOT a 🟢 recompute. 4 verify-able-CANDIDATEs (exact-EI / neural-complexity closed-form / ETC proxy / CTM) become first 🟢 ARXIV-ANIMA claims once V5 IIT engine exposes an effective_information/phi recompute path. NOT terminal (per-paper verify = V5 milestone)."
+
+# ───────────────────────────────────────────────────────────────────────
 # VERIFY-KIT — verify-kit-compute-mode (slug · group=VERIFY-KIT · V2 · P0b)
 # UPSTREAM unblocker for the catalogue-mirror domains (OEIS/DLMF/ARXIV).
 # V2 adds a VALUE-LESS COMPUTE mode to `hexa verify --expr`: drop the trailing
