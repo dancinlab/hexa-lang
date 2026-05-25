@@ -150,7 +150,7 @@ fn cmd_rubric() {
     println("             Verifies & absorbs equations NOT YET in the atlas — verify computes")
     println("             them; the binary built-in atlas grows with proven closed-forms.")
     println("  calc fns : sigma|sigma_0|sigma_2|phi|mu|tau|is_perfect|aliquot|gamma0_index|")
-    println("             gamma0_cusps|gamma0_genus|isotropy_lcm|first_cusp_form_weight|pair_threshold_factor")
+    println("             gamma0_cusps|gamma0_genus|isotropy_lcm|first_cusp_form_weight|pair_threshold_factor|recomb_3body_density_power")
     println("             2-op: sigma_k|jacobi|kronecker|dim_cusp_forms|ssh_winding  (extend _recompute on gap)")
     println("             3-op: tknn_chern (RFC 046 TKNN Chern/Hall integer · Diophantine gap label)")
     println("  float fns: welch_t_crit(df)  wilson_hilferty_p(t,df)   → 🟢 NUMERICAL (ε=1e-9")
@@ -213,6 +213,8 @@ fn cmd_rubric() {
     println("             rel_p_from_kinetic(T_MeV)   → √(T²+2·T·938.272)       (AD/ELENA decel-ladder pc(T) [MeV/c], ANTIMATTER ⓶감속, 1-arg)")
     println("             transition_factor_1s2s()    → 1/1²−1/2²=3/4           ((anti)H 1S-2S Rydberg level-diff factor, ANTIMATTER ⓻측정, 0-arg)")
     println("             h1s2s_rydberg(R∞,c)         → (3/4)·R∞·c·1e-15 [PHz]  ((anti)H 1S-2S leading freq ≈2.4661 PHz, ANTIMATTER ⓻측정, 2-arg)")
+    println("             recomb_3body_exponent()     → −9/2 = −4.5             (p̄+e⁺+e⁺→H̄ 3-body recomb T-scaling exponent α₃ᵦ∝T^−9/2, ANTIMATTER ⓹합성, 0-arg)")
+    println("             recomb_3body_tratio(Tᴴ,Tᴸ)  → (Tᴴ/Tᴸ)^4.5            (3-body recomb α-ratio α(Tᴸ)/α(Tᴴ); 4K vs 100K ⇒ 25^4.5=1953125, ANTIMATTER ⓹합성, 2-arg)")
     println("             sf_log10_t(Z,A)             → 21.08+ΣCᵢxⁱ/A           (Ren-Xu 2005 SF log10 T₁/₂[s], NUCLEAR C1, 2-arg)")
     println("             sf_log10_t_hindered(Z,A)    → sf_log10_t+HF(0/5/10)   (Ren-Xu+Hoffman93 odd-A/odd-odd HF, NUCLEAR C3, 2-arg)")
     println("             sf_log10_t_zwp(Z,A)         → F(Z)+parity+7.499122    (Zdeb-Warda-Pomorski 2013 SF log10 T₁/₂[s], NUCLEAR C4, 2-arg)")
@@ -272,6 +274,15 @@ fn _recompute(fn_name: string, n: int) -> int {
     //   pair_threshold_factor(n) = 6·n  →  the exact kinetic-threshold
     //   multiplier (n=1 ⇒ 6), Chamberlain–Segrè 1955 Bevatron closed-form.
     if fn_name == "pair_threshold_factor" { return 6 * n }
+    // ── Three-body recombination density power (ANTIMATTER ⓹합성) ───────
+    //   p̄ + e⁺ + e⁺ → H̄ + e⁺  (cold trapped plasma; a SECOND positron acts
+    //   as the third body, carrying off the binding energy). The recombination
+    //   RATE PER ANTIPROTON scales as α₃ᵦ·n_e² with the EXACT integer density
+    //   power 2 (one captured e⁺ × one spectator e⁺) — contrast radiative
+    //   recombination, linear in n_e. Mansbach–Keck 1969 PR 181:275 /
+    //   Glinsky–O'Neil 1991 Phys.Fluids B 3:1279 low-T-plasma TBR theory.
+    //   recomb_3body_density_power(n) = 2·n → exact n_e-power multiplier (n=1⇒2).
+    if fn_name == "recomb_3body_density_power" { return 2 * n }
     return NOCALC
 }
 
@@ -1313,6 +1324,38 @@ fn _h1s2s_rydberg(r_inf_per_m: float, c_m_per_s: float) -> float {
     if r_inf_per_m <= 0.0 { return _NOCALC_F }
     if c_m_per_s <= 0.0 { return _NOCALC_F }
     return 0.75 * r_inf_per_m * c_m_per_s * 0.000000000000001
+}
+
+// ── Three-body recombination scaling (ANTIMATTER ⓹합성) ────────────────
+//   In a cold trapped p̄/e⁺ plasma the synthesis channel
+//     p̄ + e⁺ + e⁺ → H̄ + e⁺
+//   (a second positron carries off the binding energy) DOMINATES over
+//   radiative recombination at low T. The three-body recombination rate
+//   COEFFICIENT scales as
+//     α₃ᵦ ∝ e¹⁰ / ( m_e^(1/2) (k_B T)^(9/2) )  ⇒  α₃ᵦ ∝ n_e · T^(−9/2),
+//   so the recombination rate PER ANTIPROTON ∝ n_e² · T^(−9/2). The closed-form
+//   INVARIANTS are the temperature exponent −9/2 = −4.5 (exact rational) and the
+//   density power 2 (exact integer). Contrast radiative p̄+e⁺→H̄+γ ~ T^(−1/2)
+//   (Kramers) — far weaker T-dependence.
+//   @cite Mansbach & Keck 1969 PR 181:275 · Glinsky & O'Neil 1991 Phys.Fluids
+//   B 3:1279 · Robicheaux 2006 J.Phys.B 39:3303 (ALPHA/ATRAP TBR theory).
+
+// recomb_3body_exponent() — the EXACT closed-form T-scaling exponent of the
+// three-body recombination coefficient: −9/2 = −4.5  (0-arg constant).
+fn _recomb_3body_exponent() -> float {
+    return 0.0 - 9.0 / 2.0
+}
+
+// recomb_3body_tratio(T_hi, T_lo) — closed-form ratio of α₃ᵦ at the LOWER
+// temperature to α₃ᵦ at the HIGHER temperature, from the T^(−9/2) scaling:
+//   α(T_lo)/α(T_hi) = (T_hi/T_lo)^(9/2).
+// 2-arg (T_hi, T_lo in K, T_hi > T_lo > 0). ALPHA/ATRAP anchor T_lo=4 K vs
+// T_hi=100 K ⇒ (100/4)^4.5 = 25^4.5 = 5^9 = 1953125.0 (exact integer).
+fn _recomb_3body_tratio(t_hi: float, t_lo: float) -> float {
+    if t_hi <= 0.0 { return _NOCALC_F }
+    if t_lo <= 0.0 { return _NOCALC_F }
+    let ratio = t_hi / t_lo
+    return pow(ratio, 4.5)
 }
 
 // BCS zero-temperature energy gap Δ(0):
@@ -2567,6 +2610,14 @@ fn _recompute_float(fn_name: string, a0: float, a1: float, a2: float, a3: float,
         if argc < 2 { return _NOCALC_F }
         return _penning_invariance(a0, a1)
     }
+    // ── Three-body recombination scaling (ANTIMATTER ⓹합성) ────────────
+    //   recomb_3body_exponent()        0-arg: −9/2 = −4.5 (T-scaling exponent)
+    //   recomb_3body_tratio(T_hi,T_lo) 2-arg: (T_hi/T_lo)^4.5 (α-ratio)
+    if fn_name == "recomb_3body_exponent" { return _recomb_3body_exponent() }
+    if fn_name == "recomb_3body_tratio" {
+        if argc < 2 { return _NOCALC_F }
+        return _recomb_3body_tratio(a0, a1)
+    }
     return _NOCALC_F
 }
 
@@ -2652,6 +2703,8 @@ fn _is_float_fn(fn_name: string) -> bool {
         || fn_name == "penning_invariance"
         // Plasma-wakefield cold-linear scalings (CERN §1.5 tabletop accel · 2026-05-25):
         || fn_name == "wakefield_e0_gv_m" || fn_name == "wakefield_lambda_um"
+        // Three-body recombination scaling (ANTIMATTER ⓹합성 · 2026-05-25):
+        || fn_name == "recomb_3body_exponent" || fn_name == "recomb_3body_tratio"
 }
 
 // is fn_name a 0-arg closed-form constant? (--expr <fn> <v>, no operands).
@@ -2664,6 +2717,7 @@ fn _is_zero_arg_float_fn(fn_name: string) -> bool {
         || fn_name == "mirror_bench_hog_asymptote"
         || fn_name == "bcs_gap_ratio"
         || fn_name == "transition_factor_1s2s"
+        || fn_name == "recomb_3body_exponent"
 }
 
 // trim trailing zeros of a float→string for tidy verdict echo.
