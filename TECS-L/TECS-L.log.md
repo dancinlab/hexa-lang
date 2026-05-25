@@ -3,6 +3,28 @@
 Append-only history sister of `TECS-L.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
 
+## 2026-05-25T13:31 — 축 B MR7 · 홀수 완전수(odd perfect) 미해결 — 정직한 🟠 INSUFFICIENT/DEFERRED 문서화
+
+- [x] MR7 milestone = "홀수 완전수 존재 여부 — open problem; 알려진 lower bound·구조 조건을 원전 citation 으로 표기, closure 주장 없음"
+- [x] **honest scope (over-claim 금지)**: TECS-L 은 홀수 완전수 존재 여부에 대해 **어떤 closure 도 주장하지 않는다**. MR1 (Euclid-Euler) 는 *짝* 완전수만 완전 분류; MR7 은 그 **open 보완**. paper_gate 가 🟠 deferred 를 paper 대상에서 제외하므로 **paper-ineligible by gate** — `PAPER/<slug>/` scaffold 없음. atlas fold 도 없음 (축 E E1 = verified-only fold 패턴)
+- [x] **알려진 하한·구조 조건 표** (각 행은 *필요 조건* — 비존재 증명 아님):
+  - n > 10^{1500} (Ochem–Rao 2012)
+  - ω(n) ≥ 9 (Nielsen 2015) / ω(n) ≥ 12 if 3∤n (Nielsen 2015)
+  - 가장 큰 소인수 P(n) ≥ 10^8 (Goto–Ohno 2008)
+  - 두 번째 큰 소인수 ≥ 10^4 (Iannucci 1999)
+  - 세 번째 큰 소인수 ≥ 10^2 (Iannucci 2000)
+  - Ω(n) ≥ 101 (Ochem–Rao 2014)
+  - **Euler 형**: n = p^a · q_1^{2b_1} · … · q_k^{2b_k}, p ≡ a ≡ 1 (mod 4) (Euler 1849)
+- [x] **g5 tier = 🟠 INSUFFICIENT/DEFERRED** (project.tape @D paper_gate 의 정직한 적용): (1) terminal 아님 (하한·필요조건 ≠ 비존재 증명) · (2) hexa-native closed-form 으로 존재 settle 가능한 경로 없음 · (3) Δ 나 closed-negative finding 산출 불가 → paper 3 조건 모두 실패 → 의도된 🟠
+- [x] **신규 hexa verify 0건** (M10·MR1·MR3 닫힘 패턴과 동형 — 단, 그쪽은 ⟺ 닫힘이고 이쪽은 open). MR7 은 *정의상* 미해결 문제에 대한 정직한 범위 진술
+- [x] **MR1 cross-link**: Euclid–Euler 는 *짝* 완전수만 완전 분류한다 — MR7 은 그 **open 보완**. MR2..MR6 의 🔵/🟢/🔴 closure 도 모두 메르센 소수 ↔ 짝 완전수 라인 위에 서 있음 (홀수 라인은 양적으로 closure 와 더 멀다)
+- [x] 1 verdict (citation artifact · ASCII-only) → `.verdicts/tecs-l-mersenne-odd-perfect-open/odd_perfect_constraints.txt` — 하한 표 + Euler 형 + 정직한 범위 진술 + 참고문헌 verbatim
+- [x] `CLAIMS.tape` slug=tecs-l-mersenne-odd-perfect-open group=TECS-L 1 entry (`@C` · method=citation · status 🟠 INSUFFICIENT/DEFERRED)
+- [x] `TECS-L/docs/mr7-odd-perfect-open.md` (Korean) — open question · 하한 표 · Euler 형 · 왜 🟠 인가 · cross-link · 참고문헌 8 섹션
+- [x] `TECS-L.md` MR7 체크 → `- [x]` (단, status 🟠 명시)
+- [x] **참고문헌**: Euler 1849 · Iannucci 1999/2000 · Goto–Ohno 2008 · Ochem–Rao 2012/2014 · Nielsen 2007/2015 · Acquaah–Konyagin 2012
+
+
 ## 2026-05-25T18:35 — 축 B MR1 · Euclid-Euler 짝완전수 ⟺ 2^{p-1}·M_p (M_p 소수) — synthesis 닫힘
 
 - [x] MR1 milestone = "Euclid-Euler 짝완전수 ⟺ 2^{p-1}·M_p, 첫 N 완전수 unified statement + g5 anchor cross-reference 표"
