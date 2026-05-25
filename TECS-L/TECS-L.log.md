@@ -14,6 +14,15 @@ Append-only history sister of `TECS-L.md`. Each entry starts with `## <ISO times
 - [ ] MR3 abundancy 닫힌형 일반화 · MR4 Lucas-Lehmer hexa-native · MR6 합성 M_p 표본 (다음 라운드)
 
 
+## 2026-05-25T14:35 — 축 A MODFORM · MF2 Γ₀(N) cusp 수 (n=6↔τ 다리)
+
+- [x] c(N)=Σ_{d|N} φ(gcd(d,N/d)) 닫힌형 = hexa `gamma0_cusps`: **N=1..30 전수 30/30 🔵** (`cusps_sweep_1_30.txt`)
+- [x] n=6 bridge: Γ₀(6) cusps=4=τ(6) (축 0 M4 연계 — 완전수 약수개수 = 모듈러곡선 cusp 수) · Γ₀(1)=1 (SL2(Z) ∞ 단일 cusp) · Γ₀(12)=6
+- [x] CLAIMS slug=tecs-l-modform-cusps 4 entry (sweep + 3 headline N=6/1/12, raw 1:1). MF1 index 와 같은 패턴
+- [x] verify-gate 통과(정상) — 30개 verdict 영속화. (참고: 첫 스윕 zsh 1-index 배열 오프바이원으로 오판정 → python 생성 expected 직접 주입으로 정정)
+- [ ] MF4 dim S₂ 관계 · MF5 Jacobi/Kronecker (다음 라운드)
+
+
 ## 2026-05-25T14:30 — 축 A MODFORM · MF3 Γ₀(N) genus 고전 genus-0 전수
 
 - [x] 고전 genus-0 15개 N∈{1,2,3,4,5,6,7,8,9,10,12,13,16,18,25} `gamma0_genus`=0 verify **15/15 🔵** (`genus_sweep.txt`)
