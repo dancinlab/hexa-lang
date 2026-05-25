@@ -49,6 +49,7 @@ fn cmd_help() {
     println("  hexa build <file> [-o out]              Compile .hexa → native binary")
     println("  hexa drill --seed \"...\"  ★              Run the discovery engine (main absorbed verb)")
     println("  hexa <subcommand> [args...]             Subcommand dispatch (80+ verbs)")
+    println("  hexa tool [list | <verb> ...]           Specialized-verb drawer (go-tool style)")
     println("  hexa --version, -v                      Version + build hash")
     println("  hexa --help, -h                         This help")
     println("")
@@ -252,6 +253,48 @@ fn cmd_help() {
     println("  `hexa <verb>` loads the module and exits 0. Per-verb fn main() CLI shims")
     println("  are a deferred follow-up; programmatic use via `use \"compiler/<x>/...\"` works")
     println("  today. Test smokes (`compiler/<x>/*_test.hexa`) demonstrate live API surfaces.")
+}
+
+// CANON M4: go-tool-style verb index. The bare `hexa <verb>` dispatch still
+// works for every entry; this drawer groups the 80+ specialized verbs so the
+// core `hexa --help` can stay focused on the everyday toolchain.
+fn cmd_tool_list() {
+    println("HEXA TOOL — specialized verbs · `hexa tool <verb> [args]` (or bare `hexa <verb> [args]`)")
+    println("")
+    println("DISCOVERY   drill kick chain omega surge dream swarm reign molt wake forge canon")
+    println("            debate revive smash free hyperarithmetic")
+    println("EXTERNAL    codata oeis arxiv gw horizons cmb nanograv simbad icecube nist-atomic")
+    println("            wikipedia openalex gaia lhc pubchem uniprot akida")
+    println("ANNOTATOR   pure-check memo-check catalog readme doc codegen-hints distill effect-map")
+    println("            intent-map meta-map phi-map struct-layout self-aware cognitive freedom")
+    println("            infer learn safety antivirus serve tenant eval-run test-list schema")
+    println("            law-link harness rule gate-register")
+    println("SCIENCE     atlas calc verify atlas-verify atlas-audit lattice repo-audit-taxonomy")
+    println("            honesty absolute meta-closure qrng qmirror sim-universe gpu cloud loop")
+    println("")
+    println("  per-verb detail: `hexa <verb> --help`  ·  full catalog: `hexa --help`")
+}
+
+fn cmd_tool(av) {
+    // main dispatch indexes the verb at av[2] (two-slot prefix). So for
+    // `hexa tool <verb> [args]`: av[2]=tool · av[3]=verb · av[4..]=args.
+    let x = if len(av) >= 4 { av[3] } else { "list" }
+    if x == "list" || x == "--help" || x == "-h" {
+        cmd_tool_list()
+        return
+    }
+    // Re-dispatch to the bare verb (self re-invoke). Bare `hexa <x>` is the
+    // canonical path; `hexa tool <x>` is the discoverable alias.
+    let mut rest = ""
+    let mut i = 4
+    while i < len(av) {
+        rest = rest + " " + shq(av[i])
+        i = i + 1
+    }
+    let cmd = shq(argv0_or_hexa()) + " " + shq(x) + rest
+    let r = exec_with_status(cmd)
+    print(r[0])
+    exit(r[1])
 }
 
 // ─── hexa:// URL dispatcher ────────────────────────────────────────────
@@ -6462,6 +6505,11 @@ if len(av) < 3 {
             gpi = gpi + 1
         }
         cmd_gpu(gpu_args)
+    } else if sub == "tool" {
+        // CANON M4: go-tool-style drawer. `hexa tool [list]` indexes the
+        // specialized verbs by family; `hexa tool <verb> [args]` re-dispatches
+        // to `hexa <verb> [args]` (the bare verb still works — non-breaking).
+        cmd_tool(av)
     } else if is_absorbed_verb(sub) {
         // nexus absorption surface (2026-05-13 final consolidation):
         //
