@@ -89,6 +89,12 @@
   cmd    = "hexa build archive/fires/gpu_fusion_launch_amort_2026_05_25/oracle.hexa && ./oracle  (exit 0) + ptxas -arch=sm_80 (rc 0)"
   raw    = ".verdicts/fusion-launch-amort/fusion_launch_amort.txt"
   src    = "GPU.md §5f + §1g F-RFC067-PB-TIMING (measured L=1us) · archive/fires/gpu_fusion_launch_amort_2026_05_25/"
+
+@C fusion_launch_amort_wall := "TIMED CONFIRMATION: fused 1-launch chain beats 5-launch baseline 73.1-76.2% wall UNCONDITIONALLY n in {1024..16.7M} on RTX 5070 (200 timed) — flips GPU.md §10 moat box" :: measurement [slug=fusion-launch-amort-wall group=GPU]
+  method = "silicon-fire"
+  cmd    = "host_fusion_launch.c on ubu-2 RTX 5070 sm_120 (uncontended, 20 warmup + 200 timed median) across n in {1024,16384,262144,4194304,16777216}"
+  raw    = ".verdicts/fusion-launch-amort-wall/F-FUSION-LAUNCH-AMORT-WALL.txt"
+  src    = "GPU.md §10 (box FLIPPED [x] 2026-05-25) + §1h F-FUSION-LAUNCH-AMORT · confirms round-1 projection [72.7%,80%] by measurement"
   status = "🔵/🟢 SUPPORTED — structural closed-form (launch 1<5 · HBM 3<11) + numerical projection (>=30% unconditional). REAL verdict persisted verbatim. terminal · paper-eligible. Timed silicon wall DEFERRED-to-serial (§10 >=30% box stays [ ])."
 
 # ───────────────────────────────────────────────────────────────────────

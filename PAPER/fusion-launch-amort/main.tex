@@ -72,8 +72,10 @@ $n^\star$ is negative, so the advantage is \emph{unconditional}, not merely
 launch-bound. This over-satisfies the falsifier --- the predicted launch-bound-only
 crossover is replaced by a win that the HBM-traffic axis carries into the
 bandwidth-bound regime too. Both kernels are \texttt{ptxas}-clean at \texttt{sm\_80}
-($0$ spill). The timed silicon wall is the single deferred confirmation; the
-structural counts and the projection from the measured constant are terminal.
+($0$ spill). The timed silicon wall is now \emph{measured} (2026-05-25): on an
+uncontended RTX 5070 the fused kernel beats the 5-launch baseline by
+$73.1$--$76.2\%$ across $n\in\{1024,\dots,16.7\text{M}\}$ ($200$ timed launches
+per size), confirming the $[72.7\%,\,80\%]$ projection by direct measurement.
 \end{abstract}
 
 \section{Introduction}
@@ -456,6 +458,12 @@ falsified --- it is over-satisfied.
   $\mathbf{3.67\times}$ less.
 \item Projected wall advantage: $\mathbf{80\%}$ launch-bound, $\mathbf{72.7\%}$
   bandwidth-bound, $\mathbf{\ge 30\%}$ unconditional.
+\item \textbf{Measured wall} (RTX 5070 sm\_120, uncontended, $20$ warmup $+\,200$
+  timed median): fused beats the 5-launch baseline by $\mathbf{73.1}$--$\mathbf{76.2\%}$
+  at \emph{every} size --- $n{=}1024$: $74.1\%$ ($3.86\times$); $n{=}262144$:
+  $76.2\%$ ($4.20\times$); $n{=}16.7\text{M}$: $73.5\%$ ($3.77\times$); numeric
+  $\max|\Delta|{=}1.1{\times}10^{-5}$ PASS. Confirms the projection and flips the
+  GPU substrate's whole-program-fusion $\ge 30\%$ closure box.
 \item Both kernels \texttt{ptxas}-clean at \texttt{sm\_80}, $0$ spill.
 \end{itemize}
 
