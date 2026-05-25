@@ -1791,6 +1791,20 @@ opt-in via `git config core.hooksPath .githooks`) + project.tape @D
 - Count unchanged (atof was already libc-extern-free since cycle-48; this
   deepens its impl C→hexa, not a new port). **Step 2 stays CLOSED.**
 
+### 2026-05-26 — step 2 post-close: hxlcl_atoll/atoi C-body → hexa rt_atoll (number-parse family complete)
+
+- ✅ `hxlcl_atoll` now delegates to a NEW lenient hexa-source `rt_atoll`
+  (ctype.hexa — no-throw decimal ws+sign+digit, mirrors the C body; distinct
+  from the throwing `rt_str_parse_int`). `hxlcl_atoi` = `(int)hxlcl_atoll`
+  unchanged (pure C, stays at its early site). Completes the number-parse
+  family C→hexa: atof (#1201) + atoll/atoi now.
+- Same early-zone relocate technique as atof: fwd-decl at ~L221 (pre-HexaVal),
+  two-mode DEFINITION after the cycle-5 atof def (HexaVal available).
+- VERIFY (mini arm64 · build_aprime.sh, event-driven bg build): build PASS ·
+  smoke `exit(42)==42` PASS · externs = **1 (`_write`), ≤5 preserved** ·
+  fixpoint preserved **by construction** — `atoi`/`atoll` have ZERO callers in
+  codegen.hexa / main.hexa (off the emit path → emitted asm unchanged).
+
 ## Phase 3 — step 3 (runtime.c/runtime_core.c HI tier)
 
 ### 2026-05-21 — 🛸 step 3 cycle 1 POC: hexa_abs C → hexa source
