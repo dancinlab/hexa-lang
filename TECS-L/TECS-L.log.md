@@ -3,6 +3,14 @@
 Append-only history sister of `TECS-L.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
 
+## 2026-05-25T14:00 — 축 A MODFORM · MF1 Γ₀(N) index (영구 엔진 첫 전진)
+
+- [x] ψ(N)=N∏_{p|N}(1+1/p) 닫힌형 = hexa `gamma0_index`: **N=1..30 전수 30/30 🔵** (`index_sweep_1_30.txt`)
+- [x] n=6 bridge: Γ₀(6) index=12=σ(6) (축 0 M4 연계) · Γ₀(1)=1 (SL2(Z)) · Γ₀(30)=72
+- [x] CLAIMS slug=tecs-l-modform-index 4 entry (sweep + 3 headline, 1:1). 영구 도메인 첫 축-전진
+- [ ] MF2 cusp 수 · MF3 genus-0 전수 (다음 라운드)
+
+
 ## 2026-05-25T13:30 — 영구 다축 엔진 전환 (MODFORM·MERSENNE·Atlas-LLM 축 흡수)
 
 - [x] 사용자 비전: "TECS-L 은 우주 모든 법칙이 발견될 때까지 멈출 수 없다" → 종료조건 없는 영구 발견 엔진으로 @goal/@title 재정의

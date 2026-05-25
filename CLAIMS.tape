@@ -923,3 +923,37 @@
   raw    = ".verdicts/tecs-l-uniqueness-proof/theorem_closed_form.txt"
   src    = "M10 — promotes M1/M3/M9 unbounded uniqueness 🟡 → 🔵"
   status = "🔵 SUPPORTED-FORMAL — unbounded (forall n) uniqueness PROVEN closed-form. terminal · paper-eligible (supersedes the 🟡 residual)."
+
+# ───────────────────────────────────────────────────────────────────────
+# TECS-L axis A (MODFORM) — tecs-l-modform-index (slug · group=TECS-L · MF1)
+# Gamma_0(N) index psi(N) = N * prod_{p|N}(1+1/p), recomputed by gamma0_index
+# for N=1..30 (all 🔵). Closed-form modular-curve index. Bridge: Gamma_0(6)
+# index = 12 = sigma(6).
+
+@C tecs_l_mf_index_sweep := "gamma0_index(N) = psi(N) = N*prod(1+1/p) for all N in 1..30 (Gamma_0(N) index, 30/30 closed-form)" :: experiment [slug=tecs-l-modform-index group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr gamma0_index N psi(N)  for N=1..30"
+  raw    = ".verdicts/tecs-l-modform-index/index_sweep_1_30.txt"
+  src    = "MODFORM axis MF1 (Gamma_0(N) index formula); calc fn gamma0_index"
+  status = "🔵 SUPPORTED-FORMAL — 30/30 closed-form, verdicts persisted verbatim. terminal."
+
+@C tecs_l_mf_index_n6 := "gamma0_index(6) = 12 = sigma(6) (n=6 bridge: modular curve index = divisor sum)" :: formula [slug=tecs-l-modform-index group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr gamma0_index 6 12"
+  raw    = ".verdicts/tecs-l-modform-index/idx_n6.txt"
+  src    = "MODFORM MF6 bridge (axis 0 M4: Gamma_0(6) index=sigma(6))"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal."
+
+@C tecs_l_mf_index_n1 := "gamma0_index(1) = 1 (Gamma_0(1) = SL2(Z), index 1)" :: formula [slug=tecs-l-modform-index group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr gamma0_index 1 1"
+  raw    = ".verdicts/tecs-l-modform-index/idx_n1.txt"
+  src    = "MODFORM MF1"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal."
+
+@C tecs_l_mf_index_n30 := "gamma0_index(30) = 72 = 30*(3/2)(4/3)(6/5) (squarefree 2*3*5)" :: formula [slug=tecs-l-modform-index group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr gamma0_index 30 72"
+  raw    = ".verdicts/tecs-l-modform-index/idx_n30.txt"
+  src    = "MODFORM MF1"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal."
