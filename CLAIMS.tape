@@ -1233,3 +1233,32 @@
   raw    = ".verdicts/tecs-l-mersenne-composite/m11_tau.txt"
   src    = "TECS-L axis B MR6 finding; grounded in m11 sigma/tau atoms (tau(2047)=4!=2 deterministic witness)"
   status = "🔵 SUPPORTED-FORMAL — closed converse-failure finding; grounded in m11 sigma/tau atoms. terminal · paper-eligible."
+
+# GPU — fusion-attention-roofline (slug · group=GPU · GPU.md §10 · round 7)
+
+@C fusion_attn_roofline_numeric := "TMA + double-buffer + 64x64 mma.sync.m16n8k16 fused flash-attention kernel is NUMERICALLY CORRECT (rel_rowscale 6.11e-4 @ N=2048, 7.14e-4 @ N=4096, max_abs 3.4e-5 / 3.1e-5, rms_rel 2.7e-4 — matches the round-4 oracle and the f64 CPU reference exactly)" :: measurement [slug=fusion-attention-roofline group=GPU]
+  method = "mma fragment-probe campaign (probe2/probe3) + fa_mma_oracle.cu PASS + ubu-2 silicon fire fa_roofline_host N=2048 N=4096"
+  cmd    = "./fa_roofline_host flash_attn_tma_v2_2048.ptx 2048  &&  ./fa_roofline_host flash_attn_tma_v2_4096.ptx 4096"
+  raw    = ".verdicts/fusion-attention-roofline/F-FUSION-ATTN-ROOFLINE.txt"
+  src    = "round-7 hand-emit PTX flash_attn_tma_v2 + CUDA-C mma oracle on ubu-2 RTX 5070 sm_120, GPU 0% util pre-fire (uncontended)"
+  status = "🟢 SUPPORTED-NUMERICAL — REAL silicon-fire numeric measurement. terminal."
+
+@C fusion_attn_roofline_wall := "QUANTIFIED CLOSED-NEGATIVE: porting the N204 standalone-GEMM roofline toolkit (TMA cp.async.bulk.tensor + double-buffered K/V + 64x64 mma.sync large tiles) into the fused softmax(QK^T/sqrt(d))V kernel REGRESSES the wall ratio vs cuBLAS-TC from round-5's 3.47x to round-7's 5.27x @ N=2048 / 6.87x @ N=4096 (d=64). The kernel achieves only 4.71-4.77% of the cuBLAS HGEMM ceiling (70.2 TFLOPS) and 1.32-1.34% of the theoretical sm_120 FP16-TC peak (249.9 TFLOPS)." :: measurement [slug=fusion-attention-roofline group=GPU]
+  method = "20 warmup + 200 timed cuEvent median, ubu-2 RTX 5070 sm_120, uncontended"
+  cmd    = "./fa_roofline_host flash_attn_tma_v2_{2048,4096}.ptx {2048,4096}"
+  raw    = ".verdicts/fusion-attention-roofline/F-FUSION-ATTN-ROOFLINE.txt"
+  src    = "round-7 timed silicon fire archive/fires/fusion_attention_roofline_2026_05_25/"
+  status = "🟠 INSUFFICIENT/QUANTIFIED-CLOSED-NEGATIVE — terminal pre-registered target NOT hit · supersedes round-5's 3.47x along the new roofline-toolkit axis."
+
+@C fusion_attn_roofline_occupancy := "The wall regression is ATTRIBUTED to smem-bound occupancy collapse: cuOccupancyMaxActiveBlocksPerMultiprocessor returns 1 CTA/SM for the 99136-byte-smem flash_attn_tma_v2 kernel (vs 8 CTAs/SM the round-4 BM=16 kernel achieved). At N=2048 only 32 of 48 SMs are populated (66.7% SM coverage); at N=4096 all 48 SMs run 1 CTA + 16 CTAs queued for a serialized second wave. Single-buffer occupancy-test variant (smem 74560 B, still 1 CTA/SM) measured 0.324896 ms vs v2's 0.324864 ms — DELTA 0.01%, double-buffer ZERO BENEFIT (kernel is occupancy-bound, not DMA-bound)." :: measurement [slug=fusion-attention-roofline group=GPU]
+  method = "cuOccupancyMaxActiveBlocksPerMultiprocessor on the real fn + paired-shape timed measurement of v2 vs sb"
+  raw    = ".verdicts/fusion-attention-roofline/F-FUSION-ATTN-ROOFLINE.txt"
+  src    = "round-7 attribution measurements ubu-2 RTX 5070 sm_120"
+  status = "🟢 SUPPORTED-NUMERICAL — direct occupancy + double-buffer A/B measurement. terminal."
+
+@C fusion_attn_mma_fragment_discovery := "mma.sync.m16n8k16 .trans + ldmatrix.x4 performs an 8x8-BLOCK transpose within each 16x16 fragment, NOT a full 16x16 transpose — empirically established by probe2 (non-trans => A.B^T err 1e-7 MATCH; trans does NOT give A.B). The P.V GEMM (contraction along V rows) therefore CANNOT use the same .trans-B path as the QK^T GEMM; P.V requires either V pre-transpose in smem (the v2 path: probe3 PASS err 6e-8) or a fundamentally different addressing scheme. This is a non-obvious empirical fact about the m16n8k16 ldmatrix.x4 semantics surfaced by the round-7 mma probe campaign." :: measurement [slug=fusion-attention-roofline group=GPU]
+  method = "isolated 16x16x16 mma+ldmatrix CUDA-C probes (probe2.cu / probe3.cu) on ubu-2 RTX 5070 sm_120"
+  cmd    = "./probe2 0  &&  ./probe2 1  &&  ./probe3"
+  raw    = ".verdicts/fusion-attention-roofline/F-FUSION-ATTN-ROOFLINE.txt"
+  src    = "round-7 fragment-map discovery campaign archive/fires/fusion_attention_roofline_2026_05_25/probe{2,3}.cu"
+  status = "🟢 SUPPORTED-NUMERICAL — empirical with err 1e-7 / 6e-8 bit-exact matches. terminal."

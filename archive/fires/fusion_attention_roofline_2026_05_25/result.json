@@ -3,55 +3,80 @@
   "date": "2026-05-25",
   "falsifier": "F-FUSION-ATTN-ROOFLINE",
   "round": "7 of the GPU sec10 GEMM-fusion (attention) axis",
-  "goal": "port the N204 roofline-GEMM toolkit (TMA cp.async.bulk.tensor + 128B shared-memory swizzle + double-buffered K/V tiles + large 64x64 MMA tiles + mma.sync.m16n8k16) into the fused softmax(QK^T/sqrt(d))V inner GEMMs; measure ratio vs cuBLAS-TC + % of roofline",
-  "pre_registered_target": "ratio <= 1.10 vs cuBLAS-TC (>= ~90% of cuBLAS ceiling) on at least one shape (N in {2048,4096}, d=64), AND report achieved % of sm_120 FP16-tensor-core roofline",
-  "host": "ubu-2/ubu-1 RTX 5070 sm_120 (48 SMs) -- PHASE 2 timed fire (gated on 0 compute procs)",
+  "host": "ubu-2 RTX 5070 sm_120 driver=13000 (48 SMs, 0 compute procs at fire = uncontended)",
+  "toolchain": { "nvcc": "12.9", "ptxas": "12.9 V12.9", "arch": "sm_120a" },
+  "verdict_tier": "ORANGE -- INSUFFICIENT (pre-registered <=1.10 NOT hit) + QUANTIFIED-CLOSED-NEGATIVE finding",
+  "pre_registered_target": "ratio <= 1.10 vs cuBLAS-TC on a shape AND report % of sm_120 FP16 tensor-core roofline",
+  "gap_closure_trajectory": "round-3 9.4-15.5x -> round-4 3.4-5.0x -> round-5 3.47x -> ROUND-7 5.3-6.9x (REGRESSION)",
   "design": {
-    "vs_round4_base": {
-      "BM_query_rows_per_cta": "16 -> 64 (N204 tile size, restores GEMM efficiency)",
-      "warps_per_cta": "1 -> 4 (full SM compute, 2x2 warp layout over 64-row tile)",
-      "inner_mma": "wmma.mma.sync m16n16k16 (16x16 frag) -> mma.sync.m16n8k16 (N204 large-tile MMA, 8/warp/K-step)",
-      "loads": "wmma.load.*.global (HBM each subtile) -> cp.async.bulk.tensor TMA SWIZZLE_128B",
-      "pipeline": "none (TMA->wait->mma) -> double-buffered K/V (slot[k+1] DMA overlaps mma[k])",
-      "Q_reuse": "re-read from HBM every K-block -> TMA-loaded ONCE into smem (resident)"
-    },
-    "tile": "per-CTA 64x64, BK=64 key block, d=64",
-    "grid": "N/64 CTAs (32 @ N=2048, 64 @ N=4096) vs 48 SMs",
-    "smem_total_bytes": 82752,
-    "smem_breakdown": "Q 8192 + K[2] 16384 + V[2] 16384 + S 16384 + P 8192 + O 16384 + m/l/c 768 + mbar 64",
-    "tma_descriptors": 3,
-    "tma_box": "[64 inner fp16=128B, 64 rows] SWIZZLE_128B",
-    "swizzle_formula": "byte = row*128 + (atom_k XOR (row&7))*16 + (k_fp16%8)*2 (N204-derived, CUTLASS Sw<3,4,3>)"
+    "ports_n204_toolkit": ["cp.async.bulk.tensor TMA loads", "double-buffered K/V slots", "64x64 mma.sync.m16n8k16 large tiles", "4-warp 2x2 layout"],
+    "applied_swizzle": "NONE (SWIZZLE_128B requires .trans path; my mma probe campaign empirically established .trans gives 8x8-block transpose not full transpose -> non-trans + V pre-transpose is the proven correct path)",
+    "tile": "per-CTA BM=64 query rows, BK=64 key block, d=64",
+    "smem_per_cta_bytes": 99136,
+    "ptxas_v2": "rc=0, 68 regs/thd, 0 spills, 1 barrier, 8 B stack"
   },
-  "ptxas_compile_only": "PENDING (PHASE 1 -- requires Linux GPU host; Mac has no ptxas)",
-  "static_review": {
-    "pure_ascii": true,
-    "non_ascii_bytes": 0,
-    "instruction_histogram_N2048": {
-      "cp.async.bulk.tensor": 5,
-      "mma.sync.aligned.m16n8k16": 64,
-      "ldmatrix": 32,
-      "mbarrier.try_wait": 2,
-      "st.global": 1,
-      "bar.sync": 8,
-      "ex2.approx": 2
+  "results_per_shape": {
+    "N2048": {
+      "fused_ms": 0.324864,
+      "cublas_tc_ms": 0.061568,
+      "ratio_vs_cublas_tc": 5.276,
+      "fused_tflops": 3.305,
+      "cublas_tflops": 17.440,
+      "pct_cublas_hgemm_ceiling_70_2": 4.71,
+      "pct_theo_tc_peak_249_9": 1.32,
+      "grid_ctas": 32,
+      "sm_coverage_pct": 66.7,
+      "numeric": { "max_abs": 3.41114e-5, "rel_rowscale": 6.11e-4, "rms_rel": 2.72e-4, "pass": true }
     },
-    "mma_layout": "QK^T = mma.row.col B=K via ldmatrix.trans (K^T); P.V = mma.row.col B=V non-trans (contraction over keys along smem rows)",
-    "mbarrier_double_buffer": "per-slot parity = (kb>>1)&1; prologue arrives slot0, in-loop issue-next arrives the other slot -- exactly one arrive per slot use (traced, no double-arrive, no race)",
-    "register_hygiene": "lane consts (r55/r71/r90/r91) set once + read-only; mma/scatter scratch (r74-97,r150-151) disjoint from softmax/finalize (r100-116); kb/parity dedicated named regs"
+    "N4096": {
+      "fused_ms": 1.281312,
+      "cublas_tc_ms": 0.186624,
+      "ratio_vs_cublas_tc": 6.866,
+      "fused_tflops": 3.352,
+      "cublas_tflops": 23.014,
+      "pct_cublas_hgemm_ceiling_70_2": 4.77,
+      "pct_theo_tc_peak_249_9": 1.34,
+      "grid_ctas": 64,
+      "sm_coverage_pct": 100.0,
+      "second_wave_ctas": 16,
+      "numeric": { "max_abs": 3.11565e-5, "rel_rowscale": 7.14e-4, "rms_rel": 2.72e-4, "pass": true }
+    }
   },
-  "numeric_gate": "rel_rowscale <= 1e-2 vs f64 CPU ref (honest per-row-scaled metric); validated by fa_mma_oracle.cu (IDENTICAL mma.sync.m16n8k16 + ldmatrix sequence, unswizzled smem) -- PENDING fire",
-  "results_per_shape": "PENDING PHASE 2 (timed fire on uncontended GPU)",
+  "occupancy_attribution_measured": {
+    "cuOccupancyMaxActiveBlocksPerMultiprocessor": 1,
+    "smem_per_cta": 99136,
+    "smem_optin_per_sm": 102400,
+    "interpretation": "1 CTA/SM smem-bound (round-4 had 8 CTAs/SM with the BM=16 tile) -- the 64x64 attention tile's resident set (Q + K[2] + V[2] + V^T[2] + S + P + O) is 8x the round-4 footprint"
+  },
+  "double_buffer_attribution_measured": {
+    "v2_double_buffer_ms": 0.324864,
+    "sb_single_buffer_ms": 0.324896,
+    "delta": "0.01%",
+    "interpretation": "double-buffer provides ZERO benefit at 1 CTA/SM -- the kernel is occupancy-bound not DMA-bound; the TMA overlap opportunity is unrealized because there is no parallel compute to hide loads behind"
+  },
+  "which_technique_helped_most": "NONE moved the wall positively. The transplant REGRESSES vs round-4 because the smem footprint that buys roofline GEMM performance for a standalone GEMM costs occupancy for fused attention. ATTRIBUTED RANK: 64x64 tile (BACKFIRED, the main regressor) > TMA loads (NEUTRAL, save HBM but no occupancy to absorb) > double-buffer (ZERO) > swizzle (NOT APPLIED).",
+  "residual_bottleneck": "occupancy collapse to 1 CTA/SM from the 99 KB smem footprint required by simultaneous resident Q + K + V + V^T + S + P + O tiles at BM=64",
+  "key_discovery_paper_significance_candidate": "Empirically established (probe2/probe3) that mma.sync.m16n8k16 .trans + ldmatrix performs an 8x8-block transpose not a full 16x16 transpose -- so the P.V GEMM (contraction along V rows) CANNOT use the same trans-B path the QK^T GEMM uses; P.V requires either V pre-transpose in smem OR a fundamentally different addressing scheme. This is a non-obvious empirical fact about the m16n8k16 ldmatrix semantics that doesn't appear in the PTX ISA reference except by careful reading.",
+  "paper_eligible": false,
+  "paper_reason": "ORANGE INSUFFICIENT + closed-negative re-confirmation of a wall (round-4/5 already CLOSED-NEGATIVE via different axes); paper_gate forbids 🟠 and re-confirmation papers per project.tape paper_significance",
+  "section10_box": "[x] (launch-amort PR #1028) -- NOT touched; GEMM-fusion (attention) axis still NOT-won",
+  "next_round_wedge": "shallower tile BM=32 or BM=16 + REGISTER-RESIDENT O (acc in regs, not smem) + selective TMA (Q only or interleaved) to restore >=4 CTAs/SM occupancy WITHOUT abandoning TMA",
   "invariants": {
     "no_llvm": true,
     "no_c_transpile_change": true,
-    "codegen_untouched": "compiler/codegen/*.hexa UNTOUCHED (hand-emit PTX path); .cu/.c are oracle/host only"
+    "codegen_untouched": "compiler/codegen/*.hexa UNTOUCHED (hand-emit PTX path; .cu/.c are oracle/host only)",
+    "s_tile_never_to_hbm": "structural moat preserved (S/P/O resident in smem; only 1 st.global = final O)",
+    "single_launch": "1 launch vs cuBLAS-TC 3-launch moat preserved",
+    "ptxas_clean": "sm_120a rc=0, 68 regs/thd, 0 spills, 1 barrier, 8 B stack",
+    "pure_ascii": "0 non-ascii bytes in committed PTX"
   },
   "artifacts": {
-    "kernel_ptx": ["flash_attn_tma_sw128_2048.ptx", "flash_attn_tma_sw128_4096.ptx"],
-    "generator": "gen_flash_attn_tma_sw128_ptx.hexa (provenance)",
-    "mma_oracle": "fa_mma_oracle.cu",
-    "host": "fa_roofline_host.c",
-    "measure": "measure.hexa (provenance runbook)"
+    "kernel_ptx_main": ["flash_attn_tma_v2_2048.ptx", "flash_attn_tma_v2_4096.ptx"],
+    "kernel_ptx_single_buffer_test": ["flash_attn_tma_sb_2048.ptx", "flash_attn_tma_sb_4096.ptx"],
+    "mma_oracle": "fa_mma_oracle.cu  (PASS both shapes, rel_rowscale 6e-4/7e-4)",
+    "host": "fa_roofline_host.c  (TMA + cuBLAS-TC + roofline %)",
+    "fragment_probes": ["mma_probe.cu", "probe2.cu", "probe3.cu"],
+    "generators": ["gen_flash_attn_tma_sw128_ptx.hexa (v1, deprecated)", "gen_flash_attn_tma_v2_ptx.hexa (v2, the shipped)", "gen_flash_attn_tma_sb_ptx.hexa (occupancy test)"],
+    "verdict": ".verdicts/fusion-attention-roofline/F-FUSION-ATTN-ROOFLINE.txt"
   }
 }
