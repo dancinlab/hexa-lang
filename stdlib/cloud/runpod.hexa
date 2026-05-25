@@ -53,6 +53,54 @@ fn _runpodctl_path() -> str {
     return on_path
 }
 
+// ── credential resolution — single SSOT for CLI · dispatch · watchdog ──
+
+// _toml_str_field — extract a flat-TOML `<key> = "<value>"` (first match, "" if none).
+fn _toml_str_field(toml: str, key: str) -> str {
+    let lines = toml.split("\n")
+    let mut i = 0
+    while i < len(lines) {
+        let ln = lines[i].trim()
+        if ln.index_of(key) == 0 {
+            let q0 = ln.index_of("\"")
+            if q0 >= 0 {
+                let rest = ln.substring(q0 + 1, len(ln))
+                let q1 = rest.index_of("\"")
+                if q1 >= 0 { return rest.substring(0, q1) }
+            }
+        }
+        i = i + 1
+    }
+    return ""
+}
+
+// runpod_api_key — resolve the RunPod API key, canonical order:
+//   1. `secret get runpod.api_key`  (macOS Keychain SSOT)
+//   2. ~/.runpod/config.toml  `api_key = "…"`  (runpodctl maintains it)
+//   3. RUNPOD_API_KEY env
+// Every path (cloud CLI · fire dispatch · idle-orphan watchdog) auths the same
+// way — no manual env setup, no stale-key drift, no un-killable orphan from a
+// watchdog that simply lacked a key.
+fn runpod_api_key() -> str {
+    let s = exec("secret get runpod.api_key 2>/dev/null").trim()
+    if len(s) > 0 { return s }
+    let toml = read_file(env_var("HOME") + "/.runpod/config.toml")
+    let k = _toml_str_field(toml, "api_key")
+    if len(k) > 0 { return k }
+    return env_var("RUNPOD_API_KEY")
+}
+
+// runpod_local_pubkey — the local SSH public key, so every pod we create is
+// reachable from THIS host. A pod created without our key is publickey-denied:
+// a crashed-dispatch orphan then can't be inspected/torn-down over ssh, only
+// via runpodctl. ed25519 → rsa fallback.
+fn runpod_local_pubkey() -> str {
+    let home = env_var("HOME")
+    let ed = read_file(home + "/.ssh/id_ed25519.pub").trim()
+    if len(ed) > 0 { return ed }
+    return read_file(home + "/.ssh/id_rsa.pub").trim()
+}
+
 // _shq_local — POSIX-quote a token for the local /bin/sh -c. Mirrors
 // cloud.hexa's _shq; kept local here so this module does not depend on a
 // private export. Wraps in single quotes; a literal ' becomes '\''.

@@ -388,9 +388,12 @@ fn watchdog_run(av: [str], start: int) -> int {
     println("")
 
     // api_key is only consumed by runpod_terminate when dry_run == 0.
-    let api_key = env_var("RUNPOD_API_KEY")
+    // Resolve via the shared SSOT (secret get → config.toml → env) so the
+    // orphan-killer auths without a manual env var — a watchdog that can't
+    // auth is the reason an idle-dispatch orphan keeps billing.
+    let api_key = runpod_api_key()
     if dry_run == 0 && len(api_key) == 0 {
-        println("[watchdog] error: --kill requires RUNPOD_API_KEY in env (live terminate)")
+        println("[watchdog] error: --kill needs a RunPod key — set `secret set runpod.api_key`, ~/.runpod/config.toml, or RUNPOD_API_KEY")
         return 1
     }
 
