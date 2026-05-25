@@ -2125,13 +2125,15 @@ fn cmd_register(rest: array) {
         let mkx_on = drill_engine == "mk10"
         let mut all_discoveries: array = []
         let mut seed_pool: array = []
+        let mut cum_seen_ids: array = []
         let mut total_yield: i64 = 0
         let mut last_round: i64 = 0
         let mut r: i64 = 0
         while r < drill_rounds {
             r = r + 1
             last_round = r
-            let rr = round_run_with_pool(drill_seed, r, 3, 3, 1, mkx_on, seed_pool)
+            let rr = round_run_with_pool(drill_seed, r, 3, 3, 1, mkx_on, seed_pool, cum_seen_ids)
+            cum_seen_ids = rr.cum_seen_ids
             println("  round " + to_string(r) + ": smash+" + to_string(rr.yields.smash_n) +
                     " free+" + to_string(rr.yields.free_n) +
                     " abs=" + to_string(rr.yields.abs_n) +
@@ -2148,8 +2150,9 @@ fn cmd_register(rest: array) {
             }
             // Feed next round's seed pool from this round's axiom-exprs.
             seed_pool = extract_axiom_exprs(rr.discoveries)
-            // Saturation: drill's own contract.
+            // Saturation: drill's own contract — gross total OR C5 net-novel fixpoint.
             if rr.yields.total == 0 { break }
+            if r >= 2 && rr.net_novel == 0 { break }
         }
         println("  drill  = rounds=" + to_string(last_round) +
                 " total=" + to_string(total_yield) +
