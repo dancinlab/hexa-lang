@@ -413,7 +413,7 @@
   method = "fence"
   cmd    = "archive-TECS-L math/dfs_dedekind_psi_discrepancy.py (analytic n→∞ argument)"
   raw    = ".verdicts/tecs-l-dedekind-psi-uniqueness/sweep_D_1_100.txt   # finite witness only — NOT a proof of the unbounded claim"
-  status = "🟡 SUPPORTED-BY-CITATION — unbounded claim cited (archive); finite sweep 1..100 is the terminal witness. residual gated OUT of /paper. do NOT over-claim full proof from finite sweep."
+  status = "🔵 SUPERSEDED by M10 — unbounded uniqueness now PROVEN closed-form (tecs_l_up_theorem · TECS-L/docs/m10-uniqueness-closed-form-proof.md). was 🟡 (finite-sweep-only) at M3."
 
 # ───────────────────────────────────────────────────────────────────────
 # TECS-L — tecs-l-n6-characterizations (slug · group=TECS-L · TECS-L/TECS-L.md M4)
@@ -819,3 +819,88 @@
   raw    = ".verdicts/tecs-l-discovery-engine/loop_once_smoke.txt"
   src    = "stdlib/loop/{cycle,dfs,state}.hexa · RFC 065 + RFC 080 (archive discovery_loop.py port)"
   status = "🟢 empirical PASS — discovery engine runs hexa-native end-to-end (smoke, not an arithmetic recompute). terminal-empirical."
+
+# ───────────────────────────────────────────────────────────────────────
+# TECS-L — tecs-l-uniqueness-proof (slug · group=TECS-L · TECS-L/TECS-L.md M10)
+# CLOSED-FORM PROOF of the unbounded uniqueness sigma*phi=n*tau <=> n in {1,6}.
+# By multiplicativity = prod g(p,a)=1, g(p,a)=(p^(a+1)-1)/(p(a+1)); g(2,1)=3/4 is
+# the unique factor <1, all others >1 -> only n in {1,6}. Base-case factor values
+# machine-verified below (🔵). Promotes the 🟡 residual of M1/M3/M9 to 🔵.
+# Doc: TECS-L/docs/m10-uniqueness-closed-form-proof.md.
+
+@C tecs_l_up_g21_sigma2 := "sigma(2)=3 (lemma: g(2,1)=3/4, the UNIQUE prime-power factor <1)" :: formula [slug=tecs-l-uniqueness-proof group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr sigma 2 3"
+  raw    = ".verdicts/tecs-l-uniqueness-proof/g21_sigma2.txt"
+  src    = "M10 closed-form proof (sign lemma base cases)"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal."
+
+@C tecs_l_up_g21_phi2 := "phi(2)=1 (lemma g(2,1)=3/4)" :: formula [slug=tecs-l-uniqueness-proof group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr phi 2 1"
+  raw    = ".verdicts/tecs-l-uniqueness-proof/g21_phi2.txt"
+  src    = "M10 closed-form proof (sign lemma base cases)"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal."
+
+@C tecs_l_up_g31_sigma3 := "sigma(3)=4 (lemma: g(3,1)=4/3, smallest odd factor)" :: formula [slug=tecs-l-uniqueness-proof group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr sigma 3 4"
+  raw    = ".verdicts/tecs-l-uniqueness-proof/g31_sigma3.txt"
+  src    = "M10 closed-form proof (sign lemma base cases)"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal."
+
+@C tecs_l_up_g31_phi3 := "phi(3)=2 (lemma g(3,1)=4/3)" :: formula [slug=tecs-l-uniqueness-proof group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr phi 3 2"
+  raw    = ".verdicts/tecs-l-uniqueness-proof/g31_phi3.txt"
+  src    = "M10 closed-form proof (sign lemma base cases)"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal."
+
+@C tecs_l_up_g22_sigma4 := "sigma(4)=7 (lemma g(2,2)=7/6>1)" :: formula [slug=tecs-l-uniqueness-proof group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr sigma 4 7"
+  raw    = ".verdicts/tecs-l-uniqueness-proof/g22_sigma4.txt"
+  src    = "M10 closed-form proof (sign lemma base cases)"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal."
+
+@C tecs_l_up_g22_phi4 := "phi(4)=2 (lemma g(2,2)=7/6>1)" :: formula [slug=tecs-l-uniqueness-proof group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr phi 4 2"
+  raw    = ".verdicts/tecs-l-uniqueness-proof/g22_phi4.txt"
+  src    = "M10 closed-form proof (sign lemma base cases)"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal."
+
+@C tecs_l_up_g51_sigma5 := "sigma(5)=6 (lemma g(5,1)=12/5>1)" :: formula [slug=tecs-l-uniqueness-proof group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr sigma 5 6"
+  raw    = ".verdicts/tecs-l-uniqueness-proof/g51_sigma5.txt"
+  src    = "M10 closed-form proof (sign lemma base cases)"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal."
+
+@C tecs_l_up_g51_phi5 := "phi(5)=4 (lemma g(5,1)=12/5>1)" :: formula [slug=tecs-l-uniqueness-proof group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr phi 5 4"
+  raw    = ".verdicts/tecs-l-uniqueness-proof/g51_phi5.txt"
+  src    = "M10 closed-form proof (sign lemma base cases)"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal."
+
+@C tecs_l_up_g71_sigma7 := "sigma(7)=8 (lemma g(7,1)=24/7>1)" :: formula [slug=tecs-l-uniqueness-proof group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr sigma 7 8"
+  raw    = ".verdicts/tecs-l-uniqueness-proof/g71_sigma7.txt"
+  src    = "M10 closed-form proof (sign lemma base cases)"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal."
+
+@C tecs_l_up_g71_phi7 := "phi(7)=6 (lemma g(7,1)=24/7>1)" :: formula [slug=tecs-l-uniqueness-proof group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr phi 7 6"
+  raw    = ".verdicts/tecs-l-uniqueness-proof/g71_phi7.txt"
+  src    = "M10 closed-form proof (sign lemma base cases)"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal."
+
+@C tecs_l_up_theorem := "sigma(n)*phi(n)=n*tau(n) <=> n in {1,6} for ALL n (closed-form proof: prod g(p,a)=1, g(2,1)=3/4 unique <1)" :: formula [slug=tecs-l-uniqueness-proof group=TECS-L]
+  method = "closed-form-proof"
+  cmd    = "multiplicative reduction to prod g(p,a)=1 + sign lemma (machine-verified base cases) + exp>linear bound"
+  raw    = ".verdicts/tecs-l-uniqueness-proof/theorem_closed_form.txt"
+  src    = "M10 — promotes M1/M3/M9 unbounded uniqueness 🟡 → 🔵"
+  status = "🔵 SUPPORTED-FORMAL — unbounded (forall n) uniqueness PROVEN closed-form. terminal · paper-eligible (supersedes the 🟡 residual)."
