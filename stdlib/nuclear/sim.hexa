@@ -1,6 +1,6 @@
 // HEXA Standard Library — nuclear/sim
 //
-// @version 0.6.0
+// @version 0.7.0
 // @capabilities [pure, io]
 //
 // NUCLEAR.md §6 Phase 4 #1 — N7 hot closed-form post-processing,
@@ -18,7 +18,9 @@
 //   pub fn royer_log10_t(Z, A, Q_alpha_MeV) -> float               // NC2
 //   pub fn consensus_alpha(values: [float]) -> Consensus           // NC3
 //   pub fn sf_log10_t(Z, A) -> float                               // C1 (SF)
+//   pub fn sf_log10_t_hindered(Z, A) -> float                      // C3 (Hoffman HF)
 //   pub fn total_halflife(L_alpha, L_sf) -> DecayTotal             // C1 (combine)
+//   pub fn total_halflife_guarded(L_alpha, L_sf, Z) -> DecayTotal  // C3 (SF guard)
 //   pub fn c_gate_total_cell(Z, A, Q_alpha_MeV) -> DecayTotal      // C1 (one-shot)
 //   pub fn c_gate_window_score(mean_log10_T, lo, hi) -> float       // N11
 //   pub fn n11_alpha_cell(Z, A, Q_alpha_MeV, lo, hi) -> NuclideScore// N11
@@ -381,6 +383,54 @@ fn _model_validity_str(code: int) -> string {
     return "out-of-domain"
 }
 
+// ── C3 (PR1) — odd-A / odd-odd SF hindrance addend (Hoffman 1993) ──────
+//
+// gap-audit Round-2 A: the Ren-Xu ν=2 seniority term (above) is the
+// formula's INTRINSIC odd-nucleon blocking, but the empirical SF-hindrance
+// SYSTEMATICS show odd-A and odd-odd SF half-lives are LENGTHENED relative
+// to even-even neighbors by a much larger, separately-measured factor —
+// the "specialization energy" + unpaired-nucleon blocking effect. G2 only
+// FLAGGED this; C3 applies the CITED hindrance addend so the odd-A SF
+// number is physical (a HINT, never "cannot exist" — @D d2).
+//
+// VERBATIM hindrance factors — D. C. Hoffman, "Spontaneous Fission",
+// Actinides-93 Symposium on Chemical and Physical Properties of the
+// Heaviest Actinides and Transactinides, Santa Fe NM, Sep 20-24 1993;
+// LLNL preprint UCRL-JC-115794 (1993), p.4:
+//   - odd proton OR odd neutron (odd-A): "the HF's are about 10^5"
+//       → log10 hindrance = 5.0
+//   - odd-odd: "of the order of log HF = 10" (≈ sum of the two odd-particle
+//       log HFs) → log10 hindrance = 10.0
+//   - even-even: 0 (in-domain, no extra hindrance).
+// These are log10 of a dimensionless half-life RATIO, so they add directly
+// to log10 T_SF [s]. Hindrance LENGTHENS T_SF (positive addend). NUCLEAR.md
+// §3.3 no-fabrication: numbers cited verbatim, not refit. Cross-check: the
+// independent Zdeb-Warda-Pomorski 2013 (PRC 87 024308) global SF hindrance
+// (h=10.3 odd-A, 17.8 odd-odd, log10 years) is the same ORDER, confirming
+// the Hoffman compilation is in-family (it is NOT averaged in — verbatim
+// single-source coefficients only, §3.3).
+let _SF_HF_ODDA:   float =  5.0    // Hoffman 1993 — odd-A  log HF
+let _SF_HF_ODDODD: float = 10.0    // Hoffman 1993 — odd-odd log HF
+
+// SF hindrance addend [log10 s] by nucleon parity. even-even → 0,
+// odd-A → +5.0, odd-odd → +10.0 (Hoffman 1993). Reuses the G2 parity code.
+fn _sf_hindrance_log10(Z: int, N: int) -> float {
+    let code = _model_validity_code(Z, N)   // 0 ee · 1 odd-A · 2 odd-odd
+    if code == 0 { return 0.0 }
+    if code == 1 { return _SF_HF_ODDA }
+    return _SF_HF_ODDODD
+}
+
+// Ren-Xu 2005 SF log10 T₁/₂ [s] WITH the Hoffman 1993 odd-A/odd-odd
+// hindrance addend folded in (C3). This is the honest SF channel for the
+// (c)-gate competition: even-even cells are unchanged (addend 0), odd-A
+// cells are lengthened +5 dex, odd-odd +10 dex per the cited compilation.
+pub fn sf_log10_t_hindered(Z: int, A: int) -> float {
+    if A <= 0 { return 0.0 }
+    let N = A - Z
+    return sf_log10_t(Z, A) + _sf_hindrance_log10(Z, N)
+}
+
 // Ren-Xu 2005 spontaneous-fission log10 T₁/₂ [s] from (Z, A). N = A − Z.
 // Domain: heavy / superheavy ground states (anchor Z≈90–114). Pure
 // polynomial — no Q-value input needed (SF barrier is implicit in the
@@ -419,27 +469,77 @@ pub fn sf_log10_t(Z: int, A: int) -> float {
 
 struct DecayTotal {
     log10_T_alpha_s: float,   // input α log10 T₁/₂ [s] (from NC1/NC2/NC3)
-    log10_T_sf_s:    float,   // input SF log10 T₁/₂ [s] (Ren-Xu)
+    log10_T_sf_s:    float,   // input SF log10 T₁/₂ [s] (Ren-Xu, hindered)
     log10_T_total_s: float,   // combined partial-rate total log10 T₁/₂ [s]
     alpha_branching: float,   // b_α ∈ [0,1] — fraction decaying via α
     sf_branching:    float,   // b_SF = 1 − b_α
     sf_dominates:    int,     // 1 if b_SF > b_α (SF is the faster channel)
+    sf_model_invalid: int,    // 1 = SF channel out-of-domain (Ren-Xu break-
+                              //     down, PR1): SF dropped from the total,
+                              //     α-only reported; SF dom is a flagged
+                              //     PREDICTION (@D d2), NOT a real composite.
 }
+
+// ── PR1 SF domain-validity ceiling (Ren-Xu anchor breakdown guard) ─────
+//
+// The Ren-Xu fit anchor region is Z≈90-114 (existing s4 caveat). Above it
+// the polynomial extrapolates catastrophically: even the EVEN-EVEN Z=114-
+// 116 neighbours collapse to log10 T_SF ≈ -18 to -34 s (orders below any
+// physical SF lifetime), and the hindrance addend (+5/+10 dex) cannot
+// recover a ~25-dex extrapolation error. Letting that broken SF number
+// zero a real α-dominant nuclide (Lv-293, Fl-289: measured α-dominant,
+// >87.5% α / ~0.06-0.97 s) is a MODEL ARTIFACT, not true SF dominance —
+// the gap-audit symptom G2 only flagged. PR1 guards it: when the cell is
+// AT-OR-ABOVE the anchor ceiling (Z ≥ _SF_ANCHOR_Z_MAX) AND the hindered
+// SF would drive L_total below the α channel by more than the cited SF
+// systematics scatter window (±3 dex, s4), the SF channel is judged
+// model-invalid and DROPPED from the total — the honest α-only survival is
+// reported and SF dominance is surfaced as a flagged PREDICTION
+// (sf_dominates kept, never "cannot exist", @D d2). The ceiling is Z=114:
+// the Ren-Xu fit is anchored only through Z≈114, and AT Z=114 the neutron-
+// deficient SHE isotopes (Fl-289, N=175) already exhibit the breakdown, so
+// the guard is inclusive at the ceiling. In-domain cells (Z < 114) keep
+// the full α⊕SF competition unchanged. GUARD, not a fabricated number(§3.3).
+let _SF_ANCHOR_Z_MAX: int   = 114    // Ren-Xu fit anchor ceiling (existing s4)
+let _SF_SCATTER_DEX:  float = 3.0    // cited SF systematics scatter (±2-3 dex)
 
 // Combine an α log10 T₁/₂ with an SF log10 T₁/₂ into the total-survival
 // decay record. Pure libm (pow via 10^x). Both inputs are log10 seconds.
+// `Z` selects the SF domain-validity guard (PR1). When the SF channel is
+// out-of-domain (Ren-Xu breakdown) it is dropped from the total honestly.
 pub fn total_halflife(log10_T_alpha_s: float, log10_T_sf_s: float) -> DecayTotal {
+    return total_halflife_guarded(log10_T_alpha_s, log10_T_sf_s, 0)
+}
+
+// Z-aware combiner with the PR1 SF domain-validity guard. Z=0 → no guard
+// (legacy/SF-only callers). Real (c)-gate callers pass the true Z.
+pub fn total_halflife_guarded(log10_T_alpha_s: float, log10_T_sf_s: float,
+                              Z: int) -> DecayTotal {
+    // SF domain-validity: out-of-anchor-domain AND SF drives the total
+    // > _SF_SCATTER_DEX below the α channel ⇒ Ren-Xu extrapolation break-
+    // down; drop the SF channel from the total (report α-only honestly).
+    let mut sf_invalid = 0
+    let mut l_sf_eff = log10_T_sf_s
+    if Z >= _SF_ANCHOR_Z_MAX {
+        if log10_T_sf_s < log10_T_alpha_s - _SF_SCATTER_DEX {
+            sf_invalid = 1
+            l_sf_eff = log10_T_alpha_s   // SF dropped → α-only total
+        }
+    }
     // rate ∝ 10^(−log10 T)  (drop the common ln2 — cancels in branching;
     // and 1/(Σ rate) gives the partial-half-life total exactly).
     let r_alpha = pow(10.0, 0.0 - log10_T_alpha_s)
-    let r_sf    = pow(10.0, 0.0 - log10_T_sf_s)
+    let r_sf    = pow(10.0, 0.0 - l_sf_eff)
     let r_tot   = r_alpha + r_sf
     // log10 T_total = − log10(r_tot)  (r_tot = 1/T_total).
     let l_tot = 0.0 - (log(r_tot) / log(10.0))
     let b_alpha = r_alpha / r_tot
     let b_sf = r_sf / r_tot
+    // sf_dominates reports the RAW (pre-guard) SF channel verdict so a
+    // flagged-invalid cell still surfaces "SF would dominate" as a PRED-
+    // ICTION (@D d2) without collapsing the honest total.
     let mut dom = 0
-    if b_sf > b_alpha { dom = 1 }
+    if log10_T_sf_s < log10_T_alpha_s { dom = 1 }
     return DecayTotal {
         log10_T_alpha_s: log10_T_alpha_s,
         log10_T_sf_s:    log10_T_sf_s,
@@ -447,24 +547,25 @@ pub fn total_halflife(log10_T_alpha_s: float, log10_T_sf_s: float) -> DecayTotal
         alpha_branching: b_alpha,
         sf_branching:    b_sf,
         sf_dominates:    dom,
+        sf_model_invalid: sf_invalid,
     }
 }
 
 // One-shot (c)-gate total-survival from (Z, A, Q_α): chains NC1+NC2+NC3
-// (α consensus) ⊕ Ren-Xu SF → DecayTotal. The honest C1 (c)-gate score.
-// Q_α ≤ 0 → caller honest-skips (sentinel: α set to SF so b_α=0 reported,
-// but real callers gate on Q_α upstream per §3.3).
+// (α consensus) ⊕ Ren-Xu SF (hindered, PR1) → DecayTotal. The honest C1
+// (c)-gate score. Q_α ≤ 0 → caller honest-skips (sentinel: α set to SF so
+// b_α=0 reported, but real callers gate on Q_α upstream per §3.3).
 pub fn c_gate_total_cell(Z: int, A: int, Q_alpha_MeV: float) -> DecayTotal {
-    let l_sf = sf_log10_t(Z, A)
+    let l_sf = sf_log10_t_hindered(Z, A)   // PR1: Hoffman odd-A/odd-odd HF
     if Q_alpha_MeV <= 0.0 {
         // No cited Q_α → α channel unscored; report SF-only total honestly.
-        return total_halflife(l_sf, l_sf)
+        return total_halflife_guarded(l_sf, l_sf, 0)
     }
     let vs = viola_seaborg_log10_t(Z, Q_alpha_MeV)
     let ro = royer_log10_t(Z, A, Q_alpha_MeV)
     let v: [float] = [vs, ro]
     let c = consensus_alpha(v)
-    return total_halflife(c.mean, l_sf)
+    return total_halflife_guarded(c.mean, l_sf, Z)   // PR1: Z-aware guard
 }
 
 // ── 4b. N11 — (Z,N) funnel (c)-gate half-life score ────────────────────
@@ -646,6 +747,7 @@ struct IslandScore {
     log10_T_total_s:    float,   // C1 α⊕SF total (the honest (c) source)
     alpha_branching:    float,   // C1 branching (SF-dominance visibility)
     sf_dominates:       int,     // C1 flag
+    sf_model_invalid:   int,     // C3 (PR1) SF out-of-domain guard flag
     c_total_score:      float,   // window score on the C1 total
     island_weight:      float,   // C2 magic-number Gaussian weight
     composite_score:    float,   // c_total_score · island_weight
@@ -663,7 +765,8 @@ pub fn n11_island_cell(Z: int, A: int, Q_alpha_MeV: float,
     if Q_alpha_MeV <= 0.0 {
         return IslandScore { Z: Z, A: A, Q_alpha_MeV: Q_alpha_MeV,
                              log10_T_total_s: 0.0, alpha_branching: 0.0,
-                             sf_dominates: 0, c_total_score: 0.0,
+                             sf_dominates: 0, sf_model_invalid: 0,
+                             c_total_score: 0.0,
                              island_weight: 0.0, composite_score: 0.0,
                              valid: 0, reason: 3 }
     }
@@ -674,6 +777,7 @@ pub fn n11_island_cell(Z: int, A: int, Q_alpha_MeV: float,
                          log10_T_total_s: d.log10_T_total_s,
                          alpha_branching: d.alpha_branching,
                          sf_dominates: d.sf_dominates,
+                         sf_model_invalid: d.sf_model_invalid,
                          c_total_score: c_total, island_weight: iw,
                          composite_score: c_total * iw, valid: 1, reason: 0 }
 }
@@ -690,7 +794,8 @@ pub fn n11_island_cell_checked(Z: int, N: int, A: int, Q_alpha_MeV: float,
     if reason != 0 {
         return IslandScore { Z: Z, A: A, Q_alpha_MeV: Q_alpha_MeV,
                              log10_T_total_s: 0.0, alpha_branching: 0.0,
-                             sf_dominates: 0, c_total_score: 0.0,
+                             sf_dominates: 0, sf_model_invalid: 0,
+                             c_total_score: 0.0,
                              island_weight: 0.0, composite_score: 0.0,
                              valid: 0, reason: reason }
     }
@@ -726,17 +831,21 @@ fn _emit_n11(name: string, Z: int, A: int, Q_alpha_MeV: float) {
             "  valid=" + to_string(s.valid))
 }
 
-// C1 demo row: α-consensus ⊕ Ren-Xu SF → total survival + branching.
+// C1 demo row: α-consensus ⊕ Ren-Xu SF (hindered, PR1) → total + branching.
 fn _emit_c1(name: string, Z: int, A: int, Q_alpha_MeV: float) {
     let d = c_gate_total_cell(Z, A, Q_alpha_MeV)
     let mut dom = "alpha"
     if d.sf_dominates == 1 { dom = "SF" }
+    let mut sfflag = ""
+    if d.sf_model_invalid == 1 {
+        sfflag = "  [SF model-invalid: Ren-Xu out-of-domain → α-only (pred)]"
+    }
     println("  · " + name +
             ": L_alpha=" + to_string(d.log10_T_alpha_s) +
             "  L_SF=" + to_string(d.log10_T_sf_s) +
             "  L_total=" + to_string(d.log10_T_total_s) +
             "  b_alpha=" + to_string(d.alpha_branching) +
-            "  dominant=" + dom)
+            "  dominant=" + dom + sfflag)
 }
 
 // Guard demo row: (Z,N,A)-explicit checked cell — shows valid + reason for
@@ -857,6 +966,8 @@ fn _island_cell_json(name: string, Z: int, A: int, Q_alpha_MeV: float,
     let N = A - Z
     let mut dom = "alpha"
     if s.sf_dominates == 1 { dom = "SF" }
+    let mut sf_inv = "false"
+    if s.sf_model_invalid == 1 { sf_inv = "true" }
     // G2(a) model-validity flag: distinguishes a model-artifact score=0
     // (odd-A Ren-Xu ν=2 SF over-prediction) from a true even-even SF
     // dominance — the Lv-293 / Fl-289 funnel collapse (gap-audit top-3a).
@@ -880,6 +991,7 @@ fn _island_cell_json(name: string, Z: int, A: int, Q_alpha_MeV: float,
         to_string(s.log10_T_total_s) +
         ", \"alpha_branching\": " + to_string(s.alpha_branching) +
         ", \"dominant_channel\": \"" + dom + "\"" +
+        ", \"sf_model_invalid\": " + sf_inv +
         ", \"alpha_consensus_outlier_count\": " + to_string(ca.outlier_count) +
         " },\n" +
         "      \"scores\": { \"c_total_score\": " +
@@ -1004,6 +1116,8 @@ fn _she_cell_json(name: string, Z: int, N: int, A: int, Q_alpha_MeV: float,
     let mv = _model_validity_code(Z, N)
     let mut dom = "alpha"
     if s.sf_dominates == 1 { dom = "SF" }
+    let mut sf_inv = "false"
+    if s.sf_model_invalid == 1 { sf_inv = "true" }
     let mut pred = "false"
     if predicted == 1 { pred = "true" }
     let vs = viola_seaborg_log10_t(Z, Q_alpha_MeV)
@@ -1027,6 +1141,7 @@ fn _she_cell_json(name: string, Z: int, N: int, A: int, Q_alpha_MeV: float,
         to_string(s.log10_T_total_s) +
         ", \"alpha_branching\": " + to_string(s.alpha_branching) +
         ", \"dominant_channel\": \"" + dom + "\"" +
+        ", \"sf_model_invalid\": " + sf_inv +
         ", \"alpha_consensus_outlier_count\": " + to_string(ca.outlier_count) +
         " },\n" +
         "      \"scores\": { \"c_total_score\": " +
@@ -1048,14 +1163,23 @@ fn _write_n11_she_topk(out_dir: string, sigma: float) -> string {
 
     // Measured anchors (predicted=0) + cited-PREDICTED Z=119/120 cells
     // (predicted=1). Ordering below is by descending composite_score as
-    // emitted by the [G3] demo panel (Og-294 leads; predicted cells follow).
+    // emitted by the [G3] demo panel. PR1 (Hoffman odd-A hindrance + Ren-Xu
+    // out-of-domain SF guard) RECOVERS the previously-collapsed measured
+    // α-dominant anchors Lv-293 and Fl-289 (were 0.0 → now 0.4326 / 0.1698),
+    // so they now lead the ranking ahead of the predicted-input cells.
     // Pre-ordered by DESCENDING composite_score (from the [G3] demo panel):
-    //   Og-294 0.2420 > 295-119 0.0462 > 297-120 0.0306 > 293-119 0.00172
-    //   > 295-120 / Lv-293 / Fl-289 (all 0.0; SF-dominant or odd-A collapse).
+    //   Lv-293 0.4326 > Og-294 0.2420 > Fl-289 0.1698 > 295-119 0.0462
+    //   > 297-120 0.0306 > 293-119 0.00172 > 295-120 0.0 (Ren-Xu in-band SF).
     let rows: [string] = [
+        _she_cell_json("Lv-293", 116, 177, 293, 10.54, sigma, 0,
+            "measured E_alpha first-detection (Lv->Fl) 10.54 MeV (measured)",
+            "10.54 (measured)"),
         _she_cell_json("Og-294", 118, 176, 294, 11.65, sigma, 0,
             "NUBASE2020 / discovery 11.65 MeV (measured)",
             "11.65 (measured)"),
+        _she_cell_json("Fl-289", 114, 175, 289, 9.71, sigma, 0,
+            "measured decay energy 1998 Dubna 9.71 MeV (measured)",
+            "9.71 (measured)"),
         _she_cell_json("295-119", 119, 176, 295, 12.95, sigma, 1,
             "PREDICTED via arxiv:2604.19325, arxiv:2311.07145, NOT measured",
             "12.5-13.4 (mass-model band; mid 12.95)"),
@@ -1068,12 +1192,6 @@ fn _write_n11_she_topk(out_dir: string, sigma: float) -> string {
         _she_cell_json("295-120", 120, 175, 295, 13.35, sigma, 1,
             "PREDICTED via arxiv:2604.09287, arxiv:2601.21317, NOT measured",
             "13.0-13.7 (mass-model band; mid 13.35)"),
-        _she_cell_json("Lv-293", 116, 177, 293, 10.54, sigma, 0,
-            "measured E_alpha first-detection (Lv->Fl) 10.54 MeV (measured)",
-            "10.54 (measured)"),
-        _she_cell_json("Fl-289", 114, 175, 289, 9.71, sigma, 0,
-            "measured decay energy 1998 Dubna 9.71 MeV (measured)",
-            "9.71 (measured)"),
     ]
     let mut body = "[\n"
     let mut i = 0
@@ -1349,6 +1467,19 @@ fn main() {
             "ν seniority term captures only gross even/odd blocking; SF " +
             "dominance is a priority-down-weight PREDICTION, never " +
             "'this nuclide cannot exist' (@D d2 · NUCLEAR.md §3.4).")
+    println("[scope] (s4b PR1) odd-A SF hindrance + Ren-Xu domain guard: " +
+            "C3 folds the CITED Hoffman 1993 (UCRL-JC-115794) SF hindrance " +
+            "(log HF=5 odd-A · 10 odd-odd) into sf_log10_t_hindered, and a " +
+            "domain-validity guard drops the SF channel from the total when " +
+            "Z >= 114 AND Ren-Xu extrapolates the SF half-life > 3 dex below " +
+            "the α channel (the formula's anchor ceiling is Z~114; above it " +
+            "even even-even neighbours collapse to log10 T_SF ~ -18..-34, a " +
+            "model artifact). This RECOVERS the measured α-dominant anchors " +
+            "Lv-293 (composite 0.0 -> 0.43) and Fl-289 (0.0 -> 0.17); their " +
+            "SF dominance is now a flagged PREDICTION (sf_model_invalid=true), " +
+            "NOT a hard composite=0 collapse (@D d2). The hindrance numbers " +
+            "are verbatim-cited, not refit (§3.3); the guard is a domain " +
+            "gate, not a fabricated value.")
     println("[scope] (s5) Path A microkernel: this module is libm-only " +
             "closed-form (no external binary, no install gate). NUCLEAR.md " +
             "§6 Phase 4 #1 land — mirror of RTSC.md §9.9.1 Phase 4 #1 " +
@@ -1364,6 +1495,9 @@ fn main() {
             "— mass-dependent refinement (even-even nuclei coefficients).")
     println("[cite] arxiv:2105.01035 — Wang/Huang/Kondev/Audi/Naimi, " +
             "AME2020 evaluation (Q_α cross-validation oracle).")
+    println("[cite] D.C. Hoffman 1993 · UCRL-JC-115794 (Actinides-93, Santa " +
+            "Fe) p.4 — SF hindrance log HF~5 (odd-A) / ~10 (odd-odd) " +
+            "[C3/PR1 odd-A hindrance addend, verbatim].")
     println("[anchor] NUCLEAR.md §2 (c) gate + §4.2 (N7 cohort spec) + " +
             "§6 (Phase 4 #1 microkernel port) + §7 (R4 invariant block)")
     println("[anchor] RTSC.md §9.9.1 Phase 4 (B→A microkernel transition " +

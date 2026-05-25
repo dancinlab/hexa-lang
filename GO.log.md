@@ -473,3 +473,27 @@ axis 의 첫 설계서.
 - **M14 의 uid-scoped 진단은 오진** — `HEXA_DAEMON_SOCKET` override 가 `_daemon_default_socket()` 1순위라 R3 test 의 isolated socket 은 uid 경로를 절대 안 탄다. 증상 (R3-1b/1c FAIL) 은 정확했으나 원인 layer 가 달랐음.
 - **R4 codegen test 일관성 확인** — `m_daemon_r4_codegen_test` 는 자체 fork/loopback 경로라 disk-cache 충돌 면역; R3 만 autospawn-tier 가 disk-HIT 에 가려지는 구조였음.
 
+## 2026-05-25 · M16 — compiled `sleep_ms` no-op fix (real libc nanosleep)
+
+> M14 (PR #941) 가 daemon throttle 작업 중 별 runtime 버그 보고: "Compiled `sleep_ms` is effectively a no-op (mono_ns delta ≈ 1000 ns)". timing-의존 코드 전반 영향 (daemon throttle · poll loop · 모든 sleep 계열). M16 = 진짜 fix.
+
+### 근본 원인 (1줄)
+
+`self/runtime.c::hxlcl_nanosleep` 이 **cycle-6 no-op stub** — `req` 인자를 통째 무시 (`(void)req;`) 하고 `rt_posix_ok()` 즉시 반환. 따라서 이 위에 얹힌 **모든** sleep 빌트인 (`hexa_sleep` / `sleep_s` / `sleep_ms` / `sleep_ns`) 과 `persistent_pipe` 10 ms backoff 가 compiled path 에서 silent no-op. `sleep_ms`/`sleep_ns`/`hexa_sleep_s` 의 runtime body 와 codegen dispatch (`codegen.hexa:5789` `hexa_sleep_ms(...)`) 는 **정상** — 단 하나 공유 하단 syscall shim 만 stub 이었음. (자매 `hxlcl_clock_gettime` 은 이미 real libc 호출 → 이놈만 누락.)
+
+- [x] M16 — `self/runtime.c::hxlcl_nanosleep` body 교체: `(void)req` no-op → `extern int nanosleep(...)` + `return nanosleep((const struct timespec*)req, (struct timespec*)rem);`. `<time.h>` 는 파일 상단 (line 14) 이미 include · darwin-arm64 raw-trap + linux 양쪽 libc 링크 (clock_gettime 동일 family) → 단일 shim 1곳 수정으로 양 플랫폼 커버.
+- [x] M16 — `tests/m_sleep_ms_test.hexa` 신규 (3 falsifier · mono_ns delta 측정): sleep_ms(100) ∈ [90 ms, 200 ms] (OS jitter 관대) · sleep_ms(0) < 50 ms 즉시 반환 · sleep_ms(-5) clamp-to-0 no-crash.
+
+### 검증 결과 (mac arm64 · DIRECT transpile compiled path · interp 아님)
+
+- **cc --regen 불필요** — runtime.c-only fix. codegen dispatch (`hexa_sleep_ms(arg)`) 이미 존재 · hexa_v2 트랜스파일러 무변경. `~/.hexa-cache/runtime.<sha>.o` content-hash 캐시가 runtime.c 편집을 자동 fresh-object 로 반영 (`runtime.d47d56c5...o` 신규 컴파일 확인). 기존 main-repo hexa_v2 로 빌드.
+- **BEFORE (stub runtime.c)**: `sleep_ms(100)` elapsed = **1000 ns** (= M14 보고 ≈1000 ns 정확 재현 · no-op) → test FAIL exit=1.
+- **AFTER (libc nanosleep)**: `sleep_ms(100)` elapsed = **101,264,000 ns ≈ 101 ms** (real sleep, in [90 ms, 200 ms]) · sleep_ms(0) = 1000 ns 즉시 · sleep_ms(-5) = 0 ns clamp. **3/3 PASS exit=0**.
+- 측정 요약: **전 delta ≈ 1000 ns (1 µs) → 후 delta ≈ 101 ms** (약 10만 배 증가 = 요청한 100 ms 실 sleep).
+
+### 디자인 결정 / 함정
+
+- **단일 shim 수정 (occam)** — sleep_ms 만 고치는 게 아니라 공유 `hxlcl_nanosleep` 을 고쳐 sleep/sleep_s/sleep_ns/persistent_pipe backoff 까지 일괄 정상화. stub 이 `rem` 을 0 으로 zero-fill 하던 (EINTR 가정) 동작도 제거 — libc 가 실제 잔여시간 채움 → 호출부 `while (...EINTR) req=rem` 루프 정상 작동.
+- **shared-worktree 격리 함정 (재발)** — Read/Edit 의 기본 경로가 shared main worktree (`/Users/ghost/core/hexa-lang`, detached @ 9b0a01a1 · 타 세션 leak 파일 다수) 로 잡혀 첫 edit 이 거기 leak. `git checkout -- self/runtime.c` 로 즉시 revert 후 배정된 isolated worktree (`agent-a6a3a527795fbe3c1` @ origin/main 86e17741) 에 재적용. [[feedback_hexa_lang_shared_worktree_branch_hazard]] · [[feedback_subagent_worktree_leak_pattern]].
+- **M15 와 직교** — M16 = runtime sleep_ms (self/runtime.c + test) · M15 = daemon test (test only). 영역 무중첩 · cc --regen 도 불필요 → conflict 0.
+

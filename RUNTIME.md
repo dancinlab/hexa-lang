@@ -1007,6 +1007,73 @@ opt-in via `git config core.hooksPath .githooks`) + project.tape @D
   - `RUNTIME.md` (this entry)
 - Acceptance line: `cycle 68: atlas-loop-smoke CLOSED · root=ctype.hexa:684 rt_str_join_str (O(n²) join) · smoke PASS (exit 42) · PR #(this)`
 
+### 2026-05-25 — cycle 72: codegen-layer `_write` extern drop (`__fd_write_bytes` → `hxlcl_write`) — CLOSED
+
+- cycle 72 — closes the codegen-layer `_write` extern cycle 70 (#933) explicitly
+  deferred. Cycle 70 routed the **runtime.c**-internal `__fd_write_bytes` call
+  (`self/runtime.c:10598`) through `hxlcl_write`, but `_write` PERSISTED in
+  aprime_cc. Verified cycle-70's diagnosis: the survivor is a **codegen-layer
+  emit**, not a runtime.c reference.
+
+- **Exact emit site** (confirmed by keeping `tool/build_aprime.sh`'s temp dir
+  and grepping the post-processed transpiled C, `ap_post.c`): all 6 bare
+  `write(` calls match one machine-generated signature —
+  `hexa_int((int64_t)write((int)HX_INT(<fd>), HX_STR(<s>), (size_t)HX_STRLEN(<s>)))`
+  — emitted inside `rt_print` / `rt_println` / `rt_eprint` / `rt_eprintln`
+  (the hexa-source stdlib in `stdlib/runtime/io.hexa`, all of which call
+  `__fd_write_bytes(fd, s)`). The codegen lowering of the `__fd_write_bytes`
+  builtin emits bare libc `write()`. **This backs ALL stdout/stderr** — the
+  atlas "loaded N nodes" banner, every diagnostic — so it is the highest-value
+  remaining `_write` site, not a corner case.
+
+- **Root** — SSOT `self/codegen.hexa:5662` (the `gen2_expr` branch for
+  `name == "__fd_write_bytes"`) returned a string starting
+  `"hexa_int((int64_t)write((int)HX_INT("`. The committed transpiler
+  `self/native/hexa_cc.c` (which compiles to the `hexa_v2` build binary)
+  carries the same literal at `__hexa_codegen_sl_1178` (line 14962), used
+  exactly once (line 22554), inside the `name == "__fd_write_bytes"` branch.
+
+- **Approach** — `s4_flatc_post.py` rewrite-rule was the intended LIGHT path,
+  but **governance-blocked**: the `project.tape`-marked repo refuses `.py`/`.sh`
+  Write/Edit (memory `project_hexa_native_no_sh_py_writes`; the hook redirected
+  to `.hexa`, which the `python3 tool/s4_flatc_post.py` build invocation can't
+  use without also editing the blocked `.sh`). So I took the next-lightest
+  correct path — **NOT a full `hexa cc --regen`** (which transpiles all of
+  compiler/main.hexa and is mutual-conflict-serial): a surgical 1-string edit
+  to the committed transpiler `self/native/hexa_cc.c` (a `.c` file — editable),
+  then rebuild `hexa_v2` from it via the amalgam recipe
+  (`sed runtime.h→runtime.c` + `clang -O2 -arch arm64`), promote over
+  `self/native/hexa_v2`. The SSOT `self/codegen.hexa` is edited in lockstep
+  (keeps `check_ssot_sync.hexa` happy and makes the next real regen idempotent).
+  The string signature `(int64_t)write((int)HX_INT(` is unique to this lowering
+  — no legit user `write()` matches — so the edit is exact and safe.
+
+- **Verification** (`tool/build_aprime.sh`, in-worktree, no pool hijack):
+  rebuilt aprime_cc with the promoted hexa_v2 — **1,244,264 B** Mach-O arm64,
+  atlas **loaded 16088 nodes** (the banner itself routes through the new
+  `hxlcl_write` path — proves stdout intact), smoke **exit(6*7)==42 PASS**.
+  `nm build/aprime_cc | grep ' U _write'` → **GONE**. `hxlcl_write` is now a
+  defined local symbol (`t _hxlcl_write`), not an extern. Total U externs
+  **41 → 40** (exactly -1). Extra stdout proof: a `println("…")` user program
+  built by aprime_cc + linked against runtime.c prints correctly and exits 0;
+  `eprintln` (fd 2) likewise correct.
+
+- **Note (out of scope, separate cycle)** — a user program calling bare
+  `print()` (no-newline variant) still fails to link with `Undefined symbols:
+  _print`. That is an INDEPENDENT staleness divergence: SSOT `codegen.hexa:5470`
+  lowers `print` to `hexa_print_val(...)`, but the stale `hexa_cc.c` emits bare
+  `print(`. It is NOT a `_write` issue and NOT introduced by this cycle
+  (`_print` is not an extern in aprime_cc itself). Candidate for a future
+  hexa_cc.c↔codegen.hexa resync cycle.
+
+- Files touched (codegen/transpiler scope, net additive, well under wipe
+  threshold):
+  - `self/codegen.hexa` — `__fd_write_bytes` lowering `write(` → `hxlcl_write(` (SSOT)
+  - `self/native/hexa_cc.c` — `sl_1178` string literal `write(` → `hxlcl_write(`
+  - `self/native/hexa_v2` — rebuilt from patched hexa_cc.c (binary, Mac arm64)
+  - `RUNTIME.md` (this entry)
+- Acceptance line: `cycle 72: write-codegen-fix CLOSED · approach=codegen hexa_cc.c surgical-edit + hexa_v2 rebuild (s4_flatc_post path .py-governance-blocked; full cc --regen avoided) · _write dropped (41→40 vs branch base; the codegen-layer site cycle 71 left deferred) · correctness PASS: atlas 16088 + smoke 42 + println/eprintln stdout intact · PR #(this)`
+
 ### 2026-05-25 — cycle 71: carry-flag svc re-trap expansion (8 R syscalls) — CLOSED
 
 - cycle 71 — scaled the cycle-70 (`3bdb8d3b` #933) carry-flag-correct `svc
