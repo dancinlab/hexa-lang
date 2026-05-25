@@ -20,10 +20,10 @@ def mma_kstep(s_idx, smem_a, smem_b):
     add.u32 %r79, %r78, {kb};
     add.u32 %r79, %r79, %r59;         // + chalf*2 (r59)
     add.u32 %r60, %r22, %r79;
-    add.u32 %r60, %smem_a, %r60;      // a_lo
+    add.u32 %r60, {smem_a}, %r60;      // a_lo
     add.u32 %r62, %r60, 2048;         // a_hi (+16 rows)
     add.u32 %r64, %r24, %r79;
-    add.u32 %r61, %smem_b, %r64;      // b_lo
+    add.u32 %r61, {smem_b}, %r64;      // b_lo
     add.u32 %r63, %r61, 2048;         // b_hi
     ldmatrix.sync.aligned.m8n8.x4.shared.b16 {{%ra0,%ra1,%ra2,%ra3}}, [%r60];
     ldmatrix.sync.aligned.m8n8.x4.shared.b16 {{%ra4,%ra5,%ra6,%ra7}}, [%r62];
