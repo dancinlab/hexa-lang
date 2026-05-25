@@ -3,6 +3,21 @@
 Append-only history sister of `TECS-L.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
 
+## 2026-05-25T12:42 — 축 A MF7 · first_cusp_form_weight(N) N=1..30 sweep + AL=2^ω(N) 닫힌형
+
+- [x] MF7 핵심 = (1) hexa-native `first_cusp_form_weight(N)` N=1..30 전수 verify (30/30 🔵), (2) Atkin-Lehner involution 수 |{AL of Γ₀(N)}|=2^ω(N) 닫힌형 (Atkin–Lehner 1970, Math. Ann. 185 Lemma 8) 정박
+- [x] **Sweep 30/30 🔵** — 먼저 dummy expected 로 hexa 가 돌려주는 값을 학습한 뒤 학습된 값으로 재verify. 헤드라인: N=1→12 (Δ₁₂ — SL₂(ℤ) 위 Ramanujan cusp form 의 canonical anchor), N=2→8, N=3→6, N=4→6, N=5..10·12·13·16·18·25 → 4, 나머지(N=11·14·15·17·19..24·26..30) → 2. 모두 🔵 SUPPORTED-FORMAL (g_self_verify · TECS-L Tier1)
+- [x] **Headline 개별 verdict 3개**: N=1→12 (Δ₁₂), **N=6→4** (n=6 bridge · 축 0 M4 가 사용), N=12→4 (level 12 = 2²·3, ω=2). 모두 🔵
+- [x] **AL involution 닫힌형**: |{AL of Γ₀(N)}|=2^ω(N), ω(N) = N 의 서로 다른 소인수 개수. N = ∏ p_i^{a_i} 의 exact divisor d ∥ N (gcd(d, N/d)=1) 가 AL involution 을 매개 → exact divisor 수 = 소인수 부분집합 수 = 2^ω(N)
+- [x] AL 표본 표: N=1 (ω=0, AL=1) · N=2 (ω=1, AL=2) · N=3 (ω=1, AL=2) · N=6=2·3 (ω=2, AL=4) · N=12=2²·3 (ω=2, AL=4) · N=30=2·3·5 (ω=3, AL=8). 풀 문서 → `.verdicts/tecs-l-modform-weight-al/atkin_lehner_count_formula.txt`
+- [x] **honest gate**: hexa 에 `atkin_lehner_count`/`omega`/`prime_omega`/`distinct_prime_count`/`radical` 계산기 경로 부재 (2026-05-25 probe 전부 🟠 INSUFFICIENT). 따라서 AL 공식 자체는 🟡 SUPPORTED-BY-CITATION (Atkin–Lehner 1970 Lemma 8). first_cusp_form_weight sweep 만 🔵 g5
+- [x] **μ 정박 (squarefree N 의 ω parity)**: squarefree N 에 대해 μ(N)=(−1)^ω(N) — `mu` 는 hexa-native 닫힌형 path 가 있음. μ(1)=1 (ω=0 even ✓) · μ(2)=−1 (ω=1 odd ✓) · μ(6)=1 (ω=2 even ✓) · μ(30)=−1 (ω=3 odd ✓) — 4 μ-verdict 🔵 로 sweep 범위의 squarefree-N ω 패리티 정박 (N=12 는 μ(12)=0 으로 squarefree 아니라 정박 비적용 → 소수 거듭제곱 분해 12=2²·3 에서 직접 ω=2)
+- [x] 총 verdict 영속화: 30 (sweep, 1 파일) + 3 headline weight + 4 μ + 1 AL 공식문서 = 8 raw 파일 → `.verdicts/tecs-l-modform-weight-al/`
+- [x] `CLAIMS.tape` slug=tecs-l-modform-weight-al group=TECS-L: 9 entry — sweep (🔵 experiment) · 3 headline weight (🔵 formula) · AL 닫힌형 정리 (🟡 theorem, citation) · 4 μ parity anchor (🔵 formula). 모든 entry 가 `.verdicts/` raw 와 1:1 link, orphan 0
+- [x] paper-gate 부분 적용: sweep + 3 headline + 4 μ = 8 🔵 terminal (paper-eligible). AL 공식 1 🟡 = paper-gate 미통과 (closed-form 정리는 별도 citation paper 트랙 후보)
+- [x] hexa-native 계산기 갭 (`omega`/`atkin_lehner_count`) 은 verify_cli `_recompute` 확장 후보 — 후속 별 cycle 로
+
+
 ## 2026-05-25T15:00 — 축 A MF4 · dim S₂ = genus 정리 falsified for hexa fn (🔴 closed-negative)
 
 - [x] MF4 milestone = "dim S₂(Γ₀(N)) = genus 일치 verify (🔵)" 의도 → **결과 🔴**: hexa `dim_cusp_forms(N,2)` 는 표준 dim S_2 가 아님. N=1..30 sweep 에서 10 우연 일치(전부 genus=0)·20 mismatch

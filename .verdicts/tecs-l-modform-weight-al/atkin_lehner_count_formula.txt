@@ -1,0 +1,50 @@
+# Atkin-Lehner involution count for Γ₀(N) — closed form
+
+Theorem (Atkin–Lehner, 1970):
+  | { Atkin-Lehner involutions of Γ₀(N) } | = 2^ω(N)
+  where ω(N) = number of distinct prime divisors of N.
+
+The Atkin-Lehner involutions are indexed by exact divisors d ∥ N
+(i.e. d | N with gcd(d, N/d) = 1). For N = ∏ p_i^{a_i} an exact
+divisor is any product of a subset of the prime powers p_i^{a_i},
+which gives exactly 2^ω(N) choices.
+
+# Sample table (small N)
+
+| N  | factorization | ω(N) | AL = 2^ω(N) | bridge                 |
+|----|---------------|------|-------------|------------------------|
+| 1  | 1             | 0    | 1           | identity only          |
+| 2  | 2             | 1    | 2           | {1, W_2}               |
+| 3  | 3             | 1    | 2           | {1, W_3}               |
+| 6  | 2·3           | 2    | 4           | {1, W_2, W_3, W_6}     |
+| 12 | 2²·3          | 2    | 4           | {1, W_4, W_3, W_12}    |
+| 30 | 2·3·5         | 3    | 8           | 8-element group        |
+
+# Anchor — ω(N) parity via μ(N)  (squarefree N only)
+
+For squarefree N (i.e. μ(N) ∈ {-1, +1}), the Möbius function
+gives  μ(N) = (-1)^ω(N), so the PARITY of ω is g5-verifiable via
+the `mu` calculator path. Captured verdicts:
+
+  mu_N1.txt  : μ(1)  =  1  (🔵)  →  ω(1)  even (=0)
+  mu_N2.txt  : μ(2)  = -1  (🔵)  →  ω(2)  odd  (=1)
+  mu_N6.txt  : μ(6)  =  1  (🔵)  →  ω(6)  even (=2)
+  mu_N30.txt : μ(30) = -1  (🔵)  →  ω(30) odd  (=3)
+
+These four parities are consistent with the ω(N) column above.
+
+For N = 12 (NOT squarefree, μ(12) = 0) this anchor does not apply;
+ω(12) = 2 is read from the prime-power decomposition 12 = 2²·3.
+
+# Tier
+
+Closed-form result `AL = 2^ω(N)` is a classical theorem (Atkin &
+Lehner, Math. Ann. 185 (1970), Lemma 8) and is NOT directly
+verifiable through `hexa verify` — the calculator system has no
+`atkin_lehner_count` / `omega` path (probed 2026-05-25; both return
+🟠 INSUFFICIENT).  Tier of THIS table:
+
+  🟡 SUPPORTED-BY-CITATION  (closed-form theorem · anchor via μ)
+
+The companion `first_cusp_form_weight` sweep IS directly
+verifiable (🔵 for N=1..30 — see weight_sweep_1_30.txt).

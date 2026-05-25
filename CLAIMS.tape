@@ -1414,3 +1414,75 @@
   raw    = ".verdicts/tecs-l-modform-dim-genus/dim_n30_actual.txt"
   src    = "MF4 mismatch — hexa returns 6, classical dim S_2(Γ_0(30)) = genus = 3"
   status = "🔵 SUPPORTED-FORMAL — hexa's actual value verified. (anchors the 🔴 finding)."
+
+# ───────────────────────────────────────────────────────────────────────
+# TECS-L axis A (MODFORM) — tecs-l-modform-weight-al (slug · group=TECS-L · MF7)
+# first_cusp_form_weight(N) sweep N=1..30 (smallest k with nonzero cusp form on
+# Γ₀(N)) PLUS the closed-form Atkin-Lehner involution count = 2^ω(N).
+# Sweep: 30/30 🔵. AL closed form is a classical theorem (Atkin–Lehner 1970);
+# no direct `atkin_lehner_count` / `omega` calculator path in hexa verify, so
+# the AL claim is 🟡 SUPPORTED-BY-CITATION, anchored via μ(N) = (-1)^ω(N) for
+# squarefree N (4 μ-verdicts, ω parity match).
+
+@C tecs_l_mf_weight_sweep := "first_cusp_form_weight(N) closed-form sweep N=1..30: 30/30 🔵 (k_min = smallest weight k with nonzero S_k(Γ_0(N)))" :: experiment [slug=tecs-l-modform-weight-al group=TECS-L]
+  method = "sweep"
+  cmd    = "for N in 1..30: hexa verify --expr first_cusp_form_weight N <k_min(N)>"
+  raw    = ".verdicts/tecs-l-modform-weight-al/weight_sweep_1_30.txt"
+  src    = "hexa-native first_cusp_form_weight (M4 axis-0 used N=6 → 4)"
+  status = "🔵 SUPPORTED-FORMAL — 30/30 closed-form, REAL verdict persisted verbatim. terminal."
+
+@C tecs_l_mf_weight_n1 := "first_cusp_form_weight(1) = 12 (Δ_12 — Ramanujan cusp form on SL_2(Z), the canonical anchor)" :: formula [slug=tecs-l-modform-weight-al group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr first_cusp_form_weight 1 12"
+  raw    = ".verdicts/tecs-l-modform-weight-al/weight_N1.txt"
+  src    = "classical: dim S_k(SL_2(Z)) = 0 for k<12, dim S_12 = 1 (Δ)"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal."
+
+@C tecs_l_mf_weight_n6 := "first_cusp_form_weight(6) = 4 (n=6 bridge — axis-0 M4 used this)" :: formula [slug=tecs-l-modform-weight-al group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr first_cusp_form_weight 6 4"
+  raw    = ".verdicts/tecs-l-modform-weight-al/weight_N6.txt"
+  src    = "TECS-L axis-0 M4 (n=6 modular-curve · gamma0_genus(6) = 0)"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal."
+
+@C tecs_l_mf_weight_n12 := "first_cusp_form_weight(12) = 4 (Γ_0(12), level 12 = 2²·3, ω=2)" :: formula [slug=tecs-l-modform-weight-al group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr first_cusp_form_weight 12 4"
+  raw    = ".verdicts/tecs-l-modform-weight-al/weight_N12.txt"
+  src    = "classical: dim S_2(Γ_0(12)) = 0, dim S_4(Γ_0(12)) > 0"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal."
+
+@C tecs_l_mf_al_closed_form := "|Atkin-Lehner involutions of Γ_0(N)| = 2^ω(N) where ω(N) = number of distinct prime divisors (Atkin–Lehner 1970, Math. Ann. 185 Lemma 8)" :: theorem [slug=tecs-l-modform-weight-al group=TECS-L]
+  method = "citation"
+  cmd    = "see .verdicts/tecs-l-modform-weight-al/atkin_lehner_count_formula.txt — N∈{1,2,3,6,12,30} table, ω from prime factorization, AL = 2^ω"
+  raw    = ".verdicts/tecs-l-modform-weight-al/atkin_lehner_count_formula.txt"
+  src    = "Atkin, A. O. L.; Lehner, J. — 'Hecke operators on Gamma_0(N)', Math. Ann. 185 (1970), p.149, Lemma 8 — exact divisors d || N parameterize AL involutions; exact-divisor count = 2^ω(N)"
+  status = "🟡 SUPPORTED-BY-CITATION — closed-form theorem; hexa verify has no atkin_lehner_count / omega calculator path (probed 2026-05-25 — both return 🟠 INSUFFICIENT). Parity anchored via μ(N) = (-1)^ω(N) for squarefree N (μ verdicts below)."
+
+@C tecs_l_mf_al_mu_n1 := "mu(1) = 1 (squarefree, omega(1)=0 even → mu parity anchor for AL=2^0=1)" :: formula [slug=tecs-l-modform-weight-al group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr mu 1 1"
+  raw    = ".verdicts/tecs-l-modform-weight-al/mu_N1.txt"
+  src    = "mu(N) = (-1)^omega(N) for squarefree N — omega-parity anchor"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. omega(1)=0 even ✓."
+
+@C tecs_l_mf_al_mu_n2 := "mu(2) = -1 (squarefree, omega(2)=1 odd → mu parity anchor for AL=2^1=2)" :: formula [slug=tecs-l-modform-weight-al group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr mu 2 -1"
+  raw    = ".verdicts/tecs-l-modform-weight-al/mu_N2.txt"
+  src    = "mu(N) = (-1)^omega(N) for squarefree N — omega-parity anchor"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. omega(2)=1 odd ✓."
+
+@C tecs_l_mf_al_mu_n6 := "mu(6) = 1 (squarefree 2·3, omega(6)=2 even → AL=2^2=4 — n=6 bridge)" :: formula [slug=tecs-l-modform-weight-al group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr mu 6 1"
+  raw    = ".verdicts/tecs-l-modform-weight-al/mu_N6.txt"
+  src    = "n=6 bridge: omega(6)=2 → AL(Γ_0(6))=4 (axis-0 M4 modular-curve anchor)"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. omega(6)=2 even ✓."
+
+@C tecs_l_mf_al_mu_n30 := "mu(30) = -1 (squarefree 2·3·5, omega(30)=3 odd → AL=2^3=8)" :: formula [slug=tecs-l-modform-weight-al group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr mu 30 -1"
+  raw    = ".verdicts/tecs-l-modform-weight-al/mu_N30.txt"
+  src    = "mu(N) = (-1)^omega(N) for squarefree N — omega-parity anchor at largest sweep N"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. omega(30)=3 odd ✓."

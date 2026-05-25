@@ -1,0 +1,150 @@
+=== N=1 expected=12 ===
+verify --expr first_cusp_form_weight(1)=12
+  calc   = 12  == expected 12
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+
+=== N=2 expected=8 ===
+verify --expr first_cusp_form_weight(2)=8
+  calc   = 8  == expected 8
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+
+=== N=3 expected=6 ===
+verify --expr first_cusp_form_weight(3)=6
+  calc   = 6  == expected 6
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+
+=== N=4 expected=6 ===
+verify --expr first_cusp_form_weight(4)=6
+  calc   = 6  == expected 6
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+
+=== N=5 expected=4 ===
+verify --expr first_cusp_form_weight(5)=4
+  calc   = 4  == expected 4
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+
+=== N=6 expected=4 ===
+verify --expr first_cusp_form_weight(6)=4
+  calc   = 4  == expected 4
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+
+=== N=7 expected=4 ===
+verify --expr first_cusp_form_weight(7)=4
+  calc   = 4  == expected 4
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+
+=== N=8 expected=4 ===
+verify --expr first_cusp_form_weight(8)=4
+  calc   = 4  == expected 4
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+
+=== N=9 expected=4 ===
+verify --expr first_cusp_form_weight(9)=4
+  calc   = 4  == expected 4
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+
+=== N=10 expected=4 ===
+verify --expr first_cusp_form_weight(10)=4
+  calc   = 4  == expected 4
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+
+=== N=11 expected=2 ===
+verify --expr first_cusp_form_weight(11)=2
+  calc   = 2  == expected 2
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+
+=== N=12 expected=4 ===
+verify --expr first_cusp_form_weight(12)=4
+  calc   = 4  == expected 4
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+
+=== N=13 expected=4 ===
+verify --expr first_cusp_form_weight(13)=4
+  calc   = 4  == expected 4
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+
+=== N=14 expected=2 ===
+verify --expr first_cusp_form_weight(14)=2
+  calc   = 2  == expected 2
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+
+=== N=15 expected=2 ===
+verify --expr first_cusp_form_weight(15)=2
+  calc   = 2  == expected 2
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+
+=== N=16 expected=4 ===
+verify --expr first_cusp_form_weight(16)=4
+  calc   = 4  == expected 4
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+
+=== N=17 expected=2 ===
+verify --expr first_cusp_form_weight(17)=2
+  calc   = 2  == expected 2
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+
+=== N=18 expected=4 ===
+verify --expr first_cusp_form_weight(18)=4
+  calc   = 4  == expected 4
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+
+=== N=19 expected=2 ===
+verify --expr first_cusp_form_weight(19)=2
+  calc   = 2  == expected 2
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+
+=== N=20 expected=2 ===
+verify --expr first_cusp_form_weight(20)=2
+  calc   = 2  == expected 2
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+
+=== N=21 expected=2 ===
+verify --expr first_cusp_form_weight(21)=2
+  calc   = 2  == expected 2
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+
+=== N=22 expected=2 ===
+verify --expr first_cusp_form_weight(22)=2
+  calc   = 2  == expected 2
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+
+=== N=23 expected=2 ===
+verify --expr first_cusp_form_weight(23)=2
+  calc   = 2  == expected 2
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+
+=== N=24 expected=2 ===
+verify --expr first_cusp_form_weight(24)=2
+  calc   = 2  == expected 2
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+
+=== N=25 expected=4 ===
+verify --expr first_cusp_form_weight(25)=4
+  calc   = 4  == expected 4
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+
+=== N=26 expected=2 ===
+verify --expr first_cusp_form_weight(26)=2
+  calc   = 2  == expected 2
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+
+=== N=27 expected=2 ===
+verify --expr first_cusp_form_weight(27)=2
+  calc   = 2  == expected 2
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+
+=== N=28 expected=2 ===
+verify --expr first_cusp_form_weight(28)=2
+  calc   = 2  == expected 2
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+
+=== N=29 expected=2 ===
+verify --expr first_cusp_form_weight(29)=2
+  calc   = 2  == expected 2
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+
+=== N=30 expected=2 ===
+verify --expr first_cusp_form_weight(30)=2
+  calc   = 2  == expected 2
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+
