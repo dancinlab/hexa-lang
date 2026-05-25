@@ -93,17 +93,10 @@ fn _file_exists(p: string) -> bool {
 // — which SIGSEGVs / exec-fails on Linux. This helper lets Linux pick
 // its own ELF without forcing every commit to rebuild every arch.
 fn _pick_hexa_v2(repo_root: string) -> string {
-    let os   = _uname()
-    let arch = _uname_m()
-    if os == "Linux" && (arch == "x86_64" || arch == "amd64") {
-        let p = repo_root + "/self/native/hexa_v2_linux_x86_64"
-        // graceful fallback: if the linux_x86_64 binary isn't checked in
-        // yet (older clones), fall back to the legacy name so existing
-        // workflows keep working — they'll surface the arch mismatch as
-        // an exec error, which is the pre-multiarch behaviour.
-        if _file_exists(p) { return p }
-    }
-    return repo_root + "/self/native/hexa_v2"
+    // CANON M3b: the transpiler is a per-machine build artifact, not a
+    // committed binary. Returns the expected build/hexa_v2 path; _do_build
+    // bootstraps it from hexa_cc.c (cc hexa_cc.c runtime.c) when absent.
+    return repo_root + "/build/hexa_v2"
 }
 
 // REPO_ROOT — HEXA_LANG if set, else cwd.
@@ -148,7 +141,6 @@ fn _do_build(repo_root: string) {
     let runtime_c  = repo_root + "/self/runtime.c"
     let inc        = repo_root + "/self"
 
-    _must_exist(hexa_v2,   "hexa_v2 (run `hexa cc` first)")
     _must_exist(main_hexa, "main source")
     _must_exist(ml_hexa,   "module_loader source")
 
@@ -169,6 +161,22 @@ fn _do_build(repo_root: string) {
         cflags  = "-O2 -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs" + bracket + " -I " + _shq(inc)
         ldflags = "-lpthread -lm -ldl"
     }
+
+    // ── Step 0: bootstrap the transpiler artifact (CANON M3b · Go 1.4 C-seed).
+    //   The transpiler is no longer a committed binary — build it per-machine
+    //   from the arch-neutral hexa_cc.c so it is never arch-mismatched. The
+    //   amalgam swap (#include "runtime.h" → "runtime.c") pulls the runtime
+    //   bodies into a single TU (hexa_cc.c heads with the proto-only header).
+    if !_file_exists(hexa_v2) {
+        println("[0/5] bootstrap transpiler: cc hexa_cc.c runtime.c → " + hexa_v2)
+        let hexa_cc_c = repo_root + "/self/native/hexa_cc.c"
+        _must_exist(hexa_cc_c, "hexa_cc.c (transpiler C seed)")
+        let amalgam = repo_root + "/build/_hexa_cc_amalgam.c"
+        _run("sed 's|#include \"runtime.h\"|#include \"runtime.c\"|' " + _shq(hexa_cc_c) + " > " + _shq(amalgam), "amalgam hexa_cc.c")
+        _run(cc + " " + cflags + " " + _shq(amalgam) + " -o " + _shq(hexa_v2) + " " + ldflags, "bootstrap hexa_v2")
+        let _ = exec("rm -f " + _shq(amalgam))
+    }
+    _must_exist(hexa_v2, "hexa_v2 (bootstrap from hexa_cc.c failed)")
 
     // ── Step 1+2+3: chicken-egg flatten chain (bootstrap.yml parity).
     //
