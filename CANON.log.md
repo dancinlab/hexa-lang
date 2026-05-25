@@ -14,6 +14,17 @@ PR #964(M4)의 후속 polish. 격리 worktree `agent-a119c1b3b270d14f8` (base or
 
 **교훈**: (1) 초기 절대경로 Read가 메인 repo 경로였던 탓에 Edit이 공유 메인트리 `self/main.hexa`로 leak — `git diff`로 내 편집만임을 확인 후 worktree로 `cp` 이동 + 메인 `git checkout --`로 복원(메인 = HEAD 일치 확정, 타 세션 WIP 무손상). worktree 작업 시 편집 대상 경로가 worktree 안인지 매번 확인 필수. (2) 워크트리는 build 산출물(self/native/hexa_v2) 미공유 → 메인 repo `HEXA_LANG`로 트랜스파일러 빌려 parse/build.
 
+## 2026-05-25T15:50Z — M5 배포 갭 종결 (M3b follow-up · 문서+로컬 refresh)
+
+격리 worktree `agent-a335d0f5c56d3f26d`. M3b 가 남긴 deploy 갭 진단·종결.
+
+- [x] **진단** — origin/main `self/main.hexa` 에 `resolve_or_bootstrap_hexa_v2` 존재(M3b+, 7 call-site). 배포 `~/.hx/bin/hexa.real`(=메인트리 `hexa.real`, md5 `cb08a6a8`, 5/23) `strings` 에 M3b dispatch 문자열 0 → **PRE-M3b**. 실증: 배포 hexa `parse self/main.hexa` → `error: hexa_v2 transpiler binary not found` + `self/native/hexa_v2` 만 검색(build/ 아님, auto-bootstrap 안 함). 갭 = 순수 배포 측, 소스 무결.
+- [x] **auto-bootstrap 재현 PASS** — 현재 소스로 드라이버 빌드(Step0 amalgam `hexa_cc.c` → `build/hexa_v2` → module_loader → flatten → main 트랜스파일 → `build/hexa_cli_driver`). `build/hexa_v2` 제거 후 `hexa build <tiny>` → `[bootstrap] build/hexa_v2 absent — building transpiler via hexa cc` → `=== Rebuilding hexa_cc ===` → `OK: hexa_cc rebuilt`(1.92MB 재생성) → `OK: built` → 산출물 실행 `M5 bootstrap reproduction OK`. `parse self/main.hexa` → `OK: parses cleanly`. (refuse-gate 회피 `LOCAL_BUILD=1`·출력 상대경로; pool-route 회피 `SIDECAR_NO_POOL_ROUTE=1`)
+- [x] **로컬 배포 refresh** — shim 해석 = `~/.hx/bin/hexa` → 메인트리 `hexa` shim → `__hexa_dir`=메인트리 → `hxv2`(우선)→`hexa.real`(fallback). M3b+ 드라이버를 메인트리 `hxv2`+`hexa.real`+`~/.hx/bin/{hxv2,hexa.real}` 에 배포(codesign). pre-M3b 바이너리는 `~/.hx/bin/hexa.real.bak-pre-m3b-2026-05-25` 백업. **배포 shim e2e**: `hexa_v2` 제거 후 `~/.hx/bin/hexa build` → `[bootstrap]…` 발화 → `OK: built` → auto-bootstrap PASS.
+- [x] **랜딩** — 코드 변경 불요(소스 dispatch 정상). docs-only: CANON.md M5 milestone done + 배포 refresh 절차 + M3b ⚠노트 종결 표기. self/main.hexa 미수정(M6 sibling 충돌 회피).
+
+**핵심**: M3b 갭은 dispatch 코드가 아니라 **install-step 부재** — `build_hexa_cli.hexa` 가 드라이버를 만들지만 shim 타깃으로 복사하는 단계가 없어 pull 후 배포 바이너리가 stale 잔존. 향후 자동화 = build 툴에 install 단계 추가(M5 노트의 follow-up 후보).
+
 ## 2026-05-25T06:40Z — M4 verb drawer 착지 + 도메인 SSOT publish + R2 fan-out (맥 크래시 복구 세션)
 
 맥 크래시로 detached HEAD에 4개 도메인 leak(GO daemon·NUCLEAR N11·ATLAS R2·RUNTIME) 미커밋 잔재가 뒤엉킴 → 전부 origin/main 머지본의 stale 복사본으로 확정(`nuclear/sim.hexa`는 워킹트리가 −1376 LOC) → stash 안전보관 후 origin/main(`44bd7a30`) 동기화.
