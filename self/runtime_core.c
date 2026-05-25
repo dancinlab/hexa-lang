@@ -7579,6 +7579,17 @@ HexaVal hexa_pad_right(HexaVal s, HexaVal width) {
     if (HX_IS_BOOL(_a)) _a = hexa_int(HX_BOOL(_a) ? 1 : 0); \
     if (HX_IS_BOOL(_b)) _b = hexa_int(HX_BOOL(_b) ? 1 : 0); \
 } while (0)
+// RUNTIME.md step-4 / .c-none — arithmetic core moved C → hexa (shape-2, full
+// dispatch in hexa). Under HEXA_HAS_HEXA_RT_STDLIB hexa_sub delegates to hexa-
+// source rt_sub (stdlib/runtime/numeric.hexa); the #else C body (bit-for-bit)
+// stays for standalone/smoke. rt_sub returns via typed helpers (rt_sub_int/float)
+// so no bare-native-scalar return (the attempt-1 crash, #1214). Emit-path →
+// gen1≡gen2 fixpoint MUST hold (gated before merge). NOTE the throw message text
+// differs (hexa uses type-name strings vs C's "tag %d") — prefix preserved.
+#ifdef HEXA_HAS_HEXA_RT_STDLIB
+extern HexaVal rt_sub(HexaVal a, HexaVal b);
+HexaVal hexa_sub(HexaVal a, HexaVal b) { return rt_sub(a, b); }
+#else
 HexaVal hexa_sub(HexaVal a, HexaVal b) {
     _HX_COERCE_BOOL(a, b);
     if (HX_IS_INT(a) && HX_IS_INT(b)) return hexa_int(HX_INT(a) - HX_INT(b));
@@ -7595,6 +7606,7 @@ HexaVal hexa_sub(HexaVal a, HexaVal b) {
     }
     return hexa_float(__hx_to_double(a) - __hx_to_double(b));
 }
+#endif
 HexaVal hexa_mul(HexaVal a, HexaVal b) {
     _HX_COERCE_BOOL(a, b);
     if (HX_IS_INT(a) && HX_IS_INT(b)) return hexa_int(HX_INT(a) * HX_INT(b));
