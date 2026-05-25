@@ -747,3 +747,40 @@
   raw    = ".verdicts/tecs-l-hypotheses/hyp_aliquot6.txt"
   src    = "archive-TECS-L docs/hypotheses (Review 090/123 — perfect-number master formula)"
   status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal · paper-eligible."
+
+# ───────────────────────────────────────────────────────────────────────
+# TECS-L — tecs-l-golden-zone (slug · group=TECS-L · TECS-L/TECS-L.md M7)
+# Golden Zone = 1/e closed-form derivation attempt. RESULT: 🔴 CLOSED-NEGATIVE.
+# 1/e is transcendental (Hermite 1873); every finite arithmetic combination of
+# the integers sigma(6),tau(6),phi(6) is rational; rational != transcendental,
+# so NO exact n=6 rational identity equals 1/e. Best candidates only approximate
+# (1/3 = tau/sigma off 9.4%; 3/8 off 1.94%). Archive Review 010 self-refuted 1/3.
+# Doc: TECS-L/docs/m7-golden-zone-closed-negative.md.
+
+@C tecs_l_gz_tau6 := "tau(6) = 4 (numerator of closest n=6 rational tau/sigma=1/3)" :: formula [slug=tecs-l-golden-zone group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr tau 6 4"
+  raw    = ".verdicts/tecs-l-golden-zone/gz_tau6.txt"
+  src    = "archive-TECS-L README.md (Golden Zone = 1/e; Meta fixed point 1/3)"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal."
+
+@C tecs_l_gz_sigma6 := "sigma(6) = 12 (denominator of closest n=6 rational tau/sigma=1/3)" :: formula [slug=tecs-l-golden-zone group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr sigma 6 12"
+  raw    = ".verdicts/tecs-l-golden-zone/gz_sigma6.txt"
+  src    = "archive-TECS-L docs/hypotheses/010-one-third-refuted.md"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal."
+
+@C tecs_l_gz_phi6 := "phi(6) = 2 (n=6 totient, part of the rational candidate pool)" :: formula [slug=tecs-l-golden-zone group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr phi 6 2"
+  raw    = ".verdicts/tecs-l-golden-zone/gz_phi6.txt"
+  src    = "archive-TECS-L README.md (Golden Zone)"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal."
+
+@C tecs_l_gz_closed_negative := "Golden Zone = 1/e has NO exact n=6 rational derivation (1/e transcendental; rational != transcendental)" :: formula [slug=tecs-l-golden-zone group=TECS-L]
+  method = "reasoned"
+  cmd    = "logical closure: 🔵 tau/sigma=1/3 + 1/e transcendental (Hermite 1873) -> rational != transcendental"
+  raw    = ".verdicts/tecs-l-golden-zone/closed_negative_golden_zone.txt"
+  src    = "archive-TECS-L Level 3->4 #1 (Golden Zone analytical proof attempt)"
+  status = "🔴 FALSIFIED — closed negative (exact-rational-derivation axis ruled out). paper-eligible (paper_negative_ok)."
