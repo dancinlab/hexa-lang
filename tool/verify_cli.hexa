@@ -1799,12 +1799,40 @@ fn _cycles_to_target(x: float, target: float) -> float {
     return to_float(n)
 }
 
+// CERN §1.5 plasma-wakefield (tabletop accelerator) cold-linear scalings.
+// Input n18 = electron density in units of 1e18 cm^-3 (the LWFA decade).
+// Closed forms (Dawson 1959 · Esarey RMP 2009): from SI constants e, eps0,
+// m_e, c — ω_p = sqrt(n_e e²/(ε₀ m_e)), E_0 = m_e c ω_p / e, λ_p = 2πc/ω_p.
+// libm-class (sqrt) → 🟢 Tier2. n18=1.0 → E_0≈96.159 GV/m, λ_p≈33.389 µm.
+fn _wakefield_omega_p(n18: float) -> float {
+    let e = 0.0000000000000000001602176634       // elementary charge [C]
+    let eps0 = 0.0000000000088541878128           // vacuum permittivity [F/m]
+    let me = 0.00000000000000000000000000000091093837015  // electron mass [kg]
+    let n_m3 = n18 * 1000000000000000000000000.0   // 1e18 cm^-3 → m^-3 (×1e24)
+    return sqrt(n_m3 * e * e / (eps0 * me))
+}
+// Cold wave-breaking field E_0 in GV/m.
+fn _wakefield_e0_gv_m(n18: float) -> float {
+    let e = 0.0000000000000000001602176634
+    let me = 0.00000000000000000000000000000091093837015
+    let c = 299792458.0
+    return me * c * _wakefield_omega_p(n18) / e / 1000000000.0
+}
+// Plasma wavelength λ_p in µm.
+fn _wakefield_lambda_um(n18: float) -> float {
+    let pi_c = 3.141592653589793
+    let c = 299792458.0
+    return 2.0 * pi_c * c / _wakefield_omega_p(n18) * 1000000.0
+}
+
 // float dispatch — fn_name → recompute. 0-arg fns ignore a0/a1/a2/a3
 // (constants); 1-arg fns take a0; 2-arg take a0,a1; 3-arg take a0,a1,a2;
 // 4-arg take a0,a1,a2,a3 (Phase 3 — hagen_poiseuille). Returns _NOCALC_F
 // when no float path exists (caller then tries the int path / degrades).
 // The 🟢 NUMERICAL companion to _recompute.
 fn _recompute_float(fn_name: string, a0: float, a1: float, a2: float, a3: float, argc: int) -> float {
+    if fn_name == "wakefield_e0_gv_m" { return _wakefield_e0_gv_m(a0) }
+    if fn_name == "wakefield_lambda_um" { return _wakefield_lambda_um(a0) }
     if fn_name == "welch_t_crit" { return _welch_t_crit(a0) }
     if fn_name == "wilson_hilferty_p" {
         if argc < 2 { return _NOCALC_F }
@@ -2268,6 +2296,8 @@ fn _is_float_fn(fn_name: string) -> bool {
         || fn_name == "beer_lambert_log10" || fn_name == "fluence"
         || fn_name == "beam_waist" || fn_name == "rayleigh_range"
         || fn_name == "absorption_depth"
+        // Plasma-wakefield cold-linear scalings (CERN §1.5 tabletop accel · 2026-05-25):
+        || fn_name == "wakefield_e0_gv_m" || fn_name == "wakefield_lambda_um"
 }
 
 // is fn_name a 0-arg closed-form constant? (--expr <fn> <v>, no operands).
