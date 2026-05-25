@@ -1441,3 +1441,40 @@ pub fn rt_map_remove(m: HexaVal, key: HexaVal) -> HexaVal {
     return __map_remove_cstr_v(m, key)
 }
 
+// RUNTIME.md step-4 / .c-none — arithmetic core: hexa_sub C body → hexa (shape-2,
+// full dispatch in hexa). Typed helpers rt_sub_int(-> int) / rt_sub_float(-> float)
+// box their native result on return (precedent rt_atoll/rt_isalnum); rt_sub does
+// the type_of dispatch + bool→int coerce + non-numeric throw and RETURNS VIA the
+// typed helpers (never a bare native scalar — that was the rt_sub-attempt-1 bug,
+// #1214). int-int → native isub; mixed/float → native fsub. Mirrors runtime_core.c
+// hexa_sub exactly. Uses only if-statements (no if-expr) to minimize codegen edges.
+pub fn rt_sub_int(a: int, b: int) -> int { return a - b }
+pub fn rt_sub_float(a: float, b: float) -> float { return a - b }
+
+pub fn rt_sub(a: HexaVal, b: HexaVal) -> HexaVal {
+    let ta = type_of(a)
+    let tb = type_of(b)
+    // kind: 0=int (incl. bool→int per _HX_COERCE_BOOL), 1=float, 2=non-numeric
+    let mut ai: int = 0
+    let mut a_kind = 2
+    if ta == "int" { ai = a as int; a_kind = 0 }
+    else if ta == "bool" { if a as bool { ai = 1 } else { ai = 0 } a_kind = 0 }
+    else if ta == "float" { a_kind = 1 }
+    let mut bi: int = 0
+    let mut b_kind = 2
+    if tb == "int" { bi = b as int; b_kind = 0 }
+    else if tb == "bool" { if b as bool { bi = 1 } else { bi = 0 } b_kind = 0 }
+    else if tb == "float" { b_kind = 1 }
+    if a_kind == 2 || b_kind == 2 {
+        throw "cannot subtract non-numeric operand (" + ta + " - " + tb + ")"
+    }
+    if a_kind == 0 && b_kind == 0 {
+        return rt_sub_int(ai, bi)
+    }
+    let mut af: float = 0.0
+    if a_kind == 0 { af = ai as float } else { af = a as float }
+    let mut bf: float = 0.0
+    if b_kind == 0 { bf = bi as float } else { bf = b as float }
+    return rt_sub_float(af, bf)
+}
+
