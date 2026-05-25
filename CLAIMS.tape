@@ -1416,6 +1416,120 @@
   status = "🔵 SUPPORTED-FORMAL — hexa's actual value verified. (anchors the 🔴 finding)."
 
 # ───────────────────────────────────────────────────────────────────────
+# TECS-L axis A (MODFORM) — tecs-l-modform-symbols (slug · group=TECS-L · MF5)
+# Quadratic-reciprocity instances via hexa's jacobi/kronecker fns.
+# 10 jacobi + 3 kronecker textbook values + 2 reciprocity products (a=3,b=5 and
+# a=3,b=7). All 13 expr-verdicts 🔵 + both QR products match (-1)^((a-1)(b-1)/4).
+# 🔴 divergences: 0. hexa's jacobi/kronecker agree with the classical symbol on
+# this curated set (2's supplement, -1 supplement, small-prime QR pairs, kronecker
+# extension at n∈{1,3,7}).
+
+@C tecs_l_mf_jac_2_15 := "jacobi(2,15) = 1 (2's supplement: 15 ≡ -1 mod 8 ⇒ J(2,15)=1; OEIS A091337)" :: formula [slug=tecs-l-modform-symbols group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr jacobi 2 15 1"
+  raw    = ".verdicts/tecs-l-modform-symbols/jac-2-15.txt"
+  src    = "Jacobi 2's supplement, b ≡ ±1 mod 8 ⇒ J(2,b) = +1"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal."
+
+@C tecs_l_mf_jac_2_3 := "jacobi(2,3) = -1 (2's supplement: 3 ≡ 3 mod 8 ⇒ J(2,3) = -1)" :: formula [slug=tecs-l-modform-symbols group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr jacobi 2 3 -1"
+  raw    = ".verdicts/tecs-l-modform-symbols/jac-2-3.txt"
+  src    = "Jacobi 2's supplement, b ≡ ±3 mod 8 ⇒ J(2,b) = -1"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal."
+
+@C tecs_l_mf_jac_2_5 := "jacobi(2,5) = -1 (2's supplement: 5 ≡ 5 ≡ -3 mod 8 ⇒ J(2,5) = -1)" :: formula [slug=tecs-l-modform-symbols group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr jacobi 2 5 -1"
+  raw    = ".verdicts/tecs-l-modform-symbols/jac-2-5.txt"
+  src    = "Jacobi 2's supplement, b ≡ ±3 mod 8 ⇒ J(2,b) = -1"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal."
+
+@C tecs_l_mf_jac_2_7 := "jacobi(2,7) = 1 (2's supplement: 7 ≡ -1 mod 8 ⇒ J(2,7) = 1)" :: formula [slug=tecs-l-modform-symbols group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr jacobi 2 7 1"
+  raw    = ".verdicts/tecs-l-modform-symbols/jac-2-7.txt"
+  src    = "Jacobi 2's supplement, b ≡ ±1 mod 8 ⇒ J(2,b) = +1"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal."
+
+@C tecs_l_mf_jac_neg1_3 := "jacobi(-1,3) = -1 (first supplement: (p-1)/2 = 1 odd ⇒ J(-1,3) = -1)" :: formula [slug=tecs-l-modform-symbols group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr jacobi -1 3 -1"
+  raw    = ".verdicts/tecs-l-modform-symbols/jac-neg1-3.txt"
+  src    = "Jacobi first supplement: J(-1,p) = (-1)^((p-1)/2)"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal."
+
+@C tecs_l_mf_jac_neg1_5 := "jacobi(-1,5) = 1 (first supplement: (5-1)/2 = 2 even ⇒ J(-1,5) = +1)" :: formula [slug=tecs-l-modform-symbols group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr jacobi -1 5 1"
+  raw    = ".verdicts/tecs-l-modform-symbols/jac-neg1-5.txt"
+  src    = "Jacobi first supplement: J(-1,p) = (-1)^((p-1)/2)"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal."
+
+@C tecs_l_mf_jac_neg1_7 := "jacobi(-1,7) = -1 (first supplement: (7-1)/2 = 3 odd ⇒ J(-1,7) = -1)" :: formula [slug=tecs-l-modform-symbols group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr jacobi -1 7 -1"
+  raw    = ".verdicts/tecs-l-modform-symbols/jac-neg1-7.txt"
+  src    = "Jacobi first supplement: J(-1,p) = (-1)^((p-1)/2)"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal."
+
+@C tecs_l_mf_jac_neg1_11 := "jacobi(-1,11) = -1 (first supplement: (11-1)/2 = 5 odd ⇒ J(-1,11) = -1)" :: formula [slug=tecs-l-modform-symbols group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr jacobi -1 11 -1"
+  raw    = ".verdicts/tecs-l-modform-symbols/jac-neg1-11.txt"
+  src    = "Jacobi first supplement: J(-1,p) = (-1)^((p-1)/2)"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal."
+
+@C tecs_l_mf_jac_3_5 := "jacobi(3,5) = -1 (QR: 5 ≡ 2 mod 3 ⇒ J(3,5) = J(5,3) = J(2,3) = -1)" :: formula [slug=tecs-l-modform-symbols group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr jacobi 3 5 -1"
+  raw    = ".verdicts/tecs-l-modform-symbols/jac-3-5.txt"
+  src    = "QR closed-form via 2's supplement chain"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal."
+
+@C tecs_l_mf_jac_5_7 := "jacobi(5,7) = -1 (QR: J(5,7)·J(7,5) = +1, J(7,5)=J(2,5)=-1 ⇒ J(5,7) = -1)" :: formula [slug=tecs-l-modform-symbols group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr jacobi 5 7 -1"
+  raw    = ".verdicts/tecs-l-modform-symbols/jac-5-7.txt"
+  src    = "QR closed-form via reciprocity + 2's supplement"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal."
+
+@C tecs_l_mf_kro_neg1_1 := "kronecker(-1,1) = 1 (kronecker boundary: K(a,1) = 1 for all a)" :: formula [slug=tecs-l-modform-symbols group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr kronecker -1 1 1"
+  raw    = ".verdicts/tecs-l-modform-symbols/kro-neg1-1.txt"
+  src    = "Kronecker symbol: K(a,1) = 1 (empty product convention)"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal."
+
+@C tecs_l_mf_kro_neg1_3 := "kronecker(-1,3) = -1 (Kronecker extends Jacobi at odd 3 ⇒ matches J(-1,3) = -1)" :: formula [slug=tecs-l-modform-symbols group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr kronecker -1 3 -1"
+  raw    = ".verdicts/tecs-l-modform-symbols/kro-neg1-3.txt"
+  src    = "Kronecker = Jacobi for odd positive b"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal."
+
+@C tecs_l_mf_kro_2_7 := "kronecker(2,7) = 1 (Kronecker = Jacobi for odd b; J(2,7) = +1)" :: formula [slug=tecs-l-modform-symbols group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr kronecker 2 7 1"
+  raw    = ".verdicts/tecs-l-modform-symbols/kro-2-7.txt"
+  src    = "Kronecker = Jacobi for odd positive b; 7 ≡ -1 mod 8 ⇒ J(2,7) = +1"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal."
+
+@C tecs_l_mf_qr_3_5 := "QR instance J(3,5)·J(5,3) = (-1)·(-1) = +1 = (-1)^((3-1)(5-1)/4) = (-1)^2 (reciprocity confirmed)" :: experiment [slug=tecs-l-modform-symbols group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr jacobi 3 5 -1  &&  hexa verify --expr jacobi 5 3 -1"
+  raw    = ".verdicts/tecs-l-modform-symbols/qr_instance.txt"
+  src    = "Quadratic Reciprocity: J(a,b)·J(b,a) = (-1)^((a-1)(b-1)/4) for odd coprime a,b"
+  status = "🔵 SUPPORTED-FORMAL — both factors verified, product matches QR closed-form. terminal."
+
+@C tecs_l_mf_qr_3_7 := "QR instance J(3,7)·J(7,3) = (-1)·(+1) = -1 = (-1)^((3-1)(7-1)/4) = (-1)^3 (reciprocity confirmed)" :: experiment [slug=tecs-l-modform-symbols group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr jacobi 3 7 -1  &&  hexa verify --expr jacobi 7 3 1"
+  raw    = ".verdicts/tecs-l-modform-symbols/qr_instance.txt"
+  src    = "Quadratic Reciprocity: J(a,b)·J(b,a) = (-1)^((a-1)(b-1)/4) for odd coprime a,b"
+  status = "🔵 SUPPORTED-FORMAL — both factors verified, product matches QR closed-form. terminal."
+
+# ───────────────────────────────────────────────────────────────────────
 # TECS-L axis B (MERSENNE) — tecs-l-mersenne-tau-2p (slug · group=TECS-L · MR5)
 # Closed form: an even perfect number P = 2^(p-1) * M_p (M_p = 2^p - 1 prime)
 # has tau(P) = 2p. Divisors of P factor uniquely as 2^a * M_p^b with

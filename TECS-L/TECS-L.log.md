@@ -3,6 +3,23 @@
 Append-only history sister of `TECS-L.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
 
+## 2026-05-25T12:42 — 축 A MF5 · Jacobi/Kronecker 이차 상호법칙 인스턴스 (13/13 🔵 + 2 QR 곱 적중)
+
+- [x] MF5 milestone = "hexa `jacobi a b`/`kronecker a b` 로 QR 인스턴스 verify (🔵)"
+- [x] 10 jacobi 교과서 값 verify (`hexa verify --expr jacobi a b v`):
+  - 2의 보조법칙 (b mod 8): J(2,15)=1, J(2,3)=-1, J(2,5)=-1, J(2,7)=1 — 4/4 🔵
+  - -1 보조법칙 ((p-1)/2 패리티): J(-1,3)=-1, J(-1,5)=1, J(-1,7)=-1, J(-1,11)=-1 — 4/4 🔵
+  - 소수쌍 QR: J(3,5)=-1, J(5,7)=-1 — 2/2 🔵
+- [x] 3 kronecker 확장 값 verify (`hexa verify --expr kronecker a b v`):
+  - K(-1,1)=1 (경계 K(a,1)=1), K(-1,3)=-1 (홀수 b 에서 J 와 동일), K(2,7)=1 — 3/3 🔵
+- [x] 2 QR 상호법칙 곱 인스턴스 (a,b)=(3,5)·(3,7):
+  - J(3,5)·J(5,3) = (-1)·(-1) = +1 = (-1)^((3-1)(5-1)/4) = (-1)^2 ✓ 🔵
+  - J(3,7)·J(7,3) = (-1)·(+1) = -1 = (-1)^((3-1)(7-1)/4) = (-1)^3 ✓ 🔵
+- [x] 🔴 불일치 0 — hexa `jacobi`/`kronecker` 가 curated 13 인스턴스 + 2 reciprocity 곱 전부에서 고전 기호와 일치
+- [x] 14 verdict 영속화 (13 atom + qr_instance.txt) → `.verdicts/tecs-l-modform-symbols/`
+- [x] `CLAIMS.tape` group=TECS-L slug=tecs-l-modform-symbols 15 entry (13 atom 🔵 + 2 reciprocity 곱 🔵, 1:1 pointer · orphan 0)
+
+
 ## 2026-05-25T12:41 — 축 B MR5 · τ(2^{p-1}·M_p)=2p 닫힌형 첫 7 완전수 전부 🔵
 
 - [x] **닫힌형 도출**: 짝완전수 P = 2^{p-1}·M_p (M_p = 2^p−1 메르센 소수) 의 약수는 2^a·M_p^b, a∈[0,p-1] (p개), b∈{0,1} (2개) → τ(P) = (p−1+1)(1+1) = **2p**. 멀티플리커티브 τ + 서로소 인수분해 + M_p 소수성에서 자동 유도
