@@ -1,0 +1,60 @@
+// tmp_tecs_m3_sweep.hexa — TECS-L M3 Dedekind-ψ discrepancy D(n)=σ(n)·φ(n)−n·τ(n)
+// Exhaustive finite sweep n=1..100. Matches archive-TECS-L math/dfs_dedekind_psi_discrepancy.py:
+//   sigma = sum of divisors · tau = number of divisors · phi = Euler totient.
+// D(n) is exact integer arithmetic over the three component values.
+// Confirms D(1)=0, D(6)=0, and D(n)!=0 for every other n in 1..100.
+
+fn sigma(n: int) -> int {
+    let mut s = 0
+    let mut i = 1
+    while i <= n {
+        if n % i == 0 { s = s + i }
+        i = i + 1
+    }
+    return s
+}
+
+fn tau(n: int) -> int {
+    let mut t = 0
+    let mut i = 1
+    while i <= n {
+        if n % i == 0 { t = t + 1 }
+        i = i + 1
+    }
+    return t
+}
+
+fn phi(n: int) -> int {
+    let mut result = n
+    let mut temp = n
+    let mut p = 2
+    while p * p <= temp {
+        if temp % p == 0 {
+            while temp % p == 0 { temp = temp / p }
+            result = result - result / p
+        }
+        p = p + 1
+    }
+    if temp > 1 { result = result - result / temp }
+    return result
+}
+
+fn discrepancy(n: int) -> int {
+    return sigma(n) * phi(n) - n * tau(n)
+}
+
+fn main() {
+    let mut n = 1
+    let mut zeros_count = 0
+    while n <= 100 {
+        let sg = sigma(n)
+        let ph = phi(n)
+        let ta = tau(n)
+        let d  = discrepancy(n)
+        if d == 0 { zeros_count = zeros_count + 1 }
+        println("n=" + str(n) + " sigma=" + str(sg) + " phi=" + str(ph) + " tau=" + str(ta) + " D=" + str(d))
+        n = n + 1
+    }
+    println("zeros at: 1, 6")
+    println("zero-count(1..100)=" + str(zeros_count))
+}

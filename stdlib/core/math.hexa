@@ -90,6 +90,12 @@ pub fn euler_phi(n) -> int {
     count
 }
 
+// phi — canonical short name (matches `hexa verify --expr phi`),
+// alias of euler_phi. Euler totient φ(n) = #{1≤k≤n : gcd(k,n)=1}.
+pub fn phi(n) -> int {
+    euler_phi(n)
+}
+
 pub fn tau(n) -> int {
     let count = 0
     let i = 1
@@ -100,12 +106,14 @@ pub fn tau(n) -> int {
     count
 }
 
+// sopfr(n) = Σ p·mult(p) — sum of prime factors with repetition.
+// Trial division up to √x; the residual x>1 is the final prime factor.
+// sopfr(1)=0 (empty product), sopfr(prime p)=p.
 pub fn sopfr(n) -> int {
     let sum = 0
     let x = n
     let d = 2
     while d * d <= x {
-        // @partial — Stage 0: pre-witness acknowledgement, refine in follow-up
         while x % d == 0 {
             sum = sum + d
             x = x / d
