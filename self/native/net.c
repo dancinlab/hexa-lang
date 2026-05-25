@@ -527,6 +527,61 @@ HexaVal hexa_net_write_bytes(HexaVal fd_val, HexaVal arr_val) {
     return hexa_int((int64_t)sent);
 }
 
+/* net_read_raw(fd, len) — read EXACTLY `len` bytes, NUL-preserving.
+ *
+ * Combines net_read_n's exactly-n looping accumulation with net_read_bytes'
+ * NUL-safe [int]-array return. Unlike net_read_n (which uses hexa_str →
+ * strlen-truncates at the first NUL) and net_read_bytes (single recv,
+ * capped at 65536, so it returns a SHORT read on packet boundaries), this
+ * primitive loops hxlcl_recv until it has the full `len` bytes or the peer
+ * closes (EOF → short array). This is the binary-wire reader the RFC 093
+ * daemon u32-LE length-prefix framing wants: read 4 bytes → decode u32 len
+ * → read_raw(fd, len) → exact payload with embedded NULs intact.
+ *
+ *   - returns [int] (len ≤ requested; < requested only on EOF/error)
+ *   - EINTR retried; EAGAIN/EWOULDBLOCK treated as EOF (short read)
+ *   - falls back to hxlcl_read() if the fd is not a socket (pipe/pty)
+ *   - len <= 0 returns []  */
+HexaVal hexa_net_read_raw(HexaVal fd_val, HexaVal len_val) {
+    int64_t fd = hexa_as_num(fd_val);
+    int64_t want = hexa_as_num(len_val);
+    if (fd < 0 || want <= 0) return hexa_array_new();
+    unsigned char* buf = (unsigned char*)malloc((size_t)want);
+    if (!buf) return hexa_array_new();
+    size_t got = 0;
+    int use_read = 0;  /* switch to read() once recv reports ENOTSOCK */
+    while ((int64_t)got < want) {
+        ssize_t r;
+        if (use_read) {
+            r = hxlcl_read((int)fd, buf + got, (size_t)(want - (int64_t)got));
+        } else {
+            r = hxlcl_recv((int)fd, (char*)(buf + got), (size_t)(want - (int64_t)got), 0);
+            if (r < 0 && errno == ENOTSOCK) { use_read = 1; continue; }
+        }
+        if (r > 0) { got += (size_t)r; continue; }
+        if (r == 0) break;                /* EOF */
+        if (errno == EINTR) continue;     /* retry */
+        if (errno == EAGAIN || errno == EWOULDBLOCK) break;  /* timeout → short */
+        break;                            /* other error: return what we have */
+    }
+    HexaVal out = hexa_array_new();
+    for (size_t i = 0; i < got; i++) {
+        out = hexa_array_push(out, hexa_int((int64_t)buf[i]));
+    }
+    free(buf);
+    return out;
+}
+
+/* os_getuid() — getuid(2) wrapper. Named `os_getuid` (NOT `getuid`) on
+ * purpose: `getuid` is in codegen's _hexa_name_is_reserved set, so a
+ * `getuid` builtin would mangle to `u_getuid` at the call site and collide
+ * with the dlsym extern-wrapper path (same trap term_getppid sidesteps by
+ * not being named `getppid`). Returns the real uid as Int. RFC 093 §6
+ * uses it for uid-scoped socket paths + root-daemon refuse. */
+HexaVal hexa_os_getuid(void) {
+    return hexa_int((int64_t)getuid());
+}
+
 /* net_read_bytes(fd, max) — like net_read but returns the bytes as a
  * [int] array, so NULs are preserved. */
 HexaVal hexa_net_read_bytes(HexaVal fd_val, HexaVal max_val) {
@@ -579,6 +634,9 @@ HexaVal net_recv_fd;
 /* 2026-05-14: NUL-safe byte-array variants for binary protocols (p9 codec). */
 HexaVal net_write_bytes;
 HexaVal net_read_bytes;
+/* 2026-05-25: RFC 093 R4 — exactly-len NUL-preserving read + os_getuid. */
+HexaVal net_read_raw;
+HexaVal os_getuid;
 
 static void _hexa_init_net_fn_shims(void) {
     net_listen        = hexa_fn_new((void*)hexa_net_listen,        1);
@@ -595,4 +653,6 @@ static void _hexa_init_net_fn_shims(void) {
     net_recv_fd       = hexa_fn_new((void*)hexa_net_recv_fd,       2);
     net_write_bytes   = hexa_fn_new((void*)hexa_net_write_bytes,   2);
     net_read_bytes    = hexa_fn_new((void*)hexa_net_read_bytes,    2);
+    net_read_raw      = hexa_fn_new((void*)hexa_net_read_raw,      2);
+    os_getuid         = hexa_fn_new((void*)hexa_os_getuid,         0);
 }

@@ -415,6 +415,8 @@ HexaVal exec_stream_close(HexaVal handle);                           /* runtime.
 HexaVal hexa_net_connect(HexaVal addr);                  /* native/net.c:368 — connect("host:port") → fd */
 HexaVal hexa_net_write_bytes(HexaVal fd, HexaVal arr);   /* native/net.c:489 — write(fd, byte_arr) */
 HexaVal hexa_net_read_bytes(HexaVal fd, HexaVal maxlen); /* native/net.c:530 — read(fd, max) → byte_arr */
+HexaVal hexa_net_read_raw(HexaVal fd, HexaVal len);      /* native/net.c — RFC 093 R4: read EXACTLY len bytes → byte_arr (NUL-preserving) */
+HexaVal hexa_os_getuid(void);                            /* native/net.c — RFC 093 R4: getuid(2) → Int */
 HexaVal hexa_net_close(HexaVal fd);                      /* native/net.c:168 */
 
 /* ── Additional native/*.c forward-decls (auto-generated 2026-05-15) ──

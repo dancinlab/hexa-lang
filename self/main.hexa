@@ -4511,13 +4511,17 @@ fn cmd_cache(args) {
 // touching the verb / socket plumbing.
 
 fn _daemon_default_socket() {
-    // Per RFC §4.1: `/tmp/hexa-daemon-$UID.sock`. We don't have a getuid()
-    // builtin wired to hexa yet, so fall back to $USER (good enough for
-    // single-user dev box; multi-uid hardening lands with R3).
+    // Per RFC §4.1: `/tmp/hexa-daemon-$UID.sock` — uid-scoped so two users on
+    // a shared host get distinct sockets (F-DAEMON-5 isolation half). GO M13
+    // (R4) wired the `os_getuid()` builtin so the path keys on the real numeric
+    // uid rather than the spoofable `$USER` env var; `$USER` is the fallback
+    // only when getuid is unavailable (should not happen on POSIX).
     // GO M12 (R3): `HEXA_DAEMON_SOCKET` override lets the autospawn path +
     // tests target an isolated socket (mirrors `--socket` for the verb).
     let _sov = env_var("HEXA_DAEMON_SOCKET")
     if len(_sov) > 0 { return _sov }
+    let uid = os_getuid()
+    if uid >= 0 { return "/tmp/hexa-daemon-" + to_string(uid) + ".sock" }
     let mut who = env_var("USER")
     if len(who) == 0 { who = "unknown" }
     return "/tmp/hexa-daemon-" + who + ".sock"
@@ -4776,6 +4780,16 @@ fn cmd_daemon_start(sock_path, idle_ttl_str) {
     //   - blocking accept with periodic idle-TTL check via net_set_nonblock
     //     + net_select on the listen fd
     //
+    // RFC 093 §6.1 (F-DAEMON-5): the daemon is an arbitrary-code-execution
+    // machine — the `compile`/`run` RPCs build + (R5) exec user code. A daemon
+    // running as root is a privilege-escalation footgun, so refuse outright.
+    // GO M13 (R4) wired `os_getuid()` to make this check real (was a no-op
+    // comment in R1/R3 — no getuid builtin existed). Non-root proceeds; the
+    // uid-scoped socket path + 0700 /tmp default keep cross-uid peers out.
+    if os_getuid() == 0 {
+        println("hexa daemon: refusing to run as root (uid 0) — RFC 093 §6.1")
+        exit(1)
+    }
     // Pre-flight: if a stale socket from a crashed prior daemon is on
     // disk, unlink it; otherwise bind would EADDRINUSE.
     let _rm = exec("rm -f " + shq(sock_path) + " 2>/dev/null")
@@ -4921,7 +4935,7 @@ fn cmd_daemon(args) {
         println("  hexa daemon echo <text>      [--socket <path>]")
         println("  hexa daemon compile <file.hexa> [--socket <path>]")
         println("")
-        println("  Default socket path: /tmp/hexa-daemon-$USER.sock")
+        println("  Default socket path: /tmp/hexa-daemon-$UID.sock  (uid-scoped · RFC 093 §6.1)")
         println("  Default idle TTL:    0  (no auto-exit)")
         println("")
         println("R2 SCOPE  (RFC 093 § Phase plan)")
