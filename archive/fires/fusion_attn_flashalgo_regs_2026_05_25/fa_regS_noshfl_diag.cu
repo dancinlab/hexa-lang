@@ -41,9 +41,15 @@ __device__ __forceinline__ void scale_o(
     f.x[2]*=c_hi; f.x[3]*=c_hi; f.x[6]*=c_hi; f.x[7]*=c_hi;
 }
 
+/* DIAGNOSTIC variant: keep S in accumulator regs + repack P from regs (R9
+ * structural win), but do the row max/sum via a tiny SMEM scratch (16 floats
+ * per reduction) instead of warp shuffles. Isolates whether the warp-shuffle
+ * dependency chain is the regression cause vs the reg-S idea itself. */
 extern "C" __global__ void fa_regS_v1(const __half* q, const __half* k,
                                       const __half* v, __half* o, int N, float scale) {
-    __shared__ float o_dbg[16*16];     // finalize store scratch (only smem use)
+    __shared__ float o_dbg[16*16];     // finalize store scratch
+    __shared__ float red_max[16*4];    // per-row partial max (4 lanes/row)
+    __shared__ float red_sum[16*4];    // per-row partial sum
     int lane = threadIdx.x & 31;
     int qrow_base = blockIdx.x * 16;
     const __half* qb = q + (size_t)qrow_base * 64;
@@ -78,15 +84,16 @@ extern "C" __global__ void fa_regS_v1(const __half* q, const __half* k,
         #pragma unroll
         for (int i=0;i<s_frag.num_elements;++i) s_frag.x[i]*=scale;
 
-        // ---- row max over this tile via shfl_xor (in regs) ----
-        float tmax_lo = fmaxf(fmaxf(s_frag.x[0],s_frag.x[1]), fmaxf(s_frag.x[4],s_frag.x[5]));
-        float tmax_hi = fmaxf(fmaxf(s_frag.x[2],s_frag.x[3]), fmaxf(s_frag.x[6],s_frag.x[7]));
-        #pragma unroll
-        for (int off=1; off<4; off<<=1) {
-            tmax_lo = fmaxf(tmax_lo, __shfl_xor_sync(0xffffffffu, tmax_lo, off));
-            tmax_hi = fmaxf(tmax_hi, __shfl_xor_sync(0xffffffffu, tmax_hi, off));
-        }
-        // online update: m_new, correction c
+        // ---- row max via SMEM scratch (DIAGNOSTIC: replaces shfl_xor) ----
+        int g_lo = lane >> 2, g_hi = g_lo + 8, slot = lane & 3;
+        float pmax_lo = fmaxf(fmaxf(s_frag.x[0],s_frag.x[1]), fmaxf(s_frag.x[4],s_frag.x[5]));
+        float pmax_hi = fmaxf(fmaxf(s_frag.x[2],s_frag.x[3]), fmaxf(s_frag.x[6],s_frag.x[7]));
+        red_max[g_lo*4+slot] = pmax_lo;
+        red_max[g_hi*4+slot] = pmax_hi;
+        __syncwarp();
+        float tmax_lo = fmaxf(fmaxf(red_max[g_lo*4+0],red_max[g_lo*4+1]),fmaxf(red_max[g_lo*4+2],red_max[g_lo*4+3]));
+        float tmax_hi = fmaxf(fmaxf(red_max[g_hi*4+0],red_max[g_hi*4+1]),fmaxf(red_max[g_hi*4+2],red_max[g_hi*4+3]));
+        __syncwarp();
         float mn_lo = fmaxf(m_lo, tmax_lo), mn_hi = fmaxf(m_hi, tmax_hi);
         float c_lo = __expf(m_lo - mn_lo), c_hi = __expf(m_hi - mn_hi);
 
@@ -97,14 +104,13 @@ extern "C" __global__ void fa_regS_v1(const __half* q, const __half* k,
         p[2]=__expf(s_frag.x[2]-mn_hi); p[3]=__expf(s_frag.x[3]-mn_hi);
         p[6]=__expf(s_frag.x[6]-mn_hi); p[7]=__expf(s_frag.x[7]-mn_hi);
 
-        // ---- row sum via shfl_xor, online l update ----
-        float ts_lo = p[0]+p[1]+p[4]+p[5];
-        float ts_hi = p[2]+p[3]+p[6]+p[7];
-        #pragma unroll
-        for (int off=1; off<4; off<<=1) {
-            ts_lo += __shfl_xor_sync(0xffffffffu, ts_lo, off);
-            ts_hi += __shfl_xor_sync(0xffffffffu, ts_hi, off);
-        }
+        // ---- row sum via SMEM scratch (DIAGNOSTIC) ----
+        red_sum[g_lo*4+slot] = p[0]+p[1]+p[4]+p[5];
+        red_sum[g_hi*4+slot] = p[2]+p[3]+p[6]+p[7];
+        __syncwarp();
+        float ts_lo = red_sum[g_lo*4+0]+red_sum[g_lo*4+1]+red_sum[g_lo*4+2]+red_sum[g_lo*4+3];
+        float ts_hi = red_sum[g_hi*4+0]+red_sum[g_hi*4+1]+red_sum[g_hi*4+2]+red_sum[g_hi*4+3];
+        __syncwarp();
         l_lo = l_lo*c_lo + ts_lo;
         l_hi = l_hi*c_hi + ts_hi;
         m_lo = mn_lo; m_hi = mn_hi;

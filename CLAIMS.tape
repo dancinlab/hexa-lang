@@ -1445,6 +1445,41 @@
   status = "🟢 SUPPORTED-NUMERICAL — occupancy + smem footprint measured, all 0 spills. The wide-KV-becomes-counterproductive finding is a closed-negative on the round-4 lever applicability."
 
 # ───────────────────────────────────────────────────────────────────────
+# GPU — fusion-attention-flashalgo-regs (slug · group=GPU · GPU.md §10 · round 9)
+# R9 attacked R8's residual S/P smem round-trip with register-resident S/P +
+# warp-shuffle softmax + mma-from-regs P.V. RED-falsified (warp-shuffle softmax
+# REGRESSES vs R8), but surfaced a reg-S+smem-reduce variant that beats R8 at
+# N=4096. Repack proven NEEDS NO shuffle (acc map == matrix_a map on sm_120).
+
+@C fusion_attn_flashalgo_regs_repack := "the m16n16k16 accumulator->matrix_a operand repack on sm_120 is a PURELY LOCAL register move (pa.x[i]=pa.x[i+8]=acc.x[i] for i in 0..7) -- NO cross-lane warp shuffle is needed; the f32 accumulator per-lane (elem->(row,col)) map is IDENTICAL to the f16 matrix_a map (matrix_a num_elements=16 duplicates elems 0..7 into 8..15). End-to-end reg-repack P.V == smem-roundtrip P.V BIT-EXACT (max|diff|=0)" :: measurement [slug=fusion-attention-flashalgo-regs group=GPU]
+  method = "silicon-fire"
+  cmd    = "frag_repack_probe.cu (PART A acc-map + PART B matrix_a-map tag-store-inspect) + frag_repack_partc.cu (PART C end-to-end reg-repack vs smem-roundtrip, max|O_reg-O_smem|=0) on ubu-2 RTX 5070 sm_120"
+  raw    = ".verdicts/fusion-attention-flashalgo-regs/F-FUSION-ATTN-FLASHALGO-REGS.txt"
+  src    = "archive/fires/fusion_attn_flashalgo_regs_2026_05_25/{frag_repack_probe.cu,frag_repack_partc.cu}"
+  status = "🟢 SUPPORTED-NUMERICAL — repack proven correct bit-exact; the lane permutation the round expected to need a shuffle is actually a local move. terminal."
+
+@C fusion_attn_flashalgo_regs_numeric := "reg-S + warp-shuffle softmax + mma-from-regs P.V fused flash-attention is NUMERICALLY CORRECT (rel_rowscale 5.41e-4/5.67e-4/6.11e-4/7.14e-4 at N=512..4096) -- IDENTICAL to R8 reg-O at every shape, confirming the register-resident S/P path is numerically bit-equivalent to R8's smem path" :: measurement [slug=fusion-attention-flashalgo-regs group=GPU]
+  method = "silicon-fire"
+  cmd    = "ubu-2 RTX 5070 (clean) fa_regS_v1 oracle vs f64 CPU ref, rel_rowscale<=1e-2 gate, N in {512,1024,2048,4096} d=64"
+  raw    = ".verdicts/fusion-attention-flashalgo-regs/F-FUSION-ATTN-FLASHALGO-REGS.txt"
+  src    = "archive/fires/fusion_attn_flashalgo_regs_2026_05_25/fa_regS_v1_oracle.cu"
+  status = "🟢 SUPPORTED-NUMERICAL — reg-S fused flash-attn numerically correct on 4 shapes. terminal-numerical."
+
+@C fusion_attn_flashalgo_regs_wall := "FALSIFIED: the pre-registered warp-shuffle-softmax design does NOT beat cuBLAS-stack; it REGRESSES vs R8 reg-O (shfl-regS 1.29-1.56x slower than R8, 2.1-3.1x slower than cuBLAS at N=512..4096). The win condition fused_ms<cublas_stack_ms is NOT met on any shape" :: measurement [slug=fusion-attention-flashalgo-regs group=GPU]
+  method = "silicon-fire"
+  cmd    = "ubu-2 RTX 5070 (clean, 0 procs) fa_regS_v1 vs fa_regO_v2 vs fa_cublas_tc_baseline, cuEvent 20 warmup + 200 timed median, N in {512,1024,2048,4096} d=64"
+  raw    = ".verdicts/fusion-attention-flashalgo-regs/F-FUSION-ATTN-FLASHALGO-REGS.txt"
+  src    = "archive/fires/fusion_attn_flashalgo_regs_2026_05_25/{fa_regS_v1_oracle.cu,result.json}"
+  status = "🔴 FALSIFIED — warp-shuffle-softmax reg-S does NOT cross 1.0x AND regresses vs R8. sec10 box stays [x] (launch-amort only); GEMM-fusion (attention) axis NOT-WON at d=64."
+
+@C fusion_attn_flashalgo_regs_attribution := "CLOSED-NEGATIVE root cause: the warp-shuffle SOFTMAX (not the repack) is the regression. Controlled A/B holding reg-S+reg-P-repack constant and swapping ONLY the row-reduce shows shfl_xor (6-deep cross-lane chain) is ~1.5x SLOWER than a 16-float smem-scratch reduce at every shape. The shfl chain stalls the per-tile critical path between QK^T mma and P.V mma; on the small 16x16 single-warp tile the latency is not hidden. Surfaced variant reg-S+smem-reduce BEATS R8 by 13.2% at N=4096 (0.2645 vs 0.3045 ms, ratio 0.868) but is still 1.42x cuBLAS" :: measurement [slug=fusion-attention-flashalgo-regs group=GPU]
+  method = "silicon-fire"
+  cmd    = "ubu-2 RTX 5070 controlled A/B: fa_regS_v1(shfl) vs fa_regS_noshfl_diag(smem-scratch reduce), same reg-S+reg-P-repack, cuEvent median; ptxas -v 0-spill sm_80/90/120; analytic occupancy 28/25 CTAs/SM"
+  raw    = ".verdicts/fusion-attention-flashalgo-regs/F-FUSION-ATTN-FLASHALGO-REGS.txt"
+  src    = "archive/fires/fusion_attn_flashalgo_regs_2026_05_25/{fa_regS_noshfl_diag.cu,result.json}"
+  status = "🔴 CLOSED-NEGATIVE — warp-shuffle softmax ruled out as the next lever at d=64/16x16; attention here is latency/dependency bound not bandwidth bound. Next wedge = larger Q tile + multi-warp + cp.async, NOT another shuffle softmax."
+
+# ───────────────────────────────────────────────────────────────────────
 # ───────────────────────────────────────────────────────────────────────
 # TECS-L axis A (MODFORM) — tecs-l-modform-dim-genus (slug · group=TECS-L · MF4)
 # Classical theorem dim S_2(Γ_0(N)) = genus(X_0(N)) — TESTED vs hexa fns.
