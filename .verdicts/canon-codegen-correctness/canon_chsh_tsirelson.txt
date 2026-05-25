@@ -1,0 +1,3 @@
+verify --expr chsh_tsirelson()=2.82843
+  calc   = 2.82843  ≈ expected 2.82843  (|Δ|=0.0 ≤ ε=1e-9)
+  tier   = 🟢 SUPPORTED-NUMERICAL  (hexa-native libm-class recompute, TECS-L n6-rep Tier2)
