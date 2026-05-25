@@ -3,6 +3,18 @@
 Append-only history sister of `INBOX.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
 
+## 2026-05-25T23:30Z — `hexa cloud nohup --early-life-check` — 조기-사망 launch 감지 (anima cloud handoff Option C 해소)
+
+anima patch `inbox/patches/cloud-launch-trainer-script-arg-missing.md` (PR #1110 으로 filing) 수신. F-CURRICULA-1 fire (A100 SXM $1.49/hr) 가 `dispatch_p21h_v3.hexa:365` 의 argv 누락으로 `launch_trainer_p21h.sh` 의 `exec python3 -u "$@"` 가 script-path 없이 `python3 -u qwen 1337` 실행 → 즉사. pod 는 RUNNING 유지·과금, train 0 → **158분 idle burn ($3.92)**. dispatcher 는 `cloud_nohup` 이 pid 만 반환하면 즉시 리턴해서 원격 즉사를 못 봄 = silent class-1 실패.
+
+- [x] **Option C 구현 (hexa-lang canonical)**: `cloud nohup … --early-life-check <sec>` 플래그 추가 (`stdlib/cloud/cloud_cli.hexa`). launch 후 `<sec>`초 sleep → `cloud_poll_opts` 1회 → 살아있으면 exit 0, 이미 죽었으면 **exit 3** (usage 2·nohup 시작실패 1 과 구분되는 distinct code) + "tear the pod down" 메시지. 호출자가 watchdog 타임아웃 대신 즉시 teardown 가능.
+- [x] **flag-scan helper** `_early_life_cli(av, start)` — `_max_wall_cli` 미러, `--` 구분자에서 정지(원격 argv 안의 동명 토큰 미소비). `_ssh_opts_cli` 에 skip 브랜치 추가(ssh_opts 오염 방지).
+- [x] **검증**: parse-gate clean. 격리 logic test 6/6 PASS (absent→0·present→value·after-sep 미소비→0·mixed→30·dangling→0·offset→120). `_cloud_early_life_check` 의 I/O 경로는 이미 검증된 `cloud_poll_opts` 재사용 + trivial control-flow.
+- [x] help/usage 3곳 갱신 (banner · nohup usage · flag explainer).
+- [ ] **Option A (anima-local, 비-hexa)**: `dispatch_p21h_v3.hexa:365` 가 `train_p21h_v3.py` 경로를 argv 에 포함하도록 수정 — anima repo 소관, 본 패치 권고대로 anima 측 적용 권장.
+- [ ] 후속(선택): anima dispatcher 가 nohup 대신 `--early-life-check` 를 채택하도록 wire — 모든 anima trainer 에 일반화되는 가드.
+
+
 ## 2026-05-25T18:00Z — atlas binary-builtin lookup vs source embedded.gen.hexa divergence
 
 TECS-L 축 E E2 audit 발견. `hexa atlas register --from-verify` 가 source `compiler/atlas/embedded.gen.hexa` 에 직접 splice 하지만, installed `hexa atlas lookup` 은 **binary-builtin (frozen at last hexa build)** 을 읽음. 결과:

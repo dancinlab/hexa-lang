@@ -25,7 +25,8 @@ fn _cloud_help() {
     println("  cloud preflight --params N [--gpu KEY] [opts...]        closed-form GPU mem-budget check (no pod/ssh)")
     println("  cloud run       <host> [conn] [--max-wall S] [--env K=V] -- <argv...> run argv, wait, exit with its code")
     println("  cloud exec      <host> [conn] -- <shell-cmd>           run shell command via ssh (DEFAULT SHELL PARSES IT)")
-    println("  cloud nohup     <host> <logfile> [conn] [--env K=V] -- <argv...>   background argv, print remote pid")
+    println("  cloud nohup     <host> <logfile> [conn] [--env K=V] [--early-life-check N] -- <argv...>   background argv, print remote pid")
+    println("                                                         --early-life-check N: after launch, sleep N s + poll once; exit 3 if pid already DIED (silent class-1 launch failure)")
     println("  cloud poll      <host> <pid> [conn]                    exit 0 if remote pid alive, else 1")
     println("  cloud watch     <host> <pid> [conn] [--interval N] [--max-wait S] [--then-down <id> [--provider P]]")
     println("                                                         loop poll until pid dies (exit 0) / max-wait (124); optional teardown")
@@ -50,6 +51,11 @@ fn _cloud_help() {
     println("                  survives remote word-splitting.")
     println("  --env-file <p>  (run/nohup) read K=V lines from <p> (blank and")
     println("                  #-comment lines skipped); each line acts as --env.")
+    println("  --early-life-check <s>  (nohup only) after the detached launch,")
+    println("                  sleep <s> s then poll the remote pid once; exit 3 if")
+    println("                  it already DIED (a launcher that execs and exits at")
+    println("                  once) so the caller can tear the pod down instead of")
+    println("                  burning a watchdog timeout on a job that never ran.")
     println("  --resume        (copy-from) rsync --partial --append-verify; resume")
     println("                  an interrupted large-file pull (needs rsync >= 3.0).")
     println("  --recursive,-r  (copy-to) copy a directory tree (scp -r).")
@@ -108,6 +114,10 @@ fn _ssh_opts_cli(av: [str], start: int) -> [str] {
             // run-verb wall cap (handled by _max_wall_cli) — skip flag+value
             // here so it never lands in ssh_opts.
             i = i + 2
+        } else if t == "--early-life-check" {
+            // nohup-verb early-death window (handled by _early_life_cli) —
+            // skip flag+value here so it never lands in ssh_opts.
+            i = i + 2
         } else {
             i = i + 1
         }
@@ -127,6 +137,28 @@ fn _max_wall_cli(av: [str], start: int) -> int {
         if t == "--" {
             return 0
         } else if t == "--max-wall" {
+            if i + 1 < len(av) {
+                return _cli_atoi(av[i + 1])
+            }
+            return 0
+        }
+        i = i + 1
+    }
+    return 0
+}
+
+// _early_life_cli — scan av[start..] (up to a "--" separator) for the
+// `--early-life-check <sec>` nohup-verb flag and return the window in
+// seconds; 0 means it was not given (check disabled). Stops at "--" so an
+// `--early-life-check` token inside the remote argv is never consumed.
+// Mirrors _max_wall_cli's pre-separator scan.
+fn _early_life_cli(av: [str], start: int) -> int {
+    let mut i = start
+    while i < len(av) {
+        let t = av[i]
+        if t == "--" {
+            return 0
+        } else if t == "--early-life-check" {
             if i + 1 < len(av) {
                 return _cli_atoi(av[i + 1])
             }
@@ -531,6 +563,27 @@ fn _cloud_watch(host: str, ssh_opts: [str], pid: int, interval: int, max_wait: i
     return 124
 }
 
+// _cloud_early_life_check — after a detached nohup launch, sleep `sec` s
+// then poll the remote pid ONCE. Returns 0 if the process is still alive
+// (it cleared the early-death window), else 3 — the silent class-1 failure
+// mode where a launcher execs and dies immediately (bad script path, bad
+// argv) while the pod keeps billing. A distinct nonzero return lets the
+// caller tear the pod down at once instead of waiting out a watchdog
+// timeout on a job that never started (the 158-min idle-burn anima fire).
+fn _cloud_early_life_check(host: str, ssh_opts: [str], pid: int, sec: int) -> int {
+    if sec <= 0 {
+        return 0
+    }
+    let _ = exec("sleep " + str(sec))
+    let alive = cloud_poll_opts(host, ssh_opts, pid)
+    if alive == 1 {
+        println("[cloud] early-life check OK — pid " + str(pid) + " alive after " + str(sec) + "s")
+        return 0
+    }
+    println("[cloud] early-life check FAILED — pid " + str(pid) + " DIED within " + str(sec) + "s (silent class-1 launch failure; tear the pod down)")
+    return 3
+}
+
 fn main() {
     let av = args()
     let mut si = -1
@@ -673,16 +726,17 @@ fn main() {
     }
     if sub == "nohup" {
         if si + 2 >= len(av) {
-            println("[cloud] nohup: usage — cloud nohup <host> <logfile> [--port N] [--insecure] -- <argv...>")
+            println("[cloud] nohup: usage — cloud nohup <host> <logfile> [--port N] [--insecure] [--early-life-check N] -- <argv...>")
             exit(2)
         }
         let host = av[si + 1]
         let logfile = av[si + 2]
         let ssh_opts = _ssh_opts_cli(av, si + 3)
         let env_kvs = _env_args_cli(av, si + 3)
+        let early_life = _early_life_cli(av, si + 3)
         let mut argv = _collect_after(av, si + 3)
         if len(argv) == 0 {
-            println("[cloud] nohup: empty argv — usage: cloud nohup <host> <logfile> [--port N] [--insecure] [--env K=V] -- <argv...>")
+            println("[cloud] nohup: empty argv — usage: cloud nohup <host> <logfile> [--port N] [--insecure] [--early-life-check N] [--env K=V] -- <argv...>")
             exit(2)
         }
         let prog = argv[0]
@@ -694,7 +748,8 @@ fn main() {
         }
         println("[cloud] " + r.message)
         if r.ok == 1 {
-            exit(0)
+            let rc = _cloud_early_life_check(host, ssh_opts, r.pid, early_life)
+            exit(rc)
         }
         exit(1)
     }
