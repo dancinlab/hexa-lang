@@ -2202,3 +2202,46 @@
   raw    = ".verdicts/fusion-autoregressive-decode/F-FUSION-AUTOREGRESSIVE-DECODE-TIMED.txt"
   src    = "kernels fused_decode.ptx (md5 f2dbaffa…) + eager_decode.ptx (md5 e0840784…) as merged on origin/main (PR #1116 R8). Result JSONs tool/r9_walls/ar_result_L{64,256,512,1024,2048}.json. fused med 79.97→80.19 ms; eager med 1.89→1.98 ms."
   status = "🔴 FALSIFIED — numeric FAIL (both attention-stub) + fused ~40-42× slower ∀L, no launch-bound regime win, no crossover. Closed-negative: launch-count moat does not convert when the fused kernel is single-CTA with scalar inner GEMVs. paper_negative_ok satisfied (pre-registered falsifier + real L-sweep measurement + ruled-out axis)."
+
+# ───────────────────────────────────────────────────────────────────────
+# OEIS — oeis-dlmf-probe (slug · group=OEIS · O6)
+# Feasibility probe: does the OEIS exact-integer hash-intersect catalogue-
+# mirror pattern generalize to DLMF (NIST special-functions library)?
+# CLOSED-NEGATIVE: it does NOT, as-is. Two of three preconditions FAIL
+# deterministically — (P1) DLMF has no bulk numeric corpus (per-page MathML,
+# no stripped.gz-equivalent, no API); (P3) hexa verify --expr exposes ZERO
+# classical special functions (no Bessel/Gamma(z)/erf/Hermite/Legendre/Airy/
+# zeta/hypergeometric — only number-theoretic integer fns + RFC-045 constants).
+# OEIS = {id->integer tuple} (uniform, exact-hashable); DLMF = {id->symbolic
+# identity OR continuous f} (heterogeneous, not tuple-hashable). The falsified
+# property = pattern portability. A DLMF mirror would need a DIFFERENT
+# mechanism (numeric sampling + tolerance) + a hexa special-fn library — both
+# substantial new work, not a same-pattern reuse. paper_negative_ok.
+
+@C oeis_dlmf_probe := "O6 DLMF catalogue-mirror feasibility: the OEIS exact-integer hash-intersect pattern does NOT generalize to DLMF as-is. P1 BULK-CORPUS FAIL (DLMF = per-page MathML, no bulk numeric dump/API per WebFetch dlmf.nist.gov/about+/help) + P3 HEXA-COVERAGE FAIL (hexa verify --expr has ZERO classical special fns: no bessel/gamma(z)/erf/hermite/legendre/airy/zeta/hypergeom; gamma0_index is the MODULAR index, not Gamma function). Structural: OEIS={id->integer tuple, exact-hashable} vs DLMF={id->symbolic identity OR continuous f, not tuple-hashable}. Sub-opts: (A) numeric-table intersect blocked by no-source AND no-special-fns AND exact-hash->tolerance mechanism mismatch; (B) identity-citation rejected by OEIS-domain governance (naive-dump-forbidden + verify-gated-only); (C) closed-negative ADOPTED. Ruled-out axis = pattern portability to symbolic-identity catalogues" :: synthesis [slug=oeis-dlmf-probe group=OEIS]
+  method = "feasibility"
+  cmd    = "WebFetch dlmf.nist.gov/about + /help (no bulk dump/API) ; hexa verify rubric (special-fn registry = 0 classical) → .verdicts/oeis-dlmf-probe/dlmf_assessment.txt"
+  raw    = ".verdicts/oeis-dlmf-probe/dlmf_assessment.txt"
+  src    = "OEIS/docs/o6-dlmf-feasibility.md (§1 pattern recap · §2 DLMF structure · §3 A/B/C sub-options · §4 verdict + ruled-out axis · §5 hexa special-fn availability). Evidence: WebFetch dlmf.nist.gov 2026-05-25 + `hexa verify rubric`."
+  status = "🔴 FALSIFIED (closed-negative) — OEIS catalogue-mirror pattern does NOT generalize to DLMF as-is. Falsified property = pattern portability (P1 no bulk corpus + P3 no hexa special-fns, two independent fails). A DLMF mirror needs a different mechanism (numeric sampling + tolerance) + a hexa special-fn library — both substantial new work. Terminal · paper-eligible (paper_negative_ok)."
+
+# ───────────────────────────────────────────────────────────────────────
+# ARXIV — arxiv-ingest-poc (slug · group=ARXIV · A1)
+# 3rd catalogue-mirror sister (OEIS=integer exact-hash · DLMF=🔴 doesn't
+# generalize · ARXIV=paper-claim semantic ingest). A1 = ingest-pipeline POC
+# on the ANIMA axis (IIT / Phi-structure, q-bio.NC). arXiv query -> paper
+# abstracts -> claim triage into 3 classes (verify-able / 🟡 citation /
+# cross-repo handoff). 12 on-topic papers triaged via /research:arxiv skill.
+# 0 directly verify-able (hexa verify --expr exposes NO IIT primitive: no
+# Phi / EMD / cause-effect repertoire — same P3 hexa-coverage blocker as
+# OEIS-O6). Empirical PIPELINE verdict: proves the ingest+triage flow works,
+# NOT a big absorption. First true 🟢 ARXIV claim = a PyPhi-style Phi recompute
+# for a tiny TPM once anima's faithful-Phi engine lands (A2). Handoffs STUBBED
+# (target ~/core/anima INBOX.log.md); actual filing = A6.
+
+@C arxiv_ingest_poc := "ARXIV ingest POC (A1): /research:arxiv skill -> 3 queries -> 12 on-topic IIT/Phi papers (ANIMA axis, q-bio.NC) -> 3-class claim triage. Result: 0 verify-able (hexa verify --expr exposes NO IIT primitive — no Phi/EMD/cause-effect-repertoire; same P3 hexa-coverage blocker as OEIS-O6; 2 deferred verify-able-CANDIDATEs = 1505.04368 Phi* bound 0<=Phi*<=I(whole) + 1405.0126 lossless-integration-is-noncomputable) / 5 🟡 citation (2212.14787 IIT4.0 spec, 2510.25998 consciousness-first, 1709.02050 info-geometry, 1510.04455 unified framework, 2412.10626 Shannon-vs-IIT) / 7 handoff->anima (1712.09644 PyPhi algo, 1505.04368 Phi*, 1902.04321 Phi-not-well-defined critique, 1405.0126 noncomputability, 2004.00058 macro-agent emergence, 1702.02462 group-Phi, 2212.14787 dual). First true 🟢 = PyPhi-style Phi recompute for a tiny TPM (~1.92 bits) once anima faithful-Phi engine lands (A2)" :: empirical [slug=arxiv-ingest-poc group=ARXIV]
+  method = "ingest-triage"
+  cmd    = "/research:arxiv (arXiv API) x3 queries → 12 papers → 3-class triage → ARXIV/.verdicts/arxiv-ingest-poc/triage.txt"
+  raw    = "ARXIV/.verdicts/arxiv-ingest-poc/triage.txt"
+  src    = "ARXIV/ARXIV.md (A1 roadmap + 4-axis table) + .verdicts/arxiv-ingest-poc/ingest_log.txt (raw 3-query results + triage reasoning). arXiv open-access; attribution = arxiv id + authors + title. Per-paper hexa verify recompute deferred to A2+ (no in-tree Phi primitive). Cross-repo handoffs STUBBED (target ~/core/anima INBOX.log.md); actual filing = A6."
+  status = "🟢 empirical pipeline — 12 IIT-Phi papers triaged: 0 verify-able / 5 🟡 citation / 7 anima-handoff. Proves the arxiv ingest+triage FLOW works (PIPELINE POC), NOT a big absorption. 0 verify-able is the honest/expected outcome (no in-tree Phi primitive — mirrors OEIS-O6 P3 hexa-coverage). NOT a terminal arithmetic claim (per-paper verify = A2+ milestone)."

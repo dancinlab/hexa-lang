@@ -2,6 +2,28 @@
 
 Append-only history sister of `INBOX.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
+## 2026-05-26T01:30Z — atlas register 가 `allen_dynes_tc` (RTSC 핵심 verify fn, 3-arg) 흡수 불가 — atlas_cli↔verify_cli desync + 3-arg register arm 부재 (#954 확장)
+
+demiurge RTSC "atlas 흡수" 시도 중 발견 — RTSC 캠페인의 verify-able 결과(초전도 Tc)가 atlas 에 전혀 흡수되지 못함. 차단 2겹:
+
+- [ ] **(1) verify_cli HAS · atlas_cli register mirror LACKS** — `hexa verify --expr allen_dynes_tc 0.6150 591.18 0.10 14.55` → calc=14.5511 (계산기 정상 작동). 그러나 `hexa atlas register --from-verify allen_dynes_tc 0.6150 591.18 0.10` → `🟠 INSUFFICIENT · reason="hexa verify --expr allen_dynes_tc has no calculator path" · gap="add allen_dynes_tc to tool/verify_cli.hexa"`. = #954 와 동일 class: register 는 verify_cli 로 shell-out 하지 않고 `atlas_cli.hexa` 의 자체 미러(`_recompute_float_register`)로 in-process recompute → allen_dynes_tc 가 그 미러에 부재. **RTSC 의 1순위 verify fn 이 atlas 흡수 불가**.
+- [ ] **(2) 3-arg register arm 부재** — allen_dynes_tc(λ, ω_log, μ*) = **3-arg**. 현 register 는 1-op (`<fn> <n> <v>`) + 2-op (`<fn> <a> <b> <v>`) 만. 3-arg `_recompute3_register` 경로 자체가 없음 (#954 의 2-arg case 들과 별개의 NEW sub-gap). verify_cli `--expr` 는 3-arg 처리하므로(14.5511 계산 확인) verify↔register arity 불일치.
+- [ ] **(3) ε=1e-9 round-tolerance 재확인** — 설령 register 가 동작해도, 로그/문헌 Tc(6자리 반올림, 예 14.55)는 calc(14.55109xx)와 |Δ|>1e-9 → 🔴 FALSIFIED. register 가 expected 없이 *자체 계산값*을 fold 하거나 `--tol` 옵션 필요 (기존 RTSC INBOX round-tolerance item 과 동일).
+- [ ] **영향 범위** — allen_dynes_tc 뿐 아니라 RTSC magnet 16-fn(wheeler·solenoid_endleakage·mutual_M_coaxial·current_loop_offaxis·elliptic_K/E·…, #954 목록)도 동일 차단 → RTSC 캠페인 전 verify-able 결과가 atlas 미흡수. 우선순위 ↑ (atlas 가 RTSC SSOT 역할 못 함).
+- [ ] **제안** — (a) `--from-selftest`/generic verify-delegation arm (#954 제안 a)이 이 3건 모두 우회 — register 가 verify_cli 로 직접 shell-out(또는 동일 dispatch 공유)하면 미러 desync + arity 불일치 소멸. (b) 차선: atlas_cli 미러에 allen_dynes_tc + 3-arg `_recompute3_register` 추가.
+
+Status: open · proposed-by:agent · severity:high (RTSC SSOT 흡수 전면 차단, 1순위 verify fn) · source:demiurge RTSC atlas-absorb 세션 2026-05-26 (실증: verify 🟢-able vs register 🟠) · awaits:hexa-lang fix · #954 확장
+
+
+## 2026-05-26 — inbox/patches/ 트리아지 3건 (anima 2-gap + flame V3 갭 + cloud Option A 후속 확인)
+
+`inbox/patches/` 에 미트리아지 상태로 쌓인 anima handoff 를 INBOX.md 로 라우팅. 각 건 origin/main 코드 대조로 status 판정:
+
+- [x] **`cloud-launch-trainer-script-arg-missing.md` Option A (anima-side argv 수정)** — anima repo 대조: `HEXAD/PURE/launchers/dispatch_p21h_v3.hexa` train_launch argv 가 이미 `[…/launch_trainer_p21h.sh, …/train_p21h_v3.py, …]` (script-path 포함). 버그 형태 `[…sh, init_variant, seed]` 는 anima 트리 전체 grep 0건. anima **PR #423** (`fix(PURE): dispatch_p21h_v3 train_launch full argv`) 로 closed, origin/main 조상 확인. → Option A·C 양쪽 닫힘 (C = hexa-lang #1120).
+- [ ] **`anima-flame-v3-coverage-gaps.md` (2026-05-26)** — flame coverage 기능 갭 8건. INBOX.md 신규 open 항목. P1 둘(full-position CE · V3-extension backward)이 학습정확도 직접 영향 + RFC 059 정렬. 차단 아님(anima 포팅본이 fallback 으로 smoke PASS). one-shot 아님 — RFC/feature 트랙.
+- [ ] **`anima-discovered-2gaps-2026-05-25.md` G1 (linux wrapper 깨짐 + `-D_GNU_SOURCE`)** — G1 절반(`-D_GNU_SOURCE`)은 **이미 canonical 레시피에 존재**: `self/main.hexa` (`hexa cc` 경로 L1188/1294/1304) + `tool/build_hexa_v2_linux.hexa:145` (`-O2 -std=gnu11 -D_GNU_SOURCE`). 패치가 본 누락은 "runtime.c 직접 recompile fallback" 경로 한정 — canonical `hexa cc` 쓰면 비-이슈. 나머지 절반(ubu wrapper 심링크 dangling/PATH 부재)은 기존 open "pool stale" 항목과 동일뿌리 → 그 항목에 corroboration 으로 fold ([[reference_ubu_hexa_install_paths]]).
+- [ ] **`anima-discovered-2gaps-2026-05-25.md` G2 (import-time `main()` auto-invoke)** — 진짜 미해결 갭. 트리 grep: `__main__`/`no_auto_main`/`_selftest` 가드 컨벤션 전무(archive 의 .py-풍 fire 파일 외엔 0). import 가 모듈 `main()` 을 auto-fire → eval/probe 라이브러리화 차단. **언어-semantics 변경 (blast-radius)** → 반사적 구현 금지, 설계결정 필요. INBOX.md 신규 open 항목 (RFC 후보).
+
 
 ## 2026-05-25T23:30Z — `hexa cloud nohup --early-life-check` — 조기-사망 launch 감지 (anima cloud handoff Option C 해소)
 
