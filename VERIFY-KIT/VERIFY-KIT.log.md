@@ -4,6 +4,31 @@
 
 ---
 
+## 2026-05-26 — V5.2 (P2) faithful-Φ 엔진을 verify CLI 에 배선 (`hexa verify --expr phi_demo`)
+
+### 목표 (V5 의 둘째 슬라이스 — wire 만)
+- V5.1 이 promote 한 self-contained `iit4_faithful_phi` 를 verify CLI 에서 호출 가능하게. V5 통째는 두 번 죽었으니 V5.1 처럼 작게 — wire 만, calibrate(V5.3)는 별도.
+- CHALLENGE: verify `--expr` 인자는 SCALAR(`<fn> <n> <v>`)인데 Φ 는 state 행렬(flat n×dim farr)이 필요. → **Option A** 채택: `phi_demo <case_id> <expected>` — case_id 가 하드코딩 canonical small state 선택. farr-parsing CLI grammar 없이 엔진 재계산 + 배선을 증명. (Option B = comma-sep state 파싱은 verify_cli arg parser 가 list arg 를 싸게 안 줘서 deferred → V5.2.x.)
+
+### Wire (최소 배선)
+- `tool/verify_cli.hexa`: `use "stdlib/consciousness/iit4/faithful_phi"` 추가 · `_phi_demo(case_id)` 헬퍼(case 1 = 3-cell 동일 ramp Φ>0, case 0 = cell 2 상수 → MI=0 control Φ≈0)가 하드코딩 state 빌드 후 `iit4_faithful_phi(state, 3, 6, 4)` 호출 · `_recompute_float` 에 `phi_demo` dispatch · help 라인 1줄.
+- `compiler/atlas/calc_dispatch.hexa::calc_is_float_fn` 에 `phi_demo` 등록(float-fn SSOT). 이로써 `--expr phi_demo …` 가 cmd_expr_float 경로 → 🟢 numerical.
+
+### 검증 (real CLI)
+- parse-gate PASS (verify_cli·faithful_phi·calc_dispatch 3개 전부 `hexa parse OK`).
+- standalone smoke 빌드(동일 `_phi_demo` 로직)로 엔진 deterministic 재계산 선확인: phi_demo(1)=3.83659, phi_demo(0)=4.52044e-09.
+- `bin/hexa-verify` 빌드 = HEAD transpiler 필요. **stale Mac 드라이버(self/native/hexa_v2, 2026-05-23)가 V4 bessel_j0/j1 codegen fold 를 miscompile** (`hexa_call1(bessel_j0,…)` 가 libm j0 와 _Generic 충돌) — V4(#1148) 이전 바이너리라 그렇고 V5.2 와 무관. fix = HEAD .hexa 소스로 transpiler 재빌드(`hexa cc`) → fresh `self/native/hexa_v2` 가 j0/j1 fold 복원. pool host `mini`(arm64 Mac)의 /tmp fresh clone 에서 패치 적용 + transpiler/module_loader/hexa-verify 빌드.
+- VERBATIM (`.verdicts/verify-kit-iit-wire/v5_2.txt`):
+  - `hexa verify --expr phi_demo 1 3.83659 --tol 1e-3` → 🟢 SUPPORTED-NUMERICAL (calc=3.83659, |Δ|=1.66537e-06, rc=0)
+  - `hexa verify --expr phi_demo 0 0.0 --tol 1e-3` → 🟢 (calc=4.52044e-09 ≈ 0, |Δ|=4.52e-09, rc=0) — control PASS
+
+### 산출 + tier
+- CLAIMS.tape @C `verify_kit_iit_wire` [slug=verify-kit-iit-wire group=VERIFY-KIT] status="🟢 phi recompute wired into verify CLI (faithful_phi engine) — calibration → V5.3".
+- V5.2 tier = 🟢 (numerical) — wire DONE, deterministic 재계산 CLI 에서 확인.
+- V5.3 = PyPhi calibrate (3.83659 는 엔진 자체값, PyPhi-anchored 아님). V5 `[ ]` 미플립.
+
+---
+
 ## 2026-05-26 — V5.1 (P2) anima Φ 엔진 → `stdlib/consciousness/iit4/` promote (g61/g68)
 
 ### 목표 (V5 의 첫 슬라이스 — promote 만)

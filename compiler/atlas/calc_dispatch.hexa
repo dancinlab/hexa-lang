@@ -143,6 +143,10 @@ pub fn calc_is_float_fn(fn_name: string) -> bool {
         //   irrational => 🟢 SUPPORTED-NUMERICAL via --tol (never exact 🔵).
         || fn_name == "gamma" || fn_name == "erf"
         || fn_name == "bessel_j0" || fn_name == "bessel_j1"
+        // VERIFY-KIT V5.2 — faithful Φ recompute via stdlib iit4 engine (2026-05-26):
+        //   phi_demo(case_id) 1-arg, recomputes faithful Φ★ on a hardcoded
+        //   canonical small state. Real-valued ⇒ 🟢 SUPPORTED-NUMERICAL via --tol.
+        || fn_name == "phi_demo"
 }
 
 // calc_is_zero_arg_float_fn — is fn_name a 0-arg closed-form constant?
