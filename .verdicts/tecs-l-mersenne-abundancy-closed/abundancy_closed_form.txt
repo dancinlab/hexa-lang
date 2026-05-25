@@ -1,0 +1,111 @@
+TECS-L axis B MR3 — abundancy sigma(P)=2P closed-form derivation
+==================================================================
+
+method = reasoned-synthesis (no new arithmetic verify; cites existing g5 atoms)
+tier   = 🟢 reasoned (cites 🔵 SUPPORTED-FORMAL anchors below)
+
+------------------------------------------------------------------
+Statement
+------------------------------------------------------------------
+Let p be a prime such that M_p = 2^p - 1 is a Mersenne prime.
+Let P = 2^(p-1) * M_p (the Euclid-Euler even perfect number).
+Then sigma(P) = 2P, equivalently abundancy(P) = sigma(P)/P = 2.
+
+------------------------------------------------------------------
+Derivation (4 elementary steps)
+------------------------------------------------------------------
+[S1] sigma is multiplicative over coprime factors:
+       gcd(a,b) = 1  ==>  sigma(a*b) = sigma(a) * sigma(b).
+     This is the standard property of multiplicative arithmetic
+     functions (Hardy and Wright, Theorem 273 / equivalent).
+
+[S2] gcd(2^(p-1), M_p) = 1.
+     2^(p-1) is a pure power of 2; M_p = 2^p - 1 is odd
+     (since 2^p is even, 2^p - 1 is odd). Hence the only common
+     divisor is 1.
+
+[S3] sigma of a prime power: sigma(q^k) = (q^(k+1) - 1)/(q - 1).
+     With q=2, k=p-1: sigma(2^(p-1)) = (2^p - 1)/(2 - 1) = 2^p - 1 = M_p.
+
+[S4] sigma of a prime: sigma(r) = r + 1 for prime r.
+     With r = M_p (prime by hypothesis):
+       sigma(M_p) = M_p + 1 = (2^p - 1) + 1 = 2^p.
+
+[Combine] By [S1] applied with a = 2^(p-1), b = M_p (coprime by [S2]):
+       sigma(P) = sigma(2^(p-1)) * sigma(M_p)
+                = M_p * 2^p                       (by [S3] and [S4])
+                = (2^p - 1) * 2^p
+                = 2 * (2^(p-1) * (2^p - 1))
+                = 2 * 2^(p-1) * M_p
+                = 2 * P.                                         QED
+
+Equivalently, abundancy(P) = sigma(P) / P = 2, i.e. P is perfect.
+
+------------------------------------------------------------------
+Numerical anchor table — first 7 even perfect numbers (P1..P7)
+------------------------------------------------------------------
+All sigma(P_k) values below are 🔵 SUPPORTED-FORMAL atoms produced by
+`hexa verify --expr sigma <P> <2P>` and persisted verbatim under the
+verdict paths cited. No new arithmetic verify is added by MR3.
+
+  p   M_p          P_k = 2^(p-1)*M_p   sigma(P_k) = 2*P_k    verdict path
+  --  -----------  ------------------  ---------------------  ---------------------------------------------------------
+  2   3            6                    12                    .verdicts/tecs-l-hypotheses/abundancy_sigma6.txt
+  3   7            28                   56                    .verdicts/tecs-l-hypotheses/abundancy_sigma28.txt
+  5   31           496                  992                   .verdicts/tecs-l-hypotheses/abundancy_sigma496.txt
+  7   127          8128                 16256                 .verdicts/tecs-l-hypotheses/abundancy_sigma8128.txt
+  13  8191         33550336             67100672              .verdicts/tecs-l-hypotheses/abundancy_sigma33m.txt
+  17  131071       8589869056           17179738112           .verdicts/tecs-l-mersenne-perfect/sigma_p6.txt   (MR2)
+  19  524287       137438691328         274877382656          .verdicts/tecs-l-mersenne-perfect/sigma_p7.txt   (MR2)
+
+All 7 rows: calc == expected, tier 🔵 SUPPORTED-FORMAL.
+
+The closed-form (2^p - 1) * 2^p computed for each p yields exactly the
+expected column above, confirming that the seven 🔵 anchors instantiate
+the derivation. Sample reconciliation:
+
+  p=2:  (2^2 - 1) * 2^2 = 3   * 4   = 12          = 2 * 6
+  p=3:  (2^3 - 1) * 2^3 = 7   * 8   = 56          = 2 * 28
+  p=5:  (2^5 - 1) * 2^5 = 31  * 32  = 992         = 2 * 496
+  p=7:  (2^7 - 1) * 2^7 = 127 * 128 = 16256       = 2 * 8128
+  p=13: (2^13- 1) * 2^13= 8191*8192 = 67100672    = 2 * 33550336
+  p=17: (2^17- 1) * 2^17= 131071*131072 = 17179738112  = 2 * 8589869056
+  p=19: (2^19- 1) * 2^19= 524287*524288 = 274877382656 = 2 * 137438691328
+
+Every row matches the 🔵 verdict for sigma(P_k) cited above.
+
+------------------------------------------------------------------
+Honest scope
+------------------------------------------------------------------
+- The derivation covers ONLY even perfect numbers in the Euclid-Euler
+  form P = 2^(p-1) * M_p, M_p Mersenne prime.
+- Euler (1747) proved the converse: every EVEN perfect number has
+  this form. Combined with the derivation above, this fully classifies
+  the even perfect numbers.
+- ODD PERFECT NUMBERS: existence is OPEN. No odd perfect number has
+  been found nor proven impossible. MR3 makes no claim about them.
+  This open problem is tracked separately as TECS-L axis B MR7
+  (🟠 INSUFFICIENT/DEFERRED — honest fence).
+
+------------------------------------------------------------------
+Cross-references (axis B and axis 0)
+------------------------------------------------------------------
+- Axis-0 M5/M6 — first 5 perfect numbers (6, 28, 496, 8128, 33550336)
+  abundancy=2 atoms (rows 1-5 above).
+- Axis B MR2 (slug=tecs-l-mersenne-perfect) — extends to P6 and P7
+  (rows 6-7 above) with both is_perfect=1 and sigma=2P atoms.
+- Axis B MR5 (slug=tecs-l-mersenne-tau-2p) — companion closed-form
+  tau(P) = 2p for the same seven perfect numbers (divisor-count
+  derivation; pairs naturally with sigma(P) = 2P here).
+- Axis B MR6 (slug=tecs-l-mersenne-composite) — falsifies the converse
+  "p prime ==> M_p prime" (M_11 = 2047 = 23*89), explaining why the
+  derivation requires the M_p PRIME hypothesis.
+
+------------------------------------------------------------------
+Status
+------------------------------------------------------------------
+🟢 reasoned — derivation by elementary number theory (multiplicativity
+of sigma + coprimality of 2^(p-1) and M_p + prime-power and prime
+sigma formulas). All 7 numerical instantiations are 🔵 atoms persisted
+verbatim. No new verify command needed — this artifact records the
+synthesis tying those atoms to the closed form.

@@ -1662,3 +1662,25 @@
   raw    = ".verdicts/tecs-l-atlas-health/binary_vs_source_divergence.txt"
   src    = "axis E E2 — confirms axis E E3 complement: register hazard (install-dir) + lookup staleness (binary-builtin)"
   status = "🟡 SUPPORTED-BY-CITATION — divergence is out-of-band (atlas audit clean on its own; binary≠source observed). flagged to INBOX upstream (g59)."
+
+# ───────────────────────────────────────────────────────────────────────
+# TECS-L axis B (MERSENNE) — tecs-l-mersenne-abundancy-closed (slug · group=TECS-L · MR3)
+# Closed-form derivation: for P = 2^(p-1) * M_p with M_p = 2^p - 1 prime,
+#   sigma(P) = sigma(2^(p-1)) * sigma(M_p)            [sigma multiplicative · gcd(2^(p-1),M_p)=1]
+#            = (2^p - 1)        * (M_p + 1)
+#            = M_p              * 2^p
+#            = (2^p - 1) * 2^p
+#            = 2 * 2^(p-1) * M_p
+#            = 2P.
+# Equivalently, abundancy(P) = sigma(P)/P = 2 (defn of perfect).
+# 7-perfect anchor table (P1..P7) cites pre-existing 🔵 sigma atoms:
+#   axis-0 M6 (P1..P5: 6/28/496/8128/33550336)  +  MR2 (P6/P7).
+# No new arithmetic verify added — MR3 = reasoned synthesis (method=synthesis).
+# Honest scope: even perfects ONLY (Euclid-Euler form). Odd perfects OPEN (MR7 🟠).
+
+@C tecs_l_mersenne_abundancy_closed_form := "sigma(P)=2P closed-form for P=2^(p-1)*M_p with M_p Mersenne prime (sigma multiplicative ⊗ gcd(2^(p-1),M_p)=1 ⊗ sigma(M_p)=2^p ⊗ sigma(2^(p-1))=M_p → sigma(P)=(2^p-1)*2^p=2P); 7 perfects P1..P7 anchored to existing 🔵 sigma atoms (axis-0 M6 + MR2)" :: synthesis [slug=tecs-l-mersenne-abundancy-closed group=TECS-L]
+  method = "synthesis"
+  cmd    = "reasoned — 4-step elementary derivation (sigma multiplicativity + coprime 2^(p-1)/M_p + prime-power sigma + prime sigma); no new hexa verify"
+  raw    = ".verdicts/tecs-l-mersenne-abundancy-closed/abundancy_closed_form.txt"
+  src    = "axis B MR3 — TECS-L/docs/mr3-abundancy-closed-form.md. Anchors: axis-0 M6 (.verdicts/tecs-l-hypotheses/abundancy_sigma{6,28,496,8128,33m}.txt 🔵) + MR2 (.verdicts/tecs-l-mersenne-perfect/sigma_p{6,7}.txt 🔵). Honest scope: even perfects only; odd-perfect open → MR7 🟠."
+  status = "🟢 reasoned — derivation by elementary number theory; cites 7 pre-existing 🔵 SUPPORTED-FORMAL sigma atoms (P1..P7). No new arithmetic verify. terminal for axis B MR3."
