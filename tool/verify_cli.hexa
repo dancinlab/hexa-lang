@@ -404,6 +404,10 @@ fn cmd_rubric() {
     println("             beta_max_pct(βN,Ip,a,B)     → βN·Ip/(a·B)             (Troyon ideal-MHD β-limit [%]; linear ideal-MHD only, FUSION F4, 4-arg)")
     println("             beta_n(β%,Ip,a,B)           → β%·a·B/Ip               (inverse Troyon — achieved normalized β_N, FUSION F4, 4-arg)")
     println("             q_star(a,B,R,Ip)            → 2π a²B/(μ0 R Ip)        (cylindrical edge safety factor q*; q95>2 ⇒ kink-stable, FUSION F4, 4-arg)")
+    println("             ufo_isp_fuel_ratio(μ)       → γμβ |η=1               (UFO F-ANTI-3 effective I_sp / photon-ceiling c/g; μ=1 → √3, UFO, 1-arg)")
+    println("             ufo_rocket_beta(μ)          → √(1−1/γ²) |η=1          (UFO relativistic exhaust β=v_e/c; μ=1 → √3/2 <1, UFO, 1-arg)")
+    println("             ufo_gl_derating(r)          → 1−r², r=T/Tc           (UFO HTS B(T)/B₀ GL two-fluid thermal derating, UFO, 1-arg)")
+    println("             ufo_mli_shield(N)           → 1/(N+1)                 (UFO cryostat MLI radiation shield factor, UFO, 1-arg)")
 }
 
 let NOCALC: int = -999999
@@ -2830,6 +2834,42 @@ fn _solenoid_axis_bz(ni_at: float, a_m: float, b_m: float, h_m: float) -> float 
     return _MU0_SOL * jj / 2.0 * h_m * log(num / den)
 }
 
+// ── UFO — integrated-vehicle closed-form atoms (UFO/sim/decks · @D d5) ─────
+// Dimensionless / O(1) closed-forms from the UFO verb-4 analyze decks; O(1)
+// magnitude so |Δ|≤1e-9 is a genuine full-precision discriminator (no ×1e18
+// lift). Sources: fanti3_isp_closure · thermal_cryo · coupling_fixedpoint.
+//
+// ufo_isp_fuel_ratio(μ): γμβ |η=1 = effective-I_sp / photon-ceiling (c/g) for
+//   the relativistic hybrid annihilation rocket (F-ANTI-3). γ=1+1/μ, β=√(1−1/γ²).
+//   μ=1 → √3 ≈ 1.7320508075688772 (fuel-mass I_sp is √3× the photon ceiling).
+fn _ufo_isp_fuel_ratio(mu: float) -> float {
+    if mu <= 0.0 { return _NOCALC_F }
+    let g = 1.0 + 1.0 / mu
+    let b = sqrt(1.0 - 1.0 / (g * g))
+    return g * mu * b
+}
+
+// ufo_rocket_beta(μ): β = √(1−1/γ²) |η=1, γ=1+1/μ — exhaust speed v_e/c.
+//   μ=1 → √3/2 ≈ 0.8660254037844386. β<1 ∀ finite μ>0 (relativistic-safe).
+fn _ufo_rocket_beta(mu: float) -> float {
+    if mu <= 0.0 { return _NOCALC_F }
+    let g = 1.0 + 1.0 / mu
+    return sqrt(1.0 - 1.0 / (g * g))
+}
+
+// ufo_gl_derating(r): 1−r², r=T/Tc — GL two-fluid HTS B-field thermal derating
+//   B(T)/B₀. r=4.2/90 → 0.99782… (Stage-1 magnet EM↔thermal back-coupling).
+fn _ufo_gl_derating(r: float) -> float {
+    return 1.0 - r * r
+}
+
+// ufo_mli_shield(N): 1/(N+1) — ideal multilayer-insulation radiation shield
+//   factor (cryostat radiative heat leak ∝ 1/(N+1)). N=30 → 1/31 ≈ 0.032258…
+fn _ufo_mli_shield(n_layers: float) -> float {
+    if n_layers < 0.0 { return _NOCALC_F }
+    return 1.0 / (n_layers + 1.0)
+}
+
 // float dispatch — fn_name → recompute. 0-arg fns ignore a0/a1/a2/a3
 // (constants); 1-arg fns take a0; 2-arg take a0,a1; 3-arg take a0,a1,a2;
 // 4-arg take a0,a1,a2,a3 (Phase 3 — hagen_poiseuille). Returns _NOCALC_F
@@ -3467,6 +3507,15 @@ fn _recompute_float(fn_name: string, a0: float, a1: float, a2: float, a3: float,
     if fn_name == "phi_demo" {
         return _phi_demo(to_int(a0))
     }
+    // ── UFO — integrated-vehicle closed-form atoms (UFO/sim/decks) ──────
+    //   ufo_isp_fuel_ratio(μ)  1-arg: γμβ |η=1 (F-ANTI-3 effective I_sp / c/g)
+    //   ufo_rocket_beta(μ)     1-arg: √(1−1/γ²) |η=1 (relativistic exhaust β)
+    //   ufo_gl_derating(r)     1-arg: 1−r² (HTS B(T)/B₀ thermal derating)
+    //   ufo_mli_shield(N)      1-arg: 1/(N+1) (cryostat MLI radiation shield)
+    if fn_name == "ufo_isp_fuel_ratio" { return _ufo_isp_fuel_ratio(a0) }
+    if fn_name == "ufo_rocket_beta" { return _ufo_rocket_beta(a0) }
+    if fn_name == "ufo_gl_derating" { return _ufo_gl_derating(a0) }
+    if fn_name == "ufo_mli_shield" { return _ufo_mli_shield(a0) }
     return _NOCALC_F
 }
 
