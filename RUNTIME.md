@@ -59,6 +59,31 @@ multi-month). 현재 47/55 cycle = **7% 완료**.
 `-lc`" 조항은 step 1 끝나면 충족되지만, **runtime.c 폐기 ≠ 그 조항**.
 runtime.c 폐기 = step 3 acceptance. zero-C-dep = step 4 acceptance.
 
+### Go-model reference — steps 2-4 = Go 1.5's "great C→Go translation"
+
+Steps 2-4 follow Go's proven precedent (chosen reference model, 2026-05-26).
+Go 1.0–1.4 had a **C runtime**; **Go 1.5 (2015) mechanically translated the
+entire C runtime to Go and removed the C compiler from the toolchain** — exactly
+the `runtime.c → runtime.hexa` arc here. This de-risks the 700–1300-cycle scale:
+a runtime-of-this-size C→language translation is a solved, shipped problem.
+
+Go parallel → hexa (what "GO 기준" means concretely):
+
+| Go 1.5 | hexa step 2-4 |
+|---|---|
+| runtime written in the host language (Go) | port runtime.c + runtime_core.c → `.hexa`, emitted by hexa's own codegen (no `cc`) |
+| C compiler dropped from the toolchain | step-4 acceptance = `hexac` / `aprime_cc` build with **NO `cc` step** |
+| minimal per-arch `.s` asm STAYS (`runtime/asm_arm64.s`: syscall entry · g context-switch · atomics) | the `@asm` floor STAYS: `svc #0x80` syscall entry · `_start`/argv-envp capture · setjmp/longjmp regsave (#1058 ✅) · memory barriers |
+| bootstrap: build 1.5 with the 1.4 toolchain | keep the `gen1 ≡ gen2` byte-eq fixpoint at EVERY stage (don't break it mid-translation) |
+| macOS: links **libSystem** (Apple gives no stable raw-syscall ABI) | hexa raw-svc's = **0 externs, STRICTER than Go**; keep the win, fall back to libSystem ONLY on an Apple-ABI break (documented FFI-layer-③ retreat, not a regression) |
+
+**Target = zero `.c`, NOT zero `asm`.** The asm floor is irreducible — no
+high-level language emits a raw `svc` without an asm escape (Go=`.s`, Rust=`asm!`,
+hexa=`@asm`); that is the physical floor (`feedback-closure-is-physical-limit`).
+"runtime.c retired" (step 3/4) ≠ "no assembly"; it means **no C source compiled
+into the binary** — the runtime is hexa-emitted-native + a thin `@asm` floor,
+byte-identical to Go's end-state shape.
+
 ## Domain map (Phase 0 → 3 + post)
 
 ```
