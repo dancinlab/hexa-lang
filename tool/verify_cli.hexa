@@ -352,6 +352,11 @@ fn cmd_rubric() {
     println("             rel_p_from_kinetic(T_MeV)   → √(T²+2·T·938.272)       (AD/ELENA decel-ladder pc(T) [MeV/c], ANTIMATTER ⓶감속, 1-arg)")
     println("             transition_factor_1s2s()    → 1/1²−1/2²=3/4           ((anti)H 1S-2S Rydberg level-diff factor, ANTIMATTER ⓻측정, 0-arg)")
     println("             h1s2s_rydberg(R∞,c)         → (3/4)·R∞·c·1e-15 [PHz]  ((anti)H 1S-2S leading freq ≈2.4661 PHz, ANTIMATTER ⓻측정, 2-arg)")
+    println("             cyclotron_freq_hz(q,B,m)    → qB/(2πm) [Hz]           (free cyclotron frequency; p̄ B=1T→15.245 MHz, ANTIMATTER ⓺가둠, 3-arg, 🟢 --tol)")
+    println("             penning_axial_freq(q,U,m,d) → √(qU/(m·d²)) [rad/s]    (Penning trap axial secular ω_z; feeds penning_omega_±, ANTIMATTER ⓺가둠, 4-arg, 🟢 --tol)")
+    println("             h_reduced_mass_factor(mₑ,m) → m/(mₑ+m)                ((anti)H reduced-mass factor μ/mₑ; m_p→0.99945568, ANTIMATTER ⓻측정, 2-arg, 🟢 --tol)")
+    println("             antihydrogen_1s_binding(Ry,μr) → Ry·μr [eV]          ((anti)H 1S binding w/ reduced-mass; 13.6057·0.99946→13.5983 eV, ANTIMATTER ⓻측정, 2-arg, 🟢 --tol)")
+    println("             gbar_free_fall_time(h,g)    → √(2h/g) [s]             (GBAR antihydrogen free-fall (WEP) drop time; 0.2m,9.81→0.2019 s, ANTIMATTER ⓼중력, 2-arg, 🟢 --tol)")
     println("             cyclotron_cool_bexponent(_) → −2 (exact int)          (synchrotron cooling τ_c∝B^(−2) EXACT exponent, ANTIMATTER ⓸냉각, 1-arg dummy, 🔵)")
     println("             cyclotron_cool_bratio(Bhi,Blo) → (Blo/Bhi)²           (cyclotron cooling τ_c(Bhi)/τ_c(Blo) ratio, 5T/1T→0.04, ANTIMATTER ⓸냉각, 2-arg)")
     println("             cyclotron_cool_massspeedup(mh,ml) → (mh/ml)³·1e-9     (cyclotron cooling speedup τ_c(ml)/τ_c(mh)∝(mh/ml)³ Giga-view, m_p/m_e→6.1905, raw≈6.19e9, ANTIMATTER ⓸냉각, 2-arg)")
@@ -1592,6 +1597,88 @@ fn _h1s2s_rydberg(r_inf_per_m: float, c_m_per_s: float) -> float {
     if r_inf_per_m <= 0.0 { return _NOCALC_F }
     if c_m_per_s <= 0.0 { return _NOCALC_F }
     return 0.75 * r_inf_per_m * c_m_per_s * 0.000000000000001
+}
+
+// ── VERIFY-KIT V9 — antimatter trap/spectroscopy closed-forms (2026-05-26) ─
+//   Four more closed-form physics atoms boosting the DEMIURGE antihydrogen-
+//   factory axis (ARXIV A3). All libm-class (division / sqrt) — generic
+//   --tol numerical (🟢), except the reduced-mass factor (exact ratio).
+//   @cite Penning 1936 Physica 3:873 · Brown & Gabrielse 1986 RMP 58:233 ·
+//         Bohr 1913 / Rydberg · GBAR (Pérez & Sacquin 2012 CQG 29:184008).
+
+// Free cyclotron frequency f_c = qB/(2πm)  [Hz] — the laboratory-frame
+// gyration rate of a charge q (C) in field B (T), rest mass m (kg). This is
+// the SI ORDINARY-frequency form (rad/s ω_c = qB/m divided by 2π). Feed
+// CODATA q=1.602176634e-19, m_p=1.67262192369e-27. Source anchors:
+//   proton  B=1 T → 15245186.458209697 Hz (≈15.245 MHz)
+//   proton  B=5 T → 76225932.29104848 Hz
+//   e⁻/e⁺   B=1 T → 27992489872.33304 Hz (≈27.99 GHz, m_e=9.1093837015e-31)
+// 3-arg (q, B, m). Magnitude ~1e7–1e10 ⇒ the absolute ε=1e-9 gate is
+// ULP-meaningless; verify with --tol (🟢 NUMERICAL).
+fn _cyclotron_freq_hz(q_c: float, b_t: float, m_kg: float) -> float {
+    if q_c <= 0.0 { return _NOCALC_F }
+    if b_t <= 0.0 { return _NOCALC_F }
+    if m_kg <= 0.0 { return _NOCALC_F }
+    let two_pi = 2.0 * 3.14159265358979323846
+    return q_c * b_t / (two_pi * m_kg)
+}
+
+// Penning-trap axial (secular) angular frequency ω_z = sqrt(qU/(m·d²)) [rad/s]
+// for a charge q (C) at quadrupole bias U (V), mass m (kg), characteristic
+// trap dimension d (m). This is exactly the ω_z that feeds the existing
+// _penning_omega_plus/minus eigenfrequency atoms — V9 closes the gap from
+// raw (q,U,m,d) to ω_z so the whole trap chain is verify-native. 4-arg.
+// Source anchor (pbar trap U=10 V, d=5 mm, m=m_p, q=e):
+//   penning_axial_freq(1.602176634e-19, 10.0, 1.67262192369e-27, 0.005)
+//     → 6189938.014534115 rad/s — REPRODUCES the ω_z anchor used by the
+//   existing Penning eigenfrequency atoms exactly. ~6e6 ⇒ --tol (🟢).
+fn _penning_axial_freq(q_c: float, u_v: float, m_kg: float, d_m: float) -> float {
+    if q_c <= 0.0 { return _NOCALC_F }
+    if u_v <= 0.0 { return _NOCALC_F }
+    if m_kg <= 0.0 { return _NOCALC_F }
+    if d_m <= 0.0 { return _NOCALC_F }
+    return sqrt(q_c * u_v / (m_kg * d_m * d_m))
+}
+
+// Reduced-mass factor for a one-electron (anti)hydrogenic atom:
+//   μ/m_e = m_nuc / (m_e + m_nuc)
+// the dimensionless correction that multiplies the infinite-nucleus Rydberg
+// energy. 2-arg (m_e, m_nuc in any consistent mass unit). Source anchor
+// (CODATA-2018 m_e=9.1093837015e-31, m_p=1.67262192369e-27):
+//   h_reduced_mass_factor(9.1093837015e-31, 1.67262192369e-27)
+//     → 0.9994556794247658. Exact rational of the two masses but irrational
+//   in value ⇒ --tol (🟢). (For antihydrogen the antiproton mass equals the
+//   proton mass by CPT, so the factor is identical to ordinary H.)
+fn _h_reduced_mass_factor(m_e: float, m_nuc: float) -> float {
+    if m_e <= 0.0 { return _NOCALC_F }
+    if m_nuc <= 0.0 { return _NOCALC_F }
+    return m_nuc / (m_e + m_nuc)
+}
+
+// (anti)hydrogen 1S ground-state binding energy with the reduced-mass
+// correction:  E_1S = Ry_∞ · [m_nuc/(m_e+m_nuc)]  [eV]
+// 2-arg (Ry_eV = infinite-nucleus Rydberg energy in eV, mr = reduced-mass
+// factor from h_reduced_mass_factor). Leading point-nucleus value (no
+// QED/Lamb-shift). Source anchor (Ry_∞=13.605693122994 eV, mr=0.9994556794247658):
+//   antihydrogen_1s_binding(13.605693122994, 0.9994556794247658)
+//     → 13.598287264286832 eV (≈13.5983 eV). ~13.6 ⇒ --tol (🟢).
+fn _antihydrogen_1s_binding(ry_ev: float, mr: float) -> float {
+    if ry_ev <= 0.0 { return _NOCALC_F }
+    if mr <= 0.0 { return _NOCALC_F }
+    return ry_ev * mr
+}
+
+// GBAR antihydrogen free-fall time t = sqrt(2h/g) [s] — the kinematic drop
+// time used to measure ḡ on H̄ (test of the weak equivalence principle for
+// antimatter). 2-arg (h = drop height m, g = gravitational acceleration
+// m/s²). Source anchors (g=9.81):
+//   gbar_free_fall_time(0.2, 9.81) → 0.2019275109384609 s (≈202 ms, ~20 cm drop)
+//   gbar_free_fall_time(1.0, 9.81) → 0.4515236409857309 s
+// ~0.2–0.5 ⇒ within absolute ε but irrational ⇒ --tol (🟢).
+fn _gbar_free_fall_time(h_m: float, g_m_s2: float) -> float {
+    if h_m <= 0.0 { return _NOCALC_F }
+    if g_m_s2 <= 0.0 { return _NOCALC_F }
+    return sqrt(2.0 * h_m / g_m_s2)
 }
 
 // ── Cyclotron (synchrotron) cooling time-constant scalings (ANTIMATTER ⓸냉각)
@@ -3003,6 +3090,32 @@ fn _recompute_float(fn_name: string, a0: float, a1: float, a2: float, a3: float,
     if fn_name == "h1s2s_rydberg" {
         if argc < 2 { return _NOCALC_F }
         return _h1s2s_rydberg(a0, a1)
+    }
+    // ── VERIFY-KIT V9 — antimatter trap/spectroscopy closed-forms ──────
+    //   cyclotron_freq_hz(q, B, m)            3-arg: qB/(2πm) [Hz]
+    //   penning_axial_freq(q, U, m, d)        4-arg: sqrt(qU/(md²)) [rad/s]
+    //   h_reduced_mass_factor(m_e, m_nuc)     2-arg: m_nuc/(m_e+m_nuc)
+    //   antihydrogen_1s_binding(Ry_eV, mr)    2-arg: Ry_eV·mr [eV]
+    //   gbar_free_fall_time(h, g)             2-arg: sqrt(2h/g) [s]
+    if fn_name == "cyclotron_freq_hz" {
+        if argc < 3 { return _NOCALC_F }
+        return _cyclotron_freq_hz(a0, a1, a2)
+    }
+    if fn_name == "penning_axial_freq" {
+        if argc < 4 { return _NOCALC_F }
+        return _penning_axial_freq(a0, a1, a2, a3)
+    }
+    if fn_name == "h_reduced_mass_factor" {
+        if argc < 2 { return _NOCALC_F }
+        return _h_reduced_mass_factor(a0, a1)
+    }
+    if fn_name == "antihydrogen_1s_binding" {
+        if argc < 2 { return _NOCALC_F }
+        return _antihydrogen_1s_binding(a0, a1)
+    }
+    if fn_name == "gbar_free_fall_time" {
+        if argc < 2 { return _NOCALC_F }
+        return _gbar_free_fall_time(a0, a1)
     }
     // ── Cyclotron (synchrotron) cooling time-constant scalings (ANTIMATTER ⓸냉각)
     //   cyclotron_cool_bratio(B_hi, B_lo)      2-arg: (B_lo/B_hi)²   (5,1→0.04)
