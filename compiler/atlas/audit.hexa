@@ -56,7 +56,14 @@ pub struct AuditReport {
     malformed_count: i64,     // nodes whose kind == "" (sentinel)
     breakthrough_count: i64,  // nodes flagged [!]
     hypothesis_count: i64,    // nodes flagged [?]
-    verified_count: i64       // nodes flagged [*]
+    verified_count: i64,      // nodes flagged [*]
+    // Honesty-triad coverage (measure-only): of the formula/law-bearing
+    // kinds (F, L, P, R), how many carry NO citation evidence — neither a
+    // `cite =` substring in raw nor a non-empty verified_by edge. A high
+    // cite_missing_count vs cite_present_count quantifies the gap between
+    // parsed [*] grade markers and recomputed/cited provenance.
+    cite_missing_count: i64,  // F/L/P/R nodes with no cite= and no verified_by
+    cite_present_count: i64   // F/L/P/R nodes with a cite= or verified_by
 }
 
 // --- helpers ---------------------------------------------------------------
@@ -75,7 +82,9 @@ fn _empty_report(scope_name: string) -> AuditReport {
         malformed_count: 0,
         breakthrough_count: 0,
         hypothesis_count: 0,
-        verified_count: 0
+        verified_count: 0,
+        cite_missing_count: 0,
+        cite_present_count: 0
     }
 }
 
@@ -172,6 +181,22 @@ fn _raw_has_hypothesis(raw: string) -> bool {
     return raw.index_of("?]") >= 0
 }
 
+// Formula/law-bearing kinds whose claims should carry citation evidence:
+// F formulas, L laws, P primitives, R relations. (C constants / E
+// experiments / S symmetries / X crossings / Q open questions are excluded
+// from the cite-coverage axis — they are not formula assertions.)
+fn _kind_is_cite_bearing(kind: string) -> bool {
+    return kind == "F" || kind == "L" || kind == "P" || kind == "R"
+}
+
+// A node carries citation evidence if its raw text contains a `cite =`
+// substring OR it has at least one non-empty verified_by (|>) edge.
+fn _node_has_cite(node: AtlasNode) -> bool {
+    if node.raw.index_of("cite =") >= 0 { return true }
+    if node.edges.verified_by.len() > 0 { return true }
+    return false
+}
+
 // --- core audit ------------------------------------------------------------
 
 // audit_nodes — the workhorse. Walks `nodes`, fills `rep`, builds the
@@ -223,6 +248,16 @@ fn _audit_nodes(rep: AuditReport, nodes: array) {
             if _raw_has_verified(enriched.raw) { rep.verified_count = rep.verified_count + 1 }
             if _raw_has_breakthrough(enriched.raw) { rep.breakthrough_count = rep.breakthrough_count + 1 }
             if _raw_has_hypothesis(enriched.raw) { rep.hypothesis_count = rep.hypothesis_count + 1 }
+        }
+
+        // Honesty-triad cite coverage (measure-only): tally F/L/P/R nodes
+        // by whether they carry any citation evidence.
+        if _kind_is_cite_bearing(enriched.kind) {
+            if _node_has_cite(enriched) {
+                rep.cite_present_count = rep.cite_present_count + 1
+            } else {
+                rep.cite_missing_count = rep.cite_missing_count + 1
+            }
         }
 
         i = i + 1
@@ -360,6 +395,10 @@ pub fn audit_to_json(rep: AuditReport) -> string {
     p.push(to_string(rep.hypothesis_count))
     p.push(",\"verified_count\":")
     p.push(to_string(rep.verified_count))
+    p.push(",\"cite_missing_count\":")
+    p.push(to_string(rep.cite_missing_count))
+    p.push(",\"cite_present_count\":")
+    p.push(to_string(rep.cite_present_count))
     p.push("}")
     return p.join("")
 }
@@ -384,6 +423,8 @@ pub fn audit_to_text(rep: AuditReport) -> string {
     p.push("  duplicates:     " + to_string(rep.dup_count) + "\n")
     p.push("  orphan refs:    " + to_string(rep.orphan_count) + "\n")
     p.push("  malformed:      " + to_string(rep.malformed_count) + "\n")
+    p.push("  cite missing (F/L/P/R): " + to_string(rep.cite_missing_count) + "\n")
+    p.push("  cite present (F/L/P/R): " + to_string(rep.cite_present_count) + "\n")
     p.push("  grade histogram:\n")
     let mut i = 0
     while i < len(rep.grade_buckets) {
