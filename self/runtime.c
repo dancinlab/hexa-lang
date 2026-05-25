@@ -16,7 +16,6 @@
 #include <sys/resource.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
-#include <spawn.h>      // TL;DR #2: posix_spawnp shell-free fast path
 #include <errno.h>      // EINTR for waitpid retry loop in spawn reap
 #include <fcntl.h>      // TL;DR #4: F_SETPIPE_SZ on Linux for pipe enlarge
 #include <signal.h>     // 2026-05-06: SIGPIPE SIG_IGN install in stdio init
