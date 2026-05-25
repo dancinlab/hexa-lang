@@ -3,6 +3,35 @@
 Append-only history sister of `TECS-L.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
 
+## 2026-05-25T22:55 — 축 F F9 · NOVEL = verify-infra growth driver (g59 INBOX pipeline) — terminal-empirical synthesis 🟢
+
+- [x] F9 milestone = "NOVEL 진행 중 발견된 fn gap을 g59 INBOX 자동 파이프 → stdlib/verify 보강" → 워크플로 입증으로 종결
+- [x] **테제**: NOVEL 축은 단순 발견 lane이 아니라 verify-infra growth driver. NOVEL 라운드가 hexa-lang calc-fn 의 한계를 노출 → g59 INBOX upstream reflex → 다음 hexa-lang 패치 사이클이 stdlib/compiler/verify 보강 → 다음 라운드에서 grown fn 활용. 라운드 수 = infra growth 입력 lower bound.
+- [x] **canonical 5-step pipeline** (§4):
+  - (1) NOVEL round = `hexa verify --expr` / atlas atom / fence (g5 gate)
+  - (2) honest tier 기록 (🔴/🟡/🟠/⚪ verbatim; over-claim 금지, claim_verify)
+  - (3) g59 INBOX upstream reflex (`INBOX.log.md` prepend: 헤더 + 정량 + 권고 actions + cross-link)
+  - (4) hexa-lang patch (다른 세션 책임)
+  - (5) NOVEL 다음 라운드 (grown infra 활용)
+- [x] **입증 사례 1 — 축 A MF4** (PR #1083 MERGED):
+  - 발견: `dim_cusp_forms(N,2)` vs `gamma0_genus(N)` cross-check N=1..30 → N=1..10 우연 일치(전부 genus=0), **N=11..30 중 20/20 mismatch** (~67%). 고전 정리 dim S_2(Γ_0(N))=genus 는 참 (gamma0_genus 22/22 OK), hexa fn 만 실현 안 함
+  - tier: 🔴 CLOSED-NEGATIVE — "hexa dim_cusp_forms 는 표준 dim S_2 fn 이 아니다"
+  - INBOX 항목 2026-05-25T15:00Z = fn-signature 분리 또는 정의 수정 권고 (`compiler/atlas/atlas_cli.hexa` `_recompute2` / `static_atlas` 감사)
+  - grown infra 미래: MODFORM 후속 milestone (dim S_k k≥2) 즉시 가능 + trace formula 응용 신뢰 바닥 ↑
+- [x] **입증 사례 2 — 축 E E2** (PR #1096 MERGED):
+  - 발견: source `embedded.gen.hexa` 에 E1 fold 한 6개 atom 전부 PRESENT, 그러나 installed `hexa atlas lookup` 은 binary-builtin 우선 읽어 **0/6 findable**. SSOT 명세-동작 갭
+  - tier: 🟡 CITATION — "atlas binary lookup ≠ source SSOT, register fold 가 query 에 반영되려면 hexa 재빌드 필요"
+  - INBOX 항목 2026-05-25T18:00Z = HEXA_ATLAS_EMBED overlay 우선 / register in-memory reflect / opt-in regen 트리거 권고
+  - cross-link: 축 E E3 (PR #1102, register install-dir leak) = 쓰기-측 짝
+  - grown infra 미래: E1 register-then-lookup 1-cycle close + NOVEL F11 (terminal → atlas fold) 전체 신뢰 baseline ↑
+- [x] **이번 세션 측정**: 2 NOVEL 라운드 (MF4 + E2) → 2 verify-infra growth 입력 (INBOX 2건) → 100% rate (single-session 표본, rate claim 아님 honest scope)
+- [x] **honest scope (over-claim 차단)**: NOVEL 라운드가 항상 fn gap 노출하는 것 아님 · INBOX 업스트림이 패치 보장하는 것 아님 (본 세션은 step 1-3 만 입증; step 4-5 는 다른 세션) · NOVEL 만이 infra growth lane 인 것 아님 (RUNTIME/COMPILER/CANON 도 별도)
+- [x] **method**: synthesis-by-anchor (M10/MR1/E3/F8 동일 패턴) — 신규 산술 verify 0건, 2개 기존 PR 앵커
+- [x] **paper 적격 X**: paper_significance 불충족 (workflow doc, 별도 falsifier 없음) → /paper 비대상. paper_gate 통과 안 함이 정상
+- [x] artifact: `.verdicts/tecs-l-novel-inbox-pipe/pipe_workflow.txt` (ASCII) + `TECS-L/docs/f9-inbox-pipe-novel-verify-infra.md` (Korean detail)
+- [x] CLAIMS.tape: 신규 @C `tecs_l_novel_inbox_pipe_workflow` [slug=tecs-l-novel-inbox-pipe group=TECS-L] method=synthesis · status="🟢 empirical workflow — 2 입증 케이스 (MF4 PR #1083, E2 PR #1096)"
+
+
 ## 2026-05-25T22:00 — 축 F F6 · σφ=nτ identity 정체성 [1,100] sweep 보강 — beyond-n=6 NOTABLE n spot-check (M10 closed-form proof 확장 corroboration) — terminal 🔵+🔴
 
 - [x] F6 milestone = "beyond n=6 정체성 재탐색" → M3 [1,100] sweep 의 NOTABLE n>100 보강 spot-check 으로 종결
