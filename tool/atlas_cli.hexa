@@ -989,6 +989,102 @@ fn _migdal_ratio_register(omega_phonon: float, e_fermi: float) -> float {
     return omega_phonon / e_fermi
 }
 
+// ── Superconductivity tranche 2 (RTSC #15 device-side + strong-coupling) ─
+// Allen-Dynes full f1·f2 shape correction · Morel-Anderson μ* · GL coherence
+// length ξ · BCS isotope exponent α · GL κ · London λ_L · Tuyn Hc(T) ·
+// condensation energy U · BCS Δ(0) · Pippard ξ₀. VERBATIM mirror of
+// tool/verify_cli.hexa supercon impls (same CODATA-2018 constants/arithmetic).
+
+// Allen-Dynes strong-coupling Tc (f1·f2·ad_base). 4-arg (λ, ω_log, ω̄₂, μ*).
+fn _allen_dynes_full_register(lam: float, omega_log_k: float, omega2_k: float, mustar: float) -> float {
+    if omega_log_k <= 0.0 { return _NOCALC_F_REGISTER }
+    let denom = lam - mustar * (1.0 + 0.62 * lam)
+    if denom <= 0.0 { return _NOCALC_F_REGISTER }
+    let ad_base = (omega_log_k / 1.2) * exp(0.0 - 1.04 * (1.0 + lam) / denom)
+    let r = omega2_k / omega_log_k
+    let lambda1 = 2.46 * (1.0 + 3.8 * mustar)
+    let lambda2 = 1.82 * (1.0 + 6.3 * mustar) * r
+    let f1 = pow(1.0 + pow(lam / lambda1, 1.5), 1.0 / 3.0)
+    let f2 = 1.0 + (lam * lam) * (r - 1.0) / ((lam * lam) + (lambda2 * lambda2))
+    return f1 * f2 * ad_base
+}
+
+// Morel-Anderson Coulomb pseudopotential μ* = μ/(1+μ·ln(E_F/ω_ph)). 3-arg.
+fn _morel_anderson_mustar_register(mu_bare: float, e_fermi: float, omega_ph: float) -> float {
+    if mu_bare < 0.0 { return _NOCALC_F_REGISTER }
+    if e_fermi <= 0.0 { return _NOCALC_F_REGISTER }
+    if omega_ph <= 0.0 { return _NOCALC_F_REGISTER }
+    return mu_bare / (1.0 + mu_bare * log(e_fermi / omega_ph))
+}
+
+// GL coherence length ξ = sqrt(Φ₀/(2π·Hc2)), Φ₀=2.067833848e-15 Wb. 1-arg.
+fn _coherence_length_register(hc2_zero_t: float) -> float {
+    if hc2_zero_t <= 0.0 { return _NOCALC_F_REGISTER }
+    let phi0 = 2.067833848e-15
+    let two_pi = 6.28318530717958647692
+    return sqrt(phi0 / (two_pi * hc2_zero_t))
+}
+
+// BCS isotope-effect exponent α = -ln(Tc₂/Tc₁)/ln(M₂/M₁). 4-arg.
+fn _isotope_exponent_register(mass1: float, tc1: float, mass2: float, tc2: float) -> float {
+    if mass1 <= 0.0 { return _NOCALC_F_REGISTER }
+    if mass2 <= 0.0 { return _NOCALC_F_REGISTER }
+    if tc1 <= 0.0 { return _NOCALC_F_REGISTER }
+    if tc2 <= 0.0 { return _NOCALC_F_REGISTER }
+    let dln_m = log(mass2 / mass1)
+    if dln_m == 0.0 { return _NOCALC_F_REGISTER }
+    return (0.0 - log(tc2 / tc1)) / dln_m
+}
+
+// Ginzburg-Landau parameter κ = λ_L/ξ (Type-I/II at 1/√2). 2-arg.
+fn _gl_parameter_kappa_register(lambda_l: float, xi: float) -> float {
+    if xi <= 0.0 { return _NOCALC_F_REGISTER }
+    if lambda_l < 0.0 { return _NOCALC_F_REGISTER }
+    return lambda_l / xi
+}
+
+// London penetration depth λ_L = sqrt(m_e/(μ₀·n_s·e²)). 1-arg.
+fn _london_penetration_depth_register(n_s: float) -> float {
+    if n_s <= 0.0 { return _NOCALC_F_REGISTER }
+    let m_e = 9.1093837015e-31
+    let mu0 = 1.25663706212e-6
+    let e_q = 1.602176634e-19
+    return sqrt(m_e / (mu0 * n_s * e_q * e_q))
+}
+
+// Tuyn thermodynamic critical field Hc(T)=Hc0·(1-(T/Tc)²). 3-arg.
+fn _thermo_critical_field_register(hc_zero: float, temp_k: float, tc_k: float) -> float {
+    if tc_k <= 0.0 { return _NOCALC_F_REGISTER }
+    if temp_k >= tc_k { return 0.0 }
+    if temp_k < 0.0 { return _NOCALC_F_REGISTER }
+    let r = temp_k / tc_k
+    return hc_zero * (1.0 - r * r)
+}
+
+// SC condensation energy density U = Bc(0)²/(2μ₀). 1-arg.
+fn _condensation_energy_register(bc_zero_t: float) -> float {
+    let mu0 = 1.25663706212e-6
+    return bc_zero_t * bc_zero_t / (2.0 * mu0)
+}
+
+// BCS zero-T energy gap Δ(0) = 1.764·k_B·Tc. 1-arg.
+fn _bcs_gap_zero_register(tc_k: float) -> float {
+    if tc_k <= 0.0 { return _NOCALC_F_REGISTER }
+    let k_b = 1.380649e-23
+    return 1.764 * k_b * tc_k
+}
+
+// Pippard intrinsic coherence ξ₀ = ħ·v_F/(π·1.764·k_B·Tc). 2-arg.
+fn _pippard_coherence_register(v_fermi: float, tc_k: float) -> float {
+    if v_fermi <= 0.0 { return _NOCALC_F_REGISTER }
+    if tc_k <= 0.0 { return _NOCALC_F_REGISTER }
+    let hbar = 1.054571817e-34
+    let k_b = 1.380649e-23
+    let pi_p = 3.14159265358979323846
+    let gap0 = 1.764 * k_b * tc_k
+    return hbar * v_fermi / (pi_p * gap0)
+}
+
 // ── Bio-physical Phase 3 (demiurge V2 unlock — atlas register mirror) ──
 // Higuchi (1961) sustained-release · Tafel (1905) electrochemical
 // overpotential · Hagen-Poiseuille (1839/1840) laminar flow. Phase 3
@@ -1283,6 +1379,40 @@ fn _recompute_float_register(fn_name: string, a0: float, a1: float, a2: float, a
         if argc < 2 { return _NOCALC_F_REGISTER }
         return _migdal_ratio_register(a0, a1)
     }
+    // ── Superconductivity tranche 2 (RTSC #15 device-side + strong-coupling) ─
+    //   allen_dynes_full(λ, ω_log, ω̄₂, μ*)  4-arg   morel_anderson_mustar(μ,E_F,ω) 3-arg
+    //   coherence_length(Hc2)                1-arg   isotope_exponent(M₁,Tc₁,M₂,Tc₂) 4-arg
+    //   gl_parameter_kappa(λ_L, ξ)           2-arg   london_penetration_depth(n_s)   1-arg
+    //   thermo_critical_field(Hc0, T, Tc)    3-arg   condensation_energy(Bc0)         1-arg
+    //   bcs_gap_zero(Tc)                     1-arg   pippard_coherence(v_F, Tc)       2-arg
+    if fn_name == "allen_dynes_full" {
+        if argc < 4 { return _NOCALC_F_REGISTER }
+        return _allen_dynes_full_register(a0, a1, a2, a3)
+    }
+    if fn_name == "morel_anderson_mustar" {
+        if argc < 3 { return _NOCALC_F_REGISTER }
+        return _morel_anderson_mustar_register(a0, a1, a2)
+    }
+    if fn_name == "coherence_length" { return _coherence_length_register(a0) }
+    if fn_name == "isotope_exponent" {
+        if argc < 4 { return _NOCALC_F_REGISTER }
+        return _isotope_exponent_register(a0, a1, a2, a3)
+    }
+    if fn_name == "gl_parameter_kappa" {
+        if argc < 2 { return _NOCALC_F_REGISTER }
+        return _gl_parameter_kappa_register(a0, a1)
+    }
+    if fn_name == "london_penetration_depth" { return _london_penetration_depth_register(a0) }
+    if fn_name == "thermo_critical_field" {
+        if argc < 3 { return _NOCALC_F_REGISTER }
+        return _thermo_critical_field_register(a0, a1, a2)
+    }
+    if fn_name == "condensation_energy" { return _condensation_energy_register(a0) }
+    if fn_name == "bcs_gap_zero" { return _bcs_gap_zero_register(a0) }
+    if fn_name == "pippard_coherence" {
+        if argc < 2 { return _NOCALC_F_REGISTER }
+        return _pippard_coherence_register(a0, a1)
+    }
     // ── Bio-physical Phase 3 (atlas L2 unblock — 4-arg lane) ──────────
     //   higuchi(k_H, t)                   2-arg: k_H * sqrt(t)
     //   tafel(a, b, j)                    3-arg: a + b * log10(j)
@@ -1373,6 +1503,12 @@ fn _is_float_fn_register(fn_name: string) -> bool {
         || fn_name == "allen_dynes_tc" || fn_name == "mcmillan_tc"
         || fn_name == "bcs_gap_ratio" || fn_name == "lambda_eliashberg"
         || fn_name == "beenet_grid_bins" || fn_name == "migdal_ratio"
+        // Superconductivity tranche 2 (RTSC #15 device-side + strong-coupling):
+        || fn_name == "allen_dynes_full" || fn_name == "morel_anderson_mustar"
+        || fn_name == "coherence_length" || fn_name == "isotope_exponent"
+        || fn_name == "gl_parameter_kappa" || fn_name == "london_penetration_depth"
+        || fn_name == "thermo_critical_field" || fn_name == "condensation_energy"
+        || fn_name == "bcs_gap_zero" || fn_name == "pippard_coherence"
         // Bio-physical Phase 3 (atlas L2 unblock — 4-arg lane):
         || fn_name == "higuchi" || fn_name == "tafel" || fn_name == "hagen_poiseuille"
         // TTR-ORAL / TTR-LAC bundle (topical PK + laser optics · INBOX T22:35Z):
