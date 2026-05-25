@@ -2347,6 +2347,26 @@
   status = "🟢 SUPPORTED-NUMERICAL — built + e2e tested (verdict persisted verbatim). register COMPUTES 14.5511 (no more 'no calculator path'); RTSC absorption unblocked. Round-tolerance ε=1e-9 vs literature-rounded value (14.55 → 🔴) is a SEPARATE INBOX item, out of V1 scope. Terminal · paper-eligible (Δ vs baseline = register absorption capability the prior CLI lacked for ≥3-arg float fns)."
 
 # ───────────────────────────────────────────────────────────────────────
+# VERIFY-KIT — verify-kit-tol (slug · group=VERIFY-KIT · V3)
+# CLOSES the round-tolerance INBOX item (2026-05-26T01:30Z item 3) that V1
+# explicitly deferred as out-of-scope. Adds an OPT-IN `--tol <eps>` flag to
+# `hexa verify --expr`: when |calc − expected| > strict ε=1e-9 but ≤ <eps>,
+# the verdict flips from a SPURIOUS 🔴 to 🟢 SUPPORTED-NUMERICAL (round-tolerant)
+# — the literature 6-digit-rounding case (Tc=14.55 vs the engine's 14.5511).
+# FALSIFICATION INTEGRITY: --tol is EXPLICIT (default = no tolerance = strict);
+# a 🔴 BEYOND the stated <eps> STAYS 🔴 (allen_dynes_tc … 99.0 --tol 0.01 → 🔴).
+# Tolerance is for literature rounding, NOT a launder for failures. Both float
+# (cmd_expr_float) + int (cmd_expr) verdict paths gain the band; round-tolerant
+# 🟢 does NOT auto-absorb (the atlas folds the engine's exact value, V1).
+
+@C verify_kit_tol := "VERIFY-KIT V3 round-tolerance `--tol <eps>`: `hexa verify --expr allen_dynes_tc 0.6150 591.18 0.10 14.55 --tol 0.01` → 🟢 SUPPORTED-NUMERICAL (round-tolerant; calc=14.5511 vs literature-rounded 14.55, |Δ|=0.00108 ≤ tol). OPT-IN only: same cmd WITHOUT --tol → 🔴 (strict ε=1e-9, unchanged); BEYOND tol (… 99.0 --tol 0.01) → 🔴 (NOT laundered). Int path too (sigma 6 13 --tol 2 → 🟢; sigma 6 20 --tol 2 → 🔴). Regressions clean (sigma 6 12 → 🔵 exact). Closes INBOX 2026-05-26T01:30Z item(3) round-tolerance deferred by V1" :: formula [slug=verify-kit-tol group=VERIFY-KIT]
+  method = "tolerance"
+  cmd    = "hexa verify --expr allen_dynes_tc 0.6150 591.18 0.10 14.55 --tol 0.01  (build = bash tool/build_hexa_verify.sh)"
+  raw    = ".verdicts/verify-kit-tol/v3_tol.txt"
+  src    = "tool/verify_cli.hexa (_has_tol + _get_tol + _strip_tol helpers; cmd_expr_float + cmd_expr round-tolerance band; --tol stripped before arity detection). bin/hexa-verify built mac arm64; full --tol matrix tested (within-tol 🟢 / strict 🔴 / beyond-tol 🔴)."
+  status = "🟢 SUPPORTED-NUMERICAL — built (bin/hexa-verify) + tested (verdict persisted verbatim). Round-tolerant 🟢 within opt-in --tol; strict 🔴 unchanged when --tol absent; beyond-tol 🔴 NOT laundered (falsification integrity preserved). Terminal · paper-eligible (Δ vs baseline = round-tolerant comparison the prior strict-only CLI lacked for literature-rounded values)."
+
+# ───────────────────────────────────────────────────────────────────────
 # OEIS — oeis-atlas-fold (slug · group=OEIS · O4)
 # Atlas-fold of the 7 distinct 🔵 verified theorems from O3 (336 K=20 survivors
 # → 8 🔵 / 7 distinct: sigma↔A000203, tau/sigma_0↔A000005, phi↔A000010,
