@@ -579,7 +579,10 @@ HexaVal hexa_net_read_raw(HexaVal fd_val, HexaVal len_val) {
  * not being named `getppid`). Returns the real uid as Int. RFC 093 §6
  * uses it for uid-scoped socket paths + root-daemon refuse. */
 HexaVal hexa_os_getuid(void) {
-    return hexa_int((int64_t)getuid());
+    // Route through the svc-trap helper (self/runtime.c hxlcl_getuid,
+    // SYS_GETUID=24) instead of libc getuid() — drops the `_getuid`
+    // extern. net.c is #include'd into the runtime.c TU after the helper.
+    return hexa_int((int64_t)hxlcl_getuid());
 }
 
 /* net_read_bytes(fd, max) — like net_read but returns the bytes as a

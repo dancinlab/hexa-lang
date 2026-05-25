@@ -69,6 +69,7 @@ static long hxlcl_read(int fd, void *buf, unsigned long n);
 static long hxlcl_write(int fd, const void *buf, unsigned long n);
 static int  hxlcl_close(int fd);
 static int  hxlcl_getpid(void);
+static int  hxlcl_getuid(void);
 static int  hxlcl_dup2(int oldfd, int newfd);
 static int  hxlcl_pipe(int fds[2]);
 static int  hxlcl_fork(void);
@@ -1010,6 +1011,7 @@ static int hxlcl_pthread_join(void *thread, void **retval);
 #define HXLCL_SYS_FCNTL    92
 #define HXLCL_SYS_SELECT   93
 #define HXLCL_SYS_GETPID   20
+#define HXLCL_SYS_GETUID   24
 #define HXLCL_SYS_IOCTL    54
 #define HXLCL_SYS_POLL    230
 #define HXLCL_SYS_FSTAT   339
@@ -1169,6 +1171,13 @@ static int __attribute__((noinline)) hxlcl_close(int fd) {
 }
 static int __attribute__((noinline)) hxlcl_getpid(void) {
     return (int)_hxlcl_syscall1(HXLCL_SYS_GETPID, 0);
+}
+// getuid(2) — SYS_GETUID=24. Like getpid, this BSD syscall cannot fail
+// (no errno / carry-flag path), so the plain _hxlcl_syscall1 trap (not the
+// _cf carry-flag variant) is correct. Drops the libc `_getuid` extern that
+// net.c's os_getuid() pulled in (RUNTIME Tier-A.4 POSIX direct svc trap).
+static int __attribute__((noinline)) hxlcl_getuid(void) {
+    return (int)_hxlcl_syscall1(HXLCL_SYS_GETUID, 0);
 }
 // cycle 66 — libc dup2 (same carry-flag issue as close).
 extern int dup2(int oldfd, int newfd);

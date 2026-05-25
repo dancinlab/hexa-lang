@@ -1,5 +1,8 @@
 # 🛸 RUNTIME — hexa-native runtime rewrite SSOT
 
+@goal: nm aprime shows at most 5 kernel syscall stub U-underscore lines — zero libc, zero libm, zero libsystem
+
+
 > Per-domain root file (CLAUDE.md domain-meta-domain principle).
 > Sibling to `COMPILER.md` (compiler self-host) — this file owns the
 > RUNTIME layer's hexa-native journey (~16,809 LoC of C → hexa source).
@@ -1037,6 +1040,44 @@ opt-in via `git config core.hooksPath .githooks`) + project.tape @D
   - `stdlib/runtime/ctype.hexa` — `rt_str_join_str` O(n²)→O(n) byte-collect
   - `RUNTIME.md` (this entry)
 - Acceptance line: `cycle 68: atlas-loop-smoke CLOSED · root=ctype.hexa:684 rt_str_join_str (O(n²) join) · smoke PASS (exit 42) · PR #(this)`
+
+### 2026-05-25 — cycle 75: `_getuid` svc-trap removal (Tier-A.4 POSIX) — CLOSED
+
+- ✅ cycle 75 — ground-truth baseline re-measured at worktree HEAD
+  (`6617e7a4`, post-r16) = **30** undefined externs (NOT the cycle-65
+  "≤5" — the r16 / GO-domain series re-introduced the network + exec/pty
+  stubs cycle 61 had closed, plus several were *intentionally* restored to
+  real libc for correctness: `setsockopt` (M10), `nanosleep` (M16),
+  `socket`). `_getuid` removed via svc-trap → **30 → 29** (−1).
+- Closed: `_getuid`. The single real call site `net.c:582
+  hexa_os_getuid() → (int64_t)getuid()` re-pointed to a new
+  `hxlcl_getuid()` (self/runtime.c) = `_hxlcl_syscall1(HXLCL_SYS_GETUID
+  /*24*/, 0)`, structurally identical to the existing `hxlcl_getpid`.
+  getuid(2) cannot fail (no errno / carry-flag path), so the plain
+  `_hxlcl_syscall1` trap (not the `_cf` variant) is correct. net.c is
+  `#include`'d into the runtime.c TU (line 12126) AFTER the helper, so the
+  explicit call routes directly — no fragile `#define` layer.
+- Why lowest-risk: pure no-arg syscall, no FP/correctness sensitivity,
+  not one of the GO-domain real-libc restorations, no clang-builtin
+  re-emission trap (unlike memset/memcpy/strcpy family). 13-line surgical
+  source change, runtime.c TU only.
+- Verification (in-worktree build, no pool-route hijack):
+  `tool/build_aprime.sh` → 1,244,352 B Mach-O arm64, atlas `loaded 16101
+  nodes`, smoke `exit(6*7)==42` PASS. `nm | grep ' U _' | wc -l`: 30 → 29,
+  `_getuid` absent from the after-list (verbatim in PR body).
+- Files touched (per @D `wipe_guard`, subject mentions `runtime` only;
+  +13/-1 lines, well under threshold):
+  - `self/runtime.c` — `HXLCL_SYS_GETUID 24` define + forward decl +
+    `hxlcl_getuid` body next to `hxlcl_getpid`
+  - `self/native/net.c` — `hexa_os_getuid` call site `getuid()` →
+    `hxlcl_getuid()`
+  - `RUNTIME.md` (this entry)
+- Acceptance line: `cycle 75: getuid-svc-trap CLOSED · closed=[_getuid] ·
+  externs 30→29 · correctness PASS (atlas 16101 + smoke 42) · PR #(this)`
+- Doc-lag note: many Tier-A.1/A.4/A.6 `- [ ]` checkboxes are STALE in
+  both directions — already-gone (libm, ctype, pthread, most syscalls)
+  AND regressed-back (network/exec/pty stubs cycle 61 logged closed are
+  externs again at HEAD). Reconciliation table in the PR body.
 
 ### 2026-05-25 — cycle 74: bare `print` (no-newline) arm64-codegen resync — CLOSED
 
