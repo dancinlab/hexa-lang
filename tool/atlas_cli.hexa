@@ -29,6 +29,7 @@
 use "compiler/atlas/parser"
 use "compiler/atlas/merger"
 use "compiler/atlas/static_index"
+use "compiler/atlas/cascade"       // cascade_candidates / cascade_to_text — read-only cascade-invalidation query (R5 #1026)
 use "compiler/atlas/embed_fold"    // embed_fold_into (kind,id dedup + atomic write)
 use "compiler/atlas/calc_dispatch" // calc_eps / calc_is_float_fn — float-recompute SSOT (shared w/ verify_cli)
 use "self/stdlib/fs"               // read_file_safe (used by cmd_append_witness)
@@ -47,7 +48,7 @@ fn _slice_args() -> array {
     let mut i = 1
     while i < n {
         let a = to_string(av[i])
-        if a == "lookup" || a == "dump" || a == "stats" || a == "hash" || a == "register" || a == "export" || a == "reverify" || a == "--help" || a == "-h" || a == "help" {
+        if a == "lookup" || a == "dump" || a == "stats" || a == "hash" || a == "register" || a == "export" || a == "reverify" || a == "cascade" || a == "--help" || a == "-h" || a == "help" {
             let mut out = []
             let mut j = i
             while j < n {
@@ -2375,6 +2376,72 @@ fn cmd_reverify(rest: array) {
     }
 }
 
+// cmd_cascade — `hexa atlas cascade <id> [--format=json]`. READ-ONLY query:
+// given a HYPOTHETICALLY falsified node id, list every node whose structured
+// edge (depends_on / verified_by / equivalents / derives) cites it — the
+// cascade-invalidation candidates that would need re-examination. Never
+// tombstones / mutates anything (the heavyweight RFC-017 §5e machinery is
+// retired + out of scope — see compiler/atlas/cascade.hexa header). Wraps the
+// R5 cascade query (PR #1026): we enrich the static atlas ONCE (so edges are
+// backfilled from raw), reuse that list both to confirm the id exists and to
+// run cascade_candidates against it.
+fn cmd_cascade(rest: array) {
+    let mut id = ""
+    let mut fmt = "text"
+    let mut i = 0
+    while i < len(rest) {
+        let a = to_string(rest[i])
+        if a == "--format=json" || a == "--json" { fmt = "json" }
+        else if a == "--format=text" { fmt = "text" }
+        else if len(id) == 0 && !a.starts_with("--") { id = a }
+        i = i + 1
+    }
+    if len(id) == 0 {
+        println("usage: hexa atlas cascade <id> [--format=json]")
+        println("       lists nodes whose edges cite <id> (cascade-invalidation candidates)")
+        exit(2)
+    }
+    // Enrich the static atlas once; reuse for existence check + cascade query.
+    let all = atlas_list()
+    let enriched = []
+    let mut exists = false
+    let mut j = 0
+    while j < len(all) {
+        let en = atlas_enrich(all[j])
+        if en.id == id { exists = true }
+        enriched.push(en)
+        j = j + 1
+    }
+    if !exists {
+        if fmt == "json" {
+            println("{\"falsified\":\"" + _jq(id) + "\",\"found\":false,\"count\":0,\"candidates\":[]}")
+        } else {
+            println("# unknown id: " + id + " (no such node in the atlas)")
+        }
+        exit(1)
+    }
+    let hits = cascade_candidates(id, enriched)
+    if fmt == "json" {
+        let mut parts = []
+        parts.push("{\"falsified\":\"" + _jq(id) + "\",\"found\":true,\"count\":" + to_string(len(hits)) + ",\"candidates\":[")
+        let mut k = 0
+        while k < len(hits) {
+            let h = hits[k]
+            if k > 0 { parts.push(",") }
+            parts.push("{\"id\":\"" + _jq(h.id) + "\",\"kind\":\"" + _jq(h.kind) + "\",\"via\":\"" + _jq(h.via) + "\"}")
+            k = k + 1
+        }
+        parts.push("]}")
+        println(parts.join(""))
+        return
+    }
+    if len(hits) == 0 {
+        println("cascade: if " + id + " were FALSIFIED, no cascade candidates (0 nodes cite it).")
+        return
+    }
+    print(cascade_to_text(id, hits))
+}
+
 fn cmd_help() {
     println("hexa atlas — atlas SSOT surface (embedded.gen.hexa read + direct-fold write)")
     println("")
@@ -2409,6 +2476,12 @@ fn cmd_help() {
     println("                          UNVERIFIABLE (ε=1e-9). Closes the 'frozen at registration,")
     println("                          never re-verified' gap (META-SIGNAL ②). exit 1 if any drift.")
     println("")
+    println("cascade subcommand (read-only cascade-invalidation query; no tombstone · no mutate):")
+    println("  cascade <id> [--format=json]")
+    println("                          if <id> were HYPOTHETICALLY falsified, list every node whose")
+    println("                          edge (depends_on/verified_by/equivalents/derives) cites it —")
+    println("                          the cascade candidates to re-examine. unknown id → exit 1.")
+    println("")
     println("SSOT: compiler/atlas/embedded.gen.hexa (set $HEXA_ATLAS_EMBED=/abs/dir to override).")
 }
 
@@ -2432,6 +2505,7 @@ fn main() {
     else if sub == "register" { cmd_register(rest) }
     else if sub == "export" { cmd_export(rest) }
     else if sub == "reverify" { cmd_reverify(rest) }
+    else if sub == "cascade" { cmd_cascade(rest) }
     else if sub == "help" || sub == "--help" || sub == "-h" { cmd_help() }
     else {
         println("error: unknown subcommand: " + sub)
