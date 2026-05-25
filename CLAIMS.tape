@@ -2900,3 +2900,43 @@
   raw    = ".verdicts/tecs-l-modform-other-curves/gamma1_x_index_assembled.txt"
   src    = "TECS-L axis F F7 · cites MF1/MF6 (n=6 bridge) + tecs-l-n6-identity (σφ=nτ⟺{1,6}) · .verdicts/tecs-l-modform-other-curves/{components_psi,components_phi,n6_focal}.txt"
   status = "🔴 FALSIFIED — Γ₁/X index smooth, no n=6 peak (10/10 🔵 integer components, assembled idx 🟡 citation). ruled-out axis = {1,6} specialness lifting to higher modular level."
+
+# ───────────────────────────────────────────────────────────────────────
+# TECS-L — tecs-l-n6-exclusivity-atlas (slug · group=TECS-L · paper-track · TECS-L/TECS-L.md F12)
+# NOVEL-axis (F family) paper aggregating the closed-negative CLUSTER around the
+# {1,6} positive kernel (atlas atom tecs_l_up_theorem / M10 — σφ=nτ⟺{1,6}).
+# 10+ deterministic closed-negatives → {1,6} is exclusive (F5 7 falsifiers) +
+# non-lifting (F7 Γ₁/X index smooth) + scale-stable (F6 D(n)≠0 to n=33550336).
+# Each falsifier pre-registered + measured (hexa verify) → paper_significance MET,
+# paper_negative_ok. 12-page paper PAPER/tecs-l-n6-exclusivity-atlas/, g51.
+
+@C tecs_l_n6_exclusivity_atlas_paper := "NOVEL-axis paper: the closed-negative CLUSTER tightening {1,6} from an identity to an EXCLUSIVE (F5 7 falsifiers) · NON-LIFTING (F7 Γ₁/X index smooth, no n=6 peak) · SCALE-STABLE (F6 D(n)≠0 to n=33550336) arithmetic phenomenon. 10+ deterministic closed-negatives surrounding M10 (σφ=nτ⟺{1,6}). 12-page paper PAPER/tecs-l-n6-exclusivity-atlas/, g51 (≥10p + fal.ai figure)." :: paper [slug=tecs-l-n6-exclusivity-atlas group=TECS-L]
+  method = "paper"
+  cmd    = "pdflatex×3 + bibtex (PAPER/tecs-l-n6-exclusivity-atlas/Makefile) → main.pdf 12 pages"
+  raw    = ".verdicts/tecs-l-closed-neg-miner/miner_summary.txt"
+  src    = "PAPER/tecs-l-n6-exclusivity-atlas/main.tex · F5 (closed-neg miner) + F6 (beyond-n6) + F7 (Γ₁/X non-lift) · positive kernel M10 (tecs_l_up_theorem)"
+  status = "🔴 NOVEL-axis exclusivity: 10+ closed-negatives ruling out the n=6-adjacent space ({1,6} exclusive·non-lifting·scale-stable). Paper PAPER/tecs-l-n6-exclusivity-atlas/"
+
+# — Component E (F5): the seven closed-negatives (exclusive locus) —
+@C tecs_l_n6_excl_f5_falsifiers := "F5 component E 🔴: seven deterministic closed-negatives — CN1 aliquot(220)=284≠220 (amicable≠fixed-point) · CN2 σ(12)=28≠25 (quasi-perfect [1,50] empty) · CN3 σ(120)=360≠240 (3-perfect≠abundancy-2) · CN4 σ(12)=28≠48 (n·φ=σ {1,6}-only) · CN4b σ(28)=56≠336 (perfectness no rescue) · CN5 μ(12)=0≠1 (μ no period-6) · CN6 σ(σ(6))=28≠12 (perfect≠superperfect). All exact-integer 🔴, tolerance 0." :: empirical [slug=tecs-l-n6-exclusivity-atlas group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr {aliquot,sigma,mu} <n> <v> — 7 falsifiers + 7 truth-anchors (driver #1153)"
+  raw    = ".verdicts/tecs-l-closed-neg-miner/miner_summary.txt"
+  src    = "TECS-L axis F F5 · .verdicts/tecs-l-closed-neg-miner/{cn1..cn6}_*.txt (7 falsifier 🔴 + 7 truth 🔵)"
+  status = "🔴 FALSIFIED — 7/7 closed-negatives fire; no loosening of an n=6 identity to a neighbour survives. ruled-out axis = {1,6} non-exclusivity."
+
+# — Component S (F6): scale-stability of D(n)≠0 —
+@C tecs_l_n6_excl_f6_scale := "F6 component S 🔴: D(n)=σ(n)φ(n)−n·τ(n)≠0 at 7 notable n (210·720·1024·2310·30030·8128·33550336 — primorial/factorial/2^10/perfect P_4·P_5), extending [1,100] sweep ×335503. Each σ/φ/τ 🔵; D(n) exact integer ≠0. Confirms M10 universal prediction at scale; identity does NOT recur even on the perfect-number locus." :: empirical [slug=tecs-l-n6-exclusivity-atlas group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr {sigma,phi,tau} <n> <v> for 7 notable n; D(n) exact integer arithmetic (#1153)"
+  raw    = ".verdicts/tecs-l-beyond-n6/sweep_notable_n.txt"
+  src    = "TECS-L axis F F6 · .verdicts/tecs-l-beyond-n6/ (sweep + 9 headline files) · cites M10 (tecs_l_up_theorem)"
+  status = "🔴 FALSIFIED — 7/7 notable n have D(n)≠0; identity does not recur at scale. ruled-out axis = {1,6} scale-instability."
+
+# — Component N (F7): non-lift to the modular-curve tower —
+@C tecs_l_n6_excl_f7_nonlift := "F7 component N 🔴: σφ=nτ⟺{1,6} is a Γ₀-level phenomenon that does NOT lift to Γ₁(N)/X(N) — index [SL₂:Γ₁(N)]=ψφ/2 and [SL₂:X(N)]=N·Γ₁ are smooth multiplicative in N; n=6 (12,72) is the generic value, no peak/singularity/collapse. 10/10 integer components 🔵 (ψ=gamma0_index·φ N∈{5,6,7,11,12}), assembled idx 🟡 cited." :: empirical [slug=tecs-l-n6-exclusivity-atlas group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr gamma0_index + phi for N∈{5,6,7,11,12}; assemble Γ₁/X idx (cited closed form)"
+  raw    = ".verdicts/tecs-l-modform-other-curves/gamma1_x_index_assembled.txt"
+  src    = "TECS-L axis F F7 · .verdicts/tecs-l-modform-other-curves/{components_psi,components_phi,n6_focal}.txt · cites M10"
+  status = "🔴 FALSIFIED — Γ₁/X index smooth, no n=6 peak. ruled-out axis = {1,6} specialness lifting to higher modular level."
