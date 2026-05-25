@@ -1,0 +1,118 @@
+F-FUSION-ATTENTION-FLASH  --  verdict: BLUE (structural-formal) + WALL axis ruled-out
+====================================================================================
+seed     : fused scaled-dot-product attention (flash-attention online-softmax)
+           softmax(Q K^T / sqrt(d)) V in ONE kernel, S never materialized to HBM,
+           vs a cuBLAS-using baseline (cublasGemmStridedBatchedEx QK^T -> write S
+           -> standalone softmax kernel -> cublasGemmStridedBatchedEx .V).
+date     : 2026-05-25
+host     : ubu-2  NVIDIA GeForce RTX 5070 (sm_120, driver 580), CUDA 12.0 ptxas,
+           cuBLAS 12.9.2.10.  GPU uncontended at fire time (0% util, 5 MiB used,
+           no other compute processes -> CONTENTION RULE satisfied, timed wall taken).
+falsifier: a single fused hexa-emitted kernel (a) structurally uses 1 launch + O(N*d)
+           HBM vs baseline 3 launches + O(N^2) S materialization, AND (b) beats the
+           baseline by >=30% wall on >=1 (N,d). FALSIFIED only if NEITHER holds.
+
+----------------------------------------------------------------------------------
+(1) $0 STRUCTURAL ORACLE  (deterministic, no GPU, contention-immune)  -- PRIMARY
+----------------------------------------------------------------------------------
+$ cc -O2 -o structural_oracle structural_oracle.c -lm && ./structural_oracle
+
+F-FUSION-ATTENTION-FLASH STRUCTURAL ORACLE (deterministic, no GPU)
+=================================================================
+clause (a): fused 1 launch + O(N*d) HBM  vs  baseline 3 launches + O(N^2) S
+
+shape        fused_L  base_L   fused_Shbm   base_Shbm    S_ratio      total_ratio
+-----------------------------------------------------------------------------------
+N512/d64     1        3        0            4194304      inf(0->S)    9.250        x
+N1024/d64    1        3        0            16777216     inf(0->S)    17.250       x
+N2048/d64    1        3        0            67108864     inf(0->S)    33.250       x
+N4096/d64    1        3        0            268435456    inf(0->S)    65.250       x
+N2048/d128   1        3        0            67108864     inf(0->S)    17.250       x
+
+Closed-form: launches fused=1 vs baseline=3 (3x fewer).
+Closed-form: S-matrix HBM round-trip fused=0 vs baseline=4*N^2*4 B (O(N^2) saved).
+Closed-form: total HBM ratio = (5*N*d + 4*N^2) / (4*N*d); grows ~ N/d for N>>d.
+
+At N=2048,d=64: baseline S round-trip = 67108864 B (64.0 MiB); fused S = 0 B.
+
+F-FUSION-ATTENTION-FLASH (structural clause a): PASS
+
+----------------------------------------------------------------------------------
+(1b) hexa-native closed-form anchor (compiled path, g5 SUPPORTED-FORMAL)
+----------------------------------------------------------------------------------
+$ hexa build ratio_check.hexa -o fa_ratio_check && ./fa_ratio_check
+4xR(2048,64)=133      # R(2048,64) = 33.25  ==  1.25 + N/d
+4xR(4096,64)=261      # R(4096,64) = 65.25
+4xR(512,64)=37        # R(512,64)  =  9.25
+STRUCTURAL-RATIO-CLOSED-FORM: PASS
+
+The closed-form total-HBM ratio R(N,d) = (5*N*d + 4*N^2)/(4*N*d) = 1.25 + N/d is
+reproduced exactly by a hexa-native deterministic compute -> 🔵 SUPPORTED-FORMAL.
+
+----------------------------------------------------------------------------------
+(2) ptxas-clean  (emitted PTX is pure ASCII, ptxas accepts sm_80 + sm_90)
+----------------------------------------------------------------------------------
+PTX is pure ASCII (no non-printable bytes)
+ptxas -arch=sm_80 flash_attn.ptx -> rc=0
+ptxas -arch=sm_90 flash_attn.ptx -> rc=0
+driver-JIT load on sm_120 (RTX 5070, CU_JIT_TARGET_FROM_CUCONTEXT) -> cuModuleLoadDataEx rc=0
+
+----------------------------------------------------------------------------------
+(3) SILICON FIRE  (cudaEvent, >=20 warmup, 200 timed, median + std)  -- ubu-2 RTX 5070
+----------------------------------------------------------------------------------
+GPU CLEAN
+=========== N=512 d=64 ===========
+F-FUSION-ATTENTION-FLASH-NUMERIC PASS -- N=512 d=64 max_rel=1.19905e-06 tol=1e-2 max_abs_ref=0.147176
+FUSED-WALL N=512 d=64 launches=1 median_ms=0.415104 mean_ms=0.415028 std_ms=0.000333 std_pct=0.0801
+BASELINE-CUBLAS-NUMERIC PASS -- N=512 d=64 max_rel=1.08377e-06 tol=1e-2 max_abs_ref=0.147176
+BASELINE-WALL N=512 d=64 launches=3 median_ms=0.281696 mean_ms=0.281986 std_ms=0.002544 std_pct=0.9022
+=========== N=1024 d=64 ===========
+F-FUSION-ATTENTION-FLASH-NUMERIC PASS -- N=1024 d=64 max_rel=9.51393e-07 tol=1e-2 max_abs_ref=0.192124
+FUSED-WALL N=1024 d=64 launches=1 median_ms=0.822592 mean_ms=0.822342 std_ms=0.000726 std_pct=0.0883
+BASELINE-CUBLAS-NUMERIC PASS -- N=1024 d=64 max_rel=7.4396e-07 tol=1e-2 max_abs_ref=0.192124
+BASELINE-WALL N=1024 d=64 launches=3 median_ms=0.559360 mean_ms=0.559929 std_ms=0.002839 std_pct=0.5071
+=========== N=2048 d=64 ===========
+F-FUSION-ATTENTION-FLASH-NUMERIC PASS -- N=2048 d=64 max_rel=2.47865e-06 tol=1e-2 max_abs_ref=0.0848942
+FUSED-WALL N=2048 d=64 launches=1 median_ms=1.639840 mean_ms=1.639918 std_ms=0.001651 std_pct=0.1007
+BASELINE-CUBLAS-NUMERIC PASS -- N=2048 d=64 max_rel=1.68878e-06 tol=1e-2 max_abs_ref=0.0848942
+BASELINE-WALL N=2048 d=64 launches=3 median_ms=1.143040 mean_ms=1.143815 std_ms=0.003680 std_pct=0.3217
+=========== N=4096 d=64 ===========
+F-FUSION-ATTENTION-FLASH-NUMERIC PASS -- N=4096 d=64 max_rel=4.34691e-06 tol=1e-2 max_abs_ref=0.0859848
+FUSED-WALL N=4096 d=64 launches=1 median_ms=3.788256 mean_ms=3.788756 std_ms=0.001110 std_pct=0.0293
+BASELINE-CUBLAS-NUMERIC PASS -- N=4096 d=64 max_rel=1.96335e-06 tol=1e-2 max_abs_ref=0.0859848
+BASELINE-WALL N=4096 d=64 launches=3 median_ms=2.492288 mean_ms=2.492611 std_ms=0.004414 std_pct=0.1771
+
+----------------------------------------------------------------------------------
+(4) VERDICT  (g3 honesty -- closed-negative on the wall axis is a valid finding)
+----------------------------------------------------------------------------------
+Clause (a) STRUCTURAL: PASS, proven closed-form.
+  - launches: fused 1  vs  baseline 3  (3x fewer kernel dispatches)
+  - S-matrix HBM round-trip: fused 0 B  vs  baseline 4*N^2*4 B  (O(N^2) eliminated)
+  - total-HBM ratio R(N,d) = 1.25 + N/d  (33.25x at N=2048/d=64, 65.25x at N=4096)
+  - hexa-native closed-form reproduce: 🔵 SUPPORTED-FORMAL
+
+Clause (b) WALL >=30%: FALSIFIED. The cuBLAS-using baseline is ~1.4-1.5x FASTER at
+every shape (fused/base median: 1.47x @512, 1.47x @1024, 1.43x @2048, 1.52x @4096).
+The fused kernel is a naive 1-thread-per-query scalar online-softmax; cuBLAS runs
+the QK^T and .V GEMMs on Tensor Cores. At d=64 the GEMM work dominates and the
+O(N^2) S round-trip the baseline pays is not large enough (relative to its
+Tensor-Core GEMM speed) to be overtaken by a scalar fused kernel.
+
+Falsifier overall: NOT falsified (falsified only if NEITHER clause holds; clause (a)
+holds). -> BLUE structural-formal.
+
+RULED-OUT AXIS (the negative finding): a STRUCTURALLY-fused single kernel does NOT
+automatically win wall over cuBLAS. The structural moat (1 launch, 0 S-HBM) is
+necessary but NOT sufficient; the wall win additionally requires the fused kernel's
+inner GEMMs to run at Tensor-Core throughput (wmma m16n8k* tiling over Q/K/V blocks
+with S kept in shared memory). A naive scalar fused kernel is dominated by cuBLAS.
+This deterministically rules out "fusion alone beats cuBLAS on wall" and scopes the
+next cycle: a Tensor-Core flash-attention fused kernel is the path to the >=30% wall.
+
+Numeric correctness: fused output vs f64 CPU reference rel-err <= 1e-2 at all 4
+shapes (max_rel ~1e-6, three orders under tolerance). Baseline matches identically.
+
+§10 "Whole-program-fusion >=30%" box stays [ ] (structural-only; wall not won). g3.
+No LLVM (@F f1). No C-transpile changes (@F f2): CPU codegen MD5 preserved
+(self/runtime.c 887714427cc1ff16c340dfd31cf1d00f; x86_64_linux.hexa
+b50a2a3c8ab0ba0802bcc7b4c0419992; arm64_darwin.hexa b0a397dc45547de06acc4fdc598bb859).

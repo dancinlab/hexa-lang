@@ -96,7 +96,6 @@ static void *hxlcl_mmap(void *addr, unsigned long len, int prot, int flags, int 
 static void *hxlcl_malloc(size_t n);  /* cycle 73: route pre-#define helpers off libc malloc */
 static void  hxlcl_free(void *p);     /* cycle 73: noop free — keeps _free extern out */
 static int  hxlcl_clock_gettime(int clk, void *ts);  /* re-decl: cycle 65 syscall body overrides cycle 62 stub */
-static int  hxlcl_darwin_check_fd_set_overflow(int fd, const void *p, int n);
 
 // ─── RUNTIME.md Phase 1 Tier-A.1 — libc unhook helpers ───
 // Step-1 of the hexa-native runtime rewrite (RUNTIME.md cycle 46):
@@ -1180,6 +1179,20 @@ static int __attribute__((noinline)) hxlcl_close(int fd) {
 static int __attribute__((noinline)) hxlcl_getpid(void) {
     return (int)_hxlcl_syscall1(HXLCL_SYS_GETPID, 0);
 }
+// RUNTIME Tier-A.6 — ___chkstk_darwin native stack-probe.
+// 8 large-frame functions (net.c hexa_net_read_n has a 64 KB
+// `char stackbuf[65536]`, plus hexa_exec / exec_capture / sha256_file /
+// vfprintf_fd / … — all > Darwin arm64's 4 KB guard-page probe threshold)
+// make clang emit a call to libSystem's `___chkstk_darwin` at prologue.
+// Provide it natively: one naked-asm page-walk in the Apple fixed-frame
+// ABI (requested frame size arrives in x9; clobbers only x16/x17, the
+// IP scratch regs). Touch one byte of each 4 KB page down to the new SP
+// so the guard page is committed before the frame is used. Drops the
+// libSystem `___chkstk_darwin` extern (26 -> 25).
+void hxlcl_chkstk(void) __asm__("___chkstk_darwin");
+__attribute__((naked,used)) void hxlcl_chkstk(void){ __asm__ volatile(
+  "mov x17, sp\n mov x16, x9\n 1: subs x16, x16, #0x1000\n b.lt 2f\n"
+  " sub x17, x17, #0x1000\n ldr xzr, [x17]\n b 1b\n 2: ret\n"); }
 // getuid(2) — SYS_GETUID=24. Like getpid, this BSD syscall cannot fail
 // (no errno / carry-flag path), so the plain _hxlcl_syscall1 trap (not the
 // _cf carry-flag variant) is correct. Drops the libc `_getuid` extern that
@@ -1345,10 +1358,18 @@ static int __attribute__((noinline)) hxlcl_clock_gettime(int clk, void *ts) {
     }
     return 0;
 }
-static int __attribute__((noinline)) hxlcl_darwin_check_fd_set_overflow(int fd, const void *p, int n) {
-    (void)fd; (void)p; (void)n;
-    return 0;  // never overflowing
-}
+// RUNTIME Tier-A.6 — ___darwin_check_fd_set_overflow native def.
+// The SDK FD_SET/FD_CLR/FD_ISSET macros (expanded in net.c et al via
+// <sys/select.h>) emit a call to the 3-underscore symbol
+// `___darwin_check_fd_set_overflow`; libSystem normally satisfies it.
+// A plain C identifier `hxlcl_…` mangles to `_hxlcl_…` and never binds
+// that symbol, so the prior dead stub (wrong name, never called, AND
+// returned 0 — a latent bug: a 0 return tells the SDK macro the fd is
+// out of range and SKIPS the bit op). Bind the real 3-underscore symbol
+// via an __asm__ label and return 1 (in-range, do the bit op) — dropping
+// the libSystem `___darwin_check_fd_set_overflow` extern (27 -> 26).
+int hxlcl_fd_overflow(int a, const void *b, int n) __asm__("___darwin_check_fd_set_overflow");
+__attribute__((used,noinline)) int hxlcl_fd_overflow(int a, const void *b, int n){ (void)a;(void)b;(void)n; return 1; }
 #elif defined(__linux__)
 // libc-fallback syscall layer for Linux — every architecture (x86_64
 // AND arm64). The branch above raw-traps via `svc #0x80` with Darwin
