@@ -14959,7 +14959,7 @@ static void __hexa_codegen_strlit_init_2(void) {
     __hexa_codegen_sl_1175 = hexa_str(", (int)HX_INT(");
     __hexa_codegen_sl_1176 = hexa_str(")), hexa_void())");
     __hexa_codegen_sl_1177 = hexa_str("__fd_write_bytes");
-    __hexa_codegen_sl_1178 = hexa_str("hexa_int((int64_t)write((int)HX_INT(");
+    __hexa_codegen_sl_1178 = hexa_str("hexa_int((int64_t)hxlcl_write((int)HX_INT(");
     __hexa_codegen_sl_1179 = hexa_str("), HX_STR(");
     __hexa_codegen_sl_1180 = hexa_str("), (size_t)HX_STRLEN(");
     __hexa_codegen_sl_1181 = hexa_str("hexa_str_byte_at(");
