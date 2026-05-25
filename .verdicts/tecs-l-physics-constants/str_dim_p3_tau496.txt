@@ -1,0 +1,3 @@
+verify --expr tau(496)=10
+  calc   = 10  == expected 10
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
