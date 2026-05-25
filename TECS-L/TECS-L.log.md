@@ -3,6 +3,18 @@
 Append-only history sister of `TECS-L.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
 
+## 2026-05-26T05:30Z — 축 F F7 · 다른 modular curve군 (Γ₀ 너머 Γ₁(N)/X(N) index) — 🔵 components + 🟡 indices + 🔴 n=6 closed-negative
+
+- [x] F7 milestone = "다른 modular curve군: Γ₁(N)·X(N)·Shimura — hexa fn 가용 영역 매핑" → `- [ ]`→`- [x]`. MODFORM 축 A 는 Γ₀(N)-only 였고, F7 이 modular-curve 탑을 Γ₁(N)·전레벨 X(N)=Γ(N) 로 확장.
+- [x] **닫힌형 index** (표준 인용): [SL₂(ℤ):Γ₁(N)] = ψ(N)·φ(N)/2 (N>2) = N²/2·∏_{p|N}(1−1/p²) · [SL₂(ℤ):Γ(N)] = N·[SL₂(ℤ):Γ₁(N)] = N³/2·∏(1−1/p²). N≤2 는 −I∈Γ₁ 라 /2 없음.
+- [x] **정수 component 🔵 10/10** via `hexa verify --expr` — ψ(N)=`gamma0_index` (Γ₀ index 재사용): ψ(6)=12·ψ(12)=24·ψ(5)=6·ψ(7)=8·ψ(11)=12 · φ(N): φ(6)=2·φ(12)=4·φ(5)=4·φ(7)=6·φ(11)=10. 전부 🔵 SUPPORTED-FORMAL (verdict verbatim).
+- [x] **헤드라인 (🟡 조립)**: Γ₁(6) index = ψ(6)·φ(6)/2 = 12·2/2 = **12** (= Γ₀(6) index, φ(6)=2 이므로) · X(6)=Γ(6) index = 6·12 = **72**. 교차검증 두 형태 일치: 72 = 6·Γ₁(6) = 216/2·(3/4)(8/9). 관계 X(N)=N·Γ₁(N) (N>2) 확인.
+- [x] **n=6 distinction = 🔴 CLOSED-NEGATIVE**: 사전등록 falsifier = "Γ₁/X(N) index 에 {1,6}-형 항등식 존재". 기각 — Γ₁/X(N) index 는 N 에 대해 smooth/multiplicative, n=6 에 peak/특이성 없음. σφ=nτ⟺{1,6} 특이성은 **상위 modular level 로 lift 안 됨** (Γ₀-레벨 산술함수 항등식 현상이지 level-tower 현상 아님). 결정적으로 hypothesis 배제.
+- [x] **부차 (🟡, n=6-유일 아님)**: N=6 은 Γ₁ idx = Γ₀ idx 인 집합 {3,4,6} (φ(N)=2 인 N) 중 **최대**. Γ₁(6)=Γ₀(6)=12=σ(6) bridge. φ(N)=2 우연이지 n=6-고유 항등식 아님 → 🟡 citation-grade.
+- [x] **Shimura 방향** (note only, 미계산): Shimura curve X^D(N) 는 cusp 없음(compact), index/volume 은 Eichler mass formula (quaternion discriminant D>1 기반). hexa 에 quaternion-discriminant/Eichler-mass 빌트인 부재 → 정수-component verify 불가. **capability gap (MF4류 정의 버그 아님) → INBOX 미발행**, 방향만 기록.
+- [x] 영속: `.verdicts/tecs-l-modform-other-curves/` (components_psi · components_phi · gamma1_x_index_assembled · n6_focal, 11 verdict) · `CLAIMS.tape` slug=tecs-l-modform-other-curves group=TECS-L 4 entry (🔵 components · 🟡 Γ₁(6) · 🟡 X(6) · 🔴 n=6-distinction). atlas fold 미접촉.
+- [x] **F7 tier = 🔴 CLOSED-NEGATIVE (헤드라인 finding) + 🔵 (10 components) + 🟡 (조립 index 인용)**. paper_negative_ok — "n=6 specialness 가 higher modular level 로 안 올라감" 은 결정적 ruled-out axis.
+
 ## 2026-05-26T02:10Z — 축 F F11 CLOSED · OEIS reuse cite (downstream consumer of OEIS provenance) — synthesis 🟢
 
 - [x] F11 재정의 + closure: **"OEIS reuse cite — TECS-L = OEIS-도메인 provenance 의 downstream consumer"**. `- [ ]`→`- [x]`. (OEIS 도메인 O5 와 동시 closure — OEIS 가 driver, 본 entry 는 TECS-L 측 cite 기록.)

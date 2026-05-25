@@ -16,6 +16,7 @@
 #include <sys/resource.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
+#include <spawn.h>      // posix_spawnp / posix_spawn_file_actions_* used in runtime_core.c (cold-compile fix)
 #include <errno.h>      // EINTR for waitpid retry loop in spawn reap
 #include <fcntl.h>      // TL;DR #4: F_SETPIPE_SZ on Linux for pipe enlarge
 #include <signal.h>     // 2026-05-06: SIGPIPE SIG_IGN install in stdio init
