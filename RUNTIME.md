@@ -409,15 +409,17 @@ correctness (per M10/M16; see cycle-69 catalog + PR #251/#426 analysis)
 - ~~hard-deferred trio~~ → `_longjmp` ported (#1058); `___chkstk_darwin` /
   `___darwin_check_fd_set_overflow` resolved in the 0-extern tail.
 
-### ≤5 acceptance status — UNMET at HEAD
+### ≤5 acceptance status — MET (SURPASSED) at HEAD
 
-The cycle-65 "🛸 ACCEPTANCE REACHED ≤5 externs" line below is **NO
-LONGER TRUE at HEAD** (superseded — see annotation on that entry). It
-regressed to 30 via the r16 / GO-domain network + exec re-introduction;
-≤5 acceptance is currently **UNMET (29 externs at cycle 75)**. Re-reaching
-≤5 requires carry-flag-correct svc traps for the syscall group + a
-socket/exec decision (cycle-69 catalog items 2-3), NOT a revert (a revert
-resurrects the carry-flag / pipe-pair / exec-stub bugs).
+> Reconciled 2026-05-26: this section's prior "UNMET (29 externs at cycle 75)"
+> text was content-stale (anchored at the cycle-69/75 GO-domain regression).
+> The RUNTIME tail closed the entire extern set after that: `aprime_cc` is at
+> **0 externs — north-star MET, BELOW the ≤5 floor** (#1058 native setjmp/longjmp
+> 1→0 · #1059 137→0 closure). Every syscall is inline `svc #0x80`, not even a
+> stub; the network/exec set the cycle-69 note called a deliberate libc-restore
+> was subsequently eliminated too (#1045/#1047/#1048/#1050/#1053/#1058). The
+> ≤5-extern `@goal` is satisfied with margin. (The historical cycle-65/75 entries
+> below are kept as history per g15; this banner is the current-state truth.)
 
 ## Phase 2 — Tier-B stdlib primitives (~50 fns, est 4-8 cycles)
 
@@ -438,9 +440,25 @@ resurrects the carry-flag / pipe-pair / exec-stub bugs).
       legitimately deferred to FFI
 - [ ] pty/posix_spawn/dlopen — keep as C? Or hexa-native shell?
 
-**Policy decision needed**: is "hexa-native runtime" allowed to FFI
-to vendor C (GPU drivers, system services), or must everything be in
-hexa source? `LATTICE_POLICY.md` review required.
+**Policy DECIDED (2026-05-26) — Option A: principled FFI allow-list.**
+Per `LATTICE_POLICY.md` (real-limits-first) + `feedback-closure-is-physical-limit`,
+C-dependence splits into three layers and the policy follows the *physical
+boundary*, not a blanket rule:
+
+| layer | example | policy |
+|---|---|---|
+| ① reimplementable (pure logic / math) | libc · libm · regex · JSON · codecs · crypto **algorithms** (chacha20/x25519/sha256/ed25519) · TLS 1.3 **state machine** | **hexa-native** — no physical floor; the zero-C north-star applies |
+| ② kernel ABI (irreducible floor) | syscalls (`svc #0x80`) | **inline svc** — the ≤5 floor (already MET at 0) |
+| ③ vendor ABI (irreducible external interface) | GPU driver (`cuModuleLoad*` / Metal) · OS entropy · `dlopen` of vendor blobs | **FFI allowed** — you physically cannot reimplement a vendor kernel-mode driver; FFI is the correct terminal state |
+
+The allow-list is therefore NOT arbitrary: `FFI ⟺ irreducible-external-interface`
+(layer ③ only). The runtime north-star "zero libc / libm / libsystem" stays the
+claim (MET); vendor FFI (GPU already live) is a separate, physically-justified
+category, not a violation. Consequence: Phase 2/3 is **unblocked** — regex · JSON ·
+codecs · crypto-algorithms · TLS-state-machine all proceed hexa-native (layer ①);
+only the GPU driver ABI stays FFI (layer ③, already working). The
+"`nm aprime` returns only syscalls (libm + GPU FFI allowed)" acceptance variant
+below is the chosen target.
 
 ## Post-Phase-3 — zero-C-dep acceptance
 
