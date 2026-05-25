@@ -74,7 +74,15 @@
   do   = "violating paper (gate / significance fail) revoked immediately — PAPER/<slug>/ removed"
   dont = "keep a violating paper as a draft · mark it WIP · defer revocation · allow a residual"
 
-@D paper_one_per_group := "one canonical paper per group — ATLAS · COMPILER · CANON" :: workflow [required active]
-  do   = "one paper per group — ATLAS theorems · COMPILER self-host/codegen · CANON verify-discipline"
-  do   = "replace in place when a stronger finding lands"
-  dont = "ship multiple papers per group · accumulate a backlog · fork same-group narratives"
+@D paper_on_discovery := "any verified discovery becomes a paper — free slug, no fixed domain" :: workflow [required active]
+  do   = "every terminal discovery → its own paper slug (named by the finding, not a fixed bucket)"
+  do   = "replace/supersede in place when a stronger finding lands on the same slug"
+  dont = "pre-assign papers to fixed domain buckets · cap the paper set · force a finding into wrong slug"
+
+@D discovery := "discovery runs continuously, not only at cycle tail" :: workflow [required active]
+  do   = "interleave /kick · /gap discovery every batch — a discovery lane runs alongside verify"
+  dont = "defer discovery to the end · single tail-only round · stop discovering once a paper ships"
+
+@D discovery_log := "discoveries persist at .discoveries/<slug>.tape" :: workflow [required active]
+  do   = "log every kick/gap discovery to `.discoveries/<slug>.tape` — id · seed · verdict-tier-target"
+  dont = "discard discovery output · paraphrase findings · skip linking discovery → next-cycle claim"
