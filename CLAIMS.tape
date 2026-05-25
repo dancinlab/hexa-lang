@@ -1678,6 +1678,19 @@
   status = "🟡 SUPPORTED-BY-CITATION — divergence is out-of-band (atlas audit clean on its own; binary≠source observed). flagged to INBOX upstream (g59)."
 
 # ───────────────────────────────────────────────────────────────────────
+# TECS-L axis E — tecs-l-atlas-register-hazard (slug · group=TECS-L · E3)
+# Formal write-up of the register install-dir hazard + the patch-to-worktree
+# recovery pattern. Pairs the write-side hazard (E1 hands-on, PR #1070) with
+# the read-side hazard (E2 audit, PR #1096) into a single workflow doc.
+# NO new numerical verify (M10/MR1 synthesis pattern).
+
+@C tecs_l_atlas_register_hazard_workflow := "axis E E3 formal write-up: register install-dir (cwd-independent) leak hazard + binary-builtin lookup freeze hazard form complementary surfaces; patch-to-worktree 4-step recovery (capture diff → revert shared tree → isolated worktree → apply+PR) is the standard recovery, empirically used in E1 PR #1070. 1-writer serialization recommended for atlas folds." :: workflow [slug=tecs-l-atlas-register-hazard group=TECS-L]
+  method = "synthesis"
+  raw    = ".verdicts/tecs-l-atlas-register-hazard/hazard_recovery_pattern.txt"
+  src    = "TECS-L/docs/e3-atlas-register-hazard-and-recovery.md ; anchors: PR #1070 (E1 write-side empirical), PR #1096 (E2 read-side empirical), INBOX.log.md 2026-05-25T18:00Z (upstream fix proposals)"
+  status = "🟢 empirical — E1 hands-on (PR #1070) + E2 audit (PR #1096) prove the recovery pattern and the complementary hazards. terminal-empirical (no new verify)."
+
+# ───────────────────────────────────────────────────────────────────────
 # TECS-L axis B (MERSENNE) — tecs-l-mersenne-euclid-euler (slug · group=TECS-L · MR1)
 # Euclid-Euler synthesis: n is an even perfect number  <=>  n = 2^(p-1) * M_p
 # with M_p = 2^p - 1 a Mersenne prime. Euclid IX.36 (sufficiency, c. 300 BCE)

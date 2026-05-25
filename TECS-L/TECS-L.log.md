@@ -3,6 +3,21 @@
 Append-only history sister of `TECS-L.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
 
+## 2026-05-25T13:33 — 축 E E3 · `hexa atlas register` install-dir 해저드 + patch-to-worktree 회복 formal write-up
+
+- [x] E3 milestone = "register install-dir 해저드 + recovery 4-step 워크플로 formal 문서 (E1 hands-on + E2 audit 종합)"
+- [x] **§1 write-side 해저드 (install-dir leak)**: `hexa atlas register --from-verify` 는 cwd 무관 `~/core/hexa-lang/compiler/atlas/embedded.gen.hexa` 에 splice. install-dir 트리는 통상 8세션 공유 워킹트리(`feedback_hexa_lang_shared_worktree_branch_hazard`) → 다른 에이전트의 active 브랜치가 HEAD 면 그 working tree 에 leak → 머지·커밋 시 엉뚱한 PR 에 휩쓸릴 위험
+- [x] **§1 입증**: E1 PR #1070 (2026-05-25T12:07:46Z 머지) — 6 verified-* 노드 fold 시 공유 트리 HEAD = `antimatter-h1s2s-rydberg-verify` → 회수 필요했고, 그 회수 절차가 §3 의 표준 원본
+- [x] **§2 read-side 해저드 (binary-builtin freeze)**: `hexa atlas lookup` 은 frozen binary-builtin 을 읽음. E2 PR #1096 (2026-05-25T13:08:05Z 머지) 측정 — binary 16101 entries 중 verified-* 74 hits 이나 E1 6 노드 findable=0; source SSOT 에는 6/6 present. **register 가 source 갱신, lookup 이 binary 읽음 → 상보적 desync**
+- [x] **§3 patch-to-worktree 4-step 회복 (E1 입증)**: (1) `git diff compiler/atlas/embedded.gen.hexa > /tmp/atlas-fold.patch` — (2) `git -C ~/core/hexa-lang checkout -- compiler/atlas/embedded.gen.hexa` (공유트리 즉시 회수, 타 에이전트 보호) — (3) `git worktree add -b <br> /tmp/<wt> origin/main` (격리 워크트리) — (4) `git apply /tmp/atlas-fold.patch` → 검증 → commit → PR. `embedded.gen.hexa` 16k+ 라인 생성파일이라 PR 동시성에 codegen-급 serial (`reference_codegen_change_verify_recipe` 와 동형)
+- [x] **§4 권고**: (a) atlas-write 1-writer 직렬화 — (b) HEXA_ATLAS_EMBED overlay 또는 register 시 in-memory mutation — hexa-lang 측 fix INBOX 업스트림 대기 (`INBOX.log.md` 2026-05-25T18:00Z 두 옵션 등록) — (c) N개 atlas-fold PR 머지 후 1회 일괄 hexa 바이너리 재빌드 cadence — (d) register 직전 셀프-체크 (`git status` + `branch --show-current`)
+- [x] **신규 verify 0건** (M10/MR1 synthesis 닫힘 패턴) — 두 해저드 모두 자체 prior PR 에서 empirical 입증 (#1070 write-side, #1096 read-side); 본 문서는 reasoned workflow synthesis
+- [x] 1 verdict artifact → `.verdicts/tecs-l-atlas-register-hazard/hazard_recovery_pattern.txt` (ASCII · 4-step workflow + 입증 PR 인용 + forward 권고)
+- [x] `CLAIMS.tape` slug=tecs-l-atlas-register-hazard group=TECS-L 1 `@C` (method=synthesis, status 🟢 empirical) — E2 슬러그 직후 삽입
+- [x] `TECS-L/docs/e3-atlas-register-hazard-and-recovery.md` (Korean) — §1 write-side · §2 read-side · §3 회복 · §4 권고 · 부록 A anchors · 부록 B verify 지위
+- [x] `TECS-L.md` E3 체크 → `- [x]` (write-up 위치 + 두 PR anchor 인용)
+
+
 ## 2026-05-25T13:31 — 축 B MR7 · 홀수 완전수(odd perfect) 미해결 — 정직한 🟠 INSUFFICIENT/DEFERRED 문서화
 
 - [x] MR7 milestone = "홀수 완전수 존재 여부 — open problem; 알려진 lower bound·구조 조건을 원전 citation 으로 표기, closure 주장 없음"
