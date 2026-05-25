@@ -7653,6 +7653,17 @@ HexaVal hexa_fma(HexaVal a, HexaVal b, HexaVal c) {
                         hexa_float(__hx_to_double(c)));
 }
 #endif
+// RUNTIME.md Step 4 .c-none arith core op 3: under HEXA_HAS_HEXA_RT_STDLIB
+// hexa_div delegates to hexa-source rt_div (stdlib/runtime/numeric.hexa). The
+// int divide there uses the __raw_idiv codegen escape (native HX_INT/HX_INT)
+// since the `/` operator on known-int routes back here (recursion). The #else
+// C body is retained bit-for-bit for the standalone link (smoke path doesn't
+// define the macro). Semantics byte-identical: pure int/int + pure float/float
+// throw on zero; mixed int/float is IEEE (no throw).
+#ifdef HEXA_HAS_HEXA_RT_STDLIB
+extern HexaVal rt_div(HexaVal a, HexaVal b);
+HexaVal hexa_div(HexaVal a, HexaVal b) { return rt_div(a, b); }
+#else
 HexaVal hexa_div(HexaVal a, HexaVal b) {
     _HX_COERCE_BOOL(a, b);
     if (HX_IS_INT(a) && HX_IS_INT(b)) {
@@ -7691,6 +7702,15 @@ HexaVal hexa_div(HexaVal a, HexaVal b) {
     if (fb == 0.0) { hexa_throw(hexa_str("division by zero")); return hexa_float(0.0); }
     return hexa_float(__hx_to_double(a) / fb);
 }
+#endif
+// RUNTIME.md Step 4 .c-none arith core op 4: hexa_mod delegates to hexa-source
+// rt_mod (numeric.hexa) under HEXA_HAS_HEXA_RT_STDLIB; int modulo via __raw_imod
+// codegen escape (same `%`-operator recursion reason as rt_div). #else C body
+// kept bit-for-bit. int/int + any-numeric throw on zero; fmod for the rest.
+#ifdef HEXA_HAS_HEXA_RT_STDLIB
+extern HexaVal rt_mod(HexaVal a, HexaVal b);
+HexaVal hexa_mod(HexaVal a, HexaVal b) { return rt_mod(a, b); }
+#else
 HexaVal hexa_mod(HexaVal a, HexaVal b) {
     _HX_COERCE_BOOL(a, b);
     if (HX_IS_INT(a) && HX_IS_INT(b)) {
@@ -7711,6 +7731,7 @@ HexaVal hexa_mod(HexaVal a, HexaVal b) {
     if (fb == 0.0) { hexa_throw(hexa_str("modulo by zero")); return hexa_float(0.0); }
     return hexa_float(hxlcl_fmod(__hx_to_double(a), fb));
 }
+#endif
 
 // ROI-44: comparison runtime helpers — replace inline GCC stmt-expr in codegen.
 // Semantics: TAG_FLOAT promotes to double compare; TAG_INT uses int64 compare.
