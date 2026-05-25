@@ -300,9 +300,82 @@ fn cmd_verb_help(verb) {
     } else if verb == "version" {
         println("hexa version    (also: --version, -v)")
         println("  Print the version string + build hash.")
+    // ─── CANON M11: in-tree TOOLCHAIN drawer verbs (batch/tape/hxc/url/convergence) ───
+    } else if verb == "batch" {
+        println("hexa batch <file1.hexa> [file2.hexa ...]")
+        println("  Compile-and-run N scripts under ONE dispatcher boot (ω-hexa-batch).")
+        println("  files...       positional .hexa paths (manifest/stdin list deferred)")
+    } else if verb == "tape" {
+        println("hexa tape <file.tape>")
+        println("  Native .tape v1.2 reader — dump the parsed directive tree. Exit 0 OK, 2 misuse.")
+    } else if verb == "hxc" {
+        println("hexa hxc <file.hxc>")
+        println("  Generic HXC v2 wire decoder — dump the decoded record stream. Exit 0 OK, 2 misuse.")
+    } else if verb == "url" {
+        println("hexa url <hexa://...>")
+        println("  Dispatch a hexa:// URL (e.g. 'hexa://run?file=/path/script.hexa&args=foo').")
+    } else if verb == "convergence" {
+        println("hexa convergence <dump|dump-meta> <file>")
+        println("  Scan source-embedded @convergence metadata → JSON dump.")
+        println("  dump <file>        emit the convergence blocks as JSON")
+        println("  dump-meta <file>   emit only the metadata header")
     } else {
         // Unknown / sub-CLI verb — fall back to the full catalog.
         cmd_help()
+    }
+}
+
+// CANON M11: uniform per-verb help for the absorbed tool-drawer verbs
+// (DISCOVERY · EXTERNAL · ANNOTATOR · SCIENCE families that route through
+// dispatch_absorbed). One tight block per verb — signature · purpose. The
+// intercept at the top of dispatch_absorbed() catches `--help`/`-h` BEFORE
+// the verb's real (often heavy — drill/kick/omega/…) work runs. Sub-CLI
+// delegators (atlas/qrng/qmirror/cloud/loop/gpu/sim-universe) self-delegate
+// and are NOT routed here.
+fn cmd_absorbed_help(verb) {
+    // DISCOVERY family (compiler/{drill,chain,...}) — gap-breakthrough engines.
+    if verb == "drill" || verb == "kick" {
+        println("hexa " + verb + " --seed \"<text>\" [--rounds N] [--engine mk9|mk10]")
+        println("  Gap-breakthrough discovery engine (kick ≡ drill apex). Verifies + folds atlas atoms.")
+    } else if verb == "chain"  { println("hexa chain [args]\n  DISCOVERY — chained drill rounds (multi-stage ω-cycle).")
+    } else if verb == "omega"  { println("hexa omega [args]\n  DISCOVERY — ω-cycle apex discovery driver.")
+    } else if verb == "surge"  { println("hexa surge [args]\n  DISCOVERY — burst-mode candidate generation.")
+    } else if verb == "dream"  { println("hexa dream [args]\n  DISCOVERY — speculative candidate exploration.")
+    } else if verb == "swarm"  { println("hexa swarm [args]\n  DISCOVERY — parallel multi-agent candidate sweep.")
+    } else if verb == "reign"  { println("hexa reign [args]\n  DISCOVERY — dominance/selection over candidate pools.")
+    } else if verb == "molt"   { println("hexa molt [args]\n  DISCOVERY — shed/refresh stale candidate state.")
+    } else if verb == "wake"   { println("hexa wake [args]\n  DISCOVERY — resume a suspended discovery cycle.")
+    } else if verb == "forge"  { println("hexa forge [args]\n  DISCOVERY — synthesize new artifacts from verified atoms.")
+    } else if verb == "canon"  { println("hexa canon [args]\n  DISCOVERY — canonicalize discoveries into the atlas.")
+    } else if verb == "debate" { println("hexa debate [args]\n  DISCOVERY — adversarial cross-check of candidate claims.")
+    } else if verb == "revive" { println("hexa revive [args]\n  DISCOVERY — re-run/recover a prior discovery session.")
+    // Phase 2 generators / verifiers.
+    } else if verb == "smash"           { println("hexa smash [args]\n  DISCOVERY — generator: smash a target into sub-claims.")
+    } else if verb == "free"            { println("hexa free [args]\n  DISCOVERY — generator: free-form claim expansion.")
+    } else if verb == "hyperarithmetic" { println("hexa hyperarithmetic [args]\n  DISCOVERY — generator: hyperarithmetic claim ladder.")
+    } else if verb == "honesty"         { println("hexa honesty <file>\n  AUDIT — over-claim / honesty verifier (BT-AI2 audit surface).")
+    } else if verb == "absolute"        { println("hexa absolute <file>\n  AUDIT — absolute-claim verifier (no unfenced superlatives).")
+    } else if verb == "meta-closure"    { println("hexa meta-closure <file>\n  AUDIT — meta-closure verifier (claim-graph terminality).")
+    // SCIENCE absorbed verbs.
+    } else if verb == "lattice"             { println("hexa lattice <verify|axis-table|cross-check>\n  SCIENCE — n=6 lattice math (pure-math axis tables · cross-check).")
+    } else if verb == "atlas-audit"         { println("hexa atlas-audit <external-entity|anchor|all>\n  AUDIT — overlay-corpus atlas audit (hexa-matter doctrine gate).")
+    } else if verb == "atlas-verify"        { println("hexa atlas-verify [--domain D]\n  AUDIT — atlas verdict ledger (Stage 1+2+3 hexa-native).")
+    } else if verb == "repo-audit-taxonomy" { println("hexa repo-audit-taxonomy <catalog.md> <manifest.toml> [<root>]\n  AUDIT — repo taxonomy / catalog-vs-manifest audit.")
+    } else if verb == "akida"               { println("hexa akida [args]\n  EXTERNAL — Akida neuromorphic HW probe.")
+    // EXTERNAL data bridges (compiler/bridges/*) — fetch + verify against a source.
+    } else if verb == "codata" || verb == "oeis" || verb == "arxiv" || verb == "gw" || verb == "horizons"
+           || verb == "cmb" || verb == "nanograv" || verb == "simbad" || verb == "icecube"
+           || verb == "nist-atomic" || verb == "wikipedia" || verb == "openalex" || verb == "gaia"
+           || verb == "lhc" || verb == "pubchem" || verb == "uniprot" {
+        println("hexa " + verb + " <query|id>")
+        println("  EXTERNAL data bridge — fetch from " + verb + " and verify the result against the source.")
+    // ANNOTATOR family (tool/hexa_annot/hexa-<name>) — source-analysis tools.
+    } else if is_absorbed_verb(verb) {
+        println("hexa " + verb + " <file.hexa>")
+        println("  ANNOTATOR — source-analysis tool (see `hexa tool list`).")
+    } else {
+        // Not an absorbed verb — fall back to the per-verb / full catalog.
+        cmd_verb_help(verb)
     }
 }
 
@@ -1381,6 +1454,15 @@ fn dispatch_absorbed(verb, ab_args) {
     let raw = _absorbed_script(verb)
     if len(raw) == 0 {
         println("error: unknown absorbed verb '" + verb + "'")
+        return
+    }
+
+    // CANON M11: intercept `--help`/`-h` BEFORE resolving/running the script.
+    // Many absorbed verbs (drill/kick/omega/swarm/…) trigger heavy discovery
+    // work; a stray `--help` must NOT spin that up. Render the uniform per-verb
+    // help block instead (mirrors M10's core-verb intercept pattern).
+    if len(ab_args) >= 1 && (ab_args[0] == "--help" || ab_args[0] == "-h") {
+        cmd_absorbed_help(verb)
         return
     }
 
@@ -5519,7 +5601,9 @@ if len(av) < 3 {
         // ω-hexa-batch (2026-04-26 phase A): N scripts, ONE dispatcher
         // boot. av[3..] = list of .hexa file paths (Phase A: positional
         // only; manifest-file / stdin-list deferred to Phase B).
-        if len(av) < 4 {
+        if len(av) >= 4 && (av[3] == "--help" || av[3] == "-h") {
+            cmd_verb_help("batch")          // CANON M11
+        } else if len(av) < 4 {
             println("error: 'batch' requires one or more <file> arguments")
             cmd_help()
         } else {
@@ -5764,7 +5848,9 @@ if len(av) < 3 {
         // compiled bin/hexa-convergence binary. cs_main → main renamed in
         // source so single fn main entry serves both spawn and interp
         // auto-invoke. Falls back to legacy cmd_run() when binary absent.
-        if len(av) < 5 {
+        if len(av) >= 4 && (av[3] == "--help" || av[3] == "-h") {
+            cmd_verb_help("convergence")    // CANON M11
+        } else if len(av) < 5 {
             println("error: 'convergence' requires <subcmd> <file>")
             println("usage: hexa convergence dump <file>")
             println("       hexa convergence dump-meta <file>")
@@ -5928,7 +6014,9 @@ if len(av) < 3 {
         }
     } else if sub == "tape" {
         // L2: native .tape v1.2 reader (inlined, C-compiled — no cmd_run).
-        if len(av) < 4 {
+        if len(av) >= 4 && (av[3] == "--help" || av[3] == "-h") {
+            cmd_verb_help("tape")           // CANON M11
+        } else if len(av) < 4 {
             println("error: 'tape' requires <file>")
             println("usage: hexa tape <file.tape>")
             exit(2)
@@ -5937,7 +6025,9 @@ if len(av) < 3 {
         }
     } else if sub == "hxc" {
         // L2: generic HXC v2 wire decoder (inlined, C-compiled).
-        if len(av) < 4 {
+        if len(av) >= 4 && (av[3] == "--help" || av[3] == "-h") {
+            cmd_verb_help("hxc")            // CANON M11
+        } else if len(av) < 4 {
             println("error: 'hxc' requires <file>")
             println("usage: hexa hxc <file.hxc>")
             exit(2)
@@ -5962,7 +6052,9 @@ if len(av) < 3 {
             cmd_init(init_args)
         }
     } else if sub == "url" {
-        if len(av) < 4 {
+        if len(av) >= 4 && (av[3] == "--help" || av[3] == "-h") {
+            cmd_verb_help("url")            // CANON M11
+        } else if len(av) < 4 {
             println("error: hexa url requires URL argument (e.g. 'hexa://run?file=/path/script.hexa')")
         } else {
             cmd_url(av[3])
