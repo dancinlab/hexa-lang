@@ -2,6 +2,23 @@
 
 Append-only history sister of `ARXIV.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
+## 2026-05-26 — A3 DEMIURGE axis 흡수 (반물질 공장 12편 + demiurge 7공정 핸드오프 g60)
+
+- [x] A3 ingest — DEMIURGE axis 본격 흡수 (반물질 공장 antihydrogen factory 7공정 물리 논문)
+  - fetch = arXiv API (`export.arxiv.org/api/query`, https — `/research:arxiv` skill) — **6 query** (≤8 cap)
+  - query: antihydrogen-trapping-ALPHA · antiproton-decel-ELENA-AD(too-broad, drop) · ELENA-electrostatic-decel-trap-cooling · 1S-2S-spectroscopy-CPT · GBAR-free-fall-WEP · 3-body-recomb-positron-plasma · p̄-g-factor-BASE
+  - **12 on-topic 흡수** (off-topic drop: query2 generic CERN accel 5편 · 2510.00289 ELENA-tunnelling SW 이름충돌 · CPT 이론동기 4편 subsumed · 2308.07672 QC-Penning · 재결합 cross-section 이론 subsumed)
+  - **3-class triage** (a) verify-able 🔵/🟢 / (b) 🟡 citation / (c) handoff→demiurge:
+    - **(a) verify-able = 5종 LIVE 🔵** — **A2 와 핵심 차이**: DEMIURGE 는 verify-native 라 RFC-045-style 물리 fn 이 이미 `hexa verify --expr` 에 깔림. HEAD 드라이버(#1153) · mini arm64 · `POOL_DISABLE=1` 확인: `pair_threshold_kinetic_factor 1 6`(🔵 ⓵생성 T_th=6·m_p_c²) · `pair_threshold_total_factor 1 7`(🔵 ⓵ E_beam=7) · `cyclotron_cool_massexponent 1 3`(🔵 ⓸냉각 τ_c∝m³) · `cyclotron_cool_bratio_exponent 1 2`(🔵 ⓸ B⁻²) · `cyclotron_cool_bexponent 0 -2`(🔵 ⓸) + `pair_threshold_kinetic_factor 1 5`(🔴 FALSIFIED 음성대조군).
+    - **(b) 🟡 citation = 7** — 0805.4082 · 1201.3944 · 1507.04147 · 2409.04509 · 2002.09348 · 1401.1939 · 1907.01460 (다수 dual citation+handoff). atlas reference node.
+    - **(c) handoff→demiurge = 12** — 12편 전부 ANTIMATTER 7공정 cross-link 보유.
+  - **ANTIMATTER 7공정 cross-link (12 handoff g60)**: ⓵생성=pair-threshold(🔵 verify-confirmed) · ⓶감속=1909.07493 GBAR-decel/1606.06697 ELENA · ⓷포획=1507.04147 reservoir-Penning/1401.1939 BASE/1907.01460 Brown-Gabrielse-g_s · ⓸냉각=0307151 ATHENA-plasma-T(🔵 cooling-scaling) · ⓹합성=1905.03281 3-body-recomb/1409.0705 GBAR-ultracold · ⓺가둠=1201.3944 minimum-B-trap(RTSC 상속) · ⓻측정=0805.4082/2409.04509/2002.09348/1409.0705/1401.1939.
+  - **V9 physics-primitive seed**: Penning 3주파 float form(`penning_omega_plus/minus` 2-arg; `penning_invariance` @F 🟢 fold 2026-05-25, float dispatch wire 만 부재) + `h1s2s_rydberg` 2-arg(1S-2S=(3/4)·R∞·c≈2.4661 PHz) → V9 float-driver `_recompute_float` 2-arg 재빌드 시 즉시 🟢. 3체 재결합률 scaling = ⓹합성 폐형해 후보.
+  - 영속: `.verdicts/arxiv-demiurge-absorb/triage_a3.txt` (ASCII triage 표) + `docs/a3-demiurge-axis.md` (한글) + `CLAIMS.tape` @C slug=arxiv-demiurge-absorb (🟡 12 papers + 12 handoffs · 5 verify-able 🔵).
+- [x] demiurge 핸드오프 filing (g60, 실제 filing) — `~/core/demiurge/INBOX.log.md` slug `arxiv-a3-antimatter-factory-ingest` append + `INBOX.md` 열린 handoff stub (stub-first, dedup). **주의**: demiurge working tree 가 dirty feature 브랜치(`feat/rtsc-magnet-wheeler-v2`, untracked PDF) 위 → A2 anima 패턴 + memory `feedback_closure` 에 따라 working-copy edit 만 (공유 dirty demiurge 트리 commit 금지) → **parent action: demiurge 세션 commit 필요**.
+- [x] honesty — **A3 = ARXIV 첫 verify-able 축** (A1·A2 = 0 no-primitive). verify-able 5종 🔵 는 정직한 LIVE 확인. 나머지(Penning float·1S-2S Rydberg·재결합률)는 V9 float-driver/physics primitive 로 deferred. sibling V5-IIT lane 동시 진행 (CLAIMS.tape/ARXIV.md 충돌 시 merge keep-both).
+- [x] crash-recovery — `/tmp/wt-arxiv-a3` worktree 가 sandbox env reset 으로 소실 (checkpoint commit `c2ce41a9` 는 공유 object store 에 생존) → `.claude/worktrees/.../wt-arxiv-a3-recover` 로 `c2ce41a9` 에서 worktree 재생성하여 triage 회복 + 나머지 deliverable 재작성 (memory `crash_recovery_artifact_pattern`).
+
 ## 2026-05-26 — A2 ANIMA axis 흡수 (IIT/의식 11편 + anima 핸드오프 g60)
 
 - [x] A2 ingest — ANIMA axis 본격 흡수 (A1 12편 IIT-코어와 **중복 0**, 경험적 의식 측정자·causal-emergence·AI-의식 이론으로 폭 확장)
