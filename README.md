@@ -488,6 +488,21 @@ Full doc index: [`AGENTS.md`](AGENTS.md) + [`doc/`](doc/) + [`SPEC.yaml`](SPEC.y
 
 * * *
 
+## Data corpora (git-LFS)
+
+Data-bound corpora — ENDF/B-VIII evaluated nuclear data (HEXA-PORT P4b), and future
+binary/HDF5 datasets — live under `data/` or `stdlib/corpora/` and are stored via
+**git-LFS**. The reserved LFS extensions are `.hdf5 .h5 .dat .bin .endf .ace .xml.gz
+.tar.gz` (see [`.gitattributes`](.gitattributes)).
+
+hexa-lang is the canonical home for these corpora (per @D d3 — implementation /
+asset SSOT) so downstream domain repos can `hx`-depend on them rather than
+re-fetching from upstream mirrors. Existing tracked files (atlas SSOT text,
+build artifacts, fixtures) are intentionally **not** migrated — LFS is reserved
+for future data ports only. Policy reference: HEXA-PORT.md §4.0.
+
+* * *
+
 ## License
 
 MIT License. Copyright (c) 2026 dancinlab. See [`LICENSE`](LICENSE).
