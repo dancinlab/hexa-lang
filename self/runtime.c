@@ -1531,6 +1531,42 @@ static int __attribute__((noinline)) hxlcl_darwin_check_fd_set_overflow(int fd, 
     (void)fd; (void)p; (void)n;
     return 0;  // never overflowing
 }
+// linux-branch parity for primitives the arm64-darwin block added (cycle 82
+// raw-trap mkdir; cycle 86 naked-asm setjmp/longjmp) but never mirrored here.
+// runtime_core.c calls hxlcl_mkdir + hxlcl_longjmp unconditionally and the
+// transpiled driver calls hxlcl_setjmp, so without these the Linux build fails
+// to compile/link. Route through libc / compiler builtins.
+static int __attribute__((noinline)) hxlcl_mkdir(const char *path, int mode) {
+    return mkdir(path, (mode_t)mode);  // <sys/stat.h> / <sys/types.h> included above
+}
+// The linux codegen emits libc `jmp_buf __jb; setjmp(__jb)` for try blocks and
+// pushes &__jb onto __hexa_try_stack; hexa_throw then calls hxlcl_longjmp(&__jb,
+// val). So hxlcl_longjmp MUST be a libc longjmp on that very jmp_buf — an earlier
+// __builtin_longjmp attempt segfaulted because it expects a __builtin_setjmp
+// buffer (incompatible layout). hxlcl_setjmp mirrors as a libc-setjmp macro
+// (call-site expansion, not a wrapper fn) for any non-codegen caller; the linux
+// codegen path itself uses libc setjmp directly and does not reference it.
+#include <setjmp.h>
+#define hxlcl_setjmp(buf) setjmp(*(jmp_buf *)(buf))
+static void __attribute__((noinline, noreturn)) hxlcl_longjmp(void *buf, int val) {
+    longjmp(*(jmp_buf *)buf, val ? val : 1);
+}
+// getuid + the OOB-trace backtrace stubs (arm64-darwin defines these via the
+// raw-trap / hexa-native-stub path; mirror on Linux). backtrace is a no-op
+// stub on both platforms (a self-host binary has no frame walker); getuid
+// routes through libc.
+static int __attribute__((noinline)) hxlcl_getuid(void) {
+    return (int)getuid();  // <unistd.h> included above
+}
+static int __attribute__((noinline)) hxlcl_backtrace(void **buf, int sz) {
+    (void)buf; (void)sz;
+    return 0;  // 0 frames captured — hexa-native stub, no real unwinder
+}
+static void __attribute__((noinline)) hxlcl_backtrace_symbols_fd(void *const *buf, int sz, int fd) {
+    (void)buf; (void)sz;
+    static const char msg[] = "(backtrace unavailable — hexa-native stub)\n";
+    (void)write(fd, msg, sizeof(msg) - 1);  // libc write; <unistd.h>
+}
 #endif  /* darwin-arm64 raw-trap / linux libc */
 // cycle 6: time/term/mach forward decls — bodies after #include
 static int hxlcl_time(int *t);
@@ -1910,7 +1946,14 @@ static int hxlcl_nanosleep(const void *req_, void *rem_) {
         struct timeval tv;
         tv.tv_sec  = (long)(left / 1000000000LL);
         tv.tv_usec = (int)((left % 1000000000LL) / 1000);
+#if (defined(__arm64__) || defined(__aarch64__)) && defined(__APPLE__)
         long r = _hxlcl_syscall6_cf(HXLCL_SYS_SELECT, 0, 0, 0, 0, (long)&tv, 0);
+#else
+        // Linux: the Apple raw-trap select primitive (_hxlcl_syscall6_cf /
+        // HXLCL_SYS_SELECT) lives only in the arm64-darwin branch; route the
+        // NULL-fd-set timeout sleep through libc select() (<sys/select.h>).
+        long r = select(0, NULL, NULL, NULL, &tv);
+#endif
         if (r == 0) return 0;          // timeout elapsed -> full sleep done
         if (errno == EINTR) continue;   // signal: recompute remaining, retry
         return -1;                      // genuine error
