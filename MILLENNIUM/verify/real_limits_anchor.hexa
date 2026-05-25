@@ -1,0 +1,148 @@
+#!hexa strict
+// hexa-millennium/verify/real_limits_anchor.hexa — real-limits-first anchor.
+//
+// Per LATTICE_POLICY.md §1.3 rule 2: each project's verify must use at
+// least one anchor from §1.2 (mathematical/physical/engineering HARD
+// walls) and at least one community/procedural threshold.
+//
+// hexa-millennium's HARD walls are formal-mathematical (Gödel
+// incompleteness, ZFC consistency unprovable in ZFC) and procedural
+// (Clay-Prize 2-yr community review). The empirical HARD walls are
+// the open-since dates of the six unresolved problems (P vs NP 1971,
+// BSD 1965, Hodge 1950, Riemann 1859, N-S 1934/2000, Yang-Mills 1954)
+// and the one resolution (Poincaré → Perelman 2003).
+//
+// This script confirms LIMIT_BREAKTHROUGH.md is present and references
+// the canonical HARD walls so any agent has a pointer from verify→audit.
+//
+// Honesty: NO value here is computed against the n=6 lattice. Each
+// anchor is sourced from primary literature (Gödel 1931, Cook 1971,
+// Riemann 1859, Perelman 2002/03, Clay Math Institute official rules).
+// use THEIR OWN proofs — no lattice-fit imposed.
+
+let HOME = env("HOME")
+let HEXA_MILLENNIUM_ROOT_ENV = env("HEXA_MILLENNIUM_ROOT")
+
+fn shq(s: str) -> str {
+    return "'" + s.replace("'", "'\\''") + "'"
+}
+
+fn _resolve_root() -> str {
+    if HEXA_MILLENNIUM_ROOT_ENV.len() > 0 { return HEXA_MILLENNIUM_ROOT_ENV }
+    let oldpwd = env("OLDPWD")
+    if oldpwd.len() > 0 {
+        let t = exec("[ -f " + shq(oldpwd) + "/hexa.toml ] && echo y || echo n").trim()
+        if t == "y" { return oldpwd }
+    }
+    let pwd = env("PWD")
+    if pwd.len() > 0 {
+        let t = exec("[ -f " + shq(pwd) + "/hexa.toml ] && echo y || echo n").trim()
+        if t == "y" { return pwd }
+    }
+    return HOME + "/core/hexa-millennium"
+}
+
+fn _file_exists(p: str) -> bool {
+    let r = exec("[ -f " + shq(p) + " ] && echo yes || echo no").trim()
+    return r == "yes"
+}
+
+fn _file_contains(p: str, needle: str) -> bool {
+    let cmd = "grep -F " + shq(needle) + " " + shq(p) + " >/dev/null 2>&1 && echo yes || echo no"
+    let r = exec(cmd).trim()
+    return r == "yes"
+}
+
+fn main() {
+    let root = _resolve_root()
+    println("hexa-millennium/verify/real_limits_anchor — real-limits-first check")
+    println("  root: " + root)
+    println("")
+    println("  policy: LATTICE_POLICY §1.2 — real-limits first (Gödel HARD_WALL)")
+    println("  policy: LATTICE_POLICY §1.3 rule 2 — at least 1 real limit anchor required")
+    println("  source: LIMIT_BREAKTHROUGH.md (Wave M, millennium-scale audit)")
+    println("")
+
+    let mut ok = 0
+    let mut bad = 0
+
+    // 1. Audit file must exist.
+    let audit = root + "/LIMIT_BREAKTHROUGH.md"
+    if _file_exists(audit) {
+        println("  [PASS] LIMIT_BREAKTHROUGH.md present")
+        ok = ok + 1
+    } else {
+        println("  [FAIL] LIMIT_BREAKTHROUGH.md missing (abs: " + audit + ")")
+        bad = bad + 1
+    }
+
+    // 2. HARD walls — formal-mathematical limits (per hexa-meta §3.6).
+    let hard_walls = [
+        ["Gödel incompleteness HARD_WALL",           "Gödel"],
+        ["ZFC consistency unprovable in ZFC",         "ZFC"],
+        ["Clay-Prize 2-yr community review",          "2 yr community review"],
+        ["P vs NP open since Cook 1971",              "1971"],
+        ["BSD open since 1965",                       "1965"],
+        ["Hodge open since 1950",                     "1950"],
+        ["Riemann open since 1859",                   "1859"],
+        ["Yang-Mills mass gap open (1954/1969)",      "1954"],
+        ["Poincaré RESOLVED — Perelman 2003",         "Perelman 2003"],
+        ["Closed-form candidate ≠ formal proof",      "candidate"],
+    ]
+    for a in hard_walls {
+        let label = a[0]
+        let needle = a[1]
+        if _file_contains(audit, needle) {
+            println("  [PASS] HARD wall anchored: " + label)
+            ok = ok + 1
+        } else {
+            println("  [FAIL] HARD wall missing: " + label + " (needle: '" + needle + "')")
+            bad = bad + 1
+        }
+    }
+
+    // 3. Honest-scope caveat: README must explicitly state "candidate, NOT
+    let readme = root + "/README.md"
+    let scope_anchors = [
+        ["candidate (not formal proof) badge", "CANDIDATE_(not_formal_proof)"],
+        ["Perelman 2003 acknowledged",         "Perelman"],
+        ["CANDIDATE_SPECS_ONLY verdict",        "CANDIDATE_SPECS_ONLY"],
+        ["NOT a formal proof disclaimer",       "not a formal proof"],
+    ]
+    for s in scope_anchors {
+        let label = s[0]
+        let needle = s[1]
+        if _file_contains(readme, needle) {
+            println("  [PASS] README scope-honest: " + label)
+            ok = ok + 1
+        } else {
+            println("  [FAIL] README scope-honest MISSING: " + label + " (needle: '" + needle + "')")
+            bad = bad + 1
+        }
+    }
+
+    // 4. hexa.toml must declare zero formal proofs.
+    let toml = root + "/hexa.toml"
+    if _file_contains(toml, "verbs_formally_proved = 0") {
+        println("  [PASS] hexa.toml declares verbs_formally_proved = 0")
+        ok = ok + 1
+    } else {
+        println("  [FAIL] hexa.toml missing 'verbs_formally_proved = 0'")
+        bad = bad + 1
+    }
+    if _file_contains(toml, "CANDIDATE_SPECS_ONLY") {
+        println("  [PASS] hexa.toml verdict = CANDIDATE_SPECS_ONLY")
+        ok = ok + 1
+    } else {
+        println("  [FAIL] hexa.toml missing CANDIDATE_SPECS_ONLY verdict")
+        bad = bad + 1
+    }
+
+    println("")
+    println("  anchors verified: " + str(ok) + "  failures: " + str(bad))
+    if bad > 0 {
+        println("__HEXA_MILLENNIUM_REAL_LIMITS_ANCHOR__ FAIL")
+        exit(1)
+    }
+    println("__HEXA_MILLENNIUM_REAL_LIMITS_ANCHOR__ PASS")
+}
