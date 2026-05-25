@@ -213,6 +213,9 @@ fn cmd_rubric() {
     println("             rel_p_from_kinetic(T_MeV)   → √(T²+2·T·938.272)       (AD/ELENA decel-ladder pc(T) [MeV/c], ANTIMATTER ⓶감속, 1-arg)")
     println("             transition_factor_1s2s()    → 1/1²−1/2²=3/4           ((anti)H 1S-2S Rydberg level-diff factor, ANTIMATTER ⓻측정, 0-arg)")
     println("             h1s2s_rydberg(R∞,c)         → (3/4)·R∞·c·1e-15 [PHz]  ((anti)H 1S-2S leading freq ≈2.4661 PHz, ANTIMATTER ⓻측정, 2-arg)")
+    println("             cyclotron_cool_bexponent(_) → −2 (exact int)          (synchrotron cooling τ_c∝B^(−2) EXACT exponent, ANTIMATTER ⓸냉각, 1-arg dummy, 🔵)")
+    println("             cyclotron_cool_bratio(Bhi,Blo) → (Blo/Bhi)²           (cyclotron cooling τ_c(Bhi)/τ_c(Blo) ratio, 5T/1T→0.04, ANTIMATTER ⓸냉각, 2-arg)")
+    println("             cyclotron_cool_massspeedup(mh,ml) → (mh/ml)³·1e-9     (cyclotron cooling speedup τ_c(ml)/τ_c(mh)∝(mh/ml)³ Giga-view, m_p/m_e→6.1905, raw≈6.19e9, ANTIMATTER ⓸냉각, 2-arg)")
     println("             sf_log10_t(Z,A)             → 21.08+ΣCᵢxⁱ/A           (Ren-Xu 2005 SF log10 T₁/₂[s], NUCLEAR C1, 2-arg)")
     println("             sf_log10_t_hindered(Z,A)    → sf_log10_t+HF(0/5/10)   (Ren-Xu+Hoffman93 odd-A/odd-odd HF, NUCLEAR C3, 2-arg)")
     println("             sf_log10_t_zwp(Z,A)         → F(Z)+parity+7.499122    (Zdeb-Warda-Pomorski 2013 SF log10 T₁/₂[s], NUCLEAR C4, 2-arg)")
@@ -272,6 +275,16 @@ fn _recompute(fn_name: string, n: int) -> int {
     //   pair_threshold_factor(n) = 6·n  →  the exact kinetic-threshold
     //   multiplier (n=1 ⇒ 6), Chamberlain–Segrè 1955 Bevatron closed-form.
     if fn_name == "pair_threshold_factor" { return 6 * n }
+    // ── Cyclotron (synchrotron) cooling B-exponent (ANTIMATTER ⓸냉각) ──────
+    //   A gyrating charge radiates (Larmor); its transverse energy decays
+    //   E_⊥(t) = E_⊥(0)·e^(−t/τ_c) with the SI closed-form cooling constant
+    //       τ_c = 6π ε₀ m³ c³ / (e⁴ B²)   (= 3 m³ c³ / (4 e⁴ B²) Gaussian).
+    //   The EXACT integer power of B in τ_c is −2 — a structural invariant of
+    //   the radiated-power law P ∝ q⁴ B² v_⊥² / m² (so τ_c = E_⊥/P̄ ∝ 1/B²),
+    //   independent of any constant or unit system. The operand n is a dummy.
+    //   Invoke as `--expr cyclotron_cool_bexponent 0 -2` → 🔵. Negative
+    //   control: any other claim (e.g. -3) → 🔴 (proves determinism).
+    if fn_name == "cyclotron_cool_bexponent" { return -2 }
     return NOCALC
 }
 
@@ -1315,6 +1328,39 @@ fn _h1s2s_rydberg(r_inf_per_m: float, c_m_per_s: float) -> float {
     return 0.75 * r_inf_per_m * c_m_per_s * 0.000000000000001
 }
 
+// ── Cyclotron (synchrotron) cooling time-constant scalings (ANTIMATTER ⓸냉각)
+//    closed-form — 2026-05-25). A charge gyrating in the trap's strong B
+//    radiates by the Larmor/synchrotron mechanism; its TRANSVERSE energy
+//    decays exponentially E_⊥(t)=E_⊥(0)·e^(−t/τ_c), with the SI closed form
+//        τ_c = 6π ε₀ m³ c³ / (e⁴ B²)        (KEY: τ_c ∝ 1/B² · τ_c ∝ m³)
+//    so e⁺ self-cools (m_p/m_e)³≈6.18e9× faster than p̄ — why p̄ is cooled
+//    sympathetically via electrons/positrons, not by its own radiation.
+//    @cite Jackson, Classical Electrodynamics 3e §14.2 (Larmor) ·
+//          Gabrielse et al., ATRAP — positron/electron cyclotron cooling.
+//
+// τ_c ratio at two field strengths: τ_c(B_hi)/τ_c(B_lo) = (B_lo/B_hi)².
+// 2-arg (B_hi, B_lo in any consistent unit). 5T,1T → (1/5)² = 0.04.
+fn _cyclotron_cool_bratio(b_hi: float, b_lo: float) -> float {
+    if b_hi <= 0.0 { return _NOCALC_F }
+    if b_lo <= 0.0 { return _NOCALC_F }
+    let r = b_lo / b_hi
+    return r * r
+}
+
+// mass speedup: cooling is m³ faster for the lighter species at fixed B —
+//   τ_c(m_light)/τ_c(m_heavy) = (m_heavy/m_light)³.
+// Returned SCALED ×1e-9 (Gigaspeedup view) so the ~6.19e9 raw speedup lands
+// order-unity — the discriminating-ε convention (cf. sigma_v_dt_e18), since
+// an absolute ε=1e-9 gate is ULP-meaningless at 1e9 magnitude.
+// 2-arg (m_heavy, m_light in any consistent mass unit). m_p, m_e → ≈6.1905
+// (i.e. raw (m_p/m_e)³ ≈ 6.19e9× faster e⁺ self-cooling vs p̄).
+fn _cyclotron_cool_massspeedup(m_heavy: float, m_light: float) -> float {
+    if m_heavy <= 0.0 { return _NOCALC_F }
+    if m_light <= 0.0 { return _NOCALC_F }
+    let r = m_heavy / m_light
+    return r * r * r * 0.000000001
+}
+
 // BCS zero-temperature energy gap Δ(0):
 //   Δ(0) = 1.764·k_B·Tc      (2Δ(0)/k_B·Tc = 3.528 = 2π/e^γ)
 // 1-arg (Tc in K → Δ in J). BCS 1957 PR 108:1175. CODATA 2018 k_B.
@@ -2354,6 +2400,17 @@ fn _recompute_float(fn_name: string, a0: float, a1: float, a2: float, a3: float,
         if argc < 2 { return _NOCALC_F }
         return _h1s2s_rydberg(a0, a1)
     }
+    // ── Cyclotron (synchrotron) cooling time-constant scalings (ANTIMATTER ⓸냉각)
+    //   cyclotron_cool_bratio(B_hi, B_lo)      2-arg: (B_lo/B_hi)²   (5,1→0.04)
+    //   cyclotron_cool_massspeedup(m_h, m_l)   2-arg: (m_h/m_l)³     (m_p,m_e→6.18e9)
+    if fn_name == "cyclotron_cool_bratio" {
+        if argc < 2 { return _NOCALC_F }
+        return _cyclotron_cool_bratio(a0, a1)
+    }
+    if fn_name == "cyclotron_cool_massspeedup" {
+        if argc < 2 { return _NOCALC_F }
+        return _cyclotron_cool_massspeedup(a0, a1)
+    }
     // ── Nuclear α-decay half-life (NUCLEAR.md N7/N11 funnel cohort) ─────
     //   viola_seaborg_log10_t(Z, Q_α)     2-arg: (aZ+b)/√Q + (cZ+d)
     //   royer_log10_t(Z, A, Q_α)          3-arg: a + bA^{1/6}√Z + cZ/√Q
@@ -2614,6 +2671,8 @@ fn _is_float_fn(fn_name: string) -> bool {
         || fn_name == "rel_kinetic_from_p" || fn_name == "rel_p_from_kinetic"
         // (anti)hydrogen 1S-2S two-photon frequency (ANTIMATTER ⓻측정 · 2026-05-25):
         || fn_name == "transition_factor_1s2s" || fn_name == "h1s2s_rydberg"
+        // Cyclotron (synchrotron) cooling time-constant scalings (ANTIMATTER ⓸냉각 · 2026-05-25):
+        || fn_name == "cyclotron_cool_bratio" || fn_name == "cyclotron_cool_massspeedup"
         // Nuclear α-decay half-life (NUCLEAR.md N7/N11 funnel · 2026-05-25):
         || fn_name == "viola_seaborg_log10_t" || fn_name == "royer_log10_t"
         // Nuclear C1 — SF competition (NUCLEAR.md §4.2 · NOVEL C1 · 2026-05-25):
