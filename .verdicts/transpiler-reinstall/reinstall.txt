@@ -1,0 +1,53 @@
+================================================================================
+VERDICT — transpiler-reinstall (stale Mac transpiler regen, V4 bessel _Generic blocker)
+================================================================================
+date (UTC)  : 2026-05-25T19:33:17Z
+worktree    : /tmp/wt-transpiler  (branch transpiler-reinstall-head-2026-05-26)
+base        : origin/main @ 199901a04d533d93e1a9dfca1267492a1c19ad58
+build host  : mini (arm64 macOS 26.5, /usr/bin/clang)  — pool-route blocks local heavy clang
+artifact    : self/native/hexa_v2 + build/hexa_v2  (BOTH git-ignored build-output, NOT tracked)
+
+--------------------------------------------------------------------------------
+ROOT CAUSE (confirmed from HEAD source vs stale binary)
+--------------------------------------------------------------------------------
+HEAD self/codegen.hexa::cg_math_sym maps (VERIFY-KIT V4, 2026-05-26):
+  bessel_j0 -> hexa_math_j0   (line 347)   bessel_j1 -> hexa_math_j1 (line 348)
+  gamma     -> hexa_math_tgamma (343)      tgamma -> hexa_math_tgamma (344)
+These route through hexa runtime wrappers, AVOIDING the libm j0/j1 _Generic
+collision (hexa_call1(bessel_j0,x) vs bare libm j0).
+
+The BUILT Mac transpiler predates this fix. tool/verify_cli.hexa HEAD has full
+V4 special-fn support (gamma/erf/bessel via --tol, _recompute_float @2707,
+_gamma @1179 etc.), but the stale transpiler omits the codegen mapping -> the
+rebuilt bin/hexa-verify cannot recompute gamma/bessel (returns 🟠 INSUFFICIENT
+and does not even parse --tol for those exprs).
+
+--------------------------------------------------------------------------------
+BEFORE (stale transpiler fingerprints + broken verify)
+--------------------------------------------------------------------------------
+self/native/hexa_v2 : May 25 15:34:22 2026  1923000 bytes
+  sha256 = 875e2ad52777aa45948b59f452ff211832a86de18bd33cd03ab20d93103e8d77
+  hexa_math_j0 strings: 0   hexa_math_tgamma strings: 0
+build/hexa_v2       : May 25 18:11:06 2026  1922984 bytes
+  sha256 = df73659295879a34351a9c3f4dedf5e00335605ad2aaccf7c9d850de956cc6a2
+  hexa_math_j0 strings: 0   hexa_math_tgamma strings: 0
+
+bin/hexa-verify rebuilt with stale build/hexa_v2:
+  $ bin/hexa-verify --expr gamma 5 24 --tol 1e-6
+    error: to_int: trailing garbage in "--tol"
+  $ bin/hexa-verify --expr bessel_j0 0 1 --tol 1e-6
+    error: to_int: trailing garbage in "--tol"
+  $ bin/hexa-verify --expr sigma 6 12        (control, pre-V4 path)
+    tier = 🔵 SUPPORTED-FORMAL   (OK — unaffected)
+
+--------------------------------------------------------------------------------
+PLAN
+--------------------------------------------------------------------------------
+1. Backup self/native/hexa_v2 + build/hexa_v2 to /tmp/transpiler-bak-<ts>/.
+2. Fresh /tmp clone off origin/main on mini; regen transpiler (arm64 clang).
+3. scp back; atomic mv -f swap into both paths.
+4. Rebuild bin/hexa-verify end-to-end (bessel collision must be gone).
+5. Verify: gamma 5 24 --tol 1e-6 ->🟢 · bessel_j0 0 1 --tol 1e-6 ->🟢 · sigma 6 12 ->🔵.
+6. AFTER section appended below.
+
+(AFTER appended once regen+verify complete.)
