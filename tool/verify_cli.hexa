@@ -150,7 +150,7 @@ fn cmd_rubric() {
     println("             Verifies & absorbs equations NOT YET in the atlas — verify computes")
     println("             them; the binary built-in atlas grows with proven closed-forms.")
     println("  calc fns : sigma|sigma_0|sigma_2|phi|mu|tau|is_perfect|aliquot|gamma0_index|")
-    println("             gamma0_cusps|gamma0_genus|isotropy_lcm|first_cusp_form_weight")
+    println("             gamma0_cusps|gamma0_genus|isotropy_lcm|first_cusp_form_weight|pair_threshold_factor")
     println("             2-op: sigma_k|jacobi|kronecker|dim_cusp_forms|ssh_winding  (extend _recompute on gap)")
     println("             3-op: tknn_chern (RFC 046 TKNN Chern/Hall integer · Diophantine gap label)")
     println("  float fns: welch_t_crit(df)  wilson_hilferty_p(t,df)   → 🟢 NUMERICAL (ε=1e-9")
@@ -207,6 +207,10 @@ fn cmd_rubric() {
     println("             pippard_coherence(v_F,Tc)   → ħ·v_F/(π·1.764·k_B·Tc)  (Pippard intrinsic coherence ξ₀, RTSC #15, 2-arg)")
     println("             viola_seaborg_log10_t(Z,Qα) → (aZ+b)/√Qα+(cZ+d)     (Viola-Seaborg α-decay log10 T₁/₂[s], NUCLEAR N7/N11, 2-arg)")
     println("             royer_log10_t(Z,A,Qα)       → a+bA^{1/6}√Z+cZ/√Qα   (Royer 2000 α-decay log10 T₁/₂[s], NUCLEAR N7/N11, 3-arg)")
+    println("             pair_threshold_kinetic(m_p_c²) → 6·m_p_c²            (p+p→p+p+p+p̄ kinetic threshold T_th, ANTIMATTER ⓵생성, 1-arg)")
+    println("             pair_threshold_total(m_p_c²)   → 7·m_p_c²            (antiproton-prod total beam-E threshold E_beam,th, ANTIMATTER ⓵생성, 1-arg)")
+    println("             transition_factor_1s2s()    → 1/1²−1/2²=3/4           ((anti)H 1S-2S Rydberg level-diff factor, ANTIMATTER ⓻측정, 0-arg)")
+    println("             h1s2s_rydberg(R∞,c)         → (3/4)·R∞·c·1e-15 [PHz]  ((anti)H 1S-2S leading freq ≈2.4661 PHz, ANTIMATTER ⓻측정, 2-arg)")
     println("             sf_log10_t(Z,A)             → 21.08+ΣCᵢxⁱ/A           (Ren-Xu 2005 SF log10 T₁/₂[s], NUCLEAR C1, 2-arg)")
     println("             sf_log10_t_hindered(Z,A)    → sf_log10_t+HF(0/5/10)   (Ren-Xu+Hoffman93 odd-A/odd-odd HF, NUCLEAR C3, 2-arg)")
     println("             sf_log10_t_zwp(Z,A)         → F(Z)+parity+7.499122    (Zdeb-Warda-Pomorski 2013 SF log10 T₁/₂[s], NUCLEAR C4, 2-arg)")
@@ -249,6 +253,14 @@ fn _recompute(fn_name: string, n: int) -> int {
     if fn_name == "gamma0_genus"   { return gamma0_genus(n) }
     if fn_name == "isotropy_lcm"   { return isotropy_lcm(n) }
     if fn_name == "first_cusp_form_weight" { return first_cusp_form_weight(n) }
+    // ── Antiproton pair-production threshold factor (ANTIMATTER ⓵생성) ──
+    //   p + p → p + p + p + p̄  (fixed target, baryon-number conserving).
+    //   Mandelstam-s threshold: s_min = (4 m_p c²)²  (4 final particles at
+    //   rest in CM). Fixed target: s = 2 m_p c²·E_beam + 2(m_p c²)².
+    //   ⇒ E_beam,th = 7 m_p c²  ⇒  T_th = E_beam,th − m_p c² = 6 m_p c².
+    //   pair_threshold_factor(n) = 6·n  →  the exact kinetic-threshold
+    //   multiplier (n=1 ⇒ 6), Chamberlain–Segrè 1955 Bevatron closed-form.
+    if fn_name == "pair_threshold_factor" { return 6 * n }
     return NOCALC
 }
 
@@ -1131,6 +1143,62 @@ fn _gl_parameter_kappa(lambda_l: float, xi: float) -> float {
     return lambda_l / xi
 }
 
+// -- Penning-trap eigenmotion (ANTIMATTER 3-capture - charged-particle 3-freq --
+//    closed-form - 2026-05-25). A single charged particle in a Penning trap
+//    (uniform axial B + electrostatic quadrupole U0, characteristic size d)
+//    has THREE eigenmotions whose angular frequencies follow from the
+//    secular equation of the linearised equations of motion:
+//
+//        free cyclotron     w_c = qB/m
+//        axial              w_z = sqrt(q*U0/(m*d^2))
+//        modified cyclotron w+  = w_c/2 + sqrt((w_c/2)^2 - w_z^2/2)
+//        magnetron          w-  = w_c/2 - sqrt((w_c/2)^2 - w_z^2/2)
+//
+//    All three are expressed as functions of the two natural inputs (w_c, w_z)
+//    so the verify atoms are unit-system-agnostic (feed SI rad/s). Trapping
+//    requires the discriminant (w_c/2)^2 - w_z^2/2 >= 0 (i.e. w_c >= sqrt2*w_z);
+//    otherwise the radial motion is unbound (return _NOCALC_F honestly).
+//    @cite Brown & Gabrielse 1986 Rev.Mod.Phys. 58:233 (geonium) - Penning
+//    1936 Physica 3:873 - Dehmelt 1990 Rev.Mod.Phys. 62:525 (Nobel lecture).
+
+// Modified-cyclotron (reduced cyclotron) eigenfrequency w+ (rad/s).
+// 2-arg (w_c, w_z). Source anchor pbar trap B=5T,U0=10V,d=5mm,m=m_p:
+//   (478941657.7971818, 6189938.014534115) -> 478901654.4559245.
+fn _penning_omega_plus(omega_c: float, omega_z: float) -> float {
+    if omega_c <= 0.0 { return _NOCALC_F }
+    if omega_z < 0.0 { return _NOCALC_F }
+    let half_c = omega_c / 2.0
+    let disc = half_c * half_c - omega_z * omega_z / 2.0
+    if disc < 0.0 { return _NOCALC_F }
+    return half_c + sqrt(disc)
+}
+
+// Magnetron eigenfrequency w- (rad/s). 2-arg (w_c, w_z).
+// Source anchor (same pbar trap): (478941657.7971818, 6189938.014534115)
+//   -> 40003.34125730395.
+fn _penning_omega_minus(omega_c: float, omega_z: float) -> float {
+    if omega_c <= 0.0 { return _NOCALC_F }
+    if omega_z < 0.0 { return _NOCALC_F }
+    let half_c = omega_c / 2.0
+    let disc = half_c * half_c - omega_z * omega_z / 2.0
+    if disc < 0.0 { return _NOCALC_F }
+    return half_c - sqrt(disc)
+}
+
+// Brown-Gabrielse INVARIANCE THEOREM -- reconstructed free-cyclotron freq:
+//   w_c_recon = sqrt(w+^2 + w_z^2 + w-^2)  ==  w_c  (exact algebraic identity,
+//   robust to trap misalignment/ellipticity). 2-arg (w_c, w_z); a match of
+//   w_c_recon == w_c (within eps) is the verify-native certification of the
+//   invariance theorem. Source anchor (same pbar trap):
+//   (478941657.7971818, 6189938.014534115) -> 478941657.7971818.
+fn _penning_invariance(omega_c: float, omega_z: float) -> float {
+    let wp = _penning_omega_plus(omega_c, omega_z)
+    if wp == _NOCALC_F { return _NOCALC_F }
+    let wm = _penning_omega_minus(omega_c, omega_z)
+    if wm == _NOCALC_F { return _NOCALC_F }
+    return sqrt(wp * wp + omega_z * omega_z + wm * wm)
+}
+
 // ── Superconductivity tranche 2 (RTSC #15 device-side + BCS · 2026-05-25) ─
 // Five more closed-form supercon identities (stdlib/material/sim.hexa
 // canonical home). All libm-class (sqrt/scalar) with CODATA-2018 constants;
@@ -1170,6 +1238,47 @@ fn _thermo_critical_field(hc_zero: float, temp_k: float, tc_k: float) -> float {
 fn _condensation_energy(bc_zero_t: float) -> float {
     let mu0 = 1.25663706212e-6
     return bc_zero_t * bc_zero_t / (2.0 * mu0)
+}
+
+// ── Antiproton pair-production threshold (ANTIMATTER ⓵생성) ────────────
+//   Reaction (fixed target, one p at rest):  p + p → p + p + p + p̄
+//   Baryon number forces an extra proton ⇒ 4 baryons final state.
+//   Lorentz-invariant Mandelstam s at threshold (all 4 at rest in CM):
+//     s_min = (4 m_p c²)²
+//   Fixed target:  s = 2 m_p c²·E_beam + 2(m_p c²)²   (E_beam = total)
+//   Setting equal ⇒ E_beam,th = 7 m_p c²  ⇒  T_th = E_beam,th − m_p c² = 6 m_p c².
+//   Chamberlain–Segrè 1955 Bevatron threshold. CODATA m_p c² = 938.272 MeV.
+//   pair_threshold_kinetic(m) = 6·m   (938.272 → 5629.632 MeV ≈ 5.63 GeV).
+fn _pair_threshold_kinetic(m_p_c2: float) -> float {
+    if m_p_c2 <= 0.0 { return _NOCALC_F }
+    return 6.0 * m_p_c2
+}
+//   pair_threshold_total(m) = 7·m  — total beam energy at threshold
+//   (938.272 → 6567.904 MeV ≈ 6.57 GeV); E_beam,th = 7 m_p c².
+fn _pair_threshold_total(m_p_c2: float) -> float {
+    if m_p_c2 <= 0.0 { return _NOCALC_F }
+    return 7.0 * m_p_c2
+}
+
+// ── ANTIMATTER ⓻측정 — (anti)hydrogen 1S-2S two-photon frequency ───────
+//   Bohr/Rydberg level (point-nucleus, leading order): E_n = − R∞·h·c / n².
+//   1S→2S transition energy: ΔE = R∞·h·c·(1/1² − 1/2²) = (3/4)·R∞·h·c.
+//   Two-photon frequency:    f_1S2S = ΔE/h = (3/4)·R∞·c.
+//   transition_factor_1s2s() = 1/1² − 1/2² = 3/4 = 0.75  (level-diff factor).
+fn _transition_factor_1s2s() -> float {
+    // 1/1^2 - 1/2^2 = 1 - 1/4 = 3/4
+    return 1.0 / 1.0 - 1.0 / 4.0
+}
+//   h1s2s_rydberg(R∞, c) = (3/4)·R∞·c·1e-15  [PHz]  (scaled to order-unity so
+//   the absolute ε=1e-9 gate is meaningful at the leading value).
+//   R∞=1.0973731568e7 m⁻¹, c=2.99792458e8 m/s ⇒ ≈ 2.4660730772 PHz ≈ 2466 THz.
+//   NOTE: LEADING point-nucleus value. CODATA/ALPHA measured 2 466 061 413 187 035 Hz
+//   adds the reduced-mass factor m_e/(m_e+m_p) ≈ 0.99946 + QED/Lamb-shift —
+//   NOT reproduced to 15 digits by this leading formula.
+fn _h1s2s_rydberg(r_inf_per_m: float, c_m_per_s: float) -> float {
+    if r_inf_per_m <= 0.0 { return _NOCALC_F }
+    if c_m_per_s <= 0.0 { return _NOCALC_F }
+    return 0.75 * r_inf_per_m * c_m_per_s * 0.000000000000001
 }
 
 // BCS zero-temperature energy gap Δ(0):
@@ -2072,6 +2181,23 @@ fn _recompute_float(fn_name: string, a0: float, a1: float, a2: float, a3: float,
         if argc < 2 { return _NOCALC_F }
         return _pippard_coherence(a0, a1)
     }
+    // ── Antiproton pair-production threshold (ANTIMATTER ⓵생성) ─────────
+    //   pair_threshold_kinetic(m_p_c²) = 6·m_p_c²   (T_th, 938.272→5629.632 MeV)
+    //   pair_threshold_total(m_p_c²)   = 7·m_p_c²   (E_beam,th, →6567.904 MeV)
+    if fn_name == "pair_threshold_kinetic" {
+        return _pair_threshold_kinetic(a0)
+    }
+    if fn_name == "pair_threshold_total" {
+        return _pair_threshold_total(a0)
+    }
+    // ── (anti)hydrogen 1S-2S two-photon frequency (ANTIMATTER ⓻측정) ────
+    //   transition_factor_1s2s()  0-arg: 1/1² − 1/2² = 3/4
+    //   h1s2s_rydberg(R∞, c)      2-arg: (3/4)·R∞·c·1e-15 [PHz] ≈ 2.4660730772
+    if fn_name == "transition_factor_1s2s" { return _transition_factor_1s2s() }
+    if fn_name == "h1s2s_rydberg" {
+        if argc < 2 { return _NOCALC_F }
+        return _h1s2s_rydberg(a0, a1)
+    }
     // ── Nuclear α-decay half-life (NUCLEAR.md N7/N11 funnel cohort) ─────
     //   viola_seaborg_log10_t(Z, Q_α)     2-arg: (aZ+b)/√Q + (cZ+d)
     //   royer_log10_t(Z, A, Q_α)          3-arg: a + bA^{1/6}√Z + cZ/√Q
@@ -2229,6 +2355,22 @@ fn _recompute_float(fn_name: string, a0: float, a1: float, a2: float, a3: float,
     if fn_name == "absorption_depth" {
         return _absorption_depth(a0)
     }
+    // Penning-trap eigenmotion (ANTIMATTER capture - charged-particle 3-freq):
+    //   penning_omega_plus(w_c, w_z)   2-arg: w_c/2 + sqrt((w_c/2)^2 - w_z^2/2)
+    //   penning_omega_minus(w_c, w_z)  2-arg: w_c/2 - sqrt((w_c/2)^2 - w_z^2/2)
+    //   penning_invariance(w_c, w_z)   2-arg: sqrt(w+^2 + w_z^2 + w-^2) == w_c
+    if fn_name == "penning_omega_plus" {
+        if argc < 2 { return _NOCALC_F }
+        return _penning_omega_plus(a0, a1)
+    }
+    if fn_name == "penning_omega_minus" {
+        if argc < 2 { return _NOCALC_F }
+        return _penning_omega_minus(a0, a1)
+    }
+    if fn_name == "penning_invariance" {
+        if argc < 2 { return _NOCALC_F }
+        return _penning_invariance(a0, a1)
+    }
     return _NOCALC_F
 }
 
@@ -2270,6 +2412,10 @@ fn _is_float_fn(fn_name: string) -> bool {
         || fn_name == "london_penetration_depth" || fn_name == "thermo_critical_field"
         || fn_name == "condensation_energy" || fn_name == "bcs_gap_zero"
         || fn_name == "pippard_coherence"
+        // Antiproton pair-production threshold (ANTIMATTER ⓵생성 · 2026-05-25):
+        || fn_name == "pair_threshold_kinetic" || fn_name == "pair_threshold_total"
+        // (anti)hydrogen 1S-2S two-photon frequency (ANTIMATTER ⓻측정 · 2026-05-25):
+        || fn_name == "transition_factor_1s2s" || fn_name == "h1s2s_rydberg"
         // Nuclear α-decay half-life (NUCLEAR.md N7/N11 funnel · 2026-05-25):
         || fn_name == "viola_seaborg_log10_t" || fn_name == "royer_log10_t"
         // Nuclear C1 — SF competition (NUCLEAR.md §4.2 · NOVEL C1 · 2026-05-25):
@@ -2296,6 +2442,9 @@ fn _is_float_fn(fn_name: string) -> bool {
         || fn_name == "beer_lambert_log10" || fn_name == "fluence"
         || fn_name == "beam_waist" || fn_name == "rayleigh_range"
         || fn_name == "absorption_depth"
+        // Penning-trap eigenmotion (ANTIMATTER capture 3-freq closed-form):
+        || fn_name == "penning_omega_plus" || fn_name == "penning_omega_minus"
+        || fn_name == "penning_invariance"
         // Plasma-wakefield cold-linear scalings (CERN §1.5 tabletop accel · 2026-05-25):
         || fn_name == "wakefield_e0_gv_m" || fn_name == "wakefield_lambda_um"
 }
@@ -2309,6 +2458,7 @@ fn _is_zero_arg_float_fn(fn_name: string) -> bool {
         || fn_name == "overlap_vqe_h2_shift_ha"
         || fn_name == "mirror_bench_hog_asymptote"
         || fn_name == "bcs_gap_ratio"
+        || fn_name == "transition_factor_1s2s"
 }
 
 // trim trailing zeros of a float→string for tidy verdict echo.
