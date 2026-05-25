@@ -379,6 +379,7 @@ static const char *__attribute__((noinline)) hxlcl_strerror(int errnum) {
 }
 // cycle 6: strftime forward decl — body after #include
 static size_t hxlcl_strftime(char *buf, size_t cap, const char *fmt, void *tm);
+static void *hxlcl_gmtime_r(const void *tp, void *out);
 // Cycle 52 — minimal printf family. Handles %s/%d/%i/%u/%lld/%ld/%llu/
 // %lu/%zu/%c/%x/%X/%p/%%, basic width + zero-pad.
 // Cycle 56 (2026-05-21) — real %f/%g/%e/%F/%G/%E formatting added
@@ -1551,6 +1552,11 @@ static int hxlcl_posix_openpt(int flags);
 #define strcpy(d,s)    hxlcl_strcpy((char *)(d), (const char *)(s))
 #define strerror(e)    hxlcl_strerror((int)(e))
 #define strftime(b,c,f,t) hxlcl_strftime((char *)(b), (size_t)(c), (const char *)(f), (void *)(t))
+// RUNTIME tail (cycle 84): route gmtime_r to a hexa-native civil-from-days
+// impl (placed after <time.h> so the prototype is already parsed). Drops
+// the libc _gmtime_r extern. All 4 call sites (incl. runtime_core.c, which
+// is #include'd below this point) macro-expand to the native impl.
+#define gmtime_r(t,o) hxlcl_gmtime_r((const void *)(t), (void *)(o))
 #define snprintf(b,c,...)  hxlcl_snprintf((char *)(b), (size_t)(c), __VA_ARGS__)
 #define sprintf(b,...)     hxlcl_sprintf((char *)(b), __VA_ARGS__)
 #define printf(...)        hxlcl_printf(__VA_ARGS__)
@@ -1893,6 +1899,41 @@ static size_t hxlcl_strftime(char *buf, size_t cap, const char *fmt, void *tm) {
     (void)fmt; (void)tm;
     if (buf && cap > 0) buf[0] = '\0';
     return (size_t)HX_INT(rt_posix_ok());
+}
+// hexa-native gmtime_r — UTC civil time from a Unix epoch, no libc. Uses
+// Howard Hinnant's public-domain civil-from-days algorithm. Fills the
+// struct tm fields strftime reads (year/mon/mday/hour/min/sec + wday/yday).
+static void *hxlcl_gmtime_r(const void *tp, void *out) {
+    long long t = (long long)(*(const time_t *)tp);
+    long long days = t / 86400;
+    long long secs = t % 86400;
+    if (secs < 0) { secs += 86400; days -= 1; }   // floor toward -inf
+    long long z = days + 719468;
+    long long era = (z >= 0 ? z : z - 146096) / 146097;
+    unsigned doe = (unsigned)(z - era * 146097);                 // [0,146096]
+    unsigned yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365; // [0,399]
+    long long y = (long long)yoe + era * 400;
+    unsigned doy = doe - (365 * yoe + yoe / 4 - yoe / 100);      // [0,365]
+    unsigned mp = (5 * doy + 2) / 153;                           // [0,11]
+    unsigned d = doy - (153 * mp + 2) / 5 + 1;                   // [1,31]
+    unsigned m = mp < 10 ? mp + 3 : mp - 9;                      // [1,12]
+    y += (m <= 2);
+    struct tm *g = (struct tm *)out;
+    g->tm_year = (int)(y - 1900);
+    g->tm_mon  = (int)(m - 1);
+    g->tm_mday = (int)d;
+    g->tm_hour = (int)(secs / 3600);
+    g->tm_min  = (int)((secs % 3600) / 60);
+    g->tm_sec  = (int)(secs % 60);
+    int wd = (int)((days % 7 + 4) % 7); if (wd < 0) wd += 7;     // 1970-01-01 = Thu(4)
+    g->tm_wday = wd;
+    static const int mdays[12] = {31,28,31,30,31,30,31,31,30,31,30,31};
+    int leap = ((y % 4 == 0 && y % 100 != 0) || y % 400 == 0);
+    int yd = (int)d - 1;
+    for (unsigned i = 0; i + 1 < m; i++) { yd += mdays[i]; if (i == 1 && leap) yd += 1; }
+    g->tm_yday = yd;
+    g->tm_isdst = 0;
+    return out;
 }
 // GO M10 (RFC 093 R1 prototype, 2026-05-25) — restore real libc socket
 // bodies. Cycle 61 stubbed these out with rationale "aprime_cc doesn't
