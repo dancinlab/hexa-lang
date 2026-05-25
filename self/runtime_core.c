@@ -7653,6 +7653,33 @@ HexaVal hexa_fma(HexaVal a, HexaVal b, HexaVal c) {
                         hexa_float(__hx_to_double(c)));
 }
 #endif
+// Bootstrap bridge for the __raw_idiv/__raw_imod codegen primitives. The NEW
+// codegen.hexa lowers these inline (hexa_int(HX_INT/HX_INT)), but a PRE-builtin
+// bootstrap transpiler (self/native/hexat before regen) doesn't know them and
+// emits the generic function-pointer form `hexa_call2(__raw_idiv, a, b)` — which
+// resolves to __hexa_call2_fp2(fp, a, b) → fp(a, b) via the hexa_call2 _Generic.
+// So these MUST be real C functions of signature HexaVal(HexaVal,HexaVal) (not
+// macros — a macro would not expand on the bare identifier). Same class + form
+// as the s4_flatc_post.py-injected static helpers (e.g. __arr_alloc_items_zero).
+// Unreferenced (harmless) once the bootstrap regenerates and inlines them.
+static inline HexaVal __raw_idiv(HexaVal a, HexaVal b) { return hexa_int(HX_INT(a) / HX_INT(b)); }
+static inline HexaVal __raw_imod(HexaVal a, HexaVal b) { return hexa_int(HX_INT(a) % HX_INT(b)); }
+// float modulo bridge → libm-free hxlcl_fmod (fwd-declared above the runtime_core.c
+// include at self/runtime.c:983). rt_mod's float path uses this instead of the `%`
+// operator so no `_fmod` libm extern is pulled. Mirrors hexa_mod's C body.
+static inline HexaVal __raw_fmod(HexaVal a, HexaVal b) { return hexa_float(hxlcl_fmod(HX_FLOAT(a), HX_FLOAT(b))); }
+
+// RUNTIME.md Step 4 .c-none arith core op 3: under HEXA_HAS_HEXA_RT_STDLIB
+// hexa_div delegates to hexa-source rt_div (stdlib/runtime/numeric.hexa). The
+// int divide there uses the __raw_idiv codegen escape (native HX_INT/HX_INT)
+// since the `/` operator on known-int routes back here (recursion). The #else
+// C body is retained bit-for-bit for the standalone link (smoke path doesn't
+// define the macro). Semantics byte-identical: pure int/int + pure float/float
+// throw on zero; mixed int/float is IEEE (no throw).
+#ifdef HEXA_HAS_HEXA_RT_STDLIB
+extern HexaVal rt_div(HexaVal a, HexaVal b);
+HexaVal hexa_div(HexaVal a, HexaVal b) { return rt_div(a, b); }
+#else
 HexaVal hexa_div(HexaVal a, HexaVal b) {
     _HX_COERCE_BOOL(a, b);
     if (HX_IS_INT(a) && HX_IS_INT(b)) {
@@ -7691,6 +7718,15 @@ HexaVal hexa_div(HexaVal a, HexaVal b) {
     if (fb == 0.0) { hexa_throw(hexa_str("division by zero")); return hexa_float(0.0); }
     return hexa_float(__hx_to_double(a) / fb);
 }
+#endif
+// RUNTIME.md Step 4 .c-none arith core op 4: hexa_mod delegates to hexa-source
+// rt_mod (numeric.hexa) under HEXA_HAS_HEXA_RT_STDLIB; int modulo via __raw_imod
+// codegen escape (same `%`-operator recursion reason as rt_div). #else C body
+// kept bit-for-bit. int/int + any-numeric throw on zero; fmod for the rest.
+#ifdef HEXA_HAS_HEXA_RT_STDLIB
+extern HexaVal rt_mod(HexaVal a, HexaVal b);
+HexaVal hexa_mod(HexaVal a, HexaVal b) { return rt_mod(a, b); }
+#else
 HexaVal hexa_mod(HexaVal a, HexaVal b) {
     _HX_COERCE_BOOL(a, b);
     if (HX_IS_INT(a) && HX_IS_INT(b)) {
@@ -7711,6 +7747,7 @@ HexaVal hexa_mod(HexaVal a, HexaVal b) {
     if (fb == 0.0) { hexa_throw(hexa_str("modulo by zero")); return hexa_float(0.0); }
     return hexa_float(hxlcl_fmod(__hx_to_double(a), fb));
 }
+#endif
 
 // ROI-44: comparison runtime helpers — replace inline GCC stmt-expr in codegen.
 // Semantics: TAG_FLOAT promotes to double compare; TAG_INT uses int64 compare.

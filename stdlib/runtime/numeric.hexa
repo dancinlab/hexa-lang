@@ -1510,3 +1510,81 @@ pub fn rt_mul(a: HexaVal, b: HexaVal) -> HexaVal {
     return rt_mul_float(af, bf)
 }
 
+// rt_div — hexa-source port of runtime_core.c hexa_div (arith core op 3).
+// Semantics match the C body bit-for-bit:
+//   int/int     → throw "division by zero" if b==0, else integer divide
+//   float/float → throw "division by zero" if b==0.0, else float divide
+//   mixed       → IEEE float divide (NO throw — 1/0.0→inf, 0/0.0→NaN)
+//   non-numeric → type error throw
+// The int divide uses the __raw_idiv codegen escape (native HX_INT/HX_INT)
+// because the `/` operator on known-int operands routes back to hexa_div
+// (div-by-zero throw) — calling it here would recurse. The zero-check lives
+// in rt_div, so __raw_idiv always sees a nonzero divisor.
+pub fn rt_div_float(a: float, b: float) -> float { return a / b }
+
+pub fn rt_div(a: HexaVal, b: HexaVal) -> HexaVal {
+    let ta = type_of(a)
+    let tb = type_of(b)
+    let mut ai: int = 0
+    let mut a_kind = 2
+    if ta == "int" { ai = a as int; a_kind = 0 }
+    else if ta == "bool" { if a as bool { ai = 1 } else { ai = 0 } a_kind = 0 }
+    else if ta == "float" { a_kind = 1 }
+    let mut bi: int = 0
+    let mut b_kind = 2
+    if tb == "int" { bi = b as int; b_kind = 0 }
+    else if tb == "bool" { if b as bool { bi = 1 } else { bi = 0 } b_kind = 0 }
+    else if tb == "float" { b_kind = 1 }
+    if a_kind == 2 || b_kind == 2 {
+        throw "cannot divide non-numeric operand (" + ta + " / " + tb + ")"
+    }
+    if a_kind == 0 && b_kind == 0 {
+        if bi == 0 { throw "division by zero" }
+        return __raw_idiv(ai, bi)
+    }
+    let mut af: float = 0.0
+    if a_kind == 0 { af = ai as float } else { af = a as float }
+    let mut bf: float = 0.0
+    if b_kind == 0 { bf = bi as float } else { bf = b as float }
+    // pure float/float throws on zero; mixed int/float is IEEE (no throw).
+    if a_kind == 1 && b_kind == 1 {
+        if bf == 0.0 { throw "division by zero" }
+    }
+    return rt_div_float(af, bf)
+}
+
+// rt_mod — hexa-source port of runtime_core.c hexa_mod (arith core op 4).
+//   int/int            → throw "modulo by zero" if b==0, else integer modulo
+//   any other numeric  → fmod, throw "modulo by zero" if b==0.0
+//   non-numeric        → type error throw
+// __raw_imod is the native-modulo escape (same circularity reason as rt_div).
+// __raw_fmod routes the float path through the libm-free hxlcl_fmod (the `%`
+// operator would lower to libm fmod() and pull a `_fmod` extern).
+pub fn rt_mod(a: HexaVal, b: HexaVal) -> HexaVal {
+    let ta = type_of(a)
+    let tb = type_of(b)
+    let mut ai: int = 0
+    let mut a_kind = 2
+    if ta == "int" { ai = a as int; a_kind = 0 }
+    else if ta == "bool" { if a as bool { ai = 1 } else { ai = 0 } a_kind = 0 }
+    else if ta == "float" { a_kind = 1 }
+    let mut bi: int = 0
+    let mut b_kind = 2
+    if tb == "int" { bi = b as int; b_kind = 0 }
+    else if tb == "bool" { if b as bool { bi = 1 } else { bi = 0 } b_kind = 0 }
+    else if tb == "float" { b_kind = 1 }
+    if a_kind == 2 || b_kind == 2 {
+        throw "cannot compute modulo of non-numeric operand (" + ta + " % " + tb + ")"
+    }
+    if a_kind == 0 && b_kind == 0 {
+        if bi == 0 { throw "modulo by zero" }
+        return __raw_imod(ai, bi)
+    }
+    let mut af: float = 0.0
+    if a_kind == 0 { af = ai as float } else { af = a as float }
+    let mut bf: float = 0.0
+    if b_kind == 0 { bf = bi as float } else { bf = b as float }
+    if bf == 0.0 { throw "modulo by zero" }
+    return __raw_fmod(af, bf)
+}
+

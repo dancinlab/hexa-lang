@@ -5664,6 +5664,26 @@ fn gen2_expr(node) {
             if name == "__map_raw_len" {
                 return "hexa_int((int64_t)HX_MAP_LEN(" + gen2_expr(node.args[0]) + "))"
             }
+            // RUNTIME.md Step 4 .c-none arith: raw integer divide/mod escape.
+            // codegen routes the `/`/`%` OPERATOR on known-int operands to
+            // hexa_div/hexa_mod (for the div-by-zero throw — raw C `/` is UB on
+            // zero). That makes rt_div_int/rt_mod_int's `a / b` recurse back into
+            // hexa_div. These two builtins emit the native divide DIRECTLY (caller
+            // guarantees a nonzero divisor via the rt_div/rt_mod zero-throw), so
+            // the hexa-source rt_div/rt_mod can compute without circularity.
+            if name == "__raw_idiv" {
+                return "hexa_int(HX_INT(" + gen2_expr(node.args[0]) + ") / HX_INT(" + gen2_expr(node.args[1]) + "))"
+            }
+            if name == "__raw_imod" {
+                return "hexa_int(HX_INT(" + gen2_expr(node.args[0]) + ") % HX_INT(" + gen2_expr(node.args[1]) + "))"
+            }
+            // float modulo via the libm-free runtime hxlcl_fmod (NOT the `%`
+            // operator, which codegen lowers to libm fmod() → reintroduces a
+            // `_fmod` extern, breaking the zero-libm goal). rt_mod's float path
+            // routes here. Matches hexa_mod's C body (hxlcl_fmod).
+            if name == "__raw_fmod" {
+                return "hexa_float(hxlcl_fmod(HX_FLOAT(" + gen2_expr(node.args[0]) + "), HX_FLOAT(" + gen2_expr(node.args[1]) + ")))"
+            }
             if name == "__arr_set_cap" {
                 return "(HX_SET_ARR_CAP(" + gen2_expr(node.args[0]) + ", (int)HX_INT(" + gen2_expr(node.args[1]) + ")), hexa_void())"
             }
@@ -10023,6 +10043,9 @@ fn _is_builtin_name(name) {
     if name == "__str_raw_len" { return true }
     if name == "__arr_raw_len" { return true }
     if name == "__map_raw_len" { return true }
+    if name == "__raw_idiv" { return true }
+    if name == "__raw_imod" { return true }
+    if name == "__raw_fmod" { return true }
     if name == "__arr_set_cap" { return true }
     if name == "__fd_write_bytes" { return true }
     if name == "dict_keys" { return true }
