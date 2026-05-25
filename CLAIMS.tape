@@ -1019,3 +1019,144 @@
   raw    = ".verdicts/tecs-l-modform-genus/genus_n11.txt"
   src    = "MODFORM MF3 (first level off the classical genus-0 list)"
   status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal."
+
+# ───────────────────────────────────────────────────────────────────────
+# TECS-L — tecs-l-mersenne-composite (slug · group=TECS-L · TECS-L/TECS-L.md MR6)
+# Composite Mersenne numbers with PRIME exponent. A number q is prime iff
+# sigma(q)=q+1 iff tau(q)=2. For M_p = 2^p - 1 with p prime, this is FALSE
+# in general — the first counterexample is M_11 = 2047 = 23*89:
+#   sigma(2047) = 1+23+89+2047 = 2160 != 2048 (= 2047+1)  → NOT prime
+#   tau(2047)   = 4 != 2                                   → NOT prime
+# Also M_23 = 8388607 = 47*178481 (tau=4) and M_29 = 536870911 =
+# 233*1103*2089 (tau=8). The sigma/tau ground values are 🔵; the conclusion
+# "M_p is composite" is the closed deterministic finding they carry.
+#
+# FINDING (terminal 🔵 closed): the CONVERSE of Euclid-Euler fails — p prime
+# does NOT imply M_p prime (M_11 the first counterexample), so not every
+# prime exponent yields a Mersenne prime / perfect number. Grounded in the
+# sigma/tau atoms below (tau(2047)=4 != 2 is the deterministic witness).
+
+# — M_11 = 2047 = 23*89 (first composite Mersenne with prime exponent) —
+@C tecs_l_mr_m11_sigma := "sigma(2047) = 2160 != 2048 (= 2047+1) → M_11 = 2^11-1 is COMPOSITE (= 23*89)" :: formula [slug=tecs-l-mersenne-composite group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr sigma 2047 2160"
+  raw    = ".verdicts/tecs-l-mersenne-composite/m11_sigma.txt"
+  src    = "TECS-L axis B MR6; archive-TECS-L Mersenne thread; sigma prime-test sigma(q)=q+1"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal · paper-eligible."
+
+@C tecs_l_mr_m11_tau := "tau(2047) = 4 != 2 → M_11 = 2^11-1 is COMPOSITE (deterministic prime-test witness)" :: formula [slug=tecs-l-mersenne-composite group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr tau 2047 4"
+  raw    = ".verdicts/tecs-l-mersenne-composite/m11_tau.txt"
+  src    = "TECS-L axis B MR6; tau prime-test tau(q)=2 iff q prime"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal · paper-eligible."
+
+# — M_11 factors 23, 89 (both prime: sigma=q+1, tau=2) —
+@C tecs_l_mr_f23_sigma := "sigma(23) = 24 = 23+1 → 23 is PRIME (factor of M_11)" :: formula [slug=tecs-l-mersenne-composite group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr sigma 23 24"
+  raw    = ".verdicts/tecs-l-mersenne-composite/f23_sigma.txt"
+  src    = "TECS-L axis B MR6; 2047 = 23*89 factor confirmation"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal."
+
+@C tecs_l_mr_f23_tau := "tau(23) = 2 → 23 is PRIME (factor of M_11)" :: formula [slug=tecs-l-mersenne-composite group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr tau 23 2"
+  raw    = ".verdicts/tecs-l-mersenne-composite/f23_tau.txt"
+  src    = "TECS-L axis B MR6; 2047 = 23*89 factor confirmation"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal."
+
+@C tecs_l_mr_f89_sigma := "sigma(89) = 90 = 89+1 → 89 is PRIME (factor of M_11)" :: formula [slug=tecs-l-mersenne-composite group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr sigma 89 90"
+  raw    = ".verdicts/tecs-l-mersenne-composite/f89_sigma.txt"
+  src    = "TECS-L axis B MR6; 2047 = 23*89 factor confirmation"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal."
+
+@C tecs_l_mr_f89_tau := "tau(89) = 2 → 89 is PRIME (factor of M_11)" :: formula [slug=tecs-l-mersenne-composite group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr tau 89 2"
+  raw    = ".verdicts/tecs-l-mersenne-composite/f89_tau.txt"
+  src    = "TECS-L axis B MR6; 2047 = 23*89 factor confirmation"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal."
+
+# — M_23 = 8388607 = 47*178481 (composite, tau=4) —
+@C tecs_l_mr_m23_sigma := "sigma(8388607) = 8567136 != 8388608 → M_23 = 2^23-1 is COMPOSITE (= 47*178481)" :: formula [slug=tecs-l-mersenne-composite group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr sigma 8388607 8567136"
+  raw    = ".verdicts/tecs-l-mersenne-composite/m23_sigma.txt"
+  src    = "TECS-L axis B MR6; M_23 composite (47*178481)"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal."
+
+@C tecs_l_mr_m23_tau := "tau(8388607) = 4 != 2 → M_23 = 2^23-1 is COMPOSITE (deterministic witness)" :: formula [slug=tecs-l-mersenne-composite group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr tau 8388607 4"
+  raw    = ".verdicts/tecs-l-mersenne-composite/m23_tau.txt"
+  src    = "TECS-L axis B MR6; M_23 composite (47*178481)"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal."
+
+# — M_29 = 536870911 = 233*1103*2089 (composite, tau=8) —
+@C tecs_l_mr_m29_sigma := "sigma(536870911) = 539922240 != 536870912 → M_29 = 2^29-1 is COMPOSITE (= 233*1103*2089)" :: formula [slug=tecs-l-mersenne-composite group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr sigma 536870911 539922240"
+  raw    = ".verdicts/tecs-l-mersenne-composite/m29_sigma.txt"
+  src    = "TECS-L axis B MR6; M_29 composite (233*1103*2089)"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal."
+
+@C tecs_l_mr_m29_tau := "tau(536870911) = 8 != 2 → M_29 = 2^29-1 is COMPOSITE (3 distinct prime factors)" :: formula [slug=tecs-l-mersenne-composite group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr tau 536870911 8"
+  raw    = ".verdicts/tecs-l-mersenne-composite/m29_tau.txt"
+  src    = "TECS-L axis B MR6; M_29 composite (233*1103*2089)"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal."
+
+# — M_29 factors 233, 1103, 2089 (all prime: sigma=q+1, tau=2) —
+@C tecs_l_mr_f233_sigma := "sigma(233) = 234 = 233+1 → 233 is PRIME (factor of M_29)" :: formula [slug=tecs-l-mersenne-composite group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr sigma 233 234"
+  raw    = ".verdicts/tecs-l-mersenne-composite/f233_sigma.txt"
+  src    = "TECS-L axis B MR6; M_29 = 233*1103*2089 factor confirmation"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal."
+
+@C tecs_l_mr_f233_tau := "tau(233) = 2 → 233 is PRIME (factor of M_29)" :: formula [slug=tecs-l-mersenne-composite group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr tau 233 2"
+  raw    = ".verdicts/tecs-l-mersenne-composite/f233_tau.txt"
+  src    = "TECS-L axis B MR6; M_29 = 233*1103*2089 factor confirmation"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal."
+
+@C tecs_l_mr_f1103_sigma := "sigma(1103) = 1104 = 1103+1 → 1103 is PRIME (factor of M_29)" :: formula [slug=tecs-l-mersenne-composite group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr sigma 1103 1104"
+  raw    = ".verdicts/tecs-l-mersenne-composite/f1103_sigma.txt"
+  src    = "TECS-L axis B MR6; M_29 = 233*1103*2089 factor confirmation"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal."
+
+@C tecs_l_mr_f1103_tau := "tau(1103) = 2 → 1103 is PRIME (factor of M_29)" :: formula [slug=tecs-l-mersenne-composite group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr tau 1103 2"
+  raw    = ".verdicts/tecs-l-mersenne-composite/f1103_tau.txt"
+  src    = "TECS-L axis B MR6; M_29 = 233*1103*2089 factor confirmation"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal."
+
+@C tecs_l_mr_f2089_sigma := "sigma(2089) = 2090 = 2089+1 → 2089 is PRIME (factor of M_29)" :: formula [slug=tecs-l-mersenne-composite group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr sigma 2089 2090"
+  raw    = ".verdicts/tecs-l-mersenne-composite/f2089_sigma.txt"
+  src    = "TECS-L axis B MR6; M_29 = 233*1103*2089 factor confirmation"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal."
+
+@C tecs_l_mr_f2089_tau := "tau(2089) = 2 → 2089 is PRIME (factor of M_29)" :: formula [slug=tecs-l-mersenne-composite group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr tau 2089 2"
+  raw    = ".verdicts/tecs-l-mersenne-composite/f2089_tau.txt"
+  src    = "TECS-L axis B MR6; M_29 = 233*1103*2089 factor confirmation"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal."
+
+# — FINDING (terminal): converse of Euclid-Euler fails —
+@C tecs_l_mr_finding := "p prime does NOT imply M_p = 2^p-1 prime — M_11 = 2047 = 23*89 is the first counterexample (sigma=2160 != 2048, tau=4 != 2); thus not every prime exponent yields a perfect number" :: formula [slug=tecs-l-mersenne-composite group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr tau 2047 4"
+  raw    = ".verdicts/tecs-l-mersenne-composite/m11_tau.txt"
+  src    = "TECS-L axis B MR6 finding; grounded in m11 sigma/tau atoms (tau(2047)=4!=2 deterministic witness)"
+  status = "🔵 SUPPORTED-FORMAL — closed converse-failure finding; grounded in m11 sigma/tau atoms. terminal · paper-eligible."

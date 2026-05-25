@@ -3,6 +3,18 @@
 Append-only history sister of `TECS-L.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
 
+## 2026-05-25T21:00 — 축 B MERSENNE · MR6 메르센 합성수 (p 소수 ⇏ M_p 소수) CLOSED
+
+- [x] **헤드라인: Euclid-Euler 가설의 역명제 실패** — p 가 소수여도 M_p=2^p−1 은 소수가 아닐 수 있다. 첫 반례 = M_11=2047
+- [x] 소수 판정 항등식 q 소수 ⟺ σ(q)=q+1 ⟺ τ(q)=2 를 `hexa verify --expr` 로 결정적 적용
+- [x] **M_11=2047**: σ(2047)=2160 ≠ 2048(=2047+1) 🔵 · τ(2047)=4 ≠ 2 🔵 → **합성수 (=23·89)**. 인수 23·89 도 각각 소수 확인 (σ=q+1·τ=2)
+- [x] M_23=8388607: σ=8567136·τ=4 → 합성 (=47·178481) 🔵. M_29=536870911: σ=539922240·τ=8 → 합성 (=233·1103·2089) 🔵 (인수 233·1103·2089 각 소수 확인)
+- [x] M_29(~5.4e8)도 verify 빠르게 통과(<0.3s) — 표본 3개 전부 hexa-native 검증 완료
+- [x] 17 claim / 16 verdict 영속화 → `.verdicts/tecs-l-mersenne-composite/` · `CLAIMS.tape` slug=tecs-l-mersenne-composite (finding 1건은 m11_tau 원본을 deterministic witness 로 인용)
+- [x] **finding (terminal 🔵)**: M_11 이 첫 반례 → 모든 소수지수가 완전수를 낳는 것은 아님 (Euclid-Euler 짝완전수 생성은 M_p 가 *소수*일 때만 — MR2 와 짝)
+- [ ] MR7 odd perfect number 부재 (미해결 정직 문서화) · MR8 terminal → /paper (다음 라운드)
+
+
 ## 2026-05-25T14:30 — 축 A MODFORM · MF3 Γ₀(N) genus 고전 genus-0 전수
 
 - [x] 고전 genus-0 15개 N∈{1,2,3,4,5,6,7,8,9,10,12,13,16,18,25} `gamma0_genus`=0 verify **15/15 🔵** (`genus_sweep.txt`)
