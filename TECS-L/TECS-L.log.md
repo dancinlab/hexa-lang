@@ -3,6 +3,32 @@
 Append-only history sister of `TECS-L.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
 
+## 2026-05-25T19:45 — 축 F F3 · OEIS 역조회 (n=6) — terminal 🔵+🟡 catalogue cross-check
+
+- [x] F3 milestone = "sigma/tau/phi 값을 OEIS 역조회 → 미등록 정체성 hit → hexa verify"
+- [x] **스코프**: OEIS API 11 polite request (각 sequence id 조회) — σ/τ/φ-related 17 sequence
+- [x] **🔵 직접 hexa recompute hits (10)**:
+  - A000005 τ(6)=4 · A000010 φ(6)=2 · A000203 σ(6)=12 · A001157 σ_2(6)=50 · A008683 μ(6)=1
+  - A001065 aliquot(6)=6 (perfect marker, s(n)=n ⟺ n perfect) · A000396 6 ∈ perfect numbers
+  - A001615 ψ(6)=12 (Dedekind ψ = Γ₀(N) index; ψ(6)=σ(6) 우연 = squarefree 표지)
+  - σ-iter chain σ(σ(6))=σ(12)=28 = 2nd perfect P_2 (chain 종결: σ(28)=56=2·28)
+- [x] **🟡 compound (시그마/φ 산술 조합) hits (7)**:
+  - A062354 σ·φ(6)=24 (= |conj classes of GL_2(Z/6Z)|) — Vladeta Jovovic 2001
+  - A065387 σ+φ(6)=14 — Makowski 정리: a(n)=n·d(n) ⟺ n prime
+  - A051612 σ-φ(6)=10 — a(n)=2 ⟺ n prime
+  - A007947 rad(6)=6 (squarefree 표지)
+  - A048250 sqfree-divisor-sum(6)=12=σ(6) (squarefree 일치)
+  - A007434 J_2(6)=24 = σ(6)·φ(6) (n=6 우연 — 일반 항등식 아님)
+  - A002618 n·φ(n)|n=6 = 12 = σ(6) — **SIBLING-LOCUS witness**: n·φ(n)=σ(n) hand-sweep n=1..8 → zeros at {1,6} (M10 σφ=nτ ⟺ n∈{1,6} 과 같은 locus 재확인, 단 일반 닫힌형 미증명)
+  - A002322 λ(6)=2=φ(6) — (Z/6Z)* 순환 → λ=φ
+- [x] **🔴 / 🟠 / ⚪**: 0 — 모든 a(6) 값 일치
+- [x] **honest 결론**: F3 lane = **catalogue cross-check 채널**, NOT breakthrough discovery. σ/τ/φ-derived OEIS sequence 들은 절대다수가 기존 잘 알려진 카탈로그 항목이라 신규 정체성 hit 0. 기존 hexa σ/τ/φ + gamma0_index 가 모든 OEIS hit 를 재현 — 신규 atom fold 불필요.
+- [x] **가벼운 novel 관찰**: A002618 n·φ(n)=σ(n) at n∈{1,6} (hand-sweep n=1..8) — M10 σφ=nτ=24 iff n∈{1,6} 와 sibling identity. 같은 locus 의 독립 witness 지만 일반 closed-form 증명 미수행 (general n 에서 g(n)=σ(n)−n·φ(n) zero locus 분석은 lane 범위 밖, M10 kernel 이 이미 {1,6} 공식 커버).
+- [x] **artifact**: `.verdicts/tecs-l-oeis-mining/` 11 raw verdict + 1 summary (`oeis_scan_summary.txt`) · ASCII
+- [x] **CLAIMS.tape**: 신규 19 @C entry [slug=tecs-l-oeis-mining group=TECS-L] — 10 method=expr (🔵) + 8 method=citation (🟡) + 1 method=survey (terminal)
+- [x] **정직 게이트**: paper_significance 불충족 (별도 pre-registered falsifier 없음, catalogue 중복 확인) → /paper 비대상. 산술 커널은 이미 PAPER/tecs-l-n6-identity-locus 에 포섭됨.
+
+
 ## 2026-05-25T19:10 — 축 F F8 · cross-domain n=6 다리 스캔 (NEXUS, commons g67) — terminal 🔵+🟠
 
 - [x] F8 milestone = "GPU·CANON·RUNTIME 등 도메인과 n=6 다리 발견" → 정직하게 스캔 + 분류로 종결
