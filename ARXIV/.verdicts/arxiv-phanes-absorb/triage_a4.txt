@@ -1,0 +1,194 @@
+ARXIV A4 — PHANES AXIS ABSORPTION  (autonomous discovery / self-improving agents)
+=================================================================================
+date   : 2026-05-26
+axis   : PHANES (cs.AI / cs.LG / cs.MA / cs.NE — autonomous scientific discovery,
+         AI-Scientist research loops, self-improving LLM agents, verifier-driven
+         RL (RLVR), open-endedness, quality-diversity / novelty search, LLM-driven
+         evolutionary algorithm discovery, AutoML-Zero)
+target : ~/core/phanes — "Hosted autonomous-discovery platform: tenants bring an
+         objective + verifier; phanes drives the OUROBOROS loop (hexa kick) and
+         returns a verified, provenance-tracked catalog." OUROBOROS = goal ->
+         falsifier -> saturation, round-iterated with a per-round honesty gate.
+fetch  : /research:arxiv skill (arXiv API export.arxiv.org/api/query, https),
+         8 queries <= 8-query cap:
+           (1) "autonomous scientific discovery" agent
+           (2) ti:"AI Scientist" + abs:automated research
+           (3) "self-improving" + agent + language model
+           (4) verifier + reinforcement + reasoning + language model
+           (5) "quality diversity" + open-ended
+           (6) ti:open-endedness + abs:foundation model
+           (7) AutoML-Zero / evolving algorithms from scratch
+           (8) LLM + evolutionary + discovery + mathematical
+classes: (a) verify-able 🔵/🟢   (b) 🟡 citation   (c) handoff -> phanes
+
+GATE / KEY A4 FINDING vs A3 (and consistent with A2):
+  A4 lands 0 verify-able recompute — the HONEST, EXPECTED outcome. Unlike A3
+  (DEMIURGE: verify-native, 5 integer-exact physics constants already in
+  `hexa verify --expr`), PHANES is a SYSTEMS / SaaS axis: it is the OUROBOROS
+  *engine consumer*, not a closed-form math/physics domain. Confirmed by grep
+  of the verify surface at HEAD:
+    - tool/verify_cli.hexa exposes NO phanes/ouroboros/loop/saturation/novelty
+      numeric primitive (only physics + number-theory fns).
+    - compiler/drill/drill.hexa + round.hexa hold the OUROBOROS engine
+      (drill_run, _honesty_gate, _verifier_run, _flush_discoveries_cum), but
+      these are LOOP-ORCHESTRATION fns, not scalar recompute atoms a
+      `hexa verify --expr <fn> <args> <v>` can re-derive.
+  => Same shape as A2 (ANIMA: 0 verify-able, no in-tree IIT primitive). A4's
+     deliverable is NOT a verify number; it is CITATION + a phanes ARCHITECTURE
+     MAP: each absorbed paper informs a concrete phanes surface (the discovery
+     loop / the verifier gate / provenance tracking / the tenant-objective
+     model), filed as g60 handoffs to ~/core/phanes.
+
+KEY ARCHITECTURAL CORRESPONDENCE (why these papers, not random cs.AI):
+  The phanes OUROBOROS engine already implements the loop these papers describe:
+    - 6-stage round chain -> saturation (drill.hexa: "accumulates absorptions
+      until saturation (round yield = 0) or max-rounds") == open-endedness /
+      novelty-search exhaustion (OMNI, QDHF, "Open-Endedness Essential for ASI").
+    - round.hexa: net_novel == 0 = "C5 novelty-fixpoint signal" == LITERAL
+      novelty search / quality-diversity stopping criterion.
+    - pluggable verifier + _honesty_gate (drill.hexa "Per-round verdict from the
+      pluggable verifier ... alongside the BT-AI2 round line") == verifier-driven
+      RL / RLVR / process-reward / VLM-as-judge.
+    - overlay accumulation across rounds (overlay_append_lines, atlas overlay
+      seen by later rounds) == provenance / per-tenant discovery catalog.
+    - phanes job model {seed, verifier_ref, rounds_cap} == AI-Scientist
+      tenant-objective abstraction (idea -> experiment -> verify -> refine).
+
++------------+-----------------------------------------------+--------------------------------------------+-------+--------------------------+
+| arxiv id   | title (short) · authors                       | claim / contribution (1-line)              | class | phanes surface map       |
++------------+-----------------------------------------------+--------------------------------------------+-------+--------------------------+
+| 2406.04268 | Open-Endedness is Essential for Artificial    | position: open-ended, ever-self-improving  | (b)   | OUROBOROS loop (raison   |
+|            | Superhuman Intelligence (Hughes+ DeepMind '24)| AI = path to ASI; novelty+learnability     | +(c)  | d'etre; saturation =     |
+|            |                                               | are the two open-endedness ingredients     |       | bounded-OE round cap)    |
+| 2306.01711 | OMNI: Open-endedness via Models of human      | LLM as a model of "interestingness" to     | (b)   | seed/task proposer +     |
+|            | Notions of Interestingness (Zhang/Lehman/     | pick which learnable tasks to pursue next  | +(c)  | per-round next-seed      |
+|            | Stanley 2023)                                 | (filters the infinite task space)          |       | selection (round.hexa)   |
+| 2405.15568 | OMNI-EPIC: ...Environments Programmed in Code | extends OMNI: LLM writes the task AND its   | (c)*  | verifier-as-code: tenant |
+|            | (Faldor/Zhang/Cully 2024)                     | code-based success function (env+verifier) |       | brings obj+verifier code |
+| 2003.03384 | AutoML-Zero: Evolving ML Algorithms From      | evolutionary search discovers full ML algo | (b)   | engine ancestor: search  |
+|            | Scratch (Real/Liang/So 2020)                  | from primitive ops, only fitness as signal | +(c)  | + automated eval loop    |
+| 2504.05108 | Algorithm Discovery With LLMs: Evolutionary   | LLM-evolutionary search + RL improves algo  | (c)* | OUROBOROS = LLM-propose  |
+|            | Search Meets RL (Surina/Mansouri+ 2025)       | discovery; eval signal drives the loop     |       | + verify + refine loop   |
+| 2511.02864 | Mathematical exploration and discovery at     | AlphaEvolve: generic evolutionary coding   | (c)* | DIRECT analog: phanes =  |
+|            | scale (Georgiev/Gomez-Serrano/Tao 2025)       | agent, LLM gen + AUTOMATED EVAL, iterative  |       | hosted "AlphaEvolve" for |
+|            |                                               | propose/test/refine on math+practical probs|       | tenant obj+verifier      |
+| 2502.14297 | Evaluating Sakana's AI Scientist: Bold Claims | independent eval of an end-to-end AI        | (b)   | honest-scope precedent   |
+|            | Mixed Results (Beel/Kan/Baumgart 2025)        | Scientist; mixed results, over-claim risk  | +(c)  | (g3: verifier=authority, |
+|            |                                               | (ARI = Artificial Research Intelligence)   |       | no over-claim copy)      |
+| 2508.15126 | aiXiv: Open-Access Ecosystem for Discovery    | infra for AI-generated proposals + auto     | (c)*  | provenance/catalog +     |
+|            | Generated by AI Scientists (Zhang+ 2025)      | peer-review + iterative refinement loop     |       | exportable verified cat. |
+| 2504.21024 | WebEvolver: Web Agent Self-Improvement with   | agent trains on self-sampled trajectories + | (c)  | self-improving consumer  |
+|            | Coevolving World Model (Fang/Zhang+ 2025)     | a coevolving world model (self-improve loop)|       | of the loop (round reuse)|
+| 2602.11549 | Native Reasoning Models: Reason on            | RLVR's reliance on external verifiers is a  | (b)   | verifier-gap escalation: |
+|            | Unverifiable Data (Wang/Liu/Li 2026)          | bottleneck; trains to reason w/o verifier   | +(c)  | when no oracle exists    |
+|            |                                               | (the unverifiable-objective frontier)       |       | (tenant-verifier limit)  |
++------------+-----------------------------------------------+--------------------------------------------+-------+--------------------------+
+  (*) = verify-able-CANDIDATE in the LOOSEST sense — these describe loop/eval
+        mechanisms phanes implements, but NONE reduces to a `hexa verify --expr`
+        scalar. There is no phanes closed-form atom (vs A3's physics constants).
+        The honest A4 verify count is 0; (*) marks the papers whose mechanism is
+        a candidate for a FUTURE in-engine instrumentation metric (e.g. a
+        net-novelty-rate or saturation-round closed form), NOT a present 🟢.
+
+DROPPED (off-topic / weak hit / subsumed, not triaged):
+  q1: 2605.08956 (position paper "not built for autonomous discovery" — useful
+        but subsumed by 2502.14297 as the honest-scope exemplar), 2507.07155 /
+        2511.14631 (astrophysics-domain RAG agents — domain-specific, off-axis),
+        2508.14111 (Agentic Science survey — good background, citation-redundant
+        with the position papers kept), 2203.08975 (MADRL communication survey —
+        generic MA), 2409.01907 (LLM focus group — cs.HC, off-axis).
+  q2: 2604.28158 / 2604.09621 / 2603.28589 / 2511.16931 (AI-Scientist instances
+        in specific domains — astro/medical/ecosystem; the Sakana eval 2502.14297
+        + aiXiv 2508.15126 cover the loop+ecosystem axes already).
+  q3: 2505.08803 (model collapse on self-gen data — risk note, adjacent),
+        2505.03059 (alignment via collective intelligence — off-axis),
+        2603.09206 / 2206.09360 / 2603.21340 (self-evolving VLM / AI-risk map /
+        world-model arch — adjacent, subsumed by WebEvolver as the self-improve
+        exemplar).
+  q4: 2106.11735 (probabilistic model checking — formal verif, not RLVR),
+        2601.21192 / 2509.00676 / 2604.24583 / 2505.02387 (RLVR/critic/PRM/RM
+        variants — the verifier-as-reasoner family; 2602.11549 kept as the
+        unverifiable-frontier exemplar, the rest subsumed).
+  q5: 2310.12103 KEPT? -> represented by OMNI/QD lineage already; 2108.03578 /
+        2204.03655 / 2008.04589 / 2406.04235 / 2404.15794 (QD in NLG-eval / robot
+        learning / Lenia / LLM-as-QD-operator — QD applications; the open-
+        endedness POSITION (2406.04268) + OMNI (2306.01711) carry the axis).
+  q6: 1806.07254 (emergent OE from contagion — info-theory, abstract),
+        2510.13884 / 2510.12699 (LLM open-ended TEXT generation calibration —
+        different sense of "open-ended", off-axis).
+  q7: 2305.06408 / 2404.03997 / 2302.07515 / 2509.08755 / 2501.01089 (active
+        learning / MORL / multi-agent football / agent-RL gym / ransomware —
+        AutoML-Zero 2003.03384 is the only on-axis hit of q7).
+  q8: 2412.18890 / 2510.26144 / 2511.20987 / 2605.03101 (CoEvo / FM Agent /
+        OpenEvolve-bijection / symbolic-regression — the LLM-evolutionary-
+        discovery family; AlphaEvolve 2511.02864 + Surina 2504.05108 kept as the
+        two exemplars, the rest subsumed).
+
+-------------------------------------------------------------------------
+COUNTS  (10 on-topic papers triaged)
+  (a) verify-able 🔵/🟢      : 0 LIVE  (HONEST/EXPECTED — PHANES is a systems/SaaS
+                                axis with NO closed-form atom in `hexa verify
+                                --expr`; mirrors A2 ANIMA. The OUROBOROS engine
+                                fns (drill_run/_honesty_gate/_flush_discoveries_
+                                cum) are loop orchestration, not scalar recompute.
+                                A FUTURE candidate = a net-novelty-rate /
+                                saturation-round instrumentation metric, but that
+                                is engine instrumentation, not an arxiv-cited
+                                closed form -> not counted here.)
+  (b) 🟡 citation            : 5 [2406.04268 (OE-essential-for-ASI), 2306.01711
+                                (OMNI), 2003.03384 (AutoML-Zero), 2502.14297
+                                (Sakana AI-Scientist eval / honest-scope),
+                                2602.11549 (Native Reasoning / unverifiable-data)
+                                — atlas/reference citation nodes; several dual-
+                                classed citation + handoff]
+  (c) handoff -> phanes      : 10 [ALL 10 carry a concrete phanes-architecture
+                                cross-link, mapped above to: OUROBOROS discovery
+                                loop · pluggable verifier gate · provenance /
+                                catalog · tenant-objective {seed,verifier,rounds}]
+
+PIPELINE VERDICT : 🟡 10 autonomous-discovery papers absorbed · 0 verify-able
+  (HONEST — PHANES is systems/SaaS, not verify-native like A3 DEMIURGE). A4's
+  deliverable = CITATION (5 🟡) + phanes cross-pollination: a 4-surface
+  ARCHITECTURE MAP linking each paper to a phanes component the OUROBOROS engine
+  already implements (discovery loop / verifier gate / provenance / tenant-obj),
+  filed as g60 handoffs to ~/core/phanes. This is the A2-shape outcome (citation
+  + cross-repo handoff, no in-tree primitive), NOT the A3-shape (verify-native
+  recompute). The strongest correspondences: AlphaEvolve (2511.02864, Tao+) is
+  the DIRECT analog of phanes' "hosted LLM-propose + automated-verify + refine"
+  loop; OMNI/OMNI-EPIC (2306.01711/2405.15568) inform the per-round next-seed /
+  verifier-as-code surfaces; "Open-Endedness Essential for ASI" (2406.04268)
+  is the loop's raison d'etre and frames saturation as bounded open-endedness;
+  "Native Reasoning on Unverifiable Data" (2602.11549) escalates the
+  verifier-gap (the tenant-verifier-as-sole-authority frontier when no oracle
+  exists — phanes P2.6 pluggable-verifier upstream patch).
+
+PHANES HANDOFFS FILED (g60 INBOX reflex — ACTUAL filing this milestone)
+  target repo : ~/core/phanes   file : phanes/INBOX.log.md (created — none existed)
+  slug        : arxiv-a4-autonomous-discovery-ingest
+  NOTE        : phanes working tree is on a feature branch (domain/init-phanes,
+                1 ahead / 4 behind origin/main) — CLEAN, but NOT on main. Per the
+                A2/A3 cross-repo handoff pattern + memory feedback_closure, this
+                milestone CREATES phanes/INBOX.log.md and APPENDS the handoff as a
+                working-copy edit (stub-first, dedup) but does NOT commit in the
+                non-main phanes tree. phanes session must commit (+ reconcile the
+                domain/init-phanes branch). -> parent action: phanes session
+                commit needed.
+  4-surface cross-links filed (paper -> phanes component):
+   - OUROBOROS discovery loop : 2406.04268 (OE-essential, bounded-OE = round cap)
+       · 2003.03384 (AutoML-Zero search+eval ancestor) · 2511.02864 (AlphaEvolve
+       = the DIRECT hosted-analog) · 2504.05108 (LLM-evolutionary+RL loop)
+   - pluggable verifier gate  : 2405.15568 (OMNI-EPIC verifier-as-code) ·
+       2602.11549 (unverifiable-data frontier = tenant-verifier limit, P2.6) ·
+       (verifier-driven RLVR/PRM lineage as the gate's design space)
+   - provenance / catalog     : 2508.15126 (aiXiv AI-gen + auto-review +
+       exportable catalog) · 2511.02864 (AlphaEvolve audit trail of refinements)
+   - tenant-objective model   : 2306.01711 (OMNI interestingness = next-seed
+       selection) · 2502.14297 (Sakana eval = honest-scope / over-claim guard,
+       verifier = sole authority) · 2504.21024 (WebEvolver self-improve consumer)
+  FUTURE verify-able-CANDIDATE seed (NOT a present 🟢):
+   - net-novelty-rate / saturation-round closed form — round.hexa already
+     computes net_novel (C5 novelty fixpoint); an instrumented closed-form
+     "expected rounds to saturation" or "novelty decay rate" COULD become a
+     `hexa verify --expr` atom in a future engine-instrumentation lane. This is
+     engine work, not arxiv-cited math -> deferred, honestly not counted as A4
+     verify.
