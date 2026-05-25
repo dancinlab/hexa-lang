@@ -4,6 +4,33 @@
 
 ---
 
+## 2026-05-26 — V3 (P1a) round-tolerance `--tol <eps>` (literature-rounded 값 🟢 · 옵트인)
+
+### 문제 (INBOX 2026-05-26T01:30Z item(3) · 동일 클래스 item(b) — V1 이 별개 항목으로 defer)
+- `hexa verify --expr allen_dynes_tc 0.6150 591.18 0.10 14.55` → calc=14.5511, |Δ|=0.00108 > strict ε=1e-9 → 🔴 FALSIFIED. 그러나 14.55 는 literature 의 6-digit 반올림일 뿐 — 진짜 falsification 이 아님 (spurious 🔴).
+- V1 이 register 경로(엔진 자체 계산값 fold)는 round-tolerance 무관으로 닫았으나, `verify --expr <fn> <args> <literature_value>` 경로는 여전히 rounded input 에 🔴.
+
+### 구현 (g0/g33 surgical · additions-only)
+- `tool/verify_cli.hexa`: 헬퍼 3개 신설 — `_has_tol(rest)`(`--tol` 플래그 존재 여부), `_get_tol(rest)`(`--tol` 다음 operand 를 float 파싱; 없으면 0.0 = strict 로 degrade), `_strip_tol(rest)`(`--tol <eps>` 페어를 제거한 argv 복사본 — 하류 arity 판정이 2 토큰에 흔들리지 않게; --absorb/--no-absorb/--compute 플래그 관용과 동형).
+- `cmd_expr_float` / `cmd_expr` 진입부에서 `tol`/`tol_on` 캡처 + `_strip_tol` 로 정제. float 경로는 원본 argv 를 받아 내부 strip(콜 경계 너머 플래그 보존), int 경로는 정제본으로 operand 카운트.
+- verdict 분기: strict ε=1e-9 통과 → 기존 🔵/🟢 그대로. strict 실패이지만 `tol_on && |Δ| ≤ tol` → 🟢 SUPPORTED-NUMERICAL (round-tolerant) + `(within tol <eps>, calc=… vs expected=…)` 노트. `tol` 너머 → 🔴 (명시 메시지 "tolerance does NOT launder failures"). --tol 부재 시 기존 strict 🔴 메시지 그대로.
+- **falsification 무결성**: `--tol` 은 명시 옵트인 — 기본(--tol 무) = tolerance 없음 = 현 strict 동작 그대로. silent-widen 0. round-tolerant 🟢 는 auto-absorb 안 함 (atlas 는 V1 대로 엔진 정밀값만 fold, literature-rounded operand 는 절대 fold 안 함).
+- int 경로: 정확 int closed-form 은 tolerance 불요지만, coarse expected 값 대비 `--tol` 옵트인 시 동일 밴드 적용 (`sigma 6 13 --tol 2` → 🟢; `sigma 6 20 --tol 2` → 🔴).
+
+### 검증 (`.verdicts/verify-kit-tol/v3_tol.txt` verbatim)
+- 빌드: `bash tool/build_hexa_verify.sh` → `bin/hexa-verify` (mac arm64, module_loader 선빌드 후 성공).
+- `--expr allen_dynes_tc 0.6150 591.18 0.10 14.55 --tol 0.01` → 🟢 (within tol, |Δ|=0.00108).
+- `--expr allen_dynes_tc 0.6150 591.18 0.10 14.55` (no --tol) → 🔴 (strict, unchanged).
+- `--expr allen_dynes_tc 0.6150 591.18 0.10 99.0 --tol 0.01` → 🔴 (beyond tol — NOT laundered).
+- regression: `--expr sigma 6 12` → 🔵 (exact, no tol) · `sigma 6 13 --tol 2` → 🟢 within-tol · `sigma 6 13`(no tol) → 🔴 · `sigma 6 20 --tol 2` → 🔴 beyond.
+- parse-gate: `hexa parse tool/verify_cli.hexa` clean.
+
+### 닫힘
+- INBOX 2026-05-26T01:30Z item(3) + 동일 클래스 item(b) RESOLVED. V1 이 deferred 한 round-tolerance 종결. CLAIMS.tape `verify-kit-tol` (group=VERIFY-KIT, method=tolerance) 🟢.
+- 주의: 작업 중 `/tmp/wt-vkit-v3` 워크트리가 외부 cleanup 으로 삭제되어 재생성 + origin/main fast-forward 머지(OEIS-O4 landed) 후 전체 edit 재적용 → 재빌드 → 재검증. 최종 상태는 이 entry 기준.
+
+---
+
 ## 2026-05-26 — V1 (P0a) register↔verify_cli 미러통합 (RTSC allen_dynes_tc unblock)
 
 ### 문제 (INBOX 2026-05-26T01:30Z · #954 확장)

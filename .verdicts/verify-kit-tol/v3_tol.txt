@@ -1,0 +1,47 @@
+# .verdicts/verify-kit-tol/v3_tol.txt
+# VERIFY-KIT V3 — --tol <eps> round-tolerance verdict matrix (verbatim stdout)
+# bin: tool/build_hexa_verify.sh -> bin/hexa-verify (built 2026-05-26, mac arm64)
+# falsifier: --tol must be OPT-IN; a 🔴 beyond the stated eps STAYS 🔴 (no launder).
+# NOTE: --no-absorb appended to the exact-🔵 case only, to suppress the atlas
+#       register shell-out (idempotent side-effect); the VERDICT TIER is identical.
+
+$ hexa verify --expr allen_dynes_tc 0.6150 591.18 0.10 14.55 --tol 0.01
+# EXPECT: 🟢 (within tol — literature 6-digit rounding)
+verify --expr allen_dynes_tc(0.615,591.18,0.1)=14.55
+  calc   = 14.5511  ≈ expected 14.55  (within tol 0.01, calc=14.5511 vs expected=14.55, |Δ|=0.00107782)
+  tier   = 🟢 SUPPORTED-NUMERICAL  (round-tolerant: literature-rounded value within opt-in --tol 0.01, TECS-L n6-rep Tier2)
+
+$ hexa verify --expr allen_dynes_tc 0.6150 591.18 0.10 14.55
+# EXPECT: 🔴 (strict ε=1e-9, no --tol — UNCHANGED current behavior)
+verify --expr allen_dynes_tc(0.615,591.18,0.1)=14.55
+  calc   = 14.5511  ≠ expected 14.55  (|Δ|=0.00107782 > ε=1e-9)
+  tier   = 🔴 FALSIFIED  (calc deterministically disagrees beyond ε — TECS-L result-agnostic closed negative)
+
+$ hexa verify --expr allen_dynes_tc 0.6150 591.18 0.10 99.0 --tol 0.01
+# EXPECT: 🔴 (beyond tol — NOT laundered; falsification integrity preserved)
+verify --expr allen_dynes_tc(0.615,591.18,0.1)=99.0
+  calc   = 14.5511  ≠ expected 99.0  (|Δ|=84.4489 > tol=0.01)
+  tier   = 🔴 FALSIFIED  (disagrees beyond the stated --tol 0.01 — tolerance does NOT launder failures, TECS-L result-agnostic closed negative)
+
+$ hexa verify --expr sigma 6 12 --no-absorb
+# EXPECT: 🔵 (ex  absorb = · already in atlas — idempotent skip (default · @D g69)
+
+$ hexa verify --expr sigma 6 13 --tol 2
+# EXPECT: 🟢 (within-tol int)
+verify --expr sigma(6)=13
+  calc   = 12  ≈ expected 13  (within tol 2.0, calc=12 vs expected=13, |Δ|=1)
+  tier   = 🟢 SUPPORTED-NUMERICAL  (round-tolerant: claim within opt-in --tol 2.0, TECS-L n6-rep Tier2)
+
+# ── falsification-integrity extra checks ──
+$ hexa verify --expr sigma 6 13
+# EXPECT: 🔴 (no --tol → strict, unchanged)
+verify --expr sigma(6)=13
+  calc   = 12  != expected 13
+  tier   = 🔴 FALSIFIED  (calc deterministically disagrees — TECS-L result-agnostic closed negative)
+
+$ hexa verify --expr sigma 6 20 --tol 2
+# EXPECT: 🔴 (beyond tol → NOT laundered)
+verify --expr sigma(6)=20
+  calc   = 12  != expected 20  (|Δ|=8 > tol=2.0)
+  tier   = 🔴 FALSIFIED  (disagrees beyond the stated --tol 2.0 — tolerance does NOT launder failures, TECS-L result-agnostic closed negative)
+nd the stated --tol 2.0 — tolerance does NOT launder failures, TECS-L result-agnostic closed negative)
