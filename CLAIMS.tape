@@ -1899,3 +1899,19 @@
   raw    = ".verdicts/tecs-l-beyond-n6/sweep_notable_n.txt"
   src    = "M10 proof predicts D(n)≠0 for n=33550336 ∉ {1,6}; largest n in F6 sweep — extends M3 [1,100] by factor 335503"
   status = "🔵 SUPPORTED-FORMAL + 🔴 CLOSED-negative — components persisted verbatim in sweep block. terminal · paper-eligible."
+
+# ───────────────────────────────────────────────────────────────────────
+# TECS-L axis F · family (f) · F9 — tecs-l-novel-inbox-pipe (slug · group=TECS-L · F9)
+# NOVEL = verify-infra growth driver: calc-fn gap → g59 INBOX upstream →
+# hexa-lang stdlib/compiler/verify patch → next NOVEL round uses grown fn.
+# method=synthesis (no new arithmetic verify); anchored by two terminal-tier
+# pre-existing PRs: axis A MF4 (PR #1083 RED closed-negative) + axis E E2
+# (PR #1096 YELLOW citation). Pipeline canonical 5-step workflow documented
+# in TECS-L/docs/f9-inbox-pipe-novel-verify-infra.md §4.
+
+@C tecs_l_novel_inbox_pipe_workflow := "NOVEL axis F is a verify-infra growth driver (not only a discovery lane): calc-fn gap surfaced in a NOVEL round → honest-tier verdict persisted → g59 INBOX upstream entry → hexa-lang stdlib/compiler/verify patch (other session) → next NOVEL round uses grown fn. Canonical 5-step pipeline. Empirical anchors this session: axis A MF4 (PR #1083 MERGED, RED CLOSED-NEGATIVE — hexa dim_cusp_forms(N,2) ne classical dim S_2(Gamma_0(N))=genus, 20/30 mismatch N=11..30; INBOX entry 2026-05-25T15:00Z recommending fn-signature split or definition fix) + axis E E2 (PR #1096 MERGED, YELLOW CITATION — atlas binary-builtin lookup ne source embedded.gen.hexa SSOT, 0/6 of E1-folded verified-* atoms findable in installed binary; INBOX entry 2026-05-25T18:00Z recommending HEXA_ATLAS_EMBED overlay precedence or in-memory reflect or opt-in regen trigger). Both rounds completed workflow steps 1-3 (verify try + honest tier + INBOX upstream); steps 4-5 (patch + grown infra) deferred to subsequent sessions. This session: 2 NOVEL rounds -> 2 verify-infra growth inputs (100% rate, single-session sample, not a rate claim)." :: synthesis [slug=tecs-l-novel-inbox-pipe group=TECS-L]
+  method = "synthesis"
+  cmd    = "workflow synthesis — no new arithmetic verify; anchored by PR #1083 (MF4 RED) + PR #1096 (E2 YELLOW), both terminal-tier and MERGED. Pipeline canonical 5-step workflow documented in §4 of the doc."
+  raw    = ".verdicts/tecs-l-novel-inbox-pipe/pipe_workflow.txt"
+  src    = "axis F family (f) F9 — TECS-L/docs/f9-inbox-pipe-novel-verify-infra.md. Anchors: (1) axis A MF4 PR #1083 slug tecs-l-modform-dim-genus + .verdicts/tecs-l-modform-dim-genus/ + TECS-L/docs/mf4-dim-genus-mismatch.md + INBOX.log.md 2026-05-25T15:00Z entry. (2) axis E E2 PR #1096 slug tecs-l-atlas-health + .verdicts/tecs-l-atlas-health/ + INBOX.log.md 2026-05-25T18:00Z entry. Governance: CLAUDE.md @D claim_verify + commons g59/g60 INBOX upstream reflex."
+  status = "🟢 empirical workflow — 2 입증 케이스 (MF4 PR #1083, E2 PR #1096). terminal-empirical. NOVEL = verify-infra growth driver canonical pipeline documented. paper_significance NOT satisfied (workflow doc; no new falsifier) → /paper 비대상."
