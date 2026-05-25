@@ -1007,6 +1007,83 @@ opt-in via `git config core.hooksPath .githooks`) + project.tape @D
   - `RUNTIME.md` (this entry)
 - Acceptance line: `cycle 68: atlas-loop-smoke CLOSED · root=ctype.hexa:684 rt_str_join_str (O(n²) join) · smoke PASS (exit 42) · PR #(this)`
 
+### 2026-05-25 — cycle 69: externs regression catalog + diagnosis — CLOSED (measure-before-fanout)
+
+- cycle 69 — MEASURE-BEFORE-FANOUT diagnosis cycle. aprime_cc now BUILDS + SMOKES green on HEAD `bf9f9840` (cycle 68 #923 + #924). `tool/build_aprime.sh` in-worktree → **1,244,328 B Mach-O arm64**, atlas 16,088 nodes load, **smoke exit(6*7)==42 PASS**. `nm` undefined externs = **42** (NOT the ~31 the task estimated — cycle-67 measured 31 mid-r16; the daemon R1 socket work #904 + #816/#904/#634 deploy-regens since added more).
+
+#### Full 42-extern classification
+
+| # | extern | class | cycle-65 batch / origin | now backed by |
+|---|--------|-------|------------------------|---------------|
+| 1 | `___chkstk_darwin` | **S** | cycle-65 stubborn-5 (compiler-rt stack-probe) | compiler-rt internal (never closed) |
+| 2 | `___darwin_check_fd_set_overflow` | **S** | cycle-65 stubborn-5 | `hxlcl_darwin_check_fd_set_overflow` stub present, dead-strip re-exposes |
+| 3 | `_longjmp` | **S** | cycle-65 stubborn-5 (setjmp/longjmp pair) | libc (never closed) |
+| 4 | `_malloc` | **S** | cycle-65 stubborn-5 (`-Oz` reverse-libcall) | optimizer-synthesized below `#define malloc` layer |
+| 5 | `_memcpy` | **S** | cycle-65 stubborn-5 (`-Oz` reverse-libcall) | optimizer-synthesized below `#define memcpy` layer |
+| 6 | `_free` | **S** | sibling of malloc/memcpy (reverse-libcall) | `hxlcl_free`=noop; `_free` is `-Oz` synthesized / transpile-emitted bare `free()` |
+| 7 | `_read` | **R** | cycle 63 (svc #0x80 SYS_READ) | **REVERTED to libc** `read()` — `hxlcl_read` body @runtime.c:1063 |
+| 8 | `_write` | **R** | cycle 63 (svc SYS_WRITE) | **REVERTED to libc** `write()` @1066 |
+| 9 | `_close` | **R** | cycle 63 (svc SYS_CLOSE) | **REVERTED to libc** `close()` @1073 |
+| 10 | `_dup2` | **R** | cycle 64 (svc SYS_DUP2) | **REVERTED to libc** `dup2()` @1081 |
+| 11 | `_pipe` | **R** | cycle 64 (svc SYS_PIPE) | **REVERTED to libc** `pipe()` @1093 (pair-return fix) |
+| 12 | `_fork` | **R** | cycle 64 (svc SYS_FORK) | **REVERTED to libc** `fork()` @1100 |
+| 13 | `_lseek` | **R** | cycle 64 (svc SYS_LSEEK) | **REVERTED to libc** `lseek()` @1122 (PR #426 carry-flag) |
+| 14 | `_fstat` | **R** | cycle 64 (svc SYS_FSTAT) | **REVERTED to libc** `fstat()` @1164 (PR #426) |
+| 15 | `_stat` | **R** | cycle 64 (svc SYS_STAT) | **REVERTED to libc** `stat()` @1167 (PR #426) |
+| 16 | `_waitpid` | **R** | cycle 64 (svc SYS_WAIT4) | **REVERTED to libc** `waitpid()` @1134 |
+| 17 | `_open` | **R** | cycle 65 (svc SYS_OPEN) | **REVERTED to libc** `open()` @1153 (carry-flag content-leak fix) |
+| 18 | `_mmap` | **R** | cycle 65 (svc6 SYS_MMAP) | **REVERTED to libc** `mmap()` @1187 (MAP_FAILED fix) |
+| 19 | `_socket` | **R** | cycle 61 (noop -1 stub) | **REVERTED to libc** `socket()` @1685 (yosys-exec restore) |
+| 20 | `_bind` | **R** | cycle 61 stub | **REVERTED to libc** `bind()` @1688 |
+| 21 | `_listen` | **R** | cycle 61 stub | **REVERTED to libc** `listen()` @1691 |
+| 22 | `_accept` | **R** | cycle 61 stub | **REVERTED to libc** `accept()` @1694 |
+| 23 | `_connect` | **R** | cycle 61 stub | **REVERTED to libc** `connect()` @1697 |
+| 24 | `_recv` | **R** | cycle 61 stub | **REVERTED to libc** `recv()` @1700 |
+| 25 | `_send` | **R** | cycle 61 stub | **REVERTED to libc** `send()` @1703 |
+| 26 | `_recvmsg` | **R** | cycle 61 stub | **REVERTED to libc** `recvmsg()` @1706 |
+| 27 | `_sendmsg` | **R** | cycle 61 stub | **REVERTED to libc** `sendmsg()` @1709 |
+| 28 | `_inet_pton` | **R** | cycle 61 stub | **REVERTED to libc** `inet_pton()` @1712 |
+| 29 | `_execve` | **R** | cycle 61 stub | **REVERTED to libc** `execve()` @1727 (subprocess restore) |
+| 30 | `_execvp` | **R** | cycle 61 stub | **REVERTED to libc** `execvp()` @1730 |
+| 31 | `_posix_spawnp` | **R** | (was in May-22 baseline-24) | libc — `hexa_spawn_no_shell` (runtime_core.c) |
+| 32 | `_posix_spawn_file_actions_init` | **R** | baseline-24 | libc spawn machinery |
+| 33 | `_posix_spawn_file_actions_addclose` | **R** | baseline-24 | libc spawn machinery |
+| 34 | `_posix_spawn_file_actions_adddup2` | **R** | baseline-24 | libc spawn machinery |
+| 35 | `_posix_spawn_file_actions_destroy` | **R** | baseline-24 | libc spawn machinery |
+| 36 | `_backtrace` | **R** | baseline-24 (crash-handler) | libc `backtrace()` |
+| 37 | `_backtrace_symbols_fd` | **R** | baseline-24 | libc |
+| 38 | `_gmtime_r` | **R** | baseline-24 (time fmt) | libc `gmtime_r()` (4 call sites) |
+| 39 | `_mkdir` | **R** | baseline-24 | libc `mkdir()` |
+| 40 | `_environ` | **R** | baseline-24 (execl env) | libc `environ` global |
+| 41 | `_flock` | **N** | recovered helper (`bb166ecb`) — wrapper calls libc | `hxlcl_flock`→libc `flock()` |
+| 42 | `_setsockopt` | **N** | **r16 NEW** — PR #904 `4b32a9b9` daemon R1 socket | libc `setsockopt()` (no hxlcl wrapper, no closure) |
+
+- **Tally: 34 R · 6 S · 2 N** (R=regressed-from-cycle-60-65, S=cycle-65-stubborn-residual, N=genuinely-new). Note: 24 of the 34 R were already present in the May-22 stale baseline-24; the other 10 R (`open fstat stat lseek mmap` + `socket bind listen accept connect`… the socket-family head) re-appeared via the same restore wave.
+
+#### Regression mechanism — hypothesis (a) CONFIRMED (variant: deliberate revert, not a wipe)
+
+- **Confirmed via `git log -S`**: the svc-trap helpers DID land (`f7dbd931` 2026-05-21 00:50 "RUNTIME.md cycles 63+64 — Darwin syscall via svc 0x80 (137→10, 93%)" — `hxlcl_read` used `_hxlcl_syscall3(HXLCL_SYS_READ, ...)`), then were **reverted ~3 hours later by `8ea4b75e` / PR #251 (2026-05-21 03:37 "RUNTIME.md cycle 66 — restore exec/popen/env stubs")**. Exact diff: `-    return _hxlcl_syscall3(HXLCL_SYS_READ, ...);` → `+    return read(fd, buf, n);` (same for write/close/dup2/pipe/fork). The socket/exec stubs were reverted in the same wave + follow-on **PR #426** (open/fstat/stat/lseek/mmap carry-flag).
+- **The trap-helper INFRASTRUCTURE is still present** — `grep -c 'svc #0x80\|_hxlcl_syscall' self/runtime.c` = **619**, `_hxlcl_syscall{1,2,3,4,6}` + all `HXLCL_SYS_*` numbers intact. Only the *wrapper bodies* (`hxlcl_read` etc.) were re-pointed from svc-trap → libc. So this is **NOT a deploy-regen wipe of the helpers** (hypothesis (a)-literal is FALSE) — it is a **deliberate body-revert** (hypothesis (a)-variant TRUE).
+- **WHY reverted (correctness, documented in-source)**: the svc-trap path could not read the arm64 carry flag, so failed syscalls returned positive-errno that callers mistook for valid fds/offsets (open content-leak; pipe(2) pair-return only captures x0 → fds[1] garbage → exec emitted `""`; MAP_FAILED defeat). Cycle-61 noop socket/exec stubs *silently broke every subprocess-dependent stdlib* (yosys/ABC, anima trainers, pool CLI) — see `inbox/patches/yosys-exec-runtime-regression-cycles-61-64.md`. The restore was a **correctness-over-extern-count trade**, landed on the SAME DAY as the cycle-65 acceptance.
+- Hypothesis (b) build-flag-drop: **FALSE** — `tool/build_aprime.sh` still carries `-fno-builtin-{bzero,memcpy,strlen} -D_FORTIFY_SOURCE=0 -fno-stack-protector -Wl,-dead_strip`; no flag dropped (verified, only 1 build_aprime.sh change since cycle 65 region).
+- Hypothesis (c) r16 new call sites: **mostly FALSE** — only **1 genuine r16-new libc symbol** (`_setsockopt`, PR #904 daemon R1). `_flock` is a recovered-helper sibling. The other 40 trace to the cycle-66/PR#251/PR#426 restore wave or the pre-existing baseline-24.
+
+#### Verdict — **N-reclose, NOT a 1-commit revert**
+
+- A blanket revert of PR #251/#426 (re-pointing the bodies back to svc-trap) would **resurrect the carry-flag / pipe-pair-return / exec-stub bugs** that broke yosys/ABC/anima/pool — a net regression. So the cheap-revert branch is **rejected**.
+- The 34 R externs are **not a bug to "fix" by reverting** — they are the documented cost of correct subprocess/syscall behavior. The cycle-65 "5 externs" milestone was achieved with *broken* exec/pipe; the current 42 is *correct* but libc-coupled.
+- **Concrete next-batch (N-reclose, prioritized by effort/value)**:
+  1. **`_setsockopt` (N, r16-new)** — add `hxlcl_setsockopt` wrapper + register in net.hexa, OR confirm the daemon path is dead-strippable in aprime_cc (it never opens sockets at compile-time). 1-fn, cheap.
+  2. **Carry-flag-correct svc re-trap for the 18 syscall R group** (`read/write/close/dup2/pipe/fork/lseek/fstat/stat/waitpid/open/mmap`) — the ONLY way to drop these without losing correctness is a svc-trap that *reads the carry flag* (capture `nzcv`/PSTATE C bit via `mrs` after `svc`, set errno + return -1 on carry). This is the real re-closure work: ~1 helper rework (`_hxlcl_syscall*` returning `{val, carry}`), then re-point bodies. Medium effort, 1 PR for the whole syscall group.
+  3. **Socket/exec R group (12 syms)** — these need the runtime to *actually* spawn/connect, so they can only be closed by either (a) accepting libc here (aprime_cc dead-strip when compile-only), or (b) svc-trapping socket/connect/execve too. Defer — lowest value (aprime_cc never networks).
+  4. **S group (6)** — `___chkstk_darwin` (cycle 66 deferred — needs stub + `-Wl,-u`), `malloc/memcpy/free` (`-Oz` reverse-libcall — needs `-fno-builtin` extension or `-O0` hot-path), `longjmp`, `darwin_check_fd_set_overflow` (dead-strip-exposed stub). Unchanged from cycle 65 analysis.
+
+- **Acceptance preserved note**: the cycle-65 "≤5 externs" milestone was measured on a binary with *broken* exec/pipe. The honest current state is **42 externs · all syscall/subprocess behavior CORRECT**. Re-reaching ≤5 requires carry-flag-correct svc traps (item 2), not a revert.
+
+- Files touched (diagnosis-only — per @D `wipe_guard`, RUNTIME.md only, no code change):
+  - `RUNTIME.md` (this entry)
+- Acceptance line: `cycle 69: externs-catalog CLOSED · 42 externs = 34R/6S/2N · regression=PR#251 8ea4b75e svc-trap→libc deliberate revert (helpers intact, grep svc=619) · verdict=N-reclose · PR #(this)`
+
 ## Phase 2 — Tier-B stdlib primitives (step 2)
 
 ### 2026-05-21 — 🛸 step 2 POC: hxlcl_isalnum + isalpha → stdlib/runtime/ctype.hexa (cycle 1)
