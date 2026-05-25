@@ -29,6 +29,7 @@
 use "compiler/atlas/parser"
 use "compiler/atlas/merger"
 use "compiler/atlas/static_index"
+use "compiler/atlas/embed_fold"    // embed_fold_into (kind,id dedup + atomic write)
 use "self/stdlib/fs"               // read_file_safe (used by cmd_append_witness)
 use "compiler/atlas/audit"
 use "compiler/atlas/audit_rodata"
@@ -1624,27 +1625,19 @@ fn _fold_into_embedded(node_kind: string, node_raw: string, node_id: string) -> 
         return "empty .n6 body for id: " + node_id + " (adapter must set ev.raw)"
     }
     let path = _resolve_embedded_path()
-    let body = read_file_safe(path)
-    if len(body) == 0 {
-        return "embedded.gen.hexa not readable or empty at: " + path
-    }
-    if _embedded_has_id(body, node_id) {
-        return "id already present in embedded.gen.hexa: " + node_id + " (refusing to duplicate)"
-    }
-    let marker = "pub let ATLAS_" + node_kind + "_NODES: [AtlasNode] = ["
-    let mi = body.index_of(marker)
-    if mi < 0 {
-        return "section marker not found in embedded.gen.hexa: " + marker
-    }
-    let ins_at = mi + len(marker)
-    let lit = "\n    AtlasNode { kind: \"" + node_kind + "\", id: \"" + _hxesc(node_id) +
+    // Build the one-line AtlasNode struct literal, then delegate dedup +
+    // section-splice + ATOMIC write to embed_fold::embed_fold_into (the
+    // canonical pipeline). It dedups on the composite (kind,id) key — not a
+    // bare `id:` scan — and on a true duplicate returns a SKIP-prefixed status
+    // (idempotent: no second node appended). The temp-file + rename in
+    // embed_fold_into guarantees concurrent readers never see a half-written
+    // embedded.gen.hexa.
+    let node_text = "    AtlasNode { kind: \"" + node_kind + "\", id: \"" + _hxesc(node_id) +
               "\", raw: \"" + _hxesc(node_raw) +
               "\", source_file: \"register\", source_line: 0" +
               ", grade: GradeInfo { value: -1, verified: false, breakthrough: false, hypothesis: false }" +
-              ", edges: EdgeInfo { depends_on: [], derives: [], applications: [], equivalents: [], converges: [], verified_by: [], breakthroughs: [] } },"
-    let new_body = body.substring(0, ins_at) + lit + body.substring(ins_at, len(body))
-    write_file_safe(path, new_body)
-    return ""
+              ", edges: EdgeInfo { depends_on: [], derives: [], applications: [], equivalents: [], converges: [], verified_by: [], breakthroughs: [] } }"
+    return embed_fold_into(path, node_kind, node_text, node_id)
 }
 
 // _slug_register — id-safe slug for the new atlas-id (kind-prefix style:
@@ -1754,6 +1747,13 @@ fn register_from_event(ev: DiscoveryEvent) -> string {
     }
     let embed_path = _resolve_embedded_path()
     let err = _fold_into_embedded(ev.kind, ev.raw, ev.id)
+    if embed_is_skip(err) {
+        // Idempotent re-register: (kind,id) already present. Not an error — the
+        // atlas is unchanged; print a clear skip notice and succeed.
+        println("  atlas  = already registered — skipped: @" + ev.kind + " " + ev.id + " (no duplicate appended)")
+        println("  note   = re-register is idempotent; nothing to commit")
+        return ""
+    }
     if len(err) > 0 {
         return "fold into embedded.gen.hexa failed — " + err
     }
@@ -2171,8 +2171,8 @@ fn cmd_register(rest: array) {
             let ev = _adapt_drill_candidate(c, drill_seed, drill_engine, last_round, today)
             let ferr = _fold_into_embedded(ev.kind, ev.raw, ev.id)
             if len(ferr) > 0 {
-                // Duplicate id is benign — drill can re-emit. Other errors abort.
-                if ferr.contains("refusing to duplicate") {
+                // Duplicate (kind,id) is benign — drill can re-emit. Other errors abort.
+                if embed_is_skip(ferr) {
                     println("  skip   = " + ev.id + " (already in atlas)")
                 } else {
                     println("error: fold into embedded.gen.hexa failed — " + ferr)

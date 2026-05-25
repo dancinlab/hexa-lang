@@ -100,19 +100,19 @@ jobs:
           mkdir -p self/native build/stage1
           clang $CFLAGS_COMMON \
               -I self self/native/hexa_cc.c self/runtime.c \
-              -o self/native/hexa_v2
-          file self/native/hexa_v2
+              -o build/hexa_v2
+          file build/hexa_v2
 
       - name: Stage 1 — flatten + transpile self/main.hexa → build/stage1/main.c
         shell: bash
         run: |
           set -euo pipefail
-          ./self/native/hexa_v2 self/module_loader.hexa build/stage1/module_loader.c
+          ./build/hexa_v2 self/module_loader.hexa build/stage1/module_loader.c
           clang $CFLAGS_COMMON \
               -I self build/stage1/module_loader.c self/runtime.c \
               -o build/hexa_module_loader
           ./build/hexa_module_loader self/main.hexa build/stage1/main_expanded.hexa
-          ./self/native/hexa_v2 build/stage1/main_expanded.hexa build/stage1/main.c
+          ./build/hexa_v2 build/stage1/main_expanded.hexa build/stage1/main.c
 
       - name: Stage 2 — compile CLI driver (./hexa)
         shell: bash
@@ -187,21 +187,21 @@ jobs:
           mkdir -p self/native build/stage1
           gcc $CFLAGS_COMMON \
               -I self self/native/hexa_cc.c self/runtime.c \
-              -o self/native/hexa_v2 \
+              -o build/hexa_v2 \
               -lm -ldl
-          file self/native/hexa_v2
+          file build/hexa_v2
 
       - name: Stage 1 — flatten + transpile self/main.hexa → build/stage1/main.c
         shell: bash
         run: |
           set -euo pipefail
-          ./self/native/hexa_v2 self/module_loader.hexa build/stage1/module_loader.c
+          ./build/hexa_v2 self/module_loader.hexa build/stage1/module_loader.c
           gcc $CFLAGS_COMMON \
               -I self build/stage1/module_loader.c self/runtime.c \
               -o build/hexa_module_loader \
               -lm -ldl
           ./build/hexa_module_loader self/main.hexa build/stage1/main_expanded.hexa
-          ./self/native/hexa_v2 build/stage1/main_expanded.hexa build/stage1/main.c
+          ./build/hexa_v2 build/stage1/main_expanded.hexa build/stage1/main.c
 
       - name: Stage 2 — compile CLI driver (./hexa)
         shell: bash
@@ -272,21 +272,21 @@ jobs:
           mkdir -p self/native build/stage1
           gcc $CFLAGS_COMMON \
               -I self self/native/hexa_cc.c self/runtime.c \
-              -o self/native/hexa_v2 \
+              -o build/hexa_v2 \
               -lm -ldl
-          file self/native/hexa_v2
+          file build/hexa_v2
 
       - name: Stage 1 — flatten + transpile self/main.hexa → build/stage1/main.c
         shell: bash
         run: |
           set -euo pipefail
-          ./self/native/hexa_v2 self/module_loader.hexa build/stage1/module_loader.c
+          ./build/hexa_v2 self/module_loader.hexa build/stage1/module_loader.c
           gcc $CFLAGS_COMMON \
               -I self build/stage1/module_loader.c self/runtime.c \
               -o build/hexa_module_loader \
               -lm -ldl
           ./build/hexa_module_loader self/main.hexa build/stage1/main_expanded.hexa
-          ./self/native/hexa_v2 build/stage1/main_expanded.hexa build/stage1/main.c
+          ./build/hexa_v2 build/stage1/main_expanded.hexa build/stage1/main.c
 
       - name: Stage 2 — compile CLI driver (./hexa)
         shell: bash
