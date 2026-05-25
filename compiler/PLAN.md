@@ -8529,3 +8529,19 @@ Cross-links:
 - PR #250 (`d698e61a`) — T74 minimum-shape falsifier (assertions updated for 3g)
 
 @cite g6 citation-enforced + IEEE 1364-2005 §9.1.1.2 / §10.4.2 + Yosys passes/proc/proc_mux.cc (clean-room)
+
+---
+
+## 2026-05-26 · GPU codegen correctness cycle (NVPTX scaffold) — 3 PRs
+
+NVPTX codegen 정합성 라운드 (SGEMM perf 라인은 local optimum 으로 소진 →
+source-to-silicon E2E 정합성 lane 으로 전환).
+
+| # | PR | 내용 | 검증 |
+|---|----|------|------|
+| R1 | #1189 | `gpu_wmma_*` 스캐폴드 mnemonic → ptxas-legal grammar (N122 bug 1+2): load/store state-space 토큰 순서(`.shared.f16`) + f16 mma short-form(`.f32.f32`). bf16 long-form 유지. 테스트 assert 가 옛 버그 문자열 lock-in 하던 latent 결함 동시 정정 | nvptx_lower_test 33/33 (compiled-path mac arm64) · swapped-IN 문자열 전부 `archive/fires/` ptxas-통과 PTX 에 실재 |
+| R2 | #1193 | 정수 `/`·`%` → `div.s32/.s64`·`rem.s32/.s64` in `_nvptx_binop_mnemonic_for_kind` (N71-C). `/` 가 FP64 `div.rn.f64` 로 fall-through → 정수 레지스터에 ptxas-거부 + silent miscompile (index 산술 쓰레기 → 커널 hang, N70 GAP-B 근본) | nvptx_lower_test Sub-case A2 신규 5 asserts + 33/33 무회귀 |
+| — | — | **finding**: R2 는 중복이 아니라 **silent-wipe 된 N71-C re-landing**. 원조 `9652fd5e` (div hunk) 가 N71-A 수동 통합 때 silent-drop → origin/main 비조상 (shfl.bfly hunk 만 생존, GPU.md [x] 주장만 잔존). `worktree_merge_silent_filedrop` 패턴. `rem` 은 신규 추가 | `git merge-base --is-ancestor 9652fd5e origin/main` = false |
+| R3 | (in flight) | N71-B FP64 warp-shuffle composition (N70 GAP-C) — hi/lo u32 분해 + 2× shfl.bfly.b32 + recompose. 백그라운드 에이전트, ubu-2 silicon fire 후 PASS 시에만 PR | — |
+
+Background-agent 1 dispatched (N71-B). N70 source-to-silicon warp-reduce 는 GAP-A(✅ N71-A) + GAP-B(✅ #1193) 닫힘, GAP-C(N71-B) 만 잔존.
