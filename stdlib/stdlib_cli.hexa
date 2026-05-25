@@ -4,6 +4,11 @@
 //   hexa stdlib                       Catalog table (default = list).
 //   hexa stdlib list                  Same.
 //   hexa stdlib list --json           Machine-readable JSON.
+//   hexa stdlib find <pat>            Search fn names across stdlib/ tool/
+//                                       compiler/ (default = case-insensitive
+//                                       substring; --regex for grep -E).
+//   hexa stdlib show <fn>             Print signature · file:line · leading
+//                                       doc block · 3-5 example callers.
 //   hexa stdlib --help, -h, help      Usage.
 //   hexa stdlib --version, -v         Version line.
 //
@@ -18,7 +23,7 @@
 //   2. ./stdlib           (in-tree run).
 //   3. <argv-script-dir>  (install: stdlib_cli.hexa sits inside stdlib/).
 
-let VERSION = "0.1.0"
+let VERSION = "0.2.0"
 
 fn _stdlib_help() {
     println("hexa stdlib — stdlib catalog (modules · dirs · tests · docs)")
@@ -27,6 +32,8 @@ fn _stdlib_help() {
     println("  stdlib                       Catalog table (default = list)")
     println("  stdlib list                  Same")
     println("  stdlib list --json           JSON dump (name, kind, purpose)")
+    println("  stdlib find <pat>            Search fn names (default substring; --regex for grep -E)")
+    println("  stdlib show <fn>             Print signature, file:line, doc, callers for a fn")
     println("  stdlib help | --help | -h")
     println("  stdlib version | --version | -v")
 }
@@ -315,6 +322,414 @@ fn _list_table(root: string) {
     println(to_string(shown) + " entries")
 }
 
+// Repo root = parent dir of <stdlib_root>. Used by `find`/`show` to scan
+// the sibling tool/ + compiler/ trees in addition to stdlib/.
+fn _repo_root(stdlib_root: string) -> string {
+    let n = len(stdlib_root)
+    if n == 0 { return "" }
+    // Strip trailing "/stdlib" (the canonical suffix).
+    let tail = "/stdlib"
+    let tl = len(tail)
+    if n >= tl && stdlib_root.substring(n - tl, n) == tail {
+        return stdlib_root.substring(0, n - tl)
+    }
+    // Bare "stdlib" → "." (in-tree run from repo root).
+    if stdlib_root == "stdlib" { return "." }
+    return ""
+}
+
+// Build a space-separated list of search roots that EXIST under repo_root.
+// Always includes stdlib/; tool/ and compiler/ are optional siblings.
+fn _search_roots(repo_root: string) -> string {
+    let mut out = ""
+    let dirs = ["stdlib", "tool", "compiler"]
+    let mut i = 0
+    while i < len(dirs) {
+        let d = dirs[i]
+        let p = if repo_root == "." { d } else { repo_root + "/" + d }
+        if _is_dir(p) {
+            if len(out) > 0 { out = out + " " }
+            let q = p.replace("'", "'\\''")
+            out = out + "'" + q + "'"
+        }
+        i = i + 1
+    }
+    return out
+}
+
+// Escape POSIX-ERE metacharacters so a substring pattern can be fed to
+// `grep -E` safely. Keep ASCII-only.
+fn _ere_escape(s: string) -> string {
+    let mut out = ""
+    let n = len(s)
+    let mut i = 0
+    while i < n {
+        let c = s[i]
+        let meta = c == "." || c == "*" || c == "+" || c == "?"
+                || c == "(" || c == ")" || c == "[" || c == "]"
+                || c == "{" || c == "}" || c == "|" || c == "^"
+                || c == "$" || c == "\\"
+        if meta { out = out + "\\" }
+        out = out + c
+        i = i + 1
+    }
+    return out
+}
+
+// Shell-quote for single-quoted strings.
+fn _sq(s: string) -> string {
+    return "'" + s.replace("'", "'\\''") + "'"
+}
+
+// Run `grep -rEn` against the search roots and return raw output. Per the
+// recurring-wipe wisdom: keep one fork, parse line-by-line in hexa.
+fn _grep_E(roots: string, ere: string, extra_flags: string) -> string {
+    if len(roots) == 0 { return "" }
+    let q = _sq(ere)
+    let cmd = "grep -rEn " + extra_flags + " --include='*.hexa' "
+            + q + " " + roots + " 2>/dev/null"
+    return exec(cmd)
+}
+
+// Extract the fn name from a grep hit BODY (the substring AFTER "path:lineno:").
+// Returns "" when the line is not a fn definition.
+fn _fn_name_of(body: string) -> string {
+    // Skip optional `pub ` prefix.
+    let mut s = _trim(body)
+    if s.starts_with("pub ") { s = _trim(s.substring(4, len(s))) }
+    if !s.starts_with("fn ") { return "" }
+    s = s.substring(3, len(s))
+    // Skip leading whitespace after `fn `.
+    let n = len(s)
+    let mut i = 0
+    while i < n {
+        let c = s.substring(i, i + 1)
+        if c != " " && c != "\t" { break }
+        i = i + 1
+    }
+    // Collect identifier chars.
+    let mut j = i
+    while j < n {
+        let c = s[j]
+        let ok = (c >= "a" && c <= "z") || (c >= "A" && c <= "Z")
+              || (c >= "0" && c <= "9") || c == "_"
+        if !ok { break }
+        j = j + 1
+    }
+    if j == i { return "" }
+    return s.substring(i, j)
+}
+
+// Parse a `path:lineno:body` grep hit into [path, lineno, body].
+// Returns ["", "", ""] on parse failure.
+fn _split_hit(line: string) -> [string] {
+    let n = len(line)
+    let c1 = _index_of(line, ":", 0)
+    if c1 < 0 { return ["", "", ""] }
+    let c2 = _index_of(line, ":", c1 + 1)
+    if c2 < 0 { return ["", "", ""] }
+    let path = line.substring(0, c1)
+    let lineno = line.substring(c1 + 1, c2)
+    let body = line.substring(c2 + 1, n)
+    return [path, lineno, body]
+}
+
+// One-line doc for `find` output. Look at the comment immediately above
+// the fn definition (lineno - 1), strip leading `// `. Empty if absent.
+fn _fn_doc_oneline(path: string, lineno: string) -> string {
+    let ln = lineno.parse_int()
+    if ln <= 1 { return "" }
+    let body = read_file(path)
+    if len(body) == 0 { return "" }
+    let lines = body.split("\n")
+    // 1-indexed lineno → 0-indexed; the line ABOVE the fn is index (ln - 2).
+    let above_idx = ln - 2
+    if above_idx < 0 || above_idx >= len(lines) { return "" }
+    let l = _trim(lines[above_idx])
+    if !l.starts_with("//") { return "" }
+    let mut t = l.substring(2, len(l))
+    if t.starts_with(" ") { t = t.substring(1, len(t)) }
+    return _trim(t)
+}
+
+// Leading doc block (consecutive `//` lines above the fn). Each kept line
+// has its `// ` prefix stripped. Returned as a single string with "\n".
+fn _fn_doc_block(path: string, lineno: string) -> string {
+    let ln = lineno.parse_int()
+    if ln <= 1 { return "" }
+    let body = read_file(path)
+    if len(body) == 0 { return "" }
+    let lines = body.split("\n")
+    let mut k = ln - 2  // line above (0-indexed).
+    let mut collected = []
+    while k >= 0 {
+        let l = _trim(lines[k])
+        if !l.starts_with("//") { break }
+        let mut t = l.substring(2, len(l))
+        if t.starts_with(" ") { t = t.substring(1, len(t)) }
+        collected.push(t)
+        k = k - 1
+    }
+    // Reverse.
+    let mut out = ""
+    let mut j = len(collected) - 1
+    while j >= 0 {
+        if len(out) > 0 { out = out + "\n" }
+        out = out + collected[j]
+        j = j - 1
+    }
+    return out
+}
+
+// Signature line — body from the grep hit, trimmed. If the fn opens with a
+// multi-line signature (no `{` on the first line), append continuation
+// lines until we see `{` or `->`.
+fn _fn_signature(path: string, lineno: string, first_body: string) -> string {
+    let mut sig = _trim(first_body)
+    if _index_of(sig, "{", 0) >= 0 { return sig }
+    if _index_of(sig, ") ->", 0) >= 0 && _index_of(sig, "->", 0) > 0 { return sig }
+    let body = read_file(path)
+    if len(body) == 0 { return sig }
+    let lines = body.split("\n")
+    let ln = lineno.parse_int()
+    let mut k = ln  // 0-indexed line AFTER the fn line.
+    let mut probed = 0
+    while k < len(lines) && probed < 6 {
+        let l = _trim(lines[k])
+        sig = sig + " " + l
+        if _index_of(l, "{", 0) >= 0 { break }
+        probed = probed + 1
+        k = k + 1
+    }
+    return sig
+}
+
+// Comparator: stable file then line sort key.
+fn _hit_key(path: string, lineno: string) -> string {
+    // Zero-pad lineno to 8 chars so lexicographic order matches numeric.
+    let mut p = lineno
+    while len(p) < 8 { p = "0" + p }
+    return path + ":" + p
+}
+
+fn _cmd_find(repo_root: string, pattern: string, regex_mode: bool) {
+    let roots = _search_roots(repo_root)
+    if len(roots) == 0 {
+        println("hexa stdlib find: no search roots under '" + repo_root + "'")
+        exit(2)
+    }
+    // Build an ERE: pattern → \b(pub +)?fn +<pattern>\(?
+    // We want a fn DEFINITION match. The pattern may itself be a regex.
+    let pat_ere = if regex_mode { pattern } else { _ere_escape(pattern) }
+    let case = if regex_mode { "" } else { "-i" }
+    // Anchor to start-of-line (with optional `pub `): `^(pub +)?fn +.*<pat>`
+    // Looser: match fn name CONTAINING the pattern.
+    let ere = "^(pub +)?fn +[a-zA-Z_][a-zA-Z0-9_]*"
+    // Apply the user pattern as a SECOND filter to the fn name, not the line.
+    // Simpler: first grep all fn definitions, then filter names in-process.
+    let raw = _grep_E(roots, ere, case)
+    if len(raw) == 0 {
+        println("hexa stdlib find: no fn definitions found (grep miss)")
+        return
+    }
+    let lines = raw.split("\n")
+    let mut hits = []
+    let mut i = 0
+    while i < len(lines) {
+        let l = lines[i]
+        i = i + 1
+        if len(l) == 0 { continue }
+        let parts = _split_hit(l)
+        let path = parts[0]
+        let lineno = parts[1]
+        let body = parts[2]
+        if len(path) == 0 { continue }
+        let nm = _fn_name_of(body)
+        if len(nm) == 0 { continue }
+        // Filter by user pattern — match against EITHER the fn name OR the
+        // file basename (file-level matches catch e.g. `find current_loop`
+        // hitting `current_loop_offaxis.hexa::loop_offaxis_Bz`).
+        let slash = path.last_index_of("/")
+        let basename = if slash >= 0 { path.substring(slash + 1, len(path)) } else { path }
+        let keep = if regex_mode {
+            // POSIX ERE via runtime intrinsic — no fork per name.
+            regex_match(pattern, nm) || regex_match(pattern, basename)
+        } else {
+            // Case-insensitive substring on fn name OR file basename.
+            let p_lc = pattern.to_lower()
+            _index_of(nm.to_lower(), p_lc, 0) >= 0
+                || _index_of(basename.to_lower(), p_lc, 0) >= 0
+        }
+        if !keep { continue }
+        let doc = _fn_doc_oneline(path, lineno)
+        hits.push(_hit_key(path, lineno) + "\t" + path + "\t" + lineno + "\t" + nm + "\t" + doc)
+    }
+    if len(hits) == 0 {
+        println("hexa stdlib find: no matches for '" + pattern + "'")
+        return
+    }
+    // Sort (stable lex) — manual selection sort, len(hits) is small.
+    let mut a = 0
+    while a < len(hits) {
+        let mut b = a + 1
+        while b < len(hits) {
+            if hits[b] < hits[a] {
+                let t = hits[a]; hits[a] = hits[b]; hits[b] = t
+            }
+            b = b + 1
+        }
+        a = a + 1
+    }
+    let mut k = 0
+    while k < len(hits) {
+        let row = hits[k]
+        k = k + 1
+        let cols = row.split("\t")
+        // cols = [key, path, lineno, name, doc]
+        let path = cols[1]
+        let lineno = cols[2]
+        let nm = cols[3]
+        let doc = if len(cols) >= 5 { cols[4] } else { "" }
+        let loc = path + ":" + lineno
+        if len(doc) > 0 {
+            println(loc + "::" + nm + "  ->  " + doc)
+        } else {
+            println(loc + "::" + nm)
+        }
+    }
+    println("")
+    println(to_string(len(hits)) + " match(es) for '" + pattern + "'")
+}
+
+fn _cmd_show(repo_root: string, fn_arg: string) {
+    let roots = _search_roots(repo_root)
+    if len(roots) == 0 {
+        println("hexa stdlib show: no search roots under '" + repo_root + "'")
+        exit(2)
+    }
+    // Accept qualified `family/file::fn` or bare `fn`. Strip prefix → bare.
+    let mut bare = fn_arg
+    let sep = _index_of(bare, "::", 0)
+    if sep >= 0 { bare = bare.substring(sep + 2, len(bare)) }
+    if len(bare) == 0 {
+        println("hexa stdlib show: empty fn name")
+        exit(2)
+    }
+    // Locate definitions: `^(pub +)?fn +<bare>(`. If `bare` has no leading
+    // underscore, also accept `_<bare>` (private hexa convention).
+    let bare_e = _ere_escape(bare)
+    let ere = if bare.starts_with("_") {
+        "^(pub +)?fn +" + bare_e + "\\("
+    } else {
+        "^(pub +)?fn +_?" + bare_e + "\\("
+    }
+    let raw = _grep_E(roots, ere, "")
+    if len(raw) == 0 {
+        println("hexa stdlib show: no definition found for '" + bare + "'")
+        exit(1)
+    }
+    let lines = raw.split("\n")
+    let mut defs = []  // path \t lineno \t body
+    let mut i = 0
+    while i < len(lines) {
+        let l = lines[i]
+        i = i + 1
+        if len(l) == 0 { continue }
+        let parts = _split_hit(l)
+        if len(parts[0]) == 0 { continue }
+        defs.push(parts[0] + "\t" + parts[1] + "\t" + parts[2])
+    }
+    if len(defs) == 0 {
+        println("hexa stdlib show: no definition found for '" + bare + "'")
+        exit(1)
+    }
+    if len(defs) > 1 {
+        println("hexa stdlib show: multiple definitions for '" + bare + "' — disambiguate:")
+        let mut k = 0
+        while k < len(defs) {
+            let cols = defs[k].split("\t")
+            println("  " + cols[0] + ":" + cols[1])
+            k = k + 1
+        }
+        exit(2)
+    }
+    let cols = defs[0].split("\t")
+    let path = cols[0]
+    let lineno = cols[1]
+    let body = cols[2]
+    // Resolve the actual fn name from the definition body — handles the
+    // `_<bare>` fallback (e.g. `show penning_invariance` resolves to
+    // `_penning_invariance`).
+    let resolved = _fn_name_of(body)
+    let sig = _fn_signature(path, lineno, body)
+    let doc = _fn_doc_block(path, lineno)
+    println(sig)
+    println("location: " + path + ":" + lineno)
+    if len(resolved) > 0 && resolved != bare {
+        println("resolved: " + resolved + " (input was '" + bare + "')")
+    }
+    if len(doc) > 0 {
+        println("doc:")
+        let dl = doc.split("\n")
+        let mut d = 0
+        while d < len(dl) {
+            println("  " + dl[d])
+            d = d + 1
+        }
+    } else {
+        println("doc: (none)")
+    }
+    // Callers — grep for `<resolved>(` across the search roots, exclude
+    // the definition line itself (path + ":" + lineno + ":").
+    let caller_name = if len(resolved) > 0 { resolved } else { bare }
+    let cera = _ere_escape(caller_name) + "\\("
+    let craw = _grep_E(roots, cera, "")
+    let mut callers = []
+    if len(craw) > 0 {
+        let clines = craw.split("\n")
+        let def_prefix = path + ":" + lineno + ":"
+        let mut c = 0
+        while c < len(clines) {
+            let cl = clines[c]
+            c = c + 1
+            if len(cl) == 0 { continue }
+            if cl.starts_with(def_prefix) { continue }
+            let cp = _split_hit(cl)
+            if len(cp[0]) == 0 { continue }
+            // Skip lines that are ALSO fn definitions of the same name
+            // (overloads — rare in hexa, but stay defensive).
+            let cb = _trim(cp[2])
+            let cb2 = if cb.starts_with("pub ") { _trim(cb.substring(4, len(cb))) } else { cb }
+            if cb2.starts_with("fn " + caller_name + "(") { continue }
+            callers.push(cp[0] + ":" + cp[1])
+        }
+    }
+    if len(callers) == 0 {
+        println("callers: (none found)")
+        return
+    }
+    // Sort + cap at 5.
+    let mut a = 0
+    while a < len(callers) {
+        let mut b = a + 1
+        while b < len(callers) {
+            if callers[b] < callers[a] {
+                let t = callers[a]; callers[a] = callers[b]; callers[b] = t
+            }
+            b = b + 1
+        }
+        a = a + 1
+    }
+    let total = len(callers)
+    let cap = if total > 5 { 5 } else { total }
+    println("callers (" + to_string(total) + " total" + (if total > cap { ", showing " + to_string(cap) } else { "" }) + "):")
+    let mut p = 0
+    while p < cap {
+        println("  - " + callers[p])
+        p = p + 1
+    }
+}
+
 fn main() {
     let argv = args()
     let n = len(argv)
@@ -355,6 +770,42 @@ fn main() {
 
     if sub == "" || sub == "list" {
         if json { _list_json(root) } else { _list_table(root) }
+        return
+    }
+
+    if sub == "find" {
+        // `find [--regex] <pattern>` — flags may appear in any order.
+        let mut regex_mode = false
+        let mut pattern = ""
+        let mut p = start + 1
+        while p < n {
+            let a = argv[p]
+            if a == "--regex" || a == "-E" {
+                regex_mode = true
+            } else if len(pattern) == 0 {
+                pattern = a
+            }
+            p = p + 1
+        }
+        if len(pattern) == 0 {
+            println("hexa stdlib find: missing <pattern>")
+            println("usage: hexa stdlib find [--regex] <pattern>")
+            exit(2)
+        }
+        let repo = _repo_root(root)
+        _cmd_find(repo, pattern, regex_mode)
+        return
+    }
+
+    if sub == "show" {
+        if start + 1 >= n {
+            println("hexa stdlib show: missing <fn>")
+            println("usage: hexa stdlib show <fn>")
+            exit(2)
+        }
+        let fn_arg = argv[start + 1]
+        let repo = _repo_root(root)
+        _cmd_show(repo, fn_arg)
         return
     }
 
