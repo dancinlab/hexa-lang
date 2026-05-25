@@ -500,6 +500,14 @@ fn _nvptx_binop_mnemonic(op: string) -> string {
 // PTX integer division is `div.s32` / `div.s64` and remainder is
 // `rem.s32` / `rem.s64` (PTX ISA 9.7.1.4), signed to match the existing
 // add/sub/mul .s32/.s64 banks.
+//
+// Integer bitwise/shift on a u32/u64 dst bank (same fall-through-to-FP64
+// silent-miscompile risk as div had). `& | ^` → untyped bit ops
+// `and/or/xor.b32|b64`; `<<` → `shl.b32|b64`; `>>` → ARITHMETIC
+// `shr.s32|s64` (hexa i32/i64 are signed; for the non-negative index/lane
+// values these banks hold, arithmetic and logical shr agree). PTX ISA
+// 9.7.1.2 (logic) + 9.7.1.10 (shift). Enables bit-math @gpu_kernels
+// (masking / packing / quantization / swizzle d2xy) on the codegen path.
 fn _nvptx_binop_mnemonic_for_kind(op: string, kind: string) -> string {
     if kind == NVPTX_RKIND_U32 {
         if op == "add" || op == "+" { return "add.s32" }
@@ -507,6 +515,11 @@ fn _nvptx_binop_mnemonic_for_kind(op: string, kind: string) -> string {
         if op == "mul" || op == "*" { return "mul.lo.s32" }
         if op == "div" || op == "/" { return "div.s32" }
         if op == "rem" || op == "%" { return "rem.s32" }
+        if op == "and" || op == "&" { return "and.b32" }
+        if op == "or"  || op == "|" { return "or.b32" }
+        if op == "xor" || op == "^" { return "xor.b32" }
+        if op == "shl" || op == "<<" { return "shl.b32" }
+        if op == "shr" || op == ">>" { return "shr.s32" }
     }
     if kind == NVPTX_RKIND_U64 {
         if op == "add" || op == "+" { return "add.s64" }
@@ -514,6 +527,11 @@ fn _nvptx_binop_mnemonic_for_kind(op: string, kind: string) -> string {
         if op == "mul" || op == "*" { return "mul.lo.s64" }
         if op == "div" || op == "/" { return "div.s64" }
         if op == "rem" || op == "%" { return "rem.s64" }
+        if op == "and" || op == "&" { return "and.b64" }
+        if op == "or"  || op == "|" { return "or.b64" }
+        if op == "xor" || op == "^" { return "xor.b64" }
+        if op == "shl" || op == "<<" { return "shl.b64" }
+        if op == "shr" || op == ">>" { return "shr.s64" }
     }
     return _nvptx_binop_mnemonic(op)
 }
