@@ -1720,3 +1720,32 @@
   raw    = ".verdicts/tecs-l-mersenne-abundancy-closed/abundancy_closed_form.txt"
   src    = "axis B MR3 — TECS-L/docs/mr3-abundancy-closed-form.md. Anchors: axis-0 M6 (.verdicts/tecs-l-hypotheses/abundancy_sigma{6,28,496,8128,33m}.txt 🔵) + MR2 (.verdicts/tecs-l-mersenne-perfect/sigma_p{6,7}.txt 🔵). Honest scope: even perfects only; odd-perfect open → MR7 🟠."
   status = "🟢 reasoned — derivation by elementary number theory; cites 7 pre-existing 🔵 SUPPORTED-FORMAL sigma atoms (P1..P7). No new arithmetic verify. terminal for axis B MR3."
+
+# ───────────────────────────────────────────────────────────────────────
+# TECS-L axis B (MERSENNE) — tecs-l-mersenne-odd-perfect-open (slug · group=TECS-L · MR7)
+# Odd perfect number — OPEN PROBLEM. Honest 🟠 INSUFFICIENT/DEFERRED milestone.
+# No g5 closed-form path settles existence. The artifact tabulates the modern
+# known lower bounds / structural necessary conditions with original-source
+# citations; it does NOT claim closure. Complement of MR1 (Euclid-Euler covers
+# EVEN perfects only; MR7 is the open complement on the ODD side).
+#
+# Known constraints (necessary conditions, each cited):
+#   n > 10^1500                                                  Ochem-Rao 2012
+#   omega(n) >= 9    (>= 12 if 3 does NOT divide n)              Nielsen 2015
+#   largest prime factor >= 10^8                                 Goto-Ohno 2008
+#   second-largest prime factor >= 10^4                          Iannucci 1999
+#   third-largest prime factor >= 10^2                           Iannucci 2000
+#   Omega(n) >= 101                                              Ochem-Rao 2014
+#   Euler form n = p^a * q_1^(2 b_1) * ... * q_k^(2 b_k),
+#     p == a == 1 (mod 4)                                        Euler 1849
+#
+# paper-ineligible by paper_gate (🟠 excluded). No PAPER/<slug>/ scaffolded.
+# atlas fold NOT applicable (axis E E1 = verified-only fold; 🟠 is by design
+# unverified). MR7 = explicit honest-scope statement to forbid axis-B over-claim.
+
+@C tecs_l_mersenne_odd_perfect_open := "odd perfect number existence — OPEN; modern known lower bounds and necessary conditions tabulated with original-source citations (n > 10^1500 Ochem-Rao 2012 · omega(n) >= 9 / >= 12 if 3 nmid n Nielsen 2015 · largest prime factor >= 10^8 Goto-Ohno 2008 · second-largest >= 10^4 Iannucci 1999 · Omega(n) >= 101 Ochem-Rao 2014 · Euler form p^a*prod q_i^(2 b_i), p == a == 1 mod 4, Euler 1849); MR7 is the OPEN complement of MR1 (Euclid-Euler covers EVEN only); paper-ineligible by gate" :: citation [slug=tecs-l-mersenne-odd-perfect-open group=TECS-L]
+  method = "citation"
+  cmd    = "synthesis of published lower bounds + Euler form (no new hexa verify; no g5 closed-form path for existence at this time)"
+  raw    = ".verdicts/tecs-l-mersenne-odd-perfect-open/odd_perfect_constraints.txt"
+  src    = "axis B MR7 — TECS-L/docs/mr7-odd-perfect-open.md. Cross-link: MR1 (tecs-l-mersenne-euclid-euler) is the EVEN-side closed counterpart; MR7 is the OPEN complement. References (Ochem-Rao 2012/2014, Nielsen 2007/2015, Goto-Ohno 2008, Iannucci 1999/2000, Acquaah-Konyagin 2012, Euler 1849) verbatim in the verdict artifact."
+  status = "🟠 INSUFFICIENT/DEFERRED — open problem, known lower bounds cited, no closure. paper-ineligible by gate (project.tape @D paper_gate excludes 🟠). No PAPER/<slug>/. No atlas fold (axis E E1 = verified-only). Deliberate honest-scope milestone to forbid axis-B over-claim."
