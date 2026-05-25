@@ -2,6 +2,19 @@
 
 Append-only history sister of `CANON.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
+## 2026-05-25T18:10Z — M11 per-verb `--help` 전 drawer-verb 완비 (M4/M6/M10 종결)
+
+M10이 core 11 verb를 덮은 뒤 남은 **in-tree 툴-드로어 verb**의 `--help` 갭을 닫음. 격리 worktree `agent-a5407379c52d10302` (base origin/main). 편집 = `self/main.hexa`의 help 영역만(dispatch 코어·`cmd_install`·`resolve_or_bootstrap_hexa_v2`·`build_hexa_cli.hexa` 무접촉).
+
+- [x] **타깃 집합 산정** — `cmd_tool_list` 5-family에서 (a) core 11(M10 완료) (b) 서브-CLI delegator(atlas/qrng/qmirror/cloud/loop/gpu/sim-universe — 자체 바이너리 `--help` 위임) 제외. 남은 in-tree 타깃 = `dispatch_absorbed` 라우팅 **흡수 verb 70개** + 명시 dispatch 분기 **5개**(batch/tape/hxc/url/convergence) = **75개**.
+- [x] **갭 진단** — 흡수 verb는 `--help`가 스크립트 인자로 흘러가 drill/kick/omega/swarm 등 **무거운 discovery 엔진을 기동**(stray `--help`로 round_run 발동 위험). batch=`--help`를 `<file>`로, tape/hxc=file-not-found, url=URL로 오해석, convergence=usage+exit 2. `cache`/`daemon`은 이미 `cmd_cache`/`cmd_daemon`이 자체 `--help` 보유 → 무접촉. `stdlib`/`calc`/`loop`은 자체 스크립트 위임 → 무접촉.
+- [x] **`cmd_absorbed_help(verb)` 신설** — 70 흡수 verb를 family별 통일 블록(signature · 1줄 purpose)으로 커버. DISCOVERY 13(drill/kick은 `--seed/--rounds/--engine` 풀 시그니처) · 생성기/검증기 6 · AUDIT/SCIENCE 4 · akida · EXTERNAL 브릿지 16(`<query|id>` 공통) · ANNOTATOR 29(`<file.hexa>` 공통). 흡수 아닌 verb는 `cmd_verb_help` fallback.
+- [x] **intercept 와이어링** — `dispatch_absorbed` **맨 위**(스크립트 resolve/실행 前)에 `ab_args[0]==--help|-h` 게이트 추가 → 70 verb 단일 지점 차단(M10 패턴). 명시 5개 분기에 각각 `cmd_verb_help` intercept(`cmd_verb_help`에 batch/tape/hxc/url/convergence 블록 추가). intercept는 **첫 인자**가 `--help`/`-h`일 때만 발동 → 실제 작업 경로 무회귀.
+- [x] **검증(compiled-path)** — `hexa parse self/main.hexa` OK · `tool/build_hexa_cli`(LOCAL_BUILD=1·SIDECAR_NO_POOL_ROUTE=1, `--install` 없이) 빌드 OK(smoke 3/3). 6 family 대표(drill/kick/oeis/honesty/lattice/pure-check)+5 in-tree(batch/tape/hxc/url/convergence) `--help` 전수 PASS · `cache --help` 여전히 자체 핸들 · unknown verb는 카탈로그 fallback · `drill --rounds 1`(non-help-first)이 여전히 실제 엔진 dispatch 확인.
+- [x] **랜딩** — +97/−5 LOC `self/main.hexa`. stacked PR base origin/main. **deferred**: 서브-CLI delegator 7개(자체 위임 유지)·`cache`/`daemon`(자체 핸들)·`stdlib`/`calc`/`loop`(스크립트 위임). ANNOTATOR/EXTERNAL은 family 공통 1줄 purpose(개별 분화는 g3 과잉 → 보류).
+
+**교훈**: 60+ 흡수 verb의 help는 dispatch 분기마다가 아니라 **공통 진입점 `dispatch_absorbed` 1곳**에서 가로채는 게 g4-최소이자 heavy-work 차단에 가장 안전. intercept는 반드시 첫 인자만 보게 해 실제 인자(`--rounds` 등) 경로 무회귀 보장.
+
 ## 2026-05-25T17:30Z — M9 문서 surface 정확성 스윕 (M1~M8 정렬 · docs-only)
 
 M1~M8 canonical 정렬 후 docs가 옛 상태를 present-tense로 주장하는지 전수 스윕. 격리 worktree `agent-a6405bae7b439bd08` (base origin/main). CANON.md/log·ATLAS*·RUNTIME.log.md(도메인 SSOT) 미접촉.
