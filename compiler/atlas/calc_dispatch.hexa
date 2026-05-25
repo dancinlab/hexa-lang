@@ -134,6 +134,8 @@ pub fn calc_is_float_fn(fn_name: string) -> bool {
         || fn_name == "penning_invariance"
         // Plasma-wakefield cold-linear scalings (CERN §1.5 tabletop accel · 2026-05-25):
         || fn_name == "wakefield_e0_gv_m" || fn_name == "wakefield_lambda_um"
+        // FUSION gate (e) getdp parity oracle — thick finite-solenoid on-axis center B_z (2026-05-25):
+        || fn_name == "solenoid_axis_bz"
 }
 
 // calc_is_zero_arg_float_fn — is fn_name a 0-arg closed-form constant?
