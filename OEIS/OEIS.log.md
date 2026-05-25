@@ -15,6 +15,18 @@ Append-only history sister of `OEIS.md`. Each entry starts with `## <ISO timesta
   - wall: stripped.gz 1회 캐시 (~32MB→81MB). awk hash-intersect (374K 라인 × 20 fn)= 수 초. 전체 run 은 interp orchestration overhead 로 느림 (compiled build 는 pool-route heavy-refuse → interp 사용). 측정 자체는 빠름.
 - [x] g59 INBOX filing — `hexa verify --expr <fn> <n>` value-less COMPUTE mode 부재 gap (O3 + generative discovery 차단). verify_cli whitelist 항목과 직교 (whitelist 에 있는 sigma/tau/phi 조차 값 emit 안 함). 제안: `hexa compute <fn> <n>` verb OR 2-arg verify print+self-verify.
 
+## 2026-05-25T15:09:48Z — O6 DLMF probe
+
+- [x] O6 타당성 프로브 — OEIS catalogue-mirror 패턴이 DLMF (NIST 특수함수 라이브러리) 로 일반화되는가?
+  - **터미널 verdict = 🔴 FALSIFIED (closed-negative)** — 그대로(as-is) 재사용 불가. falsified 속성 = **패턴 이식성(portability)**.
+  - OEIS 패턴의 3 전제 중 2개가 결정론적 FAIL:
+    - **P1 BULK CORPUS FAIL** — DLMF 는 per-page MathML, `stripped.gz` 등가물·공개 API·bulk 수치 dump 없음 (WebFetch `dlmf.nist.gov/about` + `/help`, 2026-05-25 확인).
+    - **P3 HEXA COVERAGE FAIL** — `hexa verify --expr` 레지스트리에 고전 특수함수 **0개** (Bessel/Gamma(z)/erf/Hermite/Legendre/Airy/ζ/초기하 없음; `gamma0_index` 는 모듈러 Γ₀ index = 정수, Gamma 함수 아님). 정수론 fn + RFC-045 상수만 존재.
+  - 구조 차이: OEIS = `{id → 정수 tuple}` (균일·exact-hashable) vs DLMF = `{id → 기호 항등식 OR 연속함수 f}` (이질·tuple 해시 불가).
+  - sub-option 3개: (A) numeric-table intersect = source 부재 AND 특수함수 부재 AND exact-hash→tolerance 메커니즘 불일치로 차단 · (B) identity-citation = 도메인 거버넌스(naive-dump 금지 + verify-gated only) + paper_gate 위반으로 REJECTED · (C) closed-negative = ADOPTED.
+  - 배제된 축: "DLMF 가 OEIS 패턴을 as-is 재사용 가능" → FALSE. DLMF 미러는 신규 메커니즘(numeric 샘플링 + tolerance, 🟢 tier) + hexa 특수함수 라이브러리(libm/급수) 둘 다 필요 = same-pattern 재사용 아님.
+  - 영속: `OEIS/docs/o6-dlmf-feasibility.md` (한국어 §1–§5) + `.verdicts/oeis-dlmf-probe/dlmf_assessment.txt` (ASCII verbatim) + `CLAIMS.tape` @C slug=oeis-dlmf-probe (🔴, paper_negative_ok).
+
 ## 2026-05-25 — 도메인 개시 + O1 scanner POC
 
 - [x] 도메인 SSOT `OEIS/OEIS.md` 작성 — @title + @goal + O1-O8 roadmap + 거버넌스
