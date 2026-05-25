@@ -2514,6 +2514,22 @@
   status = "🟢 SUPPORTED-NUMERICAL — built (bin/hexa-verify) + tested (verdict persisted verbatim). Round-tolerant 🟢 within opt-in --tol; strict 🔴 unchanged when --tol absent; beyond-tol 🔴 NOT laundered (falsification integrity preserved). Terminal · paper-eligible (Δ vs baseline = round-tolerant comparison the prior strict-only CLI lacked for literature-rounded values)."
 
 # ───────────────────────────────────────────────────────────────────────
+# VERIFY-KIT — verify-kit-iit-wire (slug · group=VERIFY-KIT · V5.2)
+# Wires the V5.1-promoted faithful-Φ engine (stdlib/consciousness/iit4/
+# faithful_phi.hexa, PR #1158) into the verify CLI so `hexa verify --expr
+# phi_demo <case> <expected> --tol <eps>` recomputes Φ. Option A (hardcoded
+# canonical small state, no farr CLI grammar) — the minimal wire that proves
+# the engine recomputes a deterministic Φ end-to-end through the CLI. V5.3 =
+# PyPhi calibration of the exact number (the 3.83659 is the engine's own
+# deterministic output, not yet PyPhi-anchored).
+@C verify_kit_iit_wire := "VERIFY-KIT V5.2 faithful-Φ recompute wired into verify CLI: `hexa verify --expr phi_demo 1 3.83659 --tol 1e-3` → 🟢 SUPPORTED-NUMERICAL (calc=3.83659 vs 3.83659, |Δ|=1.66537e-06) via the promoted stdlib iit4_faithful_phi engine; control `--expr phi_demo 0 0.0 --tol 1e-3` → 🟢 (calc=4.52044e-09 ≈ 0, disconnected-cell MIP at zero cut). Option A — phi_demo(case_id) recomputes faithful Φ★ on a HARDCODED canonical n=3 dim=6 state (case 1 correlated Φ>0 · case 0 control Φ≈0), proving the wire (calc_is_float_fn → cmd_expr_float → _recompute_float → _phi_demo → iit4_faithful_phi) without a farr-parsing grammar. Calibration of the exact Φ vs PyPhi = V5.3 (the 3.83659 is the engine's own deterministic value). Build: bin/hexa-verify from HEAD source (V4 bessel codegen fold needs the fresh self/native/hexa_v2 transpiler — stale Mac driver miscompiles V4, a pre-existing issue independent of V5.2)" :: formula [slug=verify-kit-iit-wire group=VERIFY-KIT]
+  method = "tolerance"
+  cmd    = "hexa verify --expr phi_demo 1 3.83659 --tol 1e-3  (build = bash tool/build_hexa_verify.sh)"
+  raw    = ".verdicts/verify-kit-iit-wire/v5_2.txt"
+  src    = "tool/verify_cli.hexa (_phi_demo helper + _recompute_float dispatch + help line; use stdlib/consciousness/iit4/faithful_phi) · compiler/atlas/calc_dispatch.hexa::calc_is_float_fn (phi_demo registered). bin/hexa-verify built arm64 from HEAD transpiler; phi_demo VERIFY (case 1 Φ>0) + control (case 0 Φ≈0) both 🟢."
+  status = "🟢 phi recompute wired into verify CLI (faithful_phi engine) — calibration → V5.3"
+
+# ───────────────────────────────────────────────────────────────────────
 # OEIS — oeis-atlas-fold (slug · group=OEIS · O4)
 # Atlas-fold of the 7 distinct 🔵 verified theorems from O3 (336 K=20 survivors
 # → 8 🔵 / 7 distinct: sigma↔A000203, tau/sigma_0↔A000005, phi↔A000010,

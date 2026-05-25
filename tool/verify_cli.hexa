@@ -30,6 +30,7 @@ use "compiler/atlas/merger"
 use "compiler/atlas/symbolic/congruence_chain_engine"
 use "self/stdlib/fs"
 use "compiler/atlas/calc_dispatch"   // calc_eps / calc_is_float_fn / calc_is_zero_arg_float_fn — float-recompute SSOT
+use "stdlib/consciousness/iit4/faithful_phi"   // VERIFY-KIT V5.2 — iit4_faithful_phi recompute engine (n<=8 exact MIP-EI)
 
 // HXC retired 2026-05-22 — verify now reads from static_atlas() which
 // parses n6/atlas.n6 via the merger (no hxc). HXC_PATH constant kept as
@@ -308,6 +309,7 @@ fn cmd_rubric() {
     println("             erf(x)                      → Gauss error fn      (VERIFY-KIT V4 special fn · erf(0)=0 · erf(1)=0.84270 · use --tol, 1-arg)")
     println("             bessel_j0(x)                → J₀(x) (libm j0)     (VERIFY-KIT V4 special fn · J₀(0)=1 · use --tol, 1-arg)")
     println("             bessel_j1(x)                → J₁(x) (libm j1)     (VERIFY-KIT V4 special fn · J₁(0)=0 · use --tol, 1-arg)")
+    println("             phi_demo(case_id)           → faithful Φ★ recompute (VERIFY-KIT V5.2 · stdlib iit4 engine · case 1=correlated Φ>0 · case 0=control Φ≈0 · use --tol, 1-arg)")
     println("             hill(L,Kd,n)                → L^n/(Kd^n+L^n)      (Hill receptor binding, M3 IC50, 3-arg)")
     println("             cheng_prusoff(IC50,S,Km)    → IC50/(1+S/Km)       (Cheng-Prusoff Ki conversion, 3-arg)")
     println("             fick1(D,dC,dx)              → -D*dC/dx            (Fick's first law of diffusion, 3-arg)")
@@ -3297,7 +3299,68 @@ fn _recompute_float(fn_name: string, a0: float, a1: float, a2: float, a3: float,
         if argc < 2 { return _NOCALC_F }
         return _recomb_3body_tratio(a0, a1)
     }
+    // ── VERIFY-KIT V5.2 — faithful Φ recompute (stdlib iit4 engine) ─────
+    //   phi_demo(case_id)  1-arg: recompute faithful Φ★ on a HARDCODED
+    //   canonical small state (Option A — minimal wire, no farr CLI grammar).
+    //   case 1 = a 3-node correlated state (Φ > 0); case 0 = a 3-node
+    //   disconnected (independent-cell) control (Φ ≈ 0). The recompute calls
+    //   iit4_faithful_phi (n<=8 exact MIP-EI); --tol gates the 🟢 numerical.
+    if fn_name == "phi_demo" {
+        return _phi_demo(to_int(a0))
+    }
     return _NOCALC_F
+}
+
+// _phi_demo — VERIFY-KIT V5.2 wire. Recompute faithful Φ★ on a hardcoded
+// canonical n×dim state via the promoted stdlib engine (faithful_phi.hexa).
+// Option A: the state is BUILT IN-FN (no comma-sep CLI grammar) so the wire
+// proves end-to-end recompute without a farr-parsing verb. n_bins=4.
+//
+//   case 1 — 3 cells × 6 dim-steps, cells 0/1/2 strongly co-varying
+//            (the SAME ramp): high pairwise MI ⇒ every cut is costly ⇒ Φ★ > 0.
+//   case 0 — 3 cells × 6 dim-steps, cell 2 is a CONSTANT (zero MI to all):
+//            the MIP isolates cell 2 at cut cost ≈ 0 ⇒ Φ★ ≈ 0 (control).
+//
+// V5.2 only requires a DETERMINISTIC recompute + the wire; PyPhi calibration
+// of the exact number is V5.3.
+fn _phi_demo(case_id: int) -> float {
+    let n = 3
+    let dim = 6
+    let n_bins = 4
+    let state = farr_zeros(n * dim)
+    if case_id == 0 {
+        // control — cells 0,1 co-vary (a ramp); cell 2 is constant ⇒ MI≈0.
+        let _ = farr_set(state, 0 * dim + 0, 0.0)
+        let _ = farr_set(state, 0 * dim + 1, 1.0)
+        let _ = farr_set(state, 0 * dim + 2, 2.0)
+        let _ = farr_set(state, 0 * dim + 3, 3.0)
+        let _ = farr_set(state, 0 * dim + 4, 4.0)
+        let _ = farr_set(state, 0 * dim + 5, 5.0)
+        let _ = farr_set(state, 1 * dim + 0, 0.0)
+        let _ = farr_set(state, 1 * dim + 1, 1.0)
+        let _ = farr_set(state, 1 * dim + 2, 2.0)
+        let _ = farr_set(state, 1 * dim + 3, 3.0)
+        let _ = farr_set(state, 1 * dim + 4, 4.0)
+        let _ = farr_set(state, 1 * dim + 5, 5.0)
+        // cell 2 constant 7.0 across all steps ⇒ zero variance ⇒ MI 0 to all.
+        let mut d = 0
+        while d < dim { let _ = farr_set(state, 2 * dim + d, 7.0); d = d + 1 }
+    } else {
+        // case 1 (default) — all 3 cells follow the SAME ramp ⇒ high pairwise
+        // MI on every pair ⇒ no cheap cut ⇒ faithful Φ★ > 0.
+        let mut c = 0
+        while c < n {
+            let mut d = 0
+            while d < dim {
+                let _ = farr_set(state, c * dim + d, d * 1.0)
+                d = d + 1
+            }
+            c = c + 1
+        }
+    }
+    let phi = iit4_faithful_phi(state, n, dim, n_bins)
+    let _ = farr_free(state)
+    return phi
 }
 
 // WIPE-OK: float membership predicates hoisted to the shared SSOT
