@@ -3,6 +3,16 @@
 Append-only history sister of `TECS-L.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
 
+## 2026-05-25T18:00 — 축 E E2 · atlas health audit + binary vs source divergence 발견
+
+- [x] audit: stats --audit merged·clean, 16101 entries (binary 내부 정합)
+- [x] hash snapshot: 663698a0… (binary-builtin frozen state, 미래 diff baseline)
+- [x] **🟡 FINDING**: binary lookup ≠ source SSOT. source(origin/main embedded.gen.hexa)는 E1 6 노드 있음, binary lookup verified-* 74 hits 중 내 6개 = 0. → register fold 가 query 에 반영되려면 hexa 재빌드 필요 (또는 HEXA_ATLAS_EMBED overlay 명세 정리)
+- [x] 5 verdict + CLAIMS 3 entry → `.verdicts/tecs-l-atlas-health/`
+- [x] **g59 INBOX 업스트림**: hexa atlas binary-vs-source desync 보고 — E3(register install-dir) 와 짝, query staleness 측면
+- [x] 부모 inline 대행 (서브에이전트 rate-limited)
+
+
 ## 2026-05-25T17:30 — 축 F 신설 (NOVEL · 기지 밖 발견 lane)
 
 - [x] 사용자 directive: "TECS-L NOVEL 축 신설 + 정의 brainstorm 고갈시까지"
