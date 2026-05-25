@@ -1744,13 +1744,18 @@ static int hxlcl_time(int *t) {
     if (t) *t = 0;
     return (int)HX_INT(rt_posix_ok());
 }
+// M16 (GO domain, 2026-05-25): real libc nanosleep. The cycle-6 body was a
+// no-op stub that ignored `req` and returned immediately — so every sleep
+// builtin (hexa_sleep / sleep_s / sleep_ms / sleep_ns) and the
+// persistent_pipe 10ms backoff were silently no-ops on the compiled path
+// (mono_ns delta ≈ 1µs instead of the requested duration). libc nanosleep
+// is already linked (the clock_gettime shims above use the same <time.h>
+// family); pass through so the requested sleep actually elapses. EINTR is
+// surfaced to callers (return -1, errno set) which loop on `rem` to finish
+// the remaining time.
+extern int nanosleep(const struct timespec *req, struct timespec *rem);
 static int hxlcl_nanosleep(const void *req, void *rem) {
-    (void)req;
-    if (rem) {
-        long long *p = (long long *)rem;
-        p[0] = 0; p[1] = 0;
-    }
-    return (int)HX_INT(rt_posix_ok());
+    return nanosleep((const struct timespec *)req, (struct timespec *)rem);
 }
 static int hxlcl_tcgetattr(int fd, void *termios) {
     (void)fd;

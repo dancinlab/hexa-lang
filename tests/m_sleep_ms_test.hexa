@@ -1,0 +1,62 @@
+// tests/m_sleep_ms_test.hexa — GO M16: compiled sleep_ms is no longer a no-op.
+//
+// Root cause (fixed): self/runtime.c::hxlcl_nanosleep was a no-op stub that
+// ignored its `req` argument and returned immediately, so every sleep builtin
+// (sleep / sleep_s / sleep_ms / sleep_ns) was silently a no-op on the compiled
+// path — mono_ns() delta ≈ 1µs (~1000ns) instead of the requested duration.
+// M14 (PR #941) hit this in the daemon throttle loop and worked around it with
+// an env throttle; this is the real fix (hxlcl_nanosleep → libc nanosleep).
+//
+// This test measures mono_ns() before/after sleep_ms(100) and asserts the
+// elapsed delta is in [90ms, 200ms] (generous range — tolerates OS scheduling
+// jitter / loaded CI). Pre-fix this delta was ≈ 1000 ns ≈ 0.001 ms → FAIL.
+//
+// MUST run on the COMPILED path (DIRECT transpile / `hexa build`), not the
+// interp — the bug is compiled-path-only.
+
+fn _fail(msg: string) {
+    eprintln("FAIL: " + msg)
+    exit(1)
+}
+
+// Measure elapsed nanoseconds across a sleep call using the monotonic clock.
+fn _measure_ns(ms: i64) -> i64 {
+    let t0 = mono_ns()
+    sleep_ms(ms)
+    let t1 = mono_ns()
+    return t1 - t0
+}
+
+fn main() {
+    let mut pass = 0
+
+    // 1. sleep_ms(100): delta must be a real sleep, in [90ms, 200ms].
+    //    90_000_000 ns = 90ms, 200_000_000 ns = 200ms.
+    let d100 = _measure_ns(100)
+    let lo = 90000000
+    let hi = 200000000
+    if d100 < lo || d100 > hi {
+        _fail("sleep_ms(100) elapsed=" + to_string(d100) + "ns (want [90ms,200ms] = [90000000,200000000]ns) — compiled sleep_ms no-op regression")
+    }
+    pass = pass + 1
+    println("PASS sleep_ms(100) elapsed=" + to_string(d100) + "ns (real sleep, ~" + to_string(d100 / 1000000) + "ms)")
+
+    // 2. sleep_ms(0): returns immediately — delta must be well under 50ms.
+    let d0 = _measure_ns(0)
+    if d0 >= 50000000 {
+        _fail("sleep_ms(0) elapsed=" + to_string(d0) + "ns (want < 50ms)")
+    }
+    pass = pass + 1
+    println("PASS sleep_ms(0) returns immediately elapsed=" + to_string(d0) + "ns")
+
+    // 3. sleep_ms(-5): negative clamps to 0, no crash, delta < 50ms.
+    let dn = _measure_ns(-5)
+    if dn >= 50000000 {
+        _fail("sleep_ms(-5) elapsed=" + to_string(dn) + "ns (want < 50ms, clamped)")
+    }
+    pass = pass + 1
+    println("PASS sleep_ms(-5) clamps to 0, no crash elapsed=" + to_string(dn) + "ns")
+
+    println("")
+    println(to_string(pass) + "/3 PASS — compiled sleep_ms is a real sleep")
+}
