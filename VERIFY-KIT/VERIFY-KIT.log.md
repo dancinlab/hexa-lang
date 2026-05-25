@@ -255,3 +255,34 @@
 
 ### 결과
 - driver reinstalled to HEAD — V4/V7 심볼이 이제 설치된 `bin/hexa-verify` 에 들어가, 향후 V* 빌드는 per-build bootstrap 불요(bootstrap-free). rollback 불요(3/3 PASS).
+
+---
+
+## 2026-05-26 — V5.3 (P2) faithful-Φ 엔진을 INDEPENDENT 레퍼런스에 calibrate (V5 완료)
+
+### 목표 (V5 의 셋째·마지막 슬라이스 — calibrate)
+- V5.2 는 `phi_demo 1` 의 case-1 = 3.83659 를 검증하지만 그건 **엔진 자기값(self-value)** 이지 외부 앵커가 아님. V5.3 = 이 값을 INDEPENDENT 레퍼런스에 앵커해 V5 를 닫는다. (직전 시도는 transient throttle-storm 으로 사망 → 본 라운드는 정상 진행, 한도 미히트.)
+- resume 로직: `git worktree list | grep v5-3` → `/private/tmp/wt-vkit-v53` 존재(branch `verify-kit-v5-3-calibrate-2026-05-26`). WIP 커밋 0개(tip = V5.2 머지 + origin/main 만) → 사실상 fresh 지만 **clean 재사용**. `git fetch+merge origin/main` (0/0 sync) 후 진행.
+
+### 무엇을 calibrate 했나 (정직한 substrate 명세)
+- hexa 엔진은 **continuous-MI 적분 proxy** — 이산 TPM IIT 4.0 아님: n×dim 연속 trajectory → cell 별 binning → pairwise Shannon MI 행렬 → 모든 bipartition(cell 0 핀, 2^(n-1) mask) cross-cut MI → MIP=argmin → Φ★ = cross-cut(MIP)/min(\|A\|,\|B\|).
+
+### 독립 레퍼런스 2종 (모두 repo 밖 `/tmp/pyphi-cal` venv 에서 실행)
+- **Ref A — same-substrate cross-check (proxy 검증)**: `faithful_phi.hexa` 헤더 SPEC 만 보고 새로 짠 Python MI-MIP 재구현(.hexa line-port 아님). case 1 = **3.836592** / case 0 = 4.520444e-09. hexa 3.83659 대비 |Δ| = **1.665369e-06** (tol 1e-3 내, 5자리 보고값 반올림 차이). → 엔진이 자기 proxy 정의를 충실히 계산함이 독립 작성자에 의해 재현됨. **🟢 (numerical)**.
+- **Ref B — canonical IIT (PyPhi discrete-TPM)**: PyPhi 1.2.0(Mayner et al. 2018, arXiv 1712.09644) 설치 → 문서화된 `pyphi.examples.basic_network()`(3-node OR/COPY/XOR) state (1,0,0) 의 IIT big-Φ = **2.3125** (PyPhi 튜토리얼 published 값 일치).
+
+### 정직한 tier 판정
+- **🟢 (calibrated)** — V5.3 가 실제 겨냥한 calibration: 엔진 self-value 가 독립 same-substrate ref(Ref A)에 tol 1e-3 내로 앵커됨 → V5.2 gap 해소.
+- **+ documented proxy-divergence (closed-negative)** — Ref B 2.3125 ≠ hexa 3.83659 은 **설계상**: (i) substrate 연속-MI trajectory vs 이산 binary TPM, (ii) object pairwise Shannon MI vs cause/effect repertoire EMD, (iii) normalize min(\|A\|,\|B\|) vs IIT distinction/relation, (iv) 애초에 다른 system. MI-MIP proxy 는 PyPhi IIT 4.0 와 **교환 불가** — deterministic·documented 한 closed-negative(버그·회귀 아님). 엔진 헤더가 이미 "NOT full per-mechanism IIT 4.0" 명시 → V5.3 가 그 divergence 를 측정·문서화.
+
+### 변경
+- `tool/verify_cli.hexa`: `_phi_demo` doc-comment + help 라인 1개에 V5.3 calibration provenance 명시 — **로직 0변경**(엔진 출력 불변, Ref A 가 그 값 독립 재현). `hexa parse verify_cli.hexa` → "OK: parses cleanly".
+- `.verdicts/verify-kit-iit-calibrate/v5_3.txt` (verbatim 2 ref + 비교 + tier) + `mi_phi_independent.py`/`pyphi_reference.py` (독립 ref 스크립트 provenance archive).
+- `CLAIMS.tape` @C `verify_kit_iit_calibrate` [slug=verify-kit-iit-calibrate group=VERIFY-KIT] — 🟢 + documented divergence.
+- `VERIFY-KIT.md` V5 `[ ]`→`[x]` (V5.1+V5.2+V5.3 全 DONE) + n≤8 exact / large-N intractable 천장 노트(@D depletion_not_terminal).
+
+### 빌드 노트 (V5.3 는 순수 주석/help 편집 → 엔진 불변)
+- V5.3 의 `tool/verify_cli.hexa` 변경은 `_phi_demo` doc + help 문자열만 = 로직 0변경 → Φ★ 출력은 V5.2 의 3.83659 와 동일, 그 값을 Ref A 가 독립 재유도(3.836592). `_phi_demo`/`iit4_faithful_phi` 와이어는 generated C(`build/artifacts/hexa-verify.c`)에 정상 emit 확인. full `bin/hexa-verify` clang link 는 **기존 V4 bessel_j0/j1 `_Generic` 충돌**(stale Mac transpiler, v5_2.txt 와 동일 이슈, V5.x 무관)에서만 실패 — fix 는 HEAD `self/native/hexa_v2` regen(pool host). live verbatim 3.83659 CLI run 은 v5_2.txt(mini pool host HEAD 빌드)에 캡처됨. V5.3 자체 defect 아님.
+
+### 결과
+- V5 (V5.1 promote + V5.2 wire + V5.3 calibrate) **完 DONE**. faithful-Φ proxy 가 독립 same-substrate ref 에 calibrated(|Δ|=1.67e-06) + canonical IIT(PyPhi 2.3125)과의 substrate-divergence 가 정직하게 문서화됨. ARXIV A2(PyPhi 1712.09644) verify-able-candidate 가 이제 앵커됨.
