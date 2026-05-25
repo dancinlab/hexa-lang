@@ -63,7 +63,15 @@ pub struct AuditReport {
     // cite_missing_count vs cite_present_count quantifies the gap between
     // parsed [*] grade markers and recomputed/cited provenance.
     cite_missing_count: i64,  // F/L/P/R nodes with no cite= and no verified_by
-    cite_present_count: i64   // F/L/P/R nodes with a cite= or verified_by
+    cite_present_count: i64,  // F/L/P/R nodes with a cite= or verified_by
+    // Per-domain coverage (measure-only): each node's `:: <domain>` token
+    // (parsed from the header line, matching parser.hexa's grammar) bucketed
+    // into a count. Nodes with no domain token bucket as "(none)". Answers
+    // "which science domains are under/zero-covered" — a coverage axis the
+    // KIND histogram can't surface (e.g. R-heavy but domain-skewed).
+    domain_buckets: array,    // [string] — "<domain> <count>" sorted by count desc
+    distinct_domain_count: i64, // number of distinct named domains (excl. "(none)")
+    no_domain_count: i64      // nodes whose header carries no `:: <domain>` token
 }
 
 // --- helpers ---------------------------------------------------------------
@@ -84,7 +92,10 @@ fn _empty_report(scope_name: string) -> AuditReport {
         hypothesis_count: 0,
         verified_count: 0,
         cite_missing_count: 0,
-        cite_present_count: 0
+        cite_present_count: 0,
+        domain_buckets: [],
+        distinct_domain_count: 0,
+        no_domain_count: 0
     }
 }
 
@@ -197,6 +208,81 @@ fn _node_has_cite(node: AtlasNode) -> bool {
     return false
 }
 
+// Local whitespace / trim helpers (parser.hexa's are private to that module).
+fn _au_is_ws(c: string) -> bool {
+    return c == " " || c == "\t"
+}
+
+fn _au_ltrim(s: string) -> string {
+    let n = len(s)
+    let mut i = 0
+    while i < n {
+        if !_au_is_ws(s.substring(i, i + 1)) { break }
+        i = i + 1
+    }
+    return s.substring(i, n)
+}
+
+fn _au_rtrim(s: string) -> string {
+    let n = len(s)
+    let mut i = n
+    while i > 0 {
+        if !_au_is_ws(s.substring(i - 1, i)) { break }
+        i = i - 1
+    }
+    return s.substring(0, i)
+}
+
+// Extract the `:: <domain>` token from a node's raw text, faithful to the
+// parser.hexa grammar `@<TYPE> <id> [= <expr>] [:: <domain>] [<grade>]`:
+//   - operate ONLY on the header line (first line of raw, before any "\n"),
+//     so `::` inside continuation prose / file paths can't leak in;
+//   - strip a trailing `[...]` grade marker (scan from the right, mirroring
+//     _extract_grade_marker) so `[10*]` isn't read as part of the domain;
+//   - take the text after the LAST " :: " in what remains, then keep only
+//     its first whitespace-delimited token (a single domain word).
+// Returns "(none)" when no domain token is present.
+fn _extract_domain(raw: string) -> string {
+    if len(raw) == 0 { return "(none)" }
+    // Header line = up to the first newline.
+    let nl = raw.index_of("\n")
+    let header = if nl >= 0 { raw.substring(0, nl) } else { raw }
+    // Right-trim, then drop a trailing "[...]" grade marker if present.
+    let mut s = _au_rtrim(header)
+    let hn = len(s)
+    if hn > 0 && s.substring(hn - 1, hn) == "]" {
+        let mut b = hn - 1
+        while b > 0 {
+            if s.substring(b - 1, b) == "[" { break }
+            b = b - 1
+        }
+        if b > 0 { s = _au_rtrim(s.substring(0, b - 1)) }
+    }
+    // Find the LAST " :: " separator (the domain sits just before the grade).
+    let needle = " :: "
+    let mut pos = -1
+    let mut scan = s.index_of(needle)
+    while scan >= 0 {
+        pos = scan
+        let nxt = s.substring(pos + 4, len(s)).index_of(needle)
+        if nxt < 0 { break }
+        scan = pos + 4 + nxt
+    }
+    if pos < 0 { return "(none)" }
+    // Domain text begins after " :: "; keep its first whitespace-delim token.
+    let after = _au_ltrim(s.substring(pos + 4, len(s)))
+    let an = len(after)
+    let mut e = 0
+    while e < an {
+        let c = after.substring(e, e + 1)
+        if _au_is_ws(c) { break }
+        e = e + 1
+    }
+    let tok = after.substring(0, e)
+    if len(tok) == 0 { return "(none)" }
+    return tok
+}
+
 // --- core audit ------------------------------------------------------------
 
 // audit_nodes — the workhorse. Walks `nodes`, fills `rep`, builds the
@@ -209,6 +295,8 @@ fn _audit_nodes(rep: AuditReport, nodes: array) {
     let defined = {}               // id -> true (for orphan check)
     let grade_keys = []
     let grade_counts = []
+    let domain_keys = []           // parallel domain histogram (incl. "(none)")
+    let domain_counts = []
 
     let mut i = 0
     while i < n {
@@ -260,10 +348,21 @@ fn _audit_nodes(rep: AuditReport, nodes: array) {
             }
         }
 
+        // Per-domain coverage (measure-only): bucket by the `:: <domain>`
+        // header token; nodes with no token fall into the "(none)" bucket.
+        let dom = _extract_domain(enriched.raw)
+        _bucket_bump(domain_keys, domain_counts, dom)
+        if dom == "(none)" { rep.no_domain_count = rep.no_domain_count + 1 }
+
         i = i + 1
     }
 
     rep.grade_buckets = _bucket_format(grade_keys, grade_counts)
+    rep.domain_buckets = _bucket_format(domain_keys, domain_counts)
+    // distinct NAMED domains = total buckets minus the "(none)" bucket (if any).
+    let mut dd = len(domain_keys)
+    if _bucket_find(domain_keys, "(none)") >= 0 { dd = dd - 1 }
+    rep.distinct_domain_count = dd
 
     // Orphan refs: collect every depends_on / derives target and see
     // which never appear as a defined id.
@@ -399,6 +498,12 @@ pub fn audit_to_json(rep: AuditReport) -> string {
     p.push(to_string(rep.cite_missing_count))
     p.push(",\"cite_present_count\":")
     p.push(to_string(rep.cite_present_count))
+    p.push(",\"distinct_domain_count\":")
+    p.push(to_string(rep.distinct_domain_count))
+    p.push(",\"no_domain_count\":")
+    p.push(to_string(rep.no_domain_count))
+    p.push(",\"domain_histogram\":")
+    p.push(_str_array_json(rep.domain_buckets))
     p.push("}")
     return p.join("")
 }
@@ -425,6 +530,14 @@ pub fn audit_to_text(rep: AuditReport) -> string {
     p.push("  malformed:      " + to_string(rep.malformed_count) + "\n")
     p.push("  cite missing (F/L/P/R): " + to_string(rep.cite_missing_count) + "\n")
     p.push("  cite present (F/L/P/R): " + to_string(rep.cite_present_count) + "\n")
+    p.push("  distinct domains: " + to_string(rep.distinct_domain_count) + "\n")
+    p.push("  no-domain nodes: " + to_string(rep.no_domain_count) + "\n")
+    p.push("  top domains (by count, up to 20):\n")
+    let mut d = 0
+    while d < len(rep.domain_buckets) && d < 20 {
+        p.push("    " + to_string(rep.domain_buckets[d]) + "\n")
+        d = d + 1
+    }
     p.push("  grade histogram:\n")
     let mut i = 0
     while i < len(rep.grade_buckets) {
