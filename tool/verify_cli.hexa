@@ -315,6 +315,22 @@ fn _recompute(fn_name: string, n: int) -> int {
     //   Glinsky–O'Neil 1991 Phys.Fluids B 3:1279 low-T-plasma TBR theory.
     //   recomb_3body_density_power(n) = 2·n → exact n_e-power multiplier (n=1⇒2).
     if fn_name == "recomb_3body_density_power" { return 2 * n }
+    // ── BLUE-MAX integer atoms (ANTIMATTER 🔵 algebraic-root pairs) ────────
+    // Pure-integer exponents/factors backing libm-class (sqrt/pow) atoms:
+    //   pair_threshold T_th=6·m_p_c² · E_beam=7·m_p_c²
+    //   transition_factor_1s2s = 3/4 (numerator 3 / denominator 4)
+    //   cyclotron_cool τ_c ∝ m³ · B^(−2) (mass exponent 3 · bratio exponent 2)
+    //   recomb_3body α₃ᵦ ∝ T^(−9/2) (exponent doubled = −9 / tratio doubled = 9)
+    // Each returns the EXACT integer algebraic root → tier=🔵 SUPPORTED-FORMAL.
+    // All 0-arg-dummy form: invoke as `--expr <name> 0 <expected_int>`.
+    if fn_name == "pair_threshold_kinetic_factor"        { return 6 }
+    if fn_name == "pair_threshold_total_factor"          { return 7 }
+    if fn_name == "transition_factor_1s2s_numerator"     { return 3 }
+    if fn_name == "transition_factor_1s2s_denominator"   { return 4 }
+    if fn_name == "cyclotron_cool_massexponent"          { return 3 }
+    if fn_name == "cyclotron_cool_bratio_exponent"       { return 2 }
+    if fn_name == "recomb_3body_exponent_doubled"        { return -9 }
+    if fn_name == "recomb_3body_tratio_exponent_doubled" { return 9 }
     return NOCALC
 }
 
