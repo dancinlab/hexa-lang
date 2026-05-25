@@ -2,7 +2,7 @@
 // Usage: ./hexa run tool/compile.hexa input.hexa [output.c]
 //
 // Loads codegen_c2 at runtime, compiles input.hexa → C via codegen_c2_full.
-// Standalone driver avoids hexa_v2 transpile issues with interpret/call_user_fn.
+// Standalone driver avoids hexat transpile issues with interpret/call_user_fn.
 
 use "self/stdlib/law_io"
 

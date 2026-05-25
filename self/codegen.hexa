@@ -484,8 +484,8 @@ fn _resolve_caller_dir_get() {
     if _resolve_caller_dir_inited { return _resolve_caller_dir }
     _resolve_caller_dir_inited = true
     let av = args()
-    // args layout under hexa_v2 native: [hexa_v2_bin, input.hexa, output.c]
-    // (hexa_v2's hexa_set_args does NOT dup argv[0], unlike the script path).
+    // args layout under hexat native: [hexat_bin, input.hexa, output.c]
+    // (hexat's hexa_set_args does NOT dup argv[0], unlike the script path).
     // Walk from index 1 looking for the first arg ending in .hexa — that's
     // the input file whose dirname we want.
     let n = len(av)
@@ -5515,7 +5515,7 @@ fn gen2_expr(node) {
                 return gl
             }
             // Free-function `split(s, delim)` mirror of `s.split(delim)` — lets
-            // us retire the TAG_FN runtime shim in runtime.c once hexa_v2 is
+            // us retire the TAG_FN runtime shim in runtime.c once hexat is
             // rebuilt from this SSOT (runtime.c:`static HexaVal split;` block).
             if name == "split" {
                 return "hexa_str_split(" + gen2_expr(node.args[0]) + ", " + gen2_expr(node.args[1]) + ")"
@@ -5929,7 +5929,7 @@ fn gen2_expr(node) {
             // exit_code] (PROBE r8). Non-breaking sibling of the 2-tuple
             // exec_with_status; body delegates to hexa_exec_capture (separate
             // stdout/stderr pipes, select-multiplexed drain). Pre-regen, the
-            // baked hexa_v2 routes bare `exec_with_status3(...)` through the
+            // baked hexat routes bare `exec_with_status3(...)` through the
             // TAG_FN bridge in runtime.c.
             if name == "exec_with_status3" {
                 return "hexa_exec_with_status3(" + gen2_expr(node.args[0]) + ")"
@@ -6141,7 +6141,7 @@ fn gen2_expr(node) {
             // (FIX-2 unblock) _v variants removed — interpreter dispatch
             // now inlines the TAG_VALSTRUCT unwrap loop in self/hexa_full.hexa
             // and calls the non-_v C builtin directly. Keeps the runtime
-            // surface SSOT-clean and avoids the precompiled-hexa_v2 mismatch.
+            // surface SSOT-clean and avoids the precompiled-hexat mismatch.
             if name == "ptr_offset" {
                 return "hexa_ptr_offset(" + gen2_expr(node.args[0]) + ", " + gen2_expr(node.args[1]) + ")"
             }
@@ -8656,7 +8656,7 @@ fn _lambda_param_name(p) {
 //
 // The native-C codegen (self/native/hexa_cc.c) honors
 // HEXA_IC_DISABLE=1 at codegen time for A/B benchmarking. This .hexa mirror
-// is kept in sync but always emits IC — hexa_v2 is the active backend.
+// is kept in sync but always emits IC — hexat is the active backend.
 let mut _ic_counter = 0
 
 // ── ComptimeConst const-fold table ───────────────────────
@@ -10396,7 +10396,7 @@ fn gen2_lambda_expr(node) {
 // Override codegen_c2 to include lambda definitions
 fn codegen_full(ast) {
     // Nested-decl shallow hoist must run before any codegen state is set
-    // up — this is the actual hexa_v2 transpile entry (main calls
+    // up — this is the actual hexat transpile entry (main calls
     // codegen_full, NOT codegen_c2; the earlier lift call inside
     // codegen_c2 was dead code). _gen2_flatten_mods runs first so
     // `mod` body decls are hoisted to module scope before nested-decl
@@ -10971,7 +10971,7 @@ fn _hexa_cert_walk_stmt(node, target, rows) {
 
 fn _hexa_cert_module_name() {
     // Best-effort: derive from args()[1] (the .hexa being compiled);
-    // RFC 062 post-dedup layout [hexa_v2_bin, input.hexa, output.c].
+    // RFC 062 post-dedup layout [hexat_bin, input.hexa, output.c].
     // fall back to "module" if unavailable.
     let av = args()
     if type_of(av) == "string" || len(av) < 2 { return "module" }

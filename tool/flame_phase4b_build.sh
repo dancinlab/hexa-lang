@@ -19,7 +19,7 @@
 # Pipeline:
 #   1. module_loader flatten        → /tmp/<stem>_expanded.hexa
 #   2. flame_phase4b_ipcp.hexa      → /tmp/<stem>_ipcp.hexa
-#   3. hexa_v2 transpile            → build/artifacts/<stem>_ipcp.c
+#   3. hexat transpile            → build/artifacts/<stem>_ipcp.c
 #   4. clang -O2                    → <out_binary>
 #
 # Exit codes:
@@ -51,20 +51,20 @@ if [ -z "$INTERP" ]; then
     exit 2
 fi
 
-# Select the EXACT canonical transpiler — never a `hexa_v2*` glob.
-# `find -name "hexa_v2*" | head -1` returns directory order and can pick
-# self/native/hexa_v2_baseline (an Apr-15 stale binary that strips
+# Select the EXACT canonical transpiler — never a `hexat*` glob.
+# `find -name "hexat*" | head -1` returns directory order and can pick
+# self/native/hexat_baseline (an Apr-15 stale binary that strips
 # multi-line fn signatures — emits `HexaVal _db_grad_accum_farr(... HexaVal )`
 # with dropped params → undeclared identifiers → ~20 clang errors).
-# The canonical self/native/hexa_v2 carries the May-11+ fixes and emits
+# The canonical self/native/hexat carries the May-11+ fixes and emits
 # the full multi-line signature.
-if [ -x self/native/hexa_v2 ]; then
-    V2="self/native/hexa_v2"
+if [ -x self/native/hexat ]; then
+    V2="self/native/hexat"
 else
-    V2=$(find self/native -name "hexa_v2" 2>/dev/null | head -1)
+    V2=$(find self/native -name "hexat" 2>/dev/null | head -1)
 fi
 if [ -z "$V2" ]; then
-    echo "FATAL: cannot locate hexa_v2 transpiler (self/native/hexa_v2)"
+    echo "FATAL: cannot locate hexat transpiler (self/native/hexat)"
     exit 2
 fi
 
@@ -79,9 +79,9 @@ echo "[1/4] module_loader flatten → $EXP"
 echo "[2/4] IPCP rewrite → $IPCP"
 ./hexa run tool/flame_phase4b_ipcp.hexa "$EXP" "$IPCP" 2>&1 | grep -E "PASS|FAIL|substitutions|total" | head -10
 
-echo "[3/4] hexa_v2 transpile → $CFILE"
+echo "[3/4] hexat transpile → $CFILE"
 "$V2" "$IPCP" "$CFILE" 2>&1 | tail -1
-# The canonical hexa_v2 emits `#include "runtime.h"` (separate-TU
+# The canonical hexat emits `#include "runtime.h"` (separate-TU
 # convention). This flame build pipeline is architected around the
 # single-TU `#include "runtime.c"` form (clang compiles only the one
 # .c, never links runtime.c separately). Restore single-TU so runtime

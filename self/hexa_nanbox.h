@@ -51,7 +51,7 @@
  *  Migration note: rt#38-B will redefine `typedef uint64_t HexaVal;` and
  *  replace every `.tag == TAG_X` / `.i` / `.f` / `.s` / `.arr` / `.map` /
  *  `.fn` / `.clo` access site. Estimated ~2100 sites across 6 C files
- *  (runtime.c, hexa_cc.c, hexa_v2 transpiler outputs).
+ *  (runtime.c, hexa_cc.c, hexat transpiler outputs).
  * ═══════════════════════════════════════════════════════════ */
 #ifndef HEXA_NANBOX_H
 #define HEXA_NANBOX_H

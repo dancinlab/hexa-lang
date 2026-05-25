@@ -1241,7 +1241,7 @@ static inline HexaVal hexa_call2_hv(HexaVal f, HexaVal a1, HexaVal a2) {
 }
 // Raw C function-pointer overload (FIX-2 unblock 2026-05-04): mirrors the
 // hexa_call1 _Generic pattern so codegen emitting `hexa_call2(bytes_to_f32_le,
-// arr, off)` from a precompiled hexa_v2 (which doesn't know the symbol is a
+// arr, off)` from a precompiled hexat (which doesn't know the symbol is a
 // builtin) resolves to the direct C function call. Without this, the call
 // goes through hexa_call2_hv expecting a HexaVal first arg and fails to link.
 static inline HexaVal __hexa_call2_fp2(HexaVal (*fp)(HexaVal, HexaVal), HexaVal a1, HexaVal a2) {
@@ -2359,7 +2359,7 @@ int hmap_find(HexaMapTable* t, const char* key, uint32_t h) {
  * Placed in runtime_core.c (not runtime.h) so user-transpiled TUs which
  * sed-include runtime.c (build_aprime stage 3) see the symbols. The
  * codegen-inline emit in self/codegen.hexa fully expands the call
- * site to a direct invocation of these helpers; stale hexa_v2 binaries
+ * site to a direct invocation of these helpers; stale hexat binaries
  * emit hexa_call2(__map_has_cstr_v, m, k) which resolves via the
  * _Generic fn-ptr lane (HexaVal (*)(HexaVal, HexaVal)). */
 static inline HexaVal __map_has_cstr_v(HexaVal m, HexaVal key) {
@@ -2412,7 +2412,7 @@ static inline HexaVal __map_order_val_at(HexaVal m, HexaVal i) {
  * Static-inline lowering: codegen emits
  *   __map_set_cstr_v(m, k, v) → hexa_map_set_impl(<m>, HX_STR(<k>), <v>)
  *   __map_remove_cstr_v(m, k) → hexa_map_remove_impl(<m>, HX_STR(<k>))
- * Stale hexa_v2 binaries that don't yet inline the builtin take the
+ * Stale hexat binaries that don't yet inline the builtin take the
  * hexa_call2/3 _Generic fn-ptr lane through these helpers. */
 HexaVal hexa_map_set_impl(HexaVal m, const char* key, HexaVal val);
 HexaVal hexa_map_remove_impl(HexaVal m, const char* key);
@@ -2619,7 +2619,7 @@ HexaVal hexa_map_set_impl(HexaVal m, const char* key, HexaVal val) {
 // allocator/Robin Hood logic remains in C; only the surface dispatch
 // moves through hexa source. VALSTRUCT routing is delegated to the
 // impl (it already short-circuits at its head). Stale-binary lane:
-// new opaque builtin `__map_set_cstr_v` lowers inline; legacy hexa_v2
+// new opaque builtin `__map_set_cstr_v` lowers inline; legacy hexat
 // emitted hexa_call3 takes the static-inline shim through the _Generic
 // fn-ptr lane (HexaVal (*)(HexaVal, HexaVal, HexaVal)).
 #ifdef HEXA_HAS_HEXA_RT_STDLIB
@@ -4470,7 +4470,7 @@ HexaVal __hexa_fn_arena_return(HexaVal ret) {
     // hexa_val_heapify call + its switch dispatch is pure overhead.
     // Pratt-descent parser fns return int/bool dozens of times per token,
     // and sample showed __hexa_fn_arena_return + hexa_val_heapify ≈ 23% of
-    // hexa_v2 user-time on codegen.hexa. Short-circuit primitives here.
+    // hexat user-time on codegen.hexa. Short-circuit primitives here.
     int tag = HX_TAG(ret);
     if (tag == TAG_INT || tag == TAG_FLOAT || tag == TAG_BOOL || tag == TAG_VOID) {
         hexa_val_arena_scope_pop();
@@ -5701,10 +5701,10 @@ HexaVal hexa_exec_stream_impl(HexaVal cmd, HexaVal on_line) {
     return hexa_int(exit_code);
 }
 
-// Forward decl + auto-wrap macro shim. The current hexa_v2 codegen emits
+// Forward decl + auto-wrap macro shim. The current hexat codegen emits
 // `hexa_exec_stream(cmd, ident)` where `ident` is a raw C function symbol
 // (e.g. `on_line`) rather than a HexaVal. To bridge that without rebuilding
-// hexa_v2, we redirect the user-visible call through a wrapping macro that
+// hexat, we redirect the user-visible call through a wrapping macro that
 // invokes hexa_exec_stream_impl with a freshly-constructed TAG_FN HexaVal.
 // After a dispatch self-rebuild activates the codegen lowering with proper
 // gen2_expr wrapping, this macro becomes a no-op (the second arg will
@@ -5922,7 +5922,7 @@ void hexa_eprint_val(HexaVal v) {
 #define HEXA_MAX_TRY 64
 static jmp_buf* __hexa_try_stack[HEXA_MAX_TRY];
 /* PHASE 1.2.B (2026-05-15): de-staticized. Try-stack depth marker read by
- * hexa_v2-emitted try/catch lowering in user.c. */
+ * hexat-emitted try/catch lowering in user.c. */
 int __hexa_try_top = 0;
 static HexaVal __hexa_error_val;
 
@@ -5957,7 +5957,7 @@ void hexa_throw(HexaVal err) {
 // ── Printing ─────────────────────────────────────────────
 
 // Cycle-102 (2026-05-22) — IO 4th-fn activation. The hexa_print_val
-// symbol is what shipped self/native/hexa_v2 emits for `print(v)`.
+// symbol is what shipped self/native/hexat emits for `print(v)`.
 // Under HEXA_HAS_HEXA_RT_STDLIB the entry dispatches to rt_print
 // (stdlib/runtime/io.hexa) which coerces via to_string + raw write.
 // For TAG_ARRAY this routes through _hexa_to_string_rec which produces
@@ -6052,7 +6052,7 @@ void hexa_print_val(HexaVal v) {
 // cycle-101 dispatch after the silent wipe in commit e8c2dc1c (wip:
 // dfflibmap sky130 reset-flop variants + ...). Additionally activates
 // the 4th IO fn (rt_print) by routing the existing `hexa_print_val`
-// symbol — which is what shipped self/native/hexa_v2 emits for
+// symbol — which is what shipped self/native/hexat emits for
 // `print(v)` — through rt_print at the top of hexa_print_val. Internal
 // recursion (TAG_ARRAY children) stays on the C path via the private
 // helper _hexa_print_val_c_body to avoid double-routing.
@@ -6074,7 +6074,7 @@ void hexa_println(HexaVal v) {
 
 // Cycle-102 (2026-05-22) — 4th IO fn activation. `print(v)` codegen
 // lowers to `hexa_print_val(v)` (the symbol used recursively for
-// ARRAY children). The shipped hexa_v2 binary emits this name, so we
+// ARRAY children). The shipped hexat binary emits this name, so we
 // dispatch at this entry point under HEXA_HAS_HEXA_RT_STDLIB to route
 // the top-level call through rt_print (stdlib/runtime/io.hexa). The
 // recursive case (hexa_print_val called from within hexa_print_val
@@ -6086,7 +6086,7 @@ void hexa_println(HexaVal v) {
 //
 // Additionally introduces a new C symbol `hexa_print(v)` for the
 // codegen rule (single-arg `print(v)` → `hexa_print(v)`) that ships
-// with the next regen of self/native/hexa_v2. Until regen lands the
+// with the next regen of self/native/hexat. Until regen lands the
 // shipped binary continues to call hexa_print_val (which now
 // dispatches), so activation is functional today and will remain
 // correct after regen flips the call site.
@@ -6548,7 +6548,7 @@ HexaVal hexa_concat_many(int n, HexaVal* parts) {
 /* Step 3 cycle 100 — pointer-eq inline builtins for hexa_eq TAG_VALSTRUCT
  * + TAG_MAP branches (RUNTIME.md 잔여 #4, 4 of 9 branches ported). The
  * aprime_cc codegen inlines `__vs_ptr_eq(a,b)` / `__map_ptr_eq(a,b)` to
- * `hexa_bool(HX_VS(a)==HX_VS(b))` etc. The hexa_v2 bootstrap transpiler
+ * `hexa_bool(HX_VS(a)==HX_VS(b))` etc. The hexat bootstrap transpiler
  * is unaware of the inline lowering and emits
  * `hexa_call2(__vs_ptr_eq, a, b)`; the static-inline defs below satisfy
  * that indirect-call path via the `hexa_call2` _Generic dispatch on
@@ -7541,7 +7541,7 @@ HexaVal hexa_pad_left(HexaVal s, HexaVal width) {
 
 
 // Bootstrap shim: hexa-level `join(arr, sep)` free-fn idiom in SSOT modules
-// emits `hexa_call2(join, arr, sep)` via TAG_FN lookup. Once hexa_v2 is rebuilt
+// emits `hexa_call2(join, arr, sep)` via TAG_FN lookup. Once hexat is rebuilt
 // from codegen.hexa's join-builtin dispatch, this becomes unused.
 // (`split` was retired 2026-04-21 — codegen now emits hexa_str_split directly.)
 static HexaVal join;

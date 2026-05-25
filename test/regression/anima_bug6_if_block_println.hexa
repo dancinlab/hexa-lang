@@ -13,7 +13,7 @@
 // reference:
 //   /Users/ghost/Dev/anima/shared/feedback/hexa_lang_handoff_20260418.md L77-86
 //   bt#52/53/66/67/68/69 + aa3060c (2026-04-13 부분 복구)
-//   project_hexa_v2_circular_rebuild_20260417 (seed-freeze state)
+//   project_hexat_circular_rebuild_20260417 (seed-freeze state)
 //
 // 검증 방법 (main 세션 rebuild 후):
 //   build/hexa_interp tests/regression/anima_bug6_if_block_println.hexa

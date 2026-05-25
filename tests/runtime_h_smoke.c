@@ -1,7 +1,7 @@
 /* tests/runtime_h_smoke.c — runtime.h public-ABI surface smoke test
  *
  * Compile-only smoke that exercises every header symbol the post-PHASE-1.3.B
- * native codegen path needs from runtime.h. If anyone modifies hexa_v2
+ * native codegen path needs from runtime.h. If anyone modifies hexat
  * codegen to emit a new helper, or shrinks runtime.h to drop one, this
  * test fails to compile.
  *

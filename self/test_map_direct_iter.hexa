@@ -1,7 +1,7 @@
 // test_map_direct_iter.hexa — regression guard for `for k in map { ... }`
 // Direct hashmap iteration: iterating a map yields its keys (Python-style).
 // Note: this feature currently works only via the self-host pipeline
-//       (./self/native/hexa_v2 → C → clang). The prebuilt `./hexa` Rust
+//       (./self/native/hexat → C → clang). The prebuilt `./hexa` Rust
 //       binary still rejects direct map iteration at type-check time.
 //       For that path, use `for k in m.keys()` instead.
 

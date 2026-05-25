@@ -11,7 +11,7 @@
 # Pipeline:
 #   1. module_loader flatten          → /tmp/<stem>_expanded.hexa
 #   2. flame_phase4b_ipcp rewriter     → /tmp/<stem>_ipcp.hexa
-#   3. hexa_v2 transpile               → build/artifacts/<stem>_ipcp.c
+#   3. hexat transpile               → build/artifacts/<stem>_ipcp.c
 #   3.5 (NEW) flame_phase4b3_emit_trampoline → trampoline.c + decls.c
 #   3.6 (NEW) sed-rewrite call sites  → build/artifacts/<stem>_b3_rewritten.c
 #   3.7 (NEW) sed-insert decls + cat trampoline → build/artifacts/<stem>_b3.c
@@ -47,18 +47,18 @@ B3="build/artifacts/${STEM}_b3.c"
 mkdir -p build/artifacts
 
 INTERP=$(tool/find_local_hexa.sh 2>/dev/null || true)
-# Select the EXACT canonical transpiler — never a `hexa_v2*` glob.
-# `find -name "hexa_v2*" | head -1` returns directory order and can pick
-# self/native/hexa_v2_baseline (an Apr-15 stale binary that strips
+# Select the EXACT canonical transpiler — never a `hexat*` glob.
+# `find -name "hexat*" | head -1` returns directory order and can pick
+# self/native/hexat_baseline (an Apr-15 stale binary that strips
 # multi-line fn signatures → dropped params → undeclared identifiers).
-if [ -x self/native/hexa_v2 ]; then
-    V2="self/native/hexa_v2"
+if [ -x self/native/hexat ]; then
+    V2="self/native/hexat"
 else
-    V2=$(find self/native -name "hexa_v2" 2>/dev/null | head -1)
+    V2=$(find self/native -name "hexat" 2>/dev/null | head -1)
 fi
 
 if [ -z "$INTERP" ] || [ -z "$V2" ]; then
-    echo "FATAL: cannot locate a hexa driver or hexa_v2"
+    echo "FATAL: cannot locate a hexa driver or hexat"
     exit 2
 fi
 
@@ -73,9 +73,9 @@ echo "[1/4] module_loader flatten → $EXP"
 echo "[2/4] IPCP rewrite → $IPCP"
 ./hexa run tool/flame_phase4b_ipcp.hexa "$EXP" "$IPCP" 2>&1 | grep -E "PASS|FAIL|substitutions|total" | head -10
 
-echo "[3/4] hexa_v2 transpile → $CFILE"
+echo "[3/4] hexat transpile → $CFILE"
 "$V2" "$IPCP" "$CFILE" 2>&1 | tail -1
-# Restore single-TU `#include "runtime.c"` — the canonical hexa_v2 emits
+# Restore single-TU `#include "runtime.c"` — the canonical hexat emits
 # `#include "runtime.h"` (separate-TU) but step 3.7 sed-inserts decls
 # after the `#include "runtime.c"` anchor, and clang never links
 # runtime.c separately. See flame_phase4b_build.sh for the rationale.

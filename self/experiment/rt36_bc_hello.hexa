@@ -5,7 +5,7 @@
 //  The expected bytecode output is documented inline (below)
 //  and in docs/rt-36-bytecode-design.md §11.
 //
-//  Phase A gate: this file parses cleanly through hexa_v2 with
+//  Phase A gate: this file parses cleanly through hexat with
 //                zero errors. It does NOT yet execute via the
 //                bytecode VM — that's Phase C/D's responsibility.
 //

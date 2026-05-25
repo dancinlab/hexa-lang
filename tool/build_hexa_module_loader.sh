@@ -2,7 +2,7 @@
 # tool/build_hexa_module_loader.sh — build the compiled module_loader binary.
 #
 # R7 track B cycle 7 (2026-05-18): module_loader is the build-pipeline
-# helper that flattens `use` statements before hexa_v2 transpilation.
+# helper that flattens `use` statements before hexat transpilation.
 # Production hexa.real invokes it via interp+module_loader.hexa, which is
 # slow + macOS-OOM-prone for large trees (atlas/verify/calc tools).
 #

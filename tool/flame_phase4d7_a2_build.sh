@@ -23,7 +23,7 @@
 # Pipeline (identical to phase4d6):
 #   1. module_loader flatten           → /tmp/<stem>_expanded.hexa
 #   2. flame_phase4b_ipcp rewriter      → /tmp/<stem>_ipcp.hexa
-#   3. hexa_v2 transpile + runtime.c restore → build/artifacts/<stem>_ipcp.c
+#   3. hexat transpile + runtime.c restore → build/artifacts/<stem>_ipcp.c
 #   4. dim-generic sed-rewrite block_fwd/bwd call sites
 #   5. concat phase4d7 primitives after #include "runtime.c"
 #   6. clang -O2 [optional -DHEXA_CUDA] → out binary
@@ -81,13 +81,13 @@ echo "  cuda   : ${CUDA_FLAG:-<no-CUDA>}"
 echo ""
 
 INTERP=$(tool/find_local_hexa.sh 2>/dev/null || true)
-if [ -x self/native/hexa_v2 ]; then
-    V2="self/native/hexa_v2"
+if [ -x self/native/hexat ]; then
+    V2="self/native/hexat"
 else
-    V2=$(find self/native -name "hexa_v2" 2>/dev/null | head -1)
+    V2=$(find self/native -name "hexat" 2>/dev/null | head -1)
 fi
 if [ -z "$INTERP" ] || [ -z "$V2" ]; then
-    echo "FATAL: cannot locate a hexa driver or hexa_v2"
+    echo "FATAL: cannot locate a hexa driver or hexat"
     exit 2
 fi
 
@@ -97,7 +97,7 @@ echo "[1/6] module_loader flatten → $EXP"
 echo "[2/6] IPCP rewrite → $IPCP"
 ./hexa run tool/flame_phase4b_ipcp.hexa "$EXP" "$IPCP" 2>&1 | grep -E "PASS|FAIL|substitutions|total" | head -10
 
-echo "[3/6] hexa_v2 transpile → $CFILE"
+echo "[3/6] hexat transpile → $CFILE"
 "$V2" "$IPCP" "$CFILE" 2>&1 | tail -1
 if grep -q '^#include "runtime.h"' "$CFILE"; then
     sed -i '' 's|^#include "runtime.h"|#include "runtime.c"|' "$CFILE"

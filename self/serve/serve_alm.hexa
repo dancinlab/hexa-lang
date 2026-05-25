@@ -1266,7 +1266,7 @@ fn _print_help() {
 // P16 pitfall: argv()[N] direct index crashes (NaN-box).
 // Always: let av = args() then av[N].
 // Note: argv() is an alias in self/codegen_c2.hexa + self/native/hexa_cc.c
-// since 2026-04-19; we use args() here so current on-disk hexa_v2 also
+// since 2026-04-19; we use args() here so current on-disk hexat also
 // compiles (alias activates after next rebuild_interp).
 let av = args()
 let n_av = len(av)

@@ -92,7 +92,7 @@
 //
 // BLOCKER
 // -------
-// SEED-FREEZE is active (memory feedback_seed_freeze.md): hexa_v2 circular
+// SEED-FREEZE is active (memory feedback_seed_freeze.md): hexat circular
 // rebuild is broken (ROI #152). Edits to self/hexa_full.hexa will NOT
 // propagate into build/hexa_interp or ./hexa until #152 lands. So this
 // file documents the fix plan and benchmarks the CURRENT (broken) state;

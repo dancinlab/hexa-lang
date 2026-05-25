@@ -3,7 +3,7 @@
 #   self/runtime_hi.hexa -> self/runtime_hi_gen.c
 #
 # Pipeline:
-#   1) self/native/hexa_v2 transpiles the .hexa SSOT to raw .c
+#   1) self/native/hexat transpiles the .hexa SSOT to raw .c
 #   2) awk extracts [static HexaVal __hexa_sl_0 .. rt_str_center closing]
 #   3) sed renames __hexa_sl_* -> __hexa_rt_sl_* and __hexa_strlit_init ->
 #      __hexa_rt_strlit_init (avoid collision with user gen.c in same TU)
@@ -24,13 +24,13 @@
 
 set -euo pipefail
 HX="${HX_ROOT:-$(cd "$(dirname "$0")/.."; pwd)}"
-HV2="${HEXA_V2:-$HX/self/native/hexa_v2}"
+HV2="${HEXA_V2:-$HX/self/native/hexat}"
 SRC="$HX/self/runtime_hi.hexa"
 TMP=$(mktemp -d)
 OUT="$HX/self/runtime_hi_gen.c"
 
 if [[ ! -x "$HV2" ]]; then
-    echo "[extract_runtime_hi] ERROR: hexa_v2 not found at $HV2" >&2
+    echo "[extract_runtime_hi] ERROR: hexat not found at $HV2" >&2
     exit 1
 fi
 if [[ ! -f "$SRC" ]]; then
@@ -44,7 +44,7 @@ fi
   cat <<'HDR'
 // GENERATED FROM self/runtime_hi.hexa — do not edit manually.
 // Source of truth: self/runtime_hi.hexa (M1-lite hi-layer SSOT).
-// Reproduce: tool/extract_runtime_hi.sh (runs self/native/hexa_v2 then
+// Reproduce: tool/extract_runtime_hi.sh (runs self/native/hexat then
 // strips main/selftest, renames __hexa_sl_* -> __hexa_rt_sl_*).
 // Included from self/runtime.c AFTER hexa_str_join is defined.
 // (hxa-20260423-003 Step 4 — extraction replaces hand-port rt_str_*)

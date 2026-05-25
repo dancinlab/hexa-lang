@@ -167,21 +167,21 @@ fn main() {
     println("[2/4] Transpiling to C...")
     let src_c = scratch_dir() + "/hexa_cross_" + base_name + ".c"
 
-    // Find hexa_v2 transpiler
-    let mut hexa_v2 = hexa_dir + "/self/native/hexa_v2"
-    let dedup = hexa_dir + "/build/hexa_v2_dedup4"
+    // Find hexat transpiler
+    let mut hexat = hexa_dir + "/self/native/hexat"
+    let dedup = hexa_dir + "/build/hexat_dedup4"
     let dedup_check = exec_with_status("test -x " + dedup)
     if dedup_check[1] == 0 {
-        hexa_v2 = dedup
+        hexat = dedup
     }
-    let v2_check = exec_with_status("test -x " + hexa_v2)
+    let v2_check = exec_with_status("test -x " + hexat)
     if v2_check[1] != 0 {
-        eprintln("error: hexa_v2 transpiler not found: " + hexa_v2)
-        eprintln("  build it: clang -O2 -std=c11 self/native/hexa_cc.c -o self/native/hexa_v2 -lm")
+        eprintln("error: hexat transpiler not found: " + hexat)
+        eprintln("  build it: clang -O2 -std=c11 self/native/hexa_cc.c -o self/native/hexat -lm")
         exit(1)
     }
 
-    let transpile_result = exec_with_status(hexa_v2 + " " + flat_out + " " + src_c)
+    let transpile_result = exec_with_status(hexat + " " + flat_out + " " + src_c)
     if transpile_result[1] != 0 {
         eprintln("error: transpile failed")
         if transpile_result[0] != "" {

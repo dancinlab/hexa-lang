@@ -14,7 +14,7 @@
 #
 # Probe order:
 #   1. $HEXA_BIN                          (user override; most explicit)
-#   2. self/native/hexa_v2                (self-hosted compiler binary)
+#   2. self/native/hexat                (self-hosted compiler binary)
 #   3. /usr/local/bin/hexa_real           (system-wide bypass install)
 #   4. $HOME/.hx/bin/hexa_real            (per-user bypass install)
 #
@@ -60,7 +60,7 @@ if [ "${HEXA_BIN:-}" != "" ]; then
 fi
 
 # 2) self-hosted compiler binary (Mach-O on macOS dev boxes)
-self_bin="$REPO_ROOT/self/native/hexa_v2"
+self_bin="$REPO_ROOT/self/native/hexat"
 if is_local_binary "$self_bin"; then
     printf '%s\n' "$self_bin"
     exit 0
@@ -83,7 +83,7 @@ find_local_hexa: no local hexa binary found.
 
 Searched (in order):
   HEXA_BIN                     = ${HEXA_BIN:-<unset>}
-  self/native/hexa_v2          = $self_bin
+  self/native/hexat          = $self_bin
   /usr/local/bin/hexa_real
   \$HOME/.hx/bin/hexa_real      = ${HOME:-<unset>}/.hx/bin/hexa_real
 

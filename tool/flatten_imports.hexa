@@ -252,7 +252,7 @@ fn fl_strip_uses(src) {
     // live ONLY in the header (before any pub decl / data table / fn body).
     // For sources larger than the split cap, strip the head and append the
     // untouched tail verbatim. If a use/import leaks past the cap in some
-    // non-conventional file, hexa_v2_v4 will fail loudly with an unresolved
+    // non-conventional file, hexat_v4 will fail loudly with an unresolved
     // `use` at the C level — which is the correct behavior (no silent breakage).
     let SPLIT_CAP_BYTES = 131072      // 128 KB head budget — covers any practical header
     let src_len = len(src)
@@ -448,7 +448,7 @@ fn fl_mangle_prefix(path) {
 // anima P0 bug #3 (2026-04-18): `main` 은 절대 mangle 대상 제외.
 // 과거 증상: driver 의 `fn main()` 과 의존 모듈의 module-level `fn main()`
 // (ad-hoc selftest entry) 가 collision → 양쪽 다 `<File>__main` 으로 rename.
-// hexa_v2 transpile 단계의 `has_user_main = (ast[i].name == "main")` 조건이
+// hexat transpile 단계의 `has_user_main = (ast[i].name == "main")` 조건이
 // 한 번도 참이 되지 않아 `u_main();` 미 emit → build/artifacts/<file>.c 의
 // C `int main()` body 가 `hexa_set_args + fflush + return 0` 만 — 바이너리
 // exit 0 + 출력 없음 (silent-exit). anima 회피 표준 = 모든 deps inline.
@@ -483,7 +483,7 @@ fn fl_scan_private_decls(src) {
                     let trimmed = rest.trim()
                     let name = fl_read_ident(trimmed, 0)
                     // C entry 예약어 `main` 은 collision 스캔에서 제외 —
-                    // mangle 되면 hexa_v2 가 user main 을 못 찾아 silent-exit.
+                    // mangle 되면 hexat 가 user main 을 못 찾아 silent-exit.
                     if name != "" && name != "main" {
                         // O(N^2) 방지: in-place push, names 단일 mut
                         names.push(name)
@@ -760,11 +760,11 @@ fn flatten_main() {
 
     // 2026-05-14: bare-intrinsic auto-pull — `list_dir` is a hexa intrinsic
     // historically resolved by the interpreter as a builtin (no `import`
-    // line at the call site, e.g. compiler/atlas/merger.hexa:82). hexa_v2
+    // line at the call site, e.g. compiler/atlas/merger.hexa:82). hexat
     // codegen doesn't recognize it as a builtin, so the C output references
     // an undefined identifier. We can't pull compiler/intrinsics/intrinsics.hexa
     // directly because it mixes typed `var x: i64` / `as i64` syntax that
-    // hexa_v2_v4 parser rejects; we ship a stage0-clean re-export at
+    // hexat_v4 parser rejects; we ship a stage0-clean re-export at
     // tool/flatten_intrinsic_shims.hexa that mirrors only the intrinsics
     // the bypass needs (currently: list_dir).
     //
@@ -868,7 +868,7 @@ fn flatten_main() {
     // order_files is leaves-first (DFS post-order). We emit in reverse so the
     // entry file (which defines structs like Val) comes before leaf files that
     // reference those structs. This avoids C-level "undeclared function" errors
-    // from hexa_v2 which doesn't emit struct constructor forward decls.
+    // from hexat which doesn't emit struct constructor forward decls.
     //
     // SINGLE-ARRAY PATTERN: only `flat_str` (a string) accumulates output.
     // Each file is processed in isolation: read → scan decls → mangle collided
@@ -905,7 +905,7 @@ fn flatten_main() {
 
         // Fix #2 — atlas embed stub (Track-A monolithic-TU clang wall).
         // compiler/atlas/embedded.gen.hexa is a 4.6 MB / 7451-line
-        // ~7400-element AtlasNode const-array fixture. legacy hexa_v2
+        // ~7400-element AtlasNode const-array fixture. legacy hexat
         // emits it verbatim into flat.c → clang -O0 on the ~8 MB single
         // TU runs 40-53 min unbounded (the rebuild gate). static_atlas()
         // reads dist/atlas.hxc (committed sidecar) FIRST and only falls

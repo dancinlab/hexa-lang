@@ -18,7 +18,7 @@
 //
 //  Pipeline:
 //    1. flatten_imports → single .hexa
-//    2. hexa_v2 → .c
+//    2. hexat → .c
 //    3. musl-gcc -static → ELF x86_64 linux
 //    4. file(1) + sha256 report
 // ═══════════════════════════════════════════════════════════════
@@ -169,15 +169,15 @@ fn main() {
         exit(1)
     }
 
-    // ── 2. hexa_v2 → .c ──────────────────────────────────────
+    // ── 2. hexat → .c ──────────────────────────────────────
     println("[2/3] transpile → C")
-    let hexa_v2 = repo_root + "/self/native/hexa_v2"
-    if !file_exists(hexa_v2) {
-        eprintln("error: hexa_v2 missing at " + hexa_v2)
+    let hexat = repo_root + "/self/native/hexat"
+    if !file_exists(hexat) {
+        eprintln("error: hexat missing at " + hexat)
         exit(1)
     }
     let src_c = "/tmp/hx_linx_" + base + ".c"
-    run_ok(hexa_v2 + " " + flat + " " + src_c)
+    run_ok(hexat + " " + flat + " " + src_c)
     if !file_exists(src_c) {
         eprintln("error: C output missing: " + src_c)
         exit(1)

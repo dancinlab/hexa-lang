@@ -2,8 +2,8 @@
 //  build_hexa_cli_linux.hexa — cross-build the hexa CLI dispatcher
 //  (self/main.hexa → build/hexa_linux_<arch>) for Linux from macOS.
 //
-//  Pairs with build_hexa_v2_linux.hexa:
-//    - build_hexa_v2_linux.hexa    transpiler only    (.hexa → .c)
+//  Pairs with build_hexat_linux.hexa:
+//    - build_hexat_linux.hexa    transpiler only    (.hexa → .c)
 //    - build_hexa_cli_linux.hexa   full CLI driver    (run/build/cc/…)
 //
 //  Output: self-contained static ELF, drop-in replacement for the
@@ -26,7 +26,7 @@
 //    x86_64 → x86_64-linux-musl-gcc
 //
 //  Pipeline:
-//    1. self/native/hexa_v2 self/main.hexa build/stage1/main.c
+//    1. self/native/hexat self/main.hexa build/stage1/main.c
 //       (regenerates the dispatch C from the current main.hexa SSOT)
 //    2. <musl-gcc> -static -I self build/stage1/main.c → ELF
 //
@@ -207,7 +207,7 @@ fn main() {
     }
 
     let extra_cflags = env("EXTRA_CFLAGS")
-    let hexa_v2 = repo_root + "/self/native/hexa_v2"
+    let hexat = repo_root + "/self/native/hexat"
     let main_hexa = repo_root + "/self/main.hexa"
     let stage1_c = repo_root + "/build/stage1/main.c"
     let inc = repo_root + "/self"
@@ -219,8 +219,8 @@ fn main() {
     println("  target : " + target)
     println("  cc     : " + cc)
 
-    if !file_exists(hexa_v2) {
-        eprintln("error: self/native/hexa_v2 missing — run tool/build_hexa_v2_linux.hexa or bootstrap first")
+    if !file_exists(hexat) {
+        eprintln("error: self/native/hexat missing — run tool/build_hexat_linux.hexa or bootstrap first")
         exit(1)
     }
     if !file_exists(main_hexa) {
@@ -239,12 +239,12 @@ fn main() {
     run_ok("mkdir -p " + exec_with_status("dirname '" + out_path + "'")[0].trim())
     run_ok("mkdir -p " + repo_root + "/build/stage1")
 
-    // Step 1: regenerate dispatch C from main.hexa via the host hexa_v2.
+    // Step 1: regenerate dispatch C from main.hexa via the host hexat.
     //   Using the host binary (arm64 on macOS) is fine — it's a pure
     //   text-to-text transpile; the output .c is platform-neutral.
     println("")
-    println("[1/2] transpile main.hexa → stage1/main.c (host hexa_v2)")
-    run_ok(hexa_v2 + " " + main_hexa + " " + stage1_c)
+    println("[1/2] transpile main.hexa → stage1/main.c (host hexat)")
+    run_ok(hexat + " " + main_hexa + " " + stage1_c)
 
     // Step 2: cross-compile with musl static.
     //   -D_GNU_SOURCE + -std=gnu11 : glibc/musl POSIX+GNU extensions

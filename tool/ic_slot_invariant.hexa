@@ -2,7 +2,7 @@
 //
 // IC-slot 대수적 fixpoint 불변량 가드레일.
 //
-// Blocker #5 (hexa_v2 circular rebuild IC-slot collapse, 2026-04-17) 류 재발
+// Blocker #5 (hexat circular rebuild IC-slot collapse, 2026-04-17) 류 재발
 // 방지. nexus smash + free 양측 탐색 수렴 결론을 정적 lint 로 실체화:
 //
 //   IC-slot 체계는 monoid fixpoint 다 — 단순 codegen 버그가 아니라

@@ -78,7 +78,7 @@
 //   1. AOT-only streaming. The runtime exposes `exec_stream` and
 //      `exec_stream_async/poll/close` as native builtins, but they are
 //      currently registered only on the AOT/codegen lowering path
-//      (self/native/hexa_v2). The `hexa run` interpreter does NOT
+//      (self/native/hexat). The `hexa run` interpreter does NOT
 //      dispatch these symbols (self/hexa_full.hexa has only "exec").
 //      Callers using `hexa run` will receive a runtime error
 //      "undefined function: exec_stream". The handle-form fallback

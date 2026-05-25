@@ -12,9 +12,9 @@
 //   hexa tool/fixpoint_check.hexa --ic-scan PATH # scan .c for IC drift
 //
 // Blockers:
-//   ROI #152 (hexa_v2 circular rebuild regression) MUST close before --live
+//   ROI #152 (hexat circular rebuild regression) MUST close before --live
 //   is allowed to rebuild interp. See:
-//     - project_hexa_v2_circular_rebuild_20260417.md
+//     - project_hexat_circular_rebuild_20260417.md
 //     - feedback_seed_freeze.md
 //
 // Output: plain lines + a JSON report at build/fixpoint_report.json.
@@ -262,7 +262,7 @@ fn main() {
     // Live mode — refuse if any blocker is active.
     if len(blk) > 0 {
         eprintln("[p7_7] --live refused: " + str(len(blk)) + " blocker(s) active")
-        eprintln("[p7_7] close ROI #152 (hexa_v2 circular rebuild) first")
+        eprintln("[p7_7] close ROI #152 (hexat circular rebuild) first")
         write_report("live-refused", blk, "", "", "", 0, -1, ic_drift)
         exit(5)
     }

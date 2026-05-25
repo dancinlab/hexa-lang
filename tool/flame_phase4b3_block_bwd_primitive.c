@@ -14,7 +14,7 @@
 // Matmul sections (5rev + 2rev + 8rev × 4 helper calls) → HexaVal callback
 // per audit (commit e7472b1e SKIP rationale).
 //
-// Concat into hexa_v2-emitted IPCP+b3-wired .c via build wrapper
+// Concat into hexat-emitted IPCP+b3-wired .c via build wrapper
 // (tool/flame_phase4b3_a2_build.sh extended for bwd).
 //
 // Build (standalone compile check):

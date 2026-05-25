@@ -40,7 +40,7 @@ static inline HexaVal hexa_int(int64_t x) {
     HexaVal v; v.tag = TAG_INT; v.i = x; return v;
 }
 
-// Tagged add — what the hexa_v2-emitted C generates for `a + b` when
+// Tagged add — what the hexat-emitted C generates for `a + b` when
 // a and b are HexaVal. Real runtime.c hexa_add has more cases; this is
 // the floor (only int/float dispatch).
 static HexaVal hexa_add(HexaVal a, HexaVal b) {

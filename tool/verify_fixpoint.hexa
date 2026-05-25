@@ -4,7 +4,7 @@
 //   Original implementation used `tool/native_build.hexa` to triple-compile
 //   (seed → hexa_1 → hexa_2 → hexa_3, gate: sha2==sha3). That pipeline
 //   never materialised — native_build.hexa is a parse-erroring sketch and
-//   the actual self-host path is flatten + hexa_v2-transpile + clang.
+//   the actual self-host path is flatten + hexat-transpile + clang.
 //
 // 2026-04-20
 //   self-host fixpoint promoted new → live. The authoritative verifier is now

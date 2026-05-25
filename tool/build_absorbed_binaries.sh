@@ -25,9 +25,9 @@ main_hexa="${repo}/self/main.hexa"
 mkdir -p "${repo}/bin"
 
 # R7 stale-transpiler trap: PATH `hexa` resolves install_dir to the
-# production tree (its hexa_v2), NOT this worktree's rebuilt hexa_v2.
+# production tree (its hexat), NOT this worktree's rebuilt hexat.
 # Use the repo-local shim so install_dir_from_argv0 → ${repo} → the
-# freshly-bootstrapped self/native/hexa_v2 (free-mangle, readline, …).
+# freshly-bootstrapped self/native/hexat (free-mangle, readline, …).
 hexa_bin="${repo}/hexa"
 [ -x "${hexa_bin}" ] || hexa_bin="$(command -v hexa)"
 

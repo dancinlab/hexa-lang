@@ -43,7 +43,7 @@
 //
 // Today (P2) the body returns a hardcoded smoke PTX so the emit-driver
 // path is exercisable end-to-end without bootstrapping the compiler tree
-// through hexa_v2 (which would not yet wire MIR->PTX from the driver).
+// through hexat (which would not yet wire MIR->PTX from the driver).
 // The stub PTX is `ptxas -arch=sm_{NN}`-compilable (verified by text
 // substring asserts in P2; live ptxas verification deferred to P3+).
 //

@@ -257,7 +257,7 @@ fn st_open(path) {
 
 // ── adapter_config.json parser ──────────────────────────────
 //  Returns [r, alpha, target_modules, rslora, use_dora, has_mts]
-//  as a positional tuple — hexa_v2 codegen loses struct field
+//  as a positional tuple — hexat codegen loses struct field
 //  types across a function boundary, so we stay on plain arrays.
 fn parse_adapter_cfg(path) {
     let raw = read_file_bytes(path)
@@ -516,7 +516,7 @@ fn load_adapter(dir) {
     }
     let scale = cfg_alpha / to_float(cfg_r)
     // Split long concat into several eprintln calls to dodge
-    // hexa_v2's deep-concat paren-balancing bug.
+    // hexat's deep-concat paren-balancing bug.
     eprintln("[lora] " + dir)
     eprintln("[lora]   r=" + to_string(cfg_r) + " alpha=" + to_string(cfg_alpha) + " scale=" + to_string(scale))
     eprintln("[lora]   target_modules=" + to_string(len(cfg_tgt)))

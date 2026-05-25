@@ -5,7 +5,7 @@
 # Builds the Phase 4-B-3 extern fn ABI test (or any flame source with
 # extern fn declarations). Pipeline:
 #   1. module_loader flatten
-#   2. hexa_v2 transpile (skip IPCP; extern fn is a single-call POC)
+#   2. hexat transpile (skip IPCP; extern fn is a single-call POC)
 #   3. cat primitive .c body (provides extern fn body in same TU)
 #   4. clang -O2 → binary
 #
@@ -34,18 +34,18 @@ BUILT="build/artifacts/${STEM}_built.c"
 mkdir -p build/artifacts
 
 INTERP=$(tool/find_local_hexa.sh 2>/dev/null || true)
-# Select the EXACT canonical transpiler — never a `hexa_v2*` glob.
-# `find -name "hexa_v2*" | head -1` returns directory order and can pick
-# self/native/hexa_v2_baseline (an Apr-15 stale binary that strips
+# Select the EXACT canonical transpiler — never a `hexat*` glob.
+# `find -name "hexat*" | head -1` returns directory order and can pick
+# self/native/hexat_baseline (an Apr-15 stale binary that strips
 # multi-line fn signatures → dropped params → undeclared identifiers).
-if [ -x self/native/hexa_v2 ]; then
-    V2="self/native/hexa_v2"
+if [ -x self/native/hexat ]; then
+    V2="self/native/hexat"
 else
-    V2=$(find self/native -name "hexa_v2" 2>/dev/null | head -1)
+    V2=$(find self/native -name "hexat" 2>/dev/null | head -1)
 fi
 
 if [ -z "$INTERP" ] || [ -z "$V2" ]; then
-    echo "FATAL: cannot locate a hexa driver or hexa_v2"
+    echo "FATAL: cannot locate a hexa driver or hexat"
     exit 2
 fi
 
@@ -56,9 +56,9 @@ echo "  out    : $OUT"
 echo "[1/4] module_loader flatten → $EXP"
 "$INTERP" run self/module_loader.hexa "$SRC" "$EXP" 2>&1 | tail -1
 
-echo "[2/4] hexa_v2 transpile → $CFILE"
+echo "[2/4] hexat transpile → $CFILE"
 "$V2" "$EXP" "$CFILE" 2>&1 | tail -1
-# Restore single-TU `#include "runtime.c"` — the canonical hexa_v2 emits
+# Restore single-TU `#include "runtime.c"` — the canonical hexat emits
 # `#include "runtime.h"` (separate-TU) but step 3 sed-inserts the
 # primitive after the `#include "runtime.c"` anchor, and clang never
 # links runtime.c separately.

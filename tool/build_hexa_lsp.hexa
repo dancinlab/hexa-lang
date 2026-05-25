@@ -43,16 +43,16 @@ let ml_out = repo + "/build/hexa_module_loader"
 if exec("test -x '" + ml_out + "' && printf yes || printf no") != "yes" {
     println("[build_hexa_lsp] building module_loader (one-time) -> " + ml_out)
     let _mk1 = exec("mkdir -p '" + repo + "/build/stage1' 2>/dev/null")
-    let v2 = repo + "/self/native/hexa_v2"
+    let v2 = repo + "/self/native/hexat"
     if exec("test -x '" + v2 + "' && printf yes || printf no") != "yes" {
-        println("build_hexa_lsp: hexa_v2 missing/not-executable: " + v2)
+        println("build_hexa_lsp: hexat missing/not-executable: " + v2)
         exit(1)
     }
     let ml_c = repo + "/build/stage1/module_loader.c"
     let _t = exec("'" + v2 + "' '" + repo + "/self/module_loader.hexa' '" + ml_c + "' 2>&1 | tail -3")
     if len(_t) > 0 { println("    " + _t) }
     if exec("test -s '" + ml_c + "' && printf yes || printf no") != "yes" {
-        println("build_hexa_lsp: hexa_v2 produced empty " + ml_c)
+        println("build_hexa_lsp: hexat produced empty " + ml_c)
         exit(1)
     }
     let cl_ml = "clang -O2 -I '" + repo + "/self' '" + ml_c + "' '" + repo + "/self/runtime.c' -o '" + ml_out + "' -lpthread 2>&1"

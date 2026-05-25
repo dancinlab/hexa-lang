@@ -1,7 +1,7 @@
 // tool/build_hexa_cli.hexa — native port of build_hexa_cli.sh.
 //
 // Compiles self/main.hexa (CLI dispatcher) and self/module_loader.hexa
-// (import flattener) into native binaries via the hexa_v2 transpiler
+// (import flattener) into native binaries via the hexat transpiler
 // + clang + runtime.c. Replaces the retired .sh, removing the last
 // .sh in the hexa-native tool/ tree (g_hexa_native_no_sh_py_writes).
 //
@@ -83,27 +83,27 @@ fn _file_exists(p: string) -> bool {
     return r[1] == 0
 }
 
-// _pick_hexa_v2: select the committed hexa_v2 binary that matches the
+// _pick_hexat: select the committed hexat binary that matches the
 // host (os, arch) triple. Returns absolute path under <repo>/self/native/.
 //
 // Layout (multiarch, 2026-05-24):
-//   self/native/hexa_v2                  — Mac arm64 (Mach-O), legacy name
-//   self/native/hexa_v2_linux_x86_64     — Linux x86_64 (ELF)
+//   self/native/hexat                  — Mac arm64 (Mach-O), legacy name
+//   self/native/hexat_linux_x86_64     — Linux x86_64 (ELF)
 //
-// The legacy name "hexa_v2" is preserved for Mac arm64 to avoid churning
+// The legacy name "hexat" is preserved for Mac arm64 to avoid churning
 // the entire build chain (bootstrap.yml, build_hexa_cli_native.hexa, etc).
 // Other (os, arch) pairs use a suffixed name so a single git commit can
 // carry every host's binary.
 //
-// Background: PR #454 regen-ed hexa_v2 on Mac arm64 only, leaving Linux
-// hosts (ubu-1/ubu-2) running a Mac binary via shared self/native/hexa_v2
+// Background: PR #454 regen-ed hexat on Mac arm64 only, leaving Linux
+// hosts (ubu-1/ubu-2) running a Mac binary via shared self/native/hexat
 // — which SIGSEGVs / exec-fails on Linux. This helper lets Linux pick
 // its own ELF without forcing every commit to rebuild every arch.
-fn _pick_hexa_v2(repo_root: string) -> string {
+fn _pick_hexat(repo_root: string) -> string {
     // CANON M3b: the transpiler is a per-machine build artifact, not a
-    // committed binary. Returns the expected build/hexa_v2 path; _do_build
+    // committed binary. Returns the expected build/hexat path; _do_build
     // bootstraps it from hexa_cc.c (cc hexa_cc.c runtime.c) when absent.
-    return repo_root + "/build/hexa_v2"
+    return repo_root + "/build/hexat"
 }
 
 // REPO_ROOT — HEXA_LANG if set, else cwd.
@@ -190,10 +190,10 @@ fn _install_driver(repo_root: string, uname: string) {
 }
 
 fn _do_build(repo_root: string) {
-    // multiarch-aware: Linux x86_64 → hexa_v2_linux_x86_64; Mac arm64 → hexa_v2.
-    // Falls back to legacy "hexa_v2" path when the arch-specific binary
+    // multiarch-aware: Linux x86_64 → hexat_linux_x86_64; Mac arm64 → hexat.
+    // Falls back to legacy "hexat" path when the arch-specific binary
     // hasn't been committed yet (pre-multiarch clones).
-    let hexa_v2   = _pick_hexa_v2(repo_root)
+    let hexat   = _pick_hexat(repo_root)
     let main_hexa = repo_root + "/self/main.hexa"
     let ml_hexa   = repo_root + "/self/module_loader.hexa"
     let stage1    = repo_root + "/build/stage1"
@@ -231,29 +231,29 @@ fn _do_build(repo_root: string) {
     //   from the arch-neutral hexa_cc.c so it is never arch-mismatched. The
     //   amalgam swap (#include "runtime.h" → "runtime.c") pulls the runtime
     //   bodies into a single TU (hexa_cc.c heads with the proto-only header).
-    if !_file_exists(hexa_v2) {
-        println("[0/5] bootstrap transpiler: cc hexa_cc.c runtime.c → " + hexa_v2)
+    if !_file_exists(hexat) {
+        println("[0/5] bootstrap transpiler: cc hexa_cc.c runtime.c → " + hexat)
         let hexa_cc_c = repo_root + "/self/native/hexa_cc.c"
         _must_exist(hexa_cc_c, "hexa_cc.c (transpiler C seed)")
         let amalgam = repo_root + "/build/_hexa_cc_amalgam.c"
         _run("sed 's|#include \"runtime.h\"|#include \"runtime.c\"|' " + _shq(hexa_cc_c) + " > " + _shq(amalgam), "amalgam hexa_cc.c")
-        _run(cc + " " + cflags + " " + _shq(amalgam) + " -o " + _shq(hexa_v2) + " " + ldflags, "bootstrap hexa_v2")
+        _run(cc + " " + cflags + " " + _shq(amalgam) + " -o " + _shq(hexat) + " " + ldflags, "bootstrap hexat")
         let _ = exec("rm -f " + _shq(amalgam))
     }
-    _must_exist(hexa_v2, "hexa_v2 (bootstrap from hexa_cc.c failed)")
+    _must_exist(hexat, "hexat (bootstrap from hexa_cc.c failed)")
 
     // ── Step 1+2+3: chicken-egg flatten chain (bootstrap.yml parity).
     //
     // self/main.hexa `use`s 7 compiler frontend modules (lex/parse/lower/...);
-    // hexa_v2 is a single-file transpiler with no `use` resolution. Therefore
+    // hexat is a single-file transpiler with no `use` resolution. Therefore
     // transpiling main.hexa directly emits extern stubs that fail to link
     // (undefined references to lex / parse / lower / lower_hir / static_atlas /
     // codegen_emit_ptx_for_sm). The fix mirrors bootstrap.yml:
     //
-    //   (1) hexa_v2 module_loader.hexa → module_loader.c        (zero `use`)
+    //   (1) hexat module_loader.hexa → module_loader.c        (zero `use`)
     //   (2) cc module_loader.c → build/hexa_module_loader        (binary)
     //   (3) hexa_module_loader main.hexa → main_expanded.hexa    (flatten)
-    //   (4) hexa_v2 main_expanded.hexa → main_native.c           (transpile)
+    //   (4) hexat main_expanded.hexa → main_native.c           (transpile)
     //   (5) cc main_native.c → build/hexa_cli_driver             (binary)
     //
     // Mac arm64 only "worked" before this fix because a previously-built
@@ -263,7 +263,7 @@ fn _do_build(repo_root: string) {
     // single-step transpile path surfaces the chicken-egg immediately.
     if env_var("SKIP_TRANSPILE") == "" {
         println("[1/5] transpile module_loader.hexa → " + ml_c)
-        _run(_shq(hexa_v2) + " " + _shq(ml_hexa) + " " + _shq(ml_c), "transpile module_loader.hexa")
+        _run(_shq(hexat) + " " + _shq(ml_hexa) + " " + _shq(ml_c), "transpile module_loader.hexa")
 
         println("[2/5] compile hexa_module_loader (stage-1 flattener)")
         _run(cc + " " + cflags + " " + _shq(ml_c) + " " + _shq(runtime_c) + " -o " + _shq(ml_out) + " " + ldflags, "compile module_loader")
@@ -272,7 +272,7 @@ fn _do_build(repo_root: string) {
         _run(_shq(ml_out) + " " + _shq(main_hexa) + " " + _shq(main_expanded), "flatten main.hexa")
 
         println("[3/5] transpile main_expanded.hexa → " + main_c)
-        _run(_shq(hexa_v2) + " " + _shq(main_expanded) + " " + _shq(main_c), "transpile main_expanded.hexa")
+        _run(_shq(hexat) + " " + _shq(main_expanded) + " " + _shq(main_c), "transpile main_expanded.hexa")
     }
     _must_exist(main_c, "transpiled C")
     _must_exist(ml_c,   "transpiled C")
@@ -291,7 +291,7 @@ fn _do_build(repo_root: string) {
 
     // ── Step 4b: shadow install-layout in build/
     let _ = exec("mkdir -p " + _shq(repo_root + "/build/self/native") + " " + _shq(repo_root + "/build/self/forge"))
-    let _ = exec("cp -f " + _shq(hexa_v2)                                 + " " + _shq(repo_root + "/build/self/native/hexa_v2"))
+    let _ = exec("cp -f " + _shq(hexat)                                 + " " + _shq(repo_root + "/build/self/native/hexat"))
     let _ = exec("cp -f " + _shq(repo_root + "/self/native/hexa_cc.c")    + " " + _shq(repo_root + "/build/self/native/hexa_cc.c"))
     let _ = exec("cp -f " + _shq(repo_root + "/self/runtime.h")           + " " + _shq(repo_root + "/build/self/runtime.h"))
     let _ = exec("cp -f " + _shq(repo_root + "/self/runtime.c")           + " " + _shq(repo_root + "/build/self/runtime.c"))

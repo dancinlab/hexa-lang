@@ -6,7 +6,7 @@
 //   fn classify { if (n) { a } else { while (b) { } } }
 // and asserts the RateVec the meter produces, plus the F-monotonicity
 // invariant. Synthetic IR is used because the full compiler self-build
-// (compiler/main.hexa) is currently blocked by an unrelated hexa_v2
+// (compiler/main.hexa) is currently blocked by an unrelated hexat
 // codegen bug (Severity enum match). This test's import graph pulls in
 // only the IR struct files + meter — it builds and runs standalone.
 //

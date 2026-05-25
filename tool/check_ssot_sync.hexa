@@ -5,7 +5,7 @@ use "self/stdlib/law_io"
 // repo:
 //
 //   self/hexa_full.hexa      (interp monolith, ~14700 SLOC)
-//   self/interpreter.hexa    (hexa_v2 / hexa_cc modular, ~10400 SLOC)
+//   self/interpreter.hexa    (hexat / hexa_cc modular, ~10400 SLOC)
 //
 // Both files re-declare many of the same top-level `fn` symbols (tokenize,
 // call_builtin, call_method, eval_expr, …). Whenever a runtime hot-path is
@@ -23,7 +23,7 @@ use "self/stdlib/law_io"
 //     interp OOM that the first draft hit on the 14.7k-line monolith.
 //     (We started with FNV-1a 64 but the native transpiler does not yet
 //     parse `^`; DJB2 uses only `*` and `+` so the same source builds in
-//     both interp and hexa_v2 / hexa_cc.)
+//     both interp and hexat / hexa_cc.)
 //   * Line normalisation: trim + drop blank + drop `// ...` comment-only.
 //     Block comments (`/* */`) are NOT stripped; they are rare in these
 //     files and false-positives here are tolerable for a first-cut tool.
@@ -74,7 +74,7 @@ fn ck_idx_of(list, needle) {
 
 // Count a single ASCII char in a line. We pre-compute the target byte to
 // avoid .bytes()[0] cost per call. Uses `char_code(s, i)` free-fn instead
-// of `.bytes()` because the native transpiler (self/native/hexa_v2 /
+// of `.bytes()` because the native transpiler (self/native/hexat /
 // hexa_cc.c) does not yet wire `.bytes()` into gen2_method_builtin — it
 // emits a `CODEGEN ERROR: unhandled method: bytes` stub that aborts at
 // first call. `char_code(s, i)` is already used throughout
@@ -94,7 +94,7 @@ fn ck_count_byte(line, target_byte) {
 // hash `h`. Returns the updated hash. Called once per kept body line.
 //
 // History: this slot was originally FNV-1a 64, but FNV-1a needs a per-byte
-// `h ^ byte` step and the native transpiler (hexa_v2 / hexa_cc) does not
+// `h ^ byte` step and the native transpiler (hexat / hexa_cc) does not
 // yet parse the BitXor `^` token (Parse error at 93:15). We swap to DJB2
 // `h = h * 33 + byte` which uses only `*` and `+`, so the same source
 // builds under both interp and the native back-end. Collision rate is
@@ -215,7 +215,7 @@ fn ck_scan(src, label) {
 // ─────────────────────────────────────────────────────────────
 
 // NB: we use the `args()` spelling because that is the name the native
-// transpiler (self/native/hexa_v2 / hexa_cc.c) maps to `hexa_args()`. The
+// transpiler (self/native/hexat / hexa_cc.c) maps to `hexa_args()`. The
 // interp interpreter exposes both `args()` and `argv()` so this spelling
 // works in both runtimes.
 let args = args()

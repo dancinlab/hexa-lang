@@ -41,7 +41,7 @@ use "compiler/atlas/offset_index"
 // R7 track B (2026-05-18): `use "compiler/atlas/embedded.gen"` severed.
 // The module_loader cycle-safety fix made atlas_cli flatten succeed, but
 // the resulting 5 MB flat (embedded.gen's 7451 AtlasNode const literals)
-// then SIGKILLs the hexa_v2 transpile — the very "const-literal load"
+// then SIGKILLs the hexat transpile — the very "const-literal load"
 // cost the dist/atlas.hxc sidecar was built to avoid (see Path Y note
 // below + tool/atlas_build_hxc.hexa, which text-reads embedded.gen to
 // dodge exactly this). The compiled atlas binary serves from

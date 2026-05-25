@@ -6,7 +6,7 @@
 // adjacent free-function / zero-arg surface that codegen_c2.hexa now
 // dispatches to typed `hexa_*` wrappers.
 //
-// Each call exercises a name that, under the legacy hexa_v2 codegen,
+// Each call exercises a name that, under the legacy hexat codegen,
 // leaked as a bare identifier and only compiled because of the shim.
 // After roadmap 66 (Phase C.2 regen) + 2361bc25 (now/push dispatch),
 // every name below should be emitted as `hexa_<canonical>` in AOT and

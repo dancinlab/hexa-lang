@@ -2,10 +2,10 @@
 // compiler binary (canonical name `hexac`, the clean replacement for
 // the bootstrap-era codename `aprime_cc`).
 //
-// Hexa-native build orchestrator (no `.sh`): replaces the hexa_v2 -> C
+// Hexa-native build orchestrator (no `.sh`): replaces the hexat -> C
 // -> clang stages of `tool/build_aprime.sh`. The native compiler
 // compiles its own source via `--emit=asm`, then we assemble + link.
-// NO hexa_v2 in the build path. clang is still shelled at stage 4 as
+// NO hexat in the build path. clang is still shelled at stage 4 as
 // the assembler + linker; S7 (own assembler + `hexa_ld`) eliminates
 // that last toolchain dependency.
 //

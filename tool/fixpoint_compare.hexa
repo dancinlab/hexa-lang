@@ -12,7 +12,7 @@ use "tool/tmp_scratch"
 //      We PREFER reusing an existing /tmp/hexa-cache/flatten/*.hexa when
 //      inputs are unchanged (avoids the known interp push-O(n²) trap).
 //      Otherwise a lightweight shell-based flattener is used.
-//   2. self/native/hexa_v2 flat.hexa -> v4.c
+//   2. self/native/hexat flat.hexa -> v4.c
 //   3. clang -O2 -std=c11 -Wno-trigraphs -I self (matches build_interp.hexa)
 //      v4.c + copy of self/runtime.c -> /tmp/hexa_v4_fixpoint/hexa_v4
 //   4. codesign --force --sign - (Darwin)
@@ -59,7 +59,7 @@ let hexa_dir = exec("cd \"$(dirname '" + script_path + "')/../\" && pwd").trim()
 
 let v3 = hexa_dir + "/build/hexa_interp.real"
 let v3_shim = hexa_dir + "/build/hexa_interp"
-let hexa_v2 = hexa_dir + "/self/native/hexa_v2"
+let hexat = hexa_dir + "/self/native/hexat"
 let runtime_c = hexa_dir + "/self/runtime.c"
 let src_hexa = hexa_dir + "/self/hexa_full.hexa"
 let flatten_script = hexa_dir + "/tool/flatten_imports.hexa"
@@ -73,7 +73,7 @@ let v4_c = work_dir + "/hexa_v4.c"
 let v4_bin = work_dir + "/hexa_v4"
 let diff_report = work_dir + "/diff_report.txt"
 
-for needed in [v3, hexa_v2, runtime_c, src_hexa, flatten_script] {
+for needed in [v3, hexat, runtime_c, src_hexa, flatten_script] {
     if !file_exists(needed) {
         eprintln("[fixpoint] missing: " + needed)
         exit(2)
@@ -82,7 +82,7 @@ for needed in [v3, hexa_v2, runtime_c, src_hexa, flatten_script] {
 
 println("[fixpoint] ROI #153 — P7-7 v3==v4 fixpoint check")
 println("[fixpoint] v3 binary        : " + v3)
-println("[fixpoint] v3 transpiler    : " + hexa_v2)
+println("[fixpoint] v3 transpiler    : " + hexat)
 println("[fixpoint] src              : " + src_hexa)
 println("[fixpoint] work dir         : " + work_dir)
 println("")
@@ -163,9 +163,9 @@ let flat_size = exec("wc -c < " + flat_hexa + " | tr -d ' '").trim()
 let flat_sha  = exec("shasum -a 256 " + flat_hexa + " | cut -d' ' -f1").trim()
 println("[fixpoint] flat: " + flat_size + " bytes  sha256 = " + flat_sha)
 
-// ── Step 2: transpile via hexa_v2 ─────────────────────────
-println("[fixpoint] step 2/4 — transpile: " + hexa_v2 + " -> " + v4_c)
-run_cmd("timeout --kill-after=10 300 " + hexa_v2 + " " + flat_hexa + " " + v4_c)
+// ── Step 2: transpile via hexat ─────────────────────────
+println("[fixpoint] step 2/4 — transpile: " + hexat + " -> " + v4_c)
+run_cmd("timeout --kill-after=10 300 " + hexat + " " + flat_hexa + " " + v4_c)
 if !file_exists(v4_c) {
     eprintln("[fixpoint] FAIL transpile: " + v4_c + " missing")
     exit(2)
@@ -310,7 +310,7 @@ println("")
 println("[fixpoint] diagnosis candidates:")
 println("  * clang Mach-O LC_UUID non-determinism (typical)")
 println("  * dsymutil path embedding")
-println("  * hexa_v2 transpile ordering non-determinism")
+println("  * hexat transpile ordering non-determinism")
 println("  * flatten import ordering")
 println("")
 println("[fixpoint] Strategy to isolate:")

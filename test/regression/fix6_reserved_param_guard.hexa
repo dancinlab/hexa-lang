@@ -31,7 +31,7 @@
 //
 // How to exercise:
 //
-//   self/native/hexa_v2 test/regression/fix6_reserved_param_guard.hexa /tmp/out.c
+//   self/native/hexat test/regression/fix6_reserved_param_guard.hexa /tmp/out.c
 //
 // Expected stdout: a FIX-6 diagnostic per offending site, e.g.
 //

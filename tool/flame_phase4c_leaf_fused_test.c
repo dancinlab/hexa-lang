@@ -11,7 +11,7 @@
 // Also performs an N-iter wall micro-benchmark (paired vs fused) for
 // F-RFC048-FUSED-WALL-IMPROVED tracking. This is a primitive-level
 // micro-bench, NOT the full d=32·3L corpus wall (which requires the
-// IPCP/A2 pipeline currently blocked by pre-existing hexa_v2 codegen
+// IPCP/A2 pipeline currently blocked by pre-existing hexat codegen
 // bug on `_db_grad_accum_farr` 9-param signature — see PHASE4C
 // IMPLEMENTATION_AUDIT.md §1 for the verify_all baseline state).
 //

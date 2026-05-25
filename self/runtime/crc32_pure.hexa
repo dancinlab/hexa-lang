@@ -21,7 +21,7 @@
 //   P30 no unsigned type — mask at every step
 //   G40/G41 interp interpreter rejects `<<` / `>>` (parse error) — use
 //        integer divide by 2 / multiply by 2 instead. The compiled
-//        hexa_v2 path supports the operators, but the interpreter
+//        hexat path supports the operators, but the interpreter
 //        (`./hexa run`) does not, and the test runner uses run.
 
 let CRC32_POLY     = 3988292384      // 0xEDB88320 reflected polynomial

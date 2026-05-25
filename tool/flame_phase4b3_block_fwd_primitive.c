@@ -4,7 +4,7 @@
 // ⚠ DRAFT — fails to compile when concat'd into IPCP build pipeline:
 //   - `farr_zeros` / `farr_free` are NOT direct fn calls in runtime.c
 //     — they're `static HexaVal` variables holding fn pointers, used
-//     via `hexa_call1(farr_zeros, ...)` macro in hexa_v2-emitted C
+//     via `hexa_call1(farr_zeros, ...)` macro in hexat-emitted C
 //   - `_db_proj_batch_farr` extern decl conflicts with implicit decl
 //     from earlier use (needs the decl before any call site, or to
 //     use the hexa-emitted signature exactly)
@@ -28,7 +28,7 @@
 // 2. Same dt_sqrt/dt_exp/_db_silu Taylor/Newton (ported)
 // 3. Same farr_table backing store (single-TU pattern shared)
 //
-// Concat into hexa_v2-emitted IPCP .c via build wrapper. Standalone
+// Concat into hexat-emitted IPCP .c via build wrapper. Standalone
 // compile-test verifies basic structure; byte-eq verify requires
 // caller wire-up + run (next sub-step).
 //
@@ -36,7 +36,7 @@
 //   clang -O2 -c -I self tool/flame_phase4b3_block_fwd_primitive.c -o /tmp/block_prim.o
 // ════════════════════════════════════════════════════════════════════════
 
-// Forward decls for concat'd-into-hexa_v2-emit case. runtime.c provides
+// Forward decls for concat'd-into-hexat-emit case. runtime.c provides
 // `static HexaVal farr_zeros;` / `static HexaVal farr_free;` (fn ptr vars,
 // not direct fns — call via `hexa_call1(farr_zeros, x)` macro).
 // `_db_proj_batch_farr` is hexa-source emitted: signature is all-HexaVal.
@@ -45,7 +45,7 @@ HexaVal _db_proj_batch_farr(HexaVal W, HexaVal W_off, HexaVal X, HexaVal X_off, 
 #endif
 
 // Standalone compile context: emulate single-TU access to runtime.c types
-// when not concat'd. When concat'd into hexa_v2-emitted .c (which
+// when not concat'd. When concat'd into hexat-emitted .c (which
 // `#include "runtime.c"`), these forward decls are redundant but harmless
 // (matching definitions in runtime.c).
 #ifdef FLAME_BLOCK_PRIM_STANDALONE

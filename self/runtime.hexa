@@ -82,7 +82,7 @@ struct Val {
 }
 
 // ── Globals referenced by env_/fn_cache helpers (context) ────
-// These are DECLARED here as pub let mut so hexa_v2 transpile can
+// These are DECLARED here as pub let mut so hexat transpile can
 // resolve identifiers. In the actual self-host binary they live
 // in hexa_full (L4698-4740) — do NOT define twice in link time.
 pub let mut env_var_names = []

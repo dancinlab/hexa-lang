@@ -222,14 +222,14 @@ HexaVal hexa_bytes_to_f64_le_v(HexaVal arr, HexaVal offset) {
 }
 
 /* Unprefixed aliases (FIX-2 unblock 2026-05-04) ---------------------
- * The precompiled bootstrap transpiler self/native/hexa_v2 was built
+ * The precompiled bootstrap transpiler self/native/hexat was built
  * before FIX-2's codegen registrations existed, so it emits raw symbol
  * references like `hexa_call1(f32_to_bytes_le, x)` instead of the
  * prefixed `hexa_f32_to_bytes_le(x)` direct call. The hexa_call1 /
  * hexa_call2 macros use _Generic to dispatch raw fn pointers, so as
  * long as the unprefixed identifier resolves to a same-typed function,
  * the call lowers correctly. These aliases provide that resolution
- * without regenerating hexa_v2.
+ * without regenerating hexat.
  */
 static inline HexaVal f32_to_bytes_le(HexaVal val) { return hexa_f32_to_bytes_le(val); }
 static inline HexaVal f64_to_bytes_le(HexaVal val) { return hexa_f64_to_bytes_le(val); }

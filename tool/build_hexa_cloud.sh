@@ -34,7 +34,7 @@ mkdir -p "$(dirname "${out}")"
 echo "[build_hexa_cloud] src=${src}"
 echo "[build_hexa_cloud] out=${out}"
 
-# Build via the manual module_loader → hexa_v2 → clang pipeline. The
+# Build via the manual module_loader → hexat → clang pipeline. The
 # `hexa build` wrapper (driver) has an unrelated hexac-environment
 # quirk where the smoke check captures empty stdout from successfully-
 # built binaries (intermittent file-descriptor interaction). Until
@@ -47,9 +47,9 @@ if [[ ! -s "${flat}" ]]; then
     echo "error: module_loader produced empty flatten" >&2
     exit 2
 fi
-"${repo}/self/native/hexa_v2" "${flat}" "${cgen}" >/dev/null 2>&1
+"${repo}/self/native/hexat" "${flat}" "${cgen}" >/dev/null 2>&1
 if [[ ! -s "${cgen}" ]]; then
-    echo "error: hexa_v2 transpile produced empty C" >&2
+    echo "error: hexat transpile produced empty C" >&2
     exit 3
 fi
 libsodium_inc="$(ls -d /opt/homebrew/Cellar/libsodium/*/include 2>/dev/null | tail -n1)"

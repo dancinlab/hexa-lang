@@ -4,7 +4,7 @@
 //  NOTE ON PARSER CONSTRAINTS
 //  --------------------------
 //  The interp interpreter rejects `<<`, `>>`, and `|` tokens in most
-//  expression positions (grammar G40/G41/G42 implemented in hexa_v2
+//  expression positions (grammar G40/G41/G42 implemented in hexat
 //  but not in the ./hexa driver yet). This module therefore emulates
 //  those ops using `&`, `^`, `+`, `-`, `*`, `/`, which parse cleanly.
 //

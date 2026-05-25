@@ -611,12 +611,12 @@ HexaVal hexa_net_read_bytes(HexaVal fd_val, HexaVal max_val) {
 }
 
 /* ── TAG_FN shim globals (bootstrap bridge, 2026-04-16) ──────────────────
- * The current self/native/hexa_v2 transpiler only recognises net_listen /
+ * The current self/native/hexat transpiler only recognises net_listen /
  * net_accept / net_close as direct-lowered builtins. Fresh names like
  * net_connect / net_read / net_write are emitted as `hexa_call1(name, …)`
  * — i.e. the transpiler treats them as free-function identifiers backed by
  * a HexaVal fn pointer. Providing TAG_FN shims keeps the interpreter path
- * working until the next codegen_c2 → hexa_cc → hexa_v2 bootstrap cycle
+ * working until the next codegen_c2 → hexa_cc → hexat bootstrap cycle
  * teaches the transpiler the direct-lowering. After that, these shims are
  * harmless — codegen will emit `hexa_net_connect(...)` directly and the
  * globals simply remain unused. */

@@ -1967,7 +1967,7 @@ fn _parse_module_one(tokens: [Token], file: string) -> Module {
         // decl-leader → Item; anything else at module scope is a top-level
         // executable statement (compiler/main.hexa is script-style). Collect
         // those into a synthesised `fn main` so the native backend has a
-        // C-ABI entry — the hexa_v2 C path generated this implicitly; the
+        // C-ABI entry — the hexat C path generated this implicitly; the
         // new lower_hir/codegen handle ITEM_FN uniformly (→ _main).
         if check_kind(TokenKind::KwFn) || check_kind(TokenKind::KwLet)
            || check_kind(TokenKind::KwStruct) || check_kind(TokenKind::KwEnum)
@@ -1983,7 +1983,7 @@ fn _parse_module_one(tokens: [Token], file: string) -> Module {
             // ITEM_LET → lower_hir global slot) AND its initializer must
             // run at program start. Emit `X = E` into the synthetic main
             // at this source position so globals init in declaration
-            // order before later driver stmts (mirrors hexa_v2's
+            // order before later driver stmts (mirrors hexat's
             // generated main: inits-then-stmts in source order).
             if item_is_let(it.kind) {
                 let mut nm = it.name
@@ -2154,7 +2154,7 @@ fn _splice_imported_items(items: [Item], importer: string) {
                 if file_exists(alt) { resolved = alt }
             }
             // `use "compiler/atlas/parser"` and similar omit the .hexa
-            // extension; the interp + hexa_v2 paths auto-append it.
+            // extension; the interp + hexat paths auto-append it.
             // Mirror that here so the aprime_cc-direct compile of
             // every atlas_*_smoke (10 files) doesn't HX0010 on the
             // very first use-line.

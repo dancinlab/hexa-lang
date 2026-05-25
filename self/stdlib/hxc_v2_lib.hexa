@@ -55,7 +55,7 @@ use "self/stdlib/hxc_composite_chain_v2"
 // COMPLIANCE NOTES
 //   * `@D g5` hexa-native-only — pure hexa, no LLVM/C-transpile-only
 //     primitive. The chain compiles via the canonical
-//     `.hexa → hexa_v2 → C → clang` pipeline.
+//     `.hexa → hexat → C → clang` pipeline.
 //   * `@D g6` citation-enforced — this wrapper carries NO formula
 //     lines, only re-exports. The cited theorems live in
 //     `hxc_composite_chain_v2.hexa` (A29 RFC 1951 / A30 BWT chain).

@@ -1,6 +1,6 @@
 // GENERATED FROM self/runtime_hi.hexa — do not edit manually.
 // Source of truth: self/runtime_hi.hexa (M1-lite hi-layer SSOT).
-// Reproduce: tool/extract_runtime_hi.sh (runs self/native/hexa_v2 then
+// Reproduce: tool/extract_runtime_hi.sh (runs self/native/hexat then
 // strips main/selftest, renames __hexa_sl_* -> __hexa_rt_sl_*).
 // Included from self/runtime.c AFTER hexa_str_join is defined.
 // (hxa-20260423-003 Step 4 — extraction replaces hand-port rt_str_*)
