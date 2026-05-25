@@ -420,7 +420,25 @@ in-memory code. 권장 = daemon 시작 시 자기 binary mtime 캐시 → 주기
 | **R1** | #904 (GO M10) | ✅ landed | socket skeleton · `{start,start-bg,stop,status,echo}` 버브 · newline-text wire (PING/ECHO/SHUTDOWN) · idle-TTL self-exit · stale-socket cleanup · runtime.c socket primitive 복원. 4-step e2e (`tests/m_daemon_r1_test.hexa`). |
 | **R2** | (this) GO M11 | ✅ landed | `compile` 메서드 + in-memory cache. `COMPILE <src>` → `HIT <bin>` (memoized) / `BUILT <bin>` / `ERR <reason>`. 캐시 키 = `sha256(source)[0:16] + "_" + version_str()` — **`hexa run` / `hexa build` 과 byte-identical** → `~/.hexa-cache/hexa_run.<key>` 슬롯 공유. 3 falsifier (`tests/m_daemon_r2_test.hexa`): R2-1 cache hit · R2-2 fork-mode fallback · R2-3 determinism. |
 | **R3** | (this) GO M12 | ✅ landed | `hexa run` autospawn wiring (`HEXA_DAEMON_AUTOSPAWN=1` opt-in → socket probe → spawn-if-missing → `COMPILE` → exec returned binary). 3-tier fallback **precompile (M2) → daemon (R3) → fork-mode** in `cmd_run_user_direct`. `HEXA_DAEMON_SOCKET` env override (socket isolation). `tests/m_daemon_r3_test.hexa` 3 falsifier: **F-DAEMON-R3-1 (autospawn)** · **F-DAEMON-R3-2 (latency N=100)** · **F-DAEMON-R3-3 (crash-respawn fallback)**. 측정 (mini arm64 fresh build): **N=100 warm-daemon 9,395 ms vs fork-mode 174,933 ms = 18.6× speedup** (F-DAEMON-2 RFC gate ≤ 1.5× far exceeded). R1/R2 회귀 무 (4/4 + 3/3 PASS). |
-| **R4** | (next) | ⛔ todo | (a) **binary u32-LE length-prefix wire** (현 `net_read` strlen 기반 → NUL-preserving `net_read_raw` 빌트인 선행 — R3 가 occam g0 로 skip: binary path 는 NUL 없어 newline-text 로 round-trip) · (b) AST/lexer/lower in-memory 유지 (R2/R3 는 binary-path 매핑까지만) · (c) atlas SSOT hash flush (F-DAEMON-4) · (d) multi-uid reject + root refuse (F-DAEMON-5) · (e) prod ship — verb 안정화 · 문서 · `hexa init` 안내 · 10/10 falsifier closure. |
+| **R4 (codegen)** | (this) GO M13 | ✅ landed | R4 의 **codegen-bound** 부분. 2 신규 builtin: **`net_read_raw(fd, len)`** = 정확히 len byte NUL-preserving read (binary u32-LE length-prefix wire 의 reader 선행) · **`os_getuid()`** = getuid(2) wrapper (`getuid` reserved-name mangle 회피 위해 `os_getuid` 명명 — `term_getppid` 패턴). 그 위 **F-DAEMON-5 multi-uid 강화**: socket path uid-scoped (`/tmp/hexa-daemon-<uid>.sock`) + root-refuse (`os_getuid()==0 → exit 1`). codegen 레시피 (cc --regen → promote → DIRECT transpile → **fixpoint gen2≡gen3 byte-identical** → 회귀 무). `tests/m_daemon_r4_codegen_test.hexa` 3 falsifier ALL PASS: R4-1 (loopback NUL round-trip) · R4-2 (os_getuid==`id -u`) · R4-3 (uid-scoped socket + non-root). |
+| **R5** | (next) | ⛔ todo | R4 의 **나머지** (codegen 의존 없음): (a) binary u32-LE length-prefix wire **실전환** (net_read_raw 사용 — 현재는 builtin 만 land, daemon payload 가 NUL-free 라 occam g0 로 newline-text 유지) · (b) AST/lexer/lower in-memory 유지 (R2/R3 는 binary-path 매핑까지만) · (c) atlas SSOT hash flush (F-DAEMON-4) · (d) SO_PEERCRED/LOCAL_PEERCRED per-connection peer-uid 확인 (현재는 uid-scoped path + root-refuse 까지) · (e) prod ship — verb 안정화 · 문서 · `hexa init` 안내 · 10/10 falsifier closure. |
+
+### R4 (codegen) honest carve-out
+
+- **binary wire 는 builtin 만 land, 실전환 X** — `net_read_raw` 빌트인은 추가됐지만 daemon
+  의 newline-text wire 는 그대로. occam g0: 현 daemon payload (COMPILE 응답 `<TAG> <path>`,
+  STATUS 등) 은 NUL 을 안 가져 binary u32-LE framing 의 이득이 없다. binary wire 가 실제
+  가치를 갖는 건 daemon 이 압축 binary bytes 자체를 client 로 전송하는 케이스 (R5) — 그때
+  net_read_raw 를 reader 로 쓴다. 지금은 reader primitive 만 선반영.
+- **multi-uid 은 uid-scoped path + root-refuse 까지** — socket 이 `/tmp/hexa-daemon-<uid>.sock`
+  로 numeric-uid keyed (두 uid 가 절대 같은 socket 공유 안 함) + 0700 /tmp 권한 + root
+  daemon refuse. **per-connection peer-uid 확인 (SO_PEERCRED on Linux / LOCAL_PEERCRED on
+  macOS) 은 R5 로 연기** — uid-scoped path 자체가 cross-uid 도달을 차단하므로 peer-cred 는
+  defense-in-depth (현 단계 occam g0). CI 의 sudo -u 시뮬은 R5 prod-ship 게이트에서.
+- **fixpoint 검증** — codegen 변경이라 `hexa cc --regen` 후 promote 한 `hexa_cc.c` 가
+  재-regen 한 `hexa_cc.c.new` 와 byte-identical (gen2≡gen3) 확인 — 트랜스파일러가 자기
+  변경을 stable-point 로 재생산. 회귀: 새 vs base 트랜스파일러로 동일 test transpile+compile,
+  clang-err new==base (WORSE 0).
 
 ### R3 honest carve-out
 

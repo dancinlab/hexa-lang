@@ -375,3 +375,41 @@ axis 의 첫 설계서.
 
 - [ ] R4 — (a) binary u32-LE length-prefix wire (선행 `net_read_raw` 빌트인 + codegen) · (b) AST/lexer/lower in-memory 유지 (현 R2/R3 는 binary-path 매핑까지만) · (c) atlas SSOT hash flush (F-DAEMON-4) · (d) multi-uid reject + root refuse (F-DAEMON-5 · `getuid()` builtin 선행) · (e) prod ship — verb 안정화 · 문서 · `hexa init` 안내 · 10/10 falsifier closure.
 
+## 2026-05-25 · M13 — hexa daemon R4 codegen (net_read_raw + os_getuid 빌트인 + multi-uid 강화, RFC 093 § R4 carve-out)
+
+> R3 (PR #931) 가 R4 의 codegen 의존 2개를 명시 carve-out: (a) binary wire 의 NUL-preserving reader `net_read_raw` · (b) F-DAEMON-5 multi-uid reject 의 `getuid()` builtin. 둘 다 codegen builtin 추가 → [[codegen 변경 검증+랜딩 레시피]] 상 hexa_cc.c 재생성이 mutually-conflict 라 **한 PR 묶어** serial-safe 처리.
+
+- [x] M13 — `self/native/net.c` 2 신규 builtin:
+  - `hexa_net_read_raw(fd, len)` — `hxlcl_recv` 를 정확히 `len` byte 누적할 때까지 루프 (peer close → short array) → NUL-safe `[int]` 반환. net_read_n 의 exactly-n 루프 + net_read_bytes 의 array 결과 결합. ENOTSOCK 시 `hxlcl_read` fallback (pipe/pty). EINTR retry · EAGAIN/EWOULDBLOCK → EOF.
+  - `hexa_os_getuid()` — `getuid(2)` → Int. **`getuid` 가 아닌 `os_getuid` 명명** 이유: `getuid` 는 codegen `_hexa_name_is_reserved` set 이라 call-site 에서 `u_getuid` 로 mangle → dlsym extern-wrapper 경로와 충돌 (term_getppid 가 `getppid` 안 쓰고 우회하는 것과 동일 함정).
+  - shim global + `_hexa_init_net_fn_shims` 등록 (interp bridge) · `self/runtime.h` forward-decl 2개 (standalone user.c compile).
+- [x] M13 — `self/codegen.hexa` dispatch 3곳: 2-arg block `net_read_raw` · 0-arg block `os_getuid` · `_hexa_is_builtin_name` 2 entry.
+- [x] M13 — `self/main.hexa` multi-uid 강화 (F-DAEMON-5):
+  - `_daemon_default_socket` — `$USER` → 실 numeric uid (`os_getuid()`) keyed: `/tmp/hexa-daemon-<uid>.sock` (RFC §4.1). `$USER` 는 getuid 실패 시 fallback.
+  - `cmd_daemon_start` — root-refuse 추가: `if os_getuid() == 0 { exit(1) }` (RFC §6.1 — daemon 은 arbitrary-code-exec 머신이라 root 거부). R1/R3 의 no-op 코멘트를 실코드로.
+  - help 텍스트 socket path `$UID` 로 갱신.
+- [x] M13 — `tests/m_daemon_r4_codegen_test.hexa` 3 falsifier: F-DAEMON-R4-1 (loopback proc_fork NUL round-trip) · F-DAEMON-R4-2 (os_getuid==`id -u`) · F-DAEMON-R4-3 (uid-scoped socket + non-root).
+- [x] M13 — RFC 093 §12 표 R4(codegen) ✅ landed + R5 row 신설 + R4 honest carve-out · GO.md M13 milestone.
+
+### 검증 결과 (mac arm64 · `/tmp/hexa-m13` fresh clone @ origin/main `c5d2499d` · codegen 레시피 엄수)
+
+- **codegen regen**: `hexa cc --regen` → `lexer=ok parser=ok tc=ok cg=ok` · hexa_cc.c.new 28212 lines (+20).
+- **FIXPOINT PASS** — promote 후 재-regen 한 `hexa_cc.c.new` 가 promoted `hexa_cc.c` 와 **byte-identical** (gen2≡gen3 · `diff -q` clean). 트랜스파일러가 자기 변경을 stable-point 로 재생산.
+- **DIRECT transpile 검증** (`/tmp/v2tool` = 새 hexa_v2 · `hexa build` 캐시 trap 회피): probe + test → `hexa_os_getuid()` / `hexa_net_read_raw(...)` C 호출 정확 emit.
+- **회귀 무** — 새 vs base(`origin/main:hexa_v2`) 트랜스파일러로 m_daemon_r1/r3 + t34_net_listen transpile+compile, clang-err new==base (WORSE 0).
+- **R4 3 falsifier ALL PASS** (`/tmp/m13test`):
+  - `[R4-1] PASS: net_read_raw round-tripped 7 bytes incl embedded NUL` (payload `[72,0,105,0,0,255,7]` — net_read/net_read_n 은 첫 NUL 에서 truncate, net_read_raw 는 7 byte 정확 복원)
+  - `[R4-2] PASS: os_getuid()=501 matches id -u`
+  - `[R4-3] PASS: non-root (uid=501) · uid-scoped socket = /tmp/hexa-daemon-501.sock`
+- **main.hexa parse-gate**: 새 `/tmp/v2tool` 로 `self/main.hexa` transpile clean (`os_getuid` 2 call-site wired).
+
+### 디자인 결정 (R4 codegen)
+
+- **binary wire 실전환은 R5 defer (occam g0)** — net_read_raw reader primitive 만 land. 현 daemon payload (COMPILE `<TAG> <path>` · STATUS) 는 NUL-free 라 binary u32-LE framing 이득 0 · R3 가 이미 newline-text 로 작동. binary wire 가 가치 갖는 건 daemon 이 압축 binary bytes 자체를 client 로 보내는 케이스 (R5) — 그때 net_read_raw 가 reader.
+- **multi-uid 은 uid-scoped path + root-refuse 까지** — socket 이 numeric-uid keyed (cross-uid 도달 차단) + root daemon refuse. **per-conn SO_PEERCRED/LOCAL_PEERCRED 는 R5 defer** (uid-scoped path 자체가 1차 방벽 · peer-cred 는 defense-in-depth).
+- **shared-worktree 격리 함정** — 배정된 worktree 가 타 세션 leak 파일 (INBOX.md·RUNTIME.md·stdlib/nuclear/sim.hexa·tool/verify_cli.hexa·staged main.hexa 387L) + stale HEAD (detached @ 9b0a01a1) 상태였음. 내 2 파일만 stash → `/tmp/hexa-m13` fresh clone (github remote reset to `c5d2499d`) 에서 작업 → 타 세션 work 무손상. [[feedback_hexa_lang_shared_worktree_branch_hazard]] · [[reference_codegen_change_verify_recipe]] 의 "fresh-clone" 처방.
+
+### 다음 (R5)
+
+- [ ] R5 — (a) binary u32-LE length-prefix wire **실전환** (net_read_raw 사용) · (b) AST/lexer/lower in-memory 유지 · (c) atlas SSOT hash flush (F-DAEMON-4) · (d) per-connection SO_PEERCRED/LOCAL_PEERCRED peer-uid 확인 · (e) prod ship — verb 안정화 · 문서 · `hexa init` 안내 · 10/10 falsifier closure (CI sudo -u multi-uid 시뮬 포함).
+

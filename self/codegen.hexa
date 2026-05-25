@@ -6522,6 +6522,9 @@ fn gen2_expr(node) {
                 if name == "term_isatty_stdin"     { return "hexa_term_isatty_stdin()" }
                 if name == "term_isatty_stdout"    { return "hexa_term_isatty_stdout()" }
                 if name == "term_getppid"          { return "hexa_term_getppid()" }
+                // RFC 093 R4 — getuid(2) wrapper (named os_getuid to dodge the
+                // reserved-name mangle that would route `getuid` to dlsym).
+                if name == "os_getuid"             { return "hexa_os_getuid()" }
                 if name == "now_monotonic_s"  { return "hexa_now_monotonic_s()" }
                 if name == "mono_ns"          { return "hexa_mono_ns()" }
                 if name == "utc_iso_now"      { return "hexa_utc_iso_now()" }
@@ -6713,6 +6716,8 @@ fn gen2_expr(node) {
                 // net — NUL-safe byte-array variants (for p9 codec / binary)
                 if name == "net_write_bytes"{ return "hexa_net_write_bytes(" + arg_strs[0] + ", " + arg_strs[1] + ")" }
                 if name == "net_read_bytes" { return "hexa_net_read_bytes(" + arg_strs[0] + ", " + arg_strs[1] + ")" }
+                // net — RFC 093 R4 exactly-len NUL-preserving read (u32-LE wire)
+                if name == "net_read_raw"   { return "hexa_net_read_raw(" + arg_strs[0] + ", " + arg_strs[1] + ")" }
                 // stdlib/os/exec_pipe — fork+exec with stdout/stderr separated
                 if name == "exec_pipe_open" { return "hexa_exec_pipe_open(" + arg_strs[0] + ", " + arg_strs[1] + ")" }
                 // stdlib/crypto — 2-arg primitives (RFC ssh-client)
@@ -10034,6 +10039,9 @@ fn _is_builtin_name(name) {
     // net — NUL-safe byte-array I/O (for p9 codec / binary protocols)
     if name == "net_write_bytes" { return true }
     if name == "net_read_bytes" { return true }
+    // RFC 093 R4 — exactly-len NUL-preserving read + getuid wrapper
+    if name == "net_read_raw" { return true }
+    if name == "os_getuid" { return true }
     if name == "exec_pipe_open" { return true }
     if name == "proc_fork" { return true }
     if name == "proc_setsid" { return true }
