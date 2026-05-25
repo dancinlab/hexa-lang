@@ -1776,3 +1776,126 @@
   raw    = ".verdicts/tecs-l-cross-domain-bridge/bridge_scan.txt"
   src    = "axis F family (e) F8 — TECS-L/docs/f8-cross-domain-bridge.md. Anchors the arithmetic kernel to its pre-existing 🔵 verdicts: M1 (.verdicts/tecs-l-n6-identity/), M3 (.verdicts/tecs-l-dedekind-psi-discrepancy/), M10 (.verdicts/tecs-l-n6-universal-uniqueness/). Honest separation: chip-comb 'n=6' = graph degree (vertex neighbor count = 6 in hex tiling), NOT divisor-function n=6; FIRMWARE.md §6 explicitly excludes 'lattice n=6' from verification — policy-level confirmation of the homonym separation."
   status = "🔵 BRIDGED-AT-IDENTITY-LAYER + 🟠 HONESTLY-SEPARATED-AT-SYSTEMS-LAYER — survey terminal. 3 real bridges 🔵 + 1 indirect 🟡 + 3 incidental homonyms 🟠 + 13 no-bridge (normal pillar separation). No new bridges invented; method=survey reflects classification-only. Follow-up candidates (deferred): (1) g5 re-verify the 5 atlas foundation L-laws' arithmetic kernel for 🔵 SUPPORTED-FORMAL verdict files; (2) ANIMA Psi_balance = phi/tau@n=6 = 1/2 vs M7 Golden Zone 1/e closed-negative quantitative bridge; (3) speculative /kick seed: chip-comb degree-6 vs sigma(2)*tau(2)=6 (likely 🔴 closed-negative). paper_significance NOT satisfied — F8 has no new falsifier; the arithmetic core is already covered by PAPER/tecs-l-n6-identity-locus."
+
+# ───────────────────────────────────────────────────────────────────────
+# TECS-L axis F — tecs-l-beyond-n6 (slug · group=TECS-L · TECS-L/TECS-L.md F6)
+# Extends M3 [1,100] sweep to NOTABLE n beyond 100, confirming M10's
+# closed-form proof (∀n: σφ=nτ ⟺ n∈{1,6}) at large/special n. Each row =
+# three 🔵 components (σ/φ/τ via `hexa verify --expr`) + an exact-integer
+# D(n) = σ(n)·φ(n) − n·τ(n) ≠ 0 (M10 prediction). 7 notable n covered:
+#   · primorials  : 210 (#4 = 2·3·5·7), 2310 (#5), 30030 (#6 ·13)
+#   · factorial   : 720 = 6!
+#   · power-of-2  : 1024 = 2^10
+#   · perfects    : 8128 (P_4), 33550336 (P_5) — extends to ×335503 scale
+# Component verdicts persisted at `.verdicts/tecs-l-beyond-n6/`; the full
+# sweep block (with per-n D computation) at `sweep_notable_n.txt`.
+# Cites M10 (tecs_l_up_theorem) for the universal prediction the F6 sweep
+# numerically corroborates at extended scale. Distinct angle from M3:
+# M3 was finite sweep [1,100]; F6 is targeted spot-check at notable n>100.
+
+@C tecs_l_beyond_sweep := "σφ=nτ sweep at 7 NOTABLE n>100 (210·720·1024·2310·30030·8128·33550336): all D(n)≠0, confirming M10 at extended scale (×335503 vs M3's [1,100])" :: fixpoint [slug=tecs-l-beyond-n6 group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr {sigma,phi,tau} <n> <v>  forall n in {210,720,1024,2310,30030,8128,33550336}  ->  D(n) = sigma*phi - n*tau via exact integer arithmetic"
+  raw    = ".verdicts/tecs-l-beyond-n6/sweep_notable_n.txt"
+  src    = "M10 closed-form proof (tecs_l_up_theorem · TECS-L/docs/m10-uniqueness-closed-form-proof.md); M3 finite sweep tecs-l-dedekind-psi-uniqueness (n=1..100). F6 extends M3 to notable n>100."
+  status = "🔵 SUPPORTED-FORMAL (per-component σ/φ/τ all 🔵) + 🔴 CLOSED-negative (D(n)≠0 ∀n in sweep) — confirms M10 prediction at extended scale. terminal · paper-eligible."
+
+# — n=210 = primorial #4 (2·3·5·7); D(210) = 576·48 − 210·16 = 27648 − 3360 = 24288 ≠ 0 —
+@C tecs_l_beyond_n210_sigma := "sigma(210) = 576 (D(210)=σφ−nτ=576·48−210·16=24288 ≠ 0; primorial #4)" :: formula [slug=tecs-l-beyond-n6 group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr sigma 210 576"
+  raw    = ".verdicts/tecs-l-beyond-n6/sigma_210.txt"
+  src    = "M10 proof predicts D(n)≠0 for n=210 ∉ {1,6}"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal · paper-eligible."
+
+@C tecs_l_beyond_n210_phi := "phi(210) = 48 (D(210)=24288 ≠ 0 component; primorial #4)" :: formula [slug=tecs-l-beyond-n6 group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr phi 210 48"
+  raw    = ".verdicts/tecs-l-beyond-n6/phi_210.txt"
+  src    = "M10 proof predicts D(n)≠0 for n=210 ∉ {1,6}"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal · paper-eligible."
+
+@C tecs_l_beyond_n210_tau := "tau(210) = 16 (D(210)=24288 ≠ 0 component; primorial #4)" :: formula [slug=tecs-l-beyond-n6 group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr tau 210 16"
+  raw    = ".verdicts/tecs-l-beyond-n6/tau_210.txt"
+  src    = "M10 proof predicts D(n)≠0 for n=210 ∉ {1,6}"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal · paper-eligible."
+
+# — n=720 = 6! = 2^4·3^2·5; D(720) = 2418·192 − 720·30 = 464256 − 21600 = 442656 ≠ 0 —
+@C tecs_l_beyond_n720_sigma := "sigma(720) = 2418 (D(720)=σφ−nτ=2418·192−720·30=442656 ≠ 0; 6! factorial)" :: formula [slug=tecs-l-beyond-n6 group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr sigma 720 2418"
+  raw    = ".verdicts/tecs-l-beyond-n6/sigma_720.txt"
+  src    = "M10 proof predicts D(n)≠0 for n=720 ∉ {1,6}"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal · paper-eligible."
+
+@C tecs_l_beyond_n720_phi := "phi(720) = 192 (D(720)=442656 ≠ 0 component; 6! factorial)" :: formula [slug=tecs-l-beyond-n6 group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr phi 720 192"
+  raw    = ".verdicts/tecs-l-beyond-n6/phi_720.txt"
+  src    = "M10 proof predicts D(n)≠0 for n=720 ∉ {1,6}"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal · paper-eligible."
+
+@C tecs_l_beyond_n720_tau := "tau(720) = 30 (D(720)=442656 ≠ 0 component; 6! factorial)" :: formula [slug=tecs-l-beyond-n6 group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr tau 720 30"
+  raw    = ".verdicts/tecs-l-beyond-n6/tau_720.txt"
+  src    = "M10 proof predicts D(n)≠0 for n=720 ∉ {1,6}"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal · paper-eligible."
+
+# — n=1024 = 2^10 pure power of 2; D(1024) = 2047·512 − 1024·11 = 1048064 − 11264 = 1036800 ≠ 0 —
+@C tecs_l_beyond_n1024_sigma := "sigma(1024) = 2047 (D(1024)=σφ−nτ=2047·512−1024·11=1036800 ≠ 0; 2^10 — single-prime archetype of M10 g(2,a) factor chain)" :: formula [slug=tecs-l-beyond-n6 group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr sigma 1024 2047"
+  raw    = ".verdicts/tecs-l-beyond-n6/sigma_1024.txt"
+  src    = "M10 proof predicts D(n)≠0 for n=1024 ∉ {1,6}; 2^a sweep — only g(2,1)=3/4<1, g(2,a≥2)>1 → D>0"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal · paper-eligible."
+
+@C tecs_l_beyond_n1024_phi := "phi(1024) = 512 (D(1024)=1036800 ≠ 0 component; 2^10)" :: formula [slug=tecs-l-beyond-n6 group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr phi 1024 512"
+  raw    = ".verdicts/tecs-l-beyond-n6/phi_1024.txt"
+  src    = "M10 proof predicts D(n)≠0 for n=1024 ∉ {1,6}"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal · paper-eligible."
+
+@C tecs_l_beyond_n1024_tau := "tau(1024) = 11 (D(1024)=1036800 ≠ 0 component; 2^10)" :: formula [slug=tecs-l-beyond-n6 group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr tau 1024 11"
+  raw    = ".verdicts/tecs-l-beyond-n6/tau_1024.txt"
+  src    = "M10 proof predicts D(n)≠0 for n=1024 ∉ {1,6}"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal · paper-eligible."
+
+# — n=2310 primorial #5 (·11); D(2310) = 6912·480 − 2310·32 = 3317760 − 73920 = 3243840 ≠ 0 —
+# — n=30030 primorial #6 (·13); D(30030) = 96768·5760 − 30030·64 = 557383680 − 1921920 = 555461760 ≠ 0 —
+# — n=8128 = P_4 (Euclid-Euler 2^6·M_7); D(8128) = 16256·4032 − 8128·14 = 65544192 − 113792 = 65430400 ≠ 0 —
+# — n=33550336 = P_5 (2^12·M_13); D = 67100672·16773120 − 33550336·26 = 1125487623536640 − 872308736 = 1125486751227904 ≠ 0 —
+# The 4 large-n cases share the sweep artifact (one block per n) as their raw verdict pointer.
+
+@C tecs_l_beyond_n2310_block := "n=2310 primorial #5 (2·3·5·7·11): sigma=6912 phi=480 tau=32 → D(2310) = 6912·480 − 2310·32 = 3317760 − 73920 = 3243840 ≠ 0; confirms M10" :: formula [slug=tecs-l-beyond-n6 group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr sigma 2310 6912 ; phi 2310 480 ; tau 2310 32  → D via exact integer arithmetic in sweep block"
+  raw    = ".verdicts/tecs-l-beyond-n6/sweep_notable_n.txt"
+  src    = "M10 proof predicts D(n)≠0 for n=2310 ∉ {1,6}; primorial #5 — multi-prime regime where every g(p_i,1) factor stays > 1 except g(2,1)=3/4, net product > 1 → D > 0"
+  status = "🔵 SUPPORTED-FORMAL + 🔴 CLOSED-negative — components persisted verbatim in sweep block. terminal · paper-eligible."
+
+@C tecs_l_beyond_n30030_block := "n=30030 primorial #6 (·13): sigma=96768 phi=5760 tau=64 → D(30030) = 96768·5760 − 30030·64 = 557383680 − 1921920 = 555461760 ≠ 0; confirms M10" :: formula [slug=tecs-l-beyond-n6 group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr sigma 30030 96768 ; phi 30030 5760 ; tau 30030 64  → D via sweep block"
+  raw    = ".verdicts/tecs-l-beyond-n6/sweep_notable_n.txt"
+  src    = "M10 proof predicts D(n)≠0 for n=30030 ∉ {1,6}; primorial #6 — deepest in-sweep multi-prime archetype (6 distinct primes)"
+  status = "🔵 SUPPORTED-FORMAL + 🔴 CLOSED-negative — components persisted verbatim in sweep block. terminal · paper-eligible."
+
+@C tecs_l_beyond_n8128_block := "n=8128 = P_4 (4th perfect, Euclid-Euler 2^6·M_7): sigma=16256 (=2·8128, anchor σ(P_k)=2 P_k) phi=4032 tau=14 → D(8128) = 16256·4032 − 8128·14 = 65544192 − 113792 = 65430400 ≠ 0; confirms M10 at perfect numbers" :: formula [slug=tecs-l-beyond-n6 group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr sigma 8128 16256 ; phi 8128 4032 ; tau 8128 14  → D via sweep block"
+  raw    = ".verdicts/tecs-l-beyond-n6/sweep_notable_n.txt"
+  src    = "M10 proof predicts D(n)≠0 for n=8128 ∉ {1,6}; cross-anchor: tecs-l-mersenne-abundancy-closed (MR3) sigma(P_k)=2P_k → D(P_k) = P_k(2 phi(P_k) − tau(P_k)); for P_k ≥ 28 even perfect, 2 phi > tau (verified) — clean derivation of the closed-negative"
+  status = "🔵 SUPPORTED-FORMAL + 🔴 CLOSED-negative — components persisted verbatim in sweep block. terminal · paper-eligible."
+
+@C tecs_l_beyond_n33550336_block := "n=33550336 = P_5 (5th perfect, Euclid-Euler 2^12·M_13): sigma=67100672 (=2·33550336) phi=16773120 tau=26 → D(P_5) = 67100672·16773120 − 33550336·26 = 1125487623536640 − 872308736 = 1125486751227904 ≠ 0; confirms M10 at ×335503 of M3 sweep scale" :: formula [slug=tecs-l-beyond-n6 group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr sigma 33550336 67100672 ; phi 33550336 16773120 ; tau 33550336 26  → D via sweep block"
+  raw    = ".verdicts/tecs-l-beyond-n6/sweep_notable_n.txt"
+  src    = "M10 proof predicts D(n)≠0 for n=33550336 ∉ {1,6}; largest n in F6 sweep — extends M3 [1,100] by factor 335503"
+  status = "🔵 SUPPORTED-FORMAL + 🔴 CLOSED-negative — components persisted verbatim in sweep block. terminal · paper-eligible."

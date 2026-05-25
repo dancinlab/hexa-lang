@@ -3,6 +3,25 @@
 Append-only history sister of `TECS-L.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
 
+## 2026-05-25T22:00 — 축 F F6 · σφ=nτ identity 정체성 [1,100] sweep 보강 — beyond-n=6 NOTABLE n spot-check (M10 closed-form proof 확장 corroboration) — terminal 🔵+🔴
+
+- [x] F6 milestone = "beyond n=6 정체성 재탐색" → M3 [1,100] sweep 의 NOTABLE n>100 보강 spot-check 으로 종결
+- [x] **각도**: M10 closed-form proof (`tecs_l_up_theorem` · `TECS-L/docs/m10-uniqueness-closed-form-proof.md`) 가 `∀n: σφ=nτ ⟺ n∈{1,6}` 을 unbounded 로 증명. M3 sweep 은 finite [1,100] 만 numerical. F6 는 finite spot-check 을 NOTABLE n>100 으로 확장 = M10 의 universal 예측이 distinguished class (primorial, factorial, power-of-2, perfect) 에서도 성립함을 가시화
+- [x] **7-n sweep** (모두 `hexa verify --expr` 로 σ/φ/τ 3-component 🔵 + exact integer arithmetic D(n)):
+  - n=210  (primorial #4 = 2·3·5·7)         · σ=576 φ=48 τ=16            · D = 576·48 − 210·16     = 27648 − 3360    = **24288 ≠ 0** 🔴
+  - n=720  (factorial 6! = 2^4·3^2·5)        · σ=2418 φ=192 τ=30          · D = 2418·192 − 720·30   = 464256 − 21600  = **442656 ≠ 0** 🔴
+  - n=1024 (power-of-2 = 2^10)               · σ=2047 φ=512 τ=11          · D = 2047·512 − 1024·11  = 1048064 − 11264 = **1036800 ≠ 0** 🔴
+  - n=2310 (primorial #5 = 2·3·5·7·11)       · σ=6912 φ=480 τ=32          · D = 6912·480 − 2310·32  = 3317760 − 73920 = **3243840 ≠ 0** 🔴
+  - n=30030 (primorial #6 = ·13)             · σ=96768 φ=5760 τ=64        · D = 96768·5760 − 30030·64 = 557383680 − 1921920 = **555461760 ≠ 0** 🔴
+  - n=8128 (P_4 = 2^6·M_7)                    · σ=16256 (=2P_4) φ=4032 τ=14 · D = 16256·4032 − 8128·14 = 65544192 − 113792 = **65430400 ≠ 0** 🔴
+  - n=33550336 (P_5 = 2^12·M_13)              · σ=67100672 (=2P_5) φ=16773120 τ=26 · D = 67100672·16773120 − 33550336·26 = 1125487623536640 − 872308736 = **1125486751227904 ≠ 0** 🔴
+- [x] **7/7 D(n) ≠ 0** — M10 의 universal 예측 (σφ=nτ ⟺ n∈{1,6}) 이 sweep 의 모든 notable n>100 에서 정확히 corroborated. M3 의 [1,100] 가시 zero-only-at-{1,6} 패턴이 **×335503 더 큰 scale (P_5)** 까지 확장됨
+- [x] **perfect-number anchor 일관성**: σ(P_4)=2·8128=16256 ✓, σ(P_5)=2·33550336=67100672 ✓ — MR3 (`tecs_l_mersenne_abundancy_closed`) 의 closed-form σ(P_k)=2 P_k 가 σ component verdict 와 정확히 일치. D(P_k) = P_k (2 φ(P_k) − τ(P_k)); 모든 짝수 perfect P_k ≥ 28 에 대해 2φ > τ 성립 → D(P_k) > 0 closed-form 유도
+- [x] artifacts: `.verdicts/tecs-l-beyond-n6/sweep_notable_n.txt` (200 줄, 21 🔵 verdicts + 7 D computation block + summary) + 9 headline 개별 파일 (n=210·720·1024 × σ/φ/τ = 9 files)
+- [x] CLAIMS.tape: 신규 14 @C [slug=tecs-l-beyond-n6 group=TECS-L] = 1 sweep (fixpoint) + 9 component formula (n=210·720·1024 × {σ,φ,τ}) + 4 block (n=2310·30030·8128·33550336, raw → sweep). 1:1 raw pointer integrity OK.
+- [x] **정직 게이트**: F6 는 M10 의 universal proof 를 *대체* 하지 않음 — finite spot-check 의 corroboration. paper_significance 는 별도 falsifier 부재 → /paper 비대상 (산술 커널 paper 는 이미 PAPER/tecs-l-n6-identity-locus 에 포섭). F6 의 가치는 **M10 의 closed-form 예측이 distinguished n-class 에서 실측-통과** 라는 verify-anchored corroboration trail
+
+
 ## 2026-05-25T19:10 — 축 F F8 · cross-domain n=6 다리 스캔 (NEXUS, commons g67) — terminal 🔵+🟠
 
 - [x] F8 milestone = "GPU·CANON·RUNTIME 등 도메인과 n=6 다리 발견" → 정직하게 스캔 + 분류로 종결
