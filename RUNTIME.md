@@ -25,9 +25,11 @@ actually grows during step 1. runtime.c retirement requires steps 2-4.
 step 1 (NOW — Phase 1)    libc extern 제거. runtime.c 안에서 libc →
                           C-source helper 치환. binary 가 libc 안 부르
                           지만 runtime.c (C) 는 살아있음.
-                          진척: 137 → 93 externs (32%) · cycle 46-55
-                          잔여: ~93 externs (Tier-A.4 POSIX + A.5 libm
-                          + 잔존 residuals) · est 10-15 cycles
+                          진척: 137 → 29 externs · cycle 46-75 (HEAD
+                          6617e7a4 + PR #988 _getuid drop = 29 측정)
+                          잔여: 29 externs — net/exec/spawn 은 r16 /
+                          GO-domain 에서 의도적 real-libc 복원, 진짜
+                          미포팅은 ~9 개 (아래 acceptance 섹션 참조)
 
 step 2 (Phase 2 part-A)   `hxlcl_*` 47 helpers 를 stdlib/runtime/
                           <name>.hexa 로 포팅 + codegen `_builtin_
@@ -120,15 +122,25 @@ retires once its callers move to hexa-source.
 - [x] `_strtoll` — removed cycle 48 (`hxlcl_strtoll` + #define, full
       base+endptr semantics)
 - [x] `_strtoull` — removed cycle 48 (`hxlcl_strtoull` + #define)
-- [pending] `_bzero` — `hxlcl_bzero` + #define landed cycle 48 but
-      `-fno-builtin-bzero` flag (added to build_aprime.sh) does NOT
-      stop clang -Oz from emitting bzero. Mechanism: `memset(p,0,n)`
-      auto-converted to bzero before tokenization sees our #define.
-      Defer to cycle that replaces memset call sites too.
-- [pending] `_strncpy` — newly emerged after cycle 48 (was not in
-      baseline 137; clang -Oz converted some other loop pattern in
-      our helpers / runtime into strncpy). 1 call site.
-- [ ] `_strcpy` — byte copy
+- [x] `_bzero` — ABSENT from nm @6617e7a4 (verified not in the 30-list;
+      effectively closed at -Oz). **Root-cause CORRECTED (cycle 75 ·
+      discovery `oz-aggregate-synthesis-not-loop-idiom`)**: the old
+      `[pending]` text ("clang -Oz folds byte loops to bzero;
+      `-fno-builtin-bzero` can't stop it") was EMPIRICALLY FALSIFIED.
+      `-Oz` does NOT run loop-idiom recognition on byte loops. The
+      libcall comes from compiler-SYNTHESIZED aggregate ops
+      (`char buf[N]={0}` → bzero/memset) which have no textual token,
+      so `#define` can never intercept them. Verified source-only fix
+      (future-proof hardening, low priority since already absent at -Oz):
+      a `volatile size_t i` induction var in the byte-loop primitives +
+      replacing large caller-side aggregate idioms with explicit
+      `hxlcl_bzero`/`hxlcl_memcpy` calls. `optnone`/`no_builtin`/
+      `#pragma optimize off` all FAIL.
+- [x] `_strncpy` — ABSENT from nm @6617e7a4 (cycle-48 "newly emerged"
+      no longer in externs; closed at -Oz under the same aggregate-
+      synthesis mechanism above).
+- [x] `_strcpy` — ABSENT from nm @6617e7a4 (verified not in the 30-list;
+      effectively closed at -Oz; same root-cause as `_bzero`).
 - [ ] `_qsort` — sort-array helper (already dead-stripped; 0 source
       sites in current build, may need attention if reachable code
       grows)
@@ -139,6 +151,15 @@ retires once its callers move to hexa-source.
 Acceptance: 12+ libc symbols removed → 137 → ~125 externs.
 Cycle 46-48 cumulative: 137 → 122 (**−15 measured · 15 of 12+ symbols
 dropped · ~125 target REACHED**, surpassed by 3 externs).
+
+> **GROUND-TRUTH UPDATE (cycle 75 · HEAD `6617e7a4` + PR #988)**: the
+> "→ 122" figure above is the cycle-48 snapshot and is NOT the current
+> baseline. The live binary measures **30 undefined externs at HEAD
+> `6617e7a4`, 29 after PR #988** (`_getuid` svc-trap dropped). The doc's
+> upper Tier-A checkboxes lag the code by ~25 cycles (doc anchored at
+> cycle 48, code at cycle 75). See the **Extern reconciliation @
+> 6617e7a4** subsection below for the authoritative gone / regressed /
+> open partition, and the cycle-75 log entry for the measurement.
 
 ### Tier-A.2 — Memory allocator family
 
@@ -297,6 +318,75 @@ Compiler-essential? **NO** — aprime_cc is single-threaded. Defer.
 - [ ] hexac via aprime_cc emit-asm builds + smoke PASS
 - [ ] LEAN binary size within ±20% of cycle 44 baseline
 - [ ] `cc --regen` byte-eq after each Tier-A sub-phase
+
+## Extern reconciliation @ `6617e7a4` (+ PR #988) — cycle 75 ground-truth
+
+`nm aprime_cc | grep ' U _'` at HEAD `6617e7a4` = **30 externs**;
+**29 after PR #988** (`_getuid` dropped via svc-trap). This is the
+authoritative live baseline — the upper Tier-A checkboxes (anchored at
+cycle 48) lag by ~25 cycles. The 30-symbol list is partitioned below.
+
+**29-extern list (post-#988)**: `___chkstk_darwin`
+`___darwin_check_fd_set_overflow` `_accept` `_backtrace`
+`_backtrace_symbols_fd` `_bind` `_connect` `_environ` `_execve`
+`_execvp` `_flock` `_fork` `_gmtime_r` `_inet_pton` `_listen`
+`_longjmp` `_mkdir` `_nanosleep`
+`_posix_spawn_file_actions_addclose` `_posix_spawn_file_actions_adddup2`
+`_posix_spawn_file_actions_destroy` `_posix_spawn_file_actions_init`
+`_posix_spawnp` `_recv` `_recvmsg` `_send` `_sendmsg` `_setsockopt`
+`_socket`. (`_getuid` was the 30th, removed by #988.)
+
+### GONE — already absent from the binary (doc-lag · flip to `- [x]`)
+
+Verified absent from nm @6617e7a4 — the doc still listed these `- [ ]`
+but the symbols are no longer externs:
+
+- [x] Tier-A.4 syscalls — `_read _write _close _open _lseek _mmap
+      _exit _getpid _dup2 _pipe _kill _fcntl _ioctl _select _poll
+      _waitpid _fstat _stat` (cycle 59-73, verified absent from nm
+      @6617e7a4)
+- [x] Tier-A.5 libm — `_sin _cos _tan _exp _log _fmod _sqrt _pow …`
+      (cycle 59, verified absent from nm @6617e7a4)
+- [x] Tier-A.3 stdio helpers — verified absent from nm @6617e7a4
+- [x] Tier-A.6 std-stream / error overrides — `___stderrp ___stdoutp
+      ___stdinp ___error` family (cycle 59-73, verified absent from nm
+      @6617e7a4). NOTE: `___darwin_check_fd_set_overflow` itself is
+      STILL an extern (see OPEN below) — keep open.
+- [x] str/mem aggregate ops — `_strcpy _bzero _strncpy _memcpy _memset
+      _memmove` (verified ABSENT from the 30-list; the old `[pending]`
+      `_bzero`/`_strncpy` blockers are effectively closed at -Oz — see
+      Tier-A.1 root-cause correction + discovery
+      `oz-aggregate-synthesis-not-loop-idiom`)
+
+### REGRESSED — back as externs despite landed helpers
+
+These were closed in cycle 60-61 but are externs AGAIN at HEAD via the
+r16 / GO-domain series. Some are INTENTIONAL real-libc restorations for
+correctness (per M10/M16; see cycle-69 catalog + PR #251/#426 analysis)
+— a correctness-over-extern-count trade, not an accidental wipe:
+
+- network — `_socket _bind _listen _accept _connect _recv _send
+  _recvmsg _sendmsg _inet_pton _setsockopt`
+- exec / spawn — `_execve _execvp _fork _flock _posix_spawnp
+  _posix_spawn_file_actions_{addclose,adddup2,destroy,init}`
+
+### GENUINELY OPEN — real externs, not yet ported
+
+- not-yet-ported — `_gmtime_r _nanosleep _mkdir _backtrace
+  _backtrace_symbols_fd _environ`
+- hard-deferred trio — `___chkstk_darwin` (compiler-rt stack-probe) ·
+  `___darwin_check_fd_set_overflow` (libc `<sys/select.h>` inline) ·
+  `_longjmp` (arm64 setjmp/longjmp regsave)
+
+### ≤5 acceptance status — UNMET at HEAD
+
+The cycle-65 "🛸 ACCEPTANCE REACHED ≤5 externs" line below is **NO
+LONGER TRUE at HEAD** (superseded — see annotation on that entry). It
+regressed to 30 via the r16 / GO-domain network + exec re-introduction;
+≤5 acceptance is currently **UNMET (29 externs at cycle 75)**. Re-reaching
+≤5 requires carry-flag-correct svc traps for the syscall group + a
+socket/exec decision (cycle-69 catalog items 2-3), NOT a revert (a revert
+resurrects the carry-flag / pipe-pair / exec-stub bugs).
 
 ## Phase 2 — Tier-B stdlib primitives (~50 fns, est 4-8 cycles)
 
@@ -945,6 +1035,16 @@ opt-in via `git config core.hooksPath .githooks`) + project.tape @D
   helper of same name — needs rename)
 
 ### 2026-05-21 — 🛸 ACCEPTANCE REACHED: ≤ 5 externs (cycle 65)
+
+> **⚠ SUPERSEDED (cycle 75 · HEAD `6617e7a4`)**: this "≤5 externs"
+> milestone is NO LONGER TRUE at HEAD. It regressed to 30 externs (29
+> after PR #988) via the r16 / GO-domain network + exec/pty
+> re-introduction — partly intentional real-libc restorations for
+> correctness (M10/M16). ≤5 acceptance is currently **UNMET (29 at
+> cycle 75)**. The cycle-65 measurement itself was on a binary with
+> *broken* exec/pipe; re-reaching ≤5 needs carry-flag-correct svc traps,
+> not a revert. Historical entry kept for provenance — see the **Extern
+> reconciliation @ 6617e7a4** subsection above for the live partition.
 
 - ✅✅✅ cycle 65 — Phase 1 step-1 **ACCEPTANCE REACHED**. aprime_cc
   nm undefined externs 10 → **5** (−5 · cumulative **137 → 5 = −132 =
