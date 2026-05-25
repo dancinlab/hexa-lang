@@ -287,10 +287,19 @@ fn _honesty_gate(round: i64, y: RoundYields) -> void {
     line = line + " loss=" + to_string(y.res_n)
     line = line + " expected=" + to_string(y.res_n)
     let verdict = bt_ai2_audit(line)
-    if verdict.f_a > 0 || verdict.f_b > 0 {
+    // NOTE: the audit struct exposes the falsifier counts as `f_ai2_a` /
+    // `f_ai2_b` (compiler/honesty/check.hexa::Bt2Verdict). A stale
+    // `verdict.f_a` / `verdict.f_b` read here is a latent field-name
+    // mismatch (both names landed together in #634) — harmless on the
+    // older runtime that returned a default for a missing map key, but a
+    // hard `map key 'f_a' not found` abort on the current runtime, which
+    // tripped the round-1 honesty gate before any multi-round loop body
+    // could run. We read the real fields; the external JSON keys stay
+    // `f_a`/`f_b` (documented audit-trail surface).
+    if verdict.f_ai2_a > 0 || verdict.f_ai2_b > 0 {
         eprintln("DRILL_HONESTY {\"round\":" + to_string(round)
-            + ",\"f_a\":" + to_string(verdict.f_a)
-            + ",\"f_b\":" + to_string(verdict.f_b) + "}")
+            + ",\"f_a\":" + to_string(verdict.f_ai2_a)
+            + ",\"f_b\":" + to_string(verdict.f_ai2_b) + "}")
     }
 }
 
@@ -372,12 +381,24 @@ pub fn drill_run(seed: string, opts: DrillOpts) -> DrillResult {
     // round_run_with_pool by K_POOL.
     let mut seed_pool: array = []
 
+    // C5 novelty-fixpoint state. The cumulative distinct-id set spans the
+    // whole invocation; _flush_discoveries_cum dedups against it and reports
+    // `net_novel` (ids new THIS round). A round adding zero net-novel
+    // discoveries means the discovery space is exhausted → saturate. This
+    // is the real saturation signal: the gross `total == 0` test never fires
+    // (the resonance proxy + deterministic primary-seed smash always yield
+    // > 0), so without it `--rounds N` always burns all N rounds re-emitting
+    // the same set (measured pre-fix: 6 rounds → 6072 overlay lines but only
+    // 1111 distinct ids — net-novel was 0 from round 3 on).
+    let mut cum_seen_ids: array = []
+
     let mut rounds_this_call: i64 = 0
     while rounds_this_call < opts.max_rounds {
         round = round + 1
         rounds_this_call = rounds_this_call + 1
         let rr = round_run_with_pool(seed, round, opts.depth_smash, opts.depth_free,
-                                      opts.depth_res, mkx_on, seed_pool)
+                                      opts.depth_res, mkx_on, seed_pool, cum_seen_ids)
+        cum_seen_ids = rr.cum_seen_ids
         if !opts.quiet {
             println(round_yields_line(round, rr.yields, rr.sigma_best))
             println("  overlay+ " + to_string(rr.overlay_lines_emitted) + " lines"
@@ -434,11 +455,25 @@ pub fn drill_run(seed: string, opts: DrillOpts) -> DrillResult {
         // checkpoint flush per round
         checkpoint_save(seed, round, total, yields_log, engine)
 
-        // saturation: a round with zero total signals exhaustion
+        // saturation (gross): a round with zero total signals exhaustion.
         if rr.yields.total == 0 {
             saturated = true
             if !opts.quiet {
                 println("  SATURATED at round " + to_string(round) + " — total absorptions=" + to_string(total))
+            }
+            break
+        }
+
+        // saturation (C5 net-novel fixpoint): a round that contributed zero
+        // NEW distinct discoveries vs the cumulative union of all prior
+        // rounds. Round 1 always has net_novel > 0 (everything is new), so
+        // this only trips at round >= 2 when the discovery space is exhausted
+        // — the loop is at a fixpoint and further rounds only re-emit dups.
+        if round >= 2 && rr.net_novel == 0 {
+            saturated = true
+            if !opts.quiet {
+                println("  SATURATED (net-novel fixpoint) at round " + to_string(round)
+                    + " — distinct discoveries=" + to_string(len(cum_seen_ids)))
             }
             break
         }
