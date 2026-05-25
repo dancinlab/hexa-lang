@@ -1531,6 +1531,24 @@ static int __attribute__((noinline)) hxlcl_darwin_check_fd_set_overflow(int fd, 
     (void)fd; (void)p; (void)n;
     return 0;  // never overflowing
 }
+// linux-branch parity for primitives the arm64-darwin block added (cycle 82
+// raw-trap mkdir; cycle 86 naked-asm setjmp/longjmp) but never mirrored here.
+// runtime_core.c calls hxlcl_mkdir + hxlcl_longjmp unconditionally and the
+// transpiled driver calls hxlcl_setjmp, so without these the Linux build fails
+// to compile/link. Route through libc / compiler builtins.
+static int __attribute__((noinline)) hxlcl_mkdir(const char *path, int mode) {
+    return mkdir(path, (mode_t)mode);  // <sys/stat.h> / <sys/types.h> included above
+}
+// __builtin_setjmp/longjmp use a 5-word buffer (<= the 192 B jmp slot the
+// codegen allocates) with no libc jmp_buf-size dependency. setjmp MUST expand
+// at the call site to capture the caller's frame, so hxlcl_setjmp is a macro
+// (a wrapper fn would save a dead frame). __builtin_longjmp always resumes the
+// setjmp as if it returned non-zero (value ignored); hexa_throw passes 1.
+#define hxlcl_setjmp(buf) __builtin_setjmp((void **)(buf))
+static void __attribute__((noinline, noreturn)) hxlcl_longjmp(void *buf, int val) {
+    (void)val;
+    __builtin_longjmp((void **)buf, 1);
+}
 #endif  /* darwin-arm64 raw-trap / linux libc */
 // cycle 6: time/term/mach forward decls — bodies after #include
 static int hxlcl_time(int *t);
@@ -1909,7 +1927,14 @@ static int hxlcl_nanosleep(const void *req_, void *rem_) {
         struct timeval tv;
         tv.tv_sec  = (long)(left / 1000000000LL);
         tv.tv_usec = (int)((left % 1000000000LL) / 1000);
+#if (defined(__arm64__) || defined(__aarch64__)) && defined(__APPLE__)
         long r = _hxlcl_syscall6_cf(HXLCL_SYS_SELECT, 0, 0, 0, 0, (long)&tv, 0);
+#else
+        // Linux: the Apple raw-trap select primitive (_hxlcl_syscall6_cf /
+        // HXLCL_SYS_SELECT) lives only in the arm64-darwin branch; route the
+        // NULL-fd-set timeout sleep through libc select() (<sys/select.h>).
+        long r = select(0, NULL, NULL, NULL, &tv);
+#endif
         if (r == 0) return 0;          // timeout elapsed -> full sleep done
         if (errno == EINTR) continue;   // signal: recompute remaining, retry
         return -1;                      // genuine error
