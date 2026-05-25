@@ -1,0 +1,9 @@
+# A5 HEXA-LANG math.NT verify-native recompute (verbatim hexa verify stdout)
+# paper: 1207.4446 Coleman — Some remarks on Euler's totient function (math.NT)
+# cmd  : POOL_DISABLE=1 hexa verify --expr euler_phi 15 8  (HEAD driver #1153, mini arm64)
+# date : 2026-05-26
+----------------------------------------------------------------------------
+verify --expr euler_phi(15)=8
+  calc   = 8  == expected 8
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+  absorb = · already in atlas — idempotent skip (default · @D g69)
