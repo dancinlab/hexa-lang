@@ -2,6 +2,19 @@
 
 Append-only history sister of `OEIS.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
+## 2026-05-26T01:40Z — O4 atlas-fold (7 🔵 theorem · dedup 16K)
+
+- [x] O3 의 **7 distinct 🔵 theorem** 을 atlas 에 fold (verified-만) + 기존 ~16K node 와 dedup. 격리 worktree `/tmp/wt-oeis-o4` (origin/main 기준) 에서만 작업 — register/edit 가 install dir(~/core/hexa-lang) 로 leak 하지 않도록 `HEXA_ATLAS_EMBED` scope + main tree grep 검증.
+  - **dedup 결과 (`hexa atlas lookup`)**:
+    - **5 ALREADY-PRESENT/alias** (중복 node 안 만듦, OEIS-id attribution 만 기록): sigma↔A000203 = `@P sigma` (divisor_sum, foundation [11*]) · tau↔A000005 = `@P tau` (divisor_count, [11*]) · phi↔A000010 = `@P phi` (euler_totient, [10*]) · mu↔A008683 = `@P mu` (mobius, [10*]) · sigma_0↔A000005 = **alias of tau** (같은 hexa `len(divisors)` fn, 별도 node 없음).
+    - **3 NEWLY-FOLDED** (atlas 부재 = lookup MISS → OEIS-attributed `@F` node 추가): aliquot↔A001065 [aliquot(8)=7] · sigma_2↔A001157 [sigma_2(9)=91] · sigma_3↔A001158 [sigma_k(9,3)=757]. 값은 O3 tier_ledger sample-verified PASS 와 일치.
+  - 각 새 node = `id=oeis-Annnnnn` · `tier="🔵 SUPPORTED-FORMAL"` · `source="OEIS Annnnnn"` · `url=https://oeis.org/Annnnnn` · `cite` 에 CC-BY-SA + verbatim provenance. (register CLI 는 OEIS source 필드를 못 실어서 — `verified-<fn>-<n>` 고정 포맷 — OEIS-attributed @F 를 직접 fold.)
+  - net +3 atlas node (16134 → 16137, F kind 1379 → 1382). main shared tree 누수 0 (`grep oeis-A001* ~/core/hexa-lang/.../embedded.gen.hexa` = 0).
+  - 영속: `.verdicts/oeis-atlas-fold/fold_ledger.txt` (fn · oeis_id · status · node ref) + `CLAIMS.tape` @C slug=oeis-atlas-fold group=OEIS.
+  - 솔직성: O4 = **mostly-attribution** — 7 중 5 가 기존 present/alias. 가치는 node 수가 아니라 검증된 OEIS↔hexa-fn provenance link (sigma/tau/phi/mu 의 OEIS canonical-source 명시 + 3 신규 fn 의 CC-BY-SA 귀속). 🟡 41 alias + 🟠 287 no-path 는 scope 밖 (O3 결정 유지).
+  - ⚠ 동시성: 작업 중 `/tmp/wt-oeis-o4` 가 한 번 외부 정리로 삭제됨 (worktree + branch 소실) → origin/main 기준 재생성 후 전 편집 재적용 (idempotent, 손실 없음). 별도 broad-campaign 세션이 main tree 에 비-OEIS `verified-<fn>-<n>` node (attribution 없음) 를 동시 fold 중 — 본 O4 와 별개, 미포착.
+  - **다음 = O5**: TECS-L F11 cross-link PR (OEIS atlas → TECS-L cite) + reuse edge 등록 (g67 NEXUS.tape).
+
 ## 2026-05-26T00:50Z — O3 per-hit verify (336 K=20 survivors)
 
 - [x] O2 의 **336 K=20 survivor** 를 candidate fn 별로 그룹핑 → distinct (fn, oeis_id) 별로 `hexa verify --expr` (VERIFY-KIT V2-era CLI) 로 재확인 + tier 분류. 3-arg VERIFY (`--expr <fn> <n> <expected>`) + V2 value-less COMPUTE (`--expr <fn> <n>`) 둘 다 사용.
