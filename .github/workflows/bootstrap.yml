@@ -13,10 +13,10 @@
 #   vice versa. 두 워크플로는 서로 모른다.
 #
 # BOOTSTRAP CHAIN (per runner)
-#   1. $CC self/native/hexa_cc.c -I self -o self/native/hexa_v2      (self-hosted transpiler binary)
-#   2. self/native/hexa_v2 self/main.hexa build/stage1/main.c        (transpile CLI source)
+#   1. $CC self/native/hexa_cc.c -I self -o build/hexa_v2      (self-hosted transpiler binary)
+#   2. build/hexa_v2 self/main.hexa build/stage1/main.c        (transpile CLI source)
 #   3. $CC -I self build/stage1/main.c -o hexa                       (link CLI)
-#   4. smoke — ./self/native/hexa_v2 + $CC 로 tiny 프로그램 실행
+#   4. smoke — ./build/hexa_v2 + $CC 로 tiny 프로그램 실행
 #
 # RUNNERS
 #   · macos-latest     — Apple Silicon arm64 (GA)
@@ -68,9 +68,9 @@ jobs:
           # (hexa_int / hexa_str / hexa_array_new / __hexa_fn_arena_*).
           clang -O2 -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs \
               -I self self/native/hexa_cc.c self/runtime.c \
-              -o self/native/hexa_v2
-          file self/native/hexa_v2
-          ls -la self/native/hexa_v2
+              -o build/hexa_v2
+          file build/hexa_v2
+          ls -la build/hexa_v2
 
       - name: Stage 1 — flatten + transpile self/main.hexa → build/stage1/main.c
         shell: bash
@@ -84,12 +84,12 @@ jobs:
           # link fails on undefined lex / parse / lower / lower_hir /
           # codegen_emit_ptx_for_sm / static_atlas. module_loader.hexa itself
           # has zero `use` directives, so it transpiles single-TU.
-          ./self/native/hexa_v2 self/module_loader.hexa build/stage1/module_loader.c
+          ./build/hexa_v2 self/module_loader.hexa build/stage1/module_loader.c
           clang -O2 -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs \
               -I self build/stage1/module_loader.c self/runtime.c \
               -o build/hexa_module_loader
           ./build/hexa_module_loader self/main.hexa build/stage1/main_expanded.hexa
-          ./self/native/hexa_v2 build/stage1/main_expanded.hexa build/stage1/main.c
+          ./build/hexa_v2 build/stage1/main_expanded.hexa build/stage1/main.c
           wc -l build/stage1/main.c
 
       - name: Stage 1 — compile CLI driver (./hexa)
@@ -113,7 +113,7 @@ jobs:
               println("ok")
           }
           HEXA_EOF
-          ./self/native/hexa_v2 /tmp/hexa_ci/hi.hexa /tmp/hexa_ci/hi.c
+          ./build/hexa_v2 /tmp/hexa_ci/hi.hexa /tmp/hexa_ci/hi.c
           clang -O2 -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs \
               -I self /tmp/hexa_ci/hi.c self/runtime.c -o /tmp/hexa_ci/hi
           OUT="$(/tmp/hexa_ci/hi)"
@@ -138,7 +138,7 @@ jobs:
           name: hexa-macos-arm64
           path: |
             hexa
-            self/native/hexa_v2
+            build/hexa_v2
           if-no-files-found: error
           retention-days: 7
 
@@ -168,9 +168,9 @@ jobs:
           # (hexa_int / hexa_str / hexa_array_new / __hexa_fn_arena_*).
           gcc -O2 -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs \
               -I self self/native/hexa_cc.c self/runtime.c \
-              -o self/native/hexa_v2 \
+              -o build/hexa_v2 \
               -lm -ldl
-          file self/native/hexa_v2
+          file build/hexa_v2
 
       - name: Stage 1 — flatten + transpile self/main.hexa → build/stage1/main.c
         shell: bash
@@ -181,13 +181,13 @@ jobs:
           # resolution), so the closure must be flattened by the compiled
           # module_loader first or the Stage 1 link fails on undefined
           # lex/parse/lower/lower_hir/codegen_emit_ptx_for_sm/static_atlas.
-          ./self/native/hexa_v2 self/module_loader.hexa build/stage1/module_loader.c
+          ./build/hexa_v2 self/module_loader.hexa build/stage1/module_loader.c
           gcc -O2 -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs \
               -I self build/stage1/module_loader.c self/runtime.c \
               -o build/hexa_module_loader \
               -lm -ldl
           ./build/hexa_module_loader self/main.hexa build/stage1/main_expanded.hexa
-          ./self/native/hexa_v2 build/stage1/main_expanded.hexa build/stage1/main.c
+          ./build/hexa_v2 build/stage1/main_expanded.hexa build/stage1/main.c
           wc -l build/stage1/main.c
 
       - name: Stage 1 — compile CLI driver (./hexa)
@@ -212,7 +212,7 @@ jobs:
               println("ok")
           }
           HEXA_EOF
-          ./self/native/hexa_v2 /tmp/hexa_ci/hi.hexa /tmp/hexa_ci/hi.c
+          ./build/hexa_v2 /tmp/hexa_ci/hi.hexa /tmp/hexa_ci/hi.c
           gcc -O2 -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs \
               -I self /tmp/hexa_ci/hi.c self/runtime.c -o /tmp/hexa_ci/hi \
               -lm -ldl
@@ -238,7 +238,7 @@ jobs:
           name: hexa-linux-x86_64
           path: |
             hexa
-            self/native/hexa_v2
+            build/hexa_v2
           if-no-files-found: error
           retention-days: 7
 
@@ -270,9 +270,9 @@ jobs:
           # (hexa_int / hexa_str / hexa_array_new / __hexa_fn_arena_*).
           gcc -O2 -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs \
               -I self self/native/hexa_cc.c self/runtime.c \
-              -o self/native/hexa_v2 \
+              -o build/hexa_v2 \
               -lm -ldl
-          file self/native/hexa_v2
+          file build/hexa_v2
 
       - name: Stage 1 — flatten + transpile + compile CLI
         shell: bash
@@ -280,13 +280,13 @@ jobs:
           set -euo pipefail
           # flatten self/main.hexa's 7-module `use` closure — see the
           # linux-x86_64 job for the rationale.
-          ./self/native/hexa_v2 self/module_loader.hexa build/stage1/module_loader.c
+          ./build/hexa_v2 self/module_loader.hexa build/stage1/module_loader.c
           gcc -O2 -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs \
               -I self build/stage1/module_loader.c self/runtime.c \
               -o build/hexa_module_loader \
               -lm -ldl
           ./build/hexa_module_loader self/main.hexa build/stage1/main_expanded.hexa
-          ./self/native/hexa_v2 build/stage1/main_expanded.hexa build/stage1/main.c
+          ./build/hexa_v2 build/stage1/main_expanded.hexa build/stage1/main.c
           gcc -O2 -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs \
               -I self build/stage1/main.c self/runtime.c \
               -o hexa \
@@ -304,7 +304,7 @@ jobs:
               println("ok")
           }
           HEXA_EOF
-          ./self/native/hexa_v2 /tmp/hexa_ci/hi.hexa /tmp/hexa_ci/hi.c
+          ./build/hexa_v2 /tmp/hexa_ci/hi.hexa /tmp/hexa_ci/hi.c
           gcc -O2 -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs \
               -I self /tmp/hexa_ci/hi.c self/runtime.c -o /tmp/hexa_ci/hi \
               -lm -ldl
@@ -328,6 +328,6 @@ jobs:
           name: hexa-linux-arm64
           path: |
             hexa
-            self/native/hexa_v2
+            build/hexa_v2
           if-no-files-found: warn
           retention-days: 7

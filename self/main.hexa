@@ -438,7 +438,7 @@ fn cmd_status() {
     println("  version:     " + version_str())
     let hexa_bin = exec("ls -la hexa 2>&1 | head -1 | tr -d '\\n'")
     println("  ./hexa:      " + hexa_bin)
-    let cc_bin = exec("ls -la self/native/hexa_v2 2>&1 | head -1 | tr -d '\\n'")
+    let cc_bin = exec("ls -la build/hexa_v2 2>&1 | head -1 | tr -d '\\n'")
     println("  hexa_cc:     " + cc_bin)
     let self_cnt = exec("ls self/*.hexa 2>/dev/null | wc -l | tr -d ' \\n'")
     println("  SSOT .hexa:  " + self_cnt + " files")
@@ -1398,7 +1398,7 @@ fn dispatch_absorbed(verb, ab_args) {
 fn regen_one_module(src, out_c) {
     // hexa_v2 SSOT → C 변환 한 모듈. 성공이면 "ok", 실패면 exec 출력.
     // buglist#5: resolve_hexa_v2() 경유 — cwd 무관 install_dir 기반 탐색.
-    let v2 = resolve_hexa_v2()
+    let v2 = resolve_or_bootstrap_hexa_v2()
     if len(v2) == 0 {
         println("  [transpile] error: hexa_v2 not found")
         return false
@@ -1522,7 +1522,7 @@ fn cmd_regen_cc() {
     // run from the repo root, so behavior there is unchanged.
     let __hxroot = resolve_hxroot()
     // preflight — buglist#5: resolve_hexa_v2() 로 cwd/$HOME/argv[0] 모두 탐색.
-    let v2 = resolve_hexa_v2()
+    let v2 = resolve_or_bootstrap_hexa_v2()
     if len(v2) == 0 {
         println("error: hexa_v2 not found — run `hexa cc` first")
         return
@@ -1818,55 +1818,21 @@ fn install_dir_from_argv0() {
 // self/main.hexa is the self-host dispatcher root and must stay flatten-clean
 // without a cross-tool `use` edge into tool/.
 // See [[reference_ubu_arch_transpiler_constraint]].
-fn _hexa_v2_basename() {
-    // host (os, arch) → committed-binary basename.
-    let os   = exec("uname 2>/dev/null | tr -d ' \\n\\t'")
-    let arch = exec("uname -m 2>/dev/null | tr -d ' \\n\\t'")
-    if os == "Linux" && (arch == "x86_64" || arch == "amd64") {
-        return "hexa_v2_linux_x86_64"
-    }
-    // Mac arm64 (legacy name) + every other host (graceful: surfaces an
-    // exec/arch error rather than a wrong-dir miss, matching pre-multiarch).
-    return "hexa_v2"
-}
-
-// _pick_hexa_v2_in_dir: given the directory that contains `self/native/`,
-// return the executable arch-matching transpiler path, or "" if neither the
-// arch-specific binary nor the legacy `hexa_v2` is present/executable there.
-// Mirrors _pick_hexa_v2()'s per-dir graceful fallback (arch-specific first,
-// then legacy name within the SAME dir).
-fn _pick_hexa_v2_in_dir(native_dir) {
-    let base = _hexa_v2_basename()
-    if base != "hexa_v2" {
-        let arch_bin = native_dir + "/" + base
-        let arch_chk = exec("test -x '" + arch_bin + "' && printf yes || printf no")
-        if arch_chk == "yes" {
-            return arch_bin
-        }
-    }
-    // Fallback to the legacy name in the same dir (covers Mac arm64 and
-    // pre-multiarch clones where the suffixed binary isn't checked in).
-    let legacy_bin = native_dir + "/hexa_v2"
-    let legacy_chk = exec("test -x '" + legacy_bin + "' && printf yes || printf no")
-    if legacy_chk == "yes" {
-        return legacy_bin
-    }
-    return ""
-}
-
-// _pick_hexa_v2_with_build: CANON M3 — given a repo root, prefer the
-// cc-built transpiler artifact at <root>/build/hexa_v2; fall back to the
-// committed <root>/self/native binary (legacy/arch-specific) until M3b
-// removes the committed seeds entirely. The build/ artifact is per-machine
-// (built by `hexa cc`) so it is never arch-mismatched — this is what closes
-// the committed-binary arch-leak class.
+// _pick_hexa_v2_with_build: CANON M3b — the transpiler is a per-machine
+// build artifact at <root>/build/hexa_v2, built by `hexa cc` from hexa_cc.c
+// (Go 1.4 C-seed model), never a committed binary — so it is always
+// arch-correct (this closes the committed-binary arch-leak class). Returns
+// the artifact path if executable, else "" (caller bootstraps via cmd_cc).
+// The committed-binary multiarch picker (_hexa_v2_basename /
+// _pick_hexa_v2_in_dir) was removed when M3b dropped self/native/hexa_v2 +
+// hexa_v2_linux_x86_64 from git.
 fn _pick_hexa_v2_with_build(root) {
     let build_bin = root + "/build/hexa_v2"
     let build_chk = exec("test -x '" + build_bin + "' && printf yes || printf no")
     if build_chk == "yes" {
         return build_bin
     }
-    return _pick_hexa_v2_in_dir(root + "/self/native")
+    return ""
 }
 
 fn resolve_hexa_v2() {
@@ -1894,6 +1860,21 @@ fn resolve_hexa_v2() {
         }
     }
     return ""
+}
+
+// resolve_or_bootstrap_hexa_v2: CANON M3b — resolve the transpiler artifact,
+// bootstrapping it from hexa_cc.c via cmd_cc if absent. This is the go-build
+// model: a fresh clone with no build/hexa_v2 self-bootstraps on first use
+// instead of erroring out. cmd_cc never calls resolve_hexa_v2, so the
+// bootstrap is non-recursive.
+fn resolve_or_bootstrap_hexa_v2() {
+    let v2 = resolve_hexa_v2()
+    if len(v2) > 0 {
+        return v2
+    }
+    println("  [bootstrap] build/hexa_v2 absent — building transpiler via hexa cc")
+    cmd_cc()
+    return resolve_hexa_v2()
 }
 
 // S5 native-codegen campaign: resolve the native compiler binary
@@ -2295,7 +2276,7 @@ fn cmd_build(src, out, c_only, target, shared) {
             exit(1)
         }
     }
-    let v2 = resolve_hexa_v2()
+    let v2 = resolve_or_bootstrap_hexa_v2()
     if len(v2) == 0 {
         die_no_hexa_v2()
     }
@@ -5052,7 +5033,7 @@ fn cmd_typecheck(src) {
         println("error: source file not found: " + src)
         exit(1)
     }
-    let v2 = resolve_hexa_v2()
+    let v2 = resolve_or_bootstrap_hexa_v2()
     if len(v2) == 0 {
         die_no_hexa_v2()
     }
@@ -5078,7 +5059,7 @@ fn cmd_parse(src) {
         println("error: source file not found: " + src)
         exit(1)
     }
-    let v2 = resolve_hexa_v2()
+    let v2 = resolve_or_bootstrap_hexa_v2()
     if len(v2) == 0 {
         die_no_hexa_v2()
     }
