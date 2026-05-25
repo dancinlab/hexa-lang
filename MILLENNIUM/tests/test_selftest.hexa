@@ -1,0 +1,25 @@
+#!hexa strict
+// tests/test_selftest.hexa — 7-verb selftest harness
+//
+// Pass criterion: __HEXA_MILLENNIUM_SELFTEST__ PASS sentinel present AND
+// the line declares "(7/7 verbs present)".
+//
+// Cost: $0 (orchestrates the CLI selftest dispatcher; pure directory presence).
+
+fn main() {
+    let root = env("HEXA_MILLENNIUM_ROOT")
+    let mut p = "cli/hexa-millennium.hexa"
+    if root.len() > 0 { p = root + "/cli/hexa-millennium.hexa" }
+
+    let raw = exec("hexa run " + p + " selftest 2>&1")
+    let pass_sentinel = raw.contains("__HEXA_MILLENNIUM_SELFTEST__ PASS")
+    let count_ok = raw.contains("(7/7 verbs present)")
+
+    if pass_sentinel && count_ok {
+        println("test_selftest: PASS — 7/7 verbs present, sentinel emitted")
+        return
+    }
+    println("test_selftest: FAIL")
+    println(raw.trim())
+    exit(1)
+}

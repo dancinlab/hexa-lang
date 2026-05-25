@@ -1,0 +1,84 @@
+#!hexa strict
+// hexa-millennium/verify/spec_presence.hexa — 7-verb Clay candidate spec presence.
+//
+// Closure anchor #1 for hexa-millennium (spec-first substrate):
+// each of the 7 Clay Millennium Problem verbs declared in hexa.toml
+// [modules].verbs must resolve to a real `millennium-<slug>.md`
+// candidate-spec markdown on disk.
+//
+// Per LATTICE_POLICY §1.3: spec-presence is real engineering verification
+// C3): each spec is a CANDIDATE — NOT a formal proof of any Clay
+// Millennium Problem. Poincaré is resolved by Perelman (2003); the verb
+// here is an n=6 verification-side spec only, not a re-solution.
+
+let HOME = env("HOME")
+let HEXA_MILLENNIUM_ROOT_ENV = env("HEXA_MILLENNIUM_ROOT")
+
+fn shq(s: str) -> str {
+    return "'" + s.replace("'", "'\\''") + "'"
+}
+
+fn _resolve_root() -> str {
+    if HEXA_MILLENNIUM_ROOT_ENV.len() > 0 { return HEXA_MILLENNIUM_ROOT_ENV }
+    let oldpwd = env("OLDPWD")
+    if oldpwd.len() > 0 {
+        let t = exec("[ -f " + shq(oldpwd) + "/hexa.toml ] && echo y || echo n").trim()
+        if t == "y" { return oldpwd }
+    }
+    let pwd = env("PWD")
+    if pwd.len() > 0 {
+        let t = exec("[ -f " + shq(pwd) + "/hexa.toml ] && echo y || echo n").trim()
+        if t == "y" { return pwd }
+    }
+    return HOME + "/core/hexa-millennium"
+}
+
+fn _file_exists(p: str) -> bool {
+    let r = exec("[ -f " + shq(p) + " ] && echo yes || echo no").trim()
+    return r == "yes"
+}
+
+// 7-verb spec registry — must match cli/hexa-millennium.hexa SPEC_* and
+// hexa.toml [modules].verbs.
+let VERBS = [
+    ["bsd",           "bsd/millennium-bsd.md",                     "CANDIDATE"],
+    ["hodge",         "hodge/millennium-hodge.md",                 "CANDIDATE"],
+    ["navier_stokes", "navier_stokes/millennium-navier-stokes.md", "CANDIDATE"],
+    ["p_vs_np",       "p_vs_np/millennium-p-vs-np.md",             "CANDIDATE"],
+    ["poincare",      "poincare/millennium-poincare.md",           "VERIFICATION_SPEC (Perelman 2003 resolved)"],
+    ["riemann",       "riemann/millennium-riemann.md",             "CANDIDATE"],
+    ["yang_mills",    "yang_mills/millennium-yang-mills.md",       "CANDIDATE"],
+]
+
+fn main() {
+    let root = _resolve_root()
+    println("hexa-millennium/verify/spec_presence — 7-verb Clay candidate spec presence")
+    println("  root: " + root)
+    println("")
+    println("  honesty: every spec is a CANDIDATE — NOT a formal proof of any")
+    println("           Clay Millennium Problem. Poincaré is Perelman 2003.")
+    println("           Acceptance requires formal Lean4/Coq + community review.")
+    println("")
+    let mut ok = 0
+    let mut bad = 0
+    for row in VERBS {
+        let verb = row[0]
+        let rel = row[1]
+        let kind = row[2]
+        let abs_p = root + "/" + rel
+        if _file_exists(abs_p) {
+            println("  [PASS] " + verb + " (" + kind + ") -> " + rel)
+            ok = ok + 1
+        } else {
+            println("  [FAIL] " + verb + " -> " + rel + " MISSING (abs: " + abs_p + ")")
+            bad = bad + 1
+        }
+    }
+    println("")
+    println("  spec docs present: " + str(ok) + " / 7")
+    if bad > 0 {
+        println("__HEXA_MILLENNIUM_SPEC_PRESENCE__ FAIL")
+        exit(1)
+    }
+    println("__HEXA_MILLENNIUM_SPEC_PRESENCE__ PASS")
+}
