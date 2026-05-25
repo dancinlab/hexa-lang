@@ -234,6 +234,25 @@
   status = "🟠 DEFERRED — wall clause (b) is the round-3 silicon-fire §finding; harness nvcc -c clean. NOT terminal until the timed fire runs."
 
 # ───────────────────────────────────────────────────────────────────────
+# GPU — fusion-attention-multicta (slug · group=GPU · GPU.md §10 · round 4)
+# Multi-CTA wide-KV fused flash-attention. Closes the round-3 wall gap and
+# corrects the round-3 "numeric FAIL" (metric artifact). Verdict ORANGE.
+
+@C fusion_attn_multicta_numeric := "round-3 flash-attn 'numeric FAIL' (max_rel 2.6-4.8) is a METRIC ARTIFACT not a kernel bug; honest per-row-scaled + RMS metric shows the algorithm is CORRECT (rel_rowscale 5.6e-4..7.1e-4, rms 2.6e-4 PASS at N=512..4096) — hand-PTX multi-CTA kernel matches f64 ref" :: measurement [slug=fusion-attention-multicta group=GPU]
+  method = "silicon-fire"
+  cmd    = "ubu-2 RTX 5070 (clean) fa_wmma_host flash_attn_wmma_mcta.ptx, f64 CPU ref, rel_rowscale<=1e-2 gate, N in {512,1024,2048,4096} d=64; cross-checked vs CUDA-C nvcuda::wmma oracle"
+  raw    = ".verdicts/fusion-attention-multicta/F-FUSION-ATTN-MULTICTA-WALL.txt"
+  src    = "archive/fires/fusion_attention_multicta_2026_05_25/{flash_attn_wmma_mcta.ptx,fa_wmma_host.c,fa_bk_oracle.cu,fa_wmma_oracle.cu}"
+  status = "🟢 SUPPORTED-NUMERICAL — correct multi-CTA fused kernel, numeric PASS (honest metric); round-3 FAIL closed as a metric artifact. terminal-numerical."
+
+@C fusion_attn_multicta_wall := "QUANTIFIED PARTIAL: multi-CTA wide-KV (BK=256) TC-fused flash-attn closes the round-3 wall gap 9.4-15.5x -> 3.4-5.0x (hand-PTX) / 1.3-2.0x (CUDA-C geometry floor) but does NOT beat cuBLAS-TC; GEMM-fusion axis remains NOT-won (binding constraint = per-tile softmax overhead, not S-HBM)" :: measurement [slug=fusion-attention-multicta group=GPU]
+  method = "silicon-fire"
+  cmd    = "ubu-2 RTX 5070 (clean, 0 procs) fa_wmma_host flash_attn_wmma_mcta.ptx vs fa_cublas_tc_baseline, cuEvent 20 warmup + 200 timed median, N in {512,1024,2048,4096} d=64"
+  raw    = ".verdicts/fusion-attention-multicta/F-FUSION-ATTN-MULTICTA-WALL.txt"
+  src    = "archive/fires/fusion_attention_multicta_2026_05_25/{flash_attn_wmma_mcta.ptx,fa_cublas_tc_baseline.c,fa_bk_oracle.cu}"
+  status = "🟠 QUANTIFIED-PARTIAL — correct multi-CTA fused, gap closed ~3-8x but still 1.3-5.0x slower than cuBLAS-TC. NOT a >=30% win. NOT paper-eligible (paper_gate forbids partials). sec10 box stays [x] via launch-amort only."
+
+# ───────────────────────────────────────────────────────────────────────
 # TECS-L — tecs-l-dedekind-psi-uniqueness (slug · group=TECS-L · TECS-L/TECS-L.md M3)
 # Dedekind-ψ discrepancy, re-grounded hexa-native via `hexa verify` g5.
 #
