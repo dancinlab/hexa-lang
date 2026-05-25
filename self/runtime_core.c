@@ -521,7 +521,7 @@ void _hx_emit_fuel_abort(const char* kind,
             hxlcl_memcpy(dir, path, cut - 1);
             dir[cut - 1] = '\0';
             // TODO(fuel-worker): full mkdir -p chain. state/ usually exists.
-            (void)mkdir(dir, 0755);
+            (void)hxlcl_mkdir(dir, 0755);
         }
     }
 
