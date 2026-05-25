@@ -1253,12 +1253,19 @@ extern int pipe(int fds[2]);
 static int __attribute__((noinline)) hxlcl_pipe(int fds[2]) {
     return _hxlcl_pipe_cf(fds);
 }
-// cycle 66 — libc fork (BSD pair-return convention; svc 0x80 path
-// captured only x0, missing the carry-flag-disambiguates-parent-vs-
-// child convention).
-extern int fork(void);
+// RUNTIME net/exec ⑥ (cycle 80): svc-trap fork (2) — Darwin BSD PAIR-RETURN.
+// fork returns the child pid in x0 for BOTH processes; the child is
+// disambiguated by x1==1 (parent has x1==0). cycle-66 left this on libc
+// because the cycle-63 x0-only svc path misread the convention. We mirror
+// _hxlcl_pipe_cf's explicit-asm dual-register capture (the register-
+// constrained "=r"(x1) form hung clang). carry-set -> failure (EAGAIN).
 static int __attribute__((noinline)) hxlcl_fork(void) {
-    return fork();
+    long r0, r1, cf;
+    __asm__ volatile("mov x16, #2\n\tsvc #0x80\n\tcset %2, cs\n\tmov %0, x0\n\tmov %1, x1"
+                     : "=r"(r0), "=r"(r1), "=r"(cf) :: "x0", "x1", "x16", "memory", "cc");
+    if (cf) { errno = (int)r0; return -1; }
+    if (r1 == 1) return 0;   // child
+    return (int)r0;          // parent: child pid
 }
 static int __attribute__((noinline)) hxlcl_kill(int pid, int sig) {
     return (int)_hxlcl_syscall2(HXLCL_SYS_KILL, (long)pid, (long)sig);
