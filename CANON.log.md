@@ -2,6 +2,17 @@
 
 Append-only history sister of `CANON.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
+## 2026-05-25T06:00Z — M7 `_v2` dead-ref 스윕
+
+M2(PR #932)가 삭제한 4개 `_v2.c`(lexer·parser·type_checker·codegen_c2) 잔여 참조 repo 전체 grep. 격리 worktree.
+
+- [x] **전체 스윕** — `lexer_v2|parser_v2|type_checker_v2|codegen_c2_v2` 11곳 적중(`.hexa/.c/.md/.yml/.yaml/.sh`). 추가로 `tool/config/build_toolchain.json` 3곳.
+- [x] **분류** — DEAD-REF 1건만: `COMPILER.md` vestige inventory 표의 삭제파일 2행(`codegen_c2_v2.c`·`{lexer,parser,type_checker}_v2.c` → rename 대상으로 등재됐으나 파일 삭제됨, rename 안 일어남). 나머지는 PRESERVE — 코드/빌드/CI는 M2가 이미 청소(0건) · CANON.log·CANON.md scope·`runtime_c_purge.md`(이미 "삭제됨 (CANON M2)" 마킹)·날짜박힌 audit/plan(`blocker1_stage0_audit_2026_05_10.md`·`runtime_c_purge_phases_20260419.md`·`build_toolchain.json`)은 시점기록이라 정확.
+- [x] **정리** — `COMPILER.md` vestige 표에서 삭제파일 2행 제거(−2줄). 활성 코드/빌드스크립트/CI dead-ref 0건 재확인.
+- [x] **LIVE 보존** — `hexa_v2` 바이너리명·`build/hexa_v2`·`hexa_cc.c` 시드·stdlib `_v2.hexa`(bio·sim_universe, 별 도메인) 무손상.
+
+**범위주의**: `self/main.hexa`(M5/M6 소관) `_v2.c` dead-ref 0건 — follow-up 불필요.
+
 ## 2026-05-25T05:23Z — M3b 컴파일러 바이너리 git 제거 + auto-bootstrap (PR #943 merged · 파괴)
 
 CANON stacked PR 3/4 마지막. 격리 worktree `/tmp/canon-m3b`. **M3 완전 종결** (M3a+M3b).
