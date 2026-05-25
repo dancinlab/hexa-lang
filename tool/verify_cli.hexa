@@ -209,6 +209,7 @@ fn cmd_rubric() {
     println("             total_halflife_log10(Lα,Lsf) → −log10(10^−Lα+10^−Lsf) (α⊕SF total log10 T₁/₂[s], NUCLEAR C1, 2-arg)")
     println("             alpha_sf_branching(Lα,Lsf)  → 10^−Lα/(10^−Lα+10^−Lsf) (α branching ratio b_α, NUCLEAR C1, 2-arg)")
     println("             island_weight(Z,N,σ)        → exp(−(dZ²+dN²)/2σ²)     (island-of-stability magic-distance weight, NUCLEAR C2, 3-arg)")
+    println("             anz_reason(Z,N,A,Q_α)       → 0/1/2/3/4 reason code   ((Z,N,A,Q_α) consistency guard, NUCLEAR G1, 4-arg)")
 }
 
 let NOCALC: int = -999999
@@ -1298,6 +1299,31 @@ fn _island_weight(zf: float, nf: float, sigma: float) -> float {
     return exp(0.0 - d2 / (2.0 * sigma * sigma))
 }
 
+// ── NUCLEAR G1 — (Z,N,A,Q_α) input-consistency guard (sim.hexa mirror) ──
+//
+// Mirror of stdlib/nuclear/sim.hexa _anz_reason (NUCLEAR.md §3.3 · gap-audit
+// top-2 silent-failure). Returns an honest reason CODE (as a float) for a
+// transposed/garbled (Z,N,A) triple instead of silently computing a flipped
+// half-life. 4-arg (Z, N, A, Q_α). Codes: 0=ok · 1=A≠Z+N · 2=Z≤0 or N≤0 ·
+// 3=Q_α non-finite or ≤0 · 4=Z>130 (full Z↔N transpose w/ A self-consistent).
+// Reference: (118,176,294,11.65)→0 · (118,176,295,11.65)→1 · (176,118,294,
+// 11.65)→4 · (118,0,118,11.65)→2 · (118,176,294,0.0)→3.
+fn _anz_reason(zf: float, nf: float, af: float, q_alpha_mev: float) -> float {
+    let z = to_int(zf)
+    let n = to_int(nf)
+    let a = to_int(af)
+    if a != z + n { return 1.0 }
+    if z <= 0 { return 2.0 }
+    if n <= 0 { return 2.0 }
+    // non-finite Q_α: NaN ≠ itself, ±inf exceeds the double ceiling.
+    if q_alpha_mev != q_alpha_mev { return 3.0 }
+    if q_alpha_mev > 1.0e308 { return 3.0 }
+    if q_alpha_mev < 0.0 - 1.0e308 { return 3.0 }
+    if q_alpha_mev <= 0.0 { return 3.0 }
+    if z > 130 { return 4.0 }
+    return 0.0
+}
+
 // ── Bio-physical Phase 3 (demiurge cross-domain V2 closure) ─────────
 // Three remaining identities from the inbox patch — Higuchi sustained
 // release (2-arg, simple form) · Tafel overpotential (3-arg, log10 path)
@@ -1801,6 +1827,13 @@ fn _recompute_float(fn_name: string, a0: float, a1: float, a2: float, a3: float,
         if argc < 3 { return _NOCALC_F }
         return _island_weight(a0, a1, a2)
     }
+    // ── Nuclear G1 — (Z,N,A,Q_α) consistency guard (NUCLEAR.md §3.3) ────
+    //   anz_reason(Z, N, A, Q_α)          4-arg: 0=ok 1=A≠Z+N 2=Z/N≤0
+    //                                            3=Q non-finite/≤0 4=Z>130
+    if fn_name == "anz_reason" {
+        if argc < 4 { return _NOCALC_F }
+        return _anz_reason(a0, a1, a2, a3)
+    }
     // ── Bio-physical Phase 3 (demiurge cross-domain V2 closure) ─────────
     //   higuchi(k_H, t)                   2-arg: k_H * sqrt(t)
     //   tafel(a, b, j)                    3-arg: a + b * log10(j)
@@ -1918,6 +1951,8 @@ fn _is_float_fn(fn_name: string) -> bool {
         || fn_name == "alpha_sf_branching"
         // Nuclear C2 — island-of-stability weight (NUCLEAR.md §6.2 · 2026-05-25):
         || fn_name == "island_weight"
+        // Nuclear G1 — (Z,N,A,Q_α) consistency guard (NUCLEAR.md §3.3 · gap-audit):
+        || fn_name == "anz_reason"
         // Bio-physical Phase 3 (demiurge cross-domain V2 closure):
         || fn_name == "higuchi" || fn_name == "tafel" || fn_name == "hagen_poiseuille"
         // TTR-ORAL / TTR-LAC bundle (topical PK + laser optics · INBOX T22:35Z):
