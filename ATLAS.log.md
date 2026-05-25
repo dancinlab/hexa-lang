@@ -2,6 +2,38 @@
 
 Append-only step log for the theorem-atlas upgrade campaign. Newest on top.
 
+## 2026-05-25 — R4 calc_dispatch SSOT (verify↔atlas float 미러 단일화 · META-SIGNAL ①)
+
+float-recompute 미러 이중화가 drift 뿌리(R3 reverify 3노드 drift · wigner #957 동일 클래스).
+조사 결과 이중화는 3층: (1) per-fn 계산 helper(`_welch_t_crit` vs `_welch_t_crit_register`, 79쌍
+byte-동일), (2) dispatch 테이블(`_recompute_float` vs `_recompute_float_register`), (3) 멤버십 술어
++ε(`_is_float_fn`/`_is_zero_arg_float_fn`/`_VERIFY_EPS` vs `_register` 짝). R3 실측 갭 = verify 99-fn,
+atlas-register 63-fn(36-fn subset drift) + zero-arg 8 vs 7 + atlas 코드주석에 "Extend this table
+whenever verify_cli's float table grows"(수동-동기 = drift 근원) 명시.
+
+핵심 발견: atlas register `--from-verify`는 이미 `hexa verify --expr` shell-out 위임(@D g20)
+이라 register-side 미러(`_recompute_float_register`·`_is_float_fn_register`·`_adapt_verify_*`)는
+**dead-code**(코드주석이 직접 "uncalled · safe to delete" 명시). 유일한 live 소비자 = `cmd_reverify`
+(`_is_float_fn_register` 2364 + `_recompute_float_register` 2379).
+
+랜딩 슬라이스(PURE·helper-비의존·byte-identical): 멤버십 술어 + ε만 SSOT로.
+
+- [x] compiler/atlas/calc_dispatch.hexa (신규 131줄) — `pub calc_eps()`(1e-9) ·
+  `pub calc_is_float_fn`(canonical 99-fn) · `pub calc_is_zero_arg_float_fn`(8-fn). canonical = verify 테이블.
+- [x] verify_cli.hexa — `use calc_dispatch` + 호출부 3곳 repoint(`calc_is_float_fn`·`calc_is_zero_arg_float_fn`·
+  `calc_eps`) + 로컬 `_is_float_fn`/`_is_zero_arg_float_fn`/`_VERIFY_EPS` 제거(WIPE-OK · 동작 불변=동일 테이블).
+- [x] atlas_cli.hexa — `use calc_dispatch` + reverify 2곳 repoint(`calc_is_float_fn`·`calc_eps`) +
+  dead `_is_float_fn_register`/`_is_zero_arg_float_fn_register`/`_VERIFY_EPS_REGISTER` 제거(WIPE-OK).
+  reverify 술어가 63→99로 확장되지만 atlas의 어떤 numerical F-노드도 36-fn 갭 fn을 안 씀 → 카운트 불변.
+- LINK GATE(핵심 위험): 양 바이너리 빌드 PASS — bin/hexa-atlas(42s) + bin/hexa-verify(6s). 공유 모듈
+  dual-`use` 링크 정상(두 CLI 모두 이미 4+ 모듈 multi-use라 저위험 입증).
+- 검증: reverify byte-identical(`numerical_seen=36 match=32 drift=3 unverifiable=1` · 동일 3 DRIFT 노드
+  allen_dynes_tc/mcmillan_tc/bcs_gap_ratio 동일 Δ) · verify --expr byte-identical(0/1/2/4-arg + zero-arg
+  routing transition_factor_1s2s=0.75 PASS) · register --from-verify 정상(falsified→refuse, embed 불변).
+- 잔여(deferred): recompute-helper 풀 이동(~99 per-fn helper ~2200줄)은 g4 200-LOC·link-risk로 별도 PR.
+  register-side 미러는 dead-code라 무해 · reverify만 local subset recompute 유지(거기서 갭 fn은
+  NOCALC→UNVERIF로 안전 degrade, 현재 노드 셋엔 해당 없음).
+
 ## 2026-05-25 — R3 lookup on-disk offset 색인
 
 단일 `hexa atlas lookup <id>`가 16101-노드 전체를 파싱(unescape+grade+edge)한 뒤 1개 노드만

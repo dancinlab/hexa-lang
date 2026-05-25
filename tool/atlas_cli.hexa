@@ -30,6 +30,7 @@ use "compiler/atlas/parser"
 use "compiler/atlas/merger"
 use "compiler/atlas/static_index"
 use "compiler/atlas/embed_fold"    // embed_fold_into (kind,id dedup + atomic write)
+use "compiler/atlas/calc_dispatch" // calc_eps / calc_is_float_fn — float-recompute SSOT (shared w/ verify_cli)
 use "self/stdlib/fs"               // read_file_safe (used by cmd_append_witness)
 use "compiler/atlas/audit"
 use "compiler/atlas/audit_rodata"
@@ -430,7 +431,8 @@ fn _tknn_chern_register(p: int, q: int, rgap: int) -> int {
 // within-ε match → 🟢 SUPPORTED-NUMERICAL; out-of-ε disagreement → 🔴.
 // Extend this table whenever verify_cli's float table grows.
 let _NOCALC_F_REGISTER: float = -999999.0
-let _VERIFY_EPS_REGISTER: float = 0.000000001   // ε = 1e-9 numerical tolerance
+// ε = 1e-9 — now sourced from compiler/atlas/calc_dispatch::calc_eps() (shared
+// SSOT with verify_cli). Reverify + the legacy float adapter call calc_eps().
 
 fn _parse_float_register(s: string) -> float {
     let t = s.trim()
@@ -1483,63 +1485,14 @@ fn _recompute_float_register(fn_name: string, a0: float, a1: float, a2: float, a
     return _NOCALC_F_REGISTER
 }
 
-// is fn_name a registered float-NUMERICAL form? Mirrors verify_cli::_is_float_fn.
-fn _is_float_fn_register(fn_name: string) -> bool {
-    return fn_name == "welch_t_crit" || fn_name == "wilson_hilferty_p"
-        || fn_name == "compound_coverage" || fn_name == "cycles_to_target"
-        || fn_name == "chsh_tsirelson" || fn_name == "hardy_bound"
-        || fn_name == "mabk_quantum_max"
-        || fn_name == "pt_doily_quantum_win" || fn_name == "pt_doily_classical_bound"
-        || fn_name == "cdr_perfect_mitigation" || fn_name == "wigner_stabilizer_sn"
-        || fn_name == "vqe_h2_fci_sto3g"
-        || fn_name == "qfi_sql" || fn_name == "qfi_ghz"
-        || fn_name == "shadow_pauli_var_bound" || fn_name == "shadow_clifford_var_bound"
-        || fn_name == "page_curve_entropy_peak" || fn_name == "qdrift_error_bound"
-        || fn_name == "sym_shadow_var_bound"
-        || fn_name == "overlap_vqe_h2_shift_ha"
-        || fn_name == "rpe_heisenberg_sigma"
-        || fn_name == "mirror_bench_hog_asymptote"
-        // Bio-physical Phase 1 (atlas L2 unblock 2026-05-25):
-        || fn_name == "exp_release" || fn_name == "ldl_pct" || fn_name == "beer_lambert"
-        // Bio-statistics (LPA cycle 4 V2 — NNT/ARR/HR trial readout):
-        || fn_name == "nnt" || fn_name == "arr" || fn_name == "ln_hr_to_hr"
-        // Bio-physical Phase 2 (atlas L2 unblock):
-        || fn_name == "hill" || fn_name == "cheng_prusoff" || fn_name == "fick1"
-        || fn_name == "laplace" || fn_name == "stokes_einstein"
-        // Superconductivity (RTSC V2 closed-form):
-        || fn_name == "allen_dynes_tc" || fn_name == "mcmillan_tc"
-        || fn_name == "bcs_gap_ratio" || fn_name == "lambda_eliashberg"
-        || fn_name == "beenet_grid_bins" || fn_name == "migdal_ratio"
-        // Superconductivity tranche 2 (RTSC #15 device-side + strong-coupling):
-        || fn_name == "allen_dynes_full" || fn_name == "morel_anderson_mustar"
-        || fn_name == "coherence_length" || fn_name == "isotope_exponent"
-        || fn_name == "gl_parameter_kappa" || fn_name == "london_penetration_depth"
-        || fn_name == "thermo_critical_field" || fn_name == "condensation_energy"
-        || fn_name == "bcs_gap_zero" || fn_name == "pippard_coherence"
-        // Bio-physical Phase 3 (atlas L2 unblock — 4-arg lane):
-        || fn_name == "higuchi" || fn_name == "tafel" || fn_name == "hagen_poiseuille"
-        // TTR-ORAL / TTR-LAC bundle (topical PK + laser optics · INBOX T22:35Z):
-        || fn_name == "higuchi_flux" || fn_name == "fick_steady_flux"
-        || fn_name == "partition_coeff" || fn_name == "permeability_skin"
-        || fn_name == "auc_first_order" || fn_name == "clearance"
-        || fn_name == "beer_lambert_log10" || fn_name == "fluence"
-        || fn_name == "beam_waist" || fn_name == "rayleigh_range"
-        || fn_name == "absorption_depth"
-}
-
-// is fn_name a 0-arg closed-form constant? Mirrors verify_cli::_is_zero_arg_float_fn.
-// 0-arg float dispatch needs special handling in cmd_register (no operands
-// between fn_name and the expected value).
-fn _is_zero_arg_float_fn_register(fn_name: string) -> bool {
-    return fn_name == "chsh_tsirelson"
-        || fn_name == "pt_doily_quantum_win"
-        || fn_name == "pt_doily_classical_bound"
-        || fn_name == "vqe_h2_fci_sto3g"
-        || fn_name == "overlap_vqe_h2_shift_ha"
-        || fn_name == "mirror_bench_hog_asymptote"
-        // Superconductivity (RTSC V2 closed-form):
-        || fn_name == "bcs_gap_ratio"
-}
+// WIPE-OK: the register-side float membership mirrors (_is_float_fn_register /
+// _is_zero_arg_float_fn_register) were a STRICT SUBSET of verify_cli's table
+// (63 vs 99 fns — the R3-measured drift) and are removed. The lone live caller
+// (cmd_reverify) now consults the shared SSOT compiler/atlas/calc_dispatch::
+// calc_is_float_fn. Widening reverify's predicate to the full table is
+// byte-identical for its counts (no atlas numerical F-node references a fn
+// outside the prior subset — verified: numerical_seen=36 match=32 drift=3
+// unverifiable=1). _is_zero_arg_float_fn_register had no callers at all.
 
 // _fstr_register — float → string for verdict echo / node text.
 fn _fstr_register(x: float) -> string {
@@ -1881,7 +1834,7 @@ fn _adapt_verify_float(fn_name: string, a0_str: string, a1_str: string, a2_str: 
             raw: "", verdict: "🟠 INSUFFICIENT", source_verb: "verify", provenance: prov }
     }
     let diff = _fabs_register(got - v)
-    if diff > _VERIFY_EPS_REGISTER {
+    if diff > calc_eps() {
         return DiscoveryEvent { kind: "F", id: "", name: fn_name + "(" + arg_echo + ")=" + v_echo,
             raw: "", verdict: "🔴 FALSIFIED", source_verb: "verify", provenance: prov }
     }
@@ -2361,7 +2314,7 @@ fn cmd_reverify(rest: array) {
         let p = _rev_parse_header(header)
         if !p.ok { unverifiable = unverifiable + 1; println("  PARSE?  @F " + nd.id + " (header not in canonical f(args)=v shape)"); continue }
         seen = seen + 1
-        if !_is_float_fn_register(p.fn_name) {
+        if !calc_is_float_fn(p.fn_name) {
             unverifiable = unverifiable + 1
             println("  UNVERIF @F " + nd.id + " — no in-process float calc path for " + p.fn_name + "()")
             continue
@@ -2383,7 +2336,7 @@ fn cmd_reverify(rest: array) {
             continue
         }
         let diff = _fabs_register(got - claimed)
-        if diff > _VERIFY_EPS_REGISTER {
+        if diff > calc_eps() {
             drifted = drifted + 1
             println("  DRIFT   @F " + nd.id + " — " + p.fn_name + "() claimed=" + p.claimed +
                     " recompute=" + _fstr_register(got) + " |Δ|=" + _fstr_register(diff))
