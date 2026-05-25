@@ -311,10 +311,10 @@ Today's PR #193 reconciled `f16 → b16` storage; bf16 reg type still trips ptxa
 
 PR #189/#190/#191 fires used direct one-shot bash; sustained automation needs hexa-native.
 
-- [ ] **stdlib/cloud dispatch primer** — leverage existing `stdlib/cloud` ssh/scp/rsync APIs
-- [ ] **`tool/dispatch_gpu_fire.hexa`** — generic hexa-native fire dispatcher (PTX path, host C path, target host)
-- [ ] **smoke verify** — re-fire PR #82 / #189 / #190 / #191 kernels via the hexa dispatcher; results identical
-- [ ] **migrate** — deprecate `tool/dispatch_r055_p2_gemm.sh` once hexa equivalent measured-PASS
+- [x] **stdlib/cloud dispatch primer** — `tool/dispatch_gpu_fire.hexa` orchestrates the whole fire (upload → nvcc → fire → pull) through `stdlib/cloud` `cloud_copy_to_opts` / `cloud_exec_opts` / `cloud_copy_from_opts`. All shell-out rides `exec_capture` (codegen-wired) inside the cloud module — NOT `exec_argv` (no codegen branch → would fail to link). f1/f2 preserved (no codegen touched).
+- [x] **`tool/dispatch_gpu_fire.hexa`** — generic hexa-native fire dispatcher. Args `<host.c> <ptx>[,<ptx>...] [target-host]` + `--out/--remote/--result/--port/--insecure/--kernel`. Multi-PTX (comma-sep, argv-order). **Parses rc=0** (`hexa parse`) AND **compiles+links clean** (`hexa build` → runnable arm64 binary, only harmless `runtime.h` comment warnings).
+- [x] **smoke verify** — re-fired the RFC 055-P2 vec-add + naive-GEMM PTX (the kernels backing `dispatch_r055_p2_gemm.sh`) via the new dispatcher on ubu-2 RTX 5070. **result.json byte-identical to the recorded `state/rfc055_p2_2026_05_20/result.json`** (md5 `cd249eeb7879031e8fee53994d01e475` both sides) — all 4 falsifiers PASS, vec-add max|Δ|=0 mismatches=0/1024, GEMM max|Δ|=0 mismatches=0/4096. fire.log falsifier lines identical. $0.
+- [x] **migrate** — `tool/dispatch_r055_p2_gemm.sh` removed (`git rm`); the hexa dispatcher re-fires the same kernels at measured byte-eq. Invoke: `dispatch_gpu_fire tool/r055_p2_host.c <vec_add.ptx>,<gemm.ptx> ubu-2`.
 
 ### 2e — `cp.async` pipelining (sm_80+) — performance, not correctness
 

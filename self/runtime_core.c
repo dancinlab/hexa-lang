@@ -2143,9 +2143,12 @@ HexaVal hexa_array_get(HexaVal arr, int64_t idx) {
         char _buf[128];
         snprintf(_buf, sizeof(_buf), "index %lld out of bounds (len %d)", (long long)_orig_idx_g, HX_ARR_LEN(arr));
         if (hxlcl_getenv("HEXA_OOB_TRACE")) {
-            void* _bt[32]; int _n = backtrace(_bt, 32);
+            // RUNTIME.md Tier-A.4: hexa-native frame-walker stubs (defined
+            // in runtime.c before this TU is #include'd) — drops the libc
+            // _backtrace / _backtrace_symbols_fd externs from aprime_cc.
+            void* _bt[32]; int _n = hxlcl_backtrace(_bt, 32);
             fprintf(stderr, "[OOB] %s\n", _buf);
-            backtrace_symbols_fd(_bt, _n, 2);
+            hxlcl_backtrace_symbols_fd(_bt, _n, 2);
         }
         hexa_throw(hexa_str(_buf));
         return hexa_void();

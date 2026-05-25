@@ -1,0 +1,344 @@
+// tool/dispatch_gpu_fire.hexa — generic hexa-native GPU-fire dispatcher.
+//
+// GPU.md §2d: replaces the direct one-shot bash fire scripts (e.g.
+// tool/dispatch_r055_p2_gemm.sh) with a pure hexa-native orchestrator
+// built on the stdlib/cloud ssh/scp APIs. Functional smoke only — no
+// silicon performance work.
+//
+// What it does, end to end, exactly mirroring the .sh fire path:
+//   1) upload  — scp the kernel PTX file(s) + the host .c launcher to the
+//                GPU host's remote work dir (cloud_copy_to).
+//   2) compile — nvcc -O2 the host launcher against -lcuda on the GPU host
+//                (cloud_exec — a shell 1-liner, the legal fast-path).
+//   3) fire    — run the launcher with the PTX file basenames as argv; the
+//                launcher loads each PTX via the CUDA Driver API, fires it,
+//                compares to its CPU reference, and writes result.json.
+//   4) pull    — scp result.json back to the local output dir, plus the
+//                merged stdout+stderr fire log (cloud_copy_from / inline).
+//
+// Pure hexa: the only downstream tools are ssh / scp (stdlib/cloud) and the
+// remote `nvcc -lcuda` + driver JIT (ptxas). No LLVM, no C-transpile — this
+// touches no codegen (f1/f2 preserved).
+//
+// IMPORTANT compiled-path note: this file shells out ONLY through the
+// stdlib/cloud APIs, which use `exec_capture` (codegen-wired) — NOT
+// `exec_argv`/`exec_argv_with_status` (which are bind-allowed but have no
+// codegen branch, so a compiled `hexa build` would fail to link). See
+// reference_hexa_exec_argv_not_codegen_wired.
+//
+// Usage (positional, then flags):
+//   dispatch_gpu_fire <host.c> <ptx>[,<ptx>...] [target-host] [options]
+//
+//   <host.c>        local path to the CUDA Driver-API host launcher.
+//   <ptx,...>       one or more local PTX paths, comma-separated. They are
+//                   passed to the launcher as argv in the given order,
+//                   referenced by basename in the remote work dir.
+//   [target-host]   ssh destination (default: ubu-2).
+//
+//   --out <dir>     local dir to receive result.json + fire.log
+//                   (default: state/gpu_fire_<host>).
+//   --remote <dir>  remote work dir (default: /tmp/hexa_gpu_fire).
+//   --result <name> remote+local result filename (default: result.json).
+//   --port <n>      ssh to a non-22 port (RunPod / vast.ai pods).
+//   --insecure      accept a changing/unknown host key (ephemeral pods).
+//   --kernel <tag>  label printed in the run banner (default: derived from
+//                   the host .c basename). Purely cosmetic.
+//
+// Exit code: 0 iff every stage succeeded AND the remote launcher exited 0
+// (its own falsifier battery passed). Non-zero on any failure — the failing
+// stage is named on stderr (g3: no over-claim; a failed fire reports FAIL).
+
+use "stdlib/cloud/cloud"
+
+// ── small arg helpers ────────────────────────────────────────────────
+
+// _basename — the final path component of `p` (after the last '/').
+fn _basename(p: str) -> str {
+    let n = len(p)
+    let mut i = n
+    while i > 0 {
+        if p.substring(i - 1, i) == "/" {
+            return p.substring(i, n)
+        }
+        i = i - 1
+    }
+    return p
+}
+
+// _strip_ext — `s` with its final ".<ext>" removed (if any).
+fn _strip_ext(s: str) -> str {
+    let n = len(s)
+    let mut i = n
+    while i > 0 {
+        let c = s.substring(i - 1, i)
+        if c == "." {
+            return s.substring(0, i - 1)
+        }
+        if c == "/" {
+            return s
+        }
+        i = i - 1
+    }
+    return s
+}
+
+// _split_commas — split `s` on ',' into a list of non-empty tokens.
+fn _split_commas(s: str) -> [str] {
+    let mut out = []
+    let mut cur = ""
+    let mut i = 0
+    let n = len(s)
+    while i < n {
+        let c = s.substring(i, i + 1)
+        if c == "," {
+            if len(cur) > 0 {
+                out.push(cur)
+            }
+            cur = ""
+        } else {
+            cur = cur + c
+        }
+        i = i + 1
+    }
+    if len(cur) > 0 {
+        out.push(cur)
+    }
+    return out
+}
+
+// _flag_after — value of `flag` in `av` (scan from `start`), else `dflt`.
+fn _flag_after(av: [str], start: int, flag: str, dflt: str) -> str {
+    let mut i = start
+    while i + 1 < len(av) {
+        if av[i] == flag {
+            return av[i + 1]
+        }
+        i = i + 1
+    }
+    return dflt
+}
+
+// _has_flag — 1 iff `flag` appears in `av` from `start`.
+fn _has_flag(av: [str], start: int, flag: str) -> int {
+    let mut i = start
+    while i < len(av) {
+        if av[i] == flag {
+            return 1
+        }
+        i = i + 1
+    }
+    return 0
+}
+
+// _is_flagish — 1 iff `t` starts with "-" (so it is an option, not a
+// positional). Used to stop positional scanning at the first flag.
+fn _is_flagish(t: str) -> int {
+    if len(t) >= 1 {
+        if t.substring(0, 1) == "-" {
+            return 1
+        }
+    }
+    return 0
+}
+
+// ── dispatch ─────────────────────────────────────────────────────────
+
+fn main() {
+    // args() layout (RFC 062): [exec, user-args...]. Skip index 0 (the
+    // launched executable), read positionals + flags from index 1. When
+    // run via `hexa run <this>.hexa ...` the same layout holds (the script
+    // path occupies index 0), so index-1 scanning is correct both ways.
+    let av = args()
+    let argc = len(av)
+
+    // Collect leading positionals (everything before the first flag).
+    let mut pos = []
+    let mut i = 1
+    while i < argc {
+        if _is_flagish(av[i]) == 1 {
+            i = argc
+        } else {
+            pos.push(av[i])
+            i = i + 1
+        }
+    }
+
+    if len(pos) < 2 {
+        eprintln("dispatch_gpu_fire — hexa-native GPU-fire dispatcher (GPU.md §2d)")
+        eprintln("")
+        eprintln("usage: dispatch_gpu_fire <host.c> <ptx>[,<ptx>...] [target-host] [opts]")
+        eprintln("")
+        eprintln("  <host.c>      local CUDA Driver-API host launcher")
+        eprintln("  <ptx,...>     comma-separated local PTX paths (argv order)")
+        eprintln("  [target-host] ssh destination (default ubu-2)")
+        eprintln("")
+        eprintln("  --out <dir>      local result dir (default state/gpu_fire_<host>)")
+        eprintln("  --remote <dir>   remote work dir (default /tmp/hexa_gpu_fire)")
+        eprintln("  --result <name>  result filename (default result.json)")
+        eprintln("  --port <n>       ssh non-22 port · --insecure changing host key")
+        eprintln("  --kernel <tag>   run-banner label")
+        exit(2)
+    }
+
+    let host_c = pos[0]
+    let ptx_csv = pos[1]
+    let mut host = "ubu-2"
+    if len(pos) >= 3 {
+        host = pos[2]
+    }
+
+    let remote_dir = _flag_after(av, 1, "--remote", "/tmp/hexa_gpu_fire")
+    let result_name = _flag_after(av, 1, "--result", "result.json")
+    let out_dir = _flag_after(av, 1, "--out", "state/gpu_fire_" + host)
+    let kernel_tag = _flag_after(av, 1, "--kernel", _strip_ext(_basename(host_c)))
+
+    // ssh connection opts (port / insecure host key for ephemeral pods).
+    let mut ssh_opts = []
+    let port = _flag_after(av, 1, "--port", "")
+    if len(port) > 0 {
+        ssh_opts.push("-p")
+        ssh_opts.push(port)
+    }
+    if _has_flag(av, 1, "--insecure") == 1 {
+        ssh_opts.push("-o")
+        ssh_opts.push("StrictHostKeyChecking=no")
+        ssh_opts.push("-o")
+        ssh_opts.push("UserKnownHostsFile=/dev/null")
+    }
+
+    let ptx_list = _split_commas(ptx_csv)
+    if len(ptx_list) == 0 {
+        eprintln("[gpu-fire] error: no PTX path in '" + ptx_csv + "'")
+        exit(2)
+    }
+
+    println("=== dispatch_gpu_fire — " + kernel_tag + " on " + host + " ===")
+    println("[gpu-fire] host.c   : " + host_c)
+    println("[gpu-fire] ptx      : " + ptx_csv)
+    println("[gpu-fire] remote   : " + host + ":" + remote_dir)
+    println("[gpu-fire] out      : " + out_dir)
+
+    // Local input presence pre-check (distinct, friendly errors).
+    if !file_exists(host_c) {
+        eprintln("[gpu-fire] FAIL stage=preflight — host launcher missing: " + host_c)
+        exit(3)
+    }
+    let mut pj = 0
+    while pj < len(ptx_list) {
+        if !file_exists(ptx_list[pj]) {
+            eprintln("[gpu-fire] FAIL stage=preflight — PTX missing: " + ptx_list[pj])
+            exit(3)
+        }
+        pj = pj + 1
+    }
+
+    // ── 1) upload: mkdir remote work dir, scp host.c + every PTX up. ──
+    println("[gpu-fire] [1/4] upload -> " + host + ":" + remote_dir)
+    let mk = cloud_exec_opts(host, ssh_opts, "mkdir -p " + remote_dir)
+    if mk.ok != 1 {
+        eprintln("[gpu-fire] FAIL stage=mkdir — " + mk.message)
+        eprintln(mk.stdout_)
+        exit(4)
+    }
+
+    let host_c_base = _basename(host_c)
+    let up_c = cloud_copy_to_opts(host, ssh_opts, host_c, remote_dir + "/" + host_c_base)
+    if up_c.ok != 1 {
+        eprintln("[gpu-fire] FAIL stage=upload(host.c) — " + up_c.message)
+        exit(4)
+    }
+
+    // Build the launcher's PTX argv (remote basenames, original order).
+    let mut ptx_argv = ""
+    let mut k = 0
+    while k < len(ptx_list) {
+        let b = _basename(ptx_list[k])
+        let up = cloud_copy_to_opts(host, ssh_opts, ptx_list[k], remote_dir + "/" + b)
+        if up.ok != 1 {
+            eprintln("[gpu-fire] FAIL stage=upload(ptx) — " + ptx_list[k] + " · " + up.message)
+            exit(4)
+        }
+        if k > 0 {
+            ptx_argv = ptx_argv + " "
+        }
+        ptx_argv = ptx_argv + b
+        k = k + 1
+    }
+    println("[gpu-fire]   uploaded " + host_c_base + " + " + str(len(ptx_list)) + " PTX module(s)")
+
+    // ── 2) compile: nvcc -O2 the launcher on the GPU host. ───────────
+    println("[gpu-fire] [2/4] nvcc -O2 " + host_c_base + " -lcuda")
+    let bin_name = _strip_ext(host_c_base)
+    let nvcc_cmd = "cd " + remote_dir + " && nvcc -O2 -o " + bin_name + " " + host_c_base + " -lcuda 2>&1"
+    let cc = cloud_exec_opts(host, ssh_opts, nvcc_cmd)
+    if cc.ok != 1 {
+        eprintln("[gpu-fire] FAIL stage=nvcc — exit " + str(cc.exit_code))
+        eprintln(cc.stdout_)
+        exit(5)
+    }
+    // f-no-llvm build-graph audit (mirrors the .sh F-RFC055-NO-LLVM gate).
+    if cc.stdout_.index_of("llvm") >= 0 {
+        eprintln("[gpu-fire] WARN — 'llvm' appears in nvcc output (build-graph audit)")
+    } else {
+        println("[gpu-fire]   NO-LLVM ok — hexa->PTX + nvcc -lcuda + driver JIT only")
+    }
+
+    // ── 3) fire: run the launcher with the PTX basenames as argv. ────
+    println("[gpu-fire] [3/4] fire ./" + bin_name + " " + ptx_argv)
+    let run_cmd = "cd " + remote_dir + " && ./" + bin_name + " " + ptx_argv + " 2>&1; echo FIRE_RC=$?"
+    let fr = cloud_exec_opts(host, ssh_opts, run_cmd)
+    println(fr.stdout_)
+    // Persist the fire log locally (write_file is codegen-wired).
+    write_file(out_dir + "/fire.log", fr.stdout_ + "\n")
+
+    let fire_rc = _parse_fire_rc(fr.stdout_)
+    // cloud_exec's own exit (the trailing `echo` ALWAYS exits 0, so
+    // cloud_exec.ok reflects the echo, not the launcher) — the launcher's
+    // real rc rides the FIRE_RC marker we parse below.
+
+    // ── 4) pull: scp result.json back. ───────────────────────────────
+    println("[gpu-fire] [4/4] pull " + result_name)
+    let local_result = out_dir + "/" + result_name
+    let pull = cloud_copy_from_opts(host, ssh_opts, remote_dir + "/" + result_name, local_result)
+    if pull.ok == 1 {
+        println("[gpu-fire]   <- " + local_result + " (" + pull.message + ")")
+        println(read_file(local_result))
+    } else {
+        eprintln("[gpu-fire]   WARN: " + result_name + " not pulled — " + pull.message + " (see fire.log)")
+    }
+
+    // ── verdict ──────────────────────────────────────────────────────
+    if fire_rc == 0 {
+        println("[gpu-fire] PASS — launcher exited 0 (falsifier battery satisfied)")
+        exit(0)
+    }
+    eprintln("[gpu-fire] FAIL — launcher exited " + str(fire_rc) + " (see " + local_result + " / fire.log)")
+    exit(6)
+}
+
+// _parse_fire_rc — read the integer after "FIRE_RC=" in the fire output.
+// Returns -1 if the marker is absent (launcher never reached the echo).
+fn _parse_fire_rc(out: str) -> int {
+    let at = out.index_of("FIRE_RC=")
+    if at < 0 {
+        return -1
+    }
+    let mut i = at + 8
+    let n = len(out)
+    let mut val = 0
+    let mut got = 0
+    while i < n {
+        let cc = char_code(out.substring(i, i + 1))
+        if cc >= 48 && cc <= 57 {
+            val = val * 10 + (cc - 48)
+            got = 1
+            i = i + 1
+        } else {
+            i = n
+        }
+    }
+    if got == 0 {
+        return -1
+    }
+    return val
+}

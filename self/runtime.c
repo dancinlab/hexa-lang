@@ -25,10 +25,12 @@
 #include <sys/socket.h> // GO M10 (RFC 093): hexa daemon unix-socket primitives
 #include <arpa/inet.h>  // GO M10: inet_pton for AF_INET addr parse
 extern char **environ; // posix_spawnp inherits parent env explicitly
-// execinfo.h: HEXA_OOB_TRACE backtrace path; available on both Apple
-// libSystem and glibc. RFC 063/064 ubu pool fire (FIRMWARE.md G-R0)
-// hit clang implicit-decl error when the include was Apple-only.
-#include <execinfo.h>
+// RUNTIME.md Tier-A.4 (cycle 76): the HEXA_OOB_TRACE backtrace path is now
+// served by hexa-native stubs (hxlcl_backtrace / hxlcl_backtrace_symbols_fd
+// below) instead of libc execinfo(3). <execinfo.h> is therefore no longer
+// needed — dropping it removes the only declaration site for the libc
+// _backtrace / _backtrace_symbols_fd externs (RFC 063/064 ubu-pool include
+// concern moot now that no execinfo fn is referenced).
 #if defined(__APPLE__)
 #include <mach/mach.h>
 #include <mach/task.h>
@@ -70,6 +72,12 @@ static long hxlcl_write(int fd, const void *buf, unsigned long n);
 static int  hxlcl_close(int fd);
 static int  hxlcl_getpid(void);
 static int  hxlcl_getuid(void);
+// RUNTIME.md Tier-A.4 — frame walker stubs (diagnostic-only, HEXA_OOB_TRACE
+// path in runtime_core.c). A self-host compiler needs no real unwinder; the
+// stub returns 0 frames + writes a single "(backtrace unavailable)" line via
+// hxlcl_write. Drops the libc _backtrace / _backtrace_symbols_fd externs.
+static int  hxlcl_backtrace(void **buf, int sz);
+static void hxlcl_backtrace_symbols_fd(void *const *buf, int sz, int fd);
 static int  hxlcl_dup2(int oldfd, int newfd);
 static int  hxlcl_pipe(int fds[2]);
 static int  hxlcl_fork(void);
@@ -1178,6 +1186,23 @@ static int __attribute__((noinline)) hxlcl_getpid(void) {
 // net.c's os_getuid() pulled in (RUNTIME Tier-A.4 POSIX direct svc trap).
 static int __attribute__((noinline)) hxlcl_getuid(void) {
     return (int)_hxlcl_syscall1(HXLCL_SYS_GETUID, 0);
+}
+// RUNTIME.md Tier-A.4 — backtrace / backtrace_symbols_fd hexa-native stubs.
+// These libc execinfo(3) fns are pulled in ONLY by the HEXA_OOB_TRACE
+// diagnostic path in runtime_core.c (array OOB tracer). A self-host compiler
+// has no need for a real frame walker; the stub returns "no frames captured"
+// and writes a single advisory line to fd via the svc-trap hxlcl_write. The
+// HEXA_OOB_TRACE [OOB] message + the actual hexa_throw still surface — only
+// the (unavailable on a stripped self-host binary) symbolized frames go away.
+// Drops the libc _backtrace + _backtrace_symbols_fd externs (29 -> 27).
+static int __attribute__((noinline)) hxlcl_backtrace(void **buf, int sz) {
+    (void)buf; (void)sz;
+    return 0;  // 0 frames captured — hexa-native stub, no real unwinder
+}
+static void __attribute__((noinline)) hxlcl_backtrace_symbols_fd(void *const *buf, int sz, int fd) {
+    (void)buf; (void)sz;
+    static const char msg[] = "(backtrace unavailable — hexa-native stub)\n";
+    hxlcl_write(fd, msg, sizeof(msg) - 1);
 }
 // cycle 66 — libc dup2 (same carry-flag issue as close).
 extern int dup2(int oldfd, int newfd);

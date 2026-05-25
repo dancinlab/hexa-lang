@@ -2,6 +2,42 @@
 
 Append-only history sister of `INBOX.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
+## 2026-05-25 — cloud INBOX FULL CLOSURE: pool-route 0.6.10 ships both cross-repo items
+
+직전 entry 들에서 pool-route 플러그인 소관으로 재분류했던 2건이 실제로 shipped. cloud INBOX open = 0.
+
+- [x] **06:37Z pool-route `hexa cloud` 오라우팅 — SHIPPED in pool-route 0.6.10** (`dancinlab/sidecar` `be00745`). classifier 가 `hexa cloud *` 를 `toks` 인접쌍 + substring 으로 조기 `_allow()` → 항상 로컬. cloud 의 `--` 뒤 remote argv heavy-word(nvidia-smi·train.log·make) 이중 라우팅 차단.
+- [x] **08:10Z(a) preflight worktree fallback — SHIPPED in pool-route 0.6.10** (`be00745`). 정확한 fix locus = `_pool_route.hexa` workdir 해소부: `/tmp/wt-x` git worktree 가 `cwd outside $HOME` 로 거부되던 것을 `git worktree list --porcelain`(main 첫 줄)로 canonical-root 얻어 mirror (기존 deny 브랜치 내부에서만 → 회귀 0). `hexa cloud preflight`(preflight.hexa)는 path 의존 0 이라 무관했음이 확정.
+- 검증 4 케이스 PASS: `hexa cloud exec`→allow(local) · `hexa kick`→여전히 라우팅(회귀 없음) · 비-git `/tmp`→deny 유지 · `/tmp` worktree→`~/core/sidecar` rescue + ubu-2 라우팅. cache sync HEAD `be00745` (0.6.10).
+
+## 2026-05-25 — cloud INBOX all-closure: reconcile vast GHOST FIX + preflight 재분류
+
+직전 triage(아래)에서 남긴 진짜-open 2건을 닫음.
+
+- [x] **06:37Z reconcile vast GHOST 오분류 — FIXED (이 PR)**. `pod_registry.hexa::cloud_reconcile_print` 가 `runpod_list_pods().pod_ids` 만 cross-ref → vast pod 전부 GHOST 였음. fix = `vast_list_instances().instance_ids` 와 union (provider-agnostic). **Falsifier (live vast 데이터)**: INBOX 가 지목한 인스턴스 `37618320`·`37619639` 가 fix 전 GHOST → fix 후 **OK** (둘 다 `cloud list` 의 live vast set 에 존재). 진짜-gone pod(`37610503` 등)는 양쪽 set 부재로 GHOST 유지 = 정상. `reconcile_test.hexa` 7/7 PASS (provider-union 멤버십 contract guard).
+- [x] **08:10Z(a) preflight worktree-path fallback → SHIPPED pool-route 0.6.10** (`be00745` · 위 FULL CLOSURE entry). `hexa cloud preflight`(preflight.hexa `preflight_run`)는 `--params/--gpu/...` 에 대한 순수 closed-form GPU-mem 예산 계산 — workdir/path 의존 0. 실 fix = `_pool_route.hexa` workdir 해소부의 worktree→canonical-root fallback. routing 건(06:37Z)과 동일 소관.
+
+## 2026-05-25 — cloud INBOX 코드-대조 정정 (resolved-flip + awaits-타겟 교정 · this-session triage)
+
+아래 미해소 cloud 항목들을 origin/main(47f5191d) 코드와 대조 → 일부가 이미 landed인데 `open`으로 남아 있어 정정. 표기만 갱신(코드 변경 없음).
+
+- [x] **09:30Z ssh exit-255 fast-fail — RESOLVED by #976** (`9e3426a7`). `cloud.hexa` `_ssh_capture_status` 가 로컬 ssh exit-code 를 반환 + `ConnectTimeout=8` → 도달불가 호스트가 ~8s 만에 exit-255 로 fast-fail + precise diagnostic. 제안(a) landed; (b) auto-down·(c) reachability-probe 는 잔존(별 entry 유지).
+- [x] **07:35Z / 06:37Z provider-truth·lifecycle verb — PARTIALLY RESOLVED by #798** (`4706d857`). `cloud_cli.hexa` 에 `rent`/`up`/`down`/`destroy`/`list`/`status` lifecycle verb landed (L542·561·580·592). `list`/`status` 가 `vast_list_instances`/`runpod_list_pods` wire → provider-truth 조회 verb 존재. 잔존 = 제안(b) installed-binary 승격(sign-gate 우회 self-provisioning).
+- [x] **06:37Z pool-route 오라우팅 → SHIPPED pool-route 0.6.10** (`be00745` · 위 FULL CLOSURE entry). classifier `_pool_route.hexa` 는 hexa-lang repo 가 아닌 `~/.claude/plugins/cache/sidecar/pool-route/` 에 있음. 제안(a) `hexa cloud *` 조기 `_allow()` 가 그 플러그인 0.6.10 으로 landed.
+- [x] **잔존 2건 → CLOSED (위 all-closure entry 참조)** — (1) 06:37Z reconcile vast GHOST → `cloud_reconcile_print` 가 vast+runpod union 으로 FIXED (live 37618320/37619639 GHOST→OK). (2) 08:10Z(a) preflight worktree fallback → pool-route 플러그인 소관으로 재분류 (hexa cloud preflight 는 path 의존 0).
+
+## 2026-05-25T07:35Z — hexa cloud lifecycle verb 부재 → raw vastai/runpodctl 직접 호출 강제 (orphan 양산 근원 · d8)
+
+demiurge RTSC micro-exp/agent provisioning 중 반복 발견 — `hexa cloud` 엔 transport/transfer verb (run·exec·nohup·poll·copy-to/from) 만 있고 **pod lifecycle verb (rent·list/ps·down·destroy) 가 부재**. pod 생성/라이브조회/종료를 하려면 raw `vastai create`·`vastai show instances`·`vastai destroy`·`runpodctl pod list` 를 직접 호출할 수밖에 없음. 이게 cloud-guard(g8) "hexa cloud 로만" 정책의 구멍이자 orphan 양산의 구조적 근원. 사용자 요청: vast/runpod CLI·API 를 직접 안 쓰게 hexa cloud 가 lifecycle 까지 일급 흡수.
+
+- [ ] **증상 — lifecycle 구멍** — `hexa cloud` (installed cycle-A binary) verb = run/exec/nohup/poll/copy-to/copy-from/orphans/reconcile/adopt/forget 뿐. `rent`·`list`·`down`·`destroy` 없음. cloud-guard 는 raw vastai/runpodctl 의 exec/ssh/transfer 만 차단하고 lifecycle(create/show/destroy)은 **명시적으로 허용** → provisioning 이 정식 경로가 없어 raw CLI 로 샘.
+- [ ] **실증 (이번 세션 4건)** — (1) micro-exp + 2 agent 가 `hexa cloud rent` 부재로 `vastai create` 직접 사용. (2) `vastai destroy` 는 인터랙티브 `[y/N]` 확인 → 비대화형에서 `Aborted` → **pod 살아있는데 forget 돼 orphan 화 실제 발생** (printf 'y' 파이프로 수동 강제 종료). (3) 라이브/과금 조회는 `vastai show instances`·`runpodctl pod list` 직접 (provider-truth verb 부재). (4) `stdlib/cloud/cloud_cli.hexa rent` 경로는 `hexa run` 이라 **local sign-gate (user-only)** 필요 → 에이전트 자가 provisioning 불가 (deck-ready YSbH₆ 에이전트가 토큰 대기 중 정지).
+- [ ] **부가 — provider-truth 조회 공백** — `hexa cloud list/ps` (vast/runpod 라이브 인스턴스 + 과금 직접 조회) 부재. `reconcile` 의 GHOST 오분류(#967 동봉)와 함께, 정상 점검에 raw `vastai show`/`runpodctl pod list` 강제.
+- [ ] **제안 (a · 핵심)** — hexa cloud 에 **lifecycle verb 일급 추가**: `rent <provider> [--query ...] [--owner ...]` (tracked → pods.jsonl) · `list`/`ps` (provider-truth 라이브+과금) · `down <pod>` (**비대화형** destroy + forget 원자적, `[y/N]` 프롬프트 없음) · `destroy <pod>`. 이로써 raw vastai/runpodctl/API 호출 0 → cloud-guard 가 lifecycle 까지 차단 가능 (진짜 single-surface).
+- [ ] **제안 (b)** — `cloud_cli.hexa` 의 `rent` 를 **installed binary (cycle-D lifecycle)** 로 승격 → `hexa run` (sign-gate) 불필요. 에이전트가 자가 provisioning 가능해짐.
+
+Status: PARTIALLY-RESOLVED 2026-05-25 · rent/up/down/destroy/list/status lifecycle verb landed (#798 · 4706d857) · provider-truth list/status verb 존재 · 잔존:제안(b) installed-binary 승격(self-provisioning sign-gate 우회) · source:demiurge RTSC micro-exp/Mg₂XH₆ 세션
+
 ## 2026-05-25T06:37Z — pool-route 가 `hexa cloud` 를 ubu 로 오라우팅 (remote argv heavy-word 트립 · cloud verb 는 Mac-local-only · d8)
 
 죽은-맥 복구 세션(demiurge RTSC)에서 발견 — `hexa cloud exec/run <pod>` 의 **remote argv** 에 heavy-word 가 들면 pool-route(0.6.9) classifier 가 전체 명령을 heavy 로 판정 → ubu-1/ubu-2 로 ssh 라우팅. 그러나 `hexa cloud` 는 Mac-local-only (로컬 hexa 빌드 + `stdlib/cloud/cloud_cli.hexa` 필요) → ubu 에서 `unknown subcommand 'cloud'`(ubu-2) / `source file not found: stdlib/cloud/cloud_cli.hexa`(ubu-1) 로 실패. 위 09:30Z exit-255 와 별개 — 이건 라우팅이 애초에 잘못된 호스트로 가는 문제.
@@ -13,7 +49,7 @@ Append-only history sister of `INBOX.md`. Each entry starts with `## <ISO timest
 - [ ] **제안 (b · 대안)** — classifier 가 `--` delimiter 이후 remote argv 를 heavy-word 스캔에서 제외 (delimiter-aware). cloud 외 다른 wrapper 에도 일반 적용되나 (a) 보다 복잡.
 - [ ] **부가 gap — `hexa cloud reconcile` GHOST 오분류** — vast 라이브 인스턴스(37618320·37619639)를 `vastai show instances` 로 RUNNING 확인했으나 reconcile 은 둘 다 GHOST(=provider 부재)로 표기. reconcile 의 vast provider cross-ref 가 실제 조회를 못 하는 정황. provider-truth inventory verb (`hexa cloud list`/`ps` — vast/runpod 라이브+과금 직접 조회) 부재로 raw curl 우회 시 cloud-guard 가 차단 → 정상 점검 경로 공백. provider-direct list verb 필요.
 
-Status: open · proposed-by:agent · severity:medium-high (복구·점검 작업 비결정적 차단 + provider-truth 점검 경로 공백) · source:demiurge 죽은-맥 RTSC 복구 세션 · awaits:hexa-lang fix
+Status: open · proposed-by:agent · severity:medium-high (복구·점검 작업 비결정적 차단) · source:demiurge 죽은-맥 RTSC 복구 세션 · awaits:**pool-route 플러그인** fix (classifier 가 hexa-lang repo 아님 — ~/.claude/plugins/cache/sidecar/pool-route/) · 부가 provider-list verb 는 #798 로 해소 · reconcile vast GHOST 만 잔존
 
 ## 2026-05-25T09:30Z — hexa cloud vast ssh-transport exit-255 outage 감지/fail-fast 부재 (h3o SSCHA · d8)
 
@@ -23,7 +59,7 @@ h3o SSCHA agent 가 발견 — vast pod 37670312 (+ 다른 2 pod) 전부 `hexa c
 - [ ] **영향** — pod ~9.2h billing 中 usable connection 0 → ≈$2.76 낭비 + 작업 차단. SSCHA agent 가 vast 포기 → pool ubu-1 으로 pivot ($0 으로 완주).
 - [ ] **제안** — (a) `hexa cloud` 가 ssh exit-255 (transport 실패) 를 감지 → fast-fail + "vast outage" 진단 메시지 (현재는 무한 시도/모호 실패). (b) optional auto-down on N consecutive 255 (billing 보호). (c) `hexa cloud list` 에 reachability probe (alive≠reachable 구분).
 
-Status: open · proposed-by:agent · severity:medium-high (billing 낭비 + 작업 차단 · vast 의존 캠페인에 치명) · source:h3o SSCHA agent (demiurge PR #141 · afe7b61) · awaits:hexa-lang fix
+Status: RESOLVED 2026-05-25 · #976 (9e3426a7) — _ssh_capture_status 가 로컬 ssh exit-code 반환 + ConnectTimeout=8 → exit-255 transport outage 가 ~8s fast-fail + precise diagnostic. 제안(a) landed · 잔존:(b) auto-down·(c) reachability-probe · source:h3o SSCHA agent (demiurge PR #141 · afe7b61)
 
 ## 2026-05-25T08:45Z — stdlib primitive atlas register path gap (`--from-selftest` arm 부재 · NOVEL-TOOL 13 primitive 발견)
 
