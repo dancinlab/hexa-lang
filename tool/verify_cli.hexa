@@ -208,6 +208,10 @@ fn cmd_rubric() {
     println("             viola_seaborg_log10_t(Z,Qα) → (aZ+b)/√Qα+(cZ+d)     (Viola-Seaborg α-decay log10 T₁/₂[s], NUCLEAR N7/N11, 2-arg)")
     println("             royer_log10_t(Z,A,Qα)       → a+bA^{1/6}√Z+cZ/√Qα   (Royer 2000 α-decay log10 T₁/₂[s], NUCLEAR N7/N11, 3-arg)")
     println("             sf_log10_t(Z,A)             → 21.08+ΣCᵢxⁱ/A           (Ren-Xu 2005 SF log10 T₁/₂[s], NUCLEAR C1, 2-arg)")
+    println("             sf_log10_t_hindered(Z,A)    → sf_log10_t+HF(0/5/10)   (Ren-Xu+Hoffman93 odd-A/odd-odd HF, NUCLEAR C3, 2-arg)")
+    println("             sf_log10_t_zwp(Z,A)         → F(Z)+parity+7.499122    (Zdeb-Warda-Pomorski 2013 SF log10 T₁/₂[s], NUCLEAR C4, 2-arg)")
+    println("             sf_consensus_mean(Z,A)      → (C3⊕C4)/2               (SF 2-formula consensus mean log10 T₁/₂[s], NUCLEAR C4, 2-arg)")
+    println("             sf_consensus_spread(Z,A)    → |C3−C4|                 (SF 2-formula raw max−min spread [dex], NUCLEAR C4, 2-arg)")
     println("             total_halflife_log10(Lα,Lsf) → −log10(10^−Lα+10^−Lsf) (α⊕SF total log10 T₁/₂[s], NUCLEAR C1, 2-arg)")
     println("             alpha_sf_branching(Lα,Lsf)  → 10^−Lα/(10^−Lα+10^−Lsf) (α branching ratio b_α, NUCLEAR C1, 2-arg)")
     println("             island_weight(Z,N,σ)        → exp(−(dZ²+dN²)/2σ²)     (island-of-stability magic-distance weight, NUCLEAR C2, 3-arg)")
@@ -1335,6 +1339,97 @@ fn _alpha_sf_branching(l_alpha: float, l_sf: float) -> float {
     return r_alpha / (r_alpha + r_sf)
 }
 
+// ── NUCLEAR C3/C4 — Round-2 A SF kernels (sim.hexa v0.8.0 mirror) ───────
+//
+// Closes the g5 honesty debt: the Round-2 A SF kernels carried only in-code
+// numerical self-checks; these register them as `hexa verify --expr` atoms
+// (same path/pattern as the C1 `sf_log10_t` above) so they earn a PROPER
+// g5 verdict (🟢 NUMERICAL within ε / 🔴 float-floor at rounded literals,
+// same class as VS/Royer/sf_log10_t). VERBATIM coefficients — mirror of
+// stdlib/nuclear/sim.hexa::sf_log10_t_hindered (C3) + sf_log10_t_zwp (C4)
+// + sf_consensus_cell (C4 spread). 2-arg (Z, A); N=A−Z.
+
+// model-validity / parity code: 0 even-even · 1 odd-A · 2 odd-odd. Shared
+// by the C3 Hoffman hindrance and the C4 ZWP parity shift (mirror of
+// sim.hexa::_model_validity_code, same parity test on (Z, N)).
+fn _sf_validity_code(zf: float, af: float) -> int {
+    let z_int = to_int(zf)
+    let n_int = to_int(af - zf)
+    let z_even = (z_int % 2) == 0
+    let n_even = (n_int % 2) == 0
+    if z_even && n_even { return 0 }
+    if z_even != n_even { return 1 }
+    return 2
+}
+
+// C3 — Hoffman 1993 odd-A/odd-odd SF hindrance addend [log10 s]:
+//   even-even → 0 · odd-A → +5.0 · odd-odd → +10.0
+// Hoffman, "Spontaneous Fission Properties...", Actinides-93 Symposium /
+// LLNL UCRL-JC-115794 (1993) p.4 (log HF 10^5 odd-A, 10^10 odd-odd). The
+// addend LENGTHENS T_SF (positive). Mirror of sim.hexa::_sf_hindrance_log10.
+fn _sf_hindrance_log10(zf: float, af: float) -> float {
+    let code = _sf_validity_code(zf, af)
+    if code == 0 { return 0.0 }
+    if code == 1 { return 5.0 }
+    return 10.0
+}
+
+// C3 — Ren-Xu 2005 SF log10 T₁/₂ [s] WITH the Hoffman 1993 hindrance folded
+// in. even-even cells == base sf_log10_t (addend 0); odd-A +5 dex; odd-odd
+// +10 dex. 2-arg (Z, A). Mirror of sim.hexa::sf_log10_t_hindered.
+// Reference: Z=118 A=294 (even-even) → -2.8643527619047653 (== base).
+fn _sf_log10_t_hindered(zf: float, af: float) -> float {
+    if af <= 0.0 { return _NOCALC_F }
+    return _sf_log10_t(zf, af) + _sf_hindrance_log10(zf, af)
+}
+
+// C4 — ZWP parity shift [log10 y]: even-even → 0 · odd-A → +10.3 · odd-odd
+// → +17.8 (Zdeb-Warda-Pomorski 2013 PRC 87 024308 Eq.5, global SF hindrance).
+fn _sf_zwp_parity(zf: float, af: float) -> float {
+    let code = _sf_validity_code(zf, af)
+    if code == 0 { return 0.0 }
+    if code == 1 { return 10.3 }
+    return 17.8
+}
+
+// C4 — Zdeb-Warda-Pomorski 2013 bare liquid-drop SF log10 T₁/₂ [s] (δM=0):
+//   log10(T_sf/y) = F(Z) + parity ;  F(Z) = -4Z + 371.2 (Z<104) / -42.8 (Z≥104)
+//   → log10 s via +log10(365.25·86400) = +7.499122.
+// VERBATIM coefficients (PRC 87 024308 Eqs.4-5); shell δM honestly dropped
+// (conservative short-T_SF bound). 2-arg (Z, A). Mirror of sim.hexa::
+// sf_log10_t_zwp. Reference: Z=118 A=294 (Z≥104, even-even) → -35.300878.
+fn _sf_log10_t_zwp(zf: float, af: float) -> float {
+    if af <= 0.0 { return _NOCALC_F }
+    let z_int = to_int(zf)
+    let mut fz = 371.2 + (0.0 - 4.0) * zf
+    if z_int >= 104 { fz = 0.0 - 42.8 }
+    return fz + _sf_zwp_parity(zf, af) + 7.499122
+}
+
+// C4 — SF 2-formula consensus scalar accessors from (Z, A): Ren-Xu hindered
+// (C3) ⊕ Zdeb-Warda-Pomorski (C4) → unweighted mean / raw (max−min) spread.
+// Scalar one-shot views of sim.hexa::sf_consensus_cell (ConsensusSF struct);
+// the honest SF uncertainty band (SF scatter ±2-3 dex > α's ±0.5-1).
+// 2-arg (Z, A). Reference: Z=118 A=294 → mean -19.082615380952383, spread
+// 32.436525238095228.
+fn _sf_consensus_mean(zf: float, af: float) -> float {
+    if af <= 0.0 { return _NOCALC_F }
+    let rx = _sf_log10_t_hindered(zf, af)
+    let zw = _sf_log10_t_zwp(zf, af)
+    return (rx + zw) / 2.0
+}
+
+fn _sf_consensus_spread(zf: float, af: float) -> float {
+    if af <= 0.0 { return _NOCALC_F }
+    let rx = _sf_log10_t_hindered(zf, af)
+    let zw = _sf_log10_t_zwp(zf, af)
+    let mut lo = rx
+    let mut hi = rx
+    if zw < lo { lo = zw }
+    if zw > hi { hi = zw }
+    return hi - lo
+}
+
 // ── NUCLEAR C2 — island-of-stability weight (sim.hexa mirror) ───────────
 //
 // Magic-number-distance 2-D Gaussian proximity weight ∈ (0,1] (NUCLEAR.md
@@ -1944,6 +2039,27 @@ fn _recompute_float(fn_name: string, a0: float, a1: float, a2: float, a3: float,
         if argc < 2 { return _NOCALC_F }
         return _alpha_sf_branching(a0, a1)
     }
+    // ── Nuclear C3/C4 — Round-2 A SF kernels (sim.hexa v0.8.0 mirror) ───
+    //   sf_log10_t_hindered(Z, A)         2-arg: Ren-Xu + Hoffman HF addend
+    //   sf_log10_t_zwp(Z, A)              2-arg: Zdeb-Warda-Pomorski 2013
+    //   sf_consensus_mean(Z, A)           2-arg: (C3 ⊕ C4) unweighted mean
+    //   sf_consensus_spread(Z, A)         2-arg: (C3 ⊕ C4) raw max−min spread
+    if fn_name == "sf_log10_t_hindered" {
+        if argc < 2 { return _NOCALC_F }
+        return _sf_log10_t_hindered(a0, a1)
+    }
+    if fn_name == "sf_log10_t_zwp" {
+        if argc < 2 { return _NOCALC_F }
+        return _sf_log10_t_zwp(a0, a1)
+    }
+    if fn_name == "sf_consensus_mean" {
+        if argc < 2 { return _NOCALC_F }
+        return _sf_consensus_mean(a0, a1)
+    }
+    if fn_name == "sf_consensus_spread" {
+        if argc < 2 { return _NOCALC_F }
+        return _sf_consensus_spread(a0, a1)
+    }
     // ── Nuclear C2 — island-of-stability weight (NUCLEAR.md §6.2 · C2) ──
     //   island_weight(Z, N, σ)            3-arg: exp(−(dZ²+dN²)/(2σ²))
     if fn_name == "island_weight" {
@@ -2085,6 +2201,9 @@ fn _is_float_fn(fn_name: string) -> bool {
         // Nuclear C1 — SF competition (NUCLEAR.md §4.2 · NOVEL C1 · 2026-05-25):
         || fn_name == "sf_log10_t" || fn_name == "total_halflife_log10"
         || fn_name == "alpha_sf_branching"
+        // Nuclear C3/C4 — Round-2 A SF kernels (sim.hexa v0.8.0 · g5 atoms · 2026-05-25):
+        || fn_name == "sf_log10_t_hindered" || fn_name == "sf_log10_t_zwp"
+        || fn_name == "sf_consensus_mean" || fn_name == "sf_consensus_spread"
         // Nuclear C2 — island-of-stability weight (NUCLEAR.md §6.2 · 2026-05-25):
         || fn_name == "island_weight"
         // Nuclear G1 — (Z,N,A,Q_α) consistency guard (NUCLEAR.md §3.3 · gap-audit):
