@@ -149,6 +149,28 @@
   status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal · paper-eligible."
 
 # ───────────────────────────────────────────────────────────────────────
+# GPU — fusion-attention-flash (slug · group=GPU · paper-track · GPU.md §10)
+# The §10 moat case cuBLAS structurally CANNOT do: a single fused
+# flash-attention kernel computing softmax(Q K^T/sqrt(d))V with online-
+# softmax tiling (S never to HBM). Structural clause PROVEN closed-form;
+# WALL clause FALSIFIED (closed-negative — naive scalar kernel slower than
+# cuBLAS Tensor Cores). Both verdicts terminal, REAL, persisted verbatim.
+
+@C fusion_attn_flash_structural := "fused flash-attention = 1 launch + 0 S-HBM vs cuBLAS-baseline 3 launches + O(N^2) S; total-HBM ratio R(N,d)=1.25+N/d (33.25x @ N=2048,d=64)" :: formula [slug=fusion-attention-flash group=GPU]
+  method = "fixpoint"
+  cmd    = "cc -O2 structural_oracle.c && ./structural_oracle ; hexa build ratio_check.hexa && ./fa_ratio_check"
+  raw    = ".verdicts/fusion-attention-flash/F-FUSION-ATTENTION-FLASH.txt"
+  src    = "archive/fires/fusion_attention_flash_2026_05_25/{structural_oracle.c,ratio_check.hexa,flash_attn.ptx}"
+  status = "🔵 SUPPORTED-FORMAL — closed-form HBM ratio reproduced by hexa-native compile. REAL verdict persisted verbatim. terminal · paper-eligible."
+
+@C fusion_attn_flash_wall := "a NAIVE fused flash-attention kernel does NOT beat a cuBLAS Tensor-Core attention stack on wall — 1.4-1.5x SLOWER at N in {512..4096} d=64 (RTX 5070, 200 timed)" :: measurement [slug=fusion-attention-flash group=GPU]
+  method = "fixpoint"
+  cmd    = "ubu-2 RTX 5070: fused_host flash_attn.ptx vs cublas_base, cudaEvent 20 warmup 200 timed median"
+  raw    = ".verdicts/fusion-attention-flash/F-FUSION-ATTENTION-FLASH.txt"
+  src    = "tool/fusion_attn_flash_host.c + tool/fusion_attn_cublas_baseline.c"
+  status = "🔴 CLOSED-NEGATIVE — wall >=30% FALSIFIED, ruled-out axis (fusion alone insufficient; needs Tensor-Core inner GEMMs). REAL verdict persisted verbatim. terminal · paper-eligible."
+
+# ───────────────────────────────────────────────────────────────────────
 # TECS-L — tecs-l-dedekind-psi-uniqueness (slug · group=TECS-L · TECS-L.md M3)
 # Dedekind-ψ discrepancy, re-grounded hexa-native via `hexa verify` g5.
 #
