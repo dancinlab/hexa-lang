@@ -218,6 +218,9 @@ fn cmd_rubric() {
     println("             anz_reason(Z,N,A,Q_α)       → 0/1/2/3/4 reason code   ((Z,N,A,Q_α) consistency guard, NUCLEAR G1, 4-arg)")
     println("             model_validity_flag(Z,N)    → 0/1/2 validity code     (odd-A hindrance / domain flag, NUCLEAR G2, 2-arg)")
     println("             consensus3_outlier_count(x0,x1,x2) → outlier count    (leave-one-out 3σ Byzantine guard, NUCLEAR G2, 3-arg)")
+    println("             is_neutron_drip(Sn)         → 1.0 if Sn<0            (neutron drip-line predicate, NUCLEAR N10, 1-arg)")
+    println("             is_proton_drip(Sp)          → 1.0 if Sp<0            (proton drip-line predicate, NUCLEAR N10, 1-arg)")
+    println("             dripline_margin(Sn,Sp)      → min(Sn,Sp) [MeV]       (closest-channel margin; <0 ⇒ past drip, NUCLEAR N10, 2-arg)")
 }
 
 let NOCALC: int = -999999
@@ -1531,6 +1534,35 @@ fn _consensus3_outlier_count(x0: float, x1: float, x2: float) -> float {
     return to_float(n_out)
 }
 
+// ── NUCLEAR N10 — drip-line predicates (stdlib/nuclear/dripline.hexa) ──
+//
+// VERBATIM mirror of stdlib/nuclear/dripline.hexa (NUCLEAR.md §4.5 N10).
+// Drip-line crossed when the separation energy is negative (particle-
+// unbound to 1n / 1p emission). Trivial closed-form comparisons; these
+// register the predicate identity itself (🟢 NUMERICAL, ε=1e-9). The Sn/Sp
+// inputs are CITED measured AME2020 values (arxiv:2105.01035) — §3.3 no
+// fabrication. Returns 1.0 (drip) / 0.0 (not). Reference: Sn=-0.757 → 1.0
+// (O-25 neutron-past-drip) · Sp=-1.378 → 1.0 (N-11 proton-past-drip) ·
+// Sp=+0.136 → 0.0 (B-8 near but bound).
+fn _is_neutron_drip(sn_mev: float) -> float {
+    if sn_mev < 0.0 { return 1.0 }
+    return 0.0
+}
+
+fn _is_proton_drip(sp_mev: float) -> float {
+    if sp_mev < 0.0 { return 1.0 }
+    return 0.0
+}
+
+// dripline_margin(Sn, Sp) — the smaller (closest-to/past-line) of the two
+// separation energies [MeV]; <0 ⇒ particle-unbound by |margin|. Mirror of
+// dripline.hexa::classify_dripline margin field. 2-arg (Sn, Sp). Reference:
+// (Sn=-0.757, Sp=26.898) → -0.757 (O-25) · (Sn=4.192, Sp=25.509) → 4.192 (O-24).
+fn _dripline_margin(sn_mev: float, sp_mev: float) -> float {
+    if sn_mev < sp_mev { return sn_mev }
+    return sp_mev
+}
+
 // ── Bio-physical Phase 3 (demiurge cross-domain V2 closure) ─────────
 // Three remaining identities from the inbox patch — Higuchi sustained
 // release (2-arg, simple form) · Tafel overpotential (3-arg, log10 path)
@@ -2084,6 +2116,20 @@ fn _recompute_float(fn_name: string, a0: float, a1: float, a2: float, a3: float,
         if argc < 3 { return _NOCALC_F }
         return _consensus3_outlier_count(a0, a1, a2)
     }
+    // ── Nuclear N10 — drip-line predicates (NUCLEAR.md §4.5 · dripline.hexa) ─
+    //   is_neutron_drip(Sn)               1-arg: 1.0 if Sn<0 (1n-unbound)
+    //   is_proton_drip(Sp)                1-arg: 1.0 if Sp<0 (1p-unbound)
+    //   dripline_margin(Sn, Sp)           2-arg: min(Sn,Sp) [MeV] (<0 ⇒ past)
+    if fn_name == "is_neutron_drip" {
+        return _is_neutron_drip(a0)
+    }
+    if fn_name == "is_proton_drip" {
+        return _is_proton_drip(a0)
+    }
+    if fn_name == "dripline_margin" {
+        if argc < 2 { return _NOCALC_F }
+        return _dripline_margin(a0, a1)
+    }
     // ── Bio-physical Phase 3 (demiurge cross-domain V2 closure) ─────────
     //   higuchi(k_H, t)                   2-arg: k_H * sqrt(t)
     //   tafel(a, b, j)                    3-arg: a + b * log10(j)
@@ -2210,6 +2256,9 @@ fn _is_float_fn(fn_name: string) -> bool {
         || fn_name == "anz_reason"
         // Nuclear G2 — odd-A model-validity + consensus outlier (NUCLEAR.md §6.2 · gap-audit):
         || fn_name == "model_validity_flag" || fn_name == "consensus3_outlier_count"
+        // Nuclear N10 — drip-line predicates (NUCLEAR.md §4.5 · dripline.hexa · 2026-05-25):
+        || fn_name == "is_neutron_drip" || fn_name == "is_proton_drip"
+        || fn_name == "dripline_margin"
         // Bio-physical Phase 3 (demiurge cross-domain V2 closure):
         || fn_name == "higuchi" || fn_name == "tafel" || fn_name == "hagen_poiseuille"
         // TTR-ORAL / TTR-LAC bundle (topical PK + laser optics · INBOX T22:35Z):
