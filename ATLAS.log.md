@@ -82,6 +82,39 @@ proof·diff verb KEEP).
 → `# unknown id` + exit 1 / no-arg → usage exit 2. auto_edge.hexa 본문 g4 내 + atlas_cli 1-블록.
 embedded.gen.hexa·cascade.hexa·proof_chain.hexa·audit.hexa 무수정.
 
+## 2026-05-25 — R7 numerology 격리 tier (`hexa atlas stats --numerology` · read-only quarantine)
+
+goal(deferred): "numerology 격리 tier". g5 honesty 루브릭은 실검증(🔵/🟢)과 미지지 주장을 구분한다.
+NUMEROLOGY 노드 = 유도/인용 없이 무관 상수간 수치 우연일치(비율·등식)를 주장하는 노드. 엄밀 노드와
+silent-mix되면 안 됨 → DETECT + ISOLATE해 가시적 quarantine. READ-ONLY(노드 mutate·grade 변경 無).
+
+**조사**: 노드 모델 = `parser.hexa` `AtlasNode`(kind·id·raw·grade·edges). audit.hexa 기존 헬퍼
+재사용 — `_kind_is_cite_bearing`·`_node_has_cite`(`cite =` substring OR `|>`verified_by)·
+`_raw_has_verified`(raw `*]` 폴백)·`_extract_domain`(헤더 `:: <domain>` 토큰)·`_au_ltrim/rtrim`.
+실데이터 마이닝(16101 노드): 진짜 numerology = `MILL-V3-T4-n6-numerical-coincidence`(12/5=σ(6)/sopfr(6)
+post-hoc) + `MILL-PX-A3-ym-beta0`(σ(6)-sopfr(6)=12-5=7, COINCIDENCE_NOT_PROOF 자기태그). 둘 다 [7]·
+무인용. 함정: `coincidence`/`post-hoc`/`수치일치` 키워드가 **반증/진단** 노드에도 등장(clay
+falsifier "ticks=12 was COINCIDENCE"는 우연을 *반증* · MCSP "수치일치 패턴조차 없음"은 link *부정*).
+
+**설계(보수적 4-신호 AND)**: false-positive 평판 비용 高 → 4개 모두 충족해야 flag. (1) 우연일치 SHAPE를
+헤더 **CLAIM BODY**(`id = ` 분리자 strip 후)에 한정: `≈`·숫자 비율-등식(`/` `=` 좌측)·숫자 `=…=…`
+체인. body 한정이 토론 `=>` 엣지의 우연 언급을 제외(그들은 우연을 반증) · (2) numerolog/coincidence/
+수치일치/coincidence_not_proof 키워드(일반 유도공식 부재) · (3) 무검증([*] 아님) · (4) 무인용
+(`_node_has_cite`). **핵심 false-positive 차단**: `id = ` 분리자를 strip하지 않으면 `@R …-non-applicability
+= n=6 … 연결 없음`(정직한 link-DENIAL [10])의 `id =` + `n=6`이 `=…=…` 체인으로 오탐 → strip 후 정확히 제외.
+
+- [x] compiler/atlas/audit.hexa (+`NumerologyReport`/`NumItem` struct · `_nu_has_coinc_keyword`·
+  `_nu_header_line`·`_nu_claim_body`·`_nu_header_has_coincidence_shape`·`_nu_has_second_eq`·
+  `_nu_has_digit`·`_nu_is_verified`·`_nu_is_numerology` · `audit_numerology_with_scope/_overlay` ·
+  `numerology_to_text/_to_json`). 기존 audit/acquisition 코드 무수정 — 순수 additive.
+- [x] compiler/atlas/audit_rodata.hexa (+`audit_numerology_rodata`·`audit_numerology_merged` 래퍼 2).
+- [x] tool/atlas_cli.hexa (`--numerology` 플래그 + 1-블록 dispatch + help 1줄; audit·acquisition verb KEEP).
+- [x] 검증: `hexa parse` 3파일 clean → bin/hexa-atlas 빌드(worktree module_loader fresh build) →
+  `stats --numerology --scope=rodata` → **scanned 16101 · quarantine 정확히 2**(둘 다 진짜 우연일치·
+  무유도·무인용 cross-check) · `--format=json` python json.load PASS · 기존 모드 회귀 0(plain stats·
+  `--audit` entries 16101 · `--acquisition` 프론티어 2150 불변). false-positive 0(MCSP non-applicability·
+  clay falsifier 모두 제외 실측). g4: 순 추가 ~198 LOC(<200).
+
 ## 2026-05-25 — R6 proof-chain export (`hexa atlas proof <id>` · read-only · cascade INVERSE)
 
 goal(deferred 신규역량): "proof-chain export". 아틀라스 노드의 edge 그래프를 walk해 그 claim이

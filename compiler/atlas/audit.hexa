@@ -739,6 +739,194 @@ pub fn acquisition_to_text(rep: AcqReport) -> string {
     return p.join("")
 }
 
+// --- R7: numerology quarantine tier (read-only isolation) ------------------
+//
+// NUMEROLOGY-style nodes assert a suspicious numeric coincidence (a ratio /
+// equality between otherwise-unrelated constants) WITHOUT a derivation or
+// citation. They should be visibly QUARANTINED, not silently mixed among
+// rigorous nodes. This sub-mode DETECTS + ISOLATES them — READ-ONLY (no node
+// mutation, no grade change). CONSERVATIVE: false-positives are costly, so a
+// node must meet ALL FOUR signals (any one alone is insufficient):
+//   (1) coincidence SHAPE in the header CLAIM BODY (after the `id = ` sep):
+//       a `≈`, a numeric ratio-equality (`a/b = …`), or a numeric `= … = …`
+//       chain. Confining to the header body excludes robustness/falsifier
+//       nodes that only DISCUSS "coincidence" in `=>` edges (they refute it).
+//   (2) a coincidence/numerology KEYWORD in raw (numerolog / coincidence /
+//       수치일치 / coincidence_not_proof) — ordinary formulas lack this.
+//   (3) NO verification — not [*]-graded (structured grade or raw `*]`).
+//   (4) NO citation — no `cite =` and no `|>` verified_by (via _node_has_cite).
+
+pub struct NumItem {
+    kind: string,
+    id: string,
+    domain: string,
+    header: string       // the trimmed header claim line (the coincidence)
+}
+
+pub struct NumerologyReport {
+    audit_scope: string,
+    scanned_count: i64,      // total nodes scanned
+    flagged_count: i64,      // nodes meeting the full numerology signature
+    items: array             // [NumItem] — quarantined nodes (id order)
+}
+
+// Coincidence/numerology keyword probe (case-insensitive substring set).
+fn _nu_has_coinc_keyword(raw: string) -> bool {
+    let lo = raw.to_lower()
+    if lo.index_of("numerolog") >= 0 { return true }
+    if lo.index_of("coincidence") >= 0 { return true }
+    if lo.index_of("coincidence_not_proof") >= 0 { return true }
+    if raw.index_of("수치일치") >= 0 { return true }   // KO: "numeric match"
+    return false
+}
+
+// First (header) line of a node's raw text.
+fn _nu_header_line(raw: string) -> string {
+    let nl = raw.index_of("\n")
+    let h = if nl >= 0 { raw.substring(0, nl) } else { raw }
+    return _au_rtrim(_au_ltrim(h))
+}
+
+// True if `s` contains a second `=` after position `from` (a `= … = …`
+// chain — characteristic of "a = b = c" numeric re-writes).
+fn _nu_has_second_eq(s: string, from: i64) -> bool {
+    let rest = s.substring(from, len(s))
+    return rest.index_of("=") >= 0
+}
+
+// True if a single ascii digit sits anywhere in `s`.
+fn _nu_has_digit(s: string) -> bool {
+    let n = len(s)
+    let mut i = 0
+    while i < n {
+        let c = s.substring(i, i + 1)
+        if c >= "0" && c <= "9" { return true }
+        i = i + 1
+    }
+    return false
+}
+
+// Strip the leading `id = ` value separator so the shape check sees only the
+// CLAIM BODY. Without this, the node's own `id = body` separator would be
+// miscounted as part of a `= … = …` chain (e.g. an HONEST "…-non-applicability
+// = n=6 … 연결 없음" denial would falsely flag). Drops up to & incl the first
+// " = "; if absent, returns the header unchanged.
+fn _nu_claim_body(header: string) -> string {
+    let sep = header.index_of(" = ")
+    if sep >= 0 { return header.substring(sep + 3, len(header)) }
+    return header
+}
+
+// Coincidence SHAPE over the CLAIM BODY: a `≈`, a numeric ratio-equality
+// (`/` left of an `=`, e.g. `12/5=σ(6)/…`), or a numeric `= … = …` chain
+// (e.g. `beta_0 = sigma(6) - sopfr(6) = 12 - 5 = 7`).
+fn _nu_header_has_coincidence_shape(header: string) -> bool {
+    let body = _nu_claim_body(header)
+    if body.index_of("≈") >= 0 { return true }
+    let eq = body.index_of("=")
+    if eq < 0 { return false }
+    // ratio-equality: a `/` appears left of the first `=`.
+    let slash = body.index_of("/")
+    if slash >= 0 && slash < eq && _nu_has_digit(body) { return true }
+    // numeric multi-`=` chain (a second `=` past the first) with a digit.
+    if _nu_has_second_eq(body, eq + 1) && _nu_has_digit(body) { return true }
+    return false
+}
+
+// Verified marker (structured grade OR raw `*]` fallback for frozen rodata).
+fn _nu_is_verified(node: AtlasNode) -> bool {
+    if node.grade.value >= 0 { return node.grade.verified }
+    return _raw_has_verified(node.raw)
+}
+
+// The full conservative numerology signature (all four signals).
+fn _nu_is_numerology(node: AtlasNode) -> bool {
+    if !_nu_has_coinc_keyword(node.raw) { return false }            // (2)
+    if !_nu_header_has_coincidence_shape(_nu_header_line(node.raw)) { return false } // (1)
+    if _nu_is_verified(node) { return false }                       // (3)
+    if _node_has_cite(node) { return false }                        // (4)
+    return true
+}
+
+// audit_numerology_with_scope — enumerate the numerology quarantine tier
+// over `nodes`. Read-only: no node mutation, no grade change.
+pub fn audit_numerology_with_scope(scope_name: string, nodes: array) -> NumerologyReport {
+    let n = len(nodes)
+    let items = []
+    let mut i = 0
+    while i < n {
+        let node0 = nodes[i]
+        let node = if node0.grade.value < 0 && node0.edges.depends_on.len() == 0
+            { enrich_node(node0) } else { node0 }
+        if node.kind != "" && _nu_is_numerology(node) {
+            items.push(NumItem {
+                kind: node.kind,
+                id: node.id,
+                domain: _extract_domain(node.raw),
+                header: _nu_header_line(node.raw)
+            })
+        }
+        i = i + 1
+    }
+    return NumerologyReport {
+        audit_scope: scope_name,
+        scanned_count: n,
+        flagged_count: len(items),
+        items: items
+    }
+}
+
+// audit_numerology_overlay — quarantine scan over the runtime overlay only.
+pub fn audit_numerology_overlay() -> NumerologyReport {
+    return audit_numerology_with_scope("overlay", overlay_load_cached())
+}
+
+// numerology_to_text — human-readable quarantine list.
+pub fn numerology_to_text(rep: NumerologyReport) -> string {
+    let p = []
+    p.push("=== atlas numerology quarantine: " + rep.audit_scope + " ===\n")
+    p.push("  scanned:           " + to_string(rep.scanned_count) + "\n")
+    p.push("  ⚠ quarantined:     " + to_string(rep.flagged_count)
+        + "  (coincidence-shape header · numerology keyword · no [*] · no cite)\n")
+    let mut i = 0
+    while i < len(rep.items) {
+        let it = rep.items[i]
+        p.push("    " + to_string(i + 1) + ". "
+            + it.kind + ":" + it.id
+            + "  dom=" + it.domain + "\n")
+        p.push("       " + it.header + "\n")
+        i = i + 1
+    }
+    if rep.flagged_count == 0 {
+        p.push("  (no numerology-tier nodes detected)\n")
+    }
+    return p.join("")
+}
+
+// numerology_to_json — machine-readable quarantine list for CI dashboards.
+pub fn numerology_to_json(rep: NumerologyReport) -> string {
+    let p = []
+    p.push("{\"scope\":\"")
+    p.push(_jesc(rep.audit_scope))
+    p.push("\",\"scanned_count\":")
+    p.push(to_string(rep.scanned_count))
+    p.push(",\"flagged_count\":")
+    p.push(to_string(rep.flagged_count))
+    p.push(",\"items\":[")
+    let mut i = 0
+    while i < len(rep.items) {
+        let it = rep.items[i]
+        if i > 0 { p.push(",") }
+        p.push("{\"kind\":\"" + _jesc(it.kind) + "\"")
+        p.push(",\"id\":\"" + _jesc(it.id) + "\"")
+        p.push(",\"domain\":\"" + _jesc(it.domain) + "\"")
+        p.push(",\"header\":\"" + _jesc(it.header) + "\"}")
+        i = i + 1
+    }
+    p.push("]}")
+    return p.join("")
+}
+
 // acquisition_to_json — machine-readable ranked frontier for CI dashboards.
 pub fn acquisition_to_json(rep: AcqReport) -> string {
     let p = []
