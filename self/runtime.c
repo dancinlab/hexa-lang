@@ -1057,21 +1057,58 @@ static inline long _hxlcl_syscall6(long nr, long a0, long a1, long a2, long a3, 
     return x0;
 }
 
-// cycle 66 — libc read/write (carry-flag issue + EINTR handling).
-extern long read(int fd, void *buf, unsigned long n);
-extern long write(int fd, const void *buf, unsigned long n);
+// cycle 70 — CARRY-FLAG-CORRECT svc 0x80 syscall traps.
+//
+// The Darwin arm64 BSD syscall ABI (`svc #0x80`) signals an ERROR by
+// setting the carry flag (C bit of NZCV/PSTATE) and returning the
+// POSITIVE errno in x0; on success the carry flag is clear and x0 holds
+// the result. The cycle-63/64 `_hxlcl_syscall{1..6}` helpers above
+// IGNORE the carry flag, so a failed syscall returned a small positive
+// errno that callers mistook for a valid fd/offset (e.g. ENOENT=2 looked
+// like fd 2). That is exactly why PR #251 (`8ea4b75e`) reverted the
+// read/write/close/... bodies to libc.
+//
+// These `_cf` variants capture the carry flag with `cset cs` immediately
+// after `svc`, then translate the kernel convention into the libc-style
+// convention the rest of the runtime expects: on carry, set the
+// hexa-native `errno` (= `hxlcl_errno` via the top-of-file #define) to
+// the positive errno and return -1; on success return x0 unchanged.
+static inline long _hxlcl_syscall1_cf(long nr, long a0) {
+    register long x0 __asm__("x0") = a0;
+    register long x16 __asm__("x16") = nr;
+    register long cf;
+    __asm__ volatile("svc #0x80\n\tcset %1, cs"
+                     : "+r"(x0), "=r"(cf) : "r"(x16) : "memory", "cc");
+    if (cf) { errno = (int)x0; return -1; }
+    return x0;
+}
+static inline long _hxlcl_syscall3_cf(long nr, long a0, long a1, long a2) {
+    register long x0 __asm__("x0") = a0;
+    register long x1 __asm__("x1") = a1;
+    register long x2 __asm__("x2") = a2;
+    register long x16 __asm__("x16") = nr;
+    register long cf;
+    __asm__ volatile("svc #0x80\n\tcset %1, cs"
+                     : "+r"(x0), "=r"(cf) : "r"(x1), "r"(x2), "r"(x16) : "memory", "cc");
+    if (cf) { errno = (int)x0; return -1; }
+    return x0;
+}
+
+// cycle 70 — read/write/close re-trapped via carry-flag-correct svc 0x80
+// (the inverse of PR #251's revert, but carry-correct this time). This is
+// the 3-syscall PROOF: read=SYS_READ(3), write=SYS_WRITE(4),
+// close=SYS_CLOSE(6). The remaining 31 R syscalls stay on libc until a
+// follow-up cycle scales this same `_cf` pattern. A failed read/close now
+// returns -1 + sets errno (not a bogus positive errno-as-result), so the
+// content-leak / bogus-fd hazards that motivated #251 cannot recur.
 static long __attribute__((noinline)) hxlcl_read(int fd, void *buf, unsigned long n) {
-    return read(fd, buf, n);
+    return _hxlcl_syscall3_cf(HXLCL_SYS_READ, (long)fd, (long)buf, (long)n);
 }
 static long __attribute__((noinline)) hxlcl_write(int fd, const void *buf, unsigned long n) {
-    return write(fd, buf, n);
+    return _hxlcl_syscall3_cf(HXLCL_SYS_WRITE, (long)fd, (long)buf, (long)n);
 }
-// cycle 66 — restore libc close. The svc 0x80 path returned errno on
-// failure without distinguishing from success-fd convention (no carry
-// flag access in inline asm), breaking pipe-close-then-read patterns.
-extern int close(int fd);
 static int __attribute__((noinline)) hxlcl_close(int fd) {
-    return close(fd);
+    return (int)_hxlcl_syscall1_cf(HXLCL_SYS_CLOSE, (long)fd);
 }
 static int __attribute__((noinline)) hxlcl_getpid(void) {
     return (int)_hxlcl_syscall1(HXLCL_SYS_GETPID, 0);
@@ -10555,7 +10592,10 @@ HexaVal hexa_dict_keys(HexaVal m) {
 // the cycle-101 (c25ef75e) port. See inbox/notes/2026-05-22-wipe-* for
 // the wipe-governance proposal.
 HexaVal __fd_write_bytes(HexaVal fd, HexaVal s) {
-    return hexa_int((int64_t)write((int)HX_INT(fd), HX_STR(s), (size_t)HX_STRLEN(s)));
+    // cycle 70 — route through hxlcl_write (carry-flag svc trap on
+    // darwin-arm64, libc on linux) rather than a bare libc write(), so the
+    // `_write` extern drops too (completes the read/write/close proof).
+    return hexa_int((int64_t)hxlcl_write((int)HX_INT(fd), HX_STR(s), (size_t)HX_STRLEN(s)));
 }
 
 // FIX-A (Anima stdlib unblock, 2026-04-19) ─────────────────────────

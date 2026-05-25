@@ -1007,6 +1007,80 @@ opt-in via `git config core.hooksPath .githooks`) + project.tape @D
   - `RUNTIME.md` (this entry)
 - Acceptance line: `cycle 68: atlas-loop-smoke CLOSED · root=ctype.hexa:684 rt_str_join_str (O(n²) join) · smoke PASS (exit 42) · PR #(this)`
 
+### 2026-05-25 — cycle 70: carry-flag-correct svc syscall re-trap (read/write/close PROOF) — CLOSED
+
+- cycle 70 — the fix PR #251 (`8ea4b75e`) **couldn't** do: a carry-flag-aware
+  `svc #0x80` syscall trap, proven on 3 syscalls (read/write/close) as a
+  de-risked beachhead before scaling to the remaining 31 R syscalls.
+
+- **Root mechanism (cycle 69 #927 diagnosis, now resolved)**: Darwin arm64
+  BSD syscalls (`svc #0x80`) signal ERROR by setting the **carry flag (C bit
+  of NZCV/PSTATE)** and return the POSITIVE errno in x0. The cycle-63/64
+  `_hxlcl_syscall{1..6}` helpers IGNORE the carry flag, so a failed `open()`
+  returning ENOENT=2 looked like a valid fd 2 (content-leak), `close(999)`
+  returned a bogus positive, `mmap` MAP_FAILED was defeated. That is exactly
+  why PR #251 reverted the bodies to libc — correctness over extern-count.
+
+- **The fix** — two new carry-flag variants in `self/runtime.c` (right after
+  `_hxlcl_syscall6`): `_hxlcl_syscall1_cf` + `_hxlcl_syscall3_cf`. Each
+  captures the carry flag with `cset %reg, cs` immediately after `svc`, then:
+  `if (cf) { errno = (int)x0; return -1; }` — translating the kernel
+  convention into the libc-style `-1`+errno convention the runtime expects.
+  `errno` here = the cycle-55 `hxlcl_errno` static (libc errno unhooked via
+  the top-of-file `#define errno hxlcl_errno`; confirmed it resolves there).
+
+- **3 syscalls re-trapped** (the inverse of PR #251's revert, but
+  carry-correct): `hxlcl_read`→`_hxlcl_syscall3_cf(SYS_READ=3,…)`,
+  `hxlcl_write`→`_hxlcl_syscall3_cf(SYS_WRITE=4,…)`,
+  `hxlcl_close`→`_hxlcl_syscall1_cf(SYS_CLOSE=6)`. Syscall numbers confirmed
+  vs `<sys/syscall.h>` (Darwin read=3 write=4 close=6 — already in the
+  `HXLCL_SYS_*` block). The redundant `extern long read/write` + `extern int
+  close` decls removed (real prototypes come from the global `<unistd.h>` at
+  runtime.c:15). Also routed `__fd_write_bytes` (runtime.c:10594) from a bare
+  libc `write()` → `hxlcl_write` so runtime.c no longer references libc
+  `_write` at all. The other 31 R syscalls stay on libc (3-syscall scope).
+
+- **Build** (`tool/build_aprime.sh`, in-worktree, no pool hijack):
+  **1,243,992 B** Mach-O arm64 (was 1,244,328 — 336 B smaller, libc-call
+  stubs → inline svc traps). atlas **loaded 16088 nodes**, smoke
+  **exit(6*7)==42 PASS**.
+
+- **Externs: 42 → 40** — `_read` GONE, `_close` GONE. `_write` PERSISTS but
+  is **NOT from the runtime syscall layer**: standalone `clang -c
+  self/runtime.c` + `llvm-nm` shows `_write` is *not* undefined in runtime.o
+  (my `__fd_write_bytes`→`hxlcl_write` route + term_ffi already-on-hxlcl
+  closed every runtime.c write site). The surviving `_write` comes from the
+  **transpiled compiler code** (hexa_v2 emits a bare libc `write()` for a
+  hexa-level write builtin in `compiler/main.hexa`) — a **codegen-layer**
+  emit, out of scope for this runtime syscall-trap cycle (follow-up =
+  hexa_v2/codegen write-builtin lowering, not a runtime.c change).
+
+- **Correctness PROOF (the WHOLE POINT — why #251 reverted)**:
+  1. **Isolated C probe** (`/tmp/cf_probe.c`, the exact `_cf` code copied
+     verbatim from runtime.c, `clang -O1 -arch arm64`): `close(999)` →
+     **ret=-1 errno=9 (EBADF)** NOT a bogus 999; `read(-1,…)` → **ret=-1
+     errno=9**; valid pipe roundtrip `write(pipe,6)`→**6 errno=0**,
+     `read(pipe,6)`→**6 data="hexa42"**, `close(valid)`→**0**. ALL PROBES
+     PASS — carry flag read correctly. (Without the `cset cs`, close(999)
+     would return the positive errno-as-fd — exactly the #251 bug.)
+  2. **atlas load = read()-heavy** (parses embedded.gen.hexa via the read
+     trap): **16088 nodes loaded** — a broken read trap would corrupt/truncate
+     the parse. Plus smoke exit 42. Both green ⇒ read+close are correct.
+
+- **Pattern scales to the remaining 31 R syscalls** (`dup2/pipe/fork/lseek/
+  fstat/stat/waitpid/open/mmap` + socket/exec family) in follow-up cycles:
+  same `_cf` helpers (add `_hxlcl_syscall2_cf/4_cf/6_cf` as needed; pipe/fork
+  also need the BSD x0/x1 pair-return capture, mmap the MAP_FAILED mapping) —
+  re-point each `hxlcl_*` body. The 3-syscall proof de-risks that the carry
+  mechanism is sound; the rest is mechanical per-wrapper re-pointing.
+
+- Files touched (per @D `wipe_guard`, runtime/syscall scope; +51/-11 lines,
+  net additive, well under wipe threshold):
+  - `self/runtime.c` — `_hxlcl_syscall{1,3}_cf` carry-flag helpers +
+    read/write/close re-trap + `__fd_write_bytes` hxlcl_write route
+  - `RUNTIME.md` (this entry)
+- Acceptance line: `cycle 70: carry-flag-svc-proof CLOSED · read/write/close re-trapped · externs 42→40 (_read+_close dropped; _write = codegen-layer, not runtime) · correctness PASS: atlas 16088 + smoke 42 + isolated-probe close(999)→-1/EBADF · PR #(this)`
+
 ### 2026-05-25 — cycle 69: externs regression catalog + diagnosis — CLOSED (measure-before-fanout)
 
 - cycle 69 — MEASURE-BEFORE-FANOUT diagnosis cycle. aprime_cc now BUILDS + SMOKES green on HEAD `bf9f9840` (cycle 68 #923 + #924). `tool/build_aprime.sh` in-worktree → **1,244,328 B Mach-O arm64**, atlas 16,088 nodes load, **smoke exit(6*7)==42 PASS**. `nm` undefined externs = **42** (NOT the ~31 the task estimated — cycle-67 measured 31 mid-r16; the daemon R1 socket work #904 + #816/#904/#634 deploy-regens since added more).
