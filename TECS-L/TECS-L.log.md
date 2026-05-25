@@ -3,6 +3,15 @@
 Append-only history sister of `TECS-L.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
 
+## 2026-05-25T13:30 — 영구 다축 엔진 전환 (MODFORM·MERSENNE·Atlas-LLM 축 흡수)
+
+- [x] 사용자 비전: "TECS-L 은 우주 모든 법칙이 발견될 때까지 멈출 수 없다" → 종료조건 없는 영구 발견 엔진으로 @goal/@title 재정의
+- [x] 별도 MODFORM/·MERSENNE/ 도메인 폴더 제거 (#1049 되돌림) → TECS-L 내부 **축**으로 흡수
+- [x] 구조: 축 0 (n=6 코어 M1–M10 CLOSED) + 축 A MODFORM (MF1–8) + 축 B MERSENNE (MR1–8) + 축 C Atlas-LLM 연속 루프 (C1–3, `hexa loop --claude` RFC 080)
+- [x] 진행바 100% 미도달이 설계 (perpetual). 축 C 는 마일스톤 아니라 연속 운전 (LLM 비용 go-ahead 또는 /schedule cloud cron 필요)
+- [x] `.verdicts/`+`CLAIMS.tape`(group=TECS-L) 단일 감사 SSOT 유지 — 축별 slug 네임스페이스
+
+
 ## 2026-05-25T12:40 — M10 · 전칭 유일성 닫힌형 증명 (🟡 → 🔵 PROVEN)
 
 - [x] M1·M3·M9 가 유한 sweep(n≤100)으로만 보이고 🟡 로 남긴 ∀n 유일성을 **닫힌형 증명**
