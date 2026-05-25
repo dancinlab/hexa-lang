@@ -65,16 +65,31 @@ fn _join_argv(argv: [str]) -> str {
 
 // ── ssh transport ───────────────────────────────────────────────────
 
-// _ssh_capture — run `remote` on `host` over ssh and capture stdout+stderr.
-// `ssh_opts` are extra ssh flags (e.g. ["-p","19241"] for a non-22 port,
-// or ["-o","StrictHostKeyChecking=no"] for an ephemeral host whose key
-// changes each boot — the RunPod / vast.ai case). host, every opt and
-// `remote` are POSIX-quoted for the LOCAL shell too, so the local
-// `/bin/sh -c` (exec_capture) sees each as one literal word, exactly as
-// the remote login shell sees the inner-quoted tokens. BatchMode=yes makes
-// ssh fail fast instead of hanging on an auth prompt.
-fn _ssh_capture(host: str, ssh_opts: [str], remote: str) -> str {
-    let mut cmd = "ssh -o BatchMode=yes"
+// SshCapture — the captured remote output plus the LOCAL ssh process exit
+// code. `local_rc` == 255 means the SSH transport itself failed (connection
+// refused / TCP timeout / auth rejection / changed host key) before the
+// remote login shell ever ran — there is no __CLOUD_*__ marker in `body`
+// because no remote command executed. Any other `local_rc` came from a
+// remote command that did run (its real exit code rides the marker).
+struct SshCapture {
+    body:     str,   // remote stdout+stderr (2>&1 merged), incl. any marker
+    local_rc: int    // local ssh process exit code; 255 == transport failure
+}
+
+// _ssh_capture_status — run `remote` on `host` over ssh and return BOTH the
+// captured stdout+stderr AND the local ssh exit code, so callers can tell a
+// TRANSPORT outage (a pod that is alive+billing but unreachable — the
+// vast.ai/RunPod failure mode) apart from a remote command that ran and
+// exited nonzero. `ssh_opts` are extra ssh flags (e.g. ["-p","19241"] for a
+// non-22 port, or ["-o","StrictHostKeyChecking=no"] for an ephemeral host
+// whose key changes each boot). host, every opt and `remote` are POSIX-quoted
+// for the LOCAL shell too, so the local `/bin/sh -c` (exec_capture) sees each
+// as one literal word, exactly as the remote login shell sees the inner-quoted
+// tokens. ConnectTimeout=8 bounds the connect attempt so an unreachable host
+// fails in ~8s with exit 255 instead of hanging on the kernel's default TCP
+// timeout (minutes); BatchMode=yes keeps ssh from blocking on an auth prompt.
+fn _ssh_capture_status(host: str, ssh_opts: [str], remote: str) -> SshCapture {
+    let mut cmd = "ssh -o BatchMode=yes -o ConnectTimeout=8"
     let mut i = 0
     while i < len(ssh_opts) {
         cmd = cmd + " " + _shq(ssh_opts[i])
@@ -83,9 +98,27 @@ fn _ssh_capture(host: str, ssh_opts: [str], remote: str) -> str {
     cmd = cmd + " " + _shq(host) + " " + _shq(remote)
     // exec_capture returns [stdout, stderr, local_exit_code]; the remote
     // command merges its own stderr into stdout (2>&1), so element 0
-    // carries everything including the __CLOUD_*__ marker line.
+    // carries everything including the __CLOUD_*__ marker line. Element 2 is
+    // the LOCAL ssh process exit code (255 == transport never connected).
     let res = exec_capture(cmd)
-    return res[0]
+    return SshCapture { body: res[0], local_rc: res[2] }
+}
+
+// _ssh_capture — _ssh_capture_status keeping only the captured body, for
+// callers that do not discriminate transport failure (poll / sha256).
+fn _ssh_capture(host: str, ssh_opts: [str], remote: str) -> str {
+    return _ssh_capture_status(host, ssh_opts, remote).body
+}
+
+// _ssh_transport_outage — shared CloudResult for an ssh exit-255 (the local
+// ssh process). The SSH transport never reached the remote shell, so this is
+// NOT a remote command failure. exit_code 255 is preserved (not the generic
+// -1) so the caller / CLI can recognise the outage and fast-fail rather than
+// retry into a wall of billing. The message names the alive≠reachable mode so
+// the operator stops the pod instead of debugging a phantom remote crash.
+fn _ssh_transport_outage(verb: str, body: str) -> CloudResult {
+    return CloudResult { ok: 0, exit_code: 255, pid: 0, stdout_: body,
+        message: verb + ": ssh transport failure (exit 255) — host unreachable (connection refused / timeout / auth / changed host key). The pod may be alive and billing but not accepting SSH — a vast.ai/RunPod transport outage. Stop retrying; verify reachability or tear the pod down." }
 }
 
 // ── scp transport ───────────────────────────────────────────────────
@@ -253,10 +286,14 @@ fn cloud_run_wall_opts(host: str, ssh_opts: [str], argv: [str], max_wall: int) -
         prefix = "timeout " + str(max_wall) + " "
     }
     let remote = prefix + _join_argv(argv) + " 2>&1; echo __CLOUD_RC__=$?"
-    let out = _ssh_capture(host, ssh_opts, remote)
+    let cap = _ssh_capture_status(host, ssh_opts, remote)
+    let out = cap.body
     let rc = _parse_uint_after(out, "__CLOUD_RC__=")
     let body = _strip_marker(out, "__CLOUD_RC__=")
     if rc < 0 {
+        if cap.local_rc == 255 {
+            return _ssh_transport_outage("cloud_run", body)
+        }
         return CloudResult { ok: 0, exit_code: -1, pid: 0, stdout_: body,
             message: "cloud_run: no exit-code marker — ssh transport failure or remote shell died" }
     }
@@ -299,10 +336,14 @@ fn cloud_exec_opts(host: str, ssh_opts: [str], cmd_str: str) -> CloudResult {
         return _cloud_fail("cloud_exec: empty cmd_str")
     }
     let remote = cmd_str + " 2>&1; echo __CLOUD_RC__=$?"
-    let out = _ssh_capture(host, ssh_opts, remote)
+    let cap = _ssh_capture_status(host, ssh_opts, remote)
+    let out = cap.body
     let rc = _parse_uint_after(out, "__CLOUD_RC__=")
     let body = _strip_marker(out, "__CLOUD_RC__=")
     if rc < 0 {
+        if cap.local_rc == 255 {
+            return _ssh_transport_outage("cloud_exec", body)
+        }
         return CloudResult { ok: 0, exit_code: -1, pid: 0, stdout_: body,
             message: "cloud_exec: no exit-code marker — ssh transport failure or remote shell died" }
     }
@@ -331,10 +372,14 @@ fn cloud_nohup_opts(host: str, ssh_opts: [str], argv: [str], logfile: str) -> Cl
         return _cloud_fail("cloud_nohup: refused — " + warns[0])
     }
     let remote = "nohup " + _join_argv(argv) + " > " + _shq(logfile) + " 2>&1 & echo __CLOUD_PID__=$!"
-    let out = _ssh_capture(host, ssh_opts, remote)
+    let cap = _ssh_capture_status(host, ssh_opts, remote)
+    let out = cap.body
     let pid = _parse_uint_after(out, "__CLOUD_PID__=")
     let body = _strip_marker(out, "__CLOUD_PID__=")
     if pid < 0 {
+        if cap.local_rc == 255 {
+            return _ssh_transport_outage("cloud_nohup", body)
+        }
         return CloudResult { ok: 0, exit_code: -1, pid: 0, stdout_: body,
             message: "cloud_nohup: no pid marker — ssh transport failure or nohup did not start" }
     }
