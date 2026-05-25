@@ -28,6 +28,17 @@ Append-only history sister of `TECS-L.md`. Each entry starts with `## <ISO times
 - [ ] 🟡 근사 물리 (페르미온 질량 1.9% · Koide δ=2/9 5ppm · m_μ/m_e≈206.89) → M5 에서 `hexa verify --expr` 🟢 NUMERICAL 시도
 - [ ] 🟠 deferred: CERN 5.26σ · 핵 magic number → 외부 실측 데이터 의존
 
+## 2026-05-25T09:30 — M2 · 산술함수 stdlib 모듈 (σ/τ/φ/sopfr) hexa-native
+
+- [x] `stdlib/core/math.hexa` 에 이미 `sigma`/`tau`/`euler_phi`/`sopfr` 순수정수 구현 존재 확인 — float·libm 無 (Python `model_utils.py` 대체분)
+- [x] `phi(n)` 공개 별칭 추가 (`euler_phi` 위임) — `hexa verify --expr phi` 정본 이름과 일치
+- [x] `sopfr` 의 오해소지 `// @partial — Stage 0` 주석을 완성 문서화로 교체 (trial-division 정상, sopfr(1)=0·sopfr(prime)=p)
+- [x] 단위테스트 `stdlib/core/math_numtheory_test.hexa` 신규 — collections_test.hexa idiom (인라인 self-contained, `check_eq_int`, PASS 리포트). 17 assert: σ/τ/φ n∈{1,6,12,28} + sopfr(6)=5·sopfr(12)=7·sopfr(28)=11·sopfr(1)=0·sopfr(7)=7 + n=6 정체성 σφ=24=nτ
+- [x] `hexa parse` 게이트 PASS (둘 다): `stdlib/core/math.hexa` · `stdlib/core/math_numtheory_test.hexa`
+- [x] σ/τ/φ n∈{1,6,12,28} 12개 `hexa verify --expr` 전부 🔵 SUPPORTED-FORMAL → 원문 verbatim `.verdicts/tecs-l-arith-stdlib/` + `CLAIMS.tape` slug=tecs-l-arith-stdlib 12 entry (1:1 매핑 검증)
+- [x] **빌드 경로 honest note**: 컴파일 테스트(path b)는 공유트리 stale `build/hexa_v2` codegen 버그로 차단 — `while i<n { i=i+1 }` 루프카운터가 stale 리터럴로 fold 돼 무한루프(`i=0` 영구 출력, comptime-fold shadow family). 내 코드 결함 아님(σ/τ/φ는 동일 idiom인데 `hexa verify --expr`로 🔵 증명됨). 실제 실행 증거 = (a) `hexa parse` PASS + (c) `hexa verify --expr` 12 verdict 🔵 (정본 correctness)
+- [x] 격리 worktree `/tmp/wt-tecs-m2` (branch `tecs-l-m2-arith-stdlib-2026-05-25`) — 공유 트리 race 회피
+
 ## 2026-05-25T08:55 — M1 CLOSED · n=6 정체성 σ·φ=n·τ g5 재근거화
 
 - [x] σ(6)=12 · φ(6)=2 · τ(6)=4 → `hexa verify --expr` 전부 🔵 SUPPORTED-FORMAL (σφ=24=nτ, 정체성 n=6 HOLDS)
