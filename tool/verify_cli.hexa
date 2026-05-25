@@ -205,6 +205,9 @@ fn cmd_rubric() {
     println("             pippard_coherence(v_F,Tc)   → ħ·v_F/(π·1.764·k_B·Tc)  (Pippard intrinsic coherence ξ₀, RTSC #15, 2-arg)")
     println("             viola_seaborg_log10_t(Z,Qα) → (aZ+b)/√Qα+(cZ+d)     (Viola-Seaborg α-decay log10 T₁/₂[s], NUCLEAR N7/N11, 2-arg)")
     println("             royer_log10_t(Z,A,Qα)       → a+bA^{1/6}√Z+cZ/√Qα   (Royer 2000 α-decay log10 T₁/₂[s], NUCLEAR N7/N11, 3-arg)")
+    println("             sf_log10_t(Z,A)             → 21.08+ΣCᵢxⁱ/A           (Ren-Xu 2005 SF log10 T₁/₂[s], NUCLEAR C1, 2-arg)")
+    println("             total_halflife_log10(Lα,Lsf) → −log10(10^−Lα+10^−Lsf) (α⊕SF total log10 T₁/₂[s], NUCLEAR C1, 2-arg)")
+    println("             alpha_sf_branching(Lα,Lsf)  → 10^−Lα/(10^−Lα+10^−Lsf) (α branching ratio b_α, NUCLEAR C1, 2-arg)")
 }
 
 let NOCALC: int = -999999
@@ -1214,6 +1217,56 @@ fn _royer_log10_t(zf: float, af: float, q_alpha_mev: float) -> float {
     return a_ro + b_ro * a_pow_1_6 * sqrt(zf) + c_ro * zf / sqrt(q_alpha_mev)
 }
 
+// ── NUCLEAR C1 — spontaneous-fission competition (sim.hexa mirror) ──────
+//
+// Ren-Xu 2005 phenomenological SF systematics (C. Xu & Z. Ren, PRC 71,
+// 014309 (2005); reproduced verbatim in Kiren et al. 2013 arxiv:1301.1767
+// Eq.(2.4)). VERBATIM coefficients — mirror of stdlib/nuclear/sim.hexa
+// sf_log10_t (NUCLEAR.md §4.2 C1). 2-arg (Z, A); N=A−Z, ν=0 even-even / 2
+// else. Reference: Z=118, A=294, N=176 (even-even, ν=0) → -2.864352.
+//   log10 T_SF[s] = 21.08 + C1·x/A + C2·x²/A + C3·x³/A + C4·x·(N−Z−52)²/A
+//   x = (Z−90−ν)  ·  C1=-548.825021 C2=-5.359139 C3=0.767379 C4=-4.282220
+fn _sf_log10_t(zf: float, af: float) -> float {
+    if af <= 0.0 { return _NOCALC_F }
+    let nf = af - zf
+    // ν seniority: 0 even-even, 2 odd-A/odd-odd (parity on Z and N).
+    let z_int = to_int(zf)
+    let n_int = to_int(nf)
+    let mut nu = 2.0
+    if (z_int % 2) == 0 {
+        if (n_int % 2) == 0 { nu = 0.0 }
+    }
+    let c1 = 0.0 - 548.825021
+    let c2 = 0.0 - 5.359139
+    let c3 = 0.767379
+    let c4 = 0.0 - 4.282220
+    let x = zf - 90.0 - nu
+    let asym = nf - zf - 52.0
+    return 21.08 + c1 * x / af + c2 * x * x / af + c3 * x * x * x / af
+        + c4 * x * asym * asym / af
+}
+
+// C1 combiner — total log10 T₁/₂ from competing α + SF partial rates:
+//   log10 T_total = − log10( 10^(−L_α) + 10^(−L_SF) )
+// 2-arg (L_alpha, L_sf) both log10 seconds. Mirror of sim.hexa
+// total_halflife().log10_T_total_s. Reference: L_α=-2.8218293069777403,
+// L_SF=-2.864352 → -3.144640... (Og-294).
+fn _total_halflife_log10(l_alpha: float, l_sf: float) -> float {
+    let r_alpha = pow(10.0, 0.0 - l_alpha)
+    let r_sf = pow(10.0, 0.0 - l_sf)
+    return 0.0 - (log(r_alpha + r_sf) / log(10.0))
+}
+
+// C1 combiner — α branching ratio b_α = λ_α / (λ_α + λ_SF):
+//   b_α = 10^(−L_α) / (10^(−L_α) + 10^(−L_SF))
+// 2-arg (L_alpha, L_sf). Mirror of sim.hexa total_halflife().alpha_branching.
+// Reference: L_α=-2.8218293069777403, L_SF=-2.864352 → 0.4755415... (Og-294).
+fn _alpha_sf_branching(l_alpha: float, l_sf: float) -> float {
+    let r_alpha = pow(10.0, 0.0 - l_alpha)
+    let r_sf = pow(10.0, 0.0 - l_sf)
+    return r_alpha / (r_alpha + r_sf)
+}
+
 // ── Bio-physical Phase 3 (demiurge cross-domain V2 closure) ─────────
 // Three remaining identities from the inbox patch — Higuchi sustained
 // release (2-arg, simple form) · Tafel overpotential (3-arg, log10 path)
@@ -1695,6 +1748,22 @@ fn _recompute_float(fn_name: string, a0: float, a1: float, a2: float, a3: float,
         if argc < 3 { return _NOCALC_F }
         return _royer_log10_t(a0, a1, a2)
     }
+    // ── Nuclear C1 — SF competition (NUCLEAR.md §4.2 · NOVEL C1) ────────
+    //   sf_log10_t(Z, A)                  2-arg: Ren-Xu 2005 SF systematics
+    //   total_halflife_log10(L_α, L_SF)   2-arg: −log10(10^−Lα + 10^−Lsf)
+    //   alpha_sf_branching(L_α, L_SF)     2-arg: λ_α/(λ_α+λ_SF)
+    if fn_name == "sf_log10_t" {
+        if argc < 2 { return _NOCALC_F }
+        return _sf_log10_t(a0, a1)
+    }
+    if fn_name == "total_halflife_log10" {
+        if argc < 2 { return _NOCALC_F }
+        return _total_halflife_log10(a0, a1)
+    }
+    if fn_name == "alpha_sf_branching" {
+        if argc < 2 { return _NOCALC_F }
+        return _alpha_sf_branching(a0, a1)
+    }
     // ── Bio-physical Phase 3 (demiurge cross-domain V2 closure) ─────────
     //   higuchi(k_H, t)                   2-arg: k_H * sqrt(t)
     //   tafel(a, b, j)                    3-arg: a + b * log10(j)
@@ -1807,6 +1876,9 @@ fn _is_float_fn(fn_name: string) -> bool {
         || fn_name == "pippard_coherence"
         // Nuclear α-decay half-life (NUCLEAR.md N7/N11 funnel · 2026-05-25):
         || fn_name == "viola_seaborg_log10_t" || fn_name == "royer_log10_t"
+        // Nuclear C1 — SF competition (NUCLEAR.md §4.2 · NOVEL C1 · 2026-05-25):
+        || fn_name == "sf_log10_t" || fn_name == "total_halflife_log10"
+        || fn_name == "alpha_sf_branching"
         // Bio-physical Phase 3 (demiurge cross-domain V2 closure):
         || fn_name == "higuchi" || fn_name == "tafel" || fn_name == "hagen_poiseuille"
         // TTR-ORAL / TTR-LAC bundle (topical PK + laser optics · INBOX T22:35Z):

@@ -1,6 +1,6 @@
 // HEXA Standard Library — nuclear/sim
 //
-// @version 0.2.0
+// @version 0.2.1
 // @capabilities [pure, io]
 //
 // NUCLEAR.md §6 Phase 4 #1 — N7 hot closed-form post-processing,
@@ -17,6 +17,9 @@
 //   pub fn viola_seaborg_log10_t(Z, Q_alpha_MeV) -> float          // NC1
 //   pub fn royer_log10_t(Z, A, Q_alpha_MeV) -> float               // NC2
 //   pub fn consensus_alpha(values: [float]) -> Consensus           // NC3
+//   pub fn sf_log10_t(Z, A) -> float                               // C1 (SF)
+//   pub fn total_halflife(L_alpha, L_sf) -> DecayTotal             // C1 (combine)
+//   pub fn c_gate_total_cell(Z, A, Q_alpha_MeV) -> DecayTotal      // C1 (one-shot)
 //   pub fn c_gate_window_score(mean_log10_T, lo, hi) -> float       // N11
 //   pub fn n11_alpha_cell(Z, A, Q_alpha_MeV, lo, hi) -> NuclideScore// N11
 //
@@ -158,7 +161,148 @@ pub fn consensus_alpha(values: [float]) -> ConsensusAlpha {
                             spread_dex: hi - lo, n: n }
 }
 
-// ── 4. N11 — (Z,N) funnel (c)-gate half-life score ─────────────────────
+// ── 4. C1 — Spontaneous-fission (SF) competition closed-form ───────────
+//
+// NUCLEAR.md §4.2 (N7 (c)-gate) + NOVEL probe C1 (exports/nuclear_discovery
+// /novel/2026-05-25-novel-probe.md). The landed NC1/NC2/NC3 kernels score
+// the α-decay channel ONLY. For Z ≥ 104 spontaneous fission frequently
+// DOMINATES, so an α-only T₁/₂ OVERESTIMATES total survival (sim.hexa s4
+// self-flag: "SF competing channel NOT modeled here"). C1 closes that flaw
+// with a published SF systematics + a partial-rate branching combiner.
+//
+// ── SF systematics: Ren–Xu 2005 phenomenological formula ───────────────
+//
+//   log10 T_SF [s] = 21.08
+//       + C1·(Z−90−ν)/A
+//       + C2·(Z−90−ν)²/A
+//       + C3·(Z−90−ν)³/A
+//       + C4·(Z−90−ν)·(N−Z−52)²/A
+//
+//   C1 = -548.825021  C2 = -5.359139  C3 = 0.767379  C4 = -4.282220
+//   ν (seniority / blocking term) = 0 even-even · 2 odd-A & odd-odd.
+//
+//   VERBATIM coefficients — C. Xu & Z. Ren, Phys. Rev. C 71, 014309 (2005)
+//   (DOI 10.1103/PhysRevC.71.014309), the generalized phenomenological SF
+//   half-life formula for ground states + odd nuclei + fission isomers.
+//   Reproduced verbatim in Kiren/Gudennavar/Bubbly 2013, Romanian J. Phys.
+//   57, 1335 (arxiv:1301.1767) Eq.(2.4), which pairs it with Viola-Seaborg
+//   for exactly the α-vs-SF competition C1 implements. NUCLEAR.md §3.3 no-
+//   fabrication: coefficients cited, not refit. Closed-form polynomial in
+//   (Z, A, N) — NO transcendental, libm-trivial.
+//
+// Honest scope (NOVEL C1 caveats · §3.3 · §7):
+//   - SF systematics scatter is LARGER than α (±2–3 dex typical, vs α's
+//     ±0.5–1 dex). The Ren-Xu fit anchor region is Z≈90–114; extrapolation
+//     above is honest but the spread widens.
+//   - The ν term captures only the gross even/odd blocking; detailed odd-A
+//     hindrance + shape-isomer effects are NOT modeled.
+//   - SF dominance for an SHE candidate is a *prediction* (a priority-down-
+//     weight hint), NEVER "this nuclide cannot exist" (@D d2). absorbed=
+//     false 永久 (R4) — the combiner returns numbers only.
+
+let _SF_C1: float = 0.0 - 548.825021
+let _SF_C2: float = 0.0 - 5.359139
+let _SF_C3: float =       0.767379
+let _SF_C4: float = 0.0 - 4.282220
+let _SF_A0: float =      21.08
+
+// ν seniority term: 0 for even-even, 2 for odd-A / odd-odd (Ren-Xu 2005).
+// Closed-form parity test on (Z, N) — A=Z+N so odd-A ⇔ Z,N differ in
+// parity; odd-odd ⇔ both odd. Even-even ⇔ both even → ν=0, else ν=2.
+fn _sf_seniority(Z: int, N: int) -> float {
+    let z_even = (Z % 2) == 0
+    let n_even = (N % 2) == 0
+    if z_even && n_even { return 0.0 }
+    return 2.0
+}
+
+// Ren-Xu 2005 spontaneous-fission log10 T₁/₂ [s] from (Z, A). N = A − Z.
+// Domain: heavy / superheavy ground states (anchor Z≈90–114). Pure
+// polynomial — no Q-value input needed (SF barrier is implicit in the
+// (Z−90)/A systematics). A must be > 0 (sentinel 0.0 mirrors NC1/NC2).
+pub fn sf_log10_t(Z: int, A: int) -> float {
+    if A <= 0 { return 0.0 }
+    let N = A - Z
+    let nu = _sf_seniority(Z, N)
+    let Af = to_float(A)
+    let Zf = to_float(Z)
+    let Nf = to_float(N)
+    let x = Zf - 90.0 - nu                 // (Z − 90 − ν)
+    let asym = Nf - Zf - 52.0              // (N − Z − 52)
+    return _SF_A0
+        + _SF_C1 * x / Af
+        + _SF_C2 * x * x / Af
+        + _SF_C3 * x * x * x / Af
+        + _SF_C4 * x * asym * asym / Af
+}
+
+// ── C1 combiner — competing α + SF partial rates → total survival ──────
+//
+// Two parallel decay channels add their partial DECAY RATES (λ = ln2/T):
+//   λ_total = λ_α + λ_SF   →   T_total = 1 / (λ_α + λ_SF)
+// In log10-half-life space (the kernels' native units), with
+// L_α = log10 T_α  and  L_SF = log10 T_SF:
+//   T_total = 1 / (10^(−L_α) + 10^(−L_SF))
+//   log10 T_total = − log10( 10^(−L_α) + 10^(−L_SF) )
+// (the ln2 prefactors cancel — partial-half-life combination is exact).
+// Branching ratio (fraction decaying via α):
+//   b_α = (10^(−L_α)) / (10^(−L_α) + 10^(−L_SF)) = λ_α / λ_total
+//   b_SF = 1 − b_α
+// This is the honest (c)-gate TOTAL-survival score for SHE: when SF
+// dominates (L_SF ≪ L_α) the total half-life collapses toward T_SF and
+// b_α → 0, correcting the α-only overestimate (NOVEL C1 rationale).
+
+struct DecayTotal {
+    log10_T_alpha_s: float,   // input α log10 T₁/₂ [s] (from NC1/NC2/NC3)
+    log10_T_sf_s:    float,   // input SF log10 T₁/₂ [s] (Ren-Xu)
+    log10_T_total_s: float,   // combined partial-rate total log10 T₁/₂ [s]
+    alpha_branching: float,   // b_α ∈ [0,1] — fraction decaying via α
+    sf_branching:    float,   // b_SF = 1 − b_α
+    sf_dominates:    int,     // 1 if b_SF > b_α (SF is the faster channel)
+}
+
+// Combine an α log10 T₁/₂ with an SF log10 T₁/₂ into the total-survival
+// decay record. Pure libm (pow via 10^x). Both inputs are log10 seconds.
+pub fn total_halflife(log10_T_alpha_s: float, log10_T_sf_s: float) -> DecayTotal {
+    // rate ∝ 10^(−log10 T)  (drop the common ln2 — cancels in branching;
+    // and 1/(Σ rate) gives the partial-half-life total exactly).
+    let r_alpha = pow(10.0, 0.0 - log10_T_alpha_s)
+    let r_sf    = pow(10.0, 0.0 - log10_T_sf_s)
+    let r_tot   = r_alpha + r_sf
+    // log10 T_total = − log10(r_tot)  (r_tot = 1/T_total).
+    let l_tot = 0.0 - (log(r_tot) / log(10.0))
+    let b_alpha = r_alpha / r_tot
+    let b_sf = r_sf / r_tot
+    let mut dom = 0
+    if b_sf > b_alpha { dom = 1 }
+    return DecayTotal {
+        log10_T_alpha_s: log10_T_alpha_s,
+        log10_T_sf_s:    log10_T_sf_s,
+        log10_T_total_s: l_tot,
+        alpha_branching: b_alpha,
+        sf_branching:    b_sf,
+        sf_dominates:    dom,
+    }
+}
+
+// One-shot (c)-gate total-survival from (Z, A, Q_α): chains NC1+NC2+NC3
+// (α consensus) ⊕ Ren-Xu SF → DecayTotal. The honest C1 (c)-gate score.
+// Q_α ≤ 0 → caller honest-skips (sentinel: α set to SF so b_α=0 reported,
+// but real callers gate on Q_α upstream per §3.3).
+pub fn c_gate_total_cell(Z: int, A: int, Q_alpha_MeV: float) -> DecayTotal {
+    let l_sf = sf_log10_t(Z, A)
+    if Q_alpha_MeV <= 0.0 {
+        // No cited Q_α → α channel unscored; report SF-only total honestly.
+        return total_halflife(l_sf, l_sf)
+    }
+    let vs = viola_seaborg_log10_t(Z, Q_alpha_MeV)
+    let ro = royer_log10_t(Z, A, Q_alpha_MeV)
+    let v: [float] = [vs, ro]
+    let c = consensus_alpha(v)
+    return total_halflife(c.mean, l_sf)
+}
+
+// ── 4b. N11 — (Z,N) funnel (c)-gate half-life score ────────────────────
 //
 // NUCLEAR.md §6.2 (N11 funnel cohort) — mirror of RTSC.md §9.10 N5
 // compositional-explorer, transposed to ELEMENTAL (Z,N) discovery.
@@ -256,6 +400,19 @@ fn _emit_n11(name: string, Z: int, A: int, Q_alpha_MeV: float) {
             ": mean_log10_T=" + to_string(s.mean_log10_T_s) +
             "  c_gate_score=" + to_string(s.c_gate_score) +
             "  valid=" + to_string(s.valid))
+}
+
+// C1 demo row: α-consensus ⊕ Ren-Xu SF → total survival + branching.
+fn _emit_c1(name: string, Z: int, A: int, Q_alpha_MeV: float) {
+    let d = c_gate_total_cell(Z, A, Q_alpha_MeV)
+    let mut dom = "alpha"
+    if d.sf_dominates == 1 { dom = "SF" }
+    println("  · " + name +
+            ": L_alpha=" + to_string(d.log10_T_alpha_s) +
+            "  L_SF=" + to_string(d.log10_T_sf_s) +
+            "  L_total=" + to_string(d.log10_T_total_s) +
+            "  b_alpha=" + to_string(d.alpha_branching) +
+            "  dominant=" + dom)
 }
 
 // ── N11 top-K JSON record emit (NUCLEAR.md §6.1 schema) ─────────────────
@@ -384,6 +541,20 @@ fn main() {
     _emit_n11("Fl-289  (Z=114, A=289, Q=9.71  · measured E_α 1998)",
               114, 289, 9.71)
 
+    // ── C1 (c)-gate TOTAL-survival cells (α ⊕ SF competition) ───────────
+    // Ren-Xu 2005 SF systematics ⊕ NC1/NC2/NC3 α-consensus → DecayTotal.
+    // For SHE the α-only T₁/₂ overestimates total survival; C1 reports the
+    // honest competing-channel total + branching (NOVEL probe C1).
+    println("[nuclear+verify · C1] (c)-gate α⊕SF competition (Ren-Xu 2005 SF)")
+    _emit_c1("U-238   (Z=92,  A=238, Q=4.27  · SF anchor ~8e15 yr)",
+             92, 238, 4.27)
+    _emit_c1("Og-294  (Z=118, A=294, Q=11.65 · SHE anchor)",
+             118, 294, 11.65)
+    _emit_c1("Lv-293  (Z=116, A=293, Q=10.54 · odd-A)",
+             116, 293, 10.54)
+    _emit_c1("Fl-289  (Z=114, A=289, Q=9.71  · odd-A)",
+             114, 289, 9.71)
+
     // Emit the REAL N11 top-K JSON record (NUCLEAR.md §6.1 schema).
     let n11_out = "/tmp/nuclear_n11"
     let _ = exec("mkdir -p " + n11_out)
@@ -417,11 +588,17 @@ fn main() {
             "sim-PASS never substitutes for accelerator beam-time.")
     println("[scope] (s4) Formula domain limits: Viola-Seaborg + Royer " +
             "are tuned for even-even heavy α emitters. Odd-A / odd-odd " +
-            "nuclei have hindrance factors not captured by these forms; " +
+            "nuclei have hindrance factors not captured by these α forms; " +
             "predictions for odd-A SHE may underestimate T₁/₂ by 1-2 " +
-            "orders. SF (spontaneous fission) competing channel NOT " +
-            "modeled here — for Z ≥ 104 SF often dominates, so α-decay " +
-            "T₁/₂ alone overestimates total survival.")
+            "orders. SF (spontaneous fission) competing channel IS NOW " +
+            "modeled (C1: Ren-Xu 2005 sf_log10_t + total_halflife " +
+            "branching combiner) — for Z ≥ 104 SF often dominates, so the " +
+            "α-only T₁/₂ overestimates total survival; c_gate_total_cell " +
+            "returns the honest α⊕SF total + branching ratio. SF " +
+            "systematics scatter (±2-3 dex) EXCEEDS the α scatter and the " +
+            "ν seniority term captures only gross even/odd blocking; SF " +
+            "dominance is a priority-down-weight PREDICTION, never " +
+            "'this nuclide cannot exist' (@D d2 · NUCLEAR.md §3.4).")
     println("[scope] (s5) Path A microkernel: this module is libm-only " +
             "closed-form (no external binary, no install gate). NUCLEAR.md " +
             "§6 Phase 4 #1 land — mirror of RTSC.md §9.9.1 Phase 4 #1 " +
