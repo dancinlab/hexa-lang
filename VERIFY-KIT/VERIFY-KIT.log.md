@@ -4,6 +4,40 @@
 
 ---
 
+## 2026-05-26 — V7 (P3b) 조합론/소수 정수 primitive (OEIS 🟠→🔵 mutual-feed)
+
+### 목표 (OEIS O3 의 287 🟠 NO-PATH 중 prime×67 해소)
+- OEIS O3 가 336 survivor 를 8 🔵 / 41 🟡 / 287 🟠 로 티어링. 🟠 의 dominant family = A000040 (소수열) ~67 hit, "no recompute path". V7 이 nth_prime/is_prime 을 추가해 그 prime hit 들이 🟠→🔵 로 전환되게 한다. 이게 OEIS↔VERIFY-KIT mutual-feed 루프의 실현 (catalogue 가 gap 을 surface → VERIFY-KIT 이 primitive 추가 → catalogue 재티어).
+
+### 착수 fn (6개 · 전부 순수 정수 closed-form)
+- PRIMARY: `nth_prime`(A000040 · trial-division 누적), `is_prime`(trial-division 0/1), `factorial`(A000142), `catalan`(A000108 · 정수 반복식 Cₙ=Cₙ₋₁·2(2n−1)/(n+1)).
+- STRETCH: `bell`(A000110 · Aitken Bell triangle), `partition`(A000041 · Euler pentagonal-number 재귀 DP).
+- 정수 exact 라 `--tol` 불요 → 전부 🔵 SUPPORTED-FORMAL. (stretch stirling2·radical·factorint 는 미착수 defer.)
+
+### 핵심 발견 — V4 (특수함수) 와 달리 codegen 무변경
+- 정수 fn 은 `cg_math_sym` (libm 라우팅) 이 전혀 불필요 → **`hexa cc --regen` 안 함**. 정의를 기존 number-theory home `compiler/atlas/symbolic/congruence_chain_engine.hexa` 에 추가 (sigma_k/euler_phi 와 동형 스타일), `tool/verify_cli.hexa::_recompute` (1-arg dispatch) 에 6줄 배선 + help 1줄. sigma/tau 메커니즘 정확히 미러.
+- fn 이름 충돌 회피: 엔진 내부는 `is_prime_int`/`factorial_int` (stdlib `is_prime`/`factorial` 와 분리), verify_cli 가 사용자 fn 이름 `is_prime`/`factorial` 로 노출.
+
+### 빌드 함정 — 설치된 드라이버가 V4-stale
+- `bin/hexa-verify` 빌드가 V4 의 bessel/gamma/erf 심볼에서 실패 (`hexa_call1(bessel_j0,x)` undeclared). 진단: pristine origin/main verify_cli 도 동일 실패 → **내 V7 변경과 무관**. 설치 드라이버(`hexa.real`, `0.1.0-dispatch`)에 V4 `cg_math_sym` 매핑 0개 = V4 (#1148) 보다 stale. worktree 의 `self/native/hexa_cc.c` 에는 V4 매핑이 이미 commit 돼 있음 (hexa_math_j0 grep=1).
+- 해결: `mini` (Mac arm64 pool host) 에 worktree rsync → amalgam swap (runtime.h→runtime.c) 로 V4-aware `build/hexa_v2` 부트스트랩 → module_loader → verify_cli flatten(13 files)+transpile(emit C 에 hexa_math_j0 정상 출현)+compile → `bin/hexa-verify` (clang error 0). 바이너리 pull back. pool-route 훅이 로컬 clang 을 가로채므로 mini 경유 (heavy C 컴파일).
+
+### 테스트 매트릭스 (verbatim → `.verdicts/verify-kit-combinatorial/v7.txt`)
+- PRIMARY: nth_prime 5 --compute=11 · nth_prime 5 11 🔵 · nth_prime 1 2 🔵 · catalan 4 --compute=14 · catalan 4 14 🔵 · catalan 0 1 🔵 · is_prime 7 1 🔵 · is_prime 6 0 🔵 · factorial 5 120 🔵.
+- STRETCH: bell 3 5 🔵 · bell 4 --compute=15 · partition 4 5 🔵 · partition 5 --compute=7.
+- NEGATIVE control (determinism): nth_prime 5 13 🔴 · is_prime 6 1 🔴.
+- REGRESSION: sigma 6 12 🔵 · gamma 5 24 --tol 1e-6 🟢 (V4 intact).
+
+### OEIS 🟠→🔵 conversion proof (mutual-feed)
+- A000040 spot-verify: nth_prime 1 2 / 5 11 / 10 29 / 25 97 / 100 541 전부 🔵 SUPPORTED-FORMAL.
+- 전환 수: prime family (A000040) ~67 of 287 🟠 → 🔵 reachable. 나머지 🟠 의 대부분 = n×190 (trivial identity a(n)=n, fn 이 아니라 recompute 후보 X → 비범위) + ~30 misc conjectural (정직하게 🟠 유지).
+- 추가로 O3 외부 OEIS reach 도 열림: A000108(catalan)·A000142(factorial)·A000110(bell)·A000041(partition) 전부 🔵-verifiable.
+
+### 산출
+- `.verdicts/verify-kit-combinatorial/v7.txt` (verbatim matrix + OEIS conversion proof) · `CLAIMS.tape` @C verify_kit_combinatorial [slug=verify-kit-combinatorial group=VERIFY-KIT] 🔵 · `OEIS/OEIS.md` O3 note · 본 도메인 V7 [x].
+
+---
+
 ## 2026-05-26 — V4 (P1b) 특수함수 primitive (gamma·erf·bessel) via native libm + --tol
 
 ### 목표 (DLMF blocker (2) — hexa verify 특수함수 0개)
