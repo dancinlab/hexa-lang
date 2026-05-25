@@ -607,4 +607,99 @@ verify --expr gamma0_cusps(6)=4      [BLUE] SUPPORTED-FORMAL   (= tau(6), n=6 br
   -> 22/22 classical genus values matched, 0 mismatch: trusted reference.
 \end{verbatim}
 
+\section{Appendix D: the full verified $\Gz(N)$ backdrop sweeps}
+\label{app:backdrop}
+
+The two closed negatives sit against a fully verified $\Gz(N)$ backdrop. For
+completeness and reproducibility we reproduce the three integer sweeps on
+$N\in[1,30]$, each $30/30$ \tierF\ \textsc{formal}, recomputed by \texttt{hexa
+verify --expr} and persisted verbatim under \texttt{.verdicts/tecs-l-modform-*/}.
+These are the trusted invariants whose internal consistency makes
+Falsifier~\ref{fals:1} (which leans on \texttt{gamma0\_genus}) and the
+smoothness assessment of Falsifier~\ref{fals:2} (which leans on
+\texttt{gamma0\_index}) credible.
+
+\paragraph{D.1 --- Index $\psi(N) =$ \texttt{gamma0\_index}, cusps $=$
+\texttt{gamma0\_cusps}, first weight $=$ \texttt{first\_cusp\_form\_weight}.}
+The $n=6$ row is highlighted: $\psi(6)=12=\sig(6)$ and four cusps $=\tau(6)$ are
+the two arithmetic bridges that Finding~2 then shows do \emph{not} continue up
+the tower.
+
+\begin{center}
+\begin{longtable}{rrrr}
+\toprule
+$N$ & $\psi(N)$ (\tierF) & cusps (\tierF) & first weight (\tierF) \\
+\midrule
+\endhead
+$1$  & $1$  & $1$ & --- \\
+$2$  & $3$  & $2$ & --- \\
+$3$  & $4$  & $2$ & --- \\
+$4$  & $6$  & $3$ & --- \\
+$5$  & $6$  & $2$ & --- \\
+$6$  & $\mathbf{12}=\sig(6)$ & $\mathbf{4}=\tau(6)$ & $\mathbf{4}=\tau(6)$ \\
+$7$  & $8$  & $2$ & --- \\
+$8$  & $12$ & $4$ & --- \\
+$9$  & $12$ & $4$ & --- \\
+$10$ & $18$ & $4$ & --- \\
+$11$ & $12$ & $2$ & --- \\
+$12$ & $24$ & $6$ & --- \\
+$13$ & $14$ & $2$ & --- \\
+$14$ & $24$ & $4$ & --- \\
+$15$ & $24$ & $4$ & --- \\
+$16$ & $24$ & $6$ & --- \\
+$17$ & $18$ & $2$ & --- \\
+$18$ & $36$ & $8$ & --- \\
+$19$ & $20$ & $2$ & --- \\
+$20$ & $36$ & $6$ & --- \\
+$21$ & $32$ & $4$ & --- \\
+$22$ & $36$ & $4$ & --- \\
+$23$ & $24$ & $2$ & --- \\
+$24$ & $48$ & $8$ & --- \\
+$25$ & $30$ & $6$ & --- \\
+$26$ & $42$ & $4$ & --- \\
+$27$ & $36$ & $6$ & --- \\
+$28$ & $48$ & $6$ & --- \\
+$29$ & $30$ & $2$ & --- \\
+$30$ & $72$ & $8$ & --- \\
+\midrule
+\multicolumn{4}{l}{\emph{All $30/30$ \tierF\ for $\psi$ and cusps; first weight
+$30/30$ \tierF\ ($1\!\to\!12$, $6\!\to\!4$, $30\!\to\!2$, monotone trend).}}\\
+\bottomrule
+\end{longtable}
+\end{center}
+
+\paragraph{D.2 --- The genus sweep ($22$ classical/known values, $0$ mismatch).}
+This is the trusted reference for Finding~1. The $15$ classical genus-$0$ levels
+are $N\in\{1\!-\!10,12,13,16,18,25\}$; the genus-$\ge 1$ boundary is
+$g(X_0(N))=1$ for $N\in\{11,14,15,17,19\}$ and $g=2$ for $N\in\{22,23\}$. Every
+one of the $22$ values matched its classical value with verdict \tierF\
+\textsc{formal} and \emph{zero} mismatches --- which is precisely why a
+disagreement between \texttt{dim\_cusp\_forms} and \texttt{gamma0\_genus}
+(Appendix~\ref{app:dimgenus}) localizes the fault to \texttt{dim\_cusp\_forms}.
+
+\paragraph{D.3 --- The $n=6$ bridge synthesis (MF6).} Aggregating four \tierF\
+atoms (plus one citation-tier Atkin--Lehner row), every core invariant of the
+modular curve $X_0(6)$ reduces to a standard $n=6$ arithmetic-function value:
+\begin{center}
+\begin{tabular}{lll}
+\toprule
+invariant of $X_0(6)$ & value & $n=6$ reduction \\
+\midrule
+index $\psi(6)$            & $12$ & $=\sig(6)$ \\
+cusps $c(6)$               & $4$  & $=\tau(6)$ \\
+genus $g(X_0(6))$          & $0$  & (classical genus-$0$) \\
+first cusp-form weight     & $4$  & $=\tau(6)$ \\
+$|\mathrm{AL}(\Gz(6))|$    & $4$  & $=2^{\omega(6)}$ (citation) \\
+\bottomrule
+\end{tabular}
+\end{center}
+\noindent
+This is the synthesis-reasoned bridge (\tierN-class, composed entirely from
+terminal \tierF\ atoms) that the two closed negatives bound. Finding~2 shows the
+covering ($\psi\!\leftrightarrow\!\sig$) and cusp ($c\!\leftrightarrow\!\tau$)
+bridges are $\Gz$-level only --- the $\Go/X$ index does not inherit them ---
+while Finding~1 shows the one quantity ($\dim S_2$) whose builtin name promises a
+genus link instead carries a definition gap. The bridge is real at $N=6$; its
+closure boundary is exactly the two negatives reported in this paper.
+
 \end{document}
