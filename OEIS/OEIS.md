@@ -21,7 +21,7 @@ precompute + hash 교집합 (O(N), 수 초) 으로 wall-time 절감. fold scope 
 - [x] O1 — scanner POC: 6/899 seq match (0.67%). 20 candidate fn precompute + hash-intersect K=10. 다음 = O2 (full 380K sweep).
 - [x] O2 — full 380K sweep: 1707 hit (K=10), 1334 coincidence filtered at K=20 (e.g. A000926 Idoneal vs `n`; 336 survive · 37 na). ledger.json + CLAIMS. 다음 = O3 (per-hit verify — INBOX verify-compute gap filed).
 - [x] O3 — 336 survivor per-hit verify (V2 compute): 8 🔵 direct (7 distinct theorem) / 41 🟡 citation / 287 🟠. 다음 = O4 (atlas auto-fold verified-만, 7 distinct).
-- [ ] O4 — atlas auto-fold (verified 만) + dedup against existing atlas 16K nodes
+- [x] O4 — atlas fold: 7 🔵 theorem (5 기존 present + OEIS attribution · 3 newly-folded). dedup vs 16K. sigma↔A000203·tau↔A000005·phi↔A000010·mu↔A008683 = @P 빌트인 present (중복 안 만듦) + sigma_0==tau alias. aliquot↔A001065·sigma_2↔A001157·sigma_3↔A001158 = atlas 부재 → OEIS-attributed @F fold (source+url+CC-BY-SA). 다음 = O5 (TECS-L F11 cross-link).
 - [ ] O5 — TECS-L F11 cross-link PR (OEIS atlas → TECS-L cite) + reuse edge 등록 (g67 NEXUS.tape)
 - [x] O6 — DLMF feasibility: 🔴 FALSIFIED (closed-negative). OEIS exact-integer hash-intersect 패턴은 DLMF 로 일반화 안 됨 — structurally incompatible (P1 bulk 수치 corpus 부재 + P3 hexa 고전 특수함수 0개, 2개 독립 fail). sampling-intersect 도 메커니즘 다르고 hexa 특수함수 라이브러리 부재로 차단. docs/o6-dlmf-feasibility.md.
 - [ ] O7 — catalogue closure report + 미러 unique pattern 발견 시 closed-negative / closed-positive paper

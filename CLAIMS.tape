@@ -2345,3 +2345,22 @@
   raw    = ".verdicts/verify-kit-mirror-unify/v1_register.txt"
   src    = "tool/atlas_cli.hexa (cmd_register --compute + 🟠→compute auto-route + _adapt_verify_compute + _parse_compute_value) · tool/verify_cli.hexa (cmd_expr_float_compute + --compute routing in cmd_expr_float). Both bin/hexa-atlas + bin/hexa-verify built mac arm64; full register→verify→compute chain tested via test shim routing inner `hexa verify` to the new binary."
   status = "🟢 SUPPORTED-NUMERICAL — built + e2e tested (verdict persisted verbatim). register COMPUTES 14.5511 (no more 'no calculator path'); RTSC absorption unblocked. Round-tolerance ε=1e-9 vs literature-rounded value (14.55 → 🔴) is a SEPARATE INBOX item, out of V1 scope. Terminal · paper-eligible (Δ vs baseline = register absorption capability the prior CLI lacked for ≥3-arg float fns)."
+
+# ───────────────────────────────────────────────────────────────────────
+# OEIS — oeis-atlas-fold (slug · group=OEIS · O4)
+# Atlas-fold of the 7 distinct 🔵 verified theorems from O3 (336 K=20 survivors
+# → 8 🔵 / 7 distinct: sigma↔A000203, tau/sigma_0↔A000005, phi↔A000010,
+# mu↔A008683, aliquot↔A001065, sigma_2↔A001157, sigma_3↔A001158). Dedup vs the
+# ~16K atlas: sigma/tau/phi/mu are pre-existing @P foundation builtins (TECS-L
+# core) → NO duplicate node, OEIS-id attribution recorded in ledger + CLAIMS;
+# sigma_0 == tau (same hexa divisor_count fn) shares A000005. aliquot/sigma_2/
+# sigma_3 were genuinely absent (lookup MISS) → 3 OEIS-attributed @F nodes folded
+# into MY worktree's embedded.gen.hexa (id=oeis-Annnnnn, source="OEIS Annnnnn",
+# url, CC-BY-SA cite). Scoped via HEXA_ATLAS_EMBED; no leak to main shared tree.
+
+@C oeis_atlas_fold := "OEIS O4 atlas-fold: 7 distinct 🔵 OEIS↔hexa-fn theorems atlas-linked (dedup vs 16K). 5 already-present/alias (sigma↔A000203 @P · tau↔A000005 @P · phi↔A000010 @P · mu↔A008683 @P · sigma_0==tau A000005 alias) — OEIS-id attribution recorded, NO duplicate node. 3 newly-folded OEIS-attributed @F (aliquot A001065 = aliquot(8)=7 · sigma_2 A001157 = sigma_2(9)=91 · sigma_3 A001158 = sigma_k(9,3)=757; values match O3 sample-verified PASS). Net +3 atlas nodes (16134→16137, F 1379→1382). OEIS CC-BY-SA provenance (source + url) on each new node. No leak to main tree (grep oeis-A001* = 0 in ~/core/hexa-lang)." :: formula [slug=oeis-atlas-fold group=OEIS]
+  method = "fold"
+  cmd    = "hexa atlas lookup <fn> (dedup) · direct OEIS-attributed @F fold into embedded.gen.hexa (HEXA_ATLAS_EMBED scoped to worktree); recompute values via tool/verify_cli.hexa::_recompute (aliquot=sigma(n)-n · sigma_2=sigma_k(n,2) · sigma_3=sigma_k(n,3))"
+  raw    = ".verdicts/oeis-atlas-fold/fold_ledger.txt"
+  src    = "compiler/atlas/embedded.gen.hexa (3 @F: oeis-A001065 · oeis-A001157 · oeis-A001158, each source=\"OEIS Annnnnn\" + url=https://oeis.org/Annnnnn) · .verdicts/oeis-perhit-verify/tier_ledger.txt (O3 8 🔵) · OEIS A000203/A000005/A000010/A008683/A001065/A001157/A001158 (CC-BY-SA)"
+  status = "🔵 7 verified theorems atlas-linked (5 already-present + attribution · 3 newly-folded). Dedup vs 16K confirmed: sigma/tau/phi/mu @P HIT (no dup); aliquot/sigma_2/sigma_3 MISS → folded with OEIS CC-BY-SA provenance. O4 = mostly-attribution (the value is the verified OEIS↔hexa-fn link, not node count). Terminal · O5-ready (TECS-L F11 cross-link)."
