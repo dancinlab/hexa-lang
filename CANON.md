@@ -26,11 +26,23 @@
 - [x] **M2 — `_v2.c` 죽은 생성물 삭제** (rename→삭제로 전환) — DONE PR #932 (merged). 조사 결과 4개 `_v2.c`는 "LEGACY PARITY ONLY · NOT referenced" 헤더 명시 + `#include` 0건 + `runtime_c_purge.md` Phase C "완전 삭제" 등재 → rename이 아니라 **삭제**가 canonical. `lexer/parser/type_checker/codegen_c2 _v2.c` + `.hexanoport` 8개 (−7,686 LOC). dead ref 정리(`build_hexa_cli.hexa`·`codegen.hexa` 주석·purge md). 라이브=`hexa_cc.c` 무영향.
 - [x] **M3 — 컴파일러 바이너리 git 제거 + Go 1.4식 C-시드 부트스트랩** (2단계 분해 · 둘 다 DONE)
   - [x] **M3a (비파괴)** — DONE PR #934. `cmd_cc` 출력 → `build/hexa_v2` · `resolve_hexa_v2` 가 build/ 우선(self/native fallback 유지). CI bootstrap green.
-  - [x] **M3b (파괴)** — DONE PR #943 (rebase 후 r2, CI 3-platform green). `git rm` hexa_v2(Mac)+hexa_v2_linux_x86_64(Linux, 5.2MB) · multiarch picker 제거 · `resolve_or_bootstrap_hexa_v2`(auto cmd_cc, go-build식) · build_hexa_cli Step0 amalgam 부트스트랩 · CI 3 workflow build/ 전환. `hexa_cc.c` C-시드 유지. **arch-leak 클래스 영구 종결.** ⚠ deploy 갭: 배포 hexa(~/.hx/bin)+로컬 메인트리는 M3b-前이라, origin/main pull 시 옛 dispatch가 build/ resolve 못함 → 배포 refresh 필요 (follow-up).
+  - [x] **M3b (파괴)** — DONE PR #943 (rebase 후 r2, CI 3-platform green). `git rm` hexa_v2(Mac)+hexa_v2_linux_x86_64(Linux, 5.2MB) · multiarch picker 제거 · `resolve_or_bootstrap_hexa_v2`(auto cmd_cc, go-build식) · build_hexa_cli Step0 amalgam 부트스트랩 · CI 3 workflow build/ 전환. `hexa_cc.c` C-시드 유지. **arch-leak 클래스 영구 종결.** ⚠ deploy 갭: 배포 hexa(~/.hx/bin)+로컬 메인트리는 M3b-前이라, origin/main pull 시 옛 dispatch가 build/ resolve 못함 → 배포 refresh 필요. → **M5 에서 종결**(소스 dispatch 정상 확인 + refresh 절차 문서화).
 - [x] **M4 — verb → canonical core + `hexa tool`** — DONE PR #964 (merged). `hexa tool [list|<verb>]` 드로어 추가: `cmd_tool_list()` family 인덱스 + `cmd_tool(av)` bare-verb re-dispatch(별칭) + main dispatch `tool` 케이스 + `hexa --help` tool 줄. bare `hexa <verb>` 전부 유지(이동 아닌 그룹화). +48 LOC `self/main.hexa`.
-- [ ] **M5 — M3b deploy 갭 종결** — 배포 hexa(`~/.hx/bin`)+로컬 공유 메인트리가 M3b-前 dispatch → origin/main pull 시 `build/hexa_v2` 없으면 빌드 실패 가능. 처방 = 배포 hexa를 `resolve_or_bootstrap` dispatch로 refresh(또는 pull 후 1회 `hexa cc` 자동화). 진단(배포 hexa가 M3b+ dispatch인가) 우선.
+- [x] **M5 — M3b deploy 갭 종결** — DONE. 진단 결과 **소스 dispatch 는 정상**(origin/main `self/main.hexa` 에 `resolve_or_bootstrap_hexa_v2` 존재, auto-bootstrap e2e PASS) — 갭은 순수 **배포 측**: 배포 바이너리(`~/.hx/bin/hexa` shim → 메인트리 `hexa.real`/`hxv2`)가 M3b-前이라 `self/native/hexa_v2` 만 찾고 auto-bootstrap 안 함. 코드 변경 불요. 처방 = 아래 **배포 refresh 절차** 문서화 + 로컬 배포 바이너리 M3b+ 로 1회 refresh. fresh clone/CI 는 이미 build/ 모델이라 무영향.
 - [ ] **M6 — M4 polish: tool family 완성도 + `--help` 재편 마무리** — #964 `cmd_tool_list` family 분류가 80+ verb 전부 커버하는지 audit · 누락 verb family 배정 · core↔tool 경계 정리.
 - [ ] **M7 — `_v2` dead-ref 스윕** — M2 `_v2.c` 삭제 후 repo 전체 `_v2` 잔여 참조(주석·문서·빌드스크립트·CI) grep + canonical 정리.
+
+## 배포 refresh 절차 (M3b post-pull)
+
+origin/main pull 이 컴파일러 바이너리를 떨어뜨리면(M3b), **배포된 hexa 가 M3b-前 dispatch 면** 다음 빌드가 `self/native/hexa_v2 not found` 로 실패한다. 1회 refresh 로 종결:
+
+1. **부트스트랩** — `build/hexa_v2` 를 hexa_cc.c amalgam 으로 시드 (Go 1.4 식 C-seed):
+   `sed 's|#include "runtime.h"|#include "runtime.c"|' self/native/hexa_cc.c > build/_amalgam.c && clang -O2 -fbracket-depth=2048 -I . -I self build/_amalgam.c -o build/hexa_v2`
+2. **드라이버 빌드** — `hexa tool/build_hexa_cli.hexa` (또는 1번이 만든 `build/hexa_v2` 로 module_loader → flatten → main 트랜스파일 → `build/hexa_cli_driver`). Mac 은 `LOCAL_BUILD=1`, pool-route 회피는 `SIDECAR_NO_POOL_ROUTE=1`.
+3. **배포** — `build/hexa_cli_driver` 를 shim 이 가리키는 바이너리로 복사: 메인트리 `hxv2`(shim 우선 해석) + `hexa.real`(fallback) + `~/.hx/bin/{hxv2,hexa.real}`; Mac 은 `codesign --force --sign -`.
+4. **검증** — `build/hexa_v2` 제거 후 `hexa build <tiny>.hexa <out>` → `[bootstrap] build/hexa_v2 absent — building transpiler via hexa cc` → `OK: hexa_cc rebuilt` → `OK: built` 가 뜨면 종결. (정상 dispatch 면 build/hexa_v2 가 자동 재생성됨.)
+
+향후 자동화 후보: `build_hexa_cli.hexa` 에 install 단계(shim 타깃 복사)를 추가하면 pull 후 단일 verb 로 종결 (M3b 의 install-step 부재가 본 갭의 근인).
 
 ## not-goal (의도적 제외)
 
