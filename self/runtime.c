@@ -291,57 +291,12 @@ static unsigned long long __attribute__((noinline)) hxlcl_strtoull(const char *n
     if (endptr) *endptr = (char *)s;
     return n;
 }
-// RUNTIME.md step-2 cycle 5 — hxlcl_atof delegates to hexa-source
-// rt_str_parse_float (stdlib/runtime/ctype.hexa cycle-73; same lenient
-// ws+sign+int+.frac+eE-exp parse). Under HEXA_HAS_HEXA_RT_STDLIB the hexa
-// body is the source of truth; the #else C body (bit-for-bit identical)
-// stays for standalone / smoke builds. Two-mode pattern == cycle-1 (isalnum).
-#ifdef HEXA_HAS_HEXA_RT_STDLIB
-extern HexaVal rt_str_parse_float(HexaVal s);
-static double __attribute__((noinline)) hxlcl_atof(const char *s) {
-    if (!s) return 0.0;
-    return HX_FLOAT(rt_str_parse_float(hexa_str((char *)s)));
-}
-#else
-static double __attribute__((noinline)) hxlcl_atof(const char *s) {
-    if (!s) return 0.0;
-    size_t i = 0;
-    while (s[i] == ' ' || s[i] == '\t' || s[i] == '\n') i++;
-    int sign = 1;
-    if (s[i] == '-') { sign = -1; i++; }
-    else if (s[i] == '+') i++;
-    double n = 0.0;
-    while (s[i] >= '0' && s[i] <= '9') {
-        n = n * 10.0 + (double)(s[i] - '0');
-        i++;
-    }
-    if (s[i] == '.') {
-        i++;
-        double frac = 0.1;
-        while (s[i] >= '0' && s[i] <= '9') {
-            n += (double)(s[i] - '0') * frac;
-            frac *= 0.1;
-            i++;
-        }
-    }
-    if (s[i] == 'e' || s[i] == 'E') {
-        i++;
-        int esign = 1;
-        if (s[i] == '-') { esign = -1; i++; }
-        else if (s[i] == '+') i++;
-        int exp_val = 0;
-        while (s[i] >= '0' && s[i] <= '9') {
-            exp_val = exp_val * 10 + (s[i] - '0');
-            i++;
-        }
-        double mul = 1.0;
-        for (int k = 0; k < exp_val; k++) mul *= 10.0;
-        if (esign < 0) n /= mul;
-        else n *= mul;
-    }
-    return (sign < 0) ? -n : n;
-}
-#endif
+// RUNTIME.md step-2 cycle 5 — hxlcl_atof forward-decl only. The two-mode
+// DEFINITION (delegating to hexa-source rt_str_parse_float under
+// HEXA_HAS_HEXA_RT_STDLIB) lives below, after the cycle-1 isalnum shim:
+// this early helper zone is pre-HexaVal, so the HexaVal-typed delegation
+// must be placed where HexaVal / hexa_str / HX_FLOAT are already declared.
+static double __attribute__((noinline)) hxlcl_atof(const char *s);
 static void __attribute__((noinline)) hxlcl_bzero(void *s, size_t n) {
     unsigned char *p = (unsigned char *)s;
     for (size_t i = 0; i < n; i++) {
@@ -1700,6 +1655,59 @@ static int hxlcl_isalnum(int c) {
 static int hxlcl_isalpha(int c) {
     return hexa_truthy(rt_isalpha(hexa_int((int64_t)c))) ? 1 : 0;
 }
+
+// RUNTIME.md step-2 cycle 5 — hxlcl_atof DEFINITION (forward-declared in the
+// early helper zone ~L294). Under HEXA_HAS_HEXA_RT_STDLIB delegate to the
+// hexa-source rt_str_parse_float (stdlib/runtime/ctype.hexa cycle-73, same
+// lenient ws+sign+int+.frac+eE parse); #else the C fallback (bit-for-bit).
+// Placed here (post-cycle-1 shim) because HexaVal/hexa_str/HX_FLOAT are
+// declared by this point — the L294 bootstrap zone is pre-HexaVal.
+#ifdef HEXA_HAS_HEXA_RT_STDLIB
+extern HexaVal rt_str_parse_float(HexaVal s);
+static double __attribute__((noinline)) hxlcl_atof(const char *s) {
+    if (!s) return 0.0;
+    return HX_FLOAT(rt_str_parse_float(hexa_str((char *)s)));
+}
+#else
+static double __attribute__((noinline)) hxlcl_atof(const char *s) {
+    if (!s) return 0.0;
+    size_t i = 0;
+    while (s[i] == ' ' || s[i] == '\t' || s[i] == '\n') i++;
+    int sign = 1;
+    if (s[i] == '-') { sign = -1; i++; }
+    else if (s[i] == '+') i++;
+    double n = 0.0;
+    while (s[i] >= '0' && s[i] <= '9') {
+        n = n * 10.0 + (double)(s[i] - '0');
+        i++;
+    }
+    if (s[i] == '.') {
+        i++;
+        double frac = 0.1;
+        while (s[i] >= '0' && s[i] <= '9') {
+            n += (double)(s[i] - '0') * frac;
+            frac *= 0.1;
+            i++;
+        }
+    }
+    if (s[i] == 'e' || s[i] == 'E') {
+        i++;
+        int esign = 1;
+        if (s[i] == '-') { esign = -1; i++; }
+        else if (s[i] == '+') i++;
+        int exp_val = 0;
+        while (s[i] >= '0' && s[i] <= '9') {
+            exp_val = exp_val * 10 + (s[i] - '0');
+            i++;
+        }
+        double mul = 1.0;
+        for (int k = 0; k < exp_val; k++) mul *= 10.0;
+        if (esign < 0) n /= mul;
+        else n *= mul;
+    }
+    return (sign < 0) ? -n : n;
+}
+#endif
 
 // RUNTIME.md step-2 cycle 2 — math helper hexa-source delegation.
 // Source of truth: stdlib/runtime/math.hexa. Same #ifndef pattern
