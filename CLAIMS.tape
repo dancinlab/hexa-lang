@@ -2498,6 +2498,24 @@
   status = "🔵 SUPPORTED-FORMAL — 6 combinatorial/prime integer fns landed (nth_prime/is_prime/factorial/catalan/bell/partition), exact integer recompute. OEIS 🟠 prime×67 (A000040) → 🔵 conversion ENABLED (mutual-feed loop realized). Terminal · paper-eligible."
 
 # ───────────────────────────────────────────────────────────────────────
+# VERIFY-KIT — verify-kit-register-source (slug · group=VERIFY-KIT · V6 · P3a)
+# Adds `--source "<attribution>"` (+ nice-to-have `--url "<link>"`) to
+# `hexa atlas register --from-verify`. The flag flows cmd_register →
+# _adapt_verify_generic / _adapt_verify_compute → _build_raw_F /
+# _build_raw_F_numerical (new _provenance_lines helper inserts `source =` /
+# `url =` between `verified-by` and `cite`, matching the OEIS O4 hand-fold
+# shape). source = PROVENANCE; g_self_verify stays the verification cite
+# (distinct, both retained). Absent → unchanged default (no provenance line).
+# This automates the OEIS O4 hand-fold of attributed @F nodes.
+
+@C verify_kit_register_source := "VERIFY-KIT V6 atlas register provenance flag: `hexa atlas register --from-verify aliquot 6 --source \"OEIS A001065\" --url \"https://oeis.org/A001065\"` folds an @F node carrying `source = \"OEIS A001065\"` + `url = \"https://oeis.org/A001065\"` between `verified-by` and `cite` (g_self_verify verify-cite retained — source is the PROVENANCE, distinct from the verify cite). Default unchanged: `register --from-verify sigma 6` (no --source) → node has NO source/url line (regression intact). Threaded cmd_register → _adapt_verify_generic/_adapt_verify_compute → _build_raw_F/_build_raw_F_numerical via new _provenance_lines helper. NO codegen change (atlas_cli.hexa edit only). Capability tested in ISOLATED atlas (HEXA_ATLAS_EMBED=/tmp scoping) — shared embedded.gen.hexa NOT touched (no leak). Eliminates the OEIS O4 hand-fold of 3 attributed @F nodes (aliquot↔A001065/sigma_2↔A001157/sigma_3↔A001158) — future OEIS folds use --source/--url." :: formula [slug=verify-kit-register-source group=VERIFY-KIT]
+  method = "cli"
+  cmd    = "hexa atlas register --from-verify aliquot 6 --source \"OEIS A001065\" --url \"https://oeis.org/A001065\"  ·  hexa atlas register --from-verify sigma 6 (no-source regression)  (build = bin/hexa-atlas + bin/hexa-verify, local arm64)"
+  raw    = ".verdicts/verify-kit-register-source/v6.txt"
+  src    = "tool/atlas_cli.hexa (cmd_register --source/--url parse; _provenance_lines helper; _adapt_verify_generic/_adapt_verify_compute/_build_raw_F/_build_raw_F_numerical signatures gain source/url; help text). bin/hexa-atlas + bin/hexa-verify built local arm64 (installed hexa.real V4-stale on _jacobi_symbol/_kronecker_symbol → hexa verify JIT link-fail; PATH wrapper forwards verify→bin/hexa-verify, no mini bootstrap needed)."
+  status = "🟢 SUPPORTED-NUMERICAL — register --source/--url → folded node `source =`/`url =` provenance field (byte-grep confirmed present, 🔵 fold); no-flag → default unchanged (0 provenance lines, regression); shared embedded.gen.hexa clean (isolated-atlas test, no leak). Terminal · paper-eligible (OEIS O4 hand-fold 자동화 = Δ vs prior hardcoded g_self_verify-only register)."
+
+# ───────────────────────────────────────────────────────────────────────
 # OEIS — oeis-prefix-collision-falsifier (slug · group=OEIS · O8 paper · closed-negative)
 # ───────────────────────────────────────────────────────────────────────
 @C oeis_prefix_collision_falsifier := "OEIS O8 closed-negative: K=10 integer-tuple prefix-match does NOT imply OEIS sequence identity. Pre-registered falsifier H (O1 ledger: A000926 Idoneal ↔ `n` — first 10 terms coincide, diverge at term 11 — set BEFORE the full sweep). Measured (O2 full sweep): 374047 OEIS seq × 20 low-entropy arithmetic candidate fn → 1707 K=10 hits → K=20 second pass → 1334/1707 = 78.1% are first-K coincidences (1334/1670 = 79.9% of the disprovable ≥20-term seqs). H FALSIFIED. Ruled-out axis = short-prefix (K=10) tuple-match as a standalone sequence-identity test, at ~78% false-positive over a 374K sweep. CAVEAT (candidate-set-relative): the 78% is for THIS 20-fn low-entropy candidate set + single K=10→K=20 prefix-pair — NOT a universal claim about OEIS prefix collisions. Paper PAPER/oeis-prefix-collision-falsifier/ (10 pages + 1 fal.ai figure, g51)." :: empirical [slug=oeis-prefix-collision-falsifier group=OEIS]

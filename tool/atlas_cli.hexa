@@ -1561,14 +1561,31 @@ fn _fstr_register(x: float) -> string {
 // (backslash, then double-quote, then newline). Mirrors what tool/atlas_embed_gen
 // emits when serializing AtlasNode.raw into embedded.gen.hexa.
 
+// _provenance_lines — VERIFY-KIT V6 optional provenance block. When `source`
+// is non-empty, emits a `source = "<text>"` line (the external attribution —
+// OEIS id, DOI, …) right after `verified-by` and before `cite`, matching the
+// OEIS O4 hand-fold shape so future OEIS folds use `--source` instead of a
+// hand edit. `url` (optional) adds a `url = "<link>"` line for the CC-BY-SA /
+// DOI link. Empty `source` AND `url` → "" (default behavior unchanged: the
+// node carries only the `g_self_verify` verify cite, no provenance field).
+fn _provenance_lines(source: string, url: string) -> string {
+    let mut out = ""
+    if len(source) > 0 { out = out + "  source = \"" + source + "\"\n" }
+    if len(url) > 0 { out = out + "  url = \"" + url + "\"\n" }
+    return out
+}
+
 // _build_raw_F — hexa-source-form header for a verified closed-form (kind F).
 // Shape:   @F <id> = <fn>(<arg>) = <value> :: formula [d=<date> active]
 //            verified-by = "hexa verify --expr <fn> <args> <v>"
+//            [source = "<attribution>"]   (V6 — present iff --source given)
+//            [url = "<link>"]             (V6 — present iff --url given)
 //            cite = "@D g_self_verify · TECS-L Tier1"
-fn _build_raw_F(id: string, fn_name: string, arg_str: string, value: int, today: string) -> string {
+fn _build_raw_F(id: string, fn_name: string, arg_str: string, value: int, today: string, source: string, url: string) -> string {
     return "@F " + id + " = " + fn_name + "(" + arg_str + ") = " + to_string(value) +
            " :: formula [d=" + today + " active]\n" +
            "  verified-by = \"hexa verify --expr " + fn_name + " " + arg_str + " " + to_string(value) + "\"\n" +
+           _provenance_lines(source, url) +
            "  cite = \"@D g_self_verify · TECS-L Tier1 — hexa-native NT closed-form\"\n" +
            "  provenance = \"tool/atlas_cli.hexa register --from-verify (direct node-gen → embedded.gen.hexa SSOT)\""
 }
@@ -1578,11 +1595,12 @@ fn _build_raw_F(id: string, fn_name: string, arg_str: string, value: int, today:
 // TECS-L Tier2 marker so the atlas keeps the 🟢-vs-🔵 distinction (🔵 =
 // closed-form FORMAL; 🟢 = libm-class numerical recompute within ε=1e-9).
 // `arg_str` / `value_str` are the decimal float echoes (e.g. "12.706").
-fn _build_raw_F_numerical(id: string, fn_name: string, arg_str: string, value_str: string, today: string) -> string {
+fn _build_raw_F_numerical(id: string, fn_name: string, arg_str: string, value_str: string, today: string, source: string, url: string) -> string {
     return "@F " + id + " = " + fn_name + "(" + arg_str + ") = " + value_str +
            " :: formula [d=" + today + " active]\n" +
            "  tier = \"🟢 SUPPORTED-NUMERICAL\"\n" +
            "  verified-by = \"hexa verify --expr " + fn_name + " " + arg_str + " " + value_str + "\"\n" +
+           _provenance_lines(source, url) +
            "  cite = \"TECS-L n6-rep Tier2 — hexa-native libm-class numerical recompute (ε=1e-9)\"\n" +
            "  provenance = \"tool/atlas_cli.hexa register --from-verify (direct node-gen → embedded.gen.hexa SSOT; 🟢 numerical)\""
 }
@@ -1808,7 +1826,7 @@ fn _adapt_verify_1op(fn_name: string, n_arg: int, expected: int, id_override: st
     let mut id = id_override
     if len(id) == 0 { id = "verified-" + _slug_register(fn_name) + "-" + to_string(n_arg) }
     let today = _today_compact()
-    let raw_body = _build_raw_F(id, fn_name, arg_str, expected, today)
+    let raw_body = _build_raw_F(id, fn_name, arg_str, expected, today, "", "")
     return DiscoveryEvent { kind: "F", id: id, name: fn_name + "(" + arg_str + ")=" + to_string(expected),
         raw: raw_body, verdict: "🔵 SUPPORTED-FORMAL", source_verb: "verify", provenance: provenance }
 }
@@ -1828,7 +1846,7 @@ fn _adapt_verify_2op(fn_name: string, a_arg: int, b_arg: int, expected: int, id_
     let mut id = id_override
     if len(id) == 0 { id = "verified-" + _slug_register(fn_name) + "-" + to_string(a_arg) + "-" + to_string(b_arg) }
     let today = _today_compact()
-    let raw_body = _build_raw_F(id, fn_name, arg_str, expected, today)
+    let raw_body = _build_raw_F(id, fn_name, arg_str, expected, today, "", "")
     return DiscoveryEvent { kind: "F", id: id, name: fn_name + "(" + arg_str + ")=" + to_string(expected),
         raw: raw_body, verdict: "🔵 SUPPORTED-FORMAL", source_verb: "verify", provenance: provenance }
 }
@@ -1852,7 +1870,7 @@ fn _adapt_verify_3op(fn_name: string, a_arg: int, b_arg: int, c_arg: int, expect
     let mut id = id_override
     if len(id) == 0 { id = "verified-" + _slug_register(fn_name) + "-" + to_string(a_arg) + "-" + to_string(b_arg) + "-" + to_string(c_arg) }
     let today = _today_compact()
-    let raw_body = _build_raw_F(id, fn_name, arg_str, expected, today)
+    let raw_body = _build_raw_F(id, fn_name, arg_str, expected, today, "", "")
     return DiscoveryEvent { kind: "F", id: id, name: fn_name + "(" + arg_str + ")=" + to_string(expected),
         raw: raw_body, verdict: "🔵 SUPPORTED-FORMAL", source_verb: "verify", provenance: provenance }
 }
@@ -1899,7 +1917,7 @@ fn _adapt_verify_float(fn_name: string, a0_str: string, a1_str: string, a2_str: 
     let mut id = id_override
     if len(id) == 0 { id = "verified-" + _slug_register(fn_name) + "-num" }
     let today = _today_compact()
-    let raw_body = _build_raw_F_numerical(id, fn_name, arg_echo, v_echo, today)
+    let raw_body = _build_raw_F_numerical(id, fn_name, arg_echo, v_echo, today, "", "")
     return DiscoveryEvent { kind: "F", id: id, name: fn_name + "(" + arg_echo + ")=" + v_echo,
         raw: raw_body, verdict: "🟢 SUPPORTED-NUMERICAL", source_verb: "verify", provenance: prov }
 }
@@ -1970,7 +1988,11 @@ fn _adapt_drill_candidate(c: DiscoveryCandidate, seed: string, engine: string,
 // (_recompute_*_register, _<fn>_register, _adapt_verify_1op/2op/3op/float,
 // _is_*_fn_register) are now uncalled — left as harmless dead code for now;
 // safe to delete in a follow-up cleanup PR.
-fn _adapt_verify_generic(fn_name: string, args: array, v_str: string, id_override: string) -> DiscoveryEvent {
+// VERIFY-KIT V6 — `source` / `url` carry external provenance (OEIS id, DOI,
+// CC-BY-SA link). Empty → unchanged default (verify cite only). Distinct from
+// the verify cite: `source` is the PROVENANCE attribution, `g_self_verify`
+// stays the verification cite.
+fn _adapt_verify_generic(fn_name: string, args: array, v_str: string, id_override: string, source: string, url: string) -> DiscoveryEvent {
     let mut args_str_arr = []
     let mut i = 0
     while i < len(args) {
@@ -2000,7 +2022,7 @@ fn _adapt_verify_generic(fn_name: string, args: array, v_str: string, id_overrid
     let mut id = id_override
     if verdict == "🟢 SUPPORTED-NUMERICAL" {
         if len(id) == 0 { id = "verified-" + _slug_register(fn_name) + "-num" }
-        let raw = _build_raw_F_numerical(id, fn_name, arg_str_comma, v_str, today)
+        let raw = _build_raw_F_numerical(id, fn_name, arg_str_comma, v_str, today, source, url)
         return DiscoveryEvent { kind: "F", id: id, name: name, raw: raw,
             verdict: verdict, source_verb: "verify", provenance: prov }
     }
@@ -2009,7 +2031,7 @@ fn _adapt_verify_generic(fn_name: string, args: array, v_str: string, id_overrid
         id = "verified-" + _slug_register(fn_name) + "-" + args_str_arr.join("-")
     }
     let v_int = to_int(v_str)
-    let raw = _build_raw_F(id, fn_name, arg_str_comma, v_int, today)
+    let raw = _build_raw_F(id, fn_name, arg_str_comma, v_int, today, source, url)
     return DiscoveryEvent { kind: "F", id: id, name: name, raw: raw,
         verdict: verdict, source_verb: "verify", provenance: prov }
 }
@@ -2039,7 +2061,7 @@ fn _parse_compute_value(out: string) -> string {
 // mirror), reads the COMPUTE value back, and folds it on 🔵/🟢. This kills
 // BOTH the atlas_cli↔verify_cli recompute desync (no mirror) AND the arity
 // gap (any operand count — allen_dynes_tc is 3-arg, handled by verify_cli).
-fn _adapt_verify_compute(fn_name: string, args: array, id_override: string) -> DiscoveryEvent {
+fn _adapt_verify_compute(fn_name: string, args: array, id_override: string, source: string, url: string) -> DiscoveryEvent {
     let mut args_str_arr = []
     let mut i = 0
     while i < len(args) {
@@ -2073,7 +2095,7 @@ fn _adapt_verify_compute(fn_name: string, args: array, id_override: string) -> D
     let mut id = id_override
     if verdict == "🟢 SUPPORTED-NUMERICAL" {
         if len(id) == 0 { id = "verified-" + _slug_register(fn_name) + "-num" }
-        let raw = _build_raw_F_numerical(id, fn_name, arg_str_comma, v_str, today)
+        let raw = _build_raw_F_numerical(id, fn_name, arg_str_comma, v_str, today, source, url)
         return DiscoveryEvent { kind: "F", id: id, name: name, raw: raw,
             verdict: verdict, source_verb: "verify", provenance: prov }
     }
@@ -2081,7 +2103,7 @@ fn _adapt_verify_compute(fn_name: string, args: array, id_override: string) -> D
     if len(id) == 0 {
         id = "verified-" + _slug_register(fn_name) + "-" + args_str_arr.join("-")
     }
-    let raw = _build_raw_F(id, fn_name, arg_str_comma, to_int(v_str), today)
+    let raw = _build_raw_F(id, fn_name, arg_str_comma, to_int(v_str), today, source, url)
     return DiscoveryEvent { kind: "F", id: id, name: name, raw: raw,
         verdict: verdict, source_verb: "verify", provenance: prov }
 }
@@ -2097,6 +2119,12 @@ fn cmd_register(rest: array) {
     let mut from_verb = ""                  // "verify" | "drill" | ""
     let mut id_override = ""
     let mut want_compute = false            // --compute → value-less compute-and-fold
+    // VERIFY-KIT V6 — external provenance attribution. --source flows into the
+    // folded node's `source = "<text>"` field (OEIS id, DOI, …); --url adds the
+    // CC-BY-SA / DOI link. Both empty → unchanged default (g_self_verify cite
+    // only). This automates the OEIS O4 hand-fold of attributed @F nodes.
+    let mut node_source = ""
+    let mut node_url = ""
     // drill-specific
     let mut drill_seed = ""
     let mut drill_rounds = 1
@@ -2110,6 +2138,8 @@ fn cmd_register(rest: array) {
         else if a == "--compute" { want_compute = true; i = i + 1 }
         else if a == "--from-drill" || a == "--from-kick" { from_verb = "drill"; i = i + 1 }
         else if a == "--id" && i + 1 < n { id_override = to_string(rest[i + 1]); i = i + 2 }
+        else if a == "--source" && i + 1 < n { node_source = to_string(rest[i + 1]); i = i + 2 }
+        else if a == "--url" && i + 1 < n { node_url = to_string(rest[i + 1]); i = i + 2 }
         else if a == "--seed" && i + 1 < n { drill_seed = to_string(rest[i + 1]); i = i + 2 }
         else if a == "--rounds" && i + 1 < n { drill_rounds = to_int(to_string(rest[i + 1])); i = i + 2 }
         else if a == "--engine" && i + 1 < n { drill_engine = to_string(rest[i + 1]); i = i + 2 }
@@ -2119,6 +2149,9 @@ fn cmd_register(rest: array) {
             println("       hexa atlas register --from-verify welch_t_crit <df> <v>          (🟢 NUMERICAL)")
             println("       hexa atlas register --from-verify wilson_hilferty_p <t> <df> <v> (🟢)")
             println("       hexa atlas register --from-drill  --seed \"<text>\" [--rounds N] [--engine mk9|mk10] [--id <id>]")
+            println("")
+            println("Options (verify): --source \"<attribution>\"  external provenance (OEIS id, DOI) → node `source =` field")
+            println("                  --url    \"<link>\"         CC-BY-SA / DOI link → node `url =` field")
             println("")
             println("Each `--from-<verb>` arm runs the verb IN-PROCESS, constructs the verified")
             println("AtlasNode IN MEMORY, and appends it DIRECTLY to the live n6/atlas.n6 SSOT — the")
@@ -2150,7 +2183,7 @@ fn cmd_register(rest: array) {
                 cargs.push(to_string(positional[ci]))
                 ci = ci + 1
             }
-            let cev = _adapt_verify_compute(fn_name, cargs, id_override)
+            let cev = _adapt_verify_compute(fn_name, cargs, id_override, node_source, node_url)
             println("hexa atlas register --from-verify " + cev.name + "  (compute)")
             if cev.verdict == "🟠 INSUFFICIENT" {
                 println("  tier   = 🟠 INSUFFICIENT")
@@ -2178,7 +2211,7 @@ fn cmd_register(rest: array) {
             args_arr.push(to_string(positional[pi]))
             pi = pi + 1
         }
-        let ev = _adapt_verify_generic(fn_name, args_arr, v_str, id_override)
+        let ev = _adapt_verify_generic(fn_name, args_arr, v_str, id_override, node_source, node_url)
         // VERIFY-KIT V1 auto-route: a 🟠 from the value-bearing form means the
         // arity didn't compute (e.g. allen_dynes_tc(λ,ω_log,μ*) is 3-arg but
         // the last operand was consumed as the claimed <v>, leaving a 2-arg
@@ -2192,7 +2225,7 @@ fn cmd_register(rest: array) {
                 allargs.push(to_string(positional[ai]))
                 ai = ai + 1
             }
-            let cev = _adapt_verify_compute(fn_name, allargs, id_override)
+            let cev = _adapt_verify_compute(fn_name, allargs, id_override, node_source, node_url)
             if cev.verdict == "🟢 SUPPORTED-NUMERICAL" || cev.verdict == "🔵 SUPPORTED-FORMAL" {
                 println("hexa atlas register --from-verify " + cev.name + "  (compute — auto-routed from 🟠)")
                 println("  tier   = " + cev.verdict + "  (delegated via `hexa verify --expr … --compute`)")
@@ -2351,6 +2384,7 @@ fn cmd_register(rest: array) {
     println("hexa atlas register: no discovery arm selected.")
     println("  --from-verify <fn> <n> <v>            (direct in-memory node-gen → live n6/atlas.n6)")
     println("  --from-verify <fn> <a> <b> <v>        (2-op form)")
+    println("  --from-verify … --source \"<attr>\"     external provenance (OEIS id, DOI) → node `source =`")
     println("  --from-drill  --seed \"<text>\" [--rounds N] [--engine mk9|mk10]")
     println("  see: hexa atlas register --help")
     exit(3)
