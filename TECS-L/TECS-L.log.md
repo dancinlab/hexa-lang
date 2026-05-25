@@ -3,6 +3,15 @@
 Append-only history sister of `TECS-L.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
 
+## 2026-05-25T14:30 — 축 E 신설 (Atlas 개선/성장) + 1차 fold 6 atom
+
+- [x] 사용자 directive: "atlas 개선사항 함께 진행 + TECS-L 축으로 등록" → 축 E (Atlas 개선/성장) 신설
+- [x] atlas 상태 점검: 16103 노드, audit drift=0 clean. 단 TECS-L 이번 발견은 atlas 미등록(no `tecs`/`verified-*` for our atoms) — verify/CLAIMS엔 있으나 atlas atom 아님
+- [x] E1 1차 fold (6 atom): `hexa atlas register --from-verify` → τ(496/8128/33550336)=string-dim · is_perfect(8589869056) · Γ₀(6) genus=0/cusps=4 → embedded.gen.hexa 16103→16109
+- [x] **register install-dir 해저드 발견·회수**: register 는 cwd 무관 install-dir(공유 main 트리=타 에이전트 antimatter 브랜치) 의 embedded.gen 에 fold → leak. `git diff>patch` → 공유트리 `checkout --` 회수 → worktree `git apply` (stray pair_threshold_factor-1 타 에이전트분 strip) → PR. 축 E E3 에 직렬화 패턴 기록
+- [ ] E2 atlas health 정기점검 · E3 register 직렬화 (perpetual)
+
+
 ## 2026-05-25T14:35 — 축 A MODFORM · MF2 Γ₀(N) cusp 수 (n=6↔τ 다리)
 
 - [x] c(N)=Σ_{d|N} φ(gcd(d,N/d)) 닫힌형 = hexa `gamma0_cusps`: **N=1..30 전수 30/30 🔵** (`cusps_sweep_1_30.txt`)
