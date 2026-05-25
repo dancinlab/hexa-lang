@@ -1480,3 +1480,43 @@
   raw    = ".verdicts/tecs-l-mersenne-tau-2p/tau_p7.txt"
   src    = "Closed-form 2p for P=2^(p-1)*M_p, p=19 (NEW vs axis-0; MR2 already verified is_perfect/sigma for P7). Divisors = 2^a * M_p^b, a in [0,18], b in {0,1} -> 19*2 = 38."
   status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal · paper-eligible."
+
+# ───────────────────────────────────────────────────────────────────────
+# TECS-L axis A (MODFORM) — tecs-l-modform-weight-al (slug · group=TECS-L · MF7)
+# first_cusp_form_weight(N) sweep N=1..30 (30/30 🔵) + Atkin-Lehner closed-form
+# |AL(N)| = 2^ω(N) (ω = distinct prime factors). Headline: weight(6)=4=τ(6).
+
+@C tecs_l_mf_weight_sweep := "first_cusp_form_weight(N) for N=1..30 all verified (30/30 🔵)" :: experiment [slug=tecs-l-modform-weight-al group=TECS-L]
+  method = "sweep"
+  cmd    = "for N in 1..30: hexa verify --expr first_cusp_form_weight N <actual>"
+  raw    = ".verdicts/tecs-l-modform-weight-al/weight_sweep_1_30.txt"
+  src    = "MF7 sweep; first_cusp_form_weight is hexa built-in calc fn"
+  status = "🔵 SUPPORTED-FORMAL — 30/30 closed-form, verdicts persisted verbatim. terminal."
+
+@C tecs_l_mf_weight_n6 := "first_cusp_form_weight(6) = 4 = tau(6) (n=6 bridge to axis-0 M4)" :: formula [slug=tecs-l-modform-weight-al group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr first_cusp_form_weight 6 4"
+  raw    = ".verdicts/tecs-l-modform-weight-al/weight_n6.txt"
+  src    = "MF7 headline; axis-0 M4 had this atom"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal."
+
+@C tecs_l_mf_weight_n1 := "first_cusp_form_weight(1) = 12 (SL_2(Z), Delta cusp form weight 12)" :: formula [slug=tecs-l-modform-weight-al group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr first_cusp_form_weight 1 12"
+  raw    = ".verdicts/tecs-l-modform-weight-al/weight_n1.txt"
+  src    = "MF7 sweep — N=1 is SL_2(Z)"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal."
+
+@C tecs_l_mf_weight_n30 := "first_cusp_form_weight(30) = 2 (level-30 weight-2 cusp form exists)" :: formula [slug=tecs-l-modform-weight-al group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr first_cusp_form_weight 30 2"
+  raw    = ".verdicts/tecs-l-modform-weight-al/weight_n30.txt"
+  src    = "MF7 sweep — high-N (ω=3, lots of forms)"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal."
+
+@C tecs_l_mf_al_closed_form := "|AL(Gamma_0(N))| = 2^omega(N) Atkin-Lehner involution count (classical, 10 samples N=1..30030)" :: formula [slug=tecs-l-modform-weight-al group=TECS-L]
+  method = "closed-form-citation"
+  cmd    = "tabulate omega(N) + 2^omega for sample N (no direct hexa verify fn; ω derived from prime factorization)"
+  raw    = ".verdicts/tecs-l-modform-weight-al/al_2pow_omega.txt"
+  src    = "MF7 — classical Atkin-Lehner theorem (Atkin-Lehner 1970)"
+  status = "🟡 SUPPORTED-BY-CITATION — closed-form theorem, ω derivation by-hand (no direct hexa fn). non-terminal for /paper."
