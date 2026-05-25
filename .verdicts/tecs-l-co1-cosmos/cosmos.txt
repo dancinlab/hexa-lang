@@ -1,0 +1,6 @@
+CO1 — COSMOS verify-able triage (main-tree verify, cache hit)
+SM gauge 8+3+1=12=sigma(6)      BLUE (M5 cite + main-tree verify)
+superstring D=10=tau(496)       BLUE (main-tree verify)
+bosonic D=26=tau(33550336)      BLUE (M5 cite)
+cosmological const (Lambda/H0)  ORANGE (observation-dependent, no closed-form path)
+honest: COSMOS verify-able = M5 dim/gauge cite (BLUE); new cosmological constants are ORANGE (observation, not verify-able). matches pre-registered prediction.

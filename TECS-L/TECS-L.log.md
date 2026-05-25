@@ -3,6 +3,14 @@
 Append-only history sister of `TECS-L.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
 
+## 2026-05-26 · 새 대축 R2 — COSMOS CO1 + LIFE LF1 honest triage (verify infra 복구 확인)
+
+- [x] **verify infra 복구 확인**: 타 세션 #1198/#1213 (`build_hexa_module_loader.sh`) 로 worktree verify_cli rebuild 막힘 RESOLVED. worktree `hexa verify --expr sigma 6 12 → 🔵` rebuild 성공 (이전 bessel/iit4 `_Generic` 막힘 해소, INBOX #1204 ack). 단 worktree rebuild 는 매 호출 느림 → main-tree cache-hit verify 가 효율적.
+- [x] CO1 (COSMOS 대축) — honest triage: 차원/gauge 🔵 (SM gauge 12=σ(6)·superstring D=10=τ(496)·bosonic D=26=τ(33550336), main-tree verify + M5 cite) + 우주론 상수(Λ/H₀) 🟠 (관측 의존). 사전등록 예측 일치 (verify-able = M5 cite, 신규 상수 🟠). → `.verdicts/tecs-l-co1-cosmos/`
+- [x] LF1 (LIFE 대축) — honest triage: codon 4³=64·pow 🟠 (calculator no-path for 'pow', sopfr 류 whitelist gap, 기존 INBOX stdlib-primitive) + IIT Φ iit4_faithful_phi DEFERRED (multi-arg, `--expr` 단순 path 아님 → phi_demo 모드 별도) + 분자 정수 🟠. 사전등록 예측 일치 (verify-able 희소). → `.verdicts/tecs-l-lf1-life/`
+- 잔여: CM1-CM7 candidate triage (verify infra 복구로 가능) · pow/sopfr calculator whitelist (기존 INBOX) · IIT Φ phi_demo 모드 verify (LIFE Φ 본격).
+- 격리 worktree `/tmp/wt-cl` (branch `tecs-cl-r2-2026-05-26`).
+
 ## 2026-05-26 · 새 대축 R1 — CM0 lattice + PH1 physics (cite M2/M5 🔵 + sopfr 🟠)
 
 - [x] CM0 (수학 대축 축 G) — n=6 lattice 재근거: σ(6)=12·τ(6)=4·φ(6)=2 🔵 (M2 cite + main-tree verify calc=12 재확인) + master σφ=nτ=24 정수조립 🔵 + sopfr(6)=5 🟠 (verify_cli `_recompute` whitelist gap, 기존 INBOX stdlib-primitive 추적). → `.verdicts/tecs-l-cm0-lattice/`
