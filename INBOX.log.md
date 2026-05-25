@@ -2,6 +2,16 @@
 
 Append-only history sister of `INBOX.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
+## 2026-05-25T09:30Z — hexa cloud vast ssh-transport exit-255 outage 감지/fail-fast 부재 (h3o SSCHA · d8)
+
+h3o SSCHA agent 가 발견 — vast pod 37670312 (+ 다른 2 pod) 전부 `hexa cloud run/exec/scp` 시 `ssh exit 255`. 3 pod 동시 실패 = tool-wide vast.ai transport outage (pod-specific 아님). pod 는 alive+billing 인데 usable connection 0. `hexa cloud` 가 ssh-transport 실패를 감지/재시도/fail-fast 못 함 (d8 — Vast finding → INBOX).
+
+- [ ] **증상** — `hexa cloud run/exec/scp <vast-pod>` 전부 `ssh exit 255` (transport 실패). 3 pod 동시 발생 = tool-wide vast.ai transport outage · pod-specific 아님. pod 는 alive+billing 인데 connection 0.
+- [ ] **영향** — pod ~9.2h billing 中 usable connection 0 → ≈$2.76 낭비 + 작업 차단. SSCHA agent 가 vast 포기 → pool ubu-1 으로 pivot ($0 으로 완주).
+- [ ] **제안** — (a) `hexa cloud` 가 ssh exit-255 (transport 실패) 를 감지 → fast-fail + "vast outage" 진단 메시지 (현재는 무한 시도/모호 실패). (b) optional auto-down on N consecutive 255 (billing 보호). (c) `hexa cloud list` 에 reachability probe (alive≠reachable 구분).
+
+Status: open · proposed-by:agent · severity:medium-high (billing 낭비 + 작업 차단 · vast 의존 캠페인에 치명) · source:h3o SSCHA agent (demiurge PR #141 · afe7b61) · awaits:hexa-lang fix
+
 ## 2026-05-25T08:45Z — stdlib primitive atlas register path gap (`--from-selftest` arm 부재 · NOVEL-TOOL 13 primitive 발견)
 
 NOVEL-TOOL 13 stdlib primitive (wheeler·elliptic·gauss_legendre·welford·logsumexp·kahan·lambert_w·demag·halbach·mutual_M·loop_offaxis·ks2·endleakage) 가 self-test 13/13 PASS (sentinel + FALSIFIER, libm-class numerical match) 인데 **atlas DB 등록 0/13** — register 메커니즘 부재.
