@@ -1,0 +1,88 @@
+#!hexa strict
+// stdlib/fusion/reactivity.hexa — ①b fusion-reactivity adapter
+// (demiurge design.md D72 2-layer STDLIB restructure · FUSION.md F1/F2).
+//
+// THIN adapter over the domain-agnostic ①a reactivity kernel
+// `stdlib/kernels/fusion_reactivity/reactivity.hexa`. The kernel owns the
+// Bosch-Hale ⟨σv⟩(T) algebra + the Lawson / Q_plasma 0-D power balance;
+// this adapter owns ONLY the fusion-domain operating points (a D-T core
+// reference ion temperature, an ITER-class triple-product point) and the
+// honesty caveat that those inputs are NOT a device measurement.
+//
+// @version 0.1.0
+// @capabilities [pure]
+// @stability stage-2 substrate. Verification anchor = Bosch & Hale's own
+//   Table VIII tabulated ⟨σv⟩ column (the paper's verification table),
+//   exercised by the `--expr` atoms registered in tool/verify_cli.hexa.
+// @since 2026-05-25
+//
+// 2-layer (ABSORPTION.md ①):
+//   ①a kernel  — `stdlib/kernels/fusion_reactivity/reactivity.hexa`.
+//                Domain-independent Bosch-Hale ⟨σv⟩ + Lawson algebra.
+//   ①b adapter — THIS FILE. Owns the fusion operating points.
+//
+// HONESTY (g3 — non-negotiable · FUSION governance):
+//   • The reactivity ⟨σv⟩(T) and the Q_plasma it feeds ARE mathematical
+//     facts of the Bosch-Hale fit + the 0-D power balance — exact given
+//     the inputs.
+//   • BUT the *input* operating point (D-T at T_i = 15 keV, an ITER-class
+//     n·T·τ_E reference point) is TEXTBOOK, NOT a real-device shot. Any
+//     consumer keeps gate=GATE_OPEN / absorbed=false unless n/T/τ_E come
+//     from a measured tokamak shot. The JET measured-oracle
+//     (`stdlib/fusion/jet_plasma_measured_oracle.py`, absorbed=true κ-70)
+//     is the ONLY absorbed=true fusion path.
+//   • A Q>1 from these operating points is DESIGN FEASIBILITY — never a
+//     claim that ignition / breakeven was achieved on a device.
+
+use "stdlib/kernels/fusion_reactivity/reactivity"
+
+// ── D-T core reference operating point (textbook) ────────────────────────
+//
+// A representative burning-plasma D-T core point — NOT a device shot:
+//   T_i = 15 keV   (near the D-T ⟨σv⟩/T² peak / typical reactor design pt)
+//   n_i = 1.0e20 m⁻³   (ITER-class core ion density, quasineutral n_e≈n_i)
+//   τ_E = 3.0 s        (ITER-class energy confinement time)
+// — g3: these are design reference numbers, NOT a measurement.
+pub fn dt_ref_t_kev() -> float  { return 15.0 }
+pub fn dt_ref_n_i() -> float    { return 1.0e20 }
+pub fn dt_ref_tau_e() -> float  { return 3.0 }
+
+/// D-T reactivity ⟨σv⟩ [cm³/s] at the core reference temperature (15 keV).
+/// Smoke-test view over the kernel — value is a math fact of the fit, but
+/// the chosen T_i is textbook (absorbed=false).
+pub fn dt_ref_sigma_v() -> float {
+    return sigma_v_dt(dt_ref_t_kev())
+}
+
+/// D-T volumetric fusion power density [W/m³] at the core reference point.
+pub fn dt_ref_p_fusion_density() -> float {
+    return p_fusion_dt_density(dt_ref_n_i(), dt_ref_t_kev())
+}
+
+/// Lawson triple product n·T·τ_E [m⁻³·keV·s] at the ITER-class reference
+/// point. The standard fusion figure of merit — design reference, NOT a
+/// measured shot (absorbed=false).
+pub fn dt_ref_triple_product() -> float {
+    return triple_product(dt_ref_n_i(), dt_ref_t_kev(), dt_ref_tau_e())
+}
+
+/// Plasma thermal energy density [J/m³] at the reference point (n_e≈n_i).
+pub fn dt_ref_w_density() -> float {
+    return w_thermal_density(dt_ref_n_i(), dt_ref_n_i(), dt_ref_t_kev())
+}
+
+/// 0-D Q_plasma at the D-T core reference operating point. DESIGN
+/// FEASIBILITY ONLY — a Q value here is what such a textbook operating
+/// point WOULD give, never "ignition achieved" (g3 · absorbed=false).
+pub fn dt_ref_q_plasma() -> float {
+    return q_plasma_0d(dt_ref_p_fusion_density(), dt_ref_w_density(),
+                       dt_ref_tau_e(), dt_alpha_fraction())
+}
+
+/// Lawson ignition margin (α-self-heating / confinement loss) at the
+/// reference point. margin ≥ 1 ⇒ 0-D ignition criterion crossed — a DESIGN
+/// statement about the textbook operating point, NOT a device result.
+pub fn dt_ref_ignition_margin() -> float {
+    return ignition_margin(dt_ref_p_fusion_density(), dt_ref_w_density(),
+                           dt_ref_tau_e(), dt_alpha_fraction())
+}

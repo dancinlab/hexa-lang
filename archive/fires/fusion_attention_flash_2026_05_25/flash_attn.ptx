@@ -1,0 +1,207 @@
+//
+// Fused flash-attention kernel -- softmax(Q K^T / sqrt(d)) V in ONE kernel.
+//
+// Online-softmax tiling: S = Q K^T is NEVER materialized to HBM. Each thread
+// owns one query row q[0..d-1] (d = 64, kept in registers). It streams over
+// all N key/value rows maintaining a running max m and running sum l, and a
+// running output accumulator acc[0..d-1] (also in registers). This is the
+// numerically-stable online softmax of Milakov & Gimelshein (2018) as used by
+// FlashAttention (Dao et al. 2022): on each key j,
+//     s   = dot(q, k_j) * scale
+//     m'  = max(m, s)
+//     c   = exp(m - m')          // rescale prior accumulators
+//     p   = exp(s - m')          // weight of this key
+//     l'  = l*c + p
+//     acc = acc*c + p * v_j
+//     m   = m'
+// then O = acc / l at the end. Pure FP32 throughout (codegen-stable; the
+// numeric correctness clause is f32 vs f64 ref, rel-err <= 1e-2).
+//
+// Launch: grid = (N / BLOCK_Q) blocks, blockDim = BLOCK_Q threads (one query
+// row per thread). With BLOCK_Q = 64 and d = 64 the per-thread acc[64] +
+// q[64] fits the register file comfortably.
+//
+// Params (all .u64 pointers + scalars):
+//   q     row-major  [N x d] fp32
+//   k     row-major  [N x d] fp32
+//   v     row-major  [N x d] fp32
+//   o     row-major  [N x d] fp32  (output)
+//   N     i32  sequence length
+//   scale f32  1/sqrt(d)
+//
+// d is fixed = 64 (loop bound is a literal so ptxas fully unrolls the d-loops).
+// PURE ASCII -- driver-JIT ptxas rejects non-ASCII comments.
+
+.version 7.0
+.target sm_80
+.address_size 64
+
+.visible .entry flash_attn (
+    .param .u64 q_ptr,
+    .param .u64 k_ptr,
+    .param .u64 v_ptr,
+    .param .u64 o_ptr,
+    .param .u32 n_seq,
+    .param .f32 scale
+)
+{
+    .reg .pred  %p<6>;
+    .reg .b32   %r<24>;
+    .reg .f32   %f<48>;
+    .reg .f64   %fd<2>;
+    .reg .b64   %rd<24>;
+
+    // ---- params ----
+    ld.param.u64 %rd0, [q_ptr];
+    ld.param.u64 %rd1, [k_ptr];
+    ld.param.u64 %rd2, [v_ptr];
+    ld.param.u64 %rd3, [o_ptr];
+    ld.param.u32 %r0,  [n_seq];
+    ld.param.f32 %f40, [scale];
+
+    cvta.to.global.u64 %rd0, %rd0;
+    cvta.to.global.u64 %rd1, %rd1;
+    cvta.to.global.u64 %rd2, %rd2;
+    cvta.to.global.u64 %rd3, %rd3;
+
+    // global query row index = ctaid.x * ntid.x + tid.x
+    mov.u32 %r1, %ctaid.x;
+    mov.u32 %r2, %ntid.x;
+    mov.u32 %r3, %tid.x;
+    mad.lo.s32 %r4, %r1, %r2, %r3;   // r4 = query row index qi
+
+    // guard: qi < N
+    setp.ge.s32 %p1, %r4, %r0;
+    @%p1 bra $done;
+
+    // q row base address = q + qi * d * 4  (d = 64 -> stride 256 bytes)
+    mul.wide.s32 %rd4, %r4, 256;
+    add.u64 %rd10, %rd0, %rd4;        // rd10 = &q[qi][0]
+
+    // o row base address = o + qi * 256
+    add.u64 %rd13, %rd3, %rd4;        // rd13 = &o[qi][0]
+
+    // ---- load q[0..63] into %f0..%f? : we keep q in 16 registers via 4-wide?
+    //      For clarity load on the fly from rd10 inside the dot loop using a
+    //      shared copy. Simpler: keep q resident in registers f0..f63 is too
+    //      many named regs; instead we re-read q each key (it stays in L1/L2,
+    //      and d=64 contiguous). To bound register pressure we hold the ACC in
+    //      registers and stream q from global each key row. ----
+
+    // running max m = -inf, running sum l = 0
+    mov.f32 %f41, 0fFF800000;         // -inf
+    mov.f32 %f42, 0f00000000;         // l = 0
+
+    // acc[0..63] in registers f0..f? -- we use 64 f-regs f0..f63? PTX virtual
+    // regs are fine; ptxas allocates. Zero them. We address acc via a small
+    // unrolled pattern below using a .local array to keep the file compact and
+    // avoid 64 named movs. Use .local for acc.
+    .local .align 4 .b8 acc_local[256];   // 64 f32
+    .local .align 4 .b8 q_local[256];     // 64 f32 cached q row
+
+    // zero acc_local and cache q row into q_local
+    mov.u32 %r5, 0;                   // byte offset, 0..255 step 4
+$init_loop:
+    setp.ge.u32 %p2, %r5, 256;
+    @%p2 bra $init_done;
+    cvt.u64.u32 %rd5, %r5;
+    add.u64 %rd6, %rd10, %rd5;        // &q[qi][off]
+    ld.global.f32 %f1, [%rd6];
+    mov.u64 %rd7, q_local;
+    add.u64 %rd7, %rd7, %rd5;
+    st.local.f32 [%rd7], %f1;
+    mov.u64 %rd8, acc_local;
+    add.u64 %rd8, %rd8, %rd5;
+    st.local.f32 [%rd8], 0f00000000;
+    add.u32 %r5, %r5, 4;
+    bra $init_loop;
+$init_done:
+
+    // ---- stream over key rows kj = 0 .. N-1 ----
+    mov.u32 %r6, 0;                   // kj
+$key_loop:
+    setp.ge.s32 %p3, %r6, %r0;
+    @%p3 bra $key_done;
+
+    // k row base = k + kj*256 ; v row base = v + kj*256
+    mul.wide.s32 %rd9, %r6, 256;
+    add.u64 %rd11, %rd1, %rd9;        // &k[kj][0]
+    add.u64 %rd12, %rd2, %rd9;        // &v[kj][0]
+
+    // s = dot(q, k_kj) over d=64
+    mov.f32 %f2, 0f00000000;          // s accumulator
+    mov.u32 %r7, 0;                   // byte offset
+$dot_loop:
+    setp.ge.u32 %p4, %r7, 256;
+    @%p4 bra $dot_done;
+    cvt.u64.u32 %rd14, %r7;
+    mov.u64 %rd15, q_local;
+    add.u64 %rd15, %rd15, %rd14;
+    ld.local.f32 %f3, [%rd15];        // q[off]
+    add.u64 %rd16, %rd11, %rd14;
+    ld.global.f32 %f4, [%rd16];       // k[off]
+    fma.rn.f32 %f2, %f3, %f4, %f2;    // s += q*k
+    add.u32 %r7, %r7, 4;
+    bra $dot_loop;
+$dot_done:
+    mul.f32 %f2, %f2, %f40;           // s *= scale
+
+    // online softmax update
+    // m_new = max(m, s)
+    max.f32 %f5, %f41, %f2;           // f5 = m_new
+    // c = exp(m - m_new) ; p = exp(s - m_new)
+    sub.f32 %f6, %f41, %f5;           // m - m_new
+    sub.f32 %f7, %f2,  %f5;           // s - m_new
+    // exp via ex2.approx: exp(x) = ex2(x * log2(e)), log2(e)=1.4426950408889634
+    mov.f32 %f8, 0f3FB8AA3B;          // log2(e)
+    mul.f32 %f9,  %f6, %f8;
+    mul.f32 %f10, %f7, %f8;
+    ex2.approx.f32 %f11, %f9;         // c
+    ex2.approx.f32 %f12, %f10;        // p
+    // l = l*c + p
+    fma.rn.f32 %f42, %f42, %f11, %f12;
+    // acc[i] = acc[i]*c + p * v[i]   for i in 0..63
+    mov.u32 %r8, 0;
+$acc_loop:
+    setp.ge.u32 %p5, %r8, 256;
+    @%p5 bra $acc_done;
+    cvt.u64.u32 %rd17, %r8;
+    mov.u64 %rd18, acc_local;
+    add.u64 %rd18, %rd18, %rd17;
+    ld.local.f32 %f13, [%rd18];       // acc[i]
+    add.u64 %rd19, %rd12, %rd17;
+    ld.global.f32 %f14, [%rd19];      // v[i]
+    mul.f32 %f15, %f12, %f14;         // p * v[i]
+    fma.rn.f32 %f13, %f13, %f11, %f15;// acc*c + p*v
+    st.local.f32 [%rd18], %f13;
+    add.u32 %r8, %r8, 4;
+    bra $acc_loop;
+$acc_done:
+    // m = m_new
+    mov.f32 %f41, %f5;
+
+    add.s32 %r6, %r6, 1;
+    bra $key_loop;
+$key_done:
+
+    // ---- finalize: o[i] = acc[i] / l ----
+    // reciprocal of l once
+    rcp.rn.f32 %f16, %f42;            // 1/l
+    mov.u32 %r9, 0;
+$out_loop:
+    setp.ge.u32 %p2, %r9, 256;
+    @%p2 bra $out_done;
+    cvt.u64.u32 %rd20, %r9;
+    mov.u64 %rd21, acc_local;
+    add.u64 %rd21, %rd21, %rd20;
+    ld.local.f32 %f17, [%rd21];
+    mul.f32 %f18, %f17, %f16;         // acc / l
+    add.u64 %rd22, %rd13, %rd20;
+    st.global.f32 [%rd22], %f18;
+    add.u32 %r9, %r9, 4;
+    bra $out_loop;
+$out_done:
+
+$done:
+    ret;
+}

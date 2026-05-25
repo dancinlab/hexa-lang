@@ -1,0 +1,26 @@
+// Deterministic closed-form check of the flash-attention structural HBM ratio.
+// total HBM ratio R(N,d) = (5*N*d + 4*N*N) / (4*N*d) = 1.25 + N/d.
+// Verify R(2048,64) == 33.25 (printed as 33 since integer N/d=32, +1.25).
+fn ratio_x4(n: i64, d: i64) -> i64 {
+    // return 4*R so we stay in integers: 4*R = 5 + 4*N/d.
+    return 5 + (4 * n) / d
+}
+
+fn main() {
+    let r4_2048_64: i64 = ratio_x4(2048, 64)   // expect 5 + 128 = 133 => R=33.25
+    let r4_4096_64: i64 = ratio_x4(4096, 64)   // expect 5 + 256 = 261 => R=65.25
+    let r4_512_64:  i64 = ratio_x4(512, 64)     // expect 5 + 32  = 37  => R=9.25
+    print("4xR(2048,64)=")
+    println(r4_2048_64)
+    print("4xR(4096,64)=")
+    println(r4_4096_64)
+    print("4xR(512,64)=")
+    println(r4_512_64)
+    if r4_2048_64 == 133 {
+        if r4_4096_64 == 261 {
+            if r4_512_64 == 37 {
+                println("STRUCTURAL-RATIO-CLOSED-FORM: PASS")
+            }
+        }
+    }
+}

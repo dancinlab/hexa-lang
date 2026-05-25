@@ -1,0 +1,55 @@
+F-FUSION-ATTENTION-FLASH silicon fire -- 2026-05-25
+====================================================
+GPU §10 moat case: fused flash-attention vs cuBLAS-using attention stack.
+
+HOST    : ubu-2  NVIDIA GeForce RTX 5070 (sm_120, driver 580)
+TOOLS   : ptxas/nvcc CUDA 12.0 V12.0.140 ; cuBLAS 12.9.2.10
+CONTEND : nvidia-smi at fire time -> GPU 0% util, 5 MiB used, NO compute procs
+          -> CONTENTION RULE satisfied -> timed wall taken (not deferred).
+
+ARTIFACTS
+  flash_attn.ptx                       hand-emit fused online-softmax kernel (pure ASCII)
+  ratio_check.hexa                     hexa-native closed-form ratio verifier (compiled-path)
+  structural_oracle.c                  $0 deterministic structural oracle (no GPU)
+  ../../../tool/fusion_attn_flash_host.c     fused PTX launcher (cuda driver API, f64 ref, cudaEvent)
+  ../../../tool/fusion_attn_cublas_baseline.c  cuBLAS baseline (gemmStridedBatchedEx x2 + softmax kernel)
+
+BUILD
+  cc   -O2 -o structural_oracle structural_oracle.c -lm
+  hexa build ratio_check.hexa -o fa_ratio_check
+  nvcc -O2        -o fused_host  fusion_attn_flash_host.c      -lcuda
+  nvcc -O2 -x cu  -o cublas_base fusion_attn_cublas_baseline.c -lcublas -lcudart
+
+PTXAS-CLEAN
+  PTX pure-ASCII (no non-printable bytes)
+  ptxas -arch=sm_80 flash_attn.ptx -> rc=0
+  ptxas -arch=sm_90 flash_attn.ptx -> rc=0
+  driver-JIT load sm_120 (cuModuleLoadDataEx, CU_JIT_TARGET_FROM_CUCONTEXT) -> rc=0
+
+STRUCTURAL ORACLE (primary, deterministic)
+  launches: fused 1   vs   baseline 3
+  S-HBM   : fused 0 B vs   baseline 4*N^2*4 B  (O(N^2) round-trip eliminated)
+  ratio   : R(N,d) = (5Nd + 4N^2)/(4Nd) = 1.25 + N/d
+            9.25x @512  17.25x @1024  33.25x @2048  65.25x @4096  (d=64)
+  hexa-native compiled recompute: 4xR(2048,64)=133 (=33.25) -> CLOSED-FORM PASS
+
+SILICON WALL (cudaEvent, 20 warmup, 200 timed, median ms)
+  N      fused(1 launch)   baseline(3 launch)   fused/base   numeric(both)
+  512    0.415104          0.281696             1.47x slow   PASS rel~1e-6
+  1024   0.822592          0.559360             1.47x slow   PASS rel~1e-6
+  2048   1.639840          1.143040             1.43x slow   PASS rel~1e-6
+  4096   3.788256          2.492288             1.52x slow   PASS rel~1e-6
+
+VERDICT (g3 honest)
+  clause(a) STRUCTURAL : PASS (closed-form, 🔵 SUPPORTED-FORMAL)
+  clause(b) WALL >=30% : FALSIFIED (baseline 1.4-1.5x faster; 🔴 closed-negative)
+  falsifier overall    : NOT falsified (clause a holds) -> BLUE structural-formal
+  ruled-out axis       : structural fusion alone does NOT win wall vs cuBLAS;
+                         the >=30% wall additionally needs the fused inner GEMMs
+                         at Tensor-Core throughput (wmma tiling, S in shared mem).
+  §10 box "Whole-program-fusion >=30%": stays [ ] (structural-only, wall not won).
+
+INVARIANTS
+  @F f1 no LLVM. @F f2 no C-transpile changes. CPU codegen MD5 preserved
+  (self/runtime.c 887714427cc1ff16c340dfd31cf1d00f ; x86_64_linux.hexa
+   b50a2a3c8ab0ba0802bcc7b4c0419992 ; arm64_darwin.hexa b0a397dc45547de06acc4fdc598bb859).
