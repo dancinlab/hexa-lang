@@ -961,6 +961,7 @@ fn main() {
     let ok_barr  = _test_barrier()
     let ok_atom  = _test_atomic_add()
     let ok_shuf  = _test_warp_shuffle()
+    let ok_shuff64 = _test_warp_shuffle_f64()
     let ok_unr   = _test_unroll_pass()
     let ok_unrn  = _test_unroll_no_match_passthrough()
     let ok_wmma  = _test_wmma_scaffold()
@@ -988,8 +989,8 @@ fn main() {
 
     println("")
     println("══════════════════════════════════════════════")
-    if ok_br && ok_cls && ok_setp && ok_intr && ok_ls && ok_part && ok_barr && ok_atom && ok_shuf && ok_unr && ok_unrn && ok_wmma && ok_mp && ok_fctN && ok_pp && ok_fw && ok_sd && ok_me && ok_np && ok_os && ok_df && ok_bm && ok_wie && ok_gkw && ok_fls && ok_fp8a && ok_fp8b && ok_i64c && ok_mm && ok_mta && ok_mtb && ok_tma && ok_tmae {
-        println("PASS: RFC 055 + RFC 067 + RFC 068 P1/P2/P3/P4-codegen + RFC 068 §3 fp8 scaffold + RFC 069 + RFC 071 P3+/P5+ + RFC 067 N202 TMA scaffold + RFC 067 N206 TMA matmul emit — 33/33 cases (incl. matmul + matmul_NT_a + matmul_NT_b + TMA codegen scaffold + TMA matmul emit)")
+    if ok_br && ok_cls && ok_setp && ok_intr && ok_ls && ok_part && ok_barr && ok_atom && ok_shuf && ok_shuff64 && ok_unr && ok_unrn && ok_wmma && ok_mp && ok_fctN && ok_pp && ok_fw && ok_sd && ok_me && ok_np && ok_os && ok_df && ok_bm && ok_wie && ok_gkw && ok_fls && ok_fp8a && ok_fp8b && ok_i64c && ok_mm && ok_mta && ok_mtb && ok_tma && ok_tmae {
+        println("PASS: RFC 055 + RFC 067 + RFC 068 P1/P2/P3/P4-codegen + RFC 068 §3 fp8 scaffold + RFC 069 + RFC 071 P3+/P5+ + N71-B FP64 warp-shuffle + RFC 067 N202 TMA scaffold + RFC 067 N206 TMA matmul emit — 34/34 cases (incl. matmul + matmul_NT_a + matmul_NT_b + FP64 warp-shuffle composition + TMA codegen scaffold + TMA matmul emit)")
     } else {
         println("FAIL: RFC 055 smoke not satisfied.")
         if !ok_br   { println("      STMT_BR FAILED") }
@@ -1001,6 +1002,7 @@ fn main() {
         if !ok_barr { println("      055-P4 gpu_barrier() FAILED") }
         if !ok_atom { println("      055-P4+ gpu_atomic_add() FAILED") }
         if !ok_shuf { println("      055-P4+ gpu_warp_shuffle() FAILED") }
+        if !ok_shuff64 { println("      N71-B FP64 gpu_warp_shuffle composition FAILED") }
         if !ok_unr  { println("      055-P4+ _nvptx_unroll_pass FAILED") }
         if !ok_unrn { println("      055-P4+ unroll passthrough FAILED") }
         if !ok_wmma { println("      RFC 055 §12 P4+ WMMA scaffold FAILED") }
@@ -1027,7 +1029,7 @@ fn main() {
         if !ok_tmae { println("      RFC 067 N206 TMA matmul emit FAILED") }
     }
     println("══════════════════════════════════════════════")
-    if !(ok_br && ok_cls && ok_setp && ok_intr && ok_ls && ok_part && ok_barr && ok_atom && ok_shuf && ok_unr && ok_unrn && ok_wmma && ok_mp && ok_fctN && ok_pp && ok_fw && ok_sd && ok_me && ok_np && ok_os && ok_df && ok_bm && ok_wie && ok_gkw && ok_fls && ok_fp8a && ok_fp8b && ok_i64c && ok_mm && ok_mta && ok_mtb && ok_tma) { exit(1) }
+    if !(ok_br && ok_cls && ok_setp && ok_intr && ok_ls && ok_part && ok_barr && ok_atom && ok_shuf && ok_shuff64 && ok_unr && ok_unrn && ok_wmma && ok_mp && ok_fctN && ok_pp && ok_fw && ok_sd && ok_me && ok_np && ok_os && ok_df && ok_bm && ok_wie && ok_gkw && ok_fls && ok_fp8a && ok_fp8b && ok_i64c && ok_mm && ok_mta && ok_mtb && ok_tma && ok_tmae) { exit(1) }
 }
 
 // ── Case 9 — 055-P4 gpu_warp_shuffle(v, lane) intrinsic ───────────────
@@ -1087,6 +1089,115 @@ fn _test_warp_shuffle() -> bool {
 
     ok = _check(ok, ptx, ".reg .u32 %r2",                                      "u32 bank for warp_shuffle dst")
     ok = _check(ok, ptx, "shfl.sync.idx.b32 %r2, %r0, %r1, 0x1f, 0xffffffff",  "shfl.sync.idx.b32 full operand list")
+    return ok
+}
+// ── Case 34 — N71-B (N70/N91 GAP-C) FP64 warp-shuffle composition ──────
+//
+// PTX `shfl.sync.*.b32` moves only 32 bits, so shuffling an f64 value must
+// decompose `%fd<src>` into two `.b32` halves (`mov.b64 {%lo,%hi},%fd<src>`),
+// shuffle EACH half with the same mode/mask/clamp/membermask, then recompose
+// (`mov.b64 %fd<dst>,{%lo_out,%hi_out}`). The earlier 32-bit-only path
+// hardcoded `%r<src>` for the value operand → an undeclared `%r` ref that
+// ptxas rejects (`Unknown symbol %r9`). This fixture builds a tiny device
+// function that produces an f64 value (binop) then warp-shuffle-xors it,
+// and asserts the decompose/shuffle×2/recompose sequence with ZERO
+// undeclared `%r` value refs in the shuffle.
+//   ref: NVIDIA PTX ISA §9.7.13.4 shfl.sync.
+fn _build_case_warp_shuffle_f64() -> MModule {
+    let a = _local(0, "a")          // f64 source operand (param-like, default f64)
+    let b = _local(1, "b")          // f64 source operand
+    let v = _local(2, "v")          // STMT_BINOP add -> F64 %fd2 (the value to shuffle)
+    let mask = _local(3, "mask")    // STMT_CALL gpu_thread_id_x -> U32 %r3
+    let r = _local(4, "r")          // gpu_warp_shuffle_xor dst — F64 (source is f64) %fd4
+
+    let mut shuf_args = []
+    shuf_args.push(_op_local(v.id))
+    shuf_args.push(_op_local(mask.id))
+
+    let mut s0 = []
+    s0.push(_stmt_binop(v, "add", _op_local(a.id), _op_local(b.id)))
+    s0.push(_stmt_call(mask, "gpu_thread_id_x"))
+    s0.push(_stmt_call_with_args(r, "gpu_warp_shuffle_xor", shuf_args))
+    s0.push(_stmt_return())
+
+    let mut blocks = []
+    blocks.push(_block(0, s0))
+
+    let mut locals = []
+    locals.push(a)
+    locals.push(b)
+    locals.push(v)
+    locals.push(mask)
+    locals.push(r)
+
+    let mf = MFunc {
+        name: "warp_shuffle_f64_smoke",
+        params: [],
+        return_local: _miss_local(),
+        locals: locals,
+        blocks: blocks,
+        entry_block: 0,
+        arena_root: 1,
+        def_line: 0,
+        gpu_kind: GPU_KIND_DEVICE
+    }
+    let mut fns = []
+    fns.push(mf)
+    return MModule { file: "case_warp_shuffle_f64.hexa", funcs: fns, globals: [] }
+}
+
+// _count_substr — local non-overlapping substring counter (the unroll-case
+// `_count_occurrences` lives further down the file; this case is defined
+// above it, so we keep a small self-contained counter here).
+fn _count_substr(hay: string, needle: string) -> i64 {
+    if len(needle) == 0 { return 0 }
+    let mut n = 0
+    let mut from = 0
+    while from <= len(hay) - len(needle) {
+        let suffix = hay.substring(from, len(hay))
+        let pos = suffix.find(needle)
+        if pos < 0 { return n }
+        n = n + 1
+        from = from + pos + len(needle)
+    }
+    return n
+}
+
+fn _test_warp_shuffle_f64() -> bool {
+    let mut ok = true
+    let mod_ws = _build_case_warp_shuffle_f64()
+    let ptx = codegen_emit_ptx_sm80(mod_ws)
+
+    println("")
+    println("-- emitted PTX (N71-B FP64 gpu_warp_shuffle_xor case, sm_80) --")
+    println(ptx)
+
+    // dst is the f64 bank (recompose target), NOT the 32-bit %r bank.
+    ok = _check(ok, ptx, ".reg .f64 %fd4",  "f64 bank for f64 warp_shuffle dst")
+    // 4 scratch .b32 halves declared (lo/hi/lo_out/hi_out).
+    ok = _check(ok, ptx, ".reg .b32 %shfl_lo_4",     "scratch .b32 %shfl_lo_4 declared")
+    ok = _check(ok, ptx, ".reg .b32 %shfl_hi_4",     "scratch .b32 %shfl_hi_4 declared")
+    ok = _check(ok, ptx, ".reg .b32 %shfl_lo_out_4", "scratch .b32 %shfl_lo_out_4 declared")
+    ok = _check(ok, ptx, ".reg .b32 %shfl_hi_out_4", "scratch .b32 %shfl_hi_out_4 declared")
+    // decompose: mov.b64 {%lo, %hi}, %fd2
+    ok = _check(ok, ptx, "mov.b64 {%shfl_lo_4, %shfl_hi_4}, %fd2", "decompose mov.b64 {lo,hi}, %fd2")
+    // two bfly shuffles, lo + hi, with the same mask/clamp/membermask
+    ok = _check(ok, ptx, "shfl.sync.bfly.b32 %shfl_lo_out_4, %shfl_lo_4, %r3, 0x1f, 0xffffffff", "shfl lo half")
+    ok = _check(ok, ptx, "shfl.sync.bfly.b32 %shfl_hi_out_4, %shfl_hi_4, %r3, 0x1f, 0xffffffff", "shfl hi half")
+    // recompose: mov.b64 %fd4, {%lo_out, %hi_out}
+    ok = _check(ok, ptx, "mov.b64 %fd4, {%shfl_lo_out_4, %shfl_hi_out_4}", "recompose mov.b64 %fd4, {lo_out,hi_out}")
+    // exactly two shuffle instructions in the f64 path (lo + hi).
+    if _count_substr(ptx, "shfl.sync.bfly.b32") != 2 {
+        ok = false
+        println("  FAIL: expected exactly 2 shfl.sync.bfly.b32 (lo+hi), got " + to_string(_count_substr(ptx, "shfl.sync.bfly.b32")))
+    }
+    // CRITICAL: ZERO undeclared %r value refs — the shuffle must NOT
+    // reference `%r2` (the old hardcoded u32-bank value reg for an f64
+    // source). %r3 (the mask) is the only legitimate %r in the shuffle.
+    if _count_substr(ptx, "%r2") != 0 {
+        ok = false
+        println("  FAIL: f64 shuffle must NOT reference the undeclared u32 value reg %r2 (GAP-C bug)")
+    }
     return ok
 }
 // ── Case 8 — 055-P4+ _nvptx_unroll_pass (canonical 3-block back-edge) ─
