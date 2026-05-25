@@ -2226,3 +2226,20 @@
   raw    = "ARXIV/.verdicts/arxiv-ingest-poc/triage.txt"
   src    = "ARXIV/ARXIV.md (A1 roadmap + 4-axis table) + .verdicts/arxiv-ingest-poc/ingest_log.txt (raw 3-query results + triage reasoning). arXiv open-access; attribution = arxiv id + authors + title. Per-paper hexa verify recompute deferred to A2+ (no in-tree Phi primitive). Cross-repo handoffs STUBBED (target ~/core/anima INBOX.log.md); actual filing = A6."
   status = "🟢 empirical pipeline — 12 IIT-Phi papers triaged: 0 verify-able / 5 🟡 citation / 7 anima-handoff. Proves the arxiv ingest+triage FLOW works (PIPELINE POC), NOT a big absorption. 0 verify-able is the honest/expected outcome (no in-tree Phi primitive — mirrors OEIS-O6 P3 hexa-coverage). NOT a terminal arithmetic claim (per-paper verify = A2+ milestone)."
+
+# ───────────────────────────────────────────────────────────────────────
+# VERIFY-KIT — verify-kit-compute-mode (slug · group=VERIFY-KIT · V2 · P0b)
+# UPSTREAM unblocker for the catalogue-mirror domains (OEIS/DLMF/ARXIV).
+# V2 adds a VALUE-LESS COMPUTE mode to `hexa verify --expr`: drop the trailing
+# <v> and the CLI COMPUTES + prints fn(args) (instead of only re-confirming a
+# supplied value). σ(7)=8, τ(6)=4, φ(6)=2 computed fresh from the same
+# `_recompute` helper; self-verified (recompute twice → deterministic 🔵).
+# The existing 3-arg VERIFY path is untouched (regression-tested: σ(6)==12 🔵,
+# σ(6)==99 🔴, sigma_k 12 1 28 🔵). Built (bin/hexa-verify) + tested.
+
+@C verify_kit_compute_mode := "VERIFY-KIT V2 value-less compute: `hexa verify --expr <fn> <n>` (no <v>) COMPUTES fn(n) — sigma(7)=8, tau(6)=4, phi(6)=2 (self-verified deterministic 🔵). Multi-operand via --compute marker (sigma_k(12,1)=28). 3-arg VERIFY path untouched (sigma(6)==12 🔵 / ==99 🔴 / sigma_k 12 1 28 🔵 regression-clean)" :: formula [slug=verify-kit-compute-mode group=VERIFY-KIT]
+  method = "compute"
+  cmd    = "hexa verify --expr sigma 7  (value-less compute mode; build = bash tool/build_hexa_verify.sh)"
+  raw    = ".verdicts/verify-kit-compute-mode/v2_compute.txt"
+  src    = "tool/verify_cli.hexa (cmd_expr_compute + _has_compute + --expr routing; VERIFY-KIT/VERIFY-KIT.md V2). Build SUCCESS on origin/main (INBOX-cited link blocker did not reproduce)."
+  status = "🟢 SUPPORTED-NUMERICAL/FORMAL — built (bin/hexa-verify) + tested. COMPUTE: sigma(7)=8 / tau(6)=4 / phi(6)=2 all 🔵 self-verified; VERIFY path regression-clean. Terminal · paper-eligible (Δ vs baseline = compute capability the prior CLI lacked)."
