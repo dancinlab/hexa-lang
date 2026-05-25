@@ -47,6 +47,47 @@ fn _has_absorb(rest) -> bool {
     return false
 }
 
+// --no-absorb anywhere in argv → opt-out of the DEFAULT auto-absorb-to-atlas
+// path (commons.tape @D g69 — domain finalization gate). Auto-absorb fires
+// IMPLICITLY on 🔵/🟢 verdicts; --no-absorb suppresses it (backward-compat for
+// callers that want pure verify without side-effects). NEVER fires on 🔴/🟠
+// (no point folding falsified/deferred atoms).
+fn _has_no_absorb(rest) -> bool {
+    let mut i = 0
+    while i < len(rest) {
+        if to_string(rest[i]) == "--no-absorb" { return true }
+        i = i + 1
+    }
+    return false
+}
+
+// _auto_absorb_via_atlas — DEFAULT auto-absorb path (commons.tape @D g69).
+// Delegates to `hexa atlas register --from-verify <fn> <args...> <v>` which
+// folds the verified atom DIRECTLY into compiler/atlas/embedded.gen.hexa
+// (the binary-builtin SSOT — visible to next `hexa atlas lookup` with no
+// rebuild). args_str_space is the space-separated args (operands only, no fn
+// name). v_str is the claimed value (int or float decimal echo).
+fn _auto_absorb_via_atlas(fn_name: string, args_str_space: string, v_str: string) {
+    // collapse any double-space when args_str_space is empty (0-arg constants)
+    let mut invoke = "hexa atlas register --from-verify " + fn_name
+    if len(args_str_space) > 0 { invoke = invoke + " " + args_str_space }
+    invoke = invoke + " " + v_str
+    let out = to_string(exec(invoke + " 2>&1"))
+    // print a single-line auto-absorb echo (the atlas register prints its
+    // own multi-line block; we surface a compact summary here). Recognise
+    // both the freshly-folded form and the idempotent skip forms (an
+    // already-registered atom is a successful no-op — same SSOT state).
+    if out.contains("folded @F") {
+        println("  absorb = ✓ auto-folded into compiler/atlas/embedded.gen.hexa (default · @D g69)")
+    } else if out.contains("already registered") || out.contains("already present in embedded.gen.hexa") {
+        println("  absorb = · already in atlas — idempotent skip (default · @D g69)")
+    } else {
+        // honest degrade — print the raw invocation tail so the caller can debug
+        println("  absorb = ⚠ atlas register did NOT confirm fold; invocation:")
+        println("           " + invoke)
+    }
+}
+
 // append a self-verified equation as a g7 atlas verdict entry (append-only
 // inbox ledger). Legit 🔵 under g_self_verify — these ARE hexa-native
 // verified (NOT sympy carry). Reviewer-merge → MAIN.tape (cycle_033/035
@@ -92,7 +133,7 @@ fn _slug(s: string) -> string {
 //  the expanded-script path at argv[1] under `hexa run`.)
 fn _is_sub(a) -> bool {
     return a == "rubric" || a == "list" || a == "help" || a == "--help" || a == "-h"
-        || a == "--expr" || a == "--fence"
+        || a == "--expr" || a == "--fence" || a == "--blue-max"
 }
 
 fn _slice_args() -> array {
@@ -144,12 +185,20 @@ fn cmd_rubric() {
     println("  hexa verify --expr <fn> <a> <b> <v> [--absorb]   2-operand (sigma_k/jacobi/ssh_winding/...)")
     println("  hexa verify --expr <fn> <a> <b> <c> <v> [--absorb]   3-operand (tknn_chern p q r)")
     println("  hexa verify --fence <claim>              ⚪ SPECULATION-FENCED (honest)")
+    println("  hexa verify --blue-max <DOMAIN>          BLUE-MAX 🔵-pair audit (@D g69)")
     println("  hexa verify rubric | list                this rubric")
     println("")
-    println("  --absorb : a 🔵 result is folded into atlas/inbox/verified_equations.tape")
+    println("  [DEFAULT auto-absorb]: 🔵/🟢 verdicts are auto-folded into the live atlas")
+    println("             via `hexa atlas register --from-verify` — i.e. the verified atom")
+    println("             lands DIRECTLY in compiler/atlas/embedded.gen.hexa (binary-builtin")
+    println("             SSOT; visible to next `hexa atlas lookup` with no rebuild). Per")
+    println("             commons.tape @D g69 — domain finalization gate. Auto-absorb NEVER")
+    println("             fires on 🔴/🟠 (no point folding falsified/deferred atoms).")
+    println("  --no-absorb : opt-out of the default auto-absorb (pure verify, no side-effects).")
+    println("  --absorb  : LEGACY ledger path — also appends to atlas/inbox/verified_equations.tape")
     println("             (g7 inbox · self-verified, g_self_verify · reviewer-merge → MAIN.tape).")
-    println("             Verifies & absorbs equations NOT YET in the atlas — verify computes")
-    println("             them; the binary built-in atlas grows with proven closed-forms.")
+    println("             Kept for backward-compat; the auto-absorb-to-atlas default is the")
+    println("             canonical sink. Verifies & absorbs equations NOT YET in the atlas.")
     println("  calc fns : sigma|sigma_0|sigma_2|phi|mu|tau|is_perfect|aliquot|gamma0_index|")
     println("             gamma0_cusps|gamma0_genus|isotropy_lcm|first_cusp_form_weight|pair_threshold_factor|recomb_3body_density_power")
     println("             2-op: sigma_k|jacobi|kronecker|dim_cusp_forms|ssh_winding  (extend _recompute on gap)")
@@ -3231,9 +3280,9 @@ fn cmd_verify_id(rest) {
 //   4-arg:  --expr <fn> <a0> <a1> <a2> <a3> <v>     (rest len 7; bio Phase 3 — hagen_poiseuille)
 fn cmd_expr_float(rest, fnm: string) {
     let zero_arg = calc_is_zero_arg_float_fn(fnm)
-    let has7 = len(rest) >= 7 && to_string(rest[6]) != "--absorb"
-    let has6 = len(rest) >= 6 && to_string(rest[5]) != "--absorb"
-    let has5 = len(rest) >= 5 && to_string(rest[4]) != "--absorb"
+    let has7 = len(rest) >= 7 && to_string(rest[6]) != "--absorb" && to_string(rest[6]) != "--no-absorb"
+    let has6 = len(rest) >= 6 && to_string(rest[5]) != "--absorb" && to_string(rest[5]) != "--no-absorb"
+    let has5 = len(rest) >= 5 && to_string(rest[4]) != "--absorb" && to_string(rest[4]) != "--no-absorb"
     let mut a0 = 0.0
     let mut a1 = 0.0
     let mut a2 = 0.0
@@ -3284,9 +3333,34 @@ fn cmd_expr_float(rest, fnm: string) {
     if diff <= calc_eps() {
         println("  calc   = " + _fstr(got) + "  ≈ expected " + _fstr(v) + "  (|Δ|=" + _fstr(diff) + " ≤ ε=1e-9)")
         println("  tier   = 🟢 SUPPORTED-NUMERICAL  (hexa-native libm-class recompute, TECS-L n6-rep Tier2)")
+        // --absorb (legacy ledger path) — kept for backward-compat
         if _has_absorb(rest) {
             _absorb(label, fnm + " hexa-native numerical recompute = " + _fstr(got) + " ≈ claimed " + _fstr(v) + " (|Δ|=" + _fstr(diff) + " ≤ 1e-9)",
                     "[numerical transform — hexa-native libm-class recompute, TECS-L Tier2]")
+        }
+        // DEFAULT auto-absorb-to-atlas (commons.tape @D g69). Opt-out with
+        // --no-absorb. Mirrors cmd_expr arity dispatch above to assemble the
+        // operand list + claimed-value echo for `hexa atlas register`.
+        if !_has_no_absorb(rest) {
+            let mut args_space = ""
+            if zero_arg {
+                args_space = ""    // 0-arg constant: empty operand list
+            } else if has7 {
+                args_space = to_string(rest[2]) + " " + to_string(rest[3]) + " " + to_string(rest[4]) + " " + to_string(rest[5])
+            } else if has6 {
+                args_space = to_string(rest[2]) + " " + to_string(rest[3]) + " " + to_string(rest[4])
+            } else if has5 {
+                args_space = to_string(rest[2]) + " " + to_string(rest[3])
+            } else {
+                args_space = to_string(rest[2])
+            }
+            let mut v_str = ""
+            if zero_arg { v_str = to_string(rest[2]) }
+            else if has7 { v_str = to_string(rest[6]) }
+            else if has6 { v_str = to_string(rest[5]) }
+            else if has5 { v_str = to_string(rest[4]) }
+            else { v_str = to_string(rest[3]) }
+            _auto_absorb_via_atlas(fnm, args_space, v_str)
         }
     } else {
         println("  calc   = " + _fstr(got) + "  ≠ expected " + _fstr(v) + "  (|Δ|=" + _fstr(diff) + " > ε=1e-9)")
@@ -3321,8 +3395,8 @@ fn cmd_expr(rest) {
     let mut got = NOCALC
     let mut label = ""
     let mut v = 0
-    let n6 = len(rest) >= 6 && to_string(rest[5]) != "--absorb"
-    let n5 = len(rest) >= 5 && to_string(rest[4]) != "--absorb"
+    let n6 = len(rest) >= 6 && to_string(rest[5]) != "--absorb" && to_string(rest[5]) != "--no-absorb"
+    let n5 = len(rest) >= 5 && to_string(rest[4]) != "--absorb" && to_string(rest[4]) != "--no-absorb"
     if n6 {
         // 3-operand: --expr <fn> <a> <b> <c> <v>  (tknn_chern p q r → Chern t)
         let a = to_int(to_string(rest[2]))
@@ -3353,9 +3427,28 @@ fn cmd_expr(rest) {
     if got == v {
         println("  calc   = " + to_string(got) + "  == expected " + to_string(v))
         println("  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)")
+        // --absorb (legacy ledger path) — kept for backward-compat
         if _has_absorb(rest) {
             _absorb(label, fnm + " hexa-native recompute = " + to_string(got) + " == claimed " + to_string(v),
                     "[compiler invariant — hexa-native NT closed-form, g_self_verify]")
+        }
+        // DEFAULT auto-absorb-to-atlas (commons.tape @D g69 — domain
+        // finalization gate). Opt-out with --no-absorb. Fires only on
+        // 🔵/🟢 (never 🔴/🟠 — no point folding falsified/deferred).
+        if !_has_no_absorb(rest) {
+            // build space-separated operand echo from the parsed args. We
+            // emit just the operand list — the dispatch arity (n6/n5/else)
+            // chooses how many operands; the atlas-register CLI then
+            // re-routes via the generic verify-delegation adapter.
+            let mut args_space = ""
+            if len(rest) >= 6 && to_string(rest[5]) != "--absorb" && to_string(rest[5]) != "--no-absorb" {
+                args_space = to_string(rest[2]) + " " + to_string(rest[3]) + " " + to_string(rest[4])
+            } else if len(rest) >= 5 && to_string(rest[4]) != "--absorb" && to_string(rest[4]) != "--no-absorb" {
+                args_space = to_string(rest[2]) + " " + to_string(rest[3])
+            } else {
+                args_space = to_string(rest[2])
+            }
+            _auto_absorb_via_atlas(fnm, args_space, to_string(v))
         }
     } else {
         println("  calc   = " + to_string(got) + "  != expected " + to_string(v))
@@ -3379,6 +3472,26 @@ fn cmd_fence(rest) {
     println("           SF ≠ verified — atlas certification intrinsically N/A)")
 }
 
+// cmd_blue_max — BLUE-MAX 🔵-pair audit for a domain (commons.tape @D g69 —
+// domain finalization gate). Delegates to stdlib/verify/blue_max_audit.hexa
+// (the pure-hexa audit kernel — also runnable directly via `hexa run`).
+//
+// Usage: hexa verify --blue-max <DOMAIN>
+//
+// Output: deterministic tier matrix table + 🔵-pair coverage + verdict.
+// Verdict line: ✅ BLUE-MAX PASS (domain absorbed=true gate cleared) OR
+// ⚠ MISSING-PAIRS: <list> (add integer-root 🔵 atom(s) per BLUE-MAX pattern).
+fn cmd_blue_max(rest) {
+    if len(rest) < 2 {
+        println("error: usage: hexa verify --blue-max <DOMAIN>")
+        println("       (e.g. ANTIMATTER · NUCLEAR · RTSC · QMIRROR · BIO)")
+        exit(2)
+    }
+    let dom = to_string(rest[1])
+    let out = to_string(exec("hexa run stdlib/verify/blue_max_audit.hexa " + dom + " 2>&1"))
+    println(out)
+}
+
 fn main() {
     let a = _slice_args()
     if len(a) == 0 { cmd_rubric(); return }
@@ -3389,6 +3502,8 @@ fn main() {
         cmd_expr(a)
     } else if sub == "--fence" {
         cmd_fence(a)
+    } else if sub == "--blue-max" {
+        cmd_blue_max(a)
     } else {
         cmd_verify_id(a)
     }
