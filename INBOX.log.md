@@ -2,6 +2,20 @@
 
 Append-only history sister of `INBOX.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
+## 2026-05-25T08:45Z — stdlib primitive atlas register path gap (`--from-selftest` arm 부재 · NOVEL-TOOL 13 primitive 발견)
+
+NOVEL-TOOL 13 stdlib primitive (wheeler·elliptic·gauss_legendre·welford·logsumexp·kahan·lambert_w·demag·halbach·mutual_M·loop_offaxis·ks2·endleakage) 가 self-test 13/13 PASS (sentinel + FALSIFIER, libm-class numerical match) 인데 **atlas DB 등록 0/13** — register 메커니즘 부재.
+
+- [ ] **`hexa atlas register --from-selftest <file>` arm 신설** (선호 · d4 single-generic-dispatch 부합)
+  - 현재 `register --from-verify <fn>` 는 `tool/verify_cli.hexa::_recompute_float`/`_is_float_fn` 의 hardcoded whitelist (~67 closed-form fn) 만 recompute. stdlib primitive 13개 전부 whitelist 밖 → `🟠 INSUFFICIENT · gap="add <fn> to verify_cli"`.
+  - 실증: `register --from-verify lambert_w 1.0 0.567...` → `🟠 · reason="hexa verify --expr lambert_w has no calculator path"`. wheeler 동일.
+  - `--from-verify`·`--from-drill` 어느 arm 도 stdlib self-test sentinel (`__HEXA_STDLIB_<PATH>__ PASS` + `N/N checks passed`) 을 register 근거로 못 씀.
+  - 제안 (a · 선호): `--from-selftest <stdlib-file>` arm — sentinel PASS + FALSIFIER 통과를 🟢 SUPPORTED-NUMERICAL 근거로 atlas DB 등록 (generic dispatch, primitive-name 하드코딩 X · d4).
+  - 제안 (b · 대안): 13 primitive 를 verify_cli whitelist 에 일괄 등록 (g20 — 단 per-instance 추가라 d4 위반 소지).
+  - severity: medium (NOVEL-TOOL primitive 가 self-test 🟢 이지만 atlas 미흡수 — verify ledger 와 atlas DB 괴리).
+  - 출처: NOVEL-TOOL atlas tier 승급 (demiurge PR #135 · exports/sweep/novel_tool_atlas_tier_2026-05-25.json).
+  - Status: open · proposed-by:agent · awaits:hexa-lang fix
+
 ## 2026-05-25T08:30Z — fresh worktree self-test 바이너리 부재 (stdlib .hexa link 실패 · NOVEL-TOOL stdlib agent 반복 발견)
 
 NOVEL-TOOL stdlib primitive agent 들 (M2 demag/halbach · M3 welford/logsumexp/kahan/lambert_w) 이 일관되게 보고하는 환경 gap. fresh `/tmp` 격리 worktree 에서 stdlib `.hexa` self-test 가 비-sqrt math_pure fn link 실패. stub-first (g60).
