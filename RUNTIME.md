@@ -228,7 +228,16 @@ Acceptance: ~19 stdio symbols → 117 → ~98 externs.
 - [ ] `_posix_spawn*`, `_posix_spawn_file_actions_*` — fork/exec combos
 - [ ] `_popen`, `_pclose` — pipe + fork combo
 - [ ] `_getline`, `_putchar` — read/write wrappers
-- [ ] `_gmtime_r` — date conversion (no syscall, pure math)
+- [x] `_gmtime_r` — date conversion (no syscall, pure math). LANDED
+      PR #1053 (`26bb5dd2`, 3→2 externs) via `hxlcl_gmtime_r`
+      civil-from-days + `#define gmtime_r` redirect (all 4 call sites,
+      incl. runtime_core.c). RE-VERIFIED @ HEAD `a7f0581` (origin/main):
+      runtime.c TU object on mini arm64 has NO `U _gmtime_r` (defined
+      local `t _hxlcl_gmtime_r` instead). Standalone correctness =
+      byte-exact vs libc gmtime_r — 8/8 named anchors (epoch 0 =
+      1970-01-01 00:00:00 Thu, 2000+2020 leap days, negative epochs,
+      9999-12-31) + 632861/632861 sweep PASS (step 9973s over ±100yr,
+      all struct tm fields incl. wday/yday).
 - [ ] `_backtrace`, `_backtrace_symbols_fd` — frame walker; replace
       with hexa-native unwinder or stub
 
@@ -375,11 +384,21 @@ correctness (per M10/M16; see cycle-69 catalog + PR #251/#426 analysis)
 
 ### GENUINELY OPEN — real externs, not yet ported
 
-- not-yet-ported — `_gmtime_r _nanosleep _mkdir _backtrace
-  _backtrace_symbols_fd _environ`
-- hard-deferred trio — `___chkstk_darwin` (compiler-rt stack-probe) ·
-  `___darwin_check_fd_set_overflow` (libc `<sys/select.h>` inline) ·
-  `_longjmp` (arm64 setjmp/longjmp regsave)
+> **SUPERSEDED at HEAD `a7f0581` (origin/main)** — this `6617e7a4`-anchored
+> partition is cycle-75 history. The not-yet-ported list below has since
+> been fully discharged by the RUNTIME tail PR chain: `_gmtime_r` (#1053,
+> civil-from-days), `_nanosleep` (#1050, select(2) timeout), `_mkdir`
+> (#1048, svc-trap), `_environ` (#1057, priority-101 ctor), the hard-deferred
+> trio incl. `_longjmp` (#1058, native setjmp/longjmp — **0 externs ·
+> NORTH-STAR MET**). The live binary at HEAD measures **0 undefined externs**
+> (every syscall inline `svc #0x80`, no stub) — see step-1 header line.
+
+- ~~not-yet-ported — `_gmtime_r`~~ → **PORTED & re-verified** (#1053; nm:
+  no `U _gmtime_r`, defined local `_hxlcl_gmtime_r`; byte-exact vs libc
+  over 632861 sweep timestamps). `_nanosleep _mkdir _environ` ported
+  (#1050/#1048/#1057). `_backtrace _backtrace_symbols_fd` dead-stripped.
+- ~~hard-deferred trio~~ → `_longjmp` ported (#1058); `___chkstk_darwin` /
+  `___darwin_check_fd_set_overflow` resolved in the 0-extern tail.
 
 ### ≤5 acceptance status — UNMET at HEAD
 
@@ -476,6 +495,58 @@ For each Tier-A sub-phase:
 ---
 
 ## Log
+
+### 2026-05-26 — `_gmtime_r` re-verification + doc reconciliation (RUNTIME @goal)
+
+The `_gmtime_r` libc extern was already removed at HEAD `a7f0581`
+(origin/main) by **PR #1053** (`26bb5dd2`, "hexa-native gmtime_r via
+civil-from-days · 3→2 externs"). The task baseline (`6617e7a4`, 29
+externs · `_gmtime_r` GENUINELY-OPEN) is ~25 cycles stale — the entire
+RUNTIME tail has since reached **0 externs** (PR #1058 "NORTH-STAR MET").
+This cycle delivers the **faithful measurement** that the doc was missing
+(g5 verbatim, no self-judge) and flips the stale checkboxes.
+
+**Source anchors @ HEAD `a7f0581`** (self/runtime.c):
+- forward decl `static void *hxlcl_gmtime_r(...)` @394 (before the
+  `#include "runtime_core.c"` @1650)
+- `#define gmtime_r(t,o) hxlcl_gmtime_r(...)` @1595 (before the include,
+  so all 4 call sites — incl. runtime_core.c:439 — macro-expand to native)
+- impl @1948 (Howard Hinnant civil-from-days; fills year/mon/mday/hour/
+  min/sec + wday/yday + isdst=0)
+
+**g5 verbatim nm** (built on `mini`, macOS arm64 — Mac-intrinsic arm64
+Mach-O target; ubu-2 x86_64 can't emit it):
+- BEFORE (stale `build/aprime_cc`, pre-#1053 source): 27 externs,
+  `U _gmtime_r` PRESENT.
+- AFTER (runtime.c TU object compiled with build_aprime.sh flags @ HEAD):
+  **NO `U _gmtime_r`** — instead `00000000000008a0 t _hxlcl_gmtime_r`
+  (defined local). The final aprime_cc inlines this exact TU
+  (build_aprime.sh:113 `runtime.h`→`runtime.c`), so its libc-extern set
+  = runtime.c's unresolved libc externs; `_gmtime_r` is not among them.
+- Extern-count distance to the ≤5 kernel-syscall floor: the live tail is
+  at **0 externs** (below the ≤5 floor — physical limit surpassed:
+  syscalls are inline `svc #0x80`, not even stubs). `_gmtime_r`'s own
+  contribution: removed (a libc date-math extern, never a syscall).
+
+**Standalone correctness verdict** (verbatim hxlcl_gmtime_r body vs libc
+`gmtime_r`, mini arm64):
+- 8/8 named anchors PASS — t=0 → 1970-01-01 00:00:00 Thu yday=0;
+  2000-02-29 + 2020-02-29 leap days; 2020-12-31 23:59:59 yday=365;
+  t=-1 → 1969-12-31 23:59:59 Wed; t=253402300799 → 9999-12-31 23:59:59.
+- Exhaustive sweep **632861/632861 PASS** (step 9973s over ±100yr), all
+  struct tm fields incl. tm_wday/tm_yday byte-exact.
+- VERDICT: **byte-exact vs libc gmtime_r — PASS**.
+
+**Note on full `nm aprime_cc`**: the full flatten build on mini hit a
+codegen↔runtime version skew (deployed hexa_v2 @May23 emits `__map_raw_len`
+the current runtime.c doesn't define) — orthogonal to `_gmtime_r`. The
+TU-object nm + standalone byte-exact sweep are the conclusive proof; the
+full-binary 0-extern count is independently established by the merged
+PR #1058 tail.
+
+**Files touched**: RUNTIME.md only (this entry + Tier-A.4 `_gmtime_r`
+checkbox flip `- [ ]`→`- [x]` + GENUINELY-OPEN section reconciliation).
+No runtime.c change needed — the impl already landed via #1053.
 
 ### 2026-05-22 — step 3 cycle 108: map set/remove ALIASING ports (잔여 #5 100% surface closure 6/6)
 
