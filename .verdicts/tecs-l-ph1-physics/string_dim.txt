@@ -1,0 +1,9 @@
+PH1 tau(perfect_k)=string critical dim
+=== hexa verify --expr tau 6 4 ===
+error: usage: hexa verify --expr <fn> <n> <v>  |  <fn> <a> <b> <v>  [--absorb]
+=== hexa verify --expr tau 28 6 ===
+error: usage: hexa verify --expr <fn> <n> <v>  |  <fn> <a> <b> <v>  [--absorb]
+=== hexa verify --expr tau 496 10 ===
+error: usage: hexa verify --expr <fn> <n> <v>  |  <fn> <a> <b> <v>  [--absorb]
+=== hexa verify --expr tau 8128 14 ===
+error: usage: hexa verify --expr <fn> <n> <v>  |  <fn> <a> <b> <v>  [--absorb]

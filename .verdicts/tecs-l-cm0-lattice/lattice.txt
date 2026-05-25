@@ -1,0 +1,14 @@
+CM0 lattice n=6 (main-tree verify)
+=== hexa verify --expr sigma 6 12 ===
+error: usage: hexa verify --expr <fn> <n> <v>  |  <fn> <a> <b> <v>  [--absorb]
+=== hexa verify --expr tau 6 4 ===
+error: usage: hexa verify --expr <fn> <n> <v>  |  <fn> <a> <b> <v>  [--absorb]
+=== hexa verify --expr phi 6 2 ===
+error: usage: hexa verify --expr <fn> <n> <v>  |  <fn> <a> <b> <v>  [--absorb]
+=== sopfr 6 5 (calculator gap) ===
+verify --expr sopfr(6)=5
+  tier   = 🟠 INSUFFICIENT
+  reason = calculator system has NO path for 'sopfr'
+  gap    = extend tool/verify_cli.hexa::_recompute (계산기시스템 개선 후보)
+
+master: sigma(6)*phi(6)=12*2=24=6*4=n*tau(6)
