@@ -61,6 +61,20 @@ fn _has_no_absorb(rest) -> bool {
     return false
 }
 
+// --compute anywhere in argv → force VERIFY-KIT V2 value-less COMPUTE mode
+// (the `--expr` verb computes & prints fn(args) instead of re-confirming a
+// supplied <v>). Lets multi-operand compute (`--expr gcd 12 8 --compute`)
+// stay unambiguous vs the 1-op VERIFY form. The len-3 1-op compute case
+// (`--expr sigma 7`) auto-detects without the marker.
+fn _has_compute(rest) -> bool {
+    let mut i = 0
+    while i < len(rest) {
+        if to_string(rest[i]) == "--compute" { return true }
+        i = i + 1
+    }
+    return false
+}
+
 // _auto_absorb_via_atlas — DEFAULT auto-absorb path (commons.tape @D g69).
 // Delegates to `hexa atlas register --from-verify <fn> <args...> <v>` which
 // folds the verified atom DIRECTLY into compiler/atlas/embedded.gen.hexa
@@ -184,6 +198,9 @@ fn cmd_rubric() {
     println("  hexa verify --expr <fn> <n> <v> [--absorb]   recompute fn(n)==v hexa-native")
     println("  hexa verify --expr <fn> <a> <b> <v> [--absorb]   2-operand (sigma_k/jacobi/ssh_winding/...)")
     println("  hexa verify --expr <fn> <a> <b> <c> <v> [--absorb]   3-operand (tknn_chern p q r)")
+    println("  hexa verify --expr <fn> <n>                  COMPUTE mode (V2): omit <v> → prints fn(n)")
+    println("                                               (e.g. `--expr sigma 7` → COMPUTE: sigma(7) = 8)")
+    println("  hexa verify --expr <fn> <a> <b> --compute    COMPUTE mode, multi-operand (explicit marker)")
     println("  hexa verify --fence <claim>              ⚪ SPECULATION-FENCED (honest)")
     println("  hexa verify --blue-max <DOMAIN>          BLUE-MAX 🔵-pair audit (@D g69)")
     println("  hexa verify rubric | list                this rubric")
@@ -3390,28 +3407,124 @@ fn cmd_expr_float(rest, fnm: string) {
     }
 }
 
+// cmd_expr_compute — VERIFY-KIT V2 (P0b): VALUE-LESS COMPUTE MODE.
+//
+// The legacy `--expr` forms all require the EXPECTED value <v> as the trailing
+// operand — so the CLI can only RE-CONFIRM a known value, never COMPUTE a
+// fresh one. catalogue-mirror sweeps (OEIS/DLMF/ARXIV) that want `σ(7)=?`
+// hit this wall. V2 adds a value-less form: drop the trailing <v> and the CLI
+// computes + prints the value via the SAME `_recompute*` helper, then
+// self-verifies (recompute twice → must be deterministic).
+//
+//   1-operand compute:  --expr <fn> <n>          (rest len 3)
+//   2-operand compute:  --expr <fn> <a> <b>      (rest len 4)
+//   3-operand compute:  --expr <fn> <a> <b> <c>  (rest len 5)
+//
+// DISAMBIGUATION RULE (operand-count): the compute form is the verify form
+// with EXACTLY ONE FEWER operand (the trailing <v> omitted). So `--expr sigma
+// 7` (len 3) = COMPUTE σ(7); `--expr sigma 7 8` (len 4) = VERIFY σ(7)==8.
+// For 2-operand fns: `--expr gcd 12 8` (len 4) = COMPUTE gcd(12,8); `--expr
+// gcd 12 8 4` (len 5) = VERIFY gcd(12,8)==4. The single len-3 collision with
+// the 0-arg float VERIFY form (`--expr chsh_tsirelson <v>`) is already routed
+// AWAY before this helper runs (cmd_expr sends 0-arg float fns to the float
+// path), so the int compute path is unambiguous.
+//
+// Output: `COMPUTE: <fn>(<args>) = <value>` (no atlas auto-absorb — compute
+// is a read; absorb stays on the value-bearing verify forms only).
+fn cmd_expr_compute(rest, ops: int) {
+    let fnm = to_string(rest[1])
+    let mut got = NOCALC
+    let mut label = ""
+    if ops == 3 {
+        let a = to_int(to_string(rest[2]))
+        let b = to_int(to_string(rest[3]))
+        let c = to_int(to_string(rest[4]))
+        got = _recompute3(fnm, a, b, c)
+        label = fnm + "(" + to_string(a) + "," + to_string(b) + "," + to_string(c) + ")"
+    } else if ops == 2 {
+        let a = to_int(to_string(rest[2]))
+        let b = to_int(to_string(rest[3]))
+        got = _recompute2(fnm, a, b)
+        label = fnm + "(" + to_string(a) + "," + to_string(b) + ")"
+    } else {
+        let nn = to_int(to_string(rest[2]))
+        got = _recompute(fnm, nn)
+        label = fnm + "(" + to_string(nn) + ")"
+    }
+    if got == NOCALC {
+        println("verify --expr " + label + "  (compute mode)")
+        println("  tier   = 🟠 INSUFFICIENT")
+        println("  reason = calculator system has NO path for '" + fnm + "'")
+        println("  gap    = extend tool/verify_cli.hexa::_recompute (계산기시스템 개선 후보)")
+        return
+    }
+    // self-verify: recompute a SECOND time — deterministic calc MUST agree.
+    let mut got2 = NOCALC
+    if ops == 3 {
+        got2 = _recompute3(fnm, to_int(to_string(rest[2])), to_int(to_string(rest[3])), to_int(to_string(rest[4])))
+    } else if ops == 2 {
+        got2 = _recompute2(fnm, to_int(to_string(rest[2])), to_int(to_string(rest[3])))
+    } else {
+        got2 = _recompute(fnm, to_int(to_string(rest[2])))
+    }
+    println("COMPUTE: " + label + " = " + to_string(got))
+    if got2 == got {
+        println("  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form compute, self-verified deterministic · g_self_verify · TECS-L Tier1)")
+    } else {
+        println("  tier   = 🔴 FALSIFIED  (recompute non-deterministic: " + to_string(got) + " vs " + to_string(got2) + " — calculator bug)")
+    }
+}
+
 fn cmd_expr(rest) {
     // 0-operand:  --expr <fn> <v>                    (rest len 3; chsh_tsirelson)
     // 1-operand:  --expr <fn> <n> <v>                (rest len 4)
     // 2-operand:  --expr <fn> <a> <b> <v>            (rest len 5)
     // 3-operand:  --expr <fn> <a> <b> <c> <v>        (rest len 6)
     // 4-operand:  --expr <fn> <a> <b> <c> <d> <v>    (rest len 7; bio Phase 3 hagen_poiseuille)
+    //
+    // VERIFY-KIT V2 — VALUE-LESS COMPUTE MODE (the verify form minus its
+    // trailing <v>): `--expr <fn> <n>` computes & prints fn(n) instead of
+    // re-confirming a known value. See cmd_expr_compute for the disambiguation
+    // rule. Routed below AFTER the float path so float fns keep their forms.
     let fnm_pre = if len(rest) >= 2 { to_string(rest[1]) } else { "" }
     let zero_arg_pre = calc_is_zero_arg_float_fn(fnm_pre)
-    if len(rest) < 4 && !zero_arg_pre {
-        println("error: usage: hexa verify --expr <fn> <n> <v>  |  <fn> <a> <b> <v>  [--absorb]")
-        exit(2)
-    }
-    if zero_arg_pre && len(rest) < 3 {
-        println("error: usage: hexa verify --expr " + fnm_pre + " <v>  [--absorb]")
+    if len(rest) < 3 {
+        println("error: usage: hexa verify --expr <fn> <n> [<v>]  |  <fn> <a> <b> [<v>]  [--absorb]")
+        println("       (compute mode: omit <v> to COMPUTE; provide <v> to VERIFY)")
         exit(2)
     }
     let fnm = to_string(rest[1])
     // float-NUMERICAL forms (welch_t_crit · wilson_hilferty_p · chsh_tsirelson
     // · hardy_bound) route to the 🟢 path BEFORE the int parser truncates
-    // real-valued args.
+    // real-valued args. (Float fns include the only int-shaped len-3 VERIFY
+    // collision — the 0-arg constants like chsh_tsirelson — so once float fns
+    // are routed away, the int compute path below is unambiguous.)
     if calc_is_float_fn(fnm) {
         cmd_expr_float(rest, fnm)
+        return
+    }
+    // ── VERIFY-KIT V2 (P0b) — value-less COMPUTE routing (int fns) ──────────
+    // Count operand args (exclude trailing --absorb/--no-absorb flags) and the
+    // explicit --compute marker. COMPUTE fires when (a) --compute is present,
+    // or (b) the operand list is len-3 (`--expr <fn> <n>`) — the canonical
+    // OEIS σ(7) case (no int 0-op VERIFY form exists, so len-3 is unambiguous).
+    // Multi-operand compute (`--expr gcd 12 8`) needs the explicit --compute
+    // marker to stay unambiguous vs the 1-op VERIFY form `--expr <fn> <n> <v>`.
+    let mut ops = 0
+    let mut k = 1
+    while k < len(rest) {
+        let tk = to_string(rest[k])
+        if tk != "--absorb" && tk != "--no-absorb" && tk != "--compute" { ops = ops + 1 }
+        k = k + 1
+    }
+    // ops counts fn + operands; operand count = ops - 1.
+    let force_compute = _has_compute(rest)
+    if force_compute || ops == 2 {
+        // ops==2 → fn + 1 operand (len-3 1-op compute). force_compute honours
+        // the marked arity (operand count = ops-1). cmd_expr_compute dispatches
+        // on the operand count (1/2/3).
+        let operand_ct = ops - 1
+        cmd_expr_compute(rest, operand_ct)
         return
     }
     let mut got = NOCALC
