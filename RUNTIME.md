@@ -1038,6 +1038,54 @@ opt-in via `git config core.hooksPath .githooks`) + project.tape @D
   - `RUNTIME.md` (this entry)
 - Acceptance line: `cycle 68: atlas-loop-smoke CLOSED · root=ctype.hexa:684 rt_str_join_str (O(n²) join) · smoke PASS (exit 42) · PR #(this)`
 
+### 2026-05-25 — cycle 74: bare `print` (no-newline) arm64-codegen resync — CLOSED
+
+- cycle 74 — closes the bare-`print` (`fn main() { print("hi") }`)
+  `_print` link-fail flagged by cycle 72 (#947 `d5539307`) as a separate
+  divergence. The actual root cause was NOT a `self/codegen.hexa` ↔
+  `self/native/hexa_cc.c` stale-twin (the task's working hypothesis):
+  **both** of those C-emit codegen sites already lower `print` →
+  `hexa_print_val` correctly (self/codegen.hexa:5464-5480; hexa_cc.c:
+  22403-22418 via `__hexa_codegen_sl_1110` = `"(hexa_print_val("`).
+- The divergence lives in the **arm64 direct-asm codegen path** used by
+  `aprime_cc` — `compiler/codegen/arm64_darwin.hexa::_builtin_runtime_sym`.
+  That function mapped `println` → `hexa_println` and `eprintln` →
+  `hexa_eprintln`, but **`print` was unmapped** → fell through the
+  trailing `return name` → emitted a bare `print` symbol → `bl _print` in
+  the .s → clang `Undefined symbols: _print` at user-program link time.
+  `print` was already in the bind allow-list (compiler/check/bind.hexa:
+  1049) so the frontend accepted it — only the codegen symbol map lagged.
+- Fix (1 logic line, mirrors `println`): add
+  `if name == "print" { return "hexa_print_val" }` next to the `println`
+  entry. `hexa_print_val` is decl runtime.h:321, def runtime.c:4436 —
+  same single-HexaVal-arg, void-return, no-ret-box shape as `println`, so
+  the generic STMT_CALL emit path lowers it verbatim (no new branch). NO
+  edit to self/runtime.c / runtime_core.c (other agent's files); the
+  runtime symbol already exists.
+- Approach: hexa_cc.c surgical edit NOT needed (hexa_cc.c was already
+  correct for the C-emit path). The fix is purely in the SSOT
+  `compiler/codegen/arm64_darwin.hexa`; aprime_cc picks it up on rebuild
+  (hexa_v2 bootstrapped from hexa_cc.c seed per #943 CANON M3b, then
+  transpiles the patched compiler source). No full `hexa cc --regen`.
+- ⚠ silent-wipe hazard hit: the first `Edit` of arm64_darwin.hexa was
+  reverted on disk (shared-worktree / deploy-regen race — `git diff`
+  empty, harness Read showed phantom cached state). Re-applied via
+  `python3` direct write; `git diff` confirmed 8 insertions survived.
+- Verification (all on bootstrapped build/hexa_v2 + rebuilt aprime_cc,
+  atlas loaded 16088 nodes, smoke exit(6*7)==42 PASS):
+  - bare `print("hi")` → emits `bl _hexa_print_val` (was `bl _print`),
+    links clean (no undefined symbols), prints `hi` with NO trailing
+    newline (hexdump `6869`), `exit(0)` → rc 0.
+  - (The bare test without explicit `exit()` returns a nonzero rc — 2 for
+    print, 4 for empty main — a pre-existing "main without explicit exit
+    returns uninitialized reg" behavior, unrelated to the print fix; with
+    `exit(0)` the program exits 0.)
+  - println regression: `println("world")` → `bl _hexa_println`, prints
+    `world\n` (hexdump `776f726c640a`), rc 0 — intact.
+  - mixed `print("a") print("b") println("c")` → `abc\n` (hexdump
+    `6162630a`), rc 0.
+- Acceptance line: `cycle 74: print-resync CLOSED · approach=compiler/codegen/arm64_darwin.hexa surgical (NOT hexa_cc.c — that path was already correct; the real gap was the arm64 direct-asm _builtin_runtime_sym map missing `print`) · bare-print links (emits _hexa_print_val, prints `hi` no-newline, exit 0) · println-regression none (prints `world\n`, rc 0) · smoke 42 PASS · PR #(this)`
+
 ### 2026-05-25 — cycle 72: codegen-layer `_write` extern drop (`__fd_write_bytes` → `hxlcl_write`) — CLOSED
 
 - cycle 72 — closes the codegen-layer `_write` extern cycle 70 (#933) explicitly
