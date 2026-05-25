@@ -2,18 +2,6 @@
 
 Append-only history sister of `ARXIV.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
-## 2026-05-26 — A7 catalogue closure report + NEXUS reuse edge + A8 paper-gate eval (SKIP)
-
-- [x] **resume logic** — 기존 worktree `/tmp/wt-arxiv-a7`(branch `arxiv-a7-closure-2026-05-26`) 발견, WIP commit 0개(A1-A6 는 origin/main 에 머지 완료, A7 본작업 미시작) → 1 commit behind origin/main 이라 **reuse + fetch/merge origin/main**(fresh worktree 불필요). throttle 회복 확인 — spawn + 정상 실행됨.
-- [x] **A7 5-axis aggregate funnel** — `docs/a7-catalogue-closure.md`(한글) §1 ASCII funnel: ~58편 흡수(A1 12 + A2 11 + A3 12 + A4 10 + A5 13) → 13 🔵 verify-native + ~29 🟡 citation + 35 cross-repo handoff + 1 in-repo null. verify-density = 13/58 = **22.4%**.
-- [x] **축별 tier split** (§2 표): A1 POC(0 🔵/5 🟡/7 handoff STUB) · A2 ANIMA(0/7/6 H) · A3 DEMIURGE(**5 🔵** +1 🔴/7/12) · A4 PHANES(0/5/10) · A5 HEXA-LANG(**8 🔵** +1 🔴/5/**0 IN-REPO**). 13 🔵 = 5 DEMIURGE 물리상수 + 8 HEXA-LANG math.NT. +2 🔴 neg ctrl(축당 1).
-- [x] **verify-density 상관표** (§3): 5 데이터점, **bimodal**(producer-2/consumer-3). 축 verify-ability ∝ target 폐형해 밀도 — A5 HEXA-LANG(highest, self) 8 🔵 + A3 DEMIURGE(high) 5 🔵 = verify-native **producer** ; A2 ANIMA(0) + A4 PHANES(0) + A1 POC(0) = **consumer**(정직, 실패 아님). 상관 시간 가변(V5 IIT 배선 시 ANIMA 0→양수).
-- [x] **13 🔵 총계 + A7 spot-confirm** (§4): A3(pair_threshold_kinetic_factor=6/total_factor=7/cyclotron_cool_massexponent=3/bratio=2/bexponent=-2) + A5(8 math.NT 논문, 16 fn). **재실행 확인**: `nth_prime 10 29` 🔵 · `catalan 5 42` 🔵 · `sigma 6 13` 🔴 · `pair_threshold_kinetic_factor 1 6` 🔵 · `cyclotron_cool_massexponent 1 3` 🔵 (POOL_DISABLE=1, mini arm64). A3/A5 LIVE 측정 유지, regression 없음. **A7 = 새 verify 산출 아님**(13 🔵 = 재인용 + spot-confirm).
-- [x] **g65 ledger** — `.verdicts/arxiv-closure/ledger.json`: 축별 {papers, verify-able, citation, handoff-target, handoff-commit} + summary + verify_density_correlation + nexus_reuse_edge + a8_paper_gate_eval. JSON valid(5 axes).
-- [x] **NEXUS reuse edge** (g67/g68, **additive only**) — `NEXUS.tape` 에 `@X p_arxiv`(provides: ARXIV catalogue-mirror paper-provenance, 코드 substrate 와 직교한 substrate KIND) + `@X e5`(reuse-edge: ARXIV paper-provenance → anima 6 H / demiurge 12 공정 / phanes 10 표면; A5 hexa-lang self-absorb = null/identity 케이스). 기존 8-consumer star(n2)/e1-e4 불변.
-- [x] **A8 paper-gate eval (STRICT) = SKIP(정직)** (§6) — 후보 finding = verify-density 상관. paper_significance/paper_gate 4-게이트: (1) **pre-registered falsifier 부재**(사후 패턴, FAIL) · (3) **서술적 집계**(Δ-vs-baseline 도 closed-negative 도 아님, FAIL) · (4) **bookkeeping closure**(paper_significance 명시 금지, ⚠). → **SKIP**. 미래 TRIGGER 경로(조건부) = falsifier 사전등록 "V5 IIT 엔진 ANIMA 배선(밀도 0→양수) 후 ARXIV-ANIMA verify count 0→양수 예측; 배선 후에도 0 이면 FALSIFIED" — pre-registered falsifier + real measurement + Δ 확보 시 게이트 통과. 현재 전제(V5 ANIMA 배선) 미충족 → SKIP.
-- [x] 영속 — `docs/a7-catalogue-closure.md`(한글) + `.verdicts/arxiv-closure/ledger.json`(g65) + `NEXUS.tape`(@X p_arxiv + e5) + `CLAIMS.tape` @C slug=arxiv-closure(🟢 closure) + ARXIV.md A7 `[x]` + A8 `[x]`(SKIP). checkpoint-commit per step. ARXIV catalogue-mirror lane 5-axis **CLOSED**.
-
 ## 2026-05-26 — A6 cross-repo handoff 메커니즘 정립 + 3 handoff debt 정산 (g48/g60)
 
 - [x] A6 메커니즘 정본화 — g60 cross-repo handoff flow 정립: ingest → 3-class triage → target-repo `INBOX.log.md` 분배(slug 앵커·stub-first·dedup) → target 세션 commit+소비+ack(g48). INBOX = 비동기 비파괴 mailbox (ARXIV 는 hexa-lang authoring, finding 소비자는 sibling repo → 직접 sibling SSOT 편집 시 authoring 권위 충돌 → INBOX decouple).
