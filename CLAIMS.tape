@@ -329,3 +329,121 @@
   cmd    = "archive-TECS-L math/dfs_dedekind_psi_discrepancy.py (analytic n→∞ argument)"
   raw    = ".verdicts/tecs-l-dedekind-psi-uniqueness/sweep_D_1_100.txt   # finite witness only — NOT a proof of the unbounded claim"
   status = "🟡 SUPPORTED-BY-CITATION — unbounded claim cited (archive); finite sweep 1..100 is the terminal witness. residual gated OUT of /paper. do NOT over-claim full proof from finite sweep."
+
+# ───────────────────────────────────────────────────────────────────────
+# TECS-L — tecs-l-n6-characterizations (slug · group=TECS-L · TECS-L.md M4)
+# archive-TECS-L "206 n=6 characterizations" g5 triage (M4). The headline 206
+# is the archive's numbered series #1…#206 (math/README.md line 4437); the
+# overwhelming majority are SYMBOLIC uniqueness claims (f(n)=g(n) ⟺ n=6) with
+# NO hexa closed-form recompute path for the [2,N] universal — those stay 🟡
+# (same handling as the σφ=nτ uniqueness residual in M1). What IS verifiable-
+# now: the n=6 GROUND arithmetic values each characterization is built from,
+# plus the modular-curve values the catalogue cites (X₀(6) index=σ, cusps=τ,
+# genus 0). 15 atoms recomputed closed-form (each 🔵). Triage doc:
+# docs/tecs-l/n6-characterizations-triage.md (verifiable / citation / deferred
+# counts, honest per M4 method §3). Quality over quantity (method §2 cap).
+
+@C tecs_l_n6char_sigma := "sigma(6) = 12 (divisor sum; shared factor of σφ=nτ #1, σ=nφ #81, 2σ=nτ #60, X₀(36) cusps=σ)" :: formula [slug=tecs-l-n6-characterizations group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr sigma 6 12"
+  raw    = ".verdicts/tecs-l-n6-characterizations/n6_sigma.txt"
+  src    = "archive-TECS-L math/README.md #1/#81/#60 + characterization_verifier.py KNOWN_CHARS"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal · paper-eligible."
+
+@C tecs_l_n6char_tau := "tau(6) = 4 (divisor count; factor of n-2=τ Cayley #59, σφ=nτ #1, τ=2φ)" :: formula [slug=tecs-l-n6-characterizations group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr tau 6 4"
+  raw    = ".verdicts/tecs-l-n6-characterizations/n6_tau.txt"
+  src    = "archive-TECS-L math/README.md #59/#1"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal · paper-eligible."
+
+@C tecs_l_n6char_phi := "phi(6) = 2 (Euler totient; factor of φ²=τ #33, σ=nφ #81, self-mirror CY₃ h11=h21=φ #208)" :: formula [slug=tecs-l-n6-characterizations group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr phi 6 2"
+  raw    = ".verdicts/tecs-l-n6-characterizations/n6_phi.txt"
+  src    = "archive-TECS-L math/README.md #33/#81/#208"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal · paper-eligible."
+
+@C tecs_l_n6char_mu := "mu(6) = 1 (Mobius; +1 since 6=2·3 has an even number of prime factors; factor of μ·s=n #86)" :: formula [slug=tecs-l-n6-characterizations group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr mu 6 1"
+  raw    = ".verdicts/tecs-l-n6-characterizations/n6_mu.txt"
+  src    = "archive-TECS-L math/README.md #86 (Mobius × aliquot)"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal · paper-eligible."
+
+@C tecs_l_n6char_is_perfect := "is_perfect(6) = 1 (6 = 1st perfect number, σ(6)=2·6; anchor of all perfect-number characterizations)" :: formula [slug=tecs-l-n6-characterizations group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr is_perfect 6 1"
+  raw    = ".verdicts/tecs-l-n6-characterizations/n6_is_perfect.txt"
+  src    = "archive-TECS-L perfect_number_engine.py (n∈{6,28,496,8128})"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal · paper-eligible."
+
+@C tecs_l_n6char_aliquot := "aliquot(6) = 6 (proper-divisor sum s(6)=σ-n=6=n, the perfect-number defn; value in s(n)=6 ⟺ {6,25} #72)" :: formula [slug=tecs-l-n6-characterizations group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr aliquot 6 6"
+  raw    = ".verdicts/tecs-l-n6-characterizations/n6_aliquot.txt"
+  src    = "archive-TECS-L math/README.md #72 (aliquot sum = P₁)"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal · paper-eligible."
+
+@C tecs_l_n6char_sigma0 := "sigma_0(6) = 4 (σ_k at k=0 = τ; divisor count via the σ_k family)" :: formula [slug=tecs-l-n6-characterizations group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr sigma_0 6 4"
+  raw    = ".verdicts/tecs-l-n6-characterizations/n6_sigma0.txt"
+  src    = "archive-TECS-L math/README.md (σ_k divisor-power family)"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal · paper-eligible."
+
+@C tecs_l_n6char_sigma2 := "sigma_2(6) = 50 (sum of squares of divisors 1+4+9+36; LHS of σ₂=φ·sopfr² #92 = 2·25, σ₂=2·sopfr² #152)" :: formula [slug=tecs-l-n6-characterizations group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr sigma_2 6 50"
+  raw    = ".verdicts/tecs-l-n6-characterizations/n6_sigma2.txt"
+  src    = "archive-TECS-L math/README.md #92/#152"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal · paper-eligible."
+
+@C tecs_l_n6char_sigma3 := "sigma_3(6) = 252 (sum of cubes of divisors 1+8+27+216; σ_k family k=3, σ₃=τ(2ⁿ-1) #H-CODE-1)" :: formula [slug=tecs-l-n6-characterizations group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr sigma_k 6 3 252"
+  raw    = ".verdicts/tecs-l-n6-characterizations/n6_sigma3.txt"
+  src    = "archive-TECS-L math/README.md #H-CODE-1 (σ₃ divisor-cube)"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal · paper-eligible."
+
+@C tecs_l_n6char_gamma0_index := "gamma0_index(6) = 12 = sigma(6) (Γ₀(6) index = σ; X₀(36) cusps = 12 = σ, math/README.md line 1285)" :: formula [slug=tecs-l-n6-characterizations group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr gamma0_index 6 12"
+  raw    = ".verdicts/tecs-l-n6-characterizations/n6_gamma0_index.txt"
+  src    = "archive-TECS-L math/README.md line 1285/677 (modular curve X₀(6) / level n²)"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal · paper-eligible."
+
+@C tecs_l_n6char_gamma0_cusps := "gamma0_cusps(6) = 4 = tau(6) (Γ₀(6) cusp count = τ)" :: formula [slug=tecs-l-n6-characterizations group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr gamma0_cusps 6 4"
+  raw    = ".verdicts/tecs-l-n6-characterizations/n6_gamma0_cusps.txt"
+  src    = "archive-TECS-L math/README.md (X₀(6) cusps)"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal · paper-eligible."
+
+@C tecs_l_n6char_gamma0_genus := "gamma0_genus(6) = 0 (X₀(6) is the unique genus-0 modular curve among perfect numbers, math/README.md line 2612)" :: formula [slug=tecs-l-n6-characterizations group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr gamma0_genus 6 0"
+  raw    = ".verdicts/tecs-l-n6-characterizations/n6_gamma0_genus.txt"
+  src    = "archive-TECS-L math/README.md line 2612/416 (genus X₀(6)=0, unique perfect)"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal · paper-eligible."
+
+@C tecs_l_n6char_first_cusp_weight := "first_cusp_form_weight(6) = 4 = tau(6) (smallest weight with a nonzero cusp form for Γ₀(6); calc-fn defn, NOT the archive's lcm(4,6)=12 reading)" :: formula [slug=tecs-l-n6-characterizations group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr first_cusp_form_weight 6 4"
+  raw    = ".verdicts/tecs-l-n6-characterizations/n6_first_cusp_form_weight.txt"
+  src    = "hexa calc first_cusp_form_weight (archive line 1550 uses a different defn — honest divergence noted in triage §1 C13)"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal · paper-eligible."
+
+@C tecs_l_n6char_dim_cusp_forms := "dim_cusp_forms(6,2) = 0 (dimension of weight-2 cusp forms on Γ₀(6) = 0, consistent with genus 0)" :: formula [slug=tecs-l-n6-characterizations group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr dim_cusp_forms 6 2 0"
+  raw    = ".verdicts/tecs-l-n6-characterizations/n6_dim_cusp_forms.txt"
+  src    = "archive-TECS-L math/README.md line 2612 (genus 0 ⟹ S₂ dim 0)"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal · paper-eligible."
+
+@C tecs_l_n6char_conductor := "pair_threshold_factor(6) = 36 = n² (conductor n²=36 for X₀ at level n, math/README.md line 677)" :: formula [slug=tecs-l-n6-characterizations group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr pair_threshold_factor 6 36"
+  raw    = ".verdicts/tecs-l-n6-characterizations/n6_conductor.txt"
+  src    = "archive-TECS-L math/README.md line 677 (Conductor = n² = 36)"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal · paper-eligible."
