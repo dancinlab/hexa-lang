@@ -27,7 +27,10 @@
 - [x] **M3 — 컴파일러 바이너리 git 제거 + Go 1.4식 C-시드 부트스트랩** (2단계 분해 · 둘 다 DONE)
   - [x] **M3a (비파괴)** — DONE PR #934. `cmd_cc` 출력 → `build/hexa_v2` · `resolve_hexa_v2` 가 build/ 우선(self/native fallback 유지). CI bootstrap green.
   - [x] **M3b (파괴)** — DONE PR #943 (rebase 후 r2, CI 3-platform green). `git rm` hexa_v2(Mac)+hexa_v2_linux_x86_64(Linux, 5.2MB) · multiarch picker 제거 · `resolve_or_bootstrap_hexa_v2`(auto cmd_cc, go-build식) · build_hexa_cli Step0 amalgam 부트스트랩 · CI 3 workflow build/ 전환. `hexa_cc.c` C-시드 유지. **arch-leak 클래스 영구 종결.** ⚠ deploy 갭: 배포 hexa(~/.hx/bin)+로컬 메인트리는 M3b-前이라, origin/main pull 시 옛 dispatch가 build/ resolve 못함 → 배포 refresh 필요 (follow-up).
-- [ ] **M4 — verb → canonical core + `hexa tool`** — 80+ verb(70 dispatch registry). core(run/build/test/parse/check/bench/cc/lsp/init/status/version) 유지, discovery(drill/loop/omega/…)+science(qrng/sim-universe/qmirror/calc/…)+audit(honesty/…)는 `hexa tool <x>` 하위 흡수. `hexa --help` 재편 (기능 폐기 아님 — 이동만).
+- [x] **M4 — verb → canonical core + `hexa tool`** — DONE PR #964 (merged). `hexa tool [list|<verb>]` 드로어 추가: `cmd_tool_list()` family 인덱스 + `cmd_tool(av)` bare-verb re-dispatch(별칭) + main dispatch `tool` 케이스 + `hexa --help` tool 줄. bare `hexa <verb>` 전부 유지(이동 아닌 그룹화). +48 LOC `self/main.hexa`.
+- [ ] **M5 — M3b deploy 갭 종결** — 배포 hexa(`~/.hx/bin`)+로컬 공유 메인트리가 M3b-前 dispatch → origin/main pull 시 `build/hexa_v2` 없으면 빌드 실패 가능. 처방 = 배포 hexa를 `resolve_or_bootstrap` dispatch로 refresh(또는 pull 후 1회 `hexa cc` 자동화). 진단(배포 hexa가 M3b+ dispatch인가) 우선.
+- [ ] **M6 — M4 polish: tool family 완성도 + `--help` 재편 마무리** — #964 `cmd_tool_list` family 분류가 80+ verb 전부 커버하는지 audit · 누락 verb family 배정 · core↔tool 경계 정리.
+- [ ] **M7 — `_v2` dead-ref 스윕** — M2 `_v2.c` 삭제 후 repo 전체 `_v2` 잔여 참조(주석·문서·빌드스크립트·CI) grep + canonical 정리.
 
 ## not-goal (의도적 제외)
 
