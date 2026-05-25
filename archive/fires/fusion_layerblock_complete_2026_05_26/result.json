@@ -1,0 +1,14 @@
+{
+  "round":13,
+  "falsifier":"F-FUSION-LAYERBLOCK-COMPLETE",
+  "slug":"fusion-layerblock-complete",
+  "date":"2026-05-26",
+  "shape":{"d":768,"h":12,"dh":64,"S":512,"B":8,"M":4096,"dff":3072},
+  "numeric":{"verdict":"PASS","refRows":64,"max_rel_rowscale":0.0008002,"max_abs":0.00102,"naninf":0,"tol":"1e-2"},
+  "timed_med_ms":{"fused":3.797216,"eager":3.836736,"gemms_only":1.207968,"attn_only":2.425120},
+  "ratio_fused_over_eager":0.9897,
+  "pct_vs_eager":1.03,
+  "decomposition":{"gemm_frac_of_fused_wall_pct":31.81,"attn_frac_pct":63.87,"glue_frac_pct":4.32},
+  "gate30":"BELOW-30%",
+  "verdict_tier":"ORANGE-near-ceiling"
+}
