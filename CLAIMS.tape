@@ -1203,6 +1203,17 @@
   src    = "archive/fires/fusion_autoregressive_decode_2026_05_25/ (fused_decode.ptx + eager_decode.ptx + oracle.hexa + oracle_output.txt + ptxas_clean.log + FIRE.md) + GPU.md §10 axis E"
   status = "🔵 SUPPORTED-FORMAL — structural launch + temp-HBM ratios proven closed-form via compiled-hexa oracle (exit 0); fused RC=0 (32+27 regs, 40960+16384 B smem, 0 spill) + eager RC=0 (17 entries) on sm_80/sm_90; sm_120 via driver-JIT (forward-compat). Timed silicon wall DEFERRED to round 9."
 
+# ── GPU — fusion-autoregressive-complete (slug · group=GPU · GPU.md §10 axis E · round 12) ──
+# Round 8/9 deferred the TIMED wall; R9 stub (single-CTA single-thread-per-row)
+# was 40x SLOWER body. R12 = the COMPLETE, properly multi-CTA-parallelized fused
+# 2-mega-kernel decode, TIMED vs a FAIR eager 18-launch baseline. Verdict ORANGE.
+@C fusion_autoregressive_complete := "COMPLETE multi-CTA fused 2-mega-kernel decode (RMSNorm+QKV-GEMV+KV-append+flash-masked-attn+O-proj+SwiGLU) wins the LAUNCH-BOUND regime over a FAIR eager 18-launch decode (+6.4% L=64 · +10.8% L=512 · +11.1% L=1024) but does NOT clear the 30% gate; crossover to loss at L~1536 (-18.9%) — numeric PASS all L (rel<=3.2e-5, nan_inf=0)" :: measurement [slug=fusion-autoregressive-complete group=GPU]
+  method = "silicon-fire"
+  cmd    = "ubu-2 RTX 5070 (clean) decode_fused_host decode_fused.ptx (cuLaunchCooperativeKernel, 2 launches/layer) vs decode_eager_baseline (18 per-op kernels, each parallel/coalesced), f64 CPU autoregressive ref, per-row rel<=1e-2 + NaN/Inf gate, cuEvent 20 warmup + 200 median (median-of-3), L in {64..4096} GPT-2-small d=768"
+  raw    = ".verdicts/fusion-autoregressive-complete/F-FUSION-AUTOREGRESSIVE-COMPLETE.txt"
+  src    = "archive/fires/fusion_autoregressive_complete_2026_05_26/ (decode_fused.ptx + decode_fused_kernels.cu + decode_fused_host.cu + decode_eager_baseline.cu + fire.log + result.json) + GPU.md §10 axis E"
+  status = "🟠 SUB-THRESHOLD launch-bound WIN — COMPLETE kernel + FAIR baseline (strawman attn_av caught + fixed 10x) + honest per-row metric + measured wall. Fusion wins launch-bound regime L<=1024 (+3..+11%, best +11.1% @ L=1024) but realized saving ~8.2us = ~40% of net-theoretical 20.4us/layer (gross launch 28.9us − grid.sync 8.5us); body slightly slower than sum of eager per-op kernels (serial flash-merge + 10 grid.sync serialize phases). NOT >=30% at any L. paper NOT triggered (@D paper_gate requires 🟢). §10 axis-E decode row stays [ ]."
+
 @C tecs_l_mr_f23_tau := "tau(23) = 2 → 23 is PRIME (factor of M_11)" :: formula [slug=tecs-l-mersenne-composite group=TECS-L]
   method = "expr"
   cmd    = "hexa verify --expr tau 23 2"

@@ -1,0 +1,60 @@
+{
+  "fire": "fusion-autoregressive-complete",
+  "date": "2026-05-26",
+  "round": 12,
+  "falsifier": "F-FUSION-AUTOREGRESSIVE-COMPLETE",
+  "axis": "launch-bound autoregressive single-token decode (fusable; R6 elementwise moat extension)",
+  "host": "ubu-2 RTX 5070 sm_120 driver 580.159.03",
+  "toolchain": { "ptxas": "CUDA 12.0 V12.0.140", "launch": "cuLaunchCooperativeKernel driver API" },
+  "contention": "GPU clean (0% util, no compute procs) -> timed wall taken",
+  "shape": { "d": 768, "n_heads": 12, "head_dim": 64, "ffn_inner": 3072 },
+  "verdict_tier": "ORANGE sub-threshold launch-bound win (numeric PASS + complete + fair baseline, <30%)",
+  "kernels": {
+    "decode_attn_fused": { "phases": "RMSNorm+QKV-GEMV+KV-append+flash-masked-attn(keys parallel)+O-proj+residual", "grid_syncs": 6, "regs": 45, "smem_bytes": 1024, "spills": 0 },
+    "decode_ffn_fused":  { "phases": "RMSNorm+gate/up-GEMV+SwiGLU+down-GEMV+residual", "grid_syncs": 4, "regs": 37, "smem_bytes": 1024, "spills": 0 },
+    "launches_per_layer_fused": 2,
+    "launches_per_layer_eager": 18,
+    "parallelization": "multi-CTA cooperative grid, GEMV rows striped across all grid warps (coalesced warp-coop dot), attention keys split across KW warps/head + flash-merge -- NOT R9 single-CTA single-thread-per-row"
+  },
+  "ptxas_clean": { "sm_80": "rc=0", "sm_90": "rc=0", "jit_sm_120": "rc=0", "pure_ascii": true },
+  "eager_fairness": {
+    "strawman_caught": "first attn_av CTA-per-head HD=64-thr serial-over-L = 0.076ms@L4096 dominated layer, faked 47% win",
+    "fix": "rewrote attn_av key-parallel (split L across KB blocks + flash-merge atomicAdd) = 0.0069ms@L4096 (10x)",
+    "all_subkernels_coalesced_parallel": true,
+    "per_subkernel_ms_L4096": { "rmsnorm": 0.0040, "gemv_DxD": 0.0053, "gemv_FFxD": 0.0065, "gemv_DxFF": 0.0061, "kv_append": 0.0027, "qk_scores": 0.0143, "softmax": 0.0062, "attn_av_fair": 0.0069, "residual": 0.0026, "swiglu": 0.0045 }
+  },
+  "numeric": {
+    "tol": "per-row-scaled rel-err <= 1e-2 vs f64 CPU autoregressive ref + NaN/Inf hard-fail",
+    "fused_max_rel_all_L": "<= 3.2e-05", "fused_nan_inf": 0,
+    "eager_max_rel_all_L": "<= 1.6e-05", "eager_nan_inf": 0,
+    "pass": true
+  },
+  "wall_us_median_of_3": {
+    "L64":   { "eager": 65.8,  "fused": 61.6,  "fused_over_eager": 0.936, "speedup_pct": 6.4 },
+    "L256":  { "eager": 65.9,  "fused": 63.6,  "fused_over_eager": 0.966, "speedup_pct": 3.4 },
+    "L512":  { "eager": 71.4,  "fused": 63.7,  "fused_over_eager": 0.892, "speedup_pct": 10.8 },
+    "L1024": { "eager": 74.0,  "fused": 65.8,  "fused_over_eager": 0.889, "speedup_pct": 11.1 },
+    "L1536": { "eager": 75.9,  "fused": 90.3,  "fused_over_eager": 1.189, "speedup_pct": -18.9 },
+    "L2048": { "eager": 82.1,  "fused": 100.6, "fused_over_eager": 1.225, "speedup_pct": -22.5 },
+    "L4096": { "eager": 155.8, "fused": 162.8, "fused_over_eager": 1.044, "speedup_pct": -4.4 }
+  },
+  "wall_warmup": 20, "wall_timed": 200, "fused_grid_ctas": 120,
+  "launch_saving_analysis": {
+    "per_launch_us_measured": 1.81,
+    "grid_sync_us_measured": 0.85,
+    "gross_launch_saving_us": 28.9,
+    "grid_sync_paid_us": 8.5,
+    "net_theoretical_us": 20.4,
+    "realized_us_at_L1024": 8.2,
+    "realized_frac_of_net": 0.40,
+    "realized_frac_of_gross": 0.28,
+    "what_swamped_it": "fused body slightly slower than sum of eager per-op kernel bodies: (a) flash-merge serial over KW partials per head; (b) 10 grid.sync barriers serialize phases defeating cross-kernel latency hiding; (c) single global cooperative grid config can't retune occupancy per phase like 18 independent eager grids"
+  },
+  "crossover_L": 1536,
+  "ge_30pct_at_any_L": false,
+  "best_win": { "L": 1024, "speedup_pct": 11.1 },
+  "section10_axis_E_decode_row": "[ ] stays open (sub-threshold launch-bound win; honest record appended -- fusion wins launch-bound regime L<=1024 by +3 to +11% but below 30% gate)",
+  "paper_triggered": false,
+  "invariants": { "no_llvm": true, "no_c_transpile_change": true,
+    "cpu_codegen_md5": { "x86_64_linux.hexa": "b50a2a3c8ab0ba0802bcc7b4c0419992" } }
+}
