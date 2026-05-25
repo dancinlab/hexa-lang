@@ -1,0 +1,18 @@
+# HEXA-PORT P0.5 — data-bound corpus storage (HEXA-PORT.md §4.0)
+# LFS namespaces reserved for FUTURE big-data ports (ENDF/B-VIII, etc.).
+# Existing >1MB tracked files are intentionally NOT migrated (atlas SSOT
+# text / build artifacts / fixtures stay in regular git).
+data/**/*.hdf5     filter=lfs diff=lfs merge=lfs -text
+data/**/*.h5       filter=lfs diff=lfs merge=lfs -text
+data/**/*.dat      filter=lfs diff=lfs merge=lfs -text
+data/**/*.bin      filter=lfs diff=lfs merge=lfs -text
+data/**/*.endf     filter=lfs diff=lfs merge=lfs -text
+data/**/*.ace      filter=lfs diff=lfs merge=lfs -text
+data/**/*.xml.gz   filter=lfs diff=lfs merge=lfs -text
+data/**/*.tar.gz   filter=lfs diff=lfs merge=lfs -text
+stdlib/corpora/**/*.hdf5  filter=lfs diff=lfs merge=lfs -text
+stdlib/corpora/**/*.h5    filter=lfs diff=lfs merge=lfs -text
+stdlib/corpora/**/*.dat   filter=lfs diff=lfs merge=lfs -text
+stdlib/corpora/**/*.bin   filter=lfs diff=lfs merge=lfs -text
+stdlib/corpora/**/*.endf  filter=lfs diff=lfs merge=lfs -text
+stdlib/corpora/**/*.ace   filter=lfs diff=lfs merge=lfs -text
