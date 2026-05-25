@@ -4,6 +4,34 @@
 
 ---
 
+## 2026-05-26 — V6 (P3a) `register --source <attribution>` → provenance 필드 자동 (OEIS O4 hand-fold 제거)
+
+### 목표 (OEIS O4 가 손으로 fold 한 이유 제거)
+- OEIS O4 가 `aliquot↔A001065·sigma_2↔A001157·sigma_3↔A001158` 3개 @F 노드를 `embedded.gen.hexa` 에 직접 hand-fold 해야 했던 이유 = `hexa atlas register --from-verify` 가 고정 포맷 `verified-<fn>-<n>` 노드를 hardcoded `g_self_verify` cite 로만 만들고 `source` (OEIS 어트리뷰션) 필드를 안 써서. V6 가 `--source "<text>"` 플래그를 추가해 fold 노드가 attribution 을 자동으로 carry → hand-fold 불요.
+
+### 변경 (g0/g33 surgical · atlas_cli.hexa 단독 편집)
+- 신규 `_provenance_lines(source, url)` 헬퍼: `source`/`url` 이 non-empty 일 때만 `source = "<text>"` / `url = "<link>"` 라인 emit (둘 다 empty → "" = default 무변경). O4 hand-fold shape 정확히 미러 — `verified-by` 와 `cite` 사이에 삽입.
+- `_build_raw_F` / `_build_raw_F_numerical` 시그니처에 `source`/`url` 추가 (legacy dead-code 호출자 `_adapt_verify_1op/2op/3op/float` 는 `"", ""` 전달 → 행동 불변).
+- 활성 경로 `_adapt_verify_generic` / `_adapt_verify_compute` 가 `source`/`url` thread.
+- `cmd_register` 가 `--source`/`--url` 파싱 → 3개 adapter 호출지점에 전달. help 텍스트 + 보조 usage print 갱신.
+- source = PROVENANCE 어트리뷰션, `g_self_verify` = 검증 cite (별개로 둘 다 유지). source 텍스트는 shell 에 안 들어감 (`exec` 는 fn_name/args 만; source 는 노드 raw 문자열로만, fold 시 `_hxesc` escape).
+- **codegen 무변경** — `hexa cc --regen` 불요.
+
+### 빌드 함정 — 설치 드라이버 V4-stale (V7 와 동일 뿌리)
+- `hexa verify` (JIT-build verify_cli) 가 `_jacobi_symbol`/`_kronecker_symbol` undefined 로 link-fail — 설치 `hexa.real` (May-25) 이 #1148/#1150 special-fn 심볼보다 stale. register 는 verify 에 위임하므로 동작 불가.
+- 해결 (mini bootstrap 불요): 로컬 toolchain 으로 `bin/hexa-atlas` + `bin/hexa-verify` 를 직접 빌드 (parse-gate 가 `hexa_cc` 를 HEAD 소스로 재빌드한 직후라 local `build/hexa_v2` 가 HEAD-aware → `_jacobi_symbol` 등 정상 링크). `hexa verify` 가 cwd `bin/hexa-verify` sub-binary 를 preferring 하지만 설치 shim 이 stale 이라 안 씀 → `/tmp/hexa` PATH wrapper 로 `verify`→`bin/hexa-verify` 포워딩.
+
+### 테스트 (격리 atlas · verbatim → `.verdicts/verify-kit-register-source/v6.txt`)
+- `HEXA_ATLAS_EMBED=/tmp/wt-vkit-v6-iso` 로 worktree 의 격리 embed 에만 fold (shared 트리 보호 · E3 leak 방지).
+- TEST 1: `register --from-verify aliquot 6 --source "OEIS A001065" --url "https://oeis.org/A001065" --compute` → 🔵 SUPPORTED-FORMAL, 노드에 `source = "OEIS A001065"` + `url = "https://oeis.org/A001065"` present (byte-grep 확인).
+- TEST 2 (regression): `register --from-verify sigma 6` (no --source) → 노드에 `source`/`url` 라인 0 (default 무변경).
+- leak check: `git diff --stat compiler/atlas/embedded.gen.hexa` = empty → shared 트리 무누출. diff = atlas_cli.hexa 코드 + verdict 만.
+
+### 결과
+- V6 CLOSED. `register --source`/`--url` → provenance 필드 자동. OEIS O4 hand-fold 자동화 완료 — 향후 OEIS fold 는 `--source`/`--url` 사용. tier 🟢 (CLI capability, byte-grep 확인 + regression + no-leak). OEIS.md O4 라인 cross-link.
+
+---
+
 ## 2026-05-26 — V7 (P3b) 조합론/소수 정수 primitive (OEIS 🟠→🔵 mutual-feed)
 
 ### 목표 (OEIS O3 의 287 🟠 NO-PATH 중 prime×67 해소)
