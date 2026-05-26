@@ -2705,6 +2705,38 @@ fn cmd_build(src, out, c_only, target, shared) {
                 println("  [native rt] WARN: HEXA_NATIVE_RT_EXIT=1 but emit driver not at " + __nemit_drv)
             }
         }
+        // HEXA_BACKEND flip · 아홉째 increment — hexa-native `_hexa_ptr_alloc`
+        // override (parallel to HEXA_NATIVE_RT_EXIT, horizontal expansion of
+        // the #1321/#1324 weak-symbol recipe). Emit a hexa-native .o for
+        // `_hexa_ptr_alloc` (test/native_build/emit_hexa_ptr_alloc_native_o.hexa)
+        // and append it to the clang link when HEXA_NATIVE_RT_PTR_ALLOC=1.
+        // The C-side `hexa_ptr_alloc` in runtime.c is `__attribute__((weak))`,
+        // so ld64 picks the hexa-emit strong symbol when this .o is linked.
+        // RESIDUAL — the override uses mmap (rt_alloc primitive) while the
+        // C-side `hexa_ptr_free` still uses libc `free()`. Safe ONLY for
+        // programs that allocate via `hexa_ptr_alloc` without subsequently
+        // calling `hexa_ptr_free` (or co-override `_hexa_ptr_free` with
+        // munmap — follow-up). ENV unset = no behavior change.
+        if env("HEXA_NATIVE_RT_PTR_ALLOC") == "1" {
+            let __npa_drv = __nself + "/../test/native_build/emit_hexa_ptr_alloc_native_o.hexa"
+            let __npa_chk = exec("test -f '" + __npa_drv + "' && printf yes || printf no")
+            if __npa_chk == "yes" {
+                let __npa_hx = env("HEXA_LANG_INTERP")
+                let mut __npa_hx_cmd = "hexa"
+                if len(__npa_hx) > 0 { __npa_hx_cmd = __npa_hx }
+                let __npa_emit_out = exec("'" + __npa_hx_cmd + "' run '" + __npa_drv + "' 2>&1")
+                if len(__npa_emit_out) > 0 { println("    [rt-emit] " + __npa_emit_out) }
+                let __npa_o_chk = exec("test -f /tmp/hexa_ptr_alloc_native.o && printf yes || printf no")
+                if __npa_o_chk == "yes" {
+                    __nrt_native_o = __nrt_native_o + "'/tmp/hexa_ptr_alloc_native.o' "
+                    println("  [native rt] HEXA_NATIVE_RT_PTR_ALLOC=1 — appending /tmp/hexa_ptr_alloc_native.o (overrides weak hexa_ptr_alloc in runtime.c)")
+                } else {
+                    println("  [native rt] WARN: HEXA_NATIVE_RT_PTR_ALLOC=1 but emit driver produced no .o — falling back to C hexa_ptr_alloc")
+                }
+            } else {
+                println("  [native rt] WARN: HEXA_NATIVE_RT_PTR_ALLOC=1 but emit driver not at " + __npa_drv)
+            }
+        }
         let __ntmp = exec("printf '%s.tmp.%s' '" + out + "' \"$$\"")
         let __nlink = "clang -O2 " + __nshared_link + os_clang_cflags() + "-Wno-trigraphs -fbracket-depth=4096 -I '" + __nself + "' " + __nrt_native_o + "'" + __nasm + "' '" + __nrtc + "' -o '" + __ntmp + "'" + os_clang_ldflags() + " 2>&1"
         println("  [native 2/2] " + __nlink)
