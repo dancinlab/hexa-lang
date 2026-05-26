@@ -11384,7 +11384,7 @@ HexaVal hexa_now_monotonic_s(void) {
 // formatting, which caused stderr_tmp collisions (fix 1472b62d). Callers
 // building unique filenames should use to_string(mono_ns()) directly
 // and skip the mktemp fork in runtime_tmpname fallback (perf).
-HexaVal hexa_mono_ns(void) {
+__attribute__((weak)) HexaVal hexa_mono_ns(void) {
     struct timespec ts;
     hxlcl_clock_gettime(CLOCK_MONOTONIC, &ts);
     return hexa_int((int64_t)ts.tv_sec * 1000000000LL + (int64_t)ts.tv_nsec);
