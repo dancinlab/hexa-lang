@@ -664,10 +664,19 @@ pub fn nn_lm_head_bwd(temb: int, zT: int, dl: int,
     // The CPU fallbacks of these builtins reduce in the SAME order as the
     // host loops below (bit-exact no-CUDA reference); CUDA = forge `_gpu`
     // rel-tol (RFC 040 §2.2). Any rc != 0 / id < 0 → host fallback.
-    let outer_id = to_int(farr_outer_gpu(dl, zT, V, d))
+    //
+    // NB: each forge kernel call is bound to a `let` BEFORE to_int(). A
+    // `to_int(kernel(...))` expands the inner call 3× in the generated C
+    // ternary (HX_IS_STR test + str-branch + num-branch), so a SIDE-EFFECTING
+    // kernel runs 2-3× — farr_add_inplace_gpu would double-add (silent grad
+    // corruption), a fresh-farr allocator would leak its first 2 allocations.
+    // Binding to a `let` first emits the call exactly once.
+    let outer_h = farr_outer_gpu(dl, zT, V, d)
+    let outer_id = to_int(outer_h)
     let mut gpu_dtemb_ok = false
     if outer_id >= 0 {
-        let rc_add = to_int(farr_add_inplace_gpu(dtemb_out, outer_id, V * d))
+        let add_h = farr_add_inplace_gpu(dtemb_out, outer_id, V * d)
+        let rc_add = to_int(add_h)
         if rc_add == 0 { gpu_dtemb_ok = true }
         let _ = farr_free(outer_id)
     }
@@ -686,10 +695,12 @@ pub fn nn_lm_head_bwd(temb: int, zT: int, dl: int,
         }
     }
     // dzT = tembᵀ · dl  ; loop order matches d5_matvec_t_g (rows=V, cols=d).
-    let dzT_id = to_int(farr_matmul_t_gpu(temb, V, d, dl))
+    let dzT_h = farr_matmul_t_gpu(temb, V, d, dl)
+    let dzT_id = to_int(dzT_h)
     let mut gpu_dzT_ok = false
     if dzT_id >= 0 {
-        let rc_cp = to_int(farr_copy_slice_gpu(dzT_id, 0, dzT_out, 0, d))
+        let cp_h = farr_copy_slice_gpu(dzT_id, 0, dzT_out, 0, d)
+        let rc_cp = to_int(cp_h)
         if rc_cp == 0 { gpu_dzT_ok = true }
         let _ = farr_free(dzT_id)
     }

@@ -211,8 +211,11 @@ fn check_adamw_kernel() -> int {
         t_fill_lcg(g, n, 100 + step * 13, 0.5)
 
         // kernel path: returns fresh W in a new farr, copies back into Wk.
-        let newW = to_int(farr_adamw_step_gpu(Wk, Mk, Vk, g, n,
-                                              lr, b1, b2, eps, wd, step))
+        // Bind to a `let` BEFORE to_int (3× ternary expand would double-step
+        // m/v) — same discipline as train_lib.nn_decoder_adamw_step.
+        let newW_h = farr_adamw_step_gpu(Wk, Mk, Vk, g, n,
+                                         lr, b1, b2, eps, wd, step)
+        let newW = to_int(newW_h)
         let _ = farr_copy_slice_gpu(newW, 0, Wk, 0, n)
         let _ = farr_free(newW)
 
