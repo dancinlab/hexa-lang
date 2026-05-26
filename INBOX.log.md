@@ -2,6 +2,18 @@
 
 Append-only history sister of `INBOX.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
+## 2026-05-27T04:50Z — Lie-group dimension verify primitives 부재 — `dim_su_n` · `dim_so_n` · `dim_e8` (F25 PHYSICS NOVEL boundary blocker)
+
+> TECS-L F25 (PHYSICS NOVEL, PR #1440) honest negative 후속. PHYSICS 영역의 NOVEL 시도에서 약수함수 (σ/τ/φ) 측 closed-form integer arithmetic 는 🔵 verify 되지만, 물리 statement 측의 Lie-group dimension (SU(N), SO(N), E_8 등) 이 `hexa verify --expr` catalogue 부재 → 모든 pairing 이 ⚪/🟡 cite 로 collapse. n=496=dim(SO(32))=dim(E8×E8) (Green-Schwarz 1984) · n=14=τ(8128)=dim(G2) · n=24=σ(6)·φ(6)=dim(SU(5)) 등 paper-grade pairing 후보가 atlas fold 불가.
+
+- [ ] **`dim_su_n(N)` verify-fn** = N²−1 (closed-form integer). cap small N (1..10) → verify dim(SU(5))=24, dim(SU(3))=8 등. `verify_cli.hexa::_recompute` arm 추가 (single-arg).
+- [ ] **`dim_so_n(N)` verify-fn** = N(N−1)/2 (closed-form integer). cap small N (3..32) → verify dim(SO(8))=28=P_2, dim(SO(32))=496=P_3 등. `verify_cli.hexa::_recompute` arm 추가.
+- [ ] **`dim_e8()` constant verify-fn** = 248 (exceptional Lie group). 또는 `dim_exceptional_lie(family, rank)` family-aware (e.g. E6/E7/E8 = 78/133/248, G2=14, F4=52). atlas L-laws pad 확장.
+- 영향: F25-followup-A 의 promotion ⚪/🟡→🔵 가능. paper-eligible pairing (n=496 SO(32) Green-Schwarz · τ(8128)=14=dim(G2)) 일부 atlas-fold 가능해짐.
+- 우선순위: 🟠 deferred frontier — PHYSICS 대축 verify-infra. Clay 와 동급 boundary, single-arg single-return → 비교적 simpler 추가.
+- 관련: PR #1402 (runtime.o blocker) 가 풀려야 binary activation 가능. source-only land 는 즉시 가능.
+- proposed-by: F25 PHYSICS NOVEL honest negative (PR #1440) + 사용자 명시 INBOX add 지시 (2026-05-27)
+
 ## 2026-05-27T02:15Z — `hexa cc --regen` 의 `runtime.o` 누락 → verify_cli binary 갱신 차단 (#1281 family · INBOX 3 activation blocker)
 
 > F21 (PR #1395 머지) 의 verify_cli arms 모두 source land 확인: `verify_cli.hexa:433` `_recompute "mertens" → mertens(n)` arm + `congruence_chain_engine.hexa:137` `pub fn mertens` 정의. `hexa parse tool/verify_cli.hexa` 도 clean. 그러나 `hexa cc --regen` link 단계에서 `clang: error: no such file or directory: '/Users/ghost/.hx/bin/self/runtime.o'` → verify_cli 재컴파일 실패 → deployed binary 갱신 차단 → `hexa verify --expr mertens 6 -1 --no-absorb` 여전 🟠 INSUFFICIENT.
