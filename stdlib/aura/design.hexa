@@ -1,0 +1,142 @@
+#!hexa strict
+// stdlib/aura/design.hexa — `aura + design` producer (hexa-native).
+//
+// LAYER: per-verb cell producer. Emits an aura_design_record-shaped
+// sentinel carrying the KiCad PCB (+embedded ngspice AFE) + FreeCAD
+// enclosure (KiCad StepUp link) + nRF Connect SDK BLE 5.x firmware
+// skeleton — TEMPLATE files, NOT a vendor-validated AFE design.
+//
+// CONTEXT: AURA = post-aural / temporal-bone clip wearable BCI domain.
+// aura.demi [cell.design] wires substrate=hexa → this script.
+//
+// Citations (domains/aura.md §2):
+//   * KiCad (with embedded ngspice) — open-source PCB EDA + AFE sim
+//   * FreeCAD + KiCad StepUp — parametric mechanical CAD + PCB↔MCAD link
+//   * nRF Connect SDK (Nordic · BSD-3 + Apache-2.0 + Zephyr) — BLE 5.x
+//   * sigrok / PulseView — open-source logic-analyzer + dev-bringup
+//
+// Honesty (g3 · @D d1 · aura.demi line 71-73):
+//   * measurement_gate = GATE_OPEN permanently
+//   * absorbed = false PERMANENTLY — design scaffolding is template
+//     EDA/MCAD/firmware stubs, NEVER a vendor-validated AFE silicon
+//     selection nor a tape-out PCB. nRF Connect SDK firmware
+//     partitioning lives downstream in firmware cell (D73).
+//
+// Sentinels:
+//   __HEXA_AURA_DESIGN__ PASS                  — dispatcher loaded
+//   AURA_DESIGN_OK gate=GATE_OPEN absorbed=false  — cellrun parse line
+//
+// Pattern: mirrors stdlib/aura/specify.hexa + structure.hexa.
+
+let VERSION       = "0.1.0"
+let MODULE        = "aura-design"
+let GEOMETRY_ID   = "aura_design_v1"
+let RECORD_KIND   = "aura_design_record"
+
+// ─── PCB EDA block (KiCad + ngspice) ──────────────────────────────────
+
+fn _pcb_eda_block() -> [str] {
+    return [
+        "EDA suite: KiCad 8.x (BSD-3 · cross-platform · GPL libs)",
+        "schematic: AFE front-end + ADC bridge + MCU + BLE radio + PMIC",
+        "ngspice: embedded SPICE simulator for AFE noise + frequency response",
+        "rules: medical-grade clearance (creepage/clearance per IEC 60601-1 Annex L)",
+        "stackup: 4-layer FR-4 baseline (Sig/GND/PWR/Sig) · 1.6 mm OL",
+        "footprint libs: KiCad standard + Snapeda for AFE/ADC/MCU/BLE",
+    ]
+}
+
+// ─── mechanical CAD block (FreeCAD + KiCad StepUp) ────────────────────
+
+fn _mech_cad_block() -> [str] {
+    return [
+        "MCAD suite: FreeCAD 1.0+ (LGPL · parametric · cross-platform)",
+        "PCB ↔ MCAD link: KiCad StepUp workbench (FreeCAD addon)",
+        "enclosure topology: clamshell + clip (post-aural anchor)",
+        "draft for additive manufacturing (FDM/SLA) prototype path",
+        "ingress: IPX4 splash target — gasket placement annotated",
+        "mechanical revision tracking: FreeCAD spreadsheet + Git LFS",
+    ]
+}
+
+// ─── firmware skeleton block (nRF Connect SDK) ────────────────────────
+
+fn _firmware_block() -> [str] {
+    return [
+        "firmware SDK: nRF Connect SDK (Nordic · BSD-3 + Apache-2.0 + Zephyr RTOS)",
+        "target SoC option: nRF52840 | nRF5340 | nRF54L15",
+        "BLE host + LL: Zephyr Bluetooth controller / softdevice variant",
+        "custom GATT service: EEG streaming (UUID placeholder) + Battery + DIS",
+        "power profile: tickless idle + connection-interval tuning for runtime",
+        "build: west + cmake (Zephyr) · CI-able · sign-able image (MCUboot)",
+    ]
+}
+
+// ─── dev bringup block (sigrok + open tooling) ────────────────────────
+
+fn _bringup_block() -> [str] {
+    return [
+        "logic analyzer: sigrok + PulseView (GPL3 · USB la-2016 / fx2lafw)",
+        "scope: any USB scope with sigrok driver (cross-platform)",
+        "BLE sniff: open-source nRF52 sniffer firmware + Wireshark",
+        "JTAG/SWD: JLinkExe (proprietary but free for nRF) OR pyOCD (open)",
+        "lint: shellcheck on bring-up scripts · clang-tidy on driver shims",
+    ]
+}
+
+fn _scope_caveats() -> [str] {
+    return [
+        "KiCad PCB skeleton + FreeCAD enclosure stub - TEMPLATE files, not vendor-validated AFE design.",
+        "nRF Connect SDK firmware partitioning = downstream firmware cell territory (D73).",
+        "measurement_gate = GATE_OPEN permanently - design scaffolding is not an absorption claim (g3).",
+        "absorbed=false PERMANENTLY (g3) - TEMPLATE EDA/MCAD/firmware stubs, NEVER a tape-out / vendor-validated silicon selection.",
+    ]
+}
+
+// ─── emit helpers ─────────────────────────────────────────────────────
+
+fn _emit_block(label: str, lines: [str]) {
+    print("# [" + label + "]")
+    let n = lines.len()
+    let mut i = 0
+    while i < n {
+        print("#   - " + lines[i])
+        i = i + 1
+    }
+    print("#")
+}
+
+fn _emit_header() {
+    print("# AURA DESIGN — open-source PCB+MCAD+firmware skeleton")
+    print("# device_target = post-aural / temporal-bone clip BCI")
+    print("# version = " + VERSION)
+    print("#")
+    _emit_block("pcb_eda",      _pcb_eda_block())
+    _emit_block("mech_cad",     _mech_cad_block())
+    _emit_block("firmware_sdk", _firmware_block())
+    _emit_block("dev_bringup",  _bringup_block())
+}
+
+fn _emit_caveats() {
+    let c = _scope_caveats()
+    let n = c.len()
+    let mut i = 0
+    while i < n {
+        print("# scope_caveat: " + c[i])
+        i = i + 1
+    }
+}
+
+// ─── main entry ───────────────────────────────────────────────────────
+
+fn main() {
+    _emit_header()
+    _emit_caveats()
+
+    print("AURA_DESIGN_OK record_kind=" + RECORD_KIND
+        + " geometry_id=" + GEOMETRY_ID
+        + " gate=GATE_OPEN absorbed=false"
+        + " version=" + VERSION)
+
+    print("__HEXA_AURA_DESIGN__ PASS")
+}
