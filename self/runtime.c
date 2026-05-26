@@ -2775,15 +2775,6 @@ HexaVal hexa_from_cstring(HexaVal ptr) {
 }
 
 
-/* HEXA_BACKEND flip · 열셋째 increment — production-wire FOURTH PROBE.
- * Marked `__attribute__((weak))` so a hexa-emit `_hexa_ptr_addr` strong
- * symbol (emitted by test/native_build/emit_hexa_ptr_addr_native_o.hexa,
- * gated by HEXA_NATIVE_RT_PTR_ADDR=1) overrides this C body at link time.
- * Adapter body is the smallest in the series — 8 B (movz x0,#0; ret).
- * No semantic divergence: HX_INT_U is bit-reinterpret regardless of the
- * input tag, so the override matches the C body for ALL inputs. See
- * `hexa_ptr_offset` (above) and `hexa_exit` (below) for prior overrides
- * in the same recipe. */
 
 // ── C2 Step 3: Dynamic FFI host dispatch (interpreter path) ──
 //
@@ -2969,39 +2960,7 @@ HexaVal hexa_host_ffi_call_6(
 
 // ── G5: Pointer arithmetic builtins ─────────────────────
 
-/* HEXA_BACKEND flip · chunk-B phase-H 아홉째 increment (2026-05-26):
- * Marked `__attribute__((weak))` so a hexa-emit `_hexa_ptr_alloc` strong
- * symbol (emitted by test/native_build/emit_hexa_ptr_alloc_native_o.hexa,
- * appended to the cmd_build native-path clang link when
- * HEXA_NATIVE_RT_PTR_ALLOC=1) cleanly overrides this C definition under
- * Mach-O ld64. Default (env unset) = strong-only, no behavior change.
- * The hexa-emit override carries a HexaVal-ABI adapter that bridges the
- * struct-by-value (x0=tag, x1=size) caller convention to the raw-ABI
- * rt_alloc primitive (x0=size, svc #0x80 with SYS_mmap=197), then wraps
- * the returned ptr back into a HexaVal (x0=TAG_INT, x1=ptr).
- * RESIDUAL — allocator-pair mismatch: the override uses mmap, but
- * `hexa_ptr_free` (below) still calls libc `free()`. Safe only for paths
- * that allocate without freeing (or co-override `_hexa_ptr_free` with
- * munmap). See RUNTIME.md phase-H 아홉째 increment + PR #1321/#1324
- * for the precedent on `_hexa_exit`. */
 
-/* HEXA_BACKEND flip · chunk-B phase-H 열한째 increment (2026-05-26):
- * Marked `__attribute__((weak))` so a hexa-emit `_hexa_ptr_free` strong
- * symbol (emitted by test/native_build/emit_hexa_ptr_free_native_o.hexa,
- * appended to the cmd_build native-path clang link when
- * HEXA_NATIVE_RT_PTR_FREE=1) cleanly overrides this C definition under
- * Mach-O ld64. Default (env unset) = strong-only, no behavior change.
- * The hexa-emit override carries a HexaVal-ABI adapter that recovers a
- * 16-B size header (laid down by the paired `_hexa_ptr_alloc` override,
- * 아홉째 increment + 2026-05-26 header refactor) and munmaps with the
- * stored size — closing the alloc/free pair-safety residual (B) of #1326.
- * PAIRING — the override pair is default-flip safe ONLY when BOTH gates
- * are on (HEXA_NATIVE_RT_PTR_ALLOC=1 + HEXA_NATIVE_RT_PTR_FREE=1):
- *   - both off  : C-side calloc + free (libc heap, no change)
- *   - both on   : mmap-with-header + munmap (allocator-symmetric, safe)
- *   - alloc-only: mmap → libc free() (UB — opt-in unsafe, pre-fix state)
- *   - free-only : calloc → munmap(addr-16, N+16) (UB — incorrect pairing)
- * See RUNTIME.md phase-H 열한째 increment + PR #1321/#1324/#1326. */
 
 
 /* @hot_kernel f32/f64/i32 ptr read/write — extracted to tensor_kernels.c
@@ -3009,19 +2968,6 @@ HexaVal hexa_host_ffi_call_6(
  * as general-purpose. */
 
 
-/* HEXA_BACKEND flip · chunk-B phase-H 열번째 increment (2026-05-26):
- * Marked `__attribute__((weak))` so a hexa-emit `_hexa_ptr_offset` strong
- * symbol (emitted by test/native_build/emit_hexa_ptr_offset_native_o.hexa,
- * appended to the cmd_build native-path clang link when
- * HEXA_NATIVE_RT_PTR_OFFSET=1) cleanly overrides this C definition under
- * Mach-O ld64. Default (env unset) = strong-only, no behavior change.
- * The hexa-emit override is a pure-arithmetic adapter — no syscall, no
- * allocator-pair coupling. Adapter ABI:
- *   in : x0=ptr.tag, x1=ptr.val, x2=off.tag, x3=off.val
- *   out: x0=TAG_INT=0, x1=ptr.val + off.val
- * RESIDUAL — drops tag-checks; callers must pass TAG_INT for both args
- * (which all transpiled-codegen callsites do — ptr arithmetic always
- * uses int-tagged ptrs). See RUNTIME.md phase-H 열번째 increment. */
 
 
 // ═══════════════════════════════════════════════════════════
@@ -5199,15 +5145,6 @@ HexaVal hexa_str_bytes(HexaVal s) {
 #include <unistd.h>
 #include <time.h>
 
-// HEXA_BACKEND flip · chunk-B phase-H 일곱째 increment (2026-05-26):
-// Marked `__attribute__((weak))` so a hexa-emit `_hexa_exit` strong symbol
-// (emitted by test/native_build/emit_hexa_exit_native_o.hexa, appended to
-// the cmd_build native-path clang link when HEXA_NATIVE_RT_EXIT=1) cleanly
-// overrides this C definition under Mach-O ld64. Default (env unset) =
-// strong-only, no behavior change. The hexa-emit override carries a tiny
-// ABI adapter (mov x0,x1) that converts the codegen-side HexaVal pair
-// (x0=tag, x1=int_value) into the raw-ABI exit-code rt_exit primitive
-// expects (x0=exit_code). See RUNTIME.md phase-H 일곱째 increment.
 
 HexaVal hexa_sleep(HexaVal sec) {
     double s = HX_IS_FLOAT(sec) ? HX_FLOAT(sec)
