@@ -3781,13 +3781,22 @@ fn _build_case_iadd_i64_array() -> MModule {
     let b   = _local_array_i64(1, "b")
     let c   = _local_array_i64(2, "c")
     let n_p = _local_i64(3, "n")          // KERNEL param i64 (unused here)
-    let idx = _local(4, "idx")            // gpu_thread_id_x → U32
-    let va  = _local(5, "va")             // a[idx] → classified U64 via Pass-1 IndexGet rule
-    let vb  = _local(6, "vb")             // b[idx] → classified U64
-    let sum = _local(7, "sum")            // va + vb → BINOP inherits U64
+    let idx32 = _local(4, "idx32")        // gpu_thread_id_x → U32
+    // Widen the thread-id to i64 — mirrors the canonical source kernel
+    // pattern `c[to_i64(i)] = a[to_i64(i)] + b[to_i64(i)]` (per the
+    // PR #1284 sweep tape's iadd source). Without the widen the byte-
+    // offset compute would emit mul.lo.s64 with a u32 operand, which
+    // ptxas rejects (mixed-width arith).
+    let idx   = _local(5, "idx")          // to_i64(idx32) → U64
+    let va    = _local(6, "va")           // a[idx] → classified U64 via Pass-1 IndexGet rule
+    let vb    = _local(7, "vb")           // b[idx] → classified U64
+    let sum   = _local(8, "sum")          // va + vb → BINOP inherits U64
 
+    let mut tii = []
+    tii.push(_op_local(idx32.id))
     let mut s0 = []
-    s0.push(_stmt_call(idx, "gpu_thread_id_x"))
+    s0.push(_stmt_call(idx32, "gpu_thread_id_x"))
+    s0.push(_stmt_call_with_args(idx, "to_i64", tii))
     s0.push(_stmt_index_get(va, a.id, idx.id))
     s0.push(_stmt_index_get(vb, b.id, idx.id))
     s0.push(_stmt_binop(sum, "add", _op_local(va.id), _op_local(vb.id)))
@@ -3801,7 +3810,7 @@ fn _build_case_iadd_i64_array() -> MModule {
     params.push(a); params.push(b); params.push(c); params.push(n_p)
     let mut locals = []
     locals.push(a); locals.push(b); locals.push(c); locals.push(n_p)
-    locals.push(idx); locals.push(va); locals.push(vb); locals.push(sum)
+    locals.push(idx32); locals.push(idx); locals.push(va); locals.push(vb); locals.push(sum)
 
     let mf = MFunc {
         name: "iadd",
@@ -3835,16 +3844,16 @@ fn _test_iadd_i64_array() -> bool {
     ok = _check(ok, ptx, ".param .u64 iadd_param_3",     "scalar i64 param n as .param .u64")
 
     // Loaded values land in the U64 bank (%rd<id>), NOT %fd<id>.
-    ok = _check(ok, ptx, ".reg .u64 %rd5",               "va (a[idx]) classified U64 (.reg .u64 %rd5)")
-    ok = _check(ok, ptx, ".reg .u64 %rd6",               "vb (b[idx]) classified U64 (.reg .u64 %rd6)")
-    ok = _check(ok, ptx, ".reg .u64 %rd7",               "sum = va+vb classified U64 (.reg .u64 %rd7)")
+    ok = _check(ok, ptx, ".reg .u64 %rd6",               "va (a[idx]) classified U64 (.reg .u64 %rd6)")
+    ok = _check(ok, ptx, ".reg .u64 %rd7",               "vb (b[idx]) classified U64 (.reg .u64 %rd7)")
+    ok = _check(ok, ptx, ".reg .u64 %rd8",               "sum = va+vb classified U64 (.reg .u64 %rd8)")
 
     // Load mnemonics — ld.global.u64, not ld.global.f64.
-    ok = _check(ok, ptx, "ld.global.u64 %rd5",           "a[idx] ld.global.u64 (PR-A integer load)")
-    ok = _check(ok, ptx, "ld.global.u64 %rd6",           "b[idx] ld.global.u64 (PR-A integer load)")
+    ok = _check(ok, ptx, "ld.global.u64 %rd6",           "a[idx] ld.global.u64 (PR-A integer load)")
+    ok = _check(ok, ptx, "ld.global.u64 %rd7",           "b[idx] ld.global.u64 (PR-A integer load)")
 
     // The arithmetic — add.s64, not add.f64.
-    ok = _check(ok, ptx, "add.s64 %rd7",                 "sum = a[idx] + b[idx] uses add.s64")
+    ok = _check(ok, ptx, "add.s64 %rd8",                 "sum = a[idx] + b[idx] uses add.s64")
 
     // Store mnemonic — st.global.u64, not st.global.f64.
     ok = _check(ok, ptx, "st.global.u64",                "c[idx] = sum uses st.global.u64")
