@@ -1,0 +1,148 @@
+#!hexa strict
+// stdlib/aura/n3_esp32c6_altsoC_port.hexa — `aura + N3`
+// G3 stage_1: ESP32-C6 (RISC-V + BLE 5.x) alt-SoC NimBLE firmware
+// port skeleton (FIRST CODE).
+//
+// CONTEXT: G3 brk path stage_1 (PR #1404 g3_ble_non_nordic_path.hexa):
+//   "ESP32-C6 (RISC-V + BLE 5.x) evaluation as AURA-100 alt SoC"
+//
+// ESP32-C6 (Espressif · RISC-V apps core + BLE 5.x + Wi-Fi 6) is the
+// closest production 2nd-source for AURA-100's Nordic nRF5340. This
+// skeleton declares the firmware port shape: ESP-IDF/Zephyr selection
+// + NimBLE controller + custom EEG GATT mirror + power profile.
+//
+// Honesty (g3 · @D d1 · @D d2):
+//   * absorbed=false PERMANENTLY — skeleton, not a flashed device.
+//
+// Sentinels:
+//   __HEXA_AURA_N3_ESP32C6_ALTSOC__ PASS
+//   AURA_N3_ESP32C6_ALTSOC_OK gate=GATE_OPEN absorbed=false
+
+let VERSION       = "0.1.0"
+let MODULE        = "aura-n3-esp32c6-altsoC-port"
+let GEOMETRY_ID   = "aura_n3_esp32c6_altsoC_port_v1"
+let RECORD_KIND   = "aura_n3_esp32c6_altsoC_port_record"
+
+fn _esp32c6_soc_block() -> [str] {
+    return [
+        "SoC: Espressif ESP32-C6 (RISC-V 32-bit · 160 MHz · BLE 5.x · Wi-Fi 6 · 802.15.4)",
+        "core: single RISC-V 'high-performance' + RISC-V 'low-power' (LP)",
+        "memory: 512 KB SRAM + 4 MB flash (typical module: ESP32-C6-WROOM-1)",
+        "BLE_radio: 2.4 GHz internal · trace antenna OR external pad",
+        "tx_power_max: +20 dBm (DSSS · regulatory headroom · subset usable on BLE)",
+        "supply: 3.0-3.6 V · sleep current ~7 µA (deep sleep)",
+    ]
+}
+
+fn _firmware_stack_block() -> [str] {
+    return [
+        "primary_option: ESP-IDF v5.x (Espressif native · Apache 2.0)",
+        "alternative_option: Zephyr 3.5+ with esp32c6 board support",
+        "BLE_stack: NimBLE (Apache 2.0 · ported to ESP-IDF) OR Zephyr Bluetooth",
+        "RTOS: FreeRTOS (ESP-IDF default · maintained by Espressif)",
+        "build_tool: idf.py (ESP-IDF) OR west (Zephyr)",
+        "signing: ESP-IDF secure boot v2 (RSA-3072 signing · matches MCUboot capability)",
+    ]
+}
+
+fn _gatt_mirror_block() -> [str] {
+    return [
+        "service_target: mirror Nordic nRF5340 AURA custom GATT EEG service",
+        "service_UUID: same vendor-specific UUID for cross-SoC compat",
+        "characteristics: streaming_data (notify) + control (write) + status (read)",
+        "framing: 16-ch × 24-bit × N samples per BLE notification (identical to D2 spec)",
+        "throughput_target: ≥ 8 kB/s sustained (matches nRF5340 baseline)",
+        "QoS: connection interval 7.5-30 ms · slave latency 0 · supervision timeout 4 s",
+    ]
+}
+
+fn _power_profile_block() -> [str] {
+    return [
+        "low_power_mode: dynamic frequency scaling + light sleep between samples",
+        "deep_sleep_current: ~7 µA (vs nRF5340 ~0.7 µA · trade-off for Wi-Fi 6 capability)",
+        "active_current: ~35 mA @ 160 MHz + BLE TX (vs nRF5340 ~3 mA · ~10x higher)",
+        "battery_runtime_impact: 200 mAh Li-Po → ~6 h continuous (vs ~12 h with nRF5340)",
+        "mitigation: lower clock + AFE-paced wake-only + WiFi disabled (BLE-only mode)",
+        "trade_off_accepted: 2nd-source value vs nRF5340 power profile loss",
+    ]
+}
+
+fn _v_v_block() -> [str] {
+    return [
+        "interop_test: side-by-side nRF5340 + ESP32-C6 production firmware build",
+        "compliance: same GATT service UUID + framing + sample rate",
+        "BLE_qualification: ESP32-C6 has its own component QDID from Espressif (reusable)",
+        "FDA_510k_implications: 2nd SoC variant = separate model number OR design variant",
+        "FCC_15.247: ESP32-C6 module typically pre-certified (modular cert · reusable)",
+        "ETSI_EN_300_328: ESP32-C6 module typically pre-certified for EU",
+    ]
+}
+
+fn _repo_scaffold_block() -> [str] {
+    return [
+        "future_repo: github.com/<org>/aura-esp32c6-port (separate from hexa-lang)",
+        "layout: esp32c6/{main, components, partition_table, sdkconfig.defaults}/",
+        "deps: ESP-IDF v5.x · NimBLE (vendored) · ADS1299 driver port",
+        "CI: GitHub Actions ESP-IDF docker image + idf.py build",
+        "tests: unit (host) + integration (QEMU) + on-target smoke (HW-in-loop)",
+        "license: Apache 2.0 (matches ESP-IDF · NimBLE)",
+    ]
+}
+
+fn _scope_caveats() -> [str] {
+    return [
+        "N3 ESP32-C6 alt-SoC port is a SKELETON spec, NOT a flashed device.",
+        "Power profile penalty (~10x active current) is real - mitigation needed for 12h target.",
+        "ESP32-C6 BLE controller QDID reusable but host stack may need separate qual.",
+        "Separate FDA 510(k) model variant OR design-history-file amendment required.",
+        "absorbed=false PERMANENTLY (g3) - skeleton spec, NEVER a built device.",
+    ]
+}
+
+fn _emit_block(label: str, lines: [str]) {
+    print("# [" + label + "]")
+    let n = lines.len()
+    let mut i = 0
+    while i < n {
+        print("#   - " + lines[i])
+        i = i + 1
+    }
+    print("#")
+}
+
+fn _emit_header() {
+    print("# AURA N3 - G3 stage_1 ESP32-C6 alt-SoC NimBLE port FIRST CODE")
+    print("# device_target = post-aural / temporal-bone clip BCI · 2nd-source SoC")
+    print("# version = " + VERSION)
+    print("# ringfence: skeleton spec - NOT a flashed device")
+    print("#")
+    _emit_block("esp32c6_soc",       _esp32c6_soc_block())
+    _emit_block("firmware_stack",    _firmware_stack_block())
+    _emit_block("gatt_mirror",       _gatt_mirror_block())
+    _emit_block("power_profile",     _power_profile_block())
+    _emit_block("v_v",               _v_v_block())
+    _emit_block("repo_scaffold",     _repo_scaffold_block())
+}
+
+fn _emit_caveats() {
+    let c = _scope_caveats()
+    let n = c.len()
+    let mut i = 0
+    while i < n {
+        print("# scope_caveat: " + c[i])
+        i = i + 1
+    }
+}
+
+fn main() {
+    _emit_header()
+    _emit_caveats()
+
+    print("AURA_N3_ESP32C6_ALTSOC_OK record_kind=" + RECORD_KIND
+        + " geometry_id=" + GEOMETRY_ID
+        + " gate=GATE_OPEN absorbed=false"
+        + " version=" + VERSION
+        + " g3_stage=1 power_penalty=10x_active")
+
+    print("__HEXA_AURA_N3_ESP32C6_ALTSOC__ PASS")
+}
