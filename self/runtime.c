@@ -5357,14 +5357,14 @@ HexaVal hexa_math_exp(HexaVal x)  { return hexa_float(hxlcl_exp(HX_FLOAT(x))); }
 // stays unchanged.
 #ifndef HEXA_HAS_HEXA_RT_STDLIB
 __attribute__((weak)) HexaVal hexa_math_floor(HexaVal x){ return hexa_float(floor(HX_FLOAT(x))); }
-HexaVal hexa_math_ceil(HexaVal x) { return hexa_float(ceil(HX_FLOAT(x))); }
+__attribute__((weak)) HexaVal hexa_math_ceil(HexaVal x) { return hexa_float(ceil(HX_FLOAT(x))); }
 HexaVal hexa_math_round(HexaVal x){ return hexa_float(round(HX_FLOAT(x))); }
 #else
 extern HexaVal rt_floor(HexaVal v);
 extern HexaVal rt_ceil(HexaVal v);
 extern HexaVal rt_round(HexaVal v);
 __attribute__((weak)) HexaVal hexa_math_floor(HexaVal x){ return hexa_float((double)HX_INT(rt_floor(hexa_float(HX_FLOAT(x))))); }
-HexaVal hexa_math_ceil(HexaVal x) { return hexa_float((double)HX_INT(rt_ceil(hexa_float(HX_FLOAT(x))))); }
+__attribute__((weak)) HexaVal hexa_math_ceil(HexaVal x) { return hexa_float((double)HX_INT(rt_ceil(hexa_float(HX_FLOAT(x))))); }
 HexaVal hexa_math_round(HexaVal x){ return hexa_float((double)HX_INT(rt_round(hexa_float(HX_FLOAT(x))))); }
 #endif
 #ifndef HEXA_HAS_HEXA_RT_STDLIB
