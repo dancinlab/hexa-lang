@@ -7828,6 +7828,38 @@ static inline void _hx_cmp_guard(HexaVal a, HexaVal b, const char* op) {
     }
 }
 
+// RUNTIME.md Step 4 .c-none — comparison family (cmp_lt/gt/le/ge). The two
+// bridges below expose the IRREDUCIBLE leaf ops that need tag introspection
+// (enum-pair ordinal · hxlcl_strcmp · __hx_to_double); the hexa rt_cmp_*
+// (stdlib/runtime/numeric.hexa) own the dispatch + per-operator + the NaN-correct
+// native float compare. __raw_cmp3 returns a code: -3 incomparable (rt_cmp throws)
+// · -2 float/valstruct (rt_cmp does native float cmp via __raw_to_double) · -1 a<b
+// · 0 a==b · 1 a>b — for enum / string / int (all NaN-free integer ordering).
+// (A single three-way cmp can't carry float NaN-unordered, so float stays per-op
+// in hexa.) Bridges are always-defined static inline (unused-stripped standalone).
+static inline HexaVal __raw_cmp3(HexaVal a, HexaVal b) {
+    int64_t ia, ib;
+    if (_hexa_enum_pair_idx(a, b, &ia, &ib)) return hexa_int(ia < ib ? -1 : (ia > ib ? 1 : 0));
+    if (HX_IS_STR(a) && HX_IS_STR(b)) {
+        int _c = hxlcl_strcmp(HX_STR(a), HX_STR(b));
+        return hexa_int(_c < 0 ? -1 : (_c > 0 ? 1 : 0));
+    }
+    if (HX_IS_FLOAT(a) || HX_IS_FLOAT(b) || HX_IS_VALSTRUCT(a) || HX_IS_VALSTRUCT(b)) return hexa_int(-2);
+    if (!_hx_int_slot_ordered(a) || !_hx_int_slot_ordered(b)) return hexa_int(-3);
+    int64_t _x = HX_INT(a), _y = HX_INT(b);
+    return hexa_int(_x < _y ? -1 : (_x > _y ? 1 : 0));
+}
+static inline HexaVal __raw_to_double(HexaVal v) { return hexa_float(__hx_to_double(v)); }
+#ifdef HEXA_HAS_HEXA_RT_STDLIB
+extern HexaVal rt_cmp_lt(HexaVal a, HexaVal b);
+extern HexaVal rt_cmp_gt(HexaVal a, HexaVal b);
+extern HexaVal rt_cmp_le(HexaVal a, HexaVal b);
+extern HexaVal rt_cmp_ge(HexaVal a, HexaVal b);
+HexaVal hexa_cmp_lt(HexaVal a, HexaVal b) { return rt_cmp_lt(a, b); }
+HexaVal hexa_cmp_gt(HexaVal a, HexaVal b) { return rt_cmp_gt(a, b); }
+HexaVal hexa_cmp_le(HexaVal a, HexaVal b) { return rt_cmp_le(a, b); }
+HexaVal hexa_cmp_ge(HexaVal a, HexaVal b) { return rt_cmp_ge(a, b); }
+#else
 HexaVal hexa_cmp_lt(HexaVal a, HexaVal b) {
     int64_t ia, ib;
     if (_hexa_enum_pair_idx(a, b, &ia, &ib)) return hexa_bool(ia < ib);
@@ -7868,6 +7900,7 @@ HexaVal hexa_cmp_ge(HexaVal a, HexaVal b) {
     _hx_cmp_guard(a, b, ">=");
     return hexa_bool(HX_INT(a) >= HX_INT(b));
 }
+#endif
 
 // Step-3 cycle 58 port — float fast-path bridge. Mixed-type arrays
 // stay on the polymorphic hexa_eq path. Int return preserved (codegen
