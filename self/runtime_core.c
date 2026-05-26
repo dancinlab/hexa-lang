@@ -7828,6 +7828,51 @@ static inline void _hx_cmp_guard(HexaVal a, HexaVal b, const char* op) {
     }
 }
 
+// RUNTIME.md Step 4 .c-none — comparison family (cmp_lt/gt/le/ge). Two bridges
+// expose the irreducible leaf ops (enum-pair ordinal · hxlcl_strcmp · float-coerce
+// compare needing tag introspection); the hexa rt_cmp_* (numeric.hexa) own only
+// the per-operator selection + throw.
+//
+// __raw_cmp3 returns a NON-NEGATIVE ordering code: 0 a<b · 1 a==b · 2 a>b · 3
+// unordered (float NaN → all comparisons false) · 4 incomparable (rt_cmp throws).
+// Float/valstruct is folded in HERE (native double compare, NaN-aware via the `3`
+// sentinel) — no per-op hexa float compare needed.
+//
+// CRITICAL — codes MUST be non-negative: a negative literal in the hexa rt_cmp
+// (`-1`) lowers to `hexa_sub(hexa_int(0), hexa_int(1))` (runtime subtract) → rt_sub
+// → `type_of==` (hexa_eq) → rt_eq → string-eq (`a<=b && a>=b`) → hexa_cmp_le →
+// rt_cmp_le = INFINITE RECURSION (stack overflow observed). The arith ports work
+// precisely because they only use non-negative kind codes (0/1/2). Likewise rt_cmp
+// must test the code with __raw_code_is (C int-eq) not hexa `==` (→ rt_eq → cmp).
+static inline HexaVal __raw_cmp3(HexaVal a, HexaVal b) {
+    int64_t ia, ib;
+    if (_hexa_enum_pair_idx(a, b, &ia, &ib)) return hexa_int(ia < ib ? 0 : (ia > ib ? 2 : 1));
+    if (HX_IS_STR(a) && HX_IS_STR(b)) {
+        int _c = hxlcl_strcmp(HX_STR(a), HX_STR(b));
+        return hexa_int(_c < 0 ? 0 : (_c > 0 ? 2 : 1));
+    }
+    if (HX_IS_FLOAT(a) || HX_IS_FLOAT(b) || HX_IS_VALSTRUCT(a) || HX_IS_VALSTRUCT(b)) {
+        double _x = __hx_to_double(a), _y = __hx_to_double(b);
+        if (_x < _y) return hexa_int(0);
+        if (_x > _y) return hexa_int(2);
+        if (_x == _y) return hexa_int(1);
+        return hexa_int(3); // NaN-unordered → every comparison false
+    }
+    if (!_hx_int_slot_ordered(a) || !_hx_int_slot_ordered(b)) return hexa_int(4);
+    int64_t _xi = HX_INT(a), _yi = HX_INT(b);
+    return hexa_int(_xi < _yi ? 0 : (_xi > _yi ? 2 : 1));
+}
+static inline HexaVal __raw_code_is(HexaVal v, HexaVal k) { return hexa_bool(HX_INT(v) == HX_INT(k)); }
+#ifdef HEXA_HAS_HEXA_RT_STDLIB
+extern HexaVal rt_cmp_lt(HexaVal a, HexaVal b);
+extern HexaVal rt_cmp_gt(HexaVal a, HexaVal b);
+extern HexaVal rt_cmp_le(HexaVal a, HexaVal b);
+extern HexaVal rt_cmp_ge(HexaVal a, HexaVal b);
+HexaVal hexa_cmp_lt(HexaVal a, HexaVal b) { return rt_cmp_lt(a, b); }
+HexaVal hexa_cmp_gt(HexaVal a, HexaVal b) { return rt_cmp_gt(a, b); }
+HexaVal hexa_cmp_le(HexaVal a, HexaVal b) { return rt_cmp_le(a, b); }
+HexaVal hexa_cmp_ge(HexaVal a, HexaVal b) { return rt_cmp_ge(a, b); }
+#else
 HexaVal hexa_cmp_lt(HexaVal a, HexaVal b) {
     int64_t ia, ib;
     if (_hexa_enum_pair_idx(a, b, &ia, &ib)) return hexa_bool(ia < ib);
@@ -7868,6 +7913,7 @@ HexaVal hexa_cmp_ge(HexaVal a, HexaVal b) {
     _hx_cmp_guard(a, b, ">=");
     return hexa_bool(HX_INT(a) >= HX_INT(b));
 }
+#endif
 
 // Step-3 cycle 58 port — float fast-path bridge. Mixed-type arrays
 // stay on the polymorphic hexa_eq path. Int return preserved (codegen

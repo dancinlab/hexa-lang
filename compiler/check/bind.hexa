@@ -1040,6 +1040,9 @@ fn _bind_builtin_names() -> [string] {
         // + float-add coerce (rt_div/rt_mod/rt_add_slow escapes). hexa_str_concat
         // = the real C string-concat fn rt_add_slow's string branch calls direct.
         "__raw_idiv", "__raw_imod", "__raw_fmod", "__raw_add_f", "hexa_str_concat",
+        // Step 4 .c-none comparison: 3-way ordering code + C int-eq code test
+        // (rt_cmp_lt/gt/le/ge escapes — self/runtime_core.c).
+        "__raw_cmp3", "__raw_code_is",
         "abs", "aes256_ctr_xor", "append", "args", "argv", "bcrypt_pbkdf", "byte_len", "bytes_to_f32_le",
         "bytes", "bytes_to_f64_le", "ceil", "chacha20_poly1305_decrypt", "chacha20_poly1305_encrypt", "chacha20_xor", "chars", "clock_ms", "copy_file",
         "cos", "crc32", "dict_keys", "ed25519_keypair", "ed25519_sign", "ed25519_verify", "env", "eprint",

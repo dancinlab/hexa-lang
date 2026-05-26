@@ -1640,3 +1640,33 @@ pub fn rt_add_slow(a: HexaVal, b: HexaVal) -> HexaVal {
     return hexa_str_concat(to_string(a), to_string(b))
 }
 
+// rt_cmp_* — hexa-source port of runtime_core.c hexa_cmp_lt/gt/le/ge (Step 4
+// .c-none). __raw_cmp3 (bridge) returns the integer-ordering code for the
+// enum/string/int leaf cases (-3 incomparable · -2 float/valstruct · -1/0/1);
+// __raw_cmp3 (bridge) returns a NON-NEGATIVE ordering code (0 a<b · 1 a==b · 2 a>b ·
+// 3 NaN-unordered · 4 incomparable); float/valstruct folded into the bridge. Codes
+// MUST be non-negative: a negative literal lowers to hexa_sub(0,N) → rt_sub →
+// type_of-`==`(hexa_eq) → rt_eq → string-eq cmp → hexa_cmp_le → rt_cmp_le = INFINITE
+// RECURSION. The code is tested with __raw_code_is (C int-eq) — NEVER hexa `==`/`<`
+// (→ rt_eq → cmp). `||` is logical. Throw message uses type names (vs C tags).
+pub fn rt_cmp_lt(a: HexaVal, b: HexaVal) -> bool {
+    let c = __raw_cmp3(a, b)
+    if __raw_code_is(c, 4) { throw "cannot compare " + type_of(a) + " with " + type_of(b) + " (operator <)" }
+    return __raw_code_is(c, 0)
+}
+pub fn rt_cmp_gt(a: HexaVal, b: HexaVal) -> bool {
+    let c = __raw_cmp3(a, b)
+    if __raw_code_is(c, 4) { throw "cannot compare " + type_of(a) + " with " + type_of(b) + " (operator >)" }
+    return __raw_code_is(c, 2)
+}
+pub fn rt_cmp_le(a: HexaVal, b: HexaVal) -> bool {
+    let c = __raw_cmp3(a, b)
+    if __raw_code_is(c, 4) { throw "cannot compare " + type_of(a) + " with " + type_of(b) + " (operator <=)" }
+    return __raw_code_is(c, 0) || __raw_code_is(c, 1)
+}
+pub fn rt_cmp_ge(a: HexaVal, b: HexaVal) -> bool {
+    let c = __raw_cmp3(a, b)
+    if __raw_code_is(c, 4) { throw "cannot compare " + type_of(a) + " with " + type_of(b) + " (operator >=)" }
+    return __raw_code_is(c, 2) || __raw_code_is(c, 1)
+}
+
