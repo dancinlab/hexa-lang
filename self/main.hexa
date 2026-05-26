@@ -2693,16 +2693,20 @@ fn cmd_build(src, out, c_only, target, shared) {
         // the C symbol so ld64 picks the hexa-emit strong symbol.
         let __nrt_envs   = ["HEXA_NATIVE_RT_EXIT",
                             "HEXA_NATIVE_RT_PTR_ALLOC",
-                            "HEXA_NATIVE_RT_PTR_OFFSET"]
+                            "HEXA_NATIVE_RT_PTR_OFFSET",
+                            "HEXA_NATIVE_RT_PTR_ADDR"]
         let __nrt_drvs   = [__nself + "/../test/native_build/emit_hexa_exit_native_o.hexa",
                             __nself + "/../test/native_build/emit_hexa_ptr_alloc_native_o.hexa",
-                            __nself + "/../test/native_build/emit_hexa_ptr_offset_native_o.hexa"]
+                            __nself + "/../test/native_build/emit_hexa_ptr_offset_native_o.hexa",
+                            __nself + "/../test/native_build/emit_hexa_ptr_addr_native_o.hexa"]
         let __nrt_outs   = ["/tmp/hexa_exit_native.o",
                             "/tmp/hexa_ptr_alloc_native.o",
-                            "/tmp/hexa_ptr_offset_native.o"]
+                            "/tmp/hexa_ptr_offset_native.o",
+                            "/tmp/hexa_ptr_addr_native.o"]
         let __nrt_syms   = ["hexa_exit",
                             "hexa_ptr_alloc",
-                            "hexa_ptr_offset"]
+                            "hexa_ptr_offset",
+                            "hexa_ptr_addr"]
         let __nrt_all_on = (env("HEXA_NATIVE_RT_ALL") == "1")
         let mut __nrt_native_o = ""
         let mut __nrt_i = 0

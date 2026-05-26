@@ -1626,6 +1626,82 @@ backward-compat 으로 무시한다.
 - (E') 단일 multi-sym `.o` 합치기 (E 격자) 의 우선순위가 높아짐 — alloc +
   free 는 항상 짝이라 한 .o 에 묶는 게 자연.
 
+
+
+### 열셋째 increment (2026-05-27 · 🛸 4th primitive wire post-#1331 — hexa-emit `_hexa_ptr_addr` override, **8-B 2-instr adapter** — 시리즈 최소, no semantic divergence)
+
+#1331 의 테이블-구동 gate consolidation 이후 첫 새 wire. 테이블에 행
+한 줄 (4 개 parallel-array push) 만 추가하는 **ROI 의 실증** —
+이전 wire 당 ~30 줄 → 이번 wire 4 줄 (88% 감소).
+
+- 대상: `hexa_ptr_addr(HexaVal v) -> HexaVal int` (self/runtime.c:2783)
+- C body: `return hexa_int((int64_t)HX_INT_U(v));` — tag-무관 bit
+  reinterpret.
+- adapter: `movz x0, #0 ; ret` — **2 instr / 8 B** — 시리즈 최소
+  (#1328 ptr_offset 의 12 B 보다 작음, #1321 exit 의 20 B 의
+  40%, #1326 ptr_alloc 의 60 B 의 13%).
+- HexaVal-ABI: x1 이 input v.val 을 그대로 carry — adapter 는 x0
+  를 TAG_INT=0 으로 set 하기만 하면 됨. arith 도, syscall 도, stack
+  frame 도 없다 (leaf).
+
+**semantic residual = ZERO** (이전 wire 들과 비교해 가장 강한 closure):
+- HX_INT_U 는 `((uint64_t)(v).i)` — 입력 tag 와 무관하게 union bits 를
+  raw 로 읽음.
+- override 의 x1 = input v.val (== v.union bits) 그대로.
+- override 의 x0 = 0 (TAG_INT) — C body 가 `hexa_int(...)` 로 새로
+  생성하는 HexaVal 의 tag 와 정확히 일치.
+- 모든 input tag (TAG_INT / TAG_FLOAT / TAG_STR / ...) 에 대해 override
+  와 C body 가 **byte-equal output**. #1328 ptr_offset 의 mistyped-call
+  divergence 같은 documented residual 이 본 wire 에는 없다.
+
+**production wire**:
+- `self/runtime.c::hexa_ptr_addr` 에 `__attribute__((weak))` 추가
+- `test/native_build/emit_hexa_ptr_addr_native_o.hexa` 신규 — 274 줄
+  (ptr_offset 의 285 줄과 거의 동일; strtab payload 만 14-B 로 다르고
+  adapter 가 2 instr 더 작음)
+- `self/main.hexa::cmd_build` 의 `__nrt_envs/_drvs/_outs/_syms` 테이블
+  4 곳에 `HEXA_NATIVE_RT_PTR_ADDR` / 드라이버 경로 / `/tmp/...` /
+  `hexa_ptr_addr` 행 추가 — **4 줄 변경**. #1331 ROI 실증.
+
+**verify (mini smoke)**:
+- 1-fn 격리 (`/tmp/h13_smoke.c`, v.tag=7 + v.i=0xdeadbeefcafebabe):
+  * env-OFF: 11-instr C body (`sub sp; str/ldr stack dance; ret`)
+  * env-ON : 2-instr hexa-emit body (`mov x0,#0; ret`)
+  * 두 모드 출력 IDENTICAL — `tag=0 val=0xdeadbeefcafebabe`
+  * otool -tv 가 `_hexa_ptr_addr` 심볼에서 body 스위치를 확인
+- no-regression: weak attribute 추가 전후 C body otool 가 **byte-eq**
+  (weak 는 link-side attr — codegen 영향 없음 — 기대대로).
+- 4-primitive composite (`/tmp/h13_composite.c`, 4 override .o 동시
+  link): 모든 4 심볼이 env-ON 에서 hexa-emit body 로 스위치.
+
+**시리즈 누적 표**:
+
+| #   | symbol            | adapter (instr / bytes) | residual               |
+|---  |---                 |---                      |---                     |
+| #1321 | `_hexa_exit`     | 5 instr / 20 B          | none (syscall)         |
+| #1326 | `_hexa_ptr_alloc`| 14 instr / 60 B (orig)  | pair w/ ptr_free       |
+| #1328 | `_hexa_ptr_offset`| 3 instr / 12 B         | mistyped-call (unreachable) |
+| #1329 | `_hexa_ptr_free` | 6 instr / 36 B          | pair w/ ptr_alloc      |
+| #1330 | `_hexa_ptr_alloc/free` (size-header) | 17/6 instr | pair-safe (closed) |
+| **본 PR** | **`_hexa_ptr_addr`** | **2 instr / 8 B** (smallest) | **none** (strongest closure) |
+
+**잔여 (다음 increment 후보, refresh)**:
+
+- (F) **production-effect verify for new wire** — `hexa_cli_driver` 재빌드
+  → otool diff 로 baked-in 확인. 본 PR 은 isolated smoke + composite e2e
+  까지. #1324 pattern follow-up.
+- (G) `hexa_ptr_null()` (zero-arg, returns int(0)) — adapter `movz x0,#0;
+  movz x1,#0; ret` 8 B / 3 instr. 본 increment 와 같은 형태로 +4 줄
+  테이블 행. 자연스러운 다음 후보.
+- (H) `hexa_cstring` / `hexa_from_cstring` — string ABI 의 weak override.
+  HexaStr 의 unwrap 만 하면 됨 (rt_str_len 류 보다 단순). 다음 cycle 의
+  string-family 진입점.
+- (I) **mini fs 경로 quirk** — `/tmp/hexa_exit_native.o` 와
+  `/tmp/hexa_ptr_offset_native.o` 두 경로가 mini 에서 corrupted 출력
+  을 만든다 (in-memory obj[] 는 OK; 같은 driver, 다른 경로로 출력하면
+  정상). path-specific 한 fs/inode 상태가 의심됨 — 본 PR 의 wire 와
+  무관, 별도 INBOX 후보.
+
 ## Domain map (Phase 0 → 3 + post)
 
 
