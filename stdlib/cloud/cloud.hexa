@@ -21,11 +21,12 @@ struct CloudResult {
     exit_code: int,   // remote process exit code; -1 if not recoverable
     pid:       int,   // remote PID from cloud_nohup; 0 otherwise
     stdout_:   str,   // captured remote stdout+stderr, marker line stripped
-    message:   str    // human-readable diagnostic
+    message:   str,   // human-readable diagnostic
+    logfile:   str    // remote logfile path (cloud_nohup only; "" elsewhere) — caller threads this into `hexa cloud tail <host> <logfile>` so Monitor can attach
 }
 
 fn _cloud_fail(msg: str) -> CloudResult {
-    return CloudResult { ok: 0, exit_code: -1, pid: 0, stdout_: "", message: msg }
+    return CloudResult { ok: 0, exit_code: -1, pid: 0, stdout_: "", message: msg, logfile: "" }
 }
 
 // ── shell quoting ────────────────────────────────────────────────────
@@ -129,7 +130,7 @@ fn _ssh_capture(host: str, ssh_opts: [str], remote: str) -> str {
 // the operator stops the pod instead of debugging a phantom remote crash.
 fn _ssh_transport_outage(verb: str, body: str) -> CloudResult {
     return CloudResult { ok: 0, exit_code: 255, pid: 0, stdout_: body,
-        message: verb + ": ssh transport failure (exit 255) — host unreachable (connection refused / timeout / auth / changed host key). The pod may be alive and billing but not accepting SSH — a vast.ai/RunPod transport outage. Stop retrying; verify reachability or tear the pod down." }
+        message: verb + ": ssh transport failure (exit 255) — host unreachable (connection refused / timeout / auth / changed host key). The pod may be alive and billing but not accepting SSH — a vast.ai/RunPod transport outage. Stop retrying; verify reachability or tear the pod down.", logfile: "" }
 }
 
 // ── scp transport ───────────────────────────────────────────────────
@@ -175,7 +176,7 @@ fn _scp_capture(scp_opts: [str], src: str, dst: str) -> CloudResult {
         ok = 1
     }
     return CloudResult { ok: ok, exit_code: rc, pid: 0, stdout_: res[0],
-        message: "scp exit " + to_string(rc) }
+        message: "scp exit " + to_string(rc), logfile: "" }
 }
 
 // ── marker parsing ───────────────────────────────────────────────────
@@ -306,18 +307,18 @@ fn cloud_run_wall_opts(host: str, ssh_opts: [str], argv: [str], max_wall: int) -
             return _ssh_transport_outage("cloud_run", body)
         }
         return CloudResult { ok: 0, exit_code: -1, pid: 0, stdout_: body,
-            message: "cloud_run: no exit-code marker — ssh transport failure or remote shell died" }
+            message: "cloud_run: no exit-code marker — ssh transport failure or remote shell died", logfile: "" }
     }
     if max_wall > 0 && rc == 124 {
         return CloudResult { ok: 0, exit_code: 124, pid: 0, stdout_: body,
-            message: "max-wall " + str(max_wall) + "s exceeded — remote command killed (exit 124)" }
+            message: "max-wall " + str(max_wall) + "s exceeded — remote command killed (exit 124)", logfile: "" }
     }
     let mut ok = 0
     if rc == 0 {
         ok = 1
     }
     return CloudResult { ok: ok, exit_code: rc, pid: 0, stdout_: body,
-        message: "remote exit " + str(rc) }
+        message: "remote exit " + str(rc), logfile: "" }
 }
 
 // cloud_run_opts — run `argv` on remote `host` over ssh with extra ssh
@@ -356,14 +357,14 @@ fn cloud_exec_opts(host: str, ssh_opts: [str], cmd_str: str) -> CloudResult {
             return _ssh_transport_outage("cloud_exec", body)
         }
         return CloudResult { ok: 0, exit_code: -1, pid: 0, stdout_: body,
-            message: "cloud_exec: no exit-code marker — ssh transport failure or remote shell died" }
+            message: "cloud_exec: no exit-code marker — ssh transport failure or remote shell died", logfile: "" }
     }
     let mut ok = 0
     if rc == 0 {
         ok = 1
     }
     return CloudResult { ok: ok, exit_code: rc, pid: 0, stdout_: body,
-        message: "remote exit " + str(rc) }
+        message: "remote exit " + str(rc), logfile: "" }
 }
 
 // cloud_exec — cloud_exec_opts with no extra ssh flags.
@@ -392,10 +393,10 @@ fn cloud_nohup_opts(host: str, ssh_opts: [str], argv: [str], logfile: str) -> Cl
             return _ssh_transport_outage("cloud_nohup", body)
         }
         return CloudResult { ok: 0, exit_code: -1, pid: 0, stdout_: body,
-            message: "cloud_nohup: no pid marker — ssh transport failure or nohup did not start" }
+            message: "cloud_nohup: no pid marker — ssh transport failure or nohup did not start", logfile: logfile }
     }
     return CloudResult { ok: 1, exit_code: 0, pid: pid, stdout_: body,
-        message: "started; remote pid " + str(pid) + " · log " + logfile }
+        message: "started; remote pid " + str(pid) + " · log " + logfile, logfile: logfile }
 }
 
 // cloud_nohup — cloud_nohup_opts with no extra ssh flags.
@@ -495,7 +496,7 @@ fn cloud_tail_cmd(host: str, logfile: str, grep_re: str, until_re: str) -> str {
 fn cloud_copy_to_opts(host: str, ssh_opts: [str], local_path: str, remote_path: str) -> CloudResult {
     if !file_exists(local_path) {
         return CloudResult { ok: 0, exit_code: 102, pid: 0, stdout_: "",
-            message: "local_source_missing · " + local_path }
+            message: "local_source_missing · " + local_path, logfile: "" }
     }
     return _scp_capture(_scp_opts(ssh_opts), local_path, host + ":" + remote_path)
 }
@@ -518,15 +519,15 @@ fn cloud_copy_from_opts(host: str, ssh_opts: [str], remote_path: str, local_path
     // scp returned 0; verify the local file actually exists and is non-empty.
     if !file_exists(local_path) {
         return CloudResult { ok: 0, exit_code: 100, pid: 0, stdout_: r.stdout_,
-            message: "remote_file_missing_or_scp_silent_fail · " + local_path }
+            message: "remote_file_missing_or_scp_silent_fail · " + local_path, logfile: "" }
     }
     let sz = file_size(local_path)
     if sz <= 0 {
         return CloudResult { ok: 0, exit_code: 101, pid: 0, stdout_: r.stdout_,
-            message: "zero_byte_transfer · " + local_path }
+            message: "zero_byte_transfer · " + local_path, logfile: "" }
     }
     return CloudResult { ok: 1, exit_code: 0, pid: 0, stdout_: r.stdout_,
-        message: "scp exit 0 · verified " + to_string(sz) + " bytes" }
+        message: "scp exit 0 · verified " + to_string(sz) + " bytes", logfile: "" }
 }
 
 // cloud_copy_from — cloud_copy_from_opts with no extra ssh flags.
@@ -566,19 +567,19 @@ fn cloud_copy_from_resume_opts(host: str, ssh_opts: [str], remote_path: str, loc
     let rc = res[2]
     if rc != 0 {
         return CloudResult { ok: 0, exit_code: rc, pid: 0, stdout_: res[0],
-            message: "rsync exit " + to_string(rc) + " (resume) · " + local_path }
+            message: "rsync exit " + to_string(rc) + " (resume) · " + local_path, logfile: "" }
     }
     if !file_exists(local_path) {
         return CloudResult { ok: 0, exit_code: 100, pid: 0, stdout_: res[0],
-            message: "remote_file_missing_or_rsync_silent_fail · " + local_path }
+            message: "remote_file_missing_or_rsync_silent_fail · " + local_path, logfile: "" }
     }
     let sz = file_size(local_path)
     if sz <= 0 {
         return CloudResult { ok: 0, exit_code: 101, pid: 0, stdout_: res[0],
-            message: "zero_byte_transfer · " + local_path }
+            message: "zero_byte_transfer · " + local_path, logfile: "" }
     }
     return CloudResult { ok: 1, exit_code: 0, pid: 0, stdout_: res[0],
-        message: "rsync exit 0 (resume) · verified " + to_string(sz) + " bytes" }
+        message: "rsync exit 0 (resume) · verified " + to_string(sz) + " bytes", logfile: "" }
 }
 
 // cloud_copy_from_resume — cloud_copy_from_resume_opts with no extra flags.
@@ -593,7 +594,7 @@ fn cloud_copy_from_resume(host: str, remote_path: str, local_path: str) -> Cloud
 fn cloud_copy_to_recursive_opts(host: str, ssh_opts: [str], local_path: str, remote_path: str) -> CloudResult {
     if !file_exists(local_path) {
         return CloudResult { ok: 0, exit_code: 102, pid: 0, stdout_: "",
-            message: "local_source_missing · " + local_path }
+            message: "local_source_missing · " + local_path, logfile: "" }
     }
     let mut ropts = ["-r"]
     let scp_opts = _scp_opts(ssh_opts)
@@ -671,12 +672,12 @@ fn cloud_verify_sha(host: str, ssh_opts: [str], remote_path: str, local_path: st
     let rsha = _sha256_remote(host, ssh_opts, remote_path)
     if len(lsha) != 64 || len(rsha) != 64 {
         return CloudResult { ok: 0, exit_code: 104, pid: 0, stdout_: "",
-            message: "sha_unavailable (no sha256sum/shasum one or both sides)" }
+            message: "sha_unavailable (no sha256sum/shasum one or both sides)", logfile: "" }
     }
     if lsha != rsha {
         return CloudResult { ok: 0, exit_code: 103, pid: 0, stdout_: "",
-            message: "sha_mismatch · local=" + lsha.substring(0, 12) + "… remote=" + rsha.substring(0, 12) + "…" }
+            message: "sha_mismatch · local=" + lsha.substring(0, 12) + "… remote=" + rsha.substring(0, 12) + "…", logfile: "" }
     }
     return CloudResult { ok: 1, exit_code: 0, pid: 0, stdout_: "",
-        message: "sha256 verified (" + lsha.substring(0, 12) + "…)" }
+        message: "sha256 verified (" + lsha.substring(0, 12) + "…)", logfile: "" }
 }
