@@ -628,7 +628,7 @@ fn main() {
         return
     }
     if sub == "version" || sub == "--version" || sub == "-v" {
-        println("hexa cloud 0.3.0 — dft-run verb (guarded QE el-ph dispatch · vast_direct_endpoint #1239(2) fix) · [0.2.4: tail · 0.2.3: nohup --early-life-check · watch · ssh-port · copy --verify-sha]")
+        println("hexa cloud 0.3.1 — registry pod-id sink guard + run/nohup no longer pollute reconcile (#1229 B→A) · [0.3.0: dft-run · vast_direct_endpoint #1239(2)]")
         return
     }
     if sub == "rent" || sub == "up" {
@@ -710,12 +710,13 @@ fn main() {
             println("[cloud] run: empty argv — usage: cloud run <host> [--port N] [--insecure] [--max-wall S] [--env K=V] -- <argv...>")
             exit(2)
         }
-        // Record the real program (argv[0]) BEFORE the env wrapper turns
-        // argv[0] into "env" — the registry label should be the workload.
-        let prog = argv[0]
         argv = _with_env(env_kvs, argv)
         let r = cloud_run_wall_opts(host, ssh_opts, argv, max_wall)
-        pod_registry_record(host, prog, "running")
+        // NOTE (#1229 B): `run` does NOT register the host. The registry holds
+        // provider pod-ids (for reconcile vs the provider live set), and `host`
+        // is an ssh destination (`root@<ip>`), not a pod-id — recording it
+        // poisoned the table with phantom GHOST rows. The pod is tracked at
+        // `rent`/`adopt` time by its real id; `run` is a host operation.
         if len(r.stdout_) > 0 {
             println(r.stdout_)
         }
@@ -767,10 +768,11 @@ fn main() {
             println("[cloud] nohup: empty argv — usage: cloud nohup <host> <logfile> [--port N] [--insecure] [--early-life-check N] [--env K=V] -- <argv...>")
             exit(2)
         }
-        let prog = argv[0]
         argv = _with_env(env_kvs, argv)
         let r = cloud_nohup_opts(host, ssh_opts, argv, logfile)
-        pod_registry_record(host, prog, "running")
+        // NOTE (#1229 B): `nohup` does NOT register the host (see `run` above) —
+        // `host` is an ssh destination, not a provider pod-id. Tracking happens
+        // at `rent`/`adopt`; recording the host poisoned reconcile with GHOSTs.
         if len(r.stdout_) > 0 {
             println(r.stdout_)
         }

@@ -2,6 +2,13 @@
 
 Append-only history sister of `INBOX.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
+## 2026-05-26T16:30Z — 🔌 cloud registry 오염 FIX (#1229 B) → reconcile GHOST 오판 해소 (#1229 A)
+
+- [x] **#1229 B — registry argv-조각/host 오염 차단** — `cloud run`/`cloud nohup` 가 `pod_registry_record(host, prog, …)` 로 ssh 목적지(`root@<ip>`·proxy host)+명령조각(`echo`/`bash`/`/root/run.sh`)을 "pod" 로 적재하던 것을 제거(둘 다 host 연산이지 pod-lifecycle 이벤트 아님; pod 추적은 rent/adopt 가 numeric id 로 함). + sink 가드 `_pod_id_looks_valid` 추가 — `@`/`/`/`.`/공백/leading-`-` 토큰(ssh dest·host·IP·path·flag)을 `pod_registry_record` 가 거부(eprintln + drop). 11/11 standalone PASS (transpile→clang→run).
+- [x] **#1229 A — reconcile GHOST 오판 해소(B의 결과)** — 오염 host-string row 가 numeric provider-id 와 절대 안 맞아 전부 GHOST 로 찍히던 "35행 junk" 가 B 차단으로 소거. reconcile union(runpod+vast) 로직은 이미 정상이었음(이 PR 은 입력 오염만 제거).
+- [x] **검증**: pod_registry.hexa·cloud_cli.hexa transpile-clean · `pod_registry_guard_test.hexa` 영구 가드(11 케이스). cloud 0.3.0→0.3.1.
+- [ ] **남은 cloud**: #1155(vast 등록키 자동 제시 — 별도 PR) · #1229 C(concurrent-wipe = 트랜스파일러 mis-deploy family, #1259 가드로 부분 대응) · D(prebuilt 전송) · #1239(1)ⓑ(`cpu_ram`, repo 밖).
+
 ## 2026-05-26 — `inbox/` 폴더 → canonical INBOX.md/INBOX.log.md 마이그레이션 + 폴더 RETIRE (4-file 라우팅)
 
 레거시 `inbox/notes/`+`inbox/patches/` 폴더(ad-hoc staging 패턴, commons g36/g48 canonical INBOX 도메인으로 이전 중)에 남은 4-file 을 canonical 수신함으로 라우팅하고 폴더를 폐기. 각 건 INBOX.md/log dedup-grep + `gh pr list --merged` + `git log --grep` 로 status 판정:
