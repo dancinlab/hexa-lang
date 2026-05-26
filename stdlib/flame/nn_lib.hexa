@@ -500,11 +500,15 @@ pub fn nn_swiglu_bwd(r: int, Wg: int, Wu: int, Wd: int,
 // (d5_sin Taylor vs libm sin); cross-impl gap is documented but not
 // flame's concern at this layer.
 
-// Build cos/sin RoPE tables (caller-allocated [T·hd] each).
-pub fn nn_rope_build_tables(T: int, hd: int,
-                            cos_out: int, sin_out: int) {
+// Build cos/sin RoPE tables (caller-allocated [T·hd] each) with an
+// explicit rotary `base` (a.k.a. theta). base=10000 is the original
+// RoPE/LLaMA default; Qwen2/2.5 use base=1000000 (some long-context
+// variants 50000) — anima flame-v3 port needs this parametrized
+// (inbox flame-v3 P2, anima TODO #1). The 4-arg `nn_rope_build_tables`
+// stays a non-breaking thin wrapper pinning base=10000.
+pub fn nn_rope_build_tables_base(T: int, hd: int,
+                                 cos_out: int, sin_out: int, base: float) {
     let half = hd / 2
-    let base = 10000.0
     let lnb = ln(base)
     // invf[i] = exp(-(2i/hd)·ln(base))   for i in [0, half)
     // We compute inline (avoid allocating an extra farr).
@@ -522,6 +526,13 @@ pub fn nn_rope_build_tables(T: int, hd: int,
         }
         p = p + 1
     }
+}
+
+// Non-breaking thin wrapper pinning the original base=10000 (LLaMA/RoPE
+// default) — all pre-existing callers keep byte-identical output.
+pub fn nn_rope_build_tables(T: int, hd: int,
+                            cos_out: int, sin_out: int) {
+    nn_rope_build_tables_base(T, hd, cos_out, sin_out, 10000.0)
 }
 
 // RoPE forward (single head, single position):
