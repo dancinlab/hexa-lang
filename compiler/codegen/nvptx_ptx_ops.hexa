@@ -167,6 +167,30 @@ pub let PTX_EXPF64_C0_HEXF64: string  = "0d3FF0000000000000"  // 1          (= 1
 pub let PTX_F64_EXP_BIAS: string      = "1023"
 pub let PTX_F64_MANT_BITS: string     = "52"
 
+// ── PTX f64 log(x) polynomial constants (RFC 055 §13 — closes f64 stub) ──
+//
+// PTX has no native f64 lg2/log. Decompose:
+//   x = 2^k * m,   m in [1, 2)        (extract via IEEE bit-pattern)
+//   y = (m - 1) / (m + 1),  |y| < 1/3
+//   log(m) = 2*y*(1 + y²/3 + y⁴/5 + y⁶/7 + y⁸/9 + y¹⁰/11)   atanh series
+//   log(x) = k * ln(2) + log(m)
+//
+// Hex literals — verified via python3 `struct.pack("<d", v)`.
+pub let PTX_LN2_HEXF64: string        = "0d3FE62E42FEFA39EF"  // ln(2)  (single literal; exp uses ln2_hi+ln2_lo Cody-Waite split — log path needs less precision)
+pub let PTX_LOGF64_C0_HEXF64: string  = "0d3FF0000000000000"  // 1
+pub let PTX_LOGF64_C1_HEXF64: string  = "0d3FD5555555555555"  // 1/3
+pub let PTX_LOGF64_C2_HEXF64: string  = "0d3FC999999999999A"  // 1/5
+pub let PTX_LOGF64_C3_HEXF64: string  = "0d3FC2492492492492"  // 1/7
+pub let PTX_LOGF64_C4_HEXF64: string  = "0d3FBC71C71C71C71C"  // 1/9
+pub let PTX_LOGF64_C5_HEXF64: string  = "0d3FB745D1745D1746"  // 1/11
+
+// IEEE-754 f64 bit-pattern extraction masks (range-reduction for log):
+//   PTX_F64_MANT_MASK   — mantissa bits (bits 51..0)
+//   PTX_F64_ONE_EXP     — bias-shifted "1.0" exponent bits (0x3FF0000000000000)
+pub let PTX_F64_MANT_MASK: string     = "0x000FFFFFFFFFFFFF"
+pub let PTX_F64_ONE_EXP: string       = "0x3FF0000000000000"
+pub let PTX_F64_TWO_HEXF64: string    = "0d4000000000000000"  // 2.0 (final 2*y*P scaling)
+
 // ── PTX integer index arithmetic (loop / addressing) ──────────
 pub let PTX_OP_MOV_U32: string        = "mov.u32"      // read sreg / move
 pub let PTX_OP_ADD_S32: string        = "add.s32"
