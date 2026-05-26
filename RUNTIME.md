@@ -4935,3 +4935,54 @@ B-class infra spec (다음 세션):
 ### honest residual
 
 physical 천장은 OPEN 유지 (per `feedback-closure-is-physical-limit`). runtime.c → 0 은 도달 가능 · time-bounded 아님. 본 세션은 1-instruction lane 들의 완전한 흡수 — 다음은 **인프라 한 단계 (B)** 가 잠금. 인프라가 풀리면 ~30-100 wire 가 BL+pack 어댑터 lane 으로 추가 흡수 가능 · 그 이후 lane = HEXA_HAS_HEXA_RT_STDLIB 의 stdlib 포팅 확장 (현 ~115 fn → 437+).
+
+## L-cleanup-pattern-validated — wire→delete closed-loop, first -95 line reduction (2026-05-27)
+
+3rd milestone. 본 세션 **wire→delete** 패턴 완결 — strong .o override 가 있는 C body 를 runtime.c 에서 안전하게 삭제. 첫 실제 line reduction 측정됨.
+
+### 누적 (#1391 + #1394 cleanup)
+
+| metric | session 시작 | session 종료 | Δ |
+|--------|------------:|------------:|---:|
+| runtime.c lines | 13,832 | 13,737 | **-95 (-0.69%)** |
+| wired (weak-override) | 11 | 20 | +9 |
+| HexaVal fn count | 448 | 428 | -20 (deleted bodies) |
+| session PRs (cum) | 27 | 38 | +11 |
+
+### wire→delete 안전성 증명
+
+19 wired fn 의 runtime.c 내부 호출자 = **0** 측정 (grep `[^a-zA-Z_]<fn>(` 패턴). 따라서 C body 삭제 = 외부 caller (compiler-emit code) 의 strong .o 라우팅만 의존. table-driven gate (#1331/#1354) default-ON 으로 strong .o 항상 link → 안전.
+
+honest tradeoff: HEXA_NATIVE_RT_ALL=0 opt-out 시 이 20 fn 의 link 실패 (soft-fallback 제거). 명시적 실패 > silent 잘못 동작.
+
+### 새 wire 추가 (CSEL pattern)
+
+20번째 = `hexa_cstring` (16B CSEL 어댑터). tag-test + payload-passthrough 의 정확한 form. 새 ARM64 pattern (조건부 select) 검증.
+
+| # | symbol | bytes | pattern |
+|---|--------|------:|---------|
+| 20 | `hexa_cstring` | 16 | cmp + csel + movz + ret |
+
+### 다음 lane 차단 측정 — B-class infra 정확한 spec
+
+본 세션 wire lane 진짜 천장 = `self/codegen/macho.hexa` 의 **relocation 미지원**:
+- 현재 emit driver: `macho_obj_wrap` (v1/v2) — single-symbol, no reloc, leaf adapter only
+- BL `_rt_sin` (cross-object call) → R_ARM64_BRANCH26 reloc 필요 → 미지원
+- ~30+ libm wrapper (sin/cos/tan/log/exp/pow/asin/acos/atan/atan2/tanh) 모두 BL 의존 → 차단
+
+**B-class spec (다음 세션 직접 진입 가능)**:
+1. `macho_obj_wrap_v3` 추가 — `undef_syms: [string]` + `reloc_records: [(text_off, sym_idx, kind)]` 인자
+2. R_ARM64_BRANCH26 (kind=2) 만 우선 (BL 26-bit relative)
+3. extern symbol stub 생성: `__undef_syms` 가 nlist symbol table 에 N_UNDF (extern, 미정의) entry 추가
+4. test wire: `hexa_math_sin` → adapter = `fmov d0,x1; bl _rt_sin (reloc); fmov x1,d0; movz x0,#1; ret` (20B + 1 reloc)
+5. ld64 (clang link) 가 rt_sin (hexa-source 컴파일 결과) 로 자동 resolve
+
+추정 분량: 1-2 PR, foreground 2-4h. unlock = ~30+ wire 가능.
+
+### honest residual
+
+```
+▓░░░░░░░░░░░░░░░░░░░ 4.7% · runtime.c -0.7% (95/13832 lines)
+```
+
+runtime.c=0 까지 거리 = ~13,737 lines × 평균 5-10 lines/fn = 잔여 ~1,500+ wire equivalent · multi-month grunt 변함없음. frontier 는 OPEN (per `feedback-closure-is-physical-limit`). 본 세션 = (1) 두 단순 lane 닫음 (trivial-const + FP-single-instr), (2) wire→delete 패턴 안전성 입증, (3) 첫 line 감소 측정, (4) B-class infra 정확한 spec.
