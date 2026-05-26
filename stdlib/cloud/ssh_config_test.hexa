@@ -1,3 +1,4 @@
+// @ci_gate — pure · network-free · deterministic (stdlib_selftest_aggregate --ci-gate)
 // stdlib/cloud/ssh_config_test.hexa — guard for the #1155 zero-flag
 // ~/.ssh/config auto-injection (vast.hexa: vast_ssh_config_block / _splice).
 // Mirrors the pure source fns verbatim (established mirror-test pattern — the

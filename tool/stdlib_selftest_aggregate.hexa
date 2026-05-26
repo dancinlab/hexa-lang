@@ -22,7 +22,7 @@
 //
 // CI gate (future): `--strict` exits non-zero if fail+timeout+error > 0.
 
-fn discover_tests() {
+fn discover_tests(ci_gate: int) {
     let cmd = "find stdlib self/stdlib -type f \\( -name '*_test.hexa' -o -name 'test_*.hexa' \\) | LC_ALL=C sort"
     let raw = exec(cmd)
     let lines = raw.split("\n")
@@ -33,12 +33,32 @@ fn discover_tests() {
         if len(p) > 0 && p != "self/stdlib/test_runner.hexa" {
             let head = exec("head -10 " + p + " 2>/dev/null")
             if !head.contains("@selftest_skip") {
-                out.push(p)
+                // --ci-gate runs ONLY the curated, network-free, deterministic
+                // subset opted in with a `// @ci_gate` marker (most of the 207
+                // discovered tests hit external APIs and cannot gate offline CI).
+                if ci_gate == 0 {
+                    out.push(p)
+                } else {
+                    if head.contains("@ci_gate") {
+                        out.push(p)
+                    }
+                }
             }
         }
         i = i + 1
     }
     return out
+}
+
+// hexa binary to spawn per test — PATH-relative `hexa` by default (the
+// bootstrapped CLI), overridable via $HEXA_BIN. The old hardcoded
+// /Users/.../.hx/bin/hexa path did not exist on the Linux CI runner.
+fn _hexa_bin() -> string {
+    let e = env_var("HEXA_BIN")
+    if len(e) > 0 {
+        return e
+    }
+    return "hexa"
 }
 
 // Wraps `cmd` so the trailing `__RC=N` exit-code marker is captured even
@@ -66,7 +86,7 @@ fn classify(rc: int, combined: string) {
 }
 
 fn run_one(path: string) {
-    let cmd = "timeout 30 /Users/ghost/.hx/bin/hexa " + path
+    let cmd = "timeout 30 " + _hexa_bin() + " " + path
     let combined = run_capture(cmd)
     let rc = parse_rc(combined)
     let status = classify(rc, combined)
@@ -82,15 +102,17 @@ fn run_one(path: string) {
 fn main() {
     let argv = args()
     let mut strict = false
+    let mut ci_gate = 0
     let mut ai = 0
     while ai < len(argv) {
         if argv[ai] == "--strict" { strict = true }
+        if argv[ai] == "--ci-gate" { ci_gate = 1; strict = true }
         ai = ai + 1
     }
 
-    let tests = discover_tests()
+    let tests = discover_tests(ci_gate)
     let n = len(tests)
-    println("# stdlib_selftest_aggregate  found=" + to_string(n) + "  strict=" + to_string(strict))
+    println("# stdlib_selftest_aggregate  found=" + to_string(n) + "  strict=" + to_string(strict) + "  ci_gate=" + to_string(ci_gate))
 
     let mut pass = 0
     let mut fail = 0

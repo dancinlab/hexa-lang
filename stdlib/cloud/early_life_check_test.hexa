@@ -1,3 +1,4 @@
+// @ci_gate — pure · network-free · deterministic (stdlib_selftest_aggregate --ci-gate)
 // stdlib/cloud/early_life_check_test.hexa — regression guard for the
 // `--early-life-check <sec>` nohup flag scanner (cloud 0.2.3, PR #1120,
 // anima cloud handoff inbox/patches/cloud-launch-trainer-script-arg-missing.md

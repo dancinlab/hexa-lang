@@ -1,3 +1,4 @@
+// @ci_gate — pure · network-free · deterministic (stdlib_selftest_aggregate --ci-gate)
 // stdlib/cloud/reconcile_test.hexa — falsifiers for the multi-provider
 // reconcile classification in stdlib/cloud/pod_registry.
 //
