@@ -1,5 +1,280 @@
 # INBOX — log
 
+## 2026-05-26T20:43Z — ubu-2 drill rebuild retry (INBOX line 8 re-verify)
+
+Retry of the INBOX line-8 item (`pool 호스트 hexa CLI — drill-runtime 잔존`,
+`map key 'f_a' not found` / `tag 4 vs tag 0`). Re-ran probe-first per
+instrument-first; the prior remote attempt (ssh ubu-2) had already landed.
+
+**Probe result (binary provenance)**
+- ubu-2 `~/.hx/bin/hexa.real`: rebuilt **2026-05-27 05:25** (today), size
+  2096072 B, md5 `d72b69379904532d7853d264d6ea71f6`, version `0.1.0-dispatch`.
+- Stale tell `strings | grep '%ld %ld'` = **0** → NOT the old fscanf build.
+- Built from `/tmp/hexa-lang-65fe0934` (clone @ `65fe093`, #1458). Current
+  main HEAD = `f759122b` (#1464) — clone is 6 commits behind, but the 6-commit
+  delta is only nvptx codegen + regex stdlib + docs (none touch drill runtime).
+- Prior rebuild **already happened** — backups present
+  (`hexa.real.bak.before-drill-rebuild-20260526` + 4 others).
+
+**Verdict: ALREADY FIXED (INBOX line 8 was already `- [x]` RESOLVED 2026-05-26).**
+- Original `map key 'f_a' not found` abort is GONE. Root cause (per line-8 note
+  + drill.hexa:290-298): drill is JIT-compiled from the ubu-2 worktree source,
+  whose `drill.hexa:290` read the stale field `verdict.f_a`; current main reads
+  `verdict.f_ai2_a` (landed #634-followup, merged via #1001 `dfd51d72`). Prior
+  agent applied current-main `drill.hexa` to the ubu-2 worktree + cleared the
+  stale JIT cache. Driver rebuild was incidental (drill is not compiled into it).
+- **ubu-2 re-smoke (this retry)**: `hexa drill --seed "verify perfect number 6
+  …" --rounds 1` → clean:
+  ```
+  round 1: smash+414 free+211 abs=0 meta=0 hyper=0 res+26(σ=0.10) total=651
+  overlay+ 517 lines (pool=0)
+  DRILL_VERIFIER {"round":1,"verdict":"skip"}
+  max rounds reached (1) — total=651
+  {"...","rounds":1,"total":651,...,"verifier_verdict":"skip"}
+  DRILL_EXIT=0
+  ```
+  `--rounds 1` correctly bounds the loop (max_rounds=1), no segfault.
+
+**NEW side-finding (Mac-local only — NOT the INBOX item, NOT on ubu-2)**
+- Local Mac `hexa drill --seed "…" --rounds 1` prints `max_rounds=10` (the
+  `--rounds` flag is silently dropped) → loop proceeds to round 2 → **deterministic
+  segfault** right after `DRILL_VERIFIER {round:1,verdict:skip}`.
+- Boundary isolated: round-1 `checkpoint_save` completes (checkpoint file written
+  with round:1), crash fires entering **round 2's seed-pool path** in
+  `round_run_with_pool` (round ≥ 2 only — round 1 has empty pool `pool=0`). The
+  populated `seed_pool` from `extract_axiom_exprs(rr.discoveries)` (drill.hexa:415)
+  drives `smash(ex_seed,1)` over candidates accessed via `c.axiom`/`c.expr`
+  (round.hexa:309-327) — a candidate-shape / map-key mismatch on the Mac runtime.
+- Why Mac-only: `cli_args()` (compiler/_cli_args/parse.hexa:24) slices `argv()`
+  from index 2 (`[interp_bin, script_path]`), but the Mac cached-`hexa_run`
+  dispatch path supplies only ONE prefix element → the first real flag
+  (`--rounds`) is eaten. ubu-2's argv has the expected 2-element prefix so
+  `--rounds` survives and the loop bounds correctly (no round 2, no crash).
+- The `drill-fixpoint-sigsegv-r2` local branch shows a prior agent already
+  touched this segfault family.
+
+**This is a PHYSICAL LIMIT for this round, cleanly reported**: the INBOX-scoped
+ubu-2 drill runtime is FIXED + verified. The Mac-local segfault is a *separate*
+bug in the drill engine's round-2 seed-pool path (gated behind a Mac-only
+`--rounds` argv-drop) — out of scope for this ubu-2 INBOX item, filed here for a
+follow-up. No ubu-2 rebuild was needed (probe showed it current + working).
+
+## 2026-05-27 — hexa run cache-key 가 imported-module hash 미포함 → stale import binding
+
+ 의 컴파일 캐시 키가  소스 해시만 반영하고  로 import 한 모듈()의 해시는 미포함. import 모듈을 편집해도  가 그대로면 캐시 히트 → 옛 모듈 바인딩 binary 재사용 → silent stale 결과.
+
+**재현 (2026-05-27, regex native engine 개발 중)**:  의 STAR backtracking 버그 수정 후, 동일  가 여전히  (수정 전 결과) 반환. 별도 새 프로그램(, 동일 호출)은 .  후  도 . → 캐시가 import 모듈 변경 미감지 확정.
+
+**영향**: stdlib 모듈 개발 시 caller 프로그램이 캐시 stale 결과 → 디버깅 혼란(수정이 반영 안 된 것처럼 보임). 특히  가 자기 자신만 바뀌고 테스트 대상 모듈이 바뀐 경우.
+
+**우회**: 모듈 편집 후  (또는 caller 에 무의미 변경 1줄).
+
+**제안 fix**: error: 'run' requires <file>
+HEXA — native-compiled, atlas-aware, strict-lint language toolchain
+  in-house prover + linker · English-only diagnostics · zero runtime GC
+  unified science stack absorbed from nexus (archived 2026-05-13)
+
+USAGE
+  hexa run <file> [args...]               Execute .hexa script (compile-then-exec)
+  hexa build <file> [-o out]              Compile .hexa → native binary
+  hexa drill --seed "..."  ★              Run the discovery engine (main absorbed verb)
+  hexa <subcommand> [args...]             Subcommand dispatch (80+ verbs)
+  hexa tool [list | <verb> ...]           Specialized-verb drawer (go-tool style)
+  hexa --version, -v                      Version + build hash
+  hexa --help, -h                         This help
+
+CORE TOOLCHAIN  (everyday verbs — `hexa <verb> --help` for per-verb detail · `hexa tool` for the drawer)
+  run [--no-sentinel] <file> [args...]    Execute .hexa script (compile-then-exec)
+                                            --no-sentinel: stdout 청정 (no __HEXA_RC=N tail)
+  build <file> [-o out] [--target=<t>]    Compile to native (RFC-018 5-stage IR;
+                                            atlas baked in 0 ms; ≤2 forks)
+              [--shared]                    Emit .so/.dylib (RFC 070 G7-A flag-
+                                            wiring; F-A1/F-A2 next sub-cycle)
+  test <file> [--filter N] [--verbose]    Run @test fns (native runner)
+  parse <file>                            Parse-only check (no exec, no codegen)
+  check <file>                            Verify @invariant DSL blocks (AST-based)
+  bench <file> [--runs N] [--json]        Benchmark wall/RSS/alloc
+  cc                                      Rebuild transpiler (hexa_cc)
+  lsp                                     Start LSP server (stdin/stdout JSON-RPC)
+  init <dir> [--name N]                   Scaffold <dir>/project.hexa
+  status                                  Toolchain status
+  version                                 Print version
+
+  more toolchain verbs in the drawer (`hexa tool` · TOOLCHAIN family):
+    batch · typecheck · cache · daemon · convergence · tape · hxc · url
+
+STDLIB CLI  (subcommand → stdlib dispatcher)
+  qrng                                    Quantum RNG default aggregate selftest (RFC 044)
+  qrng status                             9-backend table + tier coverage T0..T3
+  qrng collect [--bytes=N] [--source=NAME] [--seed=S]
+                                          pull bytes via router fallback chain
+  qrng selftest | chain | meta --backend=NAME
+                                          provider sweep · resolved chain · backend meta
+    e.g. hexa qrng collect --bytes=32 --source=mock_qrng --seed=42
+  cloud [run|nohup|poll|copy-to|copy-from] <host> [--port N] [--insecure] -- <argv...>
+                                          structured-argv remote dispatch (PR #81/#84/#86/#88)
+    e.g. hexa cloud run ubu-2 -- python3 train.py    (also: cloud copy-to / copy-from)
+  stdlib [list [--json]]                  stdlib catalog (modules · dirs · tests · docs)
+    e.g. hexa stdlib                      table view (purpose harvested from each module header)
+  sim-universe [status|selftest|anu|multiverse|qpu|qrng|bostrom|godel|
+                fvd|stark|qdarwin|ca-qm|supremacy|mbs|dtc|z2gauge|
+                preheating|multipolar|surface-code|ssh|hofstadter|dqpt|wdw]
+                                          virtual-universe runtime (26 modules, RFC 046)
+    e.g. hexa sim-universe status         module inventory + tier table
+  qmirror [status|selftest|chsh|iit|qrng|rqaoa|ctx|dynghz|vqd|stab-ext|
+           overlap-vqe|sre|lg|pseudo-tel|rpe|sym-shadow|hardy|page-curve|
+           qdrift|cdr|wigner|qfi|shallow|gme-steer|mabk|mirror-bench]
+                                          quantum mirror substrate (38 modules, RFC 045)
+    e.g. hexa qmirror chsh                CHSH Bell test (Tsirelson-class S)
+  loop [--once|--budget N|--time D] [--lenses ...] [--no-fire|--fire --budget U]
+       [--dfs --allow-llm --llm-cmd CMD [--depth N --beam K --target-absorb N --resume]]
+                                          self-growing atlas cycle — 8 stage (RFC 065 + 080)
+                                          binary built-in lens table + PR-only candidates
+                                          --dfs: pluggable-LLM depth-first descent (TECS-L port)
+                                          --allow-llm: cost gate for real cmd exec
+                                          --target-absorb N: batch N verified children → ONE PR
+    e.g. hexa loop                        --once --no-fire --dry-run (safe default)
+    e.g. hexa loop --status               print state-dir + LENS_COUNT + active families
+    e.g. hexa loop --dfs --allow-llm --llm-cmd "claude -p" --target-absorb 10
+                                          live LLM descent → 1 batched PR (compiler/atlas/embedded.gen.hexa)
+                                          per @D g_atlas_absorb_direct (no .n6 shard, no inbox markdown intermediate)
+  gpu fire <kernel.ptx> <host.c> [target] Remote GPU fire harness (GPU.md §7c)
+                                          scp + nvcc + run + pull result.json
+                                          default target = ubu-2 (RTX 5070 sm_120)
+    e.g. hexa gpu fire wmma_16x16.ptx host.c   (HEXA_GPU_DRY=1 plans only)
+  gpu disasm <kernel.ptx>                 PTX opcode-family histogram (pure hexa)
+  gpu lint   <kernel.ptx>                 PTX static checks (non-ASCII / sm_target / .reg)
+
+ATLAS SSOT  (compiler/atlas/embedded.gen.hexa, text-parsed at load)
+  atlas hash | stats                      Read meta
+  atlas lookup <id> | <K> <id> | --prefix=<p>   Read node(s)
+  atlas dump [K] [--json]                 Read full kind
+  atlas register --from-verify <fn> <args> <v>  verify IN-PROCESS → fold into embedded.gen.hexa
+  atlas register --from-drill --seed "<text>"   drill → fold verified candidates
+  atlas export [--out PATH]               live atlas → portable .n6 (n6 = export-only)
+                                          register → pr — direct fold-to-live forbidden
+                                          all absorbers (atlas register --auto-pr, drill, loop --dfs)
+                                          fold directly into compiler/atlas/embedded.gen.hexa via PR
+                                          (no intermediate .n6/.md — @D g_atlas_absorb_direct)
+  atlas-verify [--domain D] [--tier N]     Verdict ledger — 86 entries Stage 1+2+3 hexa-native
+  calc <engine> [args]                    TECS-L calculators (nstate/vortex/n6/perfect/congruence/gamma0)
+  verify <id> | --expr <fn> <n> <v>       Verify claim: atlas+calc → tier (🔵/🟡/🟠/⚪)
+    e.g. hexa atlas lookup P n            → @P n = 6 :: foundation [11*]
+    e.g. hexa verify sigma                → 🔵 SUPPORTED-FORMAL (calc divisor_sum(6)=12)
+    e.g. hexa atlas-verify --domain math  → §2 MATH verifiers PASS/FAIL + |err|
+
+ANNOTATION ANALYZERS (29, AST-based via self/lexer.tokenize)
+  pure-check  memo-check  catalog  readme  doc  codegen-hints  distill
+  effect-map  intent-map  meta-map  phi-map  struct-layout  self-aware
+  cognitive  freedom  infer  learn  safety  antivirus  serve  tenant
+  eval-run  n6-list  test-list  schema  law-link  harness  rule  gate-register
+    e.g. hexa pure-check src/math.hexa    → JSON: {version,source:"ast",pure_fns:[...]}
+
+MATH VERIFIERS  (3, deterministic — no atlas write)
+  honesty <file>                          BT-AI2 honesty audit (16-domain router)
+  absolute --seed "..."                   Mk.VIII Δ₀-absolute Σ₁/Π₁ classifier
+  meta-closure [--seed "..."]             Mk.IX self-ref fixpoint (H1+H2+H3)
+    e.g. hexa absolute --seed "sigma(6)=12"  → grade [10*]→[11*] verdict
+
+MATH DISCOVERY  (3 generators, γ no-write)
+  smash --seed "..." [--depth N]          Blowup 9-phase singularity drill
+  free --seed "..." [--dfs N]             Compose 5-module DFS
+  hyperarithmetic --prop "..."            Mk.IX Π₀² 5-system reverse-math classifier
+    e.g. hexa smash --seed "perfect_number_6" --depth 3   → ~414 candidates
+
+DISCOVERY ENGINE  ★ — drill is the main entry; 12 variants compose on top
+
+  ★ drill --seed "..." [--rounds N] [--engine mk9|mk10] [--seeds csv|--seeds-file F]
+        Main discovery engine. 6-stage round chain:
+          smash → free → absolute → meta-closure → hyperarithmetic → resonance
+        mk10 adds stage 7 transcendental_closure (Mk.X + AN11 math gate)
+        Each round flushes discoveries to atlas overlay
+          ~/.hx/data/atlas.overlay.n6  (rodata seed + runtime overlay, dedup'd)
+        Round N+1 reads round N's overlay via atlas_lookup_merged (cumulative seed pool).
+        examples:
+          hexa drill --seed "perfect_number_6" --rounds 3
+          hexa drill --seed "hexagonal_sum"   --engine mk10
+          hexa drill --seeds "s1,s2,s3"        --rounds 2          (batch dispatch)
+
+  chain --seed "..." --engines "x,y,z"      L3 cross-engine pipeline (drill across engines)
+
+  drill variants  (12, each composes drill with a different orchestration pattern):
+    omega       Apex preset (drill+chain+batch auto-dispatch — nexus's "main entry")
+    kick        alias → drill                    (ω-cycle ≡ drill apex)
+    surge       omega + cross-seed variants
+    dream       iterations × drill              (dream-mode seed evolution)
+    swarm       population × generations         (evolutionary)
+    reign       max-cycles cap
+    molt        self-evolution param mutation
+    wake        signal-file triggered drill
+    forge       strict round cap                 (no adaptive depth)
+    canon       drill + canon seal log           (~/.hx/data/canon_seal.jsonl)
+    debate      L3 N-variant adversarial debate
+    revive      engine+map v2 resurrect dead rounds (cap enforced)
+
+EXTERNAL RESOURCES  (17, δ pattern — try-CLI-or-fallback)
+  HW probes:        akida           (qmirror/qrng → STDLIB CLI via RFC 044/045)
+  Data bridges (16): codata  oeis  arxiv  gw  horizons  cmb  nanograv  simbad
+                     icecube  nist-atomic  wikipedia  openalex  gaia  lhc  pubchem  uniprot
+    Live path: HTTP API (~15 s timeout)  ·  Fallback: frozen cache (HEXA_FORCE_FALLBACK=1)
+    e.g. hexa wikipedia "Perfect number"  → live → /api/rest_v1/page/summary/
+
+ATLAS ABSORPTION  (Phase 5, 2026-05-14 — atlas-scope-only after split)
+  lattice <verify|axis-table|cross-check>           n=6 σ·φ=n·τ=24 deductive verifier (pure math)
+  atlas-audit <external-entity|anchor|all>          honest-caveat C3 lattice-fit gate + NIST anchor (overlay corpus)
+  repo-audit-taxonomy <catalog.md> <manifest.toml>  filesystem ↔ catalog ↔ manifest C1/C2/C3 audit
+    e.g. hexa lattice verify              → __N6_AXIS_VERIFY__ PASS (σ·φ=n·τ=24, |S₄|=24)
+         hexa atlas-audit anchor          → NIST/CRC/ASM citation audit over overlay corpus
+    atlas-audit reads ~/.hx/data/atlas.overlay.n6 (~109 nodes, ~3s). Full 7,278-node
+    rodata coverage pending compiler/atlas/static_index lazy-load (see docs/notes/).
+
+  Sister-project tools (rsc / bayes / n6 discover/mine / hexa-principle annotator etc.)
+  분리됨 — 각 sister repo 의 자체 도구로 위치. invoke via `hexa run <sister>/path/main.hexa <verb>`.
+
+INTRINSIC SURFACE  (SPEC §16 — absorbed shell-equivalents, 638→752 sites)
+  Use these IN-PROCESS intrinsics from `compiler/intrinsics/intrinsics.hexa` —
+  do NOT shell out (HX9xxx fork-storm lint planned). Each ⇆ its shell-equivalent:
+    cwd()            ⇆ pwd                getenv(k)         ⇆ $VAR
+    list_dir(path)   ⇆ ls <path>          path_exists(p)    ⇆ test -e <p>
+    mkdir_p(path)    ⇆ mkdir -p <p>       path_is_dir(p)    ⇆ test -d <p>
+    rm_file(path)    ⇆ rm <p>             host_target()     ⇆ uname -sm
+    rm_rf(path)      ⇆ rm -rf <p>         now_ns()          ⇆ date +%s%N
+  Plus SPEC §18 firmware: stdlib/{core,alloc,hal,embedded,mcu} + firmware/boards/*
+  (5 absorbed repos; see `hexa hash` / `hexa stats` for the embedded inventory).
+
+STDLIB n=6  (compiler-internal, available as `use "self/std_n6"`)
+  n6_lenses · n6_verify · n6_check · n6_consensus · n6_scan · n6_omega
+    User-facing utility for σ/φ/τ/n=6 constant checks (6 Omega lens API)
+
+ATLAS / STRICT LINT  (SPEC.md §2.2 / §9 / §10)
+  The atlas P/C/L/E node library is embedded into the compiler (rodata, 0 ms,
+  hash-pinned). Verified code auto-registers as new atlas L[*] nodes via in-house
+  ε self-proof (no Z3). `compiler/discover/promote.hexa` folds staging → live,
+  emits `atlas.append.<date>.n6` shards. Formula/constant-bearing fns must cite
+  an atlas L — `@implements(L[<id>])` or `@discover(kind="L")` — else HX8004.
+  Bypass: `@grace(HX####, until="...", reason="...")` — emits HX9000 audit, build
+  gated on explicit acked-grace. Discover overlay grows at `~/.hx/data/atlas.overlay.n6`
+  per drill round (rodata seed + overlay; rodata wins on ID conflict).
+
+ENV  (selected)
+  HEXA_LANG               repo root override (loader, gate)
+  HEXA_MEM_UNLIMITED=1    disable 4096 MB memcap (heavy regen / drill / 7 K-row embeds)
+  HEXA_FORCE_FALLBACK=1   skip live HTTP/HW probe, use cached fallback
+  HEXA_DRILL_ENGINE       mk9 (default) | mk10 (forces transcendental_closure)
+  HEXA_NO_SENTINEL=1      drop __HEXA_RC sentinel from `hexa run`
+
+DOCTRINE v2  (nexus absorbed 2026-05-13)
+  ① rodata seed for technical content   ② code absorbs algorithms
+  ③ metadata as frozen archive          ④ try-live-or-fallback for external
+  ⑤ rodata seed + runtime overlay for discovery accumulation
+
+STATUS
+  CLI dispatch wired for all 80+ verbs (self/main.hexa::dispatch_absorbed).
+  Most absorbed modules are libraries (pub fn entry points) — invoking
+  `hexa <verb>` loads the module and exits 0. Per-verb fn main() CLI shims
+  are a deferred follow-up; programmatic use via `use "compiler/<x>/..."` works
+  today. Test smokes (`compiler/<x>/*_test.hexa`) demonstrate live API surfaces. 의 캐시 키 계산에 flatten 된 모듈 의존성 트리의 합산 해시 포함 (이미 module_loader 가 flatten 하므로 flatten 결과 해시를 키로 쓰면 됨). 또는 flatten tmp 의 해시를 키로.
+
 ## 2026-05-27T04:15Z — atlas 6 tier symmetric registration (PR #1449 후속 broadening)
 
 **severity: high** — PR #1449는 🔴 FALSIFIED만 처리. 사용자 통찰: "모든 tier가 다 있어야 될 듯". g5 rubric은 본래 **6-element complete set** (🔵 🟢 🟡 🟠 🔴 ⚪) — atlas register는 현재 2/6만 지원.

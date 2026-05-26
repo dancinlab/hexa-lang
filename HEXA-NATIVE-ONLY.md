@@ -289,3 +289,16 @@ bench that fails to reach within an order-of-magnitude of these limits.
 - Bytecode VM (alternative perf path, lower priority) — `self/bc_emitter.hexa`, `self/bc_vm.hexa`
 - Limit policy — [`LATTICE_POLICY.md`](LATTICE_POLICY.md) §1.2 (real-limits taxonomy)
 - Project limits audit — [`LIMIT_BREAKTHROUGH.md`](LIMIT_BREAKTHROUGH.md) (parsing class, type expressiveness, target reach)
+
+---
+
+## §8 Measured acceptance — aprime_cc 0-extern (2026-05-27)
+
+```
+$ bash tool/build_aprime.sh -v <hexat>         # HEAD 04a32171
+  [1/5] flatten: 46 files 38706 lines
+  [2/5] transpile: 41637 lines C
+  [3/5] post-process
+  [4/5] clang: build/aprime_cc (1,363,160 B, Mach-O 64-bit arm64)
+  [5/5] smoke: exit(42)==42 PASS
+$ nm build/aprime_cc | grep 

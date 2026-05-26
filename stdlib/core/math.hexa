@@ -215,51 +215,30 @@ pub fn sigma(n) -> int {
     sum
 }
 
-// _next_int(a) — increment behind a fn-call boundary. The codegen comptime
-// folder otherwise pins a literal-initialised loop counter (`let d = 2`) to its
-// seed value across the whole loop body — collapsing `x % d` → `x % 2` and
-// hanging on any n with a prime factor > 2 of multiplicity ≥1 after the 2s are
-// stripped. Routing the increment through a call makes `d` runtime-valued so
-// the fold is suppressed. cf. comptime-fold shadow family.
-fn _next_int(a) -> int { a + 1 }
-
-// _largest_prime_power(x, p) — the largest power p^a dividing x (p^0 = 1 when
-// p ∤ x). Isolated in its own fn so its inner mutation lives in a fresh scope.
-fn _largest_prime_power(x, p) -> int {
-    let pk = 1
-    let y = x
-    while y % p == 0 {
-        pk = pk * p
-        y = y / p
-    }
-    pk
-}
-
 // sigma_star(n) = Σ_{d||n} d — sum of UNITARY divisors.
 // d||n ⟺ d|n AND gcd(d, n/d) = 1 (d and its cofactor are coprime).
 // σ* is MULTIPLICATIVE with σ*(p^a) = p^a + 1 (the only unitary divisors of
-// a prime power are 1 and p^a). So σ*(n) = ∏_{p^a || n} (p^a + 1). We use the
+// a prime power are 1 and p^a), so σ*(n) = ∏_{p^a || n} (p^a + 1). We use the
 // closed-form prime-power product (trial division) rather than brute
 // divisor-enumeration with an inner gcd call — exact-integer arithmetic,
-// codegen-stable (cf. stdlib_trig_libm precedent). The per-prime power is
-// computed in a helper so sigma_star's loop has no inner re-binding that would
-// trip the comptime-fold shadow on `d`. n=6 = 2·3 is the smallest
-// unitary-perfect: σ*(6) = (2+1)(3+1) = 12 = 2·6.
+// codegen-stable (cf. stdlib_trig_libm precedent). All loop locals use `let mut`
+// to opt OUT of the module-global comptime-fold table — a plain `let d = 2`
+// counter is otherwise pinned to its literal seed across the whole loop body
+// (`x % d` → `x % 2`), hanging on any prime factor > 2 once the 2s are stripped
+// (cf. reference_comptime_fold_shadow_family · same hazard handled by mul_mod
+// above). n=6 = 2·3 is the smallest unitary-perfect: σ*(6) = (2+1)(3+1) = 12.
 pub fn sigma_star(n) -> int {
-    let prod = 1
-    let x = n
-    // d initialised via a call so the codegen comptime-folder never sees a bare
-    // literal seed for the loop counter — otherwise `d` is pinned to 2 across
-    // the whole loop body (`x % d` → `x % 2`) and the trial division hangs on
-    // any prime factor > 2. cf. comptime-fold shadow family.
-    let d = _next_int(1)
+    let mut prod = 1
+    let mut x = n
+    let mut d = 2
     while d * d <= x {
-        let pk = _largest_prime_power(x, d)
-        if pk > 1 {
-            prod = prod * (pk + 1)
-            x = x / pk
+        let mut pk = 1
+        while x % d == 0 {
+            pk = pk * d
+            x = x / d
         }
-        d = _next_int(d)
+        if pk > 1 { prod = prod * (pk + 1) }
+        d = d + 1
     }
     // residual x > 1 is a prime appearing to the first power
     if x > 1 { prod = prod * (x + 1) }
