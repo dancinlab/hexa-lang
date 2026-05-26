@@ -2,6 +2,15 @@
 
 Append-only history sister of `INBOX.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
+## 2026-05-26T18:00Z — hexa-cc self-host 과도기가 TECS-L cycle verb 전체 차단 (loop runtime FLOOR + 런처 quirk)
+
+> TECS-L 범용 첫 cycle (LLM budget 무제한 해제 후) 시도 중 발견. cycle next-list(C1 Atlas-LLM·F2 /gap·F10 /micro-exp) verb 3종이 전부 deployed hexa-cc self-host 과도기에 막힘. self-host baseline(memory project_hexa_selfhosted_state) "runtime FLOOR 잔여" 구체 증상.
+
+- [ ] **C1 hexa loop = loop_state_cycle_* undeclared** — `hexa loop --once` → hexa-cc(hexat) build error: `use of undeclared identifier 'loop_state_cycle_read'/'loop_state_cycle_write'` (stdlib/loop/cycle.hexa C-emit line 9171/9172). loop state 영속(cycle 번호 read/write) runtime fn 이 self-host 미포팅 = runtime FLOOR 잔여. **LLM 게이트는 해제됨**(claude 2.1.150, budget 무제한) — 막는 건 loop verb runtime fn, LLM 아님. fix: `loop_state_cycle_{read,write}` runtime fn self-host 포팅 (또는 stdlib 정의).
+- [ ] **F2/F10/verify = 런처 result-단축 quirk** (cross-ref ↓ line 32 류) — `hexa verify --expr` 가 fresh 첫 호출 외 "OK: --expr" stub. verify_cli arm(#1235)·CM0 sopfr·LF1 codon tier 부여 차단.
+- 영향: TECS-L 범용 cycle(verify-driven + LLM-loop)의 동력 verb 전부 차단 → self-host 정착(runtime FLOOR + 런처 quirk + 링커 phase H) 선행 필수. self-host = 타세션 영역이라 handoff.
+- proposed-by: agent (TECS-L 범용 첫 cycle, 2026-05-26)
+
 ## 2026-05-26T17:40Z — 🧪 stdlib *_test.hexa CI 게이트 (#5① CI coverage gap CLOSE)
 
 - [x] **`stdlib_selftest_aggregate --ci-gate` 모드 + CI 와이어** — 기존 aggregator 는 207 `*_test.hexa` 를 발견하지만 다수가 외부 API(pubmed/arxiv/websocket/qrng…) 의존 → offline CI strict 게이트 불가. opt-in `// @ci_gate` 마커 도입: `--ci-gate` 는 마킹된 순수·network-free·deterministic 테스트만 실행 + strict(non-PASS 시 exit 1). 4건 마킹(pod_registry_guard·ssh_config·early_life_check·reconcile, 전부 no-`use` 단일파일·로컬 4/4 PASS). `bootstrap.yml` 3 job(macos·linux-x64·linux-arm64) smoke 뒤 step 추가(non-blocking: required-check 없음). + `run_one` 의 하드코딩 Mac 경로 `/Users/ghost/.hx/bin/hexa` → `$HEXA_BIN`/PATH `hexa`(Linux runner 부재 버그) 수정.
