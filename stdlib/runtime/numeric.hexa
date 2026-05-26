@@ -1633,7 +1633,10 @@ pub fn rt_add_slow(a: HexaVal, b: HexaVal) -> HexaVal {
         while j < nb { out = push(out, b[j]); j = j + 1 }
         return out
     }
-    // else → to_string + str_concat (str_concat builtin = hexa_str_concat direct)
-    return str_concat(to_string(a), to_string(b))
+    // else → to_string + hexa_str_concat. Calls the real C fn hexa_str_concat
+    // directly (NOT the `str_concat` builtin alias — a pre-mapping bootstrap
+    // emits it bare/undefined; NOT `+` — that re-enters hexa_add). hexa_str_concat
+    // resolves via the runtime symbol (registered in bind.hexa + _is_builtin_name).
+    return hexa_str_concat(to_string(a), to_string(b))
 }
 

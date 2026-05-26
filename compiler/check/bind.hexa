@@ -1037,8 +1037,9 @@ fn _bind_builtin_names() -> [string] {
         // Step 5 codegen-inline builtins (4th re-land after e8c2dc1c wipe).
         "__arr_raw_len", "__arr_set_cap", "__fd_write_bytes", "__map_raw_len", "__str_raw_len",
         // Step 4 .c-none arith: raw integer divide/mod + libm-free float mod
-        // + float-add coerce (rt_div/rt_mod/rt_add_slow escapes).
-        "__raw_idiv", "__raw_imod", "__raw_fmod", "__raw_add_f",
+        // + float-add coerce (rt_div/rt_mod/rt_add_slow escapes). hexa_str_concat
+        // = the real C string-concat fn rt_add_slow's string branch calls direct.
+        "__raw_idiv", "__raw_imod", "__raw_fmod", "__raw_add_f", "hexa_str_concat",
         "abs", "aes256_ctr_xor", "append", "args", "argv", "bcrypt_pbkdf", "byte_len", "bytes_to_f32_le",
         "bytes", "bytes_to_f64_le", "ceil", "chacha20_poly1305_decrypt", "chacha20_poly1305_encrypt", "chacha20_xor", "chars", "clock_ms", "copy_file",
         "cos", "crc32", "dict_keys", "ed25519_keypair", "ed25519_sign", "ed25519_verify", "env", "eprint",
