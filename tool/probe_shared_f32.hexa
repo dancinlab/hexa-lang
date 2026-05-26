@@ -1,0 +1,35 @@
+// tool/probe_shared_f32.hexa — A5 milestone fixture: f32 @shared verification
+//
+// Validates RFC 085 non-f64 element kind threading (PR #1413) with an f32
+// element type. Pre-#1413, `[f32; 256]` would silent-over-allocate to
+// 2048 B (using f64-default elem_size=8); now it correctly allocates
+// 256 × 4 = 1024 B via the Array:<elem>:<N> encoding chain.
+//
+// Kernel: single-block tree-reduce in f32 over `@shared let sm: [f32; 256]`.
+// N=256, blockDim=256, gridDim=1, a[i] = (f32) (i+1).
+// Expected: partial[0] == 32896.0_f32 (= 256 × 257 / 2, exact in f32 since
+//   the largest partial sum 32896 has 16 bits, well within f32's 24-bit
+//   mantissa).
+
+@gpu_kernel
+fn probe_shared_f32(a: [f32], partial: [f32], n: i64) {
+    @shared let sm: [f32; 256] = []
+    let mut tid: i64 = to_i64(gpu_thread_id_x())
+    if tid < n {
+        sm[to_i64(tid)] = a[to_i64(tid)]
+    } else {
+        sm[to_i64(tid)] = 0.0
+    }
+    gpu_barrier()
+    let mut stride: i64 = 128
+    while stride > 0 {
+        if tid < stride {
+            sm[to_i64(tid)] = sm[to_i64(tid)] + sm[to_i64(tid) + stride]
+        }
+        gpu_barrier()
+        stride = stride / 2
+    }
+    if tid == 0 {
+        partial[0] = sm[0]
+    }
+}
