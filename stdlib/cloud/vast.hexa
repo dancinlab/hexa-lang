@@ -802,3 +802,139 @@ pub fn vast_direct_endpoint(iid: str) -> VastSsh {
     let out = exec(_shq_local(vc) + " show instances --raw 2>&1")
     return vast_parse_direct_endpoint(out, iid)
 }
+
+// ── ~/.ssh/config auto-injection (#1155 zero-flag identity) ───────────
+// hexa cloud's ssh otherwise offers only the Mac default ~/.ssh/id_ed25519,
+// which is unregistered on vast → `Permission denied (publickey)` on every
+// direct-IP pod. The `--identity` flag (#1266) is the explicit escape; this is
+// the zero-flag path — `rent`/`adopt` write a MARKER-SCOPED Host block to
+// ~/.ssh/config so a later bare `hexa cloud run root@<ip> --port <p>` (or any
+// raw ssh to that IP) picks up the vast key automatically. The block carries
+// only the identity + ephemeral-host-key options — NOT Port, so `--port`
+// stays caller-controlled and the block never hijacks another service on the
+// same IP. Marker scoping means it only ever rewrites its OWN block (never a
+// user's hand-written config), and is idempotent across re-rents.
+
+// _vast_ssh_config_markers — the begin/end sentinels for one IP's block.
+fn _vast_cfg_begin(ip: str) -> str {
+    return "# >>> hexa-cloud vast " + ip + " >>>"
+}
+fn _vast_cfg_end(ip: str) -> str {
+    return "# <<< hexa-cloud vast " + ip + " <<<"
+}
+
+// vast_ssh_config_block — PURE: the marker-scoped Host block for `ip` using
+// `identity` as the private key. No trailing newline.
+pub fn vast_ssh_config_block(ip: str, identity: str) -> str {
+    return _vast_cfg_begin(ip) + "\n"
+        + "Host " + ip + "\n"
+        + "    IdentityFile " + identity + "\n"
+        + "    IdentitiesOnly yes\n"
+        + "    StrictHostKeyChecking no\n"
+        + "    UserKnownHostsFile /dev/null\n"
+        + _vast_cfg_end(ip)
+}
+
+// vast_ssh_config_splice — PURE + idempotent: given the existing ~/.ssh/config
+// text, return it with `ip`'s managed block inserted (or REPLACED if already
+// present). Any lines between this ip's begin/end markers are dropped first,
+// so re-renting the same IP never duplicates or stacks blocks. User content
+// (outside the markers) is preserved verbatim.
+pub fn vast_ssh_config_splice(existing: str, ip: str, identity: str) -> str {
+    let begin = _vast_cfg_begin(ip)
+    let end = _vast_cfg_end(ip)
+    let lines = existing.split("\n")
+    let mut kept = []
+    let mut skip = 0
+    let mut i = 0
+    while i < len(lines) {
+        let ln = lines[i]
+        if ln == begin {
+            skip = 1
+        } else {
+            if ln == end {
+                skip = 0
+            } else {
+                if skip == 0 {
+                    kept.push(ln)
+                }
+            }
+        }
+        i = i + 1
+    }
+    let mut base = ""
+    let mut j = 0
+    while j < len(kept) {
+        if j > 0 {
+            base = base + "\n"
+        }
+        base = base + kept[j]
+        j = j + 1
+    }
+    let block = vast_ssh_config_block(ip, identity)
+    let trimmed = base.trim()
+    if len(trimmed) == 0 {
+        return block + "\n"
+    }
+    return trimmed + "\n\n" + block + "\n"
+}
+
+// _vast_default_identity — the key to auto-inject: $HEXA_VAST_IDENTITY if set,
+// else the campaign-default ~/.ssh/id_vast_anima IF it exists. "" → caller
+// skips injection (no key to present; graceful no-op).
+fn _vast_default_identity() -> str {
+    let env_id = env_var("HEXA_VAST_IDENTITY")
+    if len(env_id) > 0 {
+        return env_id
+    }
+    let cand = env_var("HOME") + "/.ssh/id_vast_anima"
+    if file_exists(cand) {
+        return cand
+    }
+    return ""
+}
+
+// vast_ssh_config_ensure — I/O: idempotently write `ip`'s managed Host block
+// into ~/.ssh/config using `identity`. Returns 1 on write, 0 on no-op (empty
+// ip/identity). Creates ~/.ssh (700) + config (600) if absent. The splice is
+// pure + marker-scoped, so this only ever rewrites hexa's own block.
+fn vast_ssh_config_ensure(ip: str, identity: str) -> int {
+    if len(ip) == 0 {
+        return 0
+    }
+    if len(identity) == 0 {
+        return 0
+    }
+    let home = env_var("HOME")
+    if len(home) == 0 {
+        return 0
+    }
+    let ssh_dir = home + "/.ssh"
+    let _ = exec("mkdir -p " + _shq_local(ssh_dir) + " 2>/dev/null && chmod 700 " + _shq_local(ssh_dir) + " 2>/dev/null")
+    let cfg = ssh_dir + "/config"
+    let mut existing = ""
+    if file_exists(cfg) {
+        existing = read_file(cfg)
+    }
+    let updated = vast_ssh_config_splice(existing, ip, identity)
+    write_file(cfg, updated)
+    let _ = exec("chmod 600 " + _shq_local(cfg) + " 2>/dev/null")
+    return 1
+}
+
+// vast_ssh_config_autoinject — resolve the bare-IP endpoint for `iid` and (if
+// a vast key is available) write its ~/.ssh/config block. The single call the
+// `rent`/`adopt` verbs use; safe no-op when no key / endpoint not yet mapped.
+// Returns the IP written, or "" when it skipped.
+pub fn vast_ssh_config_autoinject(iid: str) -> str {
+    let identity = _vast_default_identity()
+    if len(identity) == 0 {
+        return ""
+    }
+    let ep = vast_direct_endpoint(iid)
+    if ep.ok == 0 {
+        return ""
+    }
+    let _ = vast_ssh_config_ensure(ep.host, identity)
+    return ep.host
+}
