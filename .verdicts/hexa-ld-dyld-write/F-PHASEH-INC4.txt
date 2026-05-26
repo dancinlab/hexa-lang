@@ -1,0 +1,129 @@
+F-PHASEH-INC4 — hexa_ld dyld function-import bind (LC_DYLD_CHAINED_FIXUPS + __stubs + __got)
+==========================================================================================
+
+Phase-H inc4 (HEXA_BACKEND flip chunk-B). First hexa-native link of a
+program that calls an EXTERNAL libSystem symbol (`_write`) — completing
+the dyld bind surface that inc1 (BRANCH26 internal) / inc2 (PAGE21
+internal __cstring) / inc3 (FULL multi-section + __data + __bss) all
+skipped. No `clang`/`ld`/`as` in the produced exe's LINK step; clang
+is only used as the CONTROL oracle to assemble the input `.o` files
+(per f1/f2 rule).
+
+VERDICT: 🟢 PASS — `bl _write` → `__stubs[0]` → `__got[0]` → dyld bind
+                  to libSystem `_write` resolved at load time.
+
+────────────────────────────────────────────────────────────────────
+RUN — produced exe stdout + exit code (verbatim)
+────────────────────────────────────────────────────────────────────
+
+$ ./dw_exe
+hi
+exit=0
+
+────────────────────────────────────────────────────────────────────
+nm -u dw_exe (imports — single libSystem symbol)
+────────────────────────────────────────────────────────────────────
+
+_write
+
+────────────────────────────────────────────────────────────────────
+otool -l dw_exe — LC layout (key segments + dyld LCs)
+────────────────────────────────────────────────────────────────────
+
+Load command 0  LC_SEGMENT_64  __PAGEZERO
+Load command 1  LC_SEGMENT_64  __TEXT
+                  sectname __text
+                  sectname __const
+                  sectname __stubs       ← NEW (inc4)
+Load command 2  LC_SEGMENT_64  __DATA
+                  sectname __got         ← NEW (inc4)
+Load command 3  LC_SEGMENT_64  __LINKEDIT
+Load command 4  LC_DYLD_CHAINED_FIXUPS
+                  dataoff 32768 · datasize 96   ← POPULATED (was 56 empty)
+Load command 5  LC_DYLD_EXPORTS_TRIE
+Load command 6  LC_SYMTAB
+Load command 7  LC_DYSYMTAB
+Load command 8  LC_LOAD_DYLINKER  /usr/lib/dyld
+Load command 9  LC_UUID
+Load command 10 LC_BUILD_VERSION
+Load command 11 LC_SOURCE_VERSION
+Load command 12 LC_MAIN
+Load command 13 LC_LOAD_DYLIB     /usr/lib/libSystem.B.dylib
+Load command 14 LC_CODE_SIGNATURE
+
+────────────────────────────────────────────────────────────────────
+otool -tv dw_exe — __text disasm (BL to stub)
+────────────────────────────────────────────────────────────────────
+
+(__TEXT,__text) section
+__start:
+00000001000003c8  mov  x0, #0x1
+00000001000003cc  adrp x1, 0 ; 0x100000000
+00000001000003d0  add  x1, x1, #0x3f0      ; &MSG ("hi\n")
+00000001000003d4  mov  x2, #0x3
+00000001000003d8  bl   0x100000400         ; PATCHED → __stubs[0]
+00000001000003dc  mov  x0, #0x0
+00000001000003e0  mov  x16, #0x1
+00000001000003e4  svc  #0x80
+
+────────────────────────────────────────────────────────────────────
+otool -s __TEXT __stubs dw_exe — 12-byte arm64 stub
+────────────────────────────────────────────────────────────────────
+
+0000000100000400  90000030 f9400210 d61f0200
+
+  90000030 = adrp x16, +0x4         (PAGE21 to __got page at 0x100004000)
+  f9400210 = ldr  x16, [x16, #0]    (load __got[0])
+  d61f0200 = br   x16               (tail-call to bound target)
+
+────────────────────────────────────────────────────────────────────
+otool -s __DATA __got dw_exe — chained-fixup chain start
+────────────────────────────────────────────────────────────────────
+
+0000000100004000  00000000 80000000
+
+  raw bytes: 00 00 00 00 00 00 00 80
+  u64 LE   : 0x8000000000000000
+  decoded  : DYLD_CHAINED_PTR_64_OFFSET bind format
+             bit 63 (bind)   = 1
+             bits 51..62 (next) = 0     (end of chain)
+             bits 32..50 (reserved) = 0
+             bits 24..31 (addend)   = 0
+             bits 0..23  (ordinal)  = 0 (→ imports[0] = _write@libSystem)
+
+────────────────────────────────────────────────────────────────────
+NO-REGRESSION (inc1 / inc2 / inc3)
+────────────────────────────────────────────────────────────────────
+
+inc1 — F-P1-LINKEXEC (BRANCH26 cross-obj exit 42):
+  $ hexa run compiler/test/macho_p0_corpus/run_F_P1_LINKEXEC.hexa
+  F-P1-LINKEXEC PASS — hexa-native link merged 2 .o → runnable
+    exit=42 · BRANCH26 cross-object reloc resolved · nm -u empty
+
+inc2 — PAGE21/PAGEOFF12 __cstring cross-obj:
+  $ cd tool/test/hexa_ld_page21 && link → run
+  hi from cstring
+  exit=0
+
+inc3 — FULL multi-section __TEXT(3 sects) + __DATA(__data + __bss):
+  $ cd tool/test/hexa_ld_multisection && link → run
+  ms ok
+  exit=7
+
+build_aprime.sh DEFAULT PATH untouched (0 hexa_ld refs).
+
+────────────────────────────────────────────────────────────────────
+INPUT INVARIANT (f1/f2 — clang only as oracle / .o producer)
+────────────────────────────────────────────────────────────────────
+
+INPUT .o files (assembled by `clang -c`, per the "INPUT only" rule):
+  a_main.o  — references extern `_write` + extern `_MSG` (PAGE21)
+  b_data.o  — defines `_MSG` ("hi\n") in __cstring
+
+The LINK is 100% hexa-native (hexa_ld.hexa). The PRODUCED exe `dw_exe`
+has 0 clang/ld/as residue:
+  - LC_LOAD_DYLINKER /usr/lib/dyld   (system dyld, not a toolchain)
+  - LC_LOAD_DYLIB    libSystem       (system dylib, the bind target)
+  - LC_CODE_SIGNATURE                (ad-hoc codesign — OS Gatekeeper req)
+
+NO `clang`, `ld`, `ld64`, `as` are invoked at link time.

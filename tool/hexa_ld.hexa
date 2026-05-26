@@ -1,7 +1,9 @@
 // tool/hexa_ld.hexa
 //
-// Phase-H inc4 WIP — first dyld import (LC_DYLD_INFO_ONLY bind opcodes
-// + __stubs + __la_symbol_ptr + dyld_stub_binder). Builds on inc3.
+// Phase-H inc4 — first dyld function import (LC_DYLD_CHAINED_FIXUPS
+// populated + __stubs + __got + BL-extern → stub patch). RUN-verified
+// with `bl _write` (libSystem.B.dylib ordinal 1) → exe prints "hi" +
+// exit 0. Builds on inc3.
 //
 // Phase-H inc3 (#1283 cont.) — extend single-`__const` layout to FULL
 // MULTI-SECTION: __TEXT (__text, __const, __cstring) + a separate
