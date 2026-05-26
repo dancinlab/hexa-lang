@@ -1,25 +1,45 @@
 # 🛸 RUNTIME — hexa-native runtime rewrite SSOT
 
-@goal: nm aprime shows at most 5 kernel syscall stub U-underscore lines — zero libc, zero libm, zero libsystem
+@goal: `.hexa`-ONLY — runtime+compiler 가 전부 `.hexa` 소스로 빌드. zero `.c` (runtime.c/runtime_core.c 제거) AND zero `.s` (asm floor 는 native backend 가 hexa-source 에서 머신코드로 self-emit) · 빌드에 `cc` 없음 · `ls self/*.c self/*.s` 비어있음
 
 
 > Per-domain root file (CLAUDE.md domain-meta-domain principle).
 > Sibling to `COMPILER.md` (compiler self-host) — this file owns the
 > RUNTIME layer's hexa-native journey (~16,809 LoC of C → hexa source).
 
-## North-star
+## North-star (재정의 2026-05-26 — `.hexa`-ONLY, purer than Go)
 
-Eliminate **all C dependencies** from the hexa-lang compiler binary
-(`aprime_cc` + `hexac`). Final acceptance: `nm aprime | grep '^.* U _'`
-produces only kernel syscall stubs (≤ 5 lines) — zero libc, zero libm,
-zero libsystem.
+**`.hexa`-only self-hosting**: `aprime_cc`/`hexac` 가 **`.hexa` 소스만으로** 빌드된다.
+native backend (`self/codegen/*.hexa` — 전부 hexa: `ir_to_arm64`·`macho`·`elf`·
+`syscall`·`regalloc`·`runtime_arm64`…) 가 Mach-O/ELF 바이너리를 **직접 emit** —
+C-transpile 없음, `runtime.c`/`runtime_core.c` (C) 제거, **`.s` 파일 0**.
 
-## End-state path (4 honest steps)
+핵심 통찰 (2026-05-26): asm floor 는 **별도 `.s` 파일이 아니라** `runtime_arm64.hexa`
+가 머신코드 바이트를 **hexa 소스로 emit**(`c.push(253)`=0xFD…)하는 형태다. 따라서
+syscall(`svc #0x80`) · arena · GC · `_start` floor 까지 전부 `.hexa` 로 표현 가능 →
+**Go(`asm_arm64.s` 유지)보다 순수한 `.hexa`-ONLY** 가 종착점.
 
-The current libc-unhook campaign (Phase 1) is **step 1 of 4**. Completing
-step 1 alone does NOT delete runtime.c — it removes libc calls FROM
-inside runtime.c by adding `hxlcl_*` C-source helpers, so runtime.c
-actually grows during step 1. runtime.c retirement requires steps 2-4.
+```
+Go 1.5:  runtime.go  +  asm_arm64.s   (irreducible asm = .s 파일)
+hexa  :  전부 .hexa   (floor = runtime_arm64.hexa 가 머신코드 self-emit) · .s 不要
+```
+
+**Final acceptance**:
+1. `ls self/*.c self/*.s` → **비어있음** (hand-written C/asm 0).
+2. `aprime_cc`/`hexac` 빌드 파이프라인에 **`cc` 단계 없음** + hand-asm `as` 없음
+   (native backend 가 `.hexa` → Mach-O/ELF self-emit).
+3. `gen1 ≡ gen2` byte-eq fixpoint 유지 (모든 단계).
+
+## End-state path (4 honest steps → `.hexa`-only native-backend flip)
+
+step 1 = libc-unhook (✅ DONE). steps 2-4 = `runtime.c`/`runtime_core.c` 의 C 를
+제거하는 arc. **종착 메커니즘 = native backend (HEXA_BACKEND=native) production-flip**:
+현재 native backend 는 *유저 코드*를 asm 으로 emit 하나(✅ RFC 063, gen1≡gen2 증명)
+*런타임 floor* 는 아직 C `runtime.c` 를 링크한다(main.hexa). flip = 그 floor 를
+`runtime_arm64.hexa` (hexa-emit-bytes) 로 교체 → `.c` 제거 → `.hexa`-only.
+
+step 1 (Phase 1) 단독으로 runtime.c 를 지우지 않는다 — libc 호출만 제거하므로
+runtime.c 는 오히려 커진다. runtime.c 폐기는 steps 2-4 + native-backend flip 필요.
 
 ```
 step 1 (✅ DONE — Phase 1)  libc extern 제거. runtime.c 안에서 libc →
@@ -46,18 +66,32 @@ step 3 (Phase 3 part-A)   runtime.c HI tier 호출자들 (hexa_str_concat ·
                           est 200-400 cycles (대규모 surface)
 
 step 4 (Phase 3 part-B)   runtime_core.c (281 KB · HexaVal repr · arena
-                          · fuel · GC) 도 동일하게 hexa source 화.
-                          그래야 runtime_core.c 도 폐기. 이게 zero-C-
-                          dep 진짜 종착점.
-                          est 400-800 cycles (HexaVal 자기-참조)
+       = native-backend     · fuel · GC) 의 floor 를 native backend 의
+       flip                 hexa-emit-bytes (`runtime_arm64.hexa`:
+                          rt_arena_init/alloc/reset/release · rt_exit ·
+                          rt_memcpy/strlen/memcmp_neon) 로 교체 + HEXA_
+                          BACKEND=native production-flip. C-transpile +
+                          runtime.c 링크 제거. 이게 `.hexa`-only 종착점.
+                          est 400-800 cycles (HexaVal 자기-참조 · raw
+                          머신코드 런타임 교체 · 가장 깊고 risk 큼)
 ```
 
 **Total honest scale**: 700-1300 cycles (10분/cycle 기준 multi-week ~
-multi-month). 현재 47/55 cycle = **7% 완료**.
+multi-month).
 
-**중요**: RUNTIME.md `## Post-Phase-3` 의 "compile cleanly without
-`-lc`" 조항은 step 1 끝나면 충족되지만, **runtime.c 폐기 ≠ 그 조항**.
-runtime.c 폐기 = step 3 acceptance. zero-C-dep = step 4 acceptance.
+**현 진척 (2026-05-26 재정의)**:
+- value-transform 레이어 (arith·cmp·conversion) **hexa-native 완료** — stdlib/
+  runtime/*.hexa ~108 rt_ fn + 이번 세션 +11 (#1217·#1219·#1224·#1226·#1231·
+  #1237·#1243). 전부 byte-identity·fixpoint 검증.
+- native backend (`self/codegen/*.hexa`) = 유저코드 asm self-emit ✅ (RFC 063,
+  gen1≡gen2 증명). `.hexa` floor (`runtime_arm64.hexa`) prototype 존재 (byte-
+  level self-test PASS) · **production 미wired** (빌드는 아직 C runtime.c 링크).
+- **남은 단일 잔여 = native-backend flip** (step-4): floor 를 hexa-emit-bytes 로
+  wire → runtime.c/runtime_core.c 제거 → `.hexa`-only.
+
+**Acceptance 단계별** (`.hexa`-only 재정의):
+- runtime.c 폐기 = step 3 (HI-tier 로직 .hexa 화).
+- **`.hexa`-only (zero `.c` + zero `.s`) = step 4 native-backend flip** = 진짜 종착.
 
 ### Go-model reference — steps 2-4 = Go 1.5's "great C→Go translation"
 
@@ -96,7 +130,7 @@ RUNTIME.md             ← runtime hexa-native rewrite (this file)
    ├─ Phase 1 (PENDING) Tier-A compiler-essential primitives
    ├─ Phase 2 (PENDING) Tier-B stdlib primitives
    ├─ Phase 3 (PENDING) Tier-C application primitives
-   └─ Post-3 (POLICY) zero-C-dep acceptance
+   └─ Post-3 (POLICY) `.hexa`-only acceptance (native-backend flip · zero .c + zero .s)
 ```
 
 ## Phase 0 — build-pipeline strip
