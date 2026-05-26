@@ -187,6 +187,23 @@ fn _type_id_of(t: Type) -> i64 {
     if t.kind == "string" { return 6 }
     if t.kind == "char" { return 7 }
     if t.kind == "unit" { return 8 }
+    // PR-A (GPU sweep #1284) — array element-kind preservation.
+    // type_id range 101-104 = array of {i64, i32, f64, f32}. nvptx
+    // IndexGet/IndexSet sites decode this to drive the ld/st/add
+    // mnemonic banks. Before this fix `[i64]` arrays defaulted to
+    // type_id=0 → unclassified → F64 default → silent miscompile
+    // (ld.global.f64/add.f64/st.global.f64 on integer storage). The
+    // 100+ range stays disjoint from the 1-8 scalar range so every
+    // existing scalar consumer is byte-identical. Non-array types
+    // (struct/closure/etc) and arrays of non-primitive element types
+    // continue to return 0 — unchanged.
+    if t.kind == "array" && len(t.args) >= 1 {
+        let ek = t.args[0].kind
+        if ek == "i64" { return 101 }
+        if ek == "i32" { return 102 }
+        if ek == "f64" { return 103 }
+        if ek == "f32" { return 104 }
+    }
     return 0
 }
 

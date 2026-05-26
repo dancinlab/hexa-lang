@@ -1209,6 +1209,7 @@ fn main() {
     let ok_fp8b  = _test_f8_e5m2_load_store()
     let ok_i64c  = _test_to_i64_and_int_cmp()
     let ok_mwc   = _test_mixed_width_cmp()
+    let ok_iadd  = _test_iadd_i64_array()
     let ok_mm    = _test_matmul_emit()
     let ok_mta   = _test_matmul_NT_a_emit()
     let ok_mtb   = _test_matmul_NT_b_emit()
@@ -1220,8 +1221,8 @@ fn main() {
 
     println("")
     println("══════════════════════════════════════════════")
-    if ok_br && ok_cls && ok_setp && ok_intr && ok_ls && ok_part && ok_barr && ok_atom && ok_shuf && ok_shuff64 && ok_shufm64 && ok_unr && ok_unrn && ok_wmma && ok_mp && ok_fctN && ok_pp && ok_fw && ok_sd && ok_me && ok_np && ok_os && ok_df && ok_bm && ok_wie && ok_gkw && ok_fls && ok_fp8a && ok_fp8b && ok_i64c && ok_mwc && ok_mm && ok_mta && ok_mtb && ok_tma && ok_tmae && ok_mf32 && ok_mf64 && ok_minh {
-        println("PASS: RFC 055 + RFC 067 + RFC 068 P1/P2/P3/P4-codegen + RFC 068 §3 fp8 scaffold + RFC 069 + RFC 071 P3+/P5+ + N71-B FP64 warp-shuffle (+u64 mask narrow) + N73 mixed-width int setp (u32<u64 widen) + RFC 067 N202 TMA scaffold + RFC 067 N206 TMA matmul emit + RFC 055 §13 math intrinsics (sqrt/max/min/exp/abs/rsqrt) — 39/39 cases (incl. matmul + matmul_NT_a + matmul_NT_b + FP64 warp-shuffle composition + mixed-width cmp widen + TMA codegen scaffold + TMA matmul emit + math f32/f64/inherit)")
+    if ok_br && ok_cls && ok_setp && ok_intr && ok_ls && ok_part && ok_barr && ok_atom && ok_shuf && ok_shuff64 && ok_shufm64 && ok_unr && ok_unrn && ok_wmma && ok_mp && ok_fctN && ok_pp && ok_fw && ok_sd && ok_me && ok_np && ok_os && ok_df && ok_bm && ok_wie && ok_gkw && ok_fls && ok_fp8a && ok_fp8b && ok_i64c && ok_mwc && ok_iadd && ok_mm && ok_mta && ok_mtb && ok_tma && ok_tmae && ok_mf32 && ok_mf64 && ok_minh {
+        println("PASS: RFC 055 + RFC 067 + RFC 068 P1/P2/P3/P4-codegen + RFC 068 §3 fp8 scaffold + RFC 069 + RFC 071 P3+/P5+ + N71-B FP64 warp-shuffle (+u64 mask narrow) + N73 mixed-width int setp (u32<u64 widen) + RFC 067 N202 TMA scaffold + RFC 067 N206 TMA matmul emit + RFC 055 §13 math intrinsics (sqrt/max/min/exp/abs/rsqrt) + PR-A [i64] kernel int-bank — 40/40 cases (incl. matmul + matmul_NT_a + matmul_NT_b + FP64 warp-shuffle composition + mixed-width cmp widen + TMA codegen scaffold + TMA matmul emit + math f32/f64/inherit + [i64] iadd int-bank)")
     } else {
         println("FAIL: RFC 055 smoke not satisfied.")
         if !ok_br   { println("      STMT_BR FAILED") }
@@ -1255,6 +1256,7 @@ fn main() {
         if !ok_fp8b { println("      RFC 068 §3 fp8 e5m2 scaffold FAILED") }
         if !ok_i64c { println("      RFC 071 P3+ to_i64 + int cmp + br_cond FAILED") }
         if !ok_mwc  { println("      N73 mixed-width int setp (u32<u64 widen) FAILED") }
+        if !ok_iadd { println("      PR-A [i64] iadd int-bank classification FAILED") }
         if !ok_mm   { println("      RFC 071 P5+ matmul codegen FAILED") }
         if !ok_mta  { println("      RFC 071 P5+ matmul_NT_a codegen FAILED") }
         if !ok_mtb  { println("      RFC 071 P5+ matmul_NT_b codegen FAILED") }
@@ -1265,7 +1267,7 @@ fn main() {
         if !ok_minh { println("      RFC 055 §13 math operand-kind inheritance FAILED") }
     }
     println("══════════════════════════════════════════════")
-    if !(ok_br && ok_cls && ok_setp && ok_intr && ok_ls && ok_part && ok_barr && ok_atom && ok_shuf && ok_shuff64 && ok_shufm64 && ok_unr && ok_unrn && ok_wmma && ok_mp && ok_fctN && ok_pp && ok_fw && ok_sd && ok_me && ok_np && ok_os && ok_df && ok_bm && ok_wie && ok_gkw && ok_fls && ok_fp8a && ok_fp8b && ok_i64c && ok_mwc && ok_mm && ok_mta && ok_mtb && ok_tma && ok_tmae && ok_mf32 && ok_mf64 && ok_minh) { exit(1) }
+    if !(ok_br && ok_cls && ok_setp && ok_intr && ok_ls && ok_part && ok_barr && ok_atom && ok_shuf && ok_shuff64 && ok_shufm64 && ok_unr && ok_unrn && ok_wmma && ok_mp && ok_fctN && ok_pp && ok_fw && ok_sd && ok_me && ok_np && ok_os && ok_df && ok_bm && ok_wie && ok_gkw && ok_fls && ok_fp8a && ok_fp8b && ok_i64c && ok_mwc && ok_iadd && ok_mm && ok_mta && ok_mtb && ok_tma && ok_tmae && ok_mf32 && ok_mf64 && ok_minh) { exit(1) }
 }
 
 // ── Case 9 — 055-P4 gpu_warp_shuffle(v, lane) intrinsic ───────────────
@@ -3721,6 +3723,148 @@ fn _test_mixed_width_cmp() -> bool {
     // Negative guard — the BUGGY `setp.lt.s32` over the u64 operand must
     // NOT appear (that's the exact ptxas-rejected emit this fix removes).
     ok = _check_not(ok, ptx, "setp.lt.s32 %p1", "no buggy setp.lt.s32 over mixed-width cmp")
+    return ok
+}
+
+// ────────────────────────────────────────────────────────────────────
+// PR-A (GPU sweep #1284) — [i64] kernel IndexGet/IndexSet emits int banks
+// ────────────────────────────────────────────────────────────────────
+//
+// Reproduces the PR #1284 sweep finding: a kernel taking `[i64]` arrays
+// silently miscompiled to f64 ld/add/st banks. Without the fix, large
+// integer values past 2^52 round-trip wrong (mantissa-bit loss). With
+// the fix, the emit picks `ld.global.u64` / `add.s64` / `st.global.u64`
+// for an `iadd(a: [i64], b: [i64], c: [i64], n: i64)` kernel.
+//
+// Synthetic MIR fixture (mirrors the source kernel shape):
+//   params: a, b, c (all type_id=101 = array<i64>), n (type_id=1 = i64)
+//   block 0:
+//     idx  = gpu_thread_id_x()      // U32 %r0
+//     va   = a[idx]                 // op="index" → ld.global.u64
+//     vb   = b[idx]                 // op="index" → ld.global.u64
+//     sum  = va + vb                // BINOP "add" → add.s64
+//     c[idx] = sum                  // op="index_set" → st.global.u64
+//     return
+//
+// (Bounds-check `if idx < n` is omitted; the load/add/store bank emit
+//  is the load-bearing property and reproduces irrespective of guards.)
+
+fn _local_array_i64(id: i64, name: string) -> Local {
+    return Local { id: id, arena_id: 1, type_id: 101, name_hint: name, precision: "" }
+}
+
+fn _stmt_index_get(dst: Local, base_id: i64, idx_id: i64) -> Stmt {
+    let mut xs = []
+    xs.push(_op_local(base_id))
+    xs.push(_op_local(idx_id))
+    return Stmt {
+        kind: STMT_ASSIGN, dst: dst, op: "index", args: xs,
+        target_block: -1, target_block_else: -1
+    }
+}
+
+fn _stmt_index_set(base_id: i64, idx_id: i64, val_id: i64) -> Stmt {
+    let mut xs = []
+    xs.push(_op_local(base_id))
+    xs.push(_op_local(idx_id))
+    xs.push(_op_local(val_id))
+    return Stmt {
+        kind: STMT_ASSIGN, dst: _miss_local(), op: "index_set", args: xs,
+        target_block: -1, target_block_else: -1
+    }
+}
+
+fn _build_case_iadd_i64_array() -> MModule {
+    // Params (type_id=101 = array<i64>) — Pass 0 stamps PReg kind=U64
+    // + frag_dtype=NVPTX_RKIND_U64 so IndexGet/Set decode to U64 bank.
+    let a   = _local_array_i64(0, "a")
+    let b   = _local_array_i64(1, "b")
+    let c   = _local_array_i64(2, "c")
+    let n_p = _local_i64(3, "n")          // KERNEL param i64 (unused here)
+    let idx32 = _local(4, "idx32")        // gpu_thread_id_x → U32
+    // Widen the thread-id to i64 — mirrors the canonical source kernel
+    // pattern `c[to_i64(i)] = a[to_i64(i)] + b[to_i64(i)]` (per the
+    // PR #1284 sweep tape's iadd source). Without the widen the byte-
+    // offset compute would emit mul.lo.s64 with a u32 operand, which
+    // ptxas rejects (mixed-width arith).
+    let idx   = _local(5, "idx")          // to_i64(idx32) → U64
+    let va    = _local(6, "va")           // a[idx] → classified U64 via Pass-1 IndexGet rule
+    let vb    = _local(7, "vb")           // b[idx] → classified U64
+    let sum   = _local(8, "sum")          // va + vb → BINOP inherits U64
+
+    let mut tii = []
+    tii.push(_op_local(idx32.id))
+    let mut s0 = []
+    s0.push(_stmt_call(idx32, "gpu_thread_id_x"))
+    s0.push(_stmt_call_with_args(idx, "to_i64", tii))
+    s0.push(_stmt_index_get(va, a.id, idx.id))
+    s0.push(_stmt_index_get(vb, b.id, idx.id))
+    s0.push(_stmt_binop(sum, "add", _op_local(va.id), _op_local(vb.id)))
+    s0.push(_stmt_index_set(c.id, idx.id, sum.id))
+    s0.push(_stmt_return())
+
+    let mut blocks = []
+    blocks.push(_block(0, s0))
+
+    let mut params = []
+    params.push(a); params.push(b); params.push(c); params.push(n_p)
+    let mut locals = []
+    locals.push(a); locals.push(b); locals.push(c); locals.push(n_p)
+    locals.push(idx32); locals.push(idx); locals.push(va); locals.push(vb); locals.push(sum)
+
+    let mf = MFunc {
+        name: "iadd",
+        params: params,
+        return_local: _miss_local(),
+        locals: locals,
+        blocks: blocks,
+        entry_block: 0,
+        arena_root: 1,
+        def_line: 0,
+        gpu_kind: GPU_KIND_KERNEL
+    }
+    let mut fns = []
+    fns.push(mf)
+    return MModule { file: "case_iadd_i64_array.hexa", funcs: fns, globals: [] }
+}
+
+fn _test_iadd_i64_array() -> bool {
+    let mut ok = true
+    let mod_in = _build_case_iadd_i64_array()
+    let ptx = codegen_emit_ptx_sm80(mod_in)
+
+    println("")
+    println("── emitted PTX (PR-A [i64] iadd, sm_80) ──")
+    println(ptx)
+
+    // Param banks — every array param classifies U64 (device pointer).
+    ok = _check(ok, ptx, ".param .u64 iadd_param_0",     "array param a as .param .u64")
+    ok = _check(ok, ptx, ".param .u64 iadd_param_1",     "array param b as .param .u64")
+    ok = _check(ok, ptx, ".param .u64 iadd_param_2",     "array param c as .param .u64")
+    ok = _check(ok, ptx, ".param .u64 iadd_param_3",     "scalar i64 param n as .param .u64")
+
+    // Loaded values land in the U64 bank (%rd<id>), NOT %fd<id>.
+    ok = _check(ok, ptx, ".reg .u64 %rd6",               "va (a[idx]) classified U64 (.reg .u64 %rd6)")
+    ok = _check(ok, ptx, ".reg .u64 %rd7",               "vb (b[idx]) classified U64 (.reg .u64 %rd7)")
+    ok = _check(ok, ptx, ".reg .u64 %rd8",               "sum = va+vb classified U64 (.reg .u64 %rd8)")
+
+    // Load mnemonics — ld.global.u64, not ld.global.f64.
+    ok = _check(ok, ptx, "ld.global.u64 %rd6",           "a[idx] ld.global.u64 (PR-A integer load)")
+    ok = _check(ok, ptx, "ld.global.u64 %rd7",           "b[idx] ld.global.u64 (PR-A integer load)")
+
+    // The arithmetic — add.s64, not add.f64.
+    ok = _check(ok, ptx, "add.s64 %rd8",                 "sum = a[idx] + b[idx] uses add.s64")
+
+    // Store mnemonic — st.global.u64, not st.global.f64.
+    ok = _check(ok, ptx, "st.global.u64",                "c[idx] = sum uses st.global.u64")
+
+    // Negative guards — the iadd kernel must NOT emit any FP64 ld/st/add
+    // in its body. (The PTX header .version line is unaffected; we only
+    // care about the body instructions, so we grep for the specific
+    // mnemonics with operands that would only appear in the body.)
+    ok = _check_not(ok, ptx, "ld.global.f64 %fd",        "no buggy ld.global.f64 (PR-A miscompile residue)")
+    ok = _check_not(ok, ptx, "st.global.f64 %fd",        "no buggy st.global.f64 (PR-A miscompile residue)")
+    ok = _check_not(ok, ptx, "add.f64 %fd",              "no buggy add.f64 (PR-A miscompile residue)")
     return ok
 }
 
