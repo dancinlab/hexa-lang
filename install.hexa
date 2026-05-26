@@ -232,5 +232,4 @@ fn main() {
         exit(1)
     }
 }
-
-main()
+// auto-invoke (hexa-strict) calls fn main() — no explicit main() call (would double-run in interp path)
