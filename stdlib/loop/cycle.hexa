@@ -65,7 +65,7 @@ fn cmd_loop_help() {
     println("            [--llm-families <a,b,c>] [--no-cache] [--allow-llm]")
     println("  hexa loop --option       (alias = --dfs --depth 3 --beam 2")
     println("                            --llm-cmd \$HEXA_LLM_CMD)")
-    println("  hexa loop --claude       (alias = --dfs --llm-cmd 'claude -p')")
+    println("  hexa loop --claude       (alias = --dfs --llm-cmd 'claude --bare -p')")
     println("  hexa loop --codex        (alias = --dfs --llm-cmd 'codex exec -')")
     println("  hexa loop --gemini       (alias = --dfs --llm-cmd 'gemini -p')")
     println("  hexa loop --claude-api   (alias = --dfs · jq|curl|jq to api.anthropic.com)")
@@ -97,8 +97,12 @@ fn cmd_loop_help() {
     println("  --no-cache      disable dist/llm_cache.hxc sidecar")
     println("  --allow-llm     gate real LLM calls (else stub-only)")
     println("  --option        alias for default DFS+LLM config")
-    println("  --claude        alias for --dfs --llm-cmd 'claude -p'")
-    println("                  (Anthropic Claude Code CLI, print mode)")
+    println("  --claude        alias for --dfs --llm-cmd 'claude --bare -p'")
+    println("                  (Claude Code CLI in --bare mode: skips SessionStart")
+    println("                   hooks/plugins so popened child does not recurse")
+    println("                   into hexa via sidecar hooks. REQUIRES")
+    println("                   ANTHROPIC_API_KEY — OAuth/keychain are not read")
+    println("                   in bare mode. Use --claude-api for jq+curl REST.)")
     println("  --codex         alias for --dfs --llm-cmd 'codex exec -'")
     println("                  (OpenAI Codex CLI, non-interactive stdin)")
     println("  --gemini        alias for --dfs --llm-cmd 'gemini -p'")
@@ -476,8 +480,27 @@ fn main() {
         //   OpenAI   : OPENAI_API_KEY    · OPENAI_MODEL    (default gpt-5)
         //   Gemini   : GEMINI_API_KEY    · GEMINI_MODEL    (default gemini-2.5-pro)
         if a == "--claude" {
+            // `claude --bare -p` skips Claude Code's SessionStart hooks,
+            // plugin sync, keychain reads, and CLAUDE.md auto-discovery
+            // (see `claude --help` --bare). Without --bare, a popened
+            // `claude -p` from inside `hexa loop` triggers user sidecar
+            // SessionStart hooks (worktree-gc, easy-auto, ...) that
+            // themselves shell out to `hexa.real run`, causing the
+            // parent loop's fread() to wait through a cascade of
+            // grandchild hexa invocations and hit the wallclock budget.
+            // --bare requires ANTHROPIC_API_KEY (OAuth and keychain are
+            // never read in bare mode), so gate the alias on the env
+            // var with the same refuse-pattern --claude-api uses.
+            if len(env("ANTHROPIC_API_KEY")) == 0 {
+                println("error: --claude requires ANTHROPIC_API_KEY (env var unset or empty)")
+                println("  hint: export ANTHROPIC_API_KEY=$(secret get anthropic.api_key)")
+                println("  why:  --claude now spawns `claude --bare -p` so user sidecar SessionStart")
+                println("        hooks (worktree-gc, easy-auto, ...) do not recursively call hexa")
+                println("        from inside the popened child. --bare requires ANTHROPIC_API_KEY.")
+                exit(2)
+            }
             dfs_enabled = true
-            llm_cmd = "claude -p"
+            llm_cmd = "claude --bare -p"
             k = k + 1
             continue
         }
