@@ -2612,7 +2612,14 @@ fn cmd_build(src, out, c_only, target, shared) {
         // both arm64 + x86_64 codegen back-ends.
         let mut __nshared_flag = ""
         if shared == "1" { __nshared_flag = " --shared" }
-        let __ncmd = "'" + __ncc + "' _drv.hexa --emit=asm" + __nshared_flag + " -o '" + __nasm + "' '" + __actual_src + "' 2>&1"
+        // HEXA_BACKEND flip · chunk A step 1 — enable the inline `hexa_int`
+        // repr-pack on the native-backend path. aprime_cc's arm64 codegen
+        // reads HEXA_INLINE_INT_BOX=1 and emits the 2-instruction x0:x1
+        // repr-pack (mov x1,x0 ; movz x0,#0) instead of `bl _hexa_int`,
+        // removing one runtime.c dependency. OPT-IN to this path only —
+        // the default `--emit=asm` (build_aprime.sh fixpoint smoke etc.)
+        // sees no env var and emits the legacy `bl hexa_int` byte-for-byte.
+        let __ncmd = "HEXA_INLINE_INT_BOX=1 '" + __ncc + "' _drv.hexa --emit=asm" + __nshared_flag + " -o '" + __nasm + "' '" + __actual_src + "' 2>&1"
         println("  [native 1/2] " + __ncmd)
         let __nr = exec(__ncmd)
         if len(__nr) > 0 { println("    " + __nr) }
