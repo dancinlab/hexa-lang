@@ -1,0 +1,10 @@
+n=100 M=1 |M|=1 floor_sqrt=10 OK_le_sqrt
+n=110 M=-5 |M|=5 floor_sqrt=10 OK_le_sqrt
+n=120 M=-3 |M|=3 floor_sqrt=10 OK_le_sqrt
+n=130 M=-2 |M|=2 floor_sqrt=11 OK_le_sqrt
+n=140 M=-4 |M|=4 floor_sqrt=11 OK_le_sqrt
+n=150 M=0 |M|=0 floor_sqrt=12 OK_le_sqrt
+n=160 M=0 |M|=0 floor_sqrt=12 OK_le_sqrt
+n=170 M=-2 |M|=2 floor_sqrt=13 OK_le_sqrt
+n=180 M=-3 |M|=3 floor_sqrt=13 OK_le_sqrt
+n=200 M=-8 |M|=8 floor_sqrt=14 OK_le_sqrt

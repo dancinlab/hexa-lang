@@ -1,0 +1,21 @@
+ω-decomp of M(n) at n=30
+M(n) = sum mu(k), partitioned by omega(k)
+k=1 mu=1
+k=2 mu=-1
+k=3 mu=-1
+k=5 mu=-1
+k=6 mu=1
+k=7 mu=-1
+k=10 mu=1
+k=11 mu=-1
+k=13 mu=-1
+k=14 mu=1
+k=15 mu=1
+k=17 mu=-1
+k=19 mu=-1
+k=21 mu=1
+k=22 mu=1
+k=23 mu=-1
+k=26 mu=1
+k=29 mu=-1
+k=30 mu=-1
