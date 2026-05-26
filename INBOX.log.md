@@ -2,6 +2,18 @@
 
 Append-only history sister of `INBOX.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
+## 2026-05-26T19:30Z — `hexa loop --allow-llm` subprocess dispatch hang (C1 LLM 실호출 차단, RFC 080 활성 게이트)
+
+> TECS-L 범용 첫 cycle C1 fire (LLM budget 무제한 + cooldown reset 작동) 시도 중 발견. fire #5~#9 누적 진단: cooldown 해소 / DFS seeds 활성(42 candidate dispatch) 까지는 진전했으나, `--allow-llm` 명시 시 hexa loop 가 subprocess (claude -p) spawn 단계에서 hang.
+
+- [ ] **`hexa loop --allow-llm` hang** — `hexa loop --claude --allow-llm --depth 1 --beam 1 --target-absorb 1 --fire --budget 1` → timeout 120s **exit 124**, 출력 0줄. **claude CLI 직접은 즉시 OK** (`echo "say hi" | claude -p` → "안녕하세요" 정상). 즉 hexa loop 내부 LLM dispatch(subprocess spawn → claude -p stdin 입력? → wait) 가 hang. stdin pipe / subprocess wait 미완 추정.
+- [ ] **`--allow-llm` 없으면 stub 정상** — 같은 명령에서 `--allow-llm` 제거 → DFS 42 candidate dispatch + "WOULD call LLM" stub + exit 0 정상. 즉 dispatch 로직은 동작, **실호출 subprocess 처리만 hang**.
+- 진전 (이번 진단으로 확정): cooldown reset(`gap_cooldown` rm) 작동 ✅, DFS seeds 활성 ✅, `--claude` alias(`'claude -p'`) 정상 ✅, LLM budget 무제한 게이트 해제 ✅.
+- 차단 잔여: hexa loop subprocess LLM dispatch 가 self-host(0.1.0-dispatch) 에서 hang → **C1 LLM 실호출 fire 차단** (RFC 080 Phase A 활성 게이트). claude API 직접 (`--claude-api` alias = jq+curl→api.anthropic.com) 우회 가능성 검토 필요.
+- fix 방향: (a) `--claude-api` alias(jq+curl) 우회 — subprocess 없이 HTTP 직접. (b) hexa loop subprocess spawn 디버그 — claude-p stdin/wait 처리.
+- 부수 발견: 매 fire 후 `cooldown += 153` 자동 누적 → 다음 fire 차단. fire 마다 `gap_cooldown` rm 강제 필요 (UX 이슈 — `--reset-cooldown` 플래그 후보).
+- proposed-by: agent (TECS-L C1 첫 LLM fire 시도, fire #5~#9, 2026-05-26)
+
 ## 2026-05-26T18:15Z — verify_cli arm/calc_dispatch 가 hexa binary 내장 → .hexa swap 무효, arm 활성 = source-build 필수 (#1230/#1235 보강)
 
 > #1230(calc-fn gap)·#1235(verify_cli sopfr/pow arm) 소스 land 후 활성 검증 중 발견. deployed .hexa swap + cache 75개 무효 후에도 sopfr 여전 🟠 — verify_cli/calc_dispatch 가 hexa binary 에 컴파일-내장돼 .hexa 소스 변경 무관.
