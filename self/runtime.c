@@ -2780,7 +2780,16 @@ HexaVal hexa_from_cstring(HexaVal ptr) {
 
 HexaVal hexa_ptr_null() { return hexa_int(0); }
 
-HexaVal hexa_ptr_addr(HexaVal v) {
+/* HEXA_BACKEND flip · 열셋째 increment — production-wire FOURTH PROBE.
+ * Marked `__attribute__((weak))` so a hexa-emit `_hexa_ptr_addr` strong
+ * symbol (emitted by test/native_build/emit_hexa_ptr_addr_native_o.hexa,
+ * gated by HEXA_NATIVE_RT_PTR_ADDR=1) overrides this C body at link time.
+ * Adapter body is the smallest in the series — 8 B (movz x0,#0; ret).
+ * No semantic divergence: HX_INT_U is bit-reinterpret regardless of the
+ * input tag, so the override matches the C body for ALL inputs. See
+ * `hexa_ptr_offset` (above) and `hexa_exit` (below) for prior overrides
+ * in the same recipe. */
+__attribute__((weak)) HexaVal hexa_ptr_addr(HexaVal v) {
     return hexa_int((int64_t)HX_INT_U(v));
 }
 
