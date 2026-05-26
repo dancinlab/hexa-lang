@@ -3654,10 +3654,8 @@ fn _test_to_i64_and_int_cmp() -> bool {
 //     br_cond p -> block 1, else block 2
 //   block 1: return ; block 2: return
 //   param n: i64 (type_id=1 → U64 %rd<id> via Pass 0)
-
-fn _local_i64(id: i64, name: string) -> Local {
-    return Local { id: id, arena_id: 1, type_id: 1, name_hint: name, precision: "" }
-}
+//
+// (reuses the existing `_local_i64` helper — type_id=1 → U64 bank.)
 
 fn _build_case_mixed_width_cmp() -> MModule {
     let i_idx = _local(0, "i")        // STMT_CALL gpu_thread_id_x → U32 %r0
