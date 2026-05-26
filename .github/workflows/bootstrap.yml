@@ -120,6 +120,20 @@ jobs:
           echo "smoke output: $OUT"
           [[ "$OUT" == "ok" ]] || { echo "::error::smoke failed (got '$OUT')"; exit 1; }
 
+      - name: stdlib ci-gate — run @ci_gate-marked stdlib tests (strict)
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Closes the INBOX "stdlib *_test.hexa never run in CI" gap. Runs ONLY
+          # the curated network-free subset opted in with a `// @ci_gate` marker
+          # (the aggregator discovers 207 tests, most of which hit external APIs).
+          # --ci-gate implies --strict → exit 1 on any FAIL/TIMEOUT/ERROR.
+          export HEXA_BIN="$PWD/hexa"
+          export HEXA_LANG="$PWD"
+          export HEXA_MODULE_LOADER="$PWD/build/hexa_module_loader"
+          export HEXA_MAC_BUILD_OK=1
+          ./hexa tool/stdlib_selftest_aggregate.hexa --ci-gate
+
       - name: Tail logs on failure
         if: failure()
         shell: bash
@@ -220,6 +234,20 @@ jobs:
           echo "smoke output: $OUT"
           [[ "$OUT" == "ok" ]] || { echo "::error::smoke failed (got '$OUT')"; exit 1; }
 
+      - name: stdlib ci-gate — run @ci_gate-marked stdlib tests (strict)
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Closes the INBOX "stdlib *_test.hexa never run in CI" gap. Runs ONLY
+          # the curated network-free subset opted in with a `// @ci_gate` marker
+          # (the aggregator discovers 207 tests, most of which hit external APIs).
+          # --ci-gate implies --strict → exit 1 on any FAIL/TIMEOUT/ERROR.
+          export HEXA_BIN="$PWD/hexa"
+          export HEXA_LANG="$PWD"
+          export HEXA_MODULE_LOADER="$PWD/build/hexa_module_loader"
+          export HEXA_MAC_BUILD_OK=1
+          ./hexa tool/stdlib_selftest_aggregate.hexa --ci-gate
+
       - name: Tail logs on failure
         if: failure()
         shell: bash
@@ -311,6 +339,20 @@ jobs:
           OUT="$(/tmp/hexa_ci/hi)"
           echo "smoke output: $OUT"
           [[ "$OUT" == "ok" ]] || { echo "::error::smoke failed (got '$OUT')"; exit 1; }
+
+      - name: stdlib ci-gate — run @ci_gate-marked stdlib tests (strict)
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Closes the INBOX "stdlib *_test.hexa never run in CI" gap. Runs ONLY
+          # the curated network-free subset opted in with a `// @ci_gate` marker
+          # (the aggregator discovers 207 tests, most of which hit external APIs).
+          # --ci-gate implies --strict → exit 1 on any FAIL/TIMEOUT/ERROR.
+          export HEXA_BIN="$PWD/hexa"
+          export HEXA_LANG="$PWD"
+          export HEXA_MODULE_LOADER="$PWD/build/hexa_module_loader"
+          export HEXA_MAC_BUILD_OK=1
+          ./hexa tool/stdlib_selftest_aggregate.hexa --ci-gate
 
       - name: Tail logs on failure
         if: failure()

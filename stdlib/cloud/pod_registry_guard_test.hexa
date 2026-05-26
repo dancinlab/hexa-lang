@@ -1,3 +1,4 @@
+// @ci_gate — pure · network-free · deterministic (stdlib_selftest_aggregate --ci-gate)
 // stdlib/cloud/pod_registry_guard_test.hexa — guard for the registry pod-id
 // sink filter (#1229 B). `pod_registry_record` drops any token that is not a
 // provider pod-id (ssh destination / host / IP / path / argv fragment), which
