@@ -1,0 +1,6 @@
+=== E02 : hexa verify --expr tau 6 4 ===
+verify --expr tau(6)=4
+  calc   = 4  == expected 4
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+  absorb = ⚠ atlas register did NOT confirm fold; invocation:
+           hexa atlas register --from-verify tau 6 4
