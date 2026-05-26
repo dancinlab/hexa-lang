@@ -29,8 +29,8 @@
 //     produced .o's runtime emit (the 16 bytes come from rt_exit()).
 //   - no binaries committed.
 
-use self/codegen/runtime_arm64
-use self/codegen/macho
+use "self/codegen/runtime_arm64"
+use "self/codegen/macho"
 
 fn poc_emit_rt_exit_obj() {
     println("[poc] chunk B/A bridge — hexa-native .o emit for rt_exit")
