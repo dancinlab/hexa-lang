@@ -27,8 +27,16 @@
 //                                   the V=256-era opt_adamw_step trajectory
 //                                   bit-for-bit unchanged (host path preserved)
 //
-// All must be max|Δ| = 0 (the no-CUDA CPU fallback must reproduce the host
-// loop exactly). Any mismatch ⇒ the kernel CPU-fallback diverges from the
+// Tolerance: the PURE-SCALAR / copy paths (FWD copy, DTEMB outer-accumulate,
+// SMALLN host path) must be EXACTLY max|Δ| = 0. The two REDUCTION paths that
+// run through FMA-fusible C in the kernel CPU helper — dzT (Σ_r M[r·C+k]·u[r]
+// in _hx_farr_matmul_t_cpu, clang -O2 FMA-fuses `O[k] += mr[k]·ur`) and AdamW
+// (the W-update `W − lr·wd·W − lr·m̂/denom`) — differ from the hexa-side
+// scalar reference in the last ulp (FMA single-round vs separate mul+add).
+// That is the documented RFC-040 §2.2 FMA-vs-hexa-scalar caveat — the SAME
+// reason the existing flame_nn_test.hexa gates nn_lm_head_fwd / nn_linear_fwd
+// at < 1e-12 not == 0. Those two are gated at < 1e-12 (measured Δ ≈ 1e-17/19).
+// Any deviation ABOVE these bounds ⇒ the kernel CPU-fallback diverges from the
 // host loop ⇒ that wiring is unsound; report the Δ.
 // ════════════════════════════════════════════════════════════════════════
 
@@ -313,30 +321,35 @@ if lh_dtemb == 0.0 {
     print("FAIL  F-AGTAPE-WIRE-LMHEAD-BWD-DTEMB  max|Δ|="); print(lh_dtemb); println(" (must be 0.0)")
 }
 
-if lh_dzT == 0.0 {
-    println("PASS  F-AGTAPE-WIRE-LMHEAD-BWD-DZT    max|dzT(farr_matmul_t_gpu+farr_copy_slice_gpu) − host tembᵀ·dl| = 0.0 (byte-eq)")
+// dzT goes through _hx_farr_matmul_t_cpu's FMA-fusible reduction → RFC-040
+// §2.2 measured fp-tol (< 1e-12), same as nn_lm_head_fwd in flame_nn_test.
+if lh_dzT < 0.000000000001 {
+    print("PASS  F-AGTAPE-WIRE-LMHEAD-BWD-DZT    max|dzT(farr_matmul_t_gpu+farr_copy_slice_gpu) − host tembᵀ·dl|="); print(lh_dzT); println(" < 1e-12 (RFC 040 §2.2 FMA-vs-scalar last-ulp)")
     pass = pass + 1
 } else {
-    print("FAIL  F-AGTAPE-WIRE-LMHEAD-BWD-DZT    max|Δ|="); print(lh_dzT); println(" (must be 0.0)")
+    print("FAIL  F-AGTAPE-WIRE-LMHEAD-BWD-DZT    max|Δ|="); print(lh_dzT); println(" (>1e-12)")
 }
 
 let aw = check_adamw_kernel()
 let aw_w = t_get(aw, 0)
 let aw_m = t_get(aw, 1)
 let aw_v = t_get(aw, 2)
-if aw_w == 0.0 {
-    if aw_m == 0.0 {
-        if aw_v == 0.0 {
-            println("PASS  F-AGTAPE-WIRE-ADAMW-KERNEL      max|{W,m,v}_kernel − {W,m,v}_host-mirror| = 0.0 over 3 steps (byte-eq · decoupled-wd FP64 ref)")
+// Every AdamW lane (m = b1·m+(1−b1)·g ; v = b2·v+(1−b2)·g² ; the W update)
+// threads through FMA-fusible C in _hx_farr_adamw_step_cpu vs the hexa-side
+// scalar mirror → RFC-040 §2.2 last-ulp fp-tol (< 1e-12; measured ≈ 1e-17).
+if aw_m < 0.000000000001 {
+    if aw_v < 0.000000000001 {
+        if aw_w < 0.000000000001 {
+            print("PASS  F-AGTAPE-WIRE-ADAMW-KERNEL      max|{W,m,v}_kernel − host-mirror|=("); print(aw_w); print(","); print(aw_m); print(","); print(aw_v); println(") < 1e-12 (RFC 040 §2.2 FMA) over 3 steps")
             pass = pass + 1
         } else {
-            print("FAIL  F-AGTAPE-WIRE-ADAMW-KERNEL      v deviation max|Δ|="); println(aw_v)
+            print("FAIL  F-AGTAPE-WIRE-ADAMW-KERNEL      W deviation max|Δ|="); print(aw_w); println(" (>1e-12)")
         }
     } else {
-        print("FAIL  F-AGTAPE-WIRE-ADAMW-KERNEL      m deviation max|Δ|="); println(aw_m)
+        print("FAIL  F-AGTAPE-WIRE-ADAMW-KERNEL      v deviation max|Δ|="); print(aw_v); println(" (>1e-12)")
     }
 } else {
-    print("FAIL  F-AGTAPE-WIRE-ADAMW-KERNEL      W deviation max|Δ|="); println(aw_w)
+    print("FAIL  F-AGTAPE-WIRE-ADAMW-KERNEL      m deviation max|Δ|="); print(aw_m); println(" (>1e-12)")
 }
 
 let sn = check_adamw_smalln_eq()
