@@ -663,6 +663,172 @@ verdict: `.verdicts/macho-multi-symbol/poc_multi_sym.txt` (verbatim).
   artifact 완성. 본 PoC 가 그 형판 (캘러 = clang shim, 차후 = hexa-native
   exec-wrap).
 
+### 여섯째 emit-side increment (2026-05-26 · 🛸 4-primitive arena bundle — `rt_arena_{init,alloc,reset,release}` → hexa-emit `.o` → C 캘러 RUN rc=42)
+
+다섯째 increment 의 `macho_obj_wrap_v3` (N-symbol strtab + optional `__const`)
+과 PR #1315 의 widened 바이트 (`adr x9, #0` → `adrp x9, _arena_state@PAGE` +
+`add x9, x9, _arena_state@PAGEOFF` placeholder pair) 가 합쳐져 **네 개의
+arena primitive 전체를 한 `.o` 로 emit + link + RUN** 하는 chunk-B/A
+가교 형판이 완성된다. 본 increment 가 `runtime_arm64.hexa::rt_arena_*` 의
+모든 byte-emit 함수를 처음으로 production-wire 형태로 묶는다 (#1311 의
+잔여 (C)).
+
+**구성**:
+
+- `test/native_build/poc_arena_bundle_emit.hexa` — 4 primitive 의 바이트
+  배열을 verbatim inline (76+48+20+68 = **212 바이트** `__text`) → 5
+  심볼 (init/alloc/reset/release + `_arena_state`) + **10 reloc** (PAGE21
+  + PAGEOFF12 × 5 ADRP+ADD 쌍) → `macho_obj_wrap_v3_arena` (v3 의 PoC
+  variant — `_arena_state` 를 writable `(__DATA, __data)` 에 둠) → 791
+  → 863 바이트 `.o`.
+- `test/native_build/poc_arena_bundle_caller.c` — link-only `clang`
+  엔트리. `rt_arena_init(1)` (1 MiB) → `p1 = rt_arena_alloc(64)` →
+  `p2 = rt_arena_alloc(32)` (검증: `p2 == p1+64`) → `rt_arena_reset()`
+  → `p3 = rt_arena_alloc(16)` (검증: `p3 == p1` after reset) →
+  `rt_arena_release()` → `return 42`.
+
+**reloc 오프셋 맵** (`__text` 시작 = 0):
+
+| 함수 | 오프셋 | ADRP @ | ADD @ |
+|---|---|---|---|
+| `rt_arena_init`    |   0 |  44 |  48 |
+| `rt_arena_alloc`   |  76 |  76 |  80 |
+| `rt_arena_reset`   | 124 | 124 | 128 |
+| `rt_arena_release` | 144 | 152 | 156 |
+| `rt_arena_release` | 144 | 180 | 184 |
+
+5 ADRP + 5 PAGEOFF12 = **10 reloc** 레코드, 모두 `_arena_state` (심볼
+인덱스 4, `__data` 섹션 = sect=2) 타겟.
+
+**emit 측 변형 (PoC 한정)**:
+
+upstream `macho_obj_wrap_v3` 는 데이터 심볼을 `(__TEXT, __const)` 에
+배치한다 — 본 PoC 에서 그대로 쓰면 `rt_arena_init` 의 `str x0, [x9]` 가
+read-only 섹션에 쓰기 시도하여 **rc=138 (SIGSEGV)** 가 나온다. 본 PoC 는
+v3 의 thin variant `macho_obj_wrap_v3_arena` 를 새로 두어 데이터 심볼을
+**별개 `LC_SEGMENT_64 __DATA` + `(__DATA, __data)` 섹션 (init/maxprot
+= R+W)** 에 둔다. upstream v3 surface 는 unchanged (v3 의 기존 callers
+인 `poc_multi_sym_emit.hexa` 는 `state_bytes=[]` 라 영향 없음). v4 (또는
+`section_kind` flag 의 v3 확장) 으로의 promotion 은 별개 PR.
+
+**g5 verbatim — 로컬 emit 측 (Mac arm64)**:
+
+```
+$ /tmp/poc_arena_bundle_emit
+=== PoC arena bundle emit — 4 primitives + _arena_state in one .o ===
+rt_arena_init    : 76 bytes (76 expected)
+rt_arena_alloc   : 48 bytes (48 expected)
+rt_arena_reset   : 20 bytes (20 expected)
+rt_arena_release : 68 bytes (68 expected)
+total code       : 212 bytes (212 expected)
+placeholders     : ADRP@{44,76,124,152,180} + ADD@{48,80,128,156,184} OK
+nreloc           : 10 records (10 expected)
+obj size         : 863 bytes total
+MH_MAGIC_64      : cf fa ed fe OK
+filetype         : 1 (MH_OBJECT) OK
+wrote            : /tmp/poc_arena_bundle.o
+[poc] EMIT OK
+```
+
+```
+$ nm /tmp/poc_arena_bundle.o
+00000000000000d4 D _arena_state
+000000000000004c T _rt_arena_alloc
+0000000000000000 T _rt_arena_init
+0000000000000090 T _rt_arena_release
+000000000000007c T _rt_arena_reset
+```
+
+```
+$ otool -rv /tmp/poc_arena_bundle.o
+/tmp/poc_arena_bundle.o:
+Relocation information (__TEXT,__text) 10 entries
+address  pcrel length extern type    scattered symbolnum/value
+0000002c True  long   True   PAGE21  False     _arena_state
+00000030 False long   True   PAGOF12 False     _arena_state
+0000004c True  long   True   PAGE21  False     _arena_state
+00000050 False long   True   PAGOF12 False     _arena_state
+0000007c True  long   True   PAGE21  False     _arena_state
+00000080 False long   True   PAGOF12 False     _arena_state
+00000098 True  long   True   PAGE21  False     _arena_state
+0000009c False long   True   PAGOF12 False     _arena_state
+000000b4 True  long   True   PAGE21  False     _arena_state
+000000b8 False long   True   PAGOF12 False     _arena_state
+```
+
+**g5 verbatim — mini 호스트 link + RUN (Mac arm64 · pool offload)**:
+
+```
+$ pool on mini "clang /tmp/poc_arena_bundle_caller.c /tmp/poc_arena_bundle.o -o /tmp/poc_arena_bundle_run; /tmp/poc_arena_bundle_run; echo rc=$?"
+rc=42
+```
+
+```
+$ pool on mini "nm /tmp/poc_arena_bundle_run | grep -E 'rt_arena|arena_state'"
+0000000100008004 D _arena_state
+0000000100000674 T _rt_arena_alloc
+0000000100000628 T _rt_arena_init
+00000001000006b8 T _rt_arena_release
+00000001000006a4 T _rt_arena_reset
+```
+
+```
+$ pool on mini "otool -tv /tmp/poc_arena_bundle_run | sed -n '/^_rt_arena_alloc:/,/^_rt_arena_reset:/p'"
+_rt_arena_alloc:
+0000000100000674	adrp	x9, 8 ; 0x100008000
+0000000100000678	add	x9, x9, #0x4
+000000010000067c	ldr	x1, [x9, #0x8]
+0000000100000680	add	x2, x1, x0
+0000000100000684	ldr	x3, [x9, #0x10]
+0000000100000688	cmp	x2, x3
+000000010000068c	b.hi	0x10000069c
+0000000100000690	str	x2, [x9, #0x8]
+0000000100000694	mov	x0, x1
+0000000100000698	ret
+000000010000069c	mov	x0, #0x0
+00000001000006a0	ret
+```
+
+**closure**: 다섯 개의 ADRP+ADD 쌍이 전부 `0x100008000 + 0x4 = 0x100008004
+= _arena_state` 로 해소된다 (`nm` 의 D 심볼 주소와 byte-eq). `rt_arena_init`
+의 `mmap(MAP_ANON|PRIV)` syscall + `_arena_state.{base,ptr,end}` 세 store
+→ `rt_arena_alloc` 의 bump-ptr + bound check + 신구 ptr 반환 →
+`rt_arena_reset` 의 `state.ptr = state.base` → 두 번째 alloc 의 reset
+verifiable (`p3 == p1`) → `rt_arena_release` 의 `munmap(size = end-base)`
++ 세 store 0 → C 캘러 `return 42` → shell `rc=42`. 모든 state 변환이
+관측 가능.
+
+**no-regression**:
+
+- v1 PoC (`poc_rt_exit_obj_emit.hexa` PR #1297) — local rebuild + emit
+  PASS (`OK: built /tmp/poc_rt_exit_obj_emit_run` + `[poc] EMIT OK —
+  link/run via host shell driver`).
+- v2 PoC (`poc_arena_reloc_emit.hexa` PR #1302) — local rebuild + emit
+  PASS (`obj size : 425 bytes total` + `MH_MAGIC_64 : cf fa ed fe OK`).
+- v3 PoC (`poc_multi_sym_emit.hexa` PR #1311) — local rebuild + emit
+  PASS (`obj size : 391 bytes total` + `[poc] EMIT OK`).
+- `runtime_arm64.hexa` self-test — 76/48/20/68 byte widening 유지 + 11
+  primitive `ALL CHECKS PASS` (각 함수 size + RET trailer + svc trailer
+  + mmap/munmap syscall imm verified).
+- `self/codegen/macho.hexa` 의 `macho_obj_wrap_v3` body — **untouched**
+  (v3-arena 는 PoC 한정 variant; upstream surface 변경 없음).
+
+**잔여 (다음 emit-side inc 후보)**:
+
+- (A) v3 promotion — v3-arena 의 `(__DATA, __data)` placement 옵션을
+  upstream `macho_obj_wrap_v3` 에 `section_kind` arg (0=__text · 1=__const ·
+  2=__data) 로 흡수. v3-arena PoC variant 삭제 (DRY · 기능 차이 0).
+- (B) production-wire — `compile_pipeline` 가 `runtime_arm64.hexa` 의 11
+  primitive (rt_exit·rt_print_str·rt_println·rt_print_int·rt_alloc·
+  rt_str_len·rt_arena_{init,alloc,reset,release} + NEON 3) 를 concat
+  해 `macho_obj_wrap_v3` 에 넘기고 `clang ... runtime.c` 대신 그 `.o`
+  를 입력으로 link. 본 PoC 가 그 형판 (캘러 = clang shim, 차후 =
+  hexa-native exec-wrap).
+- (C) v3 → exec-wrap pivot — 위 (B) 의 `.o` 를 `clang` 없이 hexa-native
+  `macho_exec_wrap` 으로 직접 link (PR #1282 의 `tool/hexa_ld.hexa`
+  PAGE21/PAGEOFF12 자체 적용). 그 시점에 `HEXA_BACKEND=hexa` 의 *전형*
+  artifact 가 `cc`-free 가 된다.
+
 ## Domain map (Phase 0 → 3 + post)
 
 ```
