@@ -311,6 +311,8 @@ fn _nvptx_lookup_reg_for_local(kinds: [PReg], id: i64) -> string {
     let n_f32 = _nvptx_reg_f32(id)
     let n_e4m3 = _nvptx_reg_f8_e4m3(id)
     let n_e5m2 = _nvptx_reg_f8_e5m2(id)
+    // PR-C piece 4+5 — SHARED base pointer reg name (`%sh<id>`).
+    let n_sh   = _nvptx_reg_shared(id)
     let mut i = 0
     while i < len(kinds) {
         let n = kinds[i].name
@@ -323,6 +325,7 @@ fn _nvptx_lookup_reg_for_local(kinds: [PReg], id: i64) -> string {
         if n == n_f32 { return n_f32 }
         if n == n_e4m3 { return n_e4m3 }
         if n == n_e5m2 { return n_e5m2 }
+        if n == n_sh   { return n_sh }
         i = i + 1
     }
     return n_f64
@@ -342,6 +345,8 @@ fn _nvptx_lookup_kind_for_local(kinds: [PReg], id: i64) -> string {
     let n_f32 = _nvptx_reg_f32(id)
     let n_e4m3 = _nvptx_reg_f8_e4m3(id)
     let n_e5m2 = _nvptx_reg_f8_e5m2(id)
+    // PR-C piece 4+5 — SHARED reg-name probe.
+    let n_sh   = _nvptx_reg_shared(id)
     let mut i = 0
     while i < len(kinds) {
         let r = kinds[i]
@@ -354,6 +359,7 @@ fn _nvptx_lookup_kind_for_local(kinds: [PReg], id: i64) -> string {
         if r.name == n_f32 { return NVPTX_RKIND_F32 }
         if r.name == n_e4m3 { return NVPTX_RKIND_F8_E4M3 }
         if r.name == n_e5m2 { return NVPTX_RKIND_F8_E5M2 }
+        if r.name == n_sh   { return NVPTX_RKIND_SHARED }
         i = i + 1
     }
     return NVPTX_RKIND_F64
@@ -412,6 +418,34 @@ fn _nvptx_ld_mnem_for_kind(kind: string) -> string {
     if kind == NVPTX_RKIND_U64 { return PTX_OP_LD_GLOBAL_U64 }
     if kind == NVPTX_RKIND_U32 { return PTX_OP_LD_GLOBAL_U32 }
     return PTX_OP_LD_GLOBAL_F64
+}
+
+// PR-C piece 5 — shared-bank load mnemonic per RKIND. Mirrors
+// `_nvptx_ld_mnem_for_kind` but emits `ld.shared.<ty>` (the address-space
+// token switches from `.global` to `.shared`). The element-type token
+// itself follows the same PR #189 convention — `.f16` / `.bf16` storage
+// is `.b16` (ptxas rejects `ld.shared.f16`), fp8 is `.b8`.
+fn _nvptx_ld_shared_mnem_for_kind(kind: string) -> string {
+    if kind == NVPTX_RKIND_F16 { return "ld.shared.b16" }
+    if kind == NVPTX_RKIND_BF16 { return "ld.shared.b16" }
+    if kind == NVPTX_RKIND_F32 { return "ld.shared.f32" }
+    if kind == NVPTX_RKIND_F8_E4M3 { return "ld.shared.b8" }
+    if kind == NVPTX_RKIND_F8_E5M2 { return "ld.shared.b8" }
+    if kind == NVPTX_RKIND_U64 { return "ld.shared.u64" }
+    if kind == NVPTX_RKIND_U32 { return "ld.shared.u32" }
+    return PTX_OP_LD_SHARED_F64
+}
+
+// PR-C piece 5 — shared-bank store mnemonic per RKIND.
+fn _nvptx_st_shared_mnem_for_kind(kind: string) -> string {
+    if kind == NVPTX_RKIND_F16 { return "st.shared.b16" }
+    if kind == NVPTX_RKIND_BF16 { return "st.shared.b16" }
+    if kind == NVPTX_RKIND_F32 { return "st.shared.f32" }
+    if kind == NVPTX_RKIND_F8_E4M3 { return "st.shared.b8" }
+    if kind == NVPTX_RKIND_F8_E5M2 { return "st.shared.b8" }
+    if kind == NVPTX_RKIND_U64 { return "st.shared.u64" }
+    if kind == NVPTX_RKIND_U32 { return "st.shared.u32" }
+    return PTX_OP_ST_SHARED_F64
 }
 
 // _nvptx_st_mnem_for_kind — global store mnemonic per RKIND.
@@ -883,6 +917,18 @@ fn _nvptx_lower_stmt(buf: [LInstr], s: Stmt, kinds: [PReg], shared_idx_off: [i64
             if len(dst_kind) == 0 {
                 dst_kind = _nvptx_lookup_kind_for_local(kinds, s.dst.id)
             }
+            // PR-C piece 5 — @shared bank detection. If the base operand
+            // is a Local whose PReg kind is SHARED, the IndexGet routes
+            // to `ld.shared.<ty>` instead of `ld.global.<ty>`. The element
+            // type defaults to f64 when no array-elem hint is attached
+            // (the SHARED base PReg has no frag_dtype-as-elem hint today
+            // — sm Locals are typeless in MIR; future cycles thread the
+            // element kind via Local.precision or a dedicated field).
+            let mut is_shared = false
+            if s.args[0].kind == "local" {
+                let base_kind = _nvptx_lookup_kind_for_local(kinds, s.args[0].local_id)
+                if base_kind == NVPTX_RKIND_SHARED { is_shared = true }
+            }
             let elem_size = _nvptx_elem_size_for_kind(dst_kind)
             let dst_reg = _nvptx_lookup_reg_for_local(kinds, s.dst.id)
             let base_reg = _nvptx_operand_text_kinds(s.args[0], kinds)
@@ -921,8 +967,14 @@ fn _nvptx_lower_stmt(buf: [LInstr], s: Stmt, kinds: [PReg], shared_idx_off: [i64
             let mut a3 = []
             a3.push(_nvptx_op(dst_reg))
             a3.push(_nvptx_op(_nvptx_addr_deref(addr_reg)))
-            let mnem = _nvptx_ld_mnem_for_kind(dst_kind)
-            out.push(_nvptx_instr(mnem, a3, "ld base[idx] (" + _nvptx_kind_short_label(dst_kind) + ")"))
+            // PR-C piece 5 — address-space dispatch. SHARED base → `ld.shared.<ty>`,
+            // every other base (.global default + future .const / .param) stays
+            // on `ld.global.<ty>`. This is the byte-eq-preserving leaf swap: the
+            // operand shape (dst_reg + addr_reg dereference) is identical to the
+            // existing path; only the mnemonic prefix `.global` → `.shared`.
+            let mnem = if is_shared { _nvptx_ld_shared_mnem_for_kind(dst_kind) } else { _nvptx_ld_mnem_for_kind(dst_kind) }
+            let space_tag = if is_shared { " .shared" } else { "" }
+            out.push(_nvptx_instr(mnem, a3, "ld base[idx]" + space_tag + " (" + _nvptx_kind_short_label(dst_kind) + ")"))
             return out
         }
         // RFC 071 P4+ (N59 G3) — `op == "index_set"` (IndexSet,
@@ -945,6 +997,12 @@ fn _nvptx_lower_stmt(buf: [LInstr], s: Stmt, kinds: [PReg], shared_idx_off: [i64
                 val_kind = base_elem_kind
             } else if val_op.kind == "local" {
                 val_kind = _nvptx_lookup_kind_for_local(kinds, val_op.local_id)
+            }
+            // PR-C piece 5 — @shared store detection (mirrors IndexGet).
+            let mut is_shared_set = false
+            if s.args[0].kind == "local" {
+                let base_kind_s = _nvptx_lookup_kind_for_local(kinds, s.args[0].local_id)
+                if base_kind_s == NVPTX_RKIND_SHARED { is_shared_set = true }
             }
             let elem_size = _nvptx_elem_size_for_kind(val_kind)
             let base_reg = _nvptx_operand_text_kinds(s.args[0], kinds)
@@ -978,8 +1036,10 @@ fn _nvptx_lower_stmt(buf: [LInstr], s: Stmt, kinds: [PReg], shared_idx_off: [i64
             let mut a3 = []
             a3.push(_nvptx_op(_nvptx_addr_deref(addr_reg)))
             a3.push(_nvptx_op(val_reg))
-            let mnem = _nvptx_st_mnem_for_kind(val_kind)
-            out.push(_nvptx_instr(mnem, a3, "st base[idx] = val (" + _nvptx_kind_short_label(val_kind) + ")"))
+            // PR-C piece 5 — address-space dispatch (mirror of IndexGet).
+            let mnem = if is_shared_set { _nvptx_st_shared_mnem_for_kind(val_kind) } else { _nvptx_st_mnem_for_kind(val_kind) }
+            let space_tag = if is_shared_set { " .shared" } else { "" }
+            out.push(_nvptx_instr(mnem, a3, "st base[idx] = val" + space_tag + " (" + _nvptx_kind_short_label(val_kind) + ")"))
             return out
         }
         // RFC 071 P4+ (N59 G5) — `_miss_local()` sentinel guard. A
@@ -1683,6 +1743,57 @@ pub let NVPTX_RKIND_B32: string = "b32raw"  // %shfl_*<id>  .reg .b32
 // f16×f16→f32 MMA family). NOT a working register allocation.
 pub let NVPTX_RKIND_FRAG: string = "frag"   // wmma fragment (scaffold — see RFC 055 §12 P4+)
 
+// PR-C piece 4+5 — @shared local memory bank. A Local whose source-level
+// declaration carries an `@shared` annotation lowers (via hir_to_mir's
+// `_space_from_let_anns` + `_fresh_local_with_space`) into a MIR Local with
+// `Local.space == "shared"`. _nvptx_classify_locals' Pass 0.5 (new) recognises
+// the tag and lands the Local in the SHARED bank — a `.u64` base register
+// `%sh<id>` initialised at kernel entry with `mov.u64 %sh<id>, _hexa_sh_<fn>
+// + <offset>;` (the staging slot lives in `.shared` memory, allocated per-
+// kernel by `_emit_ptx_func`). IndexGet/IndexSet sites whose base operand
+// classifies SHARED route through `ld.shared.<ty>` / `st.shared.<ty>`
+// instead of the default `.global` mnemonic. The per-Local byte offset is
+// carried as a decimal string in PReg.frag_layout (Pass 0.5 cumulates
+// across all shared Locals in fn order). Per-fn total shared bytes =
+// `max(offset + size)` — derived in `_emit_ptx_func` by re-walking the
+// callee_saved roster (no MFunc handle needed there).
+pub let NVPTX_RKIND_SHARED: string = "shared"
+
+// PR-C piece 4+5 — default byte size per @shared Local. The HIR layer does
+// not thread fixed-array sizes yet (no `[T; N]` syntactic surface today),
+// so a synthetic placeholder of 2048 B per shared Local is used (matches
+// the WMMA staging-slot convention + the discovery falsifier expectation
+// `@shared let sm: [f64; 256]` = 256 × 8 = 2048 B). When fixed-array sizes
+// land in MIR (future cycle), this default falls away — Local.type_id
+// (or an explicit byte-size field) provides the real value.
+pub let _nvptx_shared_default_bytes: i64 = 2048
+
+// _nvptx_reg_shared — PTX virtual register for a @shared base pointer.
+// One `.u64` reg per shared Local, holding `_hexa_sh_<fn> + offset`.
+fn _nvptx_reg_shared(id: i64) -> string {
+    return "%sh" + to_string(id)
+}
+
+// _nvptx_parse_i64 — minimal decimal-string → i64 decoder. Self-contained
+// (no stdlib dep) so the PR-C piece 4+5 SHARED-offset/size decode at the
+// `_emit_ptx_func` site has no new imports. Returns 0 on empty / non-digit
+// input — safe-default the caller path (the shared-bytes total is then 0,
+// which already short-circuits the `.shared` directive emit).
+fn _nvptx_parse_i64(s: string) -> i64 {
+    if len(s) == 0 { return 0 }
+    let mut acc: i64 = 0
+    let mut i = 0
+    let n = len(s)
+    while i < n {
+        let c = s[i]
+        if c < "0" || c > "9" { return 0 }
+        let d: i64 = (c.code() - 48) as i64
+        acc = acc * 10 + d
+        i = i + 1
+    }
+    return acc
+}
+
 // RFC 055 §12 P4+ — mixed-precision PTX type SCAFFOLD. New register
 // banks for F16 / BF16 / F32 sit alongside the F64/U32/U64/PRED set.
 // SCAFFOLD-ONLY: only the classifier + .reg-declaration side is wired;
@@ -1770,6 +1881,8 @@ fn _nvptx_reg_name_for(kind: string, id: i64) -> string {
     // RFC 067 P1 — WMMA fragment base name. Elements are
     // `<base>_e<i>` for i in 0.._nvptx_frag_width.
     if kind == NVPTX_RKIND_FRAG { return _nvptx_reg_frag(id) }
+    // PR-C piece 4+5 — @shared base pointer (`%sh<id>`).
+    if kind == NVPTX_RKIND_SHARED { return _nvptx_reg_shared(id) }
     return _nvptx_reg_f64(id)   // F64 default
 }
 
@@ -1796,6 +1909,11 @@ fn _nvptx_kind_to_ptx_ty(kind: string) -> string {
     // (e.g. `cvt.rn.f16.e4m3 %fh<n>, %fe3<n>;`). See PTX ISA §9.7.13.5.
     if kind == NVPTX_RKIND_F8_E4M3 { return ".b8" }
     if kind == NVPTX_RKIND_F8_E5M2 { return ".b8" }
+    // PR-C piece 4+5 — the SHARED bank holds a `.u64` device pointer that
+    // is INITIALISED via `mov.u64 %sh<id>, _hexa_sh_<fn>+<off>;` and then
+    // dereferenced through `ld.shared.<ty>` / `st.shared.<ty>` at the
+    // IndexGet/Set sites. The `.reg` declaration is therefore `.u64`.
+    if kind == NVPTX_RKIND_SHARED { return ".u64" }
     return ".f64"
 }
 
@@ -2089,6 +2207,53 @@ fn _nvptx_classify_locals(mfn: MFunc) -> [PReg] {
             }
             pp = pp + 1
         }
+    }
+    // PR-C piece 4+5 — Pass 0.5 (NEW): @shared body-Local classification.
+    // Walk MFunc.locals (NOT params — params are device pointers, not
+    // shared) for any Local whose `space == "shared"` and stamp it into
+    // the SHARED bank. Each shared Local gets:
+    //   - PReg.name  = "%sh<id>"
+    //   - PReg.kind  = NVPTX_RKIND_SHARED
+    //   - PReg.frag_layout = byte-offset within the per-fn `_hexa_sh_<fn>`
+    //                        staging slot (as a decimal string)
+    //   - PReg.frag_dtype  = byte size of THIS shared Local (decimal)
+    // Offsets accumulate in declaration order; default size is
+    // `_nvptx_shared_default_bytes` (2048 B — matches the WMMA staging
+    // convention and the discovery falsifier's `sm[256] f64` shape).
+    //
+    // The PReg is INITIALISED at kernel-entry by `_nvptx_lower_func`
+    // (`mov.u64 %sh<id>, _hexa_sh_<fn> + <offset>;` — see the prologue
+    // section that mirrors WMMA staging init). IndexGet/Set sites whose
+    // base local resolves to SHARED route through `ld.shared.<ty>` /
+    // `st.shared.<ty>` instead of `.global` (piece 5).
+    let mut shared_off: i64 = 0
+    let mut li = 0
+    while li < len(mfn.locals) {
+        let lloc = mfn.locals[li]
+        if lloc.space == "shared" {
+            // Skip duplicates — a `let` inside the same fn rebinding the
+            // same id (parser CSE shouldn't produce this, but the guard
+            // keeps the contract obvious).
+            let mut dup = false
+            let mut k = 0
+            while k < len(seen_ids) {
+                if seen_ids[k] == lloc.id { dup = true }
+                k = k + 1
+            }
+            if !dup {
+                let sz = _nvptx_shared_default_bytes
+                regs.push(PReg {
+                    name: _nvptx_reg_shared(lloc.id),
+                    kind: NVPTX_RKIND_SHARED,
+                    frag_role: "",
+                    frag_dtype: to_string(sz),
+                    frag_layout: to_string(shared_off)
+                })
+                seen_ids.push(lloc.id)
+                shared_off = shared_off + sz
+            }
+        }
+        li = li + 1
     }
     // Pass 1 — defining-stmt classification.
     let mut bi = 0
@@ -2836,6 +3001,25 @@ fn _nvptx_lower_func(mfn_in: MFunc, target: string) -> LFunc {
             }
             pi3 = pi3 + 1
         }
+        // PR-C piece 4+5 — @shared base init prologue. For every PReg in
+        // the SHARED bank (one per `@shared` Local; Pass 0.5 of
+        // `_nvptx_classify_locals`), emit one initializer line:
+        //   mov.u64 %sh<id>, _hexa_sh_<fn> + <offset>;
+        // The staging-slot symbol `_hexa_sh_<fn>` is declared by
+        // `_emit_ptx_func` (mirror of WMMA `_hexa_wmma_stage_<fn>`).
+        let mut sh_pi = 0
+        let slot_sym = "_hexa_sh_" + mfn.name
+        while sh_pi < len(regs) {
+            let sh_r = regs[sh_pi]
+            if sh_r.kind == NVPTX_RKIND_SHARED {
+                let mut sa = []
+                sa.push(_nvptx_op(sh_r.name))
+                sa.push(_nvptx_op(slot_sym + " + " + sh_r.frag_layout))
+                instrs.push(_nvptx_instr("mov.u64", sa,
+                    "init @shared base = " + slot_sym + " + " + sh_r.frag_layout))
+            }
+            sh_pi = sh_pi + 1
+        }
         let mut si0 = 0
         while si0 < len(entry_blk.stmts) {
             let s0 = entry_blk.stmts[si0]
@@ -3310,6 +3494,41 @@ fn _emit_ptx_func(f: LFunc) -> string {
             slot_base = slot_base.substring(kp_len2, len(slot_base))
         }
         parts.push("    .shared .align 16 .b8 _hexa_wmma_stage_" + slot_base + "[2048];\n")
+    }
+    // PR-C piece 4+5 — generic `@shared` staging-slot declaration. Mirror
+    // of the WMMA staging emit above. When any callee_saved entry has
+    // kind=NVPTX_RKIND_SHARED (the new bank added by Pass 0.5 of
+    // `_nvptx_classify_locals` when a source-level `@shared let sm: [T; N]`
+    // lowers through hir_to_mir's `_space_from_let_anns` /
+    // `_fresh_local_with_space`), emit one `.shared .align 8 .b8
+    // _hexa_sh_<fn>[<total_bytes>];` per kernel. The per-Local byte offset
+    // lives in PReg.frag_layout (as a decimal string) and the per-Local
+    // size lives in PReg.frag_dtype; total bytes = max(offset + size) across
+    // all SHARED rows. The slot name carries the function-name suffix so
+    // multiple `@shared`-bearing kernels in one PTX module don't collide.
+    let mut sh_total_bytes: i64 = 0
+    let mut sh_scan = 0
+    while sh_scan < len(f.callee_saved) {
+        let sr = f.callee_saved[sh_scan]
+        if sr.kind == NVPTX_RKIND_SHARED {
+            let off = _nvptx_parse_i64(sr.frag_layout)
+            let sz  = _nvptx_parse_i64(sr.frag_dtype)
+            let endb = off + sz
+            if endb > sh_total_bytes { sh_total_bytes = endb }
+        }
+        sh_scan = sh_scan + 1
+    }
+    if sh_total_bytes > 0 {
+        // Use the bare LFunc.name (kernel-prefix stripped if present) so
+        // the symbol matches the `mov.u64 %sh<id>, _hexa_sh_<NAME> + <off>`
+        // initializer emitted by `_nvptx_lower_func` (which uses mfn.name —
+        // the kernel-prefix-FREE form).
+        let mut sh_slot_base = f.name
+        let kp_len_sh = len(NVPTX_KERNEL_PREFIX)
+        if len(sh_slot_base) > kp_len_sh && sh_slot_base.substring(0, kp_len_sh) == NVPTX_KERNEL_PREFIX {
+            sh_slot_base = sh_slot_base.substring(kp_len_sh, len(sh_slot_base))
+        }
+        parts.push("    .shared .align 8 .b8 _hexa_sh_" + sh_slot_base + "[" + to_string(sh_total_bytes) + "];\n")
     }
     // `.reg .<ty>` declarations, one per Local — PTX requires every
     // virtual register be declared before use. The `<ty>` comes from
