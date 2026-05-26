@@ -215,6 +215,22 @@ pub fn sigma(n) -> int {
     sum
 }
 
+// sigma_star(n) = Σ_{d||n} d — sum of UNITARY divisors.
+// d||n ⟺ d|n AND gcd(d, n/d) = 1 (d and its cofactor are coprime).
+// Multiplicative; σ*(p^a) = p^a + 1 (the only unitary divisors of p^a
+// are 1 and p^a). n=6 is the smallest unitary-perfect: σ*(6) = 12 = 2·6.
+pub fn sigma_star(n) -> int {
+    let sum = 0
+    let i = 1
+    while i <= n {
+        if n % i == 0 {
+            if gcd(i, n / i) == 1 { sum = sum + i }
+        }
+        i = i + 1
+    }
+    sum
+}
+
 pub fn euler_phi(n) -> int {
     if n == 1 { return 1 }
     let count = 0
