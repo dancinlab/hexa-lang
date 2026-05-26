@@ -1,0 +1,1 @@
+- [~/.hx/bin symlink swap hazard](reference_hxbin_symlink_swap_hazard.md) — ~/.hx/bin/{self,tool,stdlib,compiler} 심볼릭을 worktree로 swap하면 그 worktree prune시 dangling→모든 hexa build(훅 포함) 깨짐. 2026-05-27 self-inflicted. fix=영속 sibling worktree + runtime.o + cc --regen. 진단=for n in ...; do [ -e ~/.hx/bin/$n ]...DANGLING
