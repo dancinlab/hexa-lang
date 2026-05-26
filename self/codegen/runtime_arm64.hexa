@@ -1114,11 +1114,16 @@ fn rt_arena_init() {
     c.push(16)
     c.push(0)
     c.push(212)
-    // adr x9, #0  (arena_state; codegen patches)    0x10000009
+    // adrp x9, _arena_state@PAGE  (PAGE21 reloc patches)  0x90000009
     c.push(9)
     c.push(0)
     c.push(0)
-    c.push(16)
+    c.push(144)
+    // add  x9, x9, _arena_state@PAGEOFF (PAGEOFF12 reloc) 0x91000129
+    c.push(41)
+    c.push(1)
+    c.push(0)
+    c.push(145)
     // str x0, [x9]       (state.base = x0)          0xF9000120
     c.push(32)
     c.push(1)
@@ -1164,11 +1169,16 @@ fn rt_arena_init() {
 
 fn rt_arena_alloc() {
     let mut c = []
-    // adr x9, #0  (arena_state; codegen patches)    0x10000009
+    // adrp x9, _arena_state@PAGE  (PAGE21 reloc patches)  0x90000009
     c.push(9)
     c.push(0)
     c.push(0)
-    c.push(16)
+    c.push(144)
+    // add  x9, x9, _arena_state@PAGEOFF (PAGEOFF12 reloc) 0x91000129
+    c.push(41)
+    c.push(1)
+    c.push(0)
+    c.push(145)
     // ldr x1, [x9, #8]   (x1 = state.ptr = old)     0xF9400521
     c.push(33)
     c.push(5)
@@ -1229,11 +1239,16 @@ fn rt_arena_alloc() {
 
 fn rt_arena_reset() {
     let mut c = []
-    // adr x9, #0  (arena_state; codegen patches)    0x10000009
+    // adrp x9, _arena_state@PAGE  (PAGE21 reloc patches)  0x90000009
     c.push(9)
     c.push(0)
     c.push(0)
-    c.push(16)
+    c.push(144)
+    // add  x9, x9, _arena_state@PAGEOFF (PAGEOFF12 reloc) 0x91000129
+    c.push(41)
+    c.push(1)
+    c.push(0)
+    c.push(145)
     // ldr x0, [x9]       (x0 = state.base)          0xF9400120
     c.push(32)
     c.push(1)
@@ -1269,11 +1284,16 @@ fn rt_arena_release() {
     c.push(3)
     c.push(0)
     c.push(145)
-    // adr x9, #0  (arena_state; codegen patches)    0x10000009
+    // adrp x9, _arena_state@PAGE  (PAGE21 reloc patches)  0x90000009
     c.push(9)
     c.push(0)
     c.push(0)
-    c.push(16)
+    c.push(144)
+    // add  x9, x9, _arena_state@PAGEOFF (PAGEOFF12 reloc) 0x91000129
+    c.push(41)
+    c.push(1)
+    c.push(0)
+    c.push(145)
     // ldr x0, [x9]       (x0 = state.base)          0xF9400120
     c.push(32)
     c.push(1)
@@ -1299,11 +1319,16 @@ fn rt_arena_release() {
     c.push(16)
     c.push(0)
     c.push(212)
-    // adr x9, #0  (arena_state; codegen patches)    0x10000009
+    // adrp x9, _arena_state@PAGE  (PAGE21 reloc patches)  0x90000009
     c.push(9)
     c.push(0)
     c.push(0)
-    c.push(16)
+    c.push(144)
+    // add  x9, x9, _arena_state@PAGEOFF (PAGEOFF12 reloc) 0x91000129
+    c.push(41)
+    c.push(1)
+    c.push(0)
+    c.push(145)
     // mov x10, #0                                    0xD280000A
     c.push(10)
     c.push(0)
