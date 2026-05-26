@@ -86,6 +86,28 @@ fn _cloud_help() {
     println("`host` is an ssh destination or ~/.ssh/config alias.")
 }
 
+// _mh_json_str — JSON-encode a path-typed string for the __MONITOR_HANDLE__=
+// one-liner emitted by `cloud nohup` (and later `cloud fire`). Escapes `"`
+// and `\\`; other control chars are vanishingly unlikely in the only inputs
+// (ssh host, remote logfile path). Mirrors the existing `__CLOUD_PID__=`
+// marker shape — caller extracts with grep '^__MONITOR_HANDLE__='.
+fn _mh_json_str(s: str) -> str {
+    let mut out = "\""
+    let mut i = 0
+    while i < len(s) {
+        let c = s.substring(i, i + 1)
+        if c == "\"" {
+            out = out + "\\\""
+        } else if c == "\\" {
+            out = out + "\\\\"
+        } else {
+            out = out + c
+        }
+        i = i + 1
+    }
+    return out + "\""
+}
+
 // _cli_atoi — parse a non-negative decimal string; non-digits ignored.
 fn _cli_atoi(s: str) -> int {
     let mut i = 0
@@ -803,6 +825,19 @@ fn main() {
             println(r.stdout_)
         }
         println("[cloud] " + r.message)
+        // __MONITOR_HANDLE__= : grep-able JSON one-liner so a harness (Monitor
+        // attach, micro-exp batch driver, a wrapping skill) can pick up host +
+        // pid + logfile + ready-to-run tail_cmd without parsing the human
+        // [cloud] message. Mirrors the existing __CLOUD_PID__= marker pattern.
+        // Emitted only on a successful dispatch with a known logfile path.
+        if r.ok == 1 && len(r.logfile) > 0 {
+            println("__MONITOR_HANDLE__={"
+                + "\"host\":" + _mh_json_str(host)
+                + ",\"pid\":" + str(r.pid)
+                + ",\"log\":" + _mh_json_str(r.logfile)
+                + ",\"tail_cmd\":" + _mh_json_str("hexa cloud tail " + host + " " + r.logfile)
+                + "}")
+        }
         if r.ok == 1 {
             let rc = _cloud_early_life_check(host, ssh_opts, r.pid, early_life)
             exit(rc)
