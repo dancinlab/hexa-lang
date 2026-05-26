@@ -154,6 +154,9 @@ pub fn calc_is_float_fn(fn_name: string) -> bool {
         //   ufo_mli_shield(N). All 1-arg O(1) dimensionless ⇒ 🟢 SUPPORTED-NUMERICAL.
         || fn_name == "ufo_isp_fuel_ratio" || fn_name == "ufo_rocket_beta"
         || fn_name == "ufo_gl_derating" || fn_name == "ufo_mli_shield"
+        // UFO V2 — n6-lattice formal-algebra (exact identities · physics ⚪-fenced):
+        || fn_name == "ufo_lattice_sigma_pow" || fn_name == "ufo_warp_composite"
+        || fn_name == "ufo_lattice_master"
         // VERIFY-KIT V9 — antimatter trap/spectroscopy closed-forms (2026-05-26):
         //   cyclotron_freq_hz(q,B,m) · penning_axial_freq(q,U,m,d) ·
         //   h_reduced_mass_factor(m_e,m_nuc) · antihydrogen_1s_binding(Ry,mr) ·
