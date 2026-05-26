@@ -2,6 +2,15 @@
 
 Append-only history sister of `INBOX.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
+## 2026-05-26T18:10Z — hexa-cc self-host 과도기가 TECS-L cycle verb 전체 차단 (loop runtime FLOOR + 런처 quirk)
+
+> TECS-L 범용 첫 cycle (LLM budget 무제한 해제 후) 시도 중 발견. cycle next-list(C1 Atlas-LLM·F2 /gap·F10 /micro-exp) verb 3종이 전부 deployed hexa-cc self-host 과도기에 막힘. self-host baseline(memory project_hexa_selfhosted_state) "runtime FLOOR 잔여" 구체 증상.
+
+- [ ] **C1 hexa loop = loop_state_cycle_* undeclared** — `hexa loop --once` → hexa-cc(hexat) build error: `use of undeclared identifier 'loop_state_cycle_read'/'loop_state_cycle_write'` (stdlib/loop/cycle.hexa C-emit line 9171/9172). loop state 영속(cycle 번호 read/write) runtime fn 이 self-host 미포팅 = runtime FLOOR 잔여. **LLM 게이트는 해제됨**(claude 2.1.150, budget 무제한) — 막는 건 loop verb runtime fn, LLM 아님. fix: `loop_state_cycle_{read,write}` runtime fn self-host 포팅 (또는 stdlib 정의).
+- [ ] **F2/F10/verify = 런처 result-단축 quirk** (cross-ref 기존 "OK: --expr" quirk entry) — `hexa verify --expr` 가 fresh 첫 호출 외 "OK: --expr" stub. verify_cli arm(#1235)·CM0 sopfr·LF1 codon tier 부여 차단.
+- 영향: TECS-L 범용 cycle(verify-driven + LLM-loop)의 동력 verb 전부 차단 → self-host 정착(runtime FLOOR + 런처 quirk + 링커 phase H) 선행 필수. self-host = 타세션 영역이라 handoff.
+- proposed-by: agent (TECS-L 범용 첫 cycle, 2026-05-26)
+
 ## 2026-05-26T18:00Z — 🔧 forge farr32 codegen→clang smoke (INBOX #4 제안② CLOSE)
 
 - [x] **`tool/forge_farr32_codegen_smoke.hexa` + CI 와이어** — V=151643 forge fire 가 Linux x86_64 빌드를 farr32 bare-emit(#1187: `hexa_farr32_*` 미선언 implicit-int call, Mac 묵인·Linux clang 거부)로 깨뜨림. dev+CI 전부 Mac 이라 영영 안 잡힘. smoke 가 farr32 전 emit(zeros/set/get/matmul/matmul_NT_a/_NT_b/free → 21 `hexa_farr32_*` call) 행사 → `hexa build --c-only` → `clang -fsyntax-only -Werror=implicit-function-declaration`. GPU·link·run 0. `bootstrap.yml` 3 job(특히 Linux 2개 = runtime.h `#else` 브랜치 실컴파일) 에 step 추가, non-blocking.
