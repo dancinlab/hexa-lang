@@ -1,5 +1,8 @@
 // tool/hexa_ld.hexa
 //
+// Phase-H inc4 WIP — first dyld import (LC_DYLD_INFO_ONLY bind opcodes
+// + __stubs + __la_symbol_ptr + dyld_stub_binder). Builds on inc3.
+//
 // Phase-H inc3 (#1283 cont.) — extend single-`__const` layout to FULL
 // MULTI-SECTION: __TEXT (__text, __const, __cstring) + a separate
 // __DATA segment (__data, __bss) with per-section vmaddrs, bss
