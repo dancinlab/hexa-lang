@@ -2778,7 +2778,6 @@ HexaVal hexa_from_cstring(HexaVal ptr) {
     return hexa_str((const char*)(uintptr_t)p);
 }
 
-__attribute__((weak)) HexaVal hexa_ptr_null() { return hexa_int(0); }
 
 /* HEXA_BACKEND flip · 열셋째 increment — production-wire FOURTH PROBE.
  * Marked `__attribute__((weak))` so a hexa-emit `_hexa_ptr_addr` strong
@@ -2789,9 +2788,6 @@ __attribute__((weak)) HexaVal hexa_ptr_null() { return hexa_int(0); }
  * input tag, so the override matches the C body for ALL inputs. See
  * `hexa_ptr_offset` (above) and `hexa_exit` (below) for prior overrides
  * in the same recipe. */
-__attribute__((weak)) HexaVal hexa_ptr_addr(HexaVal v) {
-    return hexa_int((int64_t)HX_INT_U(v));
-}
 
 // ── C2 Step 3: Dynamic FFI host dispatch (interpreter path) ──
 //
@@ -2992,12 +2988,6 @@ HexaVal hexa_host_ffi_call_6(
  * that allocate without freeing (or co-override `_hexa_ptr_free` with
  * munmap). See RUNTIME.md phase-H 아홉째 increment + PR #1321/#1324
  * for the precedent on `_hexa_exit`. */
-__attribute__((weak)) HexaVal hexa_ptr_alloc(HexaVal size) {
-    int64_t n = HX_IS_INT(size) ? HX_INT(size) : 0;
-    if (n <= 0) return hexa_int(0);
-    void* p = calloc(1, (size_t)n);
-    return hexa_int((int64_t)(uintptr_t)p);
-}
 
 /* HEXA_BACKEND flip · chunk-B phase-H 열한째 increment (2026-05-26):
  * Marked `__attribute__((weak))` so a hexa-emit `_hexa_ptr_free` strong
@@ -3016,39 +3006,12 @@ __attribute__((weak)) HexaVal hexa_ptr_alloc(HexaVal size) {
  *   - alloc-only: mmap → libc free() (UB — opt-in unsafe, pre-fix state)
  *   - free-only : calloc → munmap(addr-16, N+16) (UB — incorrect pairing)
  * See RUNTIME.md phase-H 열한째 increment + PR #1321/#1324/#1326. */
-__attribute__((weak)) HexaVal hexa_ptr_free(HexaVal ptr, HexaVal size) {
-    uint64_t p = HX_IS_INT(ptr) ? HX_INT_U(ptr) : 0;
-    if (p != 0) free((void*)(uintptr_t)p);
-    return hexa_void();
-}
 
-__attribute__((weak)) HexaVal hexa_ptr_write(HexaVal ptr, HexaVal offset, HexaVal val) {
-    uint64_t p = HX_IS_INT(ptr) ? HX_INT_U(ptr) : 0;
-    int64_t off = HX_IS_INT(offset) ? HX_INT(offset) : 0;
-    if (p == 0) return hexa_void();
-    uint8_t* base = (uint8_t*)(uintptr_t)p + off;
-    if (HX_IS_FLOAT(val)) {
-        double d = HX_FLOAT(val);
-        hxlcl_memcpy(base, &d, sizeof(double));
-    } else {
-        int64_t v = HX_INT(val);
-        hxlcl_memcpy(base, &v, sizeof(int64_t));
-    }
-    return hexa_void();
-}
 
 /* @hot_kernel f32/f64/i32 ptr read/write — extracted to tensor_kernels.c
  * (included at end of this file). hexa_ptr_read (untyped 64-bit) kept here
  * as general-purpose. */
 
-__attribute__((weak)) HexaVal hexa_ptr_read(HexaVal ptr, HexaVal offset) {
-    uint64_t p = HX_IS_INT(ptr) ? HX_INT_U(ptr) : 0;
-    int64_t off = HX_IS_INT(offset) ? HX_INT(offset) : 0;
-    if (p == 0) return hexa_int(0);
-    int64_t v;
-    hxlcl_memcpy(&v, (uint8_t*)(uintptr_t)p + off, sizeof(int64_t));
-    return hexa_int(v);
-}
 
 /* HEXA_BACKEND flip · chunk-B phase-H 열번째 increment (2026-05-26):
  * Marked `__attribute__((weak))` so a hexa-emit `_hexa_ptr_offset` strong
@@ -3063,19 +3026,7 @@ __attribute__((weak)) HexaVal hexa_ptr_read(HexaVal ptr, HexaVal offset) {
  * RESIDUAL — drops tag-checks; callers must pass TAG_INT for both args
  * (which all transpiled-codegen callsites do — ptr arithmetic always
  * uses int-tagged ptrs). See RUNTIME.md phase-H 열번째 increment. */
-__attribute__((weak)) HexaVal hexa_ptr_offset(HexaVal ptr, HexaVal offset) {
-    uint64_t p = HX_IS_INT(ptr) ? HX_INT_U(ptr) : 0;
-    int64_t off = HX_IS_INT(offset) ? HX_INT(offset) : 0;
-    return hexa_int((int64_t)(p + (uint64_t)off));
-}
 
-__attribute__((weak)) HexaVal hexa_deref(HexaVal ptr) {
-    uint64_t p = HX_IS_INT(ptr) ? HX_INT_U(ptr) : 0;
-    if (p == 0) return hexa_int(0);
-    int64_t v;
-    hxlcl_memcpy(&v, (void*)(uintptr_t)p, sizeof(int64_t));
-    return hexa_int(v);
-}
 
 // ═══════════════════════════════════════════════════════════
 //  G2: Struct Value Passing — struct packing builtins
@@ -5261,14 +5212,6 @@ HexaVal hexa_str_bytes(HexaVal s) {
 // ABI adapter (mov x0,x1) that converts the codegen-side HexaVal pair
 // (x0=tag, x1=int_value) into the raw-ABI exit-code rt_exit primitive
 // expects (x0=exit_code). See RUNTIME.md phase-H 일곱째 increment.
-__attribute__((weak)) HexaVal hexa_exit(HexaVal code) {
-    int c = HX_IS_INT(code) ? (int)HX_INT(code)
-          : HX_IS_FLOAT(code) ? (int)HX_FLOAT(code)
-          : 0;
-    fflush(stdout); fflush(stderr);
-    exit(c);
-    return hexa_void(); // unreachable
-}
 
 HexaVal hexa_sleep(HexaVal sec) {
     double s = HX_IS_FLOAT(sec) ? HX_FLOAT(sec)
@@ -5309,8 +5252,6 @@ int64_t hexa_float_to_int(double f) {
 #ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal hexa_math_tanh(HexaVal x) { return hexa_float(tanh(HX_FLOAT(x))); }
 HexaVal hexa_math_tan(HexaVal x)  { return hexa_float(tan(HX_FLOAT(x))); }
-__attribute__((weak)) HexaVal hexa_math_abs(HexaVal x)  { return hexa_float(fabs(HX_FLOAT(x))); }
-__attribute__((weak)) HexaVal hexa_math_sqrt(HexaVal x) { return hexa_float(sqrt(HX_FLOAT(x))); }
 #else
 extern HexaVal rt_tanh(HexaVal x);
 extern HexaVal rt_tan(HexaVal x);
@@ -5318,8 +5259,6 @@ extern HexaVal rt_abs_float(HexaVal v);
 extern HexaVal rt_sqrt(HexaVal v);
 HexaVal hexa_math_tanh(HexaVal x) { return rt_tanh(hexa_float(HX_FLOAT(x))); }
 HexaVal hexa_math_tan(HexaVal x)  { return rt_tan(hexa_float(HX_FLOAT(x))); }
-__attribute__((weak)) HexaVal hexa_math_abs(HexaVal x)  { return rt_abs_float(hexa_float(HX_FLOAT(x))); }
-__attribute__((weak)) HexaVal hexa_math_sqrt(HexaVal x) { return rt_sqrt(hexa_float(HX_FLOAT(x))); }
 #endif
 HexaVal hexa_math_sin(HexaVal x)  { return hexa_float(hxlcl_sin(HX_FLOAT(x))); }
 HexaVal hexa_math_cos(HexaVal x)  { return hexa_float(hxlcl_cos(HX_FLOAT(x))); }
@@ -5356,16 +5295,10 @@ HexaVal hexa_math_exp(HexaVal x)  { return hexa_float(hxlcl_exp(HX_FLOAT(x))); }
 // boundary so the libm surface goes away while the wrapper signature
 // stays unchanged.
 #ifndef HEXA_HAS_HEXA_RT_STDLIB
-__attribute__((weak)) HexaVal hexa_math_floor(HexaVal x){ return hexa_float(floor(HX_FLOAT(x))); }
-__attribute__((weak)) HexaVal hexa_math_ceil(HexaVal x) { return hexa_float(ceil(HX_FLOAT(x))); }
-__attribute__((weak)) HexaVal hexa_math_round(HexaVal x){ return hexa_float(round(HX_FLOAT(x))); }
 #else
 extern HexaVal rt_floor(HexaVal v);
 extern HexaVal rt_ceil(HexaVal v);
 extern HexaVal rt_round(HexaVal v);
-__attribute__((weak)) HexaVal hexa_math_floor(HexaVal x){ return hexa_float((double)HX_INT(rt_floor(hexa_float(HX_FLOAT(x))))); }
-__attribute__((weak)) HexaVal hexa_math_ceil(HexaVal x) { return hexa_float((double)HX_INT(rt_ceil(hexa_float(HX_FLOAT(x))))); }
-__attribute__((weak)) HexaVal hexa_math_round(HexaVal x){ return hexa_float((double)HX_INT(rt_round(hexa_float(HX_FLOAT(x))))); }
 #endif
 #ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal hexa_math_pow(HexaVal b, HexaVal e) { return hexa_float(pow(HX_FLOAT(b), HX_FLOAT(e))); }
@@ -5392,10 +5325,8 @@ HexaVal hexa_math_fmod(HexaVal a, HexaVal b) {
 }
 #endif
 #ifndef HEXA_HAS_HEXA_RT_STDLIB
-__attribute__((weak)) HexaVal hexa_math_min(HexaVal a, HexaVal b) { return hexa_float(fmin(HX_FLOAT(a), HX_FLOAT(b))); }
 #else
 extern HexaVal rt_min_float(HexaVal a, HexaVal b);
-__attribute__((weak)) HexaVal hexa_math_min(HexaVal a, HexaVal b) { return rt_min_float(a, b); }
 #endif
 // G1-FLOAT-PRIM 2026-05-06 — see .roadmap.stdlib.G1-FLOAT-PRIM. lgamma is the
 // log-gamma function used by Beta-Binomial conjugate posteriors throughout
@@ -5430,10 +5361,8 @@ HexaVal hexa_math_isinf(HexaVal x)    { return rt_isinf(hexa_float(HX_FLOAT(x)))
 HexaVal hexa_math_isfinite(HexaVal x) { return rt_isfinite(hexa_float(HX_FLOAT(x))); }
 #endif
 #ifndef HEXA_HAS_HEXA_RT_STDLIB
-__attribute__((weak)) HexaVal hexa_math_max(HexaVal a, HexaVal b) { return hexa_float(fmax(HX_FLOAT(a), HX_FLOAT(b))); }
 #else
 extern HexaVal rt_max_float(HexaVal a, HexaVal b);
-__attribute__((weak)) HexaVal hexa_math_max(HexaVal a, HexaVal b) { return rt_max_float(a, b); }
 #endif
 
 // ── ML builtins: matvec, dot ─────────────────────────────────
@@ -8795,24 +8724,9 @@ extern int  _hx_cuda_farr_unpin_device(int64_t farr_id);
 // cuda_available() -> int. 1 if a CUDA device + toolkit are detected at
 // runtime, else 0. Coherent with cuda_device_count(): one implies the
 // other > 0.
-__attribute__((weak)) HexaVal hexa_cuda_available(void) {
-#ifdef HEXA_CUDA
-    /* RFC 040 Phase A real impl (2026-05-16): probe via runtime_cuda.c TU. */
-    return hexa_int(_hx_cuda_runtime_available());
-#else
-    return hexa_int(0);
-#endif
-}
 
 // cuda_device_count() -> int. Number of visible GPUs (0 if none / no
 // CUDA toolkit). Returns 0 on the no-CUDA build always.
-__attribute__((weak)) HexaVal hexa_cuda_device_count(void) {
-#ifdef HEXA_CUDA
-    return hexa_int(_hx_cuda_device_count_impl());
-#else
-    return hexa_int(0);
-#endif
-}
 
 // farr_to_device(id) -> int. Ensure d_buf is resident + current.
 // CPU-fallback path: every farr is loc=FARR_HOST already; the call is a
@@ -11384,11 +11298,6 @@ HexaVal hexa_now_monotonic_s(void) {
 // formatting, which caused stderr_tmp collisions (fix 1472b62d). Callers
 // building unique filenames should use to_string(mono_ns()) directly
 // and skip the mktemp fork in runtime_tmpname fallback (perf).
-__attribute__((weak)) HexaVal hexa_mono_ns(void) {
-    struct timespec ts;
-    hxlcl_clock_gettime(CLOCK_MONOTONIC, &ts);
-    return hexa_int((int64_t)ts.tv_sec * 1000000000LL + (int64_t)ts.tv_nsec);
-}
 
 // utc_iso_now(): RFC-3339 / ISO-8601 UTC "YYYY-MM-DDTHH:MM:SSZ".
 HexaVal hexa_utc_iso_now(void) {
