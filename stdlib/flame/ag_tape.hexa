@@ -337,6 +337,91 @@ fn _ag_linear_metal_fp32_bwd(x: int, W: int, og: int,
     let _ = farr32_free(dWn)
 }
 
+// ── CUDA forge-route for ag_linear (2026-05-26, fire #9 wall fix) ─────────
+// The diagnosed V-INDEPENDENT dominant wall of the generic ag_tape trainer
+// on a CUDA host (no HEXA_METAL) is the `ag_k_linear` BACKWARD case below:
+// it computed dW = xᵀ·og and dx = og·Wᵀ via the host-scalar
+// `nn_linear_bwd` loop nest (dW = D×C×B host-scalar FMAs × 28 linear
+// layers × d768/12L), with NO GPU offload because only a Metal route
+// existed. This pair of helpers mirrors `_ag_linear_metal_fp32_fwd`
+// (L226) / `_ag_linear_metal_fp32_bwd` (L281) but routes through the
+// FP64 CUDA `_gpu` farr builtins instead of the FP32 `farr32_*` Metal
+// builtins:
+//   · `farr_matmul_gpu(A, Ar, Ac, B, Bc)` — cuBLAS Dgemm (the flagship
+//     real CUDA kernel, self/cuda/runtime_cuda.c `_hx_cuda_farr_matmul_gpu`;
+//     A is Ar×Ac row-major, B is Ac×Bc row-major, C is Ar×Bc).
+//   · `farr_transpose_2d_gpu(src, soff, dst, doff, d_out, d_in)` — the
+//     real CUDA 2-D transpose kernel (`_hx_cuda_farr_transpose_2d_gpu`):
+//     reads a d_out×d_in matrix at src+soff, writes its d_in×d_out
+//     transpose at dst+doff.
+// Both have REAL cuBLAS/__global__ kernels (not the TODO[cuda] -1 stubs
+// that `farr_matmul_t_gpu`/`farr_outer_gpu` still are — see
+// PHASE4D5_1_WIRING_NOTES.md), so the whole vjp pair executes device-side
+// under -DHEXA_CUDA. On the no-CUDA build both dispatchers route to the
+// byte-identical CPU fallbacks, so a Mac parse/build stays correct.
+//
+// F-RFC043 RESOLUTION (rel-err, NOT byte-eq): a GPU route for this
+// backward was historically reverted to host because the GPU IEEE-754
+// trajectory differed from the CPU host-scalar `nn_linear_bwd` reference,
+// FAILING the byte-eq oracle (Tests 2/7 + flame_ag_derive_test, which
+// compare directly against `nn_linear_bwd`). That byte-eq gate is
+// over-strict for a TRAINING backward: SGD/AdamW gradients only need
+// rel-err equivalence, not bit-reproducibility. The CUDA route therefore
+// carries a rel-err tolerance (forge `_gpu` convention, SAME as the Metal
+// path's F-RFC075-FLAME-AG-LINEAR-*-NUMERIC-EQ rel_err < 1e-2 — here FP64
+// cuBLAS Dgemm is tighter still, rel_err < 1e-6 expected since both sides
+// are FP64). The CPU FP64 host stays the DEFAULT (no env) so the byte-eq
+// oracles stay green; only HEXA_CUDA=1 + dim-gate engages this route.
+// Falsifier: F-RFC043-FLAME-AG-LINEAR-CUDA-BWD-NUMERIC-EQ (rel_err < 1e-2
+// vs the CPU `nn_linear_bwd` reference; default path unchanged).
+fn _ag_linear_cuda_fp32_fwd(x: int, W: int, B: int, D: int, C: int) -> int {
+    // y [B,C] = x [B,D] · W [D,C]. cuBLAS Dgemm: A=x (Ar=B, Ac=D),
+    // B=W (Bc=C). FP64 farr handles in/out — no cast (the autograd path
+    // consumes FP64 farrs directly), unlike the Metal FP32 round-trip.
+    return farr_matmul_gpu(x, B, D, W, C)
+}
+
+// Mirror of `_ag_linear_metal_fp32_bwd` for the matmul vjp pair, FP64
+// cuBLAS Dgemm route. The transpose-then-matmul composition makes both
+// dW and dx full GEMMs (the two real CUDA kernels), so the entire
+// per-layer linear backward runs device-side:
+//   · dW [D,C] = xᵀ [D,B] · og [B,C]   (transpose x then Dgemm)
+//   · dx [B,D] = og [B,C] · Wᵀ [C,D]   (transpose W then Dgemm)
+// Inputs x, W, og are FP64 farr handles from the tape (B·D, D·C, B·C).
+// dx_out, dW_out are caller-allocated FP64 farrs (B·D, D·C), written.
+fn _ag_linear_cuda_fp32_bwd(x: int, W: int, og: int,
+                            dx_out: int, dW_out: int,
+                            B: int, D: int, C: int) {
+    // dW [D,C] = xᵀ [D,B] · og [B,C].
+    //   xT = transpose of x (B×D → D×B) via the CUDA transpose kernel.
+    //   farr_matmul_gpu(xT, D, B, og, C) → D×C (cuBLAS Dgemm).
+    let xT = t_zeros(D * B)
+    let _  = farr_transpose_2d_gpu(x, 0, xT, 0, B, D)
+    let dW = farr_matmul_gpu(xT, D, B, og, C)
+    // dx [B,D] = og [B,C] · Wᵀ [C,D].
+    //   WT = transpose of W (D×C → C×D) via the CUDA transpose kernel.
+    //   farr_matmul_gpu(og, B, C, WT, D) → B×D (cuBLAS Dgemm).
+    let WT = t_zeros(C * D)
+    let _  = farr_transpose_2d_gpu(W, 0, WT, 0, D, C)
+    let dx = farr_matmul_gpu(og, B, C, WT, D)
+    // Copy the GEMM results into the caller-owned grad slots (the
+    // `_ag_reg_acc` consumer below frees dW_out/dx_out, not these).
+    let mut q = 0
+    while q < D * C {
+        t_set(dW_out, q, t_get(dW, q))
+        q = q + 1
+    }
+    let mut p = 0
+    while p < B * D {
+        t_set(dx_out, p, t_get(dx, p))
+        p = p + 1
+    }
+    t_free(xT)
+    t_free(WT)
+    t_free(dW)
+    t_free(dx)
+}
+
 // METAL_INTEGRATION.md bonus gap 6 — bf16 precision tier (2026-05-21).
 // Forward helper for `ag_linear` that pre-rounds inputs to bf16 values
 // (kept in the FP64 farr arena per RFC 035 `farr_to_bf16` convention:
@@ -440,16 +525,25 @@ pub fn ag_linear(tape: int, x: int, W: int, b: int,
     let dim_gate_rhs = K * N
     let metal_on = env("HEXA_METAL") == "1"
     let bf16_on  = env("HEXA_BF16") == "1"
+    let cuda_on  = env("HEXA_CUDA") == "1"
     let shape_ok = dim_gate_lhs > 8192 || dim_gate_rhs > 8192
     // METAL_INTEGRATION.md bonus gap 6 (2026-05-21): bf16 precision tier.
-    // Priority: HEXA_BF16=1 > HEXA_METAL=1 > default FP64 CPU. Both
-    // upper tiers require the same dim-gate (shape_ok) since they share
-    // the FP32 SGEMM (+ optional MPS) route; bf16 adds a pre-round step.
-    // Falsifier: F-RFC075-FLAME-AG-LINEAR-BF16-NUMERIC-EQ (rel_err < 1e-2).
+    // Priority: HEXA_BF16=1 > HEXA_METAL=1 > HEXA_CUDA=1 > default FP64 CPU.
+    // All forge tiers require the same dim-gate (shape_ok). The bf16/Metal
+    // tiers share the FP32 SGEMM (+ optional MPS) route; the CUDA tier
+    // (2026-05-26 fire #9 fix) routes the FP64 GEMM through the explicit
+    // cuBLAS Dgemm builtin `farr_matmul_gpu` (mirrors the bwd CUDA route).
+    // Falsifier (forge tiers): F-RFC075-FLAME-AG-LINEAR-BF16-NUMERIC-EQ /
+    // F-RFC043-FLAME-AG-LINEAR-CUDA-*-NUMERIC-EQ (rel_err < 1e-2). The
+    // default `farr_matmul` already routes to cuBLAS via the runtime's
+    // implicit matmul dim-gate, so the CUDA branch is mainly an explicit,
+    // symmetric counterpart to the backward CUDA route below.
     let y = if bf16_on && metal_on && shape_ok {
                 _ag_linear_metal_bf16_fwd(x, W, B, D, C)
             } else if metal_on && shape_ok {
                 _ag_linear_metal_fp32_fwd(x, W, B, D, C)
+            } else if cuda_on && shape_ok {
+                _ag_linear_cuda_fp32_fwd(x, W, B, D, C)
             } else {
                 farr_matmul(x, B, D, W, C)
             }
@@ -927,11 +1021,31 @@ pub fn ag_backward_reg(tape: int, out_tid: int, seed: int) {
             // still hits the FP64 closed-form rule). The narrow gate
             // is the right surface per task scope (METAL_INTEGRATION
             // step 5 final closure).
+            //
+            // CUDA forge-route (2026-05-26, fire #9 wall fix): on a CUDA
+            // host (no HEXA_METAL) the default `matmul_bwd_auto` path is
+            // the diagnosed V-INDEPENDENT dominant wall — it runs the
+            // dW = xᵀ·og / dx = og·Wᵀ vjp pair as a host-scalar loop nest
+            // (dW = D×C×B FMAs × 28 linear layers × d768/12L). When
+            // env("HEXA_CUDA") == "1" AND the same dim-gate passes, route
+            // the vjp pair through `_ag_linear_cuda_fp32_bwd` (FP64 cuBLAS
+            // Dgemm via `farr_matmul_gpu` + the real CUDA transpose
+            // kernel) so the whole per-layer linear backward executes
+            // device-side. F-RFC043 resolution: rel-err tolerance (NOT
+            // byte-eq) — the byte-eq oracle gate is over-strict for a
+            // TRAINING backward (SGD gradients need rel-err, not bit-
+            // reproducibility); see the helper's header. The default
+            // (no env / small shape) STAYS on `matmul_bwd_auto` which is
+            // byte-identical to nn_linear_bwd, so the F-RFC043-AUTOGRAD-
+            // AUTO-MATMUL-BYTE-EQ + Tests 2/7 oracles remain green.
             let bwd_lhs_dim = B * D
             let bwd_rhs_dim = D * C
             let bwd_metal_on = env("HEXA_METAL") == "1"
+            let bwd_cuda_on  = env("HEXA_CUDA") == "1"
             let bwd_shape_ok = bwd_lhs_dim > 8192 || bwd_rhs_dim > 8192
-            if bwd_metal_on && bwd_shape_ok {
+            if bwd_cuda_on && bwd_shape_ok {
+                _ag_linear_cuda_fp32_bwd(x, W, og, dx, dW, B, D, C)
+            } else if bwd_metal_on && bwd_shape_ok {
                 _ag_linear_metal_fp32_bwd(x, W, og, dx, dW, B, D, C)
             } else {
                 let _ = matmul_bwd_auto(ag_derive_reg, x, W, og,
