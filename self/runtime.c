@@ -5392,10 +5392,10 @@ HexaVal hexa_math_fmod(HexaVal a, HexaVal b) {
 }
 #endif
 #ifndef HEXA_HAS_HEXA_RT_STDLIB
-HexaVal hexa_math_min(HexaVal a, HexaVal b) { return hexa_float(fmin(HX_FLOAT(a), HX_FLOAT(b))); }
+__attribute__((weak)) HexaVal hexa_math_min(HexaVal a, HexaVal b) { return hexa_float(fmin(HX_FLOAT(a), HX_FLOAT(b))); }
 #else
 extern HexaVal rt_min_float(HexaVal a, HexaVal b);
-HexaVal hexa_math_min(HexaVal a, HexaVal b) { return rt_min_float(a, b); }
+__attribute__((weak)) HexaVal hexa_math_min(HexaVal a, HexaVal b) { return rt_min_float(a, b); }
 #endif
 // G1-FLOAT-PRIM 2026-05-06 — see .roadmap.stdlib.G1-FLOAT-PRIM. lgamma is the
 // log-gamma function used by Beta-Binomial conjugate posteriors throughout
