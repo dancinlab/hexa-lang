@@ -1,4 +1,4 @@
-@discovery := "RFC 063 P0 — full Mach-O object byte-eq: symtab layout + DWARF path residual" :: finding [active]
+@X rfc063_p0_full_objeq_symtab := "RFC 063 P0 — native arm64 Mach-O .o within 1-5B of clang (symtab/DYSYMTAB/sections/LCs identical); full byte-eq residual = strtab-interning order + DWARF __debug_* (CWD-bound, non-portable)" :: discovery [slug=rfc063-p0-full-objeq-symtab group=RUNTIME]
   id     = "rfc063-p0-full-objeq-symtab"
   seed   = "extend macho_arm64.hexa so full .o == clang -c (not just __text)"
   verdict-tier-target = "🟢 numerical byte-eq (modulo non-portable DWARF)"
