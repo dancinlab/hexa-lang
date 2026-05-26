@@ -646,16 +646,17 @@ fn _nvptx_is_math_intrinsic(op: string) -> bool {
     if op == "max"      { return true }
     if op == "min"      { return true }
     if op == "exp"      { return true }
+    if op == "log"      { return true }
     if op == "abs"      { return true }
     return false
 }
 
 // _nvptx_math_arity — operand count for a math intrinsic (1 for unary
-// sqrt / rsqrt / exp / abs; 2 for binary max / min). Returns 0 for a
-// non-math op (caller should not have routed it here).
+// sqrt / rsqrt / exp / log / abs; 2 for binary max / min). Returns 0
+// for a non-math op (caller should not have routed it here).
 fn _nvptx_math_arity(op: string) -> i64 {
     if op == "max" || op == "min" { return 2 }
-    if op == "sqrt" || op == "rsqrt" || op == "rsqrt_rn" || op == "exp" || op == "abs" { return 1 }
+    if op == "sqrt" || op == "rsqrt" || op == "rsqrt_rn" || op == "exp" || op == "log" || op == "abs" { return 1 }
     return 0
 }
 
@@ -1834,6 +1835,143 @@ fn _nvptx_lower_stmt(buf: [LInstr], s: Stmt, kinds: [PReg], shared_idx_off: [i64
                     out.push(_nvptx_instr("rcp.rn." + rrk, rr2, "rsqrt_rn " + rrk + ": dst = 1.0 / sqrt(x)"))
                     return out
                 }
+                // RFC 055 §13 — f64 log(x) range-reduction + atanh polynomial.
+                //
+                //   bits = bit-cast f64(x) → s64
+                //   k    = (bits >> 52) - 1023       (IEEE exponent - bias)
+                //   m    = bit-cast((bits & MANT_MASK) | ONE_EXP) → f64 ∈ [1, 2)
+                //   y    = (m - 1) / (m + 1)         (|y| < 1/3)
+                //   y²   = y * y
+                //   P(z) = C0 + z*(C1 + z*(C2 + z*(C3 + z*(C4 + z*C5))))
+                //          where C_i = 1/(2i+1)  (atanh series coefficients)
+                //   log(m) = 2 * y * P(y²)            (atanh-based series)
+                //   log(x) = k * ln(2) + log(m)       (final FMA)
+                //
+                // Accuracy: |y| < 1/3 → truncation `|y^11/11|` < 5e-6;
+                // each fma round ≤ 0.5 ulp × 6 ops ≈ 3 ulp. Sufficient
+                // for typical kernel use (softmax-log / log-sum-exp);
+                // libm-tight accuracy requires Cody-Waite split + minimax
+                // coefficients (follow-up cycle, mirror of #1333 exp's
+                // refinement path).
+                //
+                // Scratch regs (Pass 9, keyed on dst.id): m · y · y² · p
+                // (.f64) + b · k (.u64). ref: PTX ISA 8.7 §9.7.6 mov.b64.
+                if s.op == "log" && dst_kind == NVPTX_RKIND_F64 {
+                    let x_reg = _nvptx_operand_text_kinds(s.args[0], kinds)
+                    let m_reg  = _nvptx_reg_logf64_m(s.dst.id)
+                    let y_reg  = _nvptx_reg_logf64_y(s.dst.id)
+                    let y2_reg = _nvptx_reg_logf64_y2(s.dst.id)
+                    let p_reg  = _nvptx_reg_logf64_p(s.dst.id)
+                    let b_reg  = _nvptx_reg_logf64_b(s.dst.id)
+                    let k_reg  = _nvptx_reg_logf64_k(s.dst.id)
+                    // step 1: bits = bit-cast x → s64
+                    let mut l1 = []
+                    l1.push(_nvptx_op(b_reg))
+                    l1.push(_nvptx_op(x_reg))
+                    out.push(_nvptx_instr("mov.b64", l1, "log f64: bits = bit-cast x"))
+                    // step 2: k_raw = bits >> 52; k = k_raw - bias; kf = (f64) k
+                    let mut l2 = []
+                    l2.push(_nvptx_op(k_reg))
+                    l2.push(_nvptx_op(b_reg))
+                    l2.push(_nvptx_op(PTX_F64_MANT_BITS))
+                    out.push(_nvptx_instr("shr.s64", l2, "log f64: k_raw = bits >> 52"))
+                    let mut l3 = []
+                    l3.push(_nvptx_op(k_reg))
+                    l3.push(_nvptx_op(k_reg))
+                    l3.push(_nvptx_op(PTX_F64_EXP_BIAS))
+                    out.push(_nvptx_instr("sub.s64", l3, "log f64: k = k_raw - 1023"))
+                    let mut l4 = []
+                    l4.push(_nvptx_op(p_reg))
+                    l4.push(_nvptx_op(k_reg))
+                    out.push(_nvptx_instr("cvt.rn.f64.s64", l4, "log f64: kf = (f64) k"))
+                    // step 3: m = bit-cast((bits & MANT_MASK) | ONE_EXP) ∈ [1, 2)
+                    let mut l5 = []
+                    l5.push(_nvptx_op(b_reg))
+                    l5.push(_nvptx_op(b_reg))
+                    l5.push(_nvptx_op(PTX_F64_MANT_MASK))
+                    out.push(_nvptx_instr("and.b64", l5, "log f64: keep mantissa bits"))
+                    let mut l6 = []
+                    l6.push(_nvptx_op(b_reg))
+                    l6.push(_nvptx_op(b_reg))
+                    l6.push(_nvptx_op(PTX_F64_ONE_EXP))
+                    out.push(_nvptx_instr("or.b64", l6, "log f64: set exponent bias = 1023"))
+                    let mut l7 = []
+                    l7.push(_nvptx_op(m_reg))
+                    l7.push(_nvptx_op(b_reg))
+                    out.push(_nvptx_instr("mov.b64", l7, "log f64: m = bit-cast back, m in [1,2)"))
+                    // step 4: y = (m - 1) / (m + 1)
+                    let mut l8 = []
+                    l8.push(_nvptx_op(y_reg))
+                    l8.push(_nvptx_op(m_reg))
+                    l8.push(_nvptx_op(PTX_LOGF64_C0_HEXF64))
+                    out.push(_nvptx_instr(PTX_OP_SUB_F64, l8, "log f64: m - 1"))
+                    let mut l9 = []
+                    l9.push(_nvptx_op(m_reg))
+                    l9.push(_nvptx_op(m_reg))
+                    l9.push(_nvptx_op(PTX_LOGF64_C0_HEXF64))
+                    out.push(_nvptx_instr("add.f64", l9, "log f64: m + 1 (reuse m_reg)"))
+                    let mut l10 = []
+                    l10.push(_nvptx_op(y_reg))
+                    l10.push(_nvptx_op(y_reg))
+                    l10.push(_nvptx_op(m_reg))
+                    out.push(_nvptx_instr("div.rn.f64", l10, "log f64: y = (m-1)/(m+1)"))
+                    // step 5: y² = y * y
+                    let mut l11 = []
+                    l11.push(_nvptx_op(y2_reg))
+                    l11.push(_nvptx_op(y_reg))
+                    l11.push(_nvptx_op(y_reg))
+                    out.push(_nvptx_instr(PTX_OP_MUL_F64, l11, "log f64: y² = y * y"))
+                    // step 6: Horner P(z=y²) = C0 + z*(C1 + z*(C2 + ... z*C5))
+                    //   start: p = C5; then p = fma(z, p, C4) ... fma(z, p, C0)
+                    let mut h0 = []
+                    h0.push(_nvptx_op(p_reg))
+                    h0.push(_nvptx_op(PTX_LOGF64_C5_HEXF64))
+                    out.push(_nvptx_instr("mov.f64", h0, "log f64 Horner: p = C5 (= 1/11)"))
+                    let mut hc: [string] = []
+                    hc.push(PTX_LOGF64_C4_HEXF64)
+                    hc.push(PTX_LOGF64_C3_HEXF64)
+                    hc.push(PTX_LOGF64_C2_HEXF64)
+                    hc.push(PTX_LOGF64_C1_HEXF64)
+                    hc.push(PTX_LOGF64_C0_HEXF64)
+                    let mut hi = 0
+                    while hi < len(hc) {
+                        let mut hf = []
+                        hf.push(_nvptx_op(p_reg))
+                        hf.push(_nvptx_op(y2_reg))
+                        hf.push(_nvptx_op(p_reg))
+                        hf.push(_nvptx_op(hc[hi]))
+                        out.push(_nvptx_instr(PTX_OP_FMA_RN_F64, hf, "log f64 Horner step"))
+                        hi = hi + 1
+                    }
+                    // step 7: p = 2 * y * P
+                    let mut l12 = []
+                    l12.push(_nvptx_op(p_reg))
+                    l12.push(_nvptx_op(y_reg))
+                    l12.push(_nvptx_op(p_reg))
+                    out.push(_nvptx_instr(PTX_OP_MUL_F64, l12, "log f64: y * P"))
+                    let mut l13 = []
+                    l13.push(_nvptx_op(p_reg))
+                    l13.push(_nvptx_op(p_reg))
+                    l13.push(_nvptx_op(PTX_F64_TWO_HEXF64))
+                    out.push(_nvptx_instr(PTX_OP_MUL_F64, l13, "log f64: 2 * y * P = log(m)"))
+                    // step 8: dst = kf * ln2 + log(m)  via fma
+                    //   (kf was placed in p_reg earlier? No — kf in step 2
+                    //    landed in p_reg L4. Step 6+ clobbered p_reg.
+                    //    Re-load kf from k_reg: cvt.rn.f64.s64)
+                    // FIX: we overwrote p with poly accum. Recompute kf
+                    // into a fresh slot — reuse y2_reg as kf scratch.
+                    let mut l14 = []
+                    l14.push(_nvptx_op(y2_reg))
+                    l14.push(_nvptx_op(k_reg))
+                    out.push(_nvptx_instr("cvt.rn.f64.s64", l14, "log f64: kf = (f64) k (re-cvt)"))
+                    let mut l15 = []
+                    l15.push(_nvptx_op(dst_reg))
+                    l15.push(_nvptx_op(y2_reg))
+                    l15.push(_nvptx_op(PTX_LN2_HEXF64))
+                    l15.push(_nvptx_op(p_reg))
+                    out.push(_nvptx_instr(PTX_OP_FMA_RN_F64, l15, "log f64: dst = kf*ln2 + log(m)"))
+                    return out
+                }
                 // Fall-through honest stub for any other unmatched op/kind
                 // combination (e.g. a future intrinsic that lands in
                 // _nvptx_is_math_intrinsic before its codegen arm).
@@ -3002,6 +3140,33 @@ fn _nvptx_classify_locals(mfn: MFunc) -> [PReg] {
         }
         gb = gb + 1
     }
+    // RFC 055 §13 — Pass 9: f64 log(x) polynomial scratch-reg declaration.
+    // PTX has no native `lg2.approx.f64`, so f64 `log` lowers to a range-
+    // reduction (IEEE-754 bit-pattern extraction) + atanh series chain.
+    // Each call needs 4 .f64 scratch regs (m / y / y² / p) + 2 .u64
+    // scratch regs (b / k). Gated on call dst classifying as F64.
+    // Mirrors the Pass 6 `_nvptx_reg_expf64_*` family layout.
+    let mut lb = 0
+    while lb < len(mfn.blocks) {
+        let blkl = mfn.blocks[lb]
+        let mut sl = 0
+        while sl < len(blkl.stmts) {
+            let s = blkl.stmts[sl]
+            if s.kind == STMT_CALL && s.op == "log" && s.dst.id >= 0 {
+                let dk = _nvptx_lookup_kind_for_local(regs, s.dst.id)
+                if dk == NVPTX_RKIND_F64 {
+                    regs.push(PReg { name: _nvptx_reg_logf64_m(s.dst.id),  kind: NVPTX_RKIND_F64, frag_role: "", frag_dtype: "", frag_layout: "" })
+                    regs.push(PReg { name: _nvptx_reg_logf64_y(s.dst.id),  kind: NVPTX_RKIND_F64, frag_role: "", frag_dtype: "", frag_layout: "" })
+                    regs.push(PReg { name: _nvptx_reg_logf64_y2(s.dst.id), kind: NVPTX_RKIND_F64, frag_role: "", frag_dtype: "", frag_layout: "" })
+                    regs.push(PReg { name: _nvptx_reg_logf64_p(s.dst.id),  kind: NVPTX_RKIND_F64, frag_role: "", frag_dtype: "", frag_layout: "" })
+                    regs.push(PReg { name: _nvptx_reg_logf64_b(s.dst.id),  kind: NVPTX_RKIND_U64, frag_role: "", frag_dtype: "", frag_layout: "" })
+                    regs.push(PReg { name: _nvptx_reg_logf64_k(s.dst.id),  kind: NVPTX_RKIND_U64, frag_role: "", frag_dtype: "", frag_layout: "" })
+                }
+            }
+            sl = sl + 1
+        }
+        lb = lb + 1
+    }
     return regs
 }
 
@@ -4149,6 +4314,35 @@ fn _nvptx_reg_expf64_k(id: i64) -> string {
 }
 fn _nvptx_reg_expf64_b(id: i64) -> string {
     return "%rd_exp_b_" + to_string(id)
+}
+
+// RFC 055 §13 f64 log polynomial — per-call scratch register names.
+//
+// `log(x)` at f64 has no native PTX `lg2.approx.f64` unit, so the
+// lower emits range-reduction (extract IEEE-754 exponent + mantissa)
+// + atanh series for log of mantissa. Each call needs 4 .f64 scratch
+// regs (`m` mantissa · `y` (m-1)/(m+1) · `y2` y² · `p` poly accum) +
+// 2 .u64 scratch regs (`b` bit-pattern temp · `k` integer exponent).
+// Mirror of `_nvptx_reg_expf64_*` family. Declared in
+// `_nvptx_classify_locals` Pass 9; consumed at the `s.op == "log"`
+// emit site.
+fn _nvptx_reg_logf64_m(id: i64) -> string {
+    return "%fd_log_m_" + to_string(id)
+}
+fn _nvptx_reg_logf64_y(id: i64) -> string {
+    return "%fd_log_y_" + to_string(id)
+}
+fn _nvptx_reg_logf64_y2(id: i64) -> string {
+    return "%fd_log_y2_" + to_string(id)
+}
+fn _nvptx_reg_logf64_p(id: i64) -> string {
+    return "%fd_log_p_" + to_string(id)
+}
+fn _nvptx_reg_logf64_b(id: i64) -> string {
+    return "%rd_log_b_" + to_string(id)
+}
+fn _nvptx_reg_logf64_k(id: i64) -> string {
+    return "%rd_log_k_" + to_string(id)
 }
 
 // RFC 055 §5 multi-block global thread index — per-call scratch reg.
