@@ -2990,7 +2990,24 @@ __attribute__((weak)) HexaVal hexa_ptr_alloc(HexaVal size) {
     return hexa_int((int64_t)(uintptr_t)p);
 }
 
-HexaVal hexa_ptr_free(HexaVal ptr, HexaVal size) {
+/* HEXA_BACKEND flip · chunk-B phase-H 열한째 increment (2026-05-26):
+ * Marked `__attribute__((weak))` so a hexa-emit `_hexa_ptr_free` strong
+ * symbol (emitted by test/native_build/emit_hexa_ptr_free_native_o.hexa,
+ * appended to the cmd_build native-path clang link when
+ * HEXA_NATIVE_RT_PTR_FREE=1) cleanly overrides this C definition under
+ * Mach-O ld64. Default (env unset) = strong-only, no behavior change.
+ * The hexa-emit override carries a HexaVal-ABI adapter that recovers a
+ * 16-B size header (laid down by the paired `_hexa_ptr_alloc` override,
+ * 아홉째 increment + 2026-05-26 header refactor) and munmaps with the
+ * stored size — closing the alloc/free pair-safety residual (B) of #1326.
+ * PAIRING — the override pair is default-flip safe ONLY when BOTH gates
+ * are on (HEXA_NATIVE_RT_PTR_ALLOC=1 + HEXA_NATIVE_RT_PTR_FREE=1):
+ *   - both off  : C-side calloc + free (libc heap, no change)
+ *   - both on   : mmap-with-header + munmap (allocator-symmetric, safe)
+ *   - alloc-only: mmap → libc free() (UB — opt-in unsafe, pre-fix state)
+ *   - free-only : calloc → munmap(addr-16, N+16) (UB — incorrect pairing)
+ * See RUNTIME.md phase-H 열한째 increment + PR #1321/#1324/#1326. */
+__attribute__((weak)) HexaVal hexa_ptr_free(HexaVal ptr, HexaVal size) {
     uint64_t p = HX_IS_INT(ptr) ? HX_INT_U(ptr) : 0;
     if (p != 0) free((void*)(uintptr_t)p);
     return hexa_void();
