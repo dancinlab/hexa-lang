@@ -231,6 +231,93 @@ pub fn sigma_star(n) -> int {
     sum
 }
 
+// sigma_3(n) = Σ_{d|n} d³ — sum of cubes of divisors (OEIS A001158).
+// σ_3 = sigma_k(·,3); multiplicative, σ_3(p^a) = (p^(3(a+1))−1)/(p³−1).
+// σ_3(6) = 1+8+27+216 = 252. Integer-exact (no float); the single-arg NAME
+// `sigma_3` closes the verify_cli calc-gap #1230 (2-op `sigma_k 6 3` already
+// worked; this gives the canonical 1-arg surface).
+pub fn sigma_3(n) -> int {
+    let sum = 0
+    let i = 1
+    while i <= n {
+        if n % i == 0 { sum = sum + i * i * i }
+        i = i + 1
+    }
+    sum
+}
+
+// omega_big(n) = Ω(n) — number of prime factors of n WITH multiplicity
+// (OEIS A001222). Ω(p^a)=a, additive over prime powers; Ω(1)=0. Trial
+// division to √x; the residual x>1 is one final prime. Backs liouville().
+pub fn omega_big(n) -> int {
+    let count = 0
+    let x = n
+    let d = 2
+    while d * d <= x {
+        while x % d == 0 {
+            count = count + 1
+            x = x / d
+        }
+        d = d + 1
+    }
+    if x > 1 { count = count + 1 }
+    count
+}
+
+// liouville(n) = λ(n) = (−1)^Ω(n) — the Liouville function (OEIS A008836).
+// Completely multiplicative; λ(p^a)=(−1)^a, λ(1)=1. Returns +1 / −1.
+// λ(6)=λ(2·3)=(−1)²=1; λ(8)=λ(2³)=(−1)³=−1.
+pub fn liouville(n) -> int {
+    if omega_big(n) % 2 == 0 { 1 } else { -1 }
+}
+
+// liouville_summatory(n) = L(n) = Σ_{k=1}^{n} λ(k) (OEIS A002819).
+// Polya conjecture (L(n)≤0 ∀n>1) was FALSIFIED at n=906150257 (Tanaka 1980;
+// Haselgrove 1958, Lehman 1960) — a classical closed-negative. L(2)=0, L(6)=0.
+pub fn liouville_summatory(n) -> int {
+    let sum = 0
+    let k = 1
+    while k <= n {
+        sum = sum + liouville(k)
+        k = k + 1
+    }
+    sum
+}
+
+// fibonacci_mod(k, m) = F_k mod m (F_0=0, F_1=1). Iterative (a,b) pairs;
+// no big-int needed since every value is reduced mod m each step.
+pub fn fibonacci_mod(k, m) -> int {
+    if m <= 0 { return 0 }
+    let a = 0
+    let b = 1
+    let i = 0
+    while i < k {
+        let t = (a + b) % m
+        a = b
+        b = t
+        i = i + 1
+    }
+    a
+}
+
+// pisano_period(n) = π(n) — period of the Fibonacci sequence taken mod n
+// (OEIS A001175). Iterate (a,b)=(0,1)→(b,(a+b) mod n) counting steps until
+// the pair returns to (0,1). π(2)=3, π(3)=8, π(6)=lcm(3,8)=24, π(10)=60.
+pub fn pisano_period(n) -> int {
+    if n <= 1 { return 1 }
+    let a = 0
+    let b = 1
+    let period = 0
+    while true {
+        let t = (a + b) % n
+        a = b
+        b = t
+        period = period + 1
+        if a == 0 && b == 1 { return period }
+    }
+    period
+}
+
 pub fn euler_phi(n) -> int {
     if n == 1 { return 1 }
     let count = 0

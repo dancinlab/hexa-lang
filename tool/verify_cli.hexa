@@ -283,7 +283,8 @@ fn cmd_rubric() {
     println("             (g7 inbox · self-verified, g_self_verify · reviewer-merge → MAIN.tape).")
     println("             Kept for backward-compat; the auto-absorb-to-atlas default is the")
     println("             canonical sink. Verifies & absorbs equations NOT YET in the atlas.")
-    println("  calc fns : sigma|sigma_0|sigma_2|sigma_star|phi|mu|tau|is_perfect|aliquot|gamma0_index|")
+    println("  calc fns : sigma|sigma_0|sigma_2|sigma_3|sigma_star|phi|mu|tau|is_perfect|aliquot|gamma0_index|")
+    println("             omega_big|liouville|liouville_summatory|pisano_period  (A001222/A008836/A002819/A001175 · integer-exact · INBOX #5/#7/#8)")
     println("             gamma0_cusps|gamma0_genus|isotropy_lcm|first_cusp_form_weight|pair_threshold_factor|recomb_3body_density_power")
     println("             nth_prime|is_prime|factorial|catalan|bell|partition  (VERIFY-KIT V7 OEIS A000040/108/142/110/41 · integer-exact)")
     println("             2-op: sigma_k|jacobi|kronecker|dim_cusp_forms|ssh_winding  (extend _recompute on gap)")
@@ -434,6 +435,11 @@ fn _recompute(fn_name: string, n: int) -> int {
     if fn_name == "divisor_count" || fn_name == "tau" { return len(divisors(n)) }
     if fn_name == "sopfr" { return sopfr(n) }   // sum of prime factors w/ multiplicity (TECS-L CM0 lattice · F9 calc-gap fix)
     if fn_name == "sigma_star" { return sigma_star(n) }   // Σ_{d||n} d — unitary divisor sum; n=6 smallest unitary-perfect σ*(6)=12 (INBOX #6 · calc-gap #1230)
+    if fn_name == "sigma_3" { return sigma_k(n, 3) }   // Σ_{d|n} d³ — A001158; σ_3(6)=252 (INBOX #5 · g0 Occam reuse of sigma_k · calc-gap #1230)
+    if fn_name == "omega_big" || fn_name == "big_omega" { return omega_big(n) }   // Ω(n) prime factors w/ multiplicity — A001222 (INBOX #7)
+    if fn_name == "liouville" { return liouville_int(n) }   // λ(n)=(−1)^Ω(n) → +1/−1 (signed; A008836 · INBOX #7)
+    if fn_name == "liouville_summatory" { return liouville_summatory(n) }   // L(n)=Σλ(k); Polya falsified @906150257 (A002819 · INBOX #7)
+    if fn_name == "pisano_period" { return pisano_period(n) }   // π(n) Fibonacci period mod n — A001175; π(6)=24 (INBOX #8)
     if fn_name == "is_perfect" {
         // perfect ⟺ σ(n) = 2n  (Euclid–Euler; 6,28,496,…) → 1 / 0
         if sigma_k(n, 1) == 2 * n { return 1 }
