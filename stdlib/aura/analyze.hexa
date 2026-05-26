@@ -1,0 +1,140 @@
+#!hexa strict
+// stdlib/aura/analyze.hexa — `aura + analyze` producer (hexa-native).
+//
+// LAYER: per-verb cell producer. Emits an aura_analyze_record-shaped
+// sentinel carrying TWO analysis tracks:
+//   * EEG signal-processing — MNE-Python band-power (alpha/beta/gamma)
+//   * EM analysis — openEMS FDTD antenna pattern + SAR estimate
+//
+// Default substrate input = synthetic EEG (textbook configuration).
+// Sleep-EDF MEASURED-ORACLE parity is at the verify cell (V0 G33),
+// NOT here — this cell is signal-processing scaffolding only.
+//
+// CONTEXT: AURA = post-aural / temporal-bone clip wearable BCI.
+// aura.demi [cell.analyze] wires substrate=hexa → this script.
+// The actual MNE-Python band-power producer code lives at
+// stdlib/aura/aura_mne.py (D61-from-birth · substrate SSOT). This
+// hexa shim is the cellrun-side announcement that the analyze cell
+// is wired and exposes 2 analysis tracks.
+//
+// Citations (domains/aura.md §2 + §4):
+//   * MNE-Python (mne-tools, BSD-3) — EEG/MEG signal processing
+//   * openEMS (GPL-3) — FDTD EM solver (antenna + matching network)
+//   * PhysioNet Sleep-EDF — open EEG dataset for verify-side oracle
+//   * BNCI Horizon — open EEG dataset reference (BCI competition)
+//
+// Honesty (g3 · @D d1 · aura.demi line 99-102):
+//   * measurement_gate = GATE_OPEN permanently
+//   * absorbed = false PERMANENTLY — analyze band-power on SYNTHETIC
+//     input is signal-processing scaffold, NEVER a clinical EEG
+//     finding. The Sleep-EDF measured-oracle parity claim lives at
+//     verify (V0 · G33 LANDED · mean_rel_err 8.4e-07).
+//   * SAR/MRI honest-gap: openEMS antenna+SAR is NOT FDA-MDDT-
+//     qualified vs Sim4Life — that's the V6 EM-side verify gap.
+//
+// Sentinels:
+//   __HEXA_AURA_ANALYZE__ PASS                 — dispatcher loaded
+//   AURA_ANALYZE_OK gate=GATE_OPEN absorbed=false  — cellrun parse line
+//
+// Pattern: mirrors stdlib/aura/specify.hexa + structure.hexa + design.hexa.
+
+let VERSION       = "0.1.0"
+let MODULE        = "aura-analyze"
+let GEOMETRY_ID   = "aura_analyze_v1"
+let RECORD_KIND   = "aura_analyze_record"
+
+// ─── EEG signal-processing track (MNE-Python) ─────────────────────────
+
+fn _eeg_dsp_block() -> [str] {
+    return [
+        "library: MNE-Python (mne-tools · BSD-3 · cross-platform pip-installable)",
+        "preprocessing: bandpass 0.5-50 Hz (FIR · zero-phase) · notch 50/60 Hz mains",
+        "epoching: window 2-30 s sliding (alpha analysis · sleep analysis)",
+        "band-power computation: Welch PSD + numerical integration over band edges",
+        "alpha band: 8-13 Hz · beta band: 13-30 Hz · gamma band: 30-50 Hz",
+        "substrate SSOT: stdlib/aura/aura_mne.py (D61-from-birth)",
+        "naive-DFT companion: stdlib/aura/_dft_alpha_band_batch.hexa (hexa-native parity)",
+    ]
+}
+
+// ─── EM analysis track (openEMS FDTD) ─────────────────────────────────
+
+fn _em_fdtd_block() -> [str] {
+    return [
+        "library: openEMS (GPL-3 · cross-platform · MPI-parallel) · 3D FDTD",
+        "antenna geometry: PCB chip antenna OR matched trace (V3 design output)",
+        "frequency band: BLE 2.4-2.4835 GHz (ISM)",
+        "S11 / VSWR sweep + 3D radiation pattern (gain · directivity · efficiency)",
+        "SAR estimate: head-phantom (ITIS Foundation Virtual Population reference)",
+        "matching network: pi/T topology (smith-chart) with capacitor sweep",
+        "post-process: paraview VTK + matplotlib polar pattern",
+    ]
+}
+
+// ─── synthetic input track (default cellrun behavior) ─────────────────
+
+fn _synthetic_input_block() -> [str] {
+    return [
+        "default input: synthetic EEG (sinusoid + 1/f pink-noise · textbook configuration)",
+        "purpose: smoke-test the band-power + EM pipeline END-TO-END (no clinical data)",
+        "Sleep-EDF measured-oracle parity = V0 verify cell (G33 LANDED · 8.4e-07)",
+        "BNCI Horizon EEG datasets = optional extension input (verify-side, not analyze)",
+    ]
+}
+
+fn _scope_caveats() -> [str] {
+    return [
+        "MNE-Python EEG band-power (alpha/beta/gamma) producer - D61-from-birth (script SSOT in hexa-lang/stdlib/aura/).",
+        "Default input = synthetic EEG (textbook configuration); Sleep-EDF measured-oracle parity is at verify cell, NOT analyze.",
+        "measurement_gate = GATE_OPEN permanently - analyze band-power on synthetic input is not an absorption claim (g3).",
+        "openEMS antenna + SAR is NOT FDA-MDDT-qualified vs Sim4Life - that honest-gap belongs to V6 EM-side verify (G1 breakthrough candidate).",
+        "absorbed=false PERMANENTLY (g3) - signal-processing scaffold, NEVER a clinical EEG finding.",
+    ]
+}
+
+// ─── emit helpers ─────────────────────────────────────────────────────
+
+fn _emit_block(label: str, lines: [str]) {
+    print("# [" + label + "]")
+    let n = lines.len()
+    let mut i = 0
+    while i < n {
+        print("#   - " + lines[i])
+        i = i + 1
+    }
+    print("#")
+}
+
+fn _emit_header() {
+    print("# AURA ANALYZE — MNE-Python band-power + openEMS FDTD antenna/SAR")
+    print("# device_target = post-aural / temporal-bone clip BCI")
+    print("# version = " + VERSION)
+    print("#")
+    _emit_block("eeg_dsp",          _eeg_dsp_block())
+    _emit_block("em_fdtd",          _em_fdtd_block())
+    _emit_block("synthetic_input",  _synthetic_input_block())
+}
+
+fn _emit_caveats() {
+    let c = _scope_caveats()
+    let n = c.len()
+    let mut i = 0
+    while i < n {
+        print("# scope_caveat: " + c[i])
+        i = i + 1
+    }
+}
+
+// ─── main entry ───────────────────────────────────────────────────────
+
+fn main() {
+    _emit_header()
+    _emit_caveats()
+
+    print("AURA_ANALYZE_OK record_kind=" + RECORD_KIND
+        + " geometry_id=" + GEOMETRY_ID
+        + " gate=GATE_OPEN absorbed=false"
+        + " version=" + VERSION)
+
+    print("__HEXA_AURA_ANALYZE__ PASS")
+}
