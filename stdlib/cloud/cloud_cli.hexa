@@ -383,7 +383,7 @@ fn _cloud_rent_vast(av: [str], start: int) -> int {
         disk_gb = 30
     }
     // verified_only=1 → vast.hexa applies the campaign-proven default
-    // filters (reliability2>=0.95 + verified + rentable). An explicit
+    // filters (reliability>=0.95 + verified + rentable). An explicit
     // --query opts into the caller's raw predicate string instead.
     let offer = vast_search_offers(query, 1)
     if offer.ok == 0 {

@@ -2,6 +2,11 @@
 
 Append-only history sister of `INBOX.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
+## 2026-05-26T15:10Z — 🔌 cloud rent `reliability2` query-field 오타 FIX (#1239(1)ⓐ · #1038(1)) — vast rent unblock
+
+- [x] **`stdlib/cloud/vast.hexa` `_vast_default_filters` `reliability2>=0.95` → `reliability>=0.95`** — vastai 검색-DSL 필드는 `reliability` 이고 `reliability2` 는 offer-JSON **출력** 필드에만 존재. query 에 `reliability2` 를 주면 미지 키로 거부 → offer 0건 → `hexa cloud rent` 가 항상 silent-fail. 공식문서 확인: `vastai search offers 'reliability > 0.99 num_gpus>=4'`. 코드 1줄 + stale 주석 3곳(vast.hexa 135/197 · cloud_cli.hexa 386) 정정. 로컬 parse-gate 는 배포 hexa 바이너리 destructive(소스 clobber)라 skip → CI bootstrap build-gate.
+- [ ] **남은 분리-항목 (이 fix 범위 밖)**: #1239(1)ⓑ `cpu_ram` MB→GB 는 vast.hexa 에 부재(호출자 query 문자열 소관) · #1239(2) `vastai show instance <id>` start_date=None crash(list-기반 추출/None-guard) · #1229(A·B·C·D) reconcile GHOST/registry 오염/concurrent-wipe/prebuilt-전송 · #1155 vast 등록키 미제시 — 모두 OPEN.
+
 ## 2026-05-26T09:45Z — 💡 RFC: `hexa cloud dft-run <deck-dir>` — DFT el-ph pod 발사를 canonical 레시피로 (손-롤 실수 제거) · from demiurge RTSC
 
 > RTSC 캠페인(vast pod 다수) 운용서 **매 dispatch 손-롤이 반복 실수의 원천**임이 드러남. transport/lifecycle 버그(#1155/#1229/#1239) 위에, "deck → 발사 → 수확" 상위 레시피 층을 `hexa cloud` 서브커맨드로 흡수하면 실수 0. demiurge-side SSOT 레시피 = `demiurge/exports/sweep/DFT_POD_DISPATCH_RECIPE.md` (이 RFC의 구현 사양).
