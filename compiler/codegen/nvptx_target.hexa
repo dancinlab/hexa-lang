@@ -359,6 +359,42 @@ fn _nvptx_lookup_kind_for_local(kinds: [PReg], id: i64) -> string {
     return NVPTX_RKIND_F64
 }
 
+// PR-A (GPU sweep #1284) — array element-kind decode helpers.
+// hir_to_mir.hexa::_type_id_of encodes array element kinds as:
+//   101 = array<i64>, 102 = array<i32>, 103 = array<f64>, 104 = array<f32>.
+// IndexGet/IndexSet sites + the classifier IndexGet dst rule read these
+// to drive the right ld/st/add bank (NOT the F64 fall-through default
+// that silently miscompiles `[i64]` kernels to ld.global.f64/add.f64).
+fn _nvptx_array_elem_kind_for_type_id(tid: i64) -> string {
+    if tid == 101 { return NVPTX_RKIND_U64 }
+    if tid == 102 { return NVPTX_RKIND_U32 }
+    if tid == 103 { return NVPTX_RKIND_F64 }
+    if tid == 104 { return NVPTX_RKIND_F32 }
+    return ""   // not an array type / unknown element kind
+}
+
+// _nvptx_lookup_array_elem_kind_for_local — companion to
+// `_nvptx_lookup_kind_for_local`. The array param's PReg kind is U64
+// (the device pointer bank — used for address arithmetic), but the
+// IndexGet/IndexSet sites need the ELEMENT kind to pick the right
+// ld/st bank. The classifier (Pass 0) stamps the element kind into
+// `PReg.frag_dtype` for array params; this helper retrieves it.
+// Returns "" if the Local isn't an array param (caller falls through
+// to the default F64 bank — backward compat for non-array workloads).
+fn _nvptx_lookup_array_elem_kind_for_local(kinds: [PReg], id: i64) -> string {
+    let n_u64 = _nvptx_reg_u64(id)
+    let mut i = 0
+    while i < len(kinds) {
+        let r = kinds[i]
+        if r.name == n_u64 && len(r.frag_dtype) > 0 {
+            // Stamped by Pass 0 with NVPTX_RKIND_{U64,U32,F64,F32}.
+            return r.frag_dtype
+        }
+        i = i + 1
+    }
+    return ""
+}
+
 // _nvptx_ld_mnem_for_kind — global load mnemonic per RKIND.
 // (RFC 068 P4 `F-RFC068-NUMERIC-EQ` codegen seam.)
 fn _nvptx_ld_mnem_for_kind(kind: string) -> string {
@@ -827,7 +863,18 @@ fn _nvptx_lower_stmt(buf: [LInstr], s: Stmt, kinds: [PReg], shared_idx_off: [i64
         //   add.s64     %rd_idxa_<id>, %rd_idxa_<id>, <base_reg>;
         //   ld.global.<ty>  %<dst_reg>, [%rd_idxa_<id>];
         if s.op == "index" && s.dst.id >= 0 && len(s.args) >= 2 {
-            let dst_kind = _nvptx_lookup_kind_for_local(kinds, s.dst.id)
+            // PR-A (GPU sweep #1284) — array element-kind threading.
+            // Prefer the array base's element kind (stamped by Pass 0
+            // into PReg.frag_dtype for array params). Falls back to the
+            // dst Local's classified kind when the base isn't a known
+            // array param (synthetic test fixtures + scalar pointers).
+            let mut dst_kind = ""
+            if s.args[0].kind == "local" {
+                dst_kind = _nvptx_lookup_array_elem_kind_for_local(kinds, s.args[0].local_id)
+            }
+            if len(dst_kind) == 0 {
+                dst_kind = _nvptx_lookup_kind_for_local(kinds, s.dst.id)
+            }
             let elem_size = _nvptx_elem_size_for_kind(dst_kind)
             let dst_reg = _nvptx_lookup_reg_for_local(kinds, s.dst.id)
             let base_reg = _nvptx_operand_text_kinds(s.args[0], kinds)
@@ -876,7 +923,19 @@ fn _nvptx_lower_stmt(buf: [LInstr], s: Stmt, kinds: [PReg], shared_idx_off: [i64
         if s.op == "index_set" && len(s.args) >= 3 {
             let val_op = s.args[2]
             let mut val_kind = NVPTX_RKIND_F64
-            if val_op.kind == "local" {
+            // PR-A (GPU sweep #1284) — prefer array element kind for the
+            // store bank. The val_op's classified kind may have been
+            // tainted by Pass-1 F64 default if upstream BINOPs didn't
+            // pick up integer banks (e.g. via op="index" loads with
+            // unclassified base). The base operand's element kind is
+            // the authoritative ground truth for the store bank.
+            let mut base_elem_kind = ""
+            if s.args[0].kind == "local" {
+                base_elem_kind = _nvptx_lookup_array_elem_kind_for_local(kinds, s.args[0].local_id)
+            }
+            if len(base_elem_kind) > 0 {
+                val_kind = base_elem_kind
+            } else if val_op.kind == "local" {
                 val_kind = _nvptx_lookup_kind_for_local(kinds, val_op.local_id)
             }
             let elem_size = _nvptx_elem_size_for_kind(val_kind)
@@ -1995,16 +2054,27 @@ fn _nvptx_classify_locals(mfn: MFunc) -> [PReg] {
         while pp < len(mfn.params) {
             let p = mfn.params[pp]
             let mut pk = ""
+            // PR-A (GPU sweep #1284) — array param classification. type_id
+            // 101-104 = array<i64/i32/f64/f32>. The param reg is a U64
+            // device pointer (used by addr arith); the ELEMENT kind is
+            // stamped into PReg.frag_dtype so IndexGet/Set sites can
+            // pick the correct ld/st bank. Without this, [i64] arrays
+            // default to F64 ld/st → silent miscompile past 2^52.
+            let mut elem_kind = ""
             if p.type_id == 1 { pk = NVPTX_RKIND_U64 }
             else if p.type_id == 2 { pk = NVPTX_RKIND_U32 }
             else if p.type_id == 3 { pk = NVPTX_RKIND_F64 }
             else if p.type_id == 4 { pk = NVPTX_RKIND_F32 }
+            else {
+                elem_kind = _nvptx_array_elem_kind_for_type_id(p.type_id)
+                if len(elem_kind) > 0 { pk = NVPTX_RKIND_U64 }
+            }
             if len(pk) > 0 {
                 regs.push(PReg {
                     name: _nvptx_reg_name_for(pk, p.id),
                     kind: pk,
                     frag_role: "",
-                    frag_dtype: "",
+                    frag_dtype: elem_kind,
                     frag_layout: ""
                 })
                 seen_ids.push(p.id)
@@ -2063,6 +2133,22 @@ fn _nvptx_classify_locals(mfn: MFunc) -> [PReg] {
                             if len(s.args) >= 1 && s.args[0].kind == "local" {
                                 let ks = _nvptx_lookup_kind_for_local(regs, s.args[0].local_id)
                                 if ks == NVPTX_RKIND_U64 || ks == NVPTX_RKIND_U32 { kind = ks }
+                            }
+                        }
+                        // PR-A (GPU sweep #1284) — IndexGet dst-kind inherits
+                        // the array element kind. `_nvptx_classify_local_for_stmt`
+                        // defaults the dst to F64 for unrecognised ops including
+                        // `index`; without this override the loaded value reg
+                        // is %fd<id> and downstream BINOP operand-kind inference
+                        // sees F64, propagating the F64 bank through add/store.
+                        // The array base operand (args[0]) carries the elem
+                        // kind in PReg.frag_dtype (stamped by Pass 0). When
+                        // present, override the F64 default with that kind
+                        // (so a [i64] load lands in %rd<id> + emits ld.global.u64).
+                        if s.kind == STMT_ASSIGN && s.op == "index" && kind == NVPTX_RKIND_F64 && len(s.dst.precision) == 0 {
+                            if len(s.args) >= 1 && s.args[0].kind == "local" {
+                                let ke = _nvptx_lookup_array_elem_kind_for_local(regs, s.args[0].local_id)
+                                if len(ke) > 0 { kind = ke }
                             }
                         }
                         // RFC 055 §13 — math-intrinsic dst-kind inheritance.
