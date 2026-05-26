@@ -4532,6 +4532,26 @@ fn parse_attribute_prefix() {
         return parse_stmt()
     }
 
+    // @shared — bare marker attribute (no parens) used by @gpu_kernel to
+    // hoist a `let` into PTX `.shared` memory. PR #1284/#1301 sweep surfaced
+    // that this attribute was silently dropped (parsed then discarded) and
+    // the kernel emit defaulted to `.global` ld/st on the shared base,
+    // producing ptxas-rejecting PTX. Piece 1 of the @shared landing chain
+    // (parser surface): preserve into p_pending_attrs so the next parse_let
+    // attaches "shared" into LetStmt.op (existing attrs threading at
+    // parser.hexa:1718). Downstream codegen pieces (ast_to_hir / hir_to_mir /
+    // nvptx_target .shared directive + ld.shared/st.shared bank) land
+    // separately in stacked PRs.
+    if attr_name == "shared" {
+        if p_pending_attrs == "" {
+            p_pending_attrs = "shared"
+        } else {
+            p_pending_attrs = p_pending_attrs + ",shared"
+        }
+        p_skip_newlines()
+        return parse_stmt()
+    }
+
     // Unknown attribute — skip and continue
     if p_peek_kind() == "LParen" {
         p_advance() // consume (
