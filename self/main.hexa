@@ -2672,99 +2672,69 @@ fn cmd_build(src, out, c_only, target, shared) {
         // .so/.dylib (0644), not an executable (0755).
         let mut __nshared_link = ""
         if shared == "1" { __nshared_link = "-fPIC -shared " }
-        // HEXA_BACKEND flip · 일곱째 increment — hexa-native runtime override.
-        // When HEXA_NATIVE_RT_EXIT=1, emit a hexa-native `_hexa_exit` .o
-        // (test/native_build/emit_hexa_exit_native_o.hexa) and append it to
-        // the clang link. The C-side `hexa_exit` in runtime.c carries
-        // `__attribute__((weak))`; ld64 binds the `bl _hexa_exit` callsite
-        // to the hexa-emit strong symbol instead. ENV unset = no behavior
-        // change (default build_aprime.sh stays byte-identical).
-        // The emit driver writes to /tmp/hexa_exit_native.o. We rebuild
-        // every cmd_build invocation (small + cheap, ~280 bytes) — no cache
+        // HEXA_BACKEND flip · 열한째 increment — gate consolidation.
+        // Single table-driven loop replaces the per-primitive `if env(...)`
+        // blocks. Each row = (env var · emit driver `.hexa` · output `.o` ·
+        // overridden weak C symbol). Default OFF for every row (env unset =
+        // no behavior change · build_aprime.sh stays byte-identical).
+        //
+        // HEXA_NATIVE_RT_ALL=1 umbrella: when set, every per-primitive gate
+        // flips ON regardless of its individual env value (the row's env is
+        // skipped — RT_ALL wins). Individual gates still work standalone
+        // (e.g. HEXA_NATIVE_RT_EXIT=1 alone still wires only rt_exit).
+        //
+        // The emit driver writes its `.o` to /tmp; we rebuild every cmd_build
+        // invocation (small + cheap, ~hundreds of bytes per .o) — no cache
         // staleness risk if the emit driver changes.
+        //
+        // Adding a new primitive = append one row (4 parallel-array push)
+        // + drop the matching `emit_<name>_native_o.hexa` into test/native_build/.
+        // The runtime.c side must already carry `__attribute__((weak))` on
+        // the C symbol so ld64 picks the hexa-emit strong symbol.
+        let __nrt_envs   = ["HEXA_NATIVE_RT_EXIT",
+                            "HEXA_NATIVE_RT_PTR_ALLOC",
+                            "HEXA_NATIVE_RT_PTR_OFFSET"]
+        let __nrt_drvs   = [__nself + "/../test/native_build/emit_hexa_exit_native_o.hexa",
+                            __nself + "/../test/native_build/emit_hexa_ptr_alloc_native_o.hexa",
+                            __nself + "/../test/native_build/emit_hexa_ptr_offset_native_o.hexa"]
+        let __nrt_outs   = ["/tmp/hexa_exit_native.o",
+                            "/tmp/hexa_ptr_alloc_native.o",
+                            "/tmp/hexa_ptr_offset_native.o"]
+        let __nrt_syms   = ["hexa_exit",
+                            "hexa_ptr_alloc",
+                            "hexa_ptr_offset"]
+        let __nrt_all_on = (env("HEXA_NATIVE_RT_ALL") == "1")
         let mut __nrt_native_o = ""
-        if env("HEXA_NATIVE_RT_EXIT") == "1" {
-            let __nemit_drv = __nself + "/../test/native_build/emit_hexa_exit_native_o.hexa"
-            let __nemit_chk = exec("test -f '" + __nemit_drv + "' && printf yes || printf no")
-            if __nemit_chk == "yes" {
-                // Resolve the hexa interpreter the same way the bootstrap
-                // path does — pick the live driver argv[0].
-                let __nhx = env("HEXA_LANG_INTERP")
-                let mut __nhx_cmd = "hexa"
-                if len(__nhx) > 0 { __nhx_cmd = __nhx }
-                let __nemit_out = exec("'" + __nhx_cmd + "' run '" + __nemit_drv + "' 2>&1")
-                if len(__nemit_out) > 0 { println("    [rt-emit] " + __nemit_out) }
-                let __no_chk = exec("test -f /tmp/hexa_exit_native.o && printf yes || printf no")
-                if __no_chk == "yes" {
-                    __nrt_native_o = "'/tmp/hexa_exit_native.o' "
-                    println("  [native rt] HEXA_NATIVE_RT_EXIT=1 — appending /tmp/hexa_exit_native.o (overrides weak hexa_exit in runtime.c)")
+        let mut __nrt_i = 0
+        while __nrt_i < len(__nrt_envs) {
+            let __nrt_env  = __nrt_envs[__nrt_i]
+            let __nrt_drv  = __nrt_drvs[__nrt_i]
+            let __nrt_out  = __nrt_outs[__nrt_i]
+            let __nrt_sym  = __nrt_syms[__nrt_i]
+            let mut __nrt_on = __nrt_all_on
+            if !__nrt_on { __nrt_on = (env(__nrt_env) == "1") }
+            if __nrt_on {
+                let __nrt_drv_chk = exec("test -f '" + __nrt_drv + "' && printf yes || printf no")
+                if __nrt_drv_chk == "yes" {
+                    // Resolve the hexa interpreter the same way the bootstrap
+                    // path does — pick the live driver argv[0].
+                    let __nrt_hx = env("HEXA_LANG_INTERP")
+                    let mut __nrt_hx_cmd = "hexa"
+                    if len(__nrt_hx) > 0 { __nrt_hx_cmd = __nrt_hx }
+                    let __nrt_emit_out = exec("'" + __nrt_hx_cmd + "' run '" + __nrt_drv + "' 2>&1")
+                    if len(__nrt_emit_out) > 0 { println("    [rt-emit] " + __nrt_emit_out) }
+                    let __nrt_o_chk = exec("test -f '" + __nrt_out + "' && printf yes || printf no")
+                    if __nrt_o_chk == "yes" {
+                        __nrt_native_o = __nrt_native_o + "'" + __nrt_out + "' "
+                        println("  [native rt] " + __nrt_env + "=1 — appending " + __nrt_out + " (overrides weak " + __nrt_sym + " in runtime.c)")
+                    } else {
+                        println("  [native rt] WARN: " + __nrt_env + "=1 but emit driver produced no .o — falling back to C " + __nrt_sym)
+                    }
                 } else {
-                    println("  [native rt] WARN: HEXA_NATIVE_RT_EXIT=1 but emit driver produced no .o — falling back to C hexa_exit")
+                    println("  [native rt] WARN: " + __nrt_env + "=1 but emit driver not at " + __nrt_drv)
                 }
-            } else {
-                println("  [native rt] WARN: HEXA_NATIVE_RT_EXIT=1 but emit driver not at " + __nemit_drv)
             }
-        }
-        // HEXA_BACKEND flip · 아홉째 increment — hexa-native `_hexa_ptr_alloc`
-        // override (parallel to HEXA_NATIVE_RT_EXIT, horizontal expansion of
-        // the #1321/#1324 weak-symbol recipe). Emit a hexa-native .o for
-        // `_hexa_ptr_alloc` (test/native_build/emit_hexa_ptr_alloc_native_o.hexa)
-        // and append it to the clang link when HEXA_NATIVE_RT_PTR_ALLOC=1.
-        // The C-side `hexa_ptr_alloc` in runtime.c is `__attribute__((weak))`,
-        // so ld64 picks the hexa-emit strong symbol when this .o is linked.
-        // RESIDUAL — the override uses mmap (rt_alloc primitive) while the
-        // C-side `hexa_ptr_free` still uses libc `free()`. Safe ONLY for
-        // programs that allocate via `hexa_ptr_alloc` without subsequently
-        // calling `hexa_ptr_free` (or co-override `_hexa_ptr_free` with
-        // munmap — follow-up). ENV unset = no behavior change.
-        if env("HEXA_NATIVE_RT_PTR_ALLOC") == "1" {
-            let __npa_drv = __nself + "/../test/native_build/emit_hexa_ptr_alloc_native_o.hexa"
-            let __npa_chk = exec("test -f '" + __npa_drv + "' && printf yes || printf no")
-            if __npa_chk == "yes" {
-                let __npa_hx = env("HEXA_LANG_INTERP")
-                let mut __npa_hx_cmd = "hexa"
-                if len(__npa_hx) > 0 { __npa_hx_cmd = __npa_hx }
-                let __npa_emit_out = exec("'" + __npa_hx_cmd + "' run '" + __npa_drv + "' 2>&1")
-                if len(__npa_emit_out) > 0 { println("    [rt-emit] " + __npa_emit_out) }
-                let __npa_o_chk = exec("test -f /tmp/hexa_ptr_alloc_native.o && printf yes || printf no")
-                if __npa_o_chk == "yes" {
-                    __nrt_native_o = __nrt_native_o + "'/tmp/hexa_ptr_alloc_native.o' "
-                    println("  [native rt] HEXA_NATIVE_RT_PTR_ALLOC=1 — appending /tmp/hexa_ptr_alloc_native.o (overrides weak hexa_ptr_alloc in runtime.c)")
-                } else {
-                    println("  [native rt] WARN: HEXA_NATIVE_RT_PTR_ALLOC=1 but emit driver produced no .o — falling back to C hexa_ptr_alloc")
-                }
-            } else {
-                println("  [native rt] WARN: HEXA_NATIVE_RT_PTR_ALLOC=1 but emit driver not at " + __npa_drv)
-            }
-        }
-        // HEXA_BACKEND flip · 열번째 increment — hexa-native `_hexa_ptr_offset`
-        // override (parallel to HEXA_NATIVE_RT_PTR_ALLOC, horizontal expansion
-        // of the #1321/#1326 weak-symbol recipe). Emit a hexa-native .o for
-        // `_hexa_ptr_offset` (test/native_build/emit_hexa_ptr_offset_native_o.hexa)
-        // and append it to the clang link when HEXA_NATIVE_RT_PTR_OFFSET=1.
-        // The C-side `hexa_ptr_offset` in runtime.c is `__attribute__((weak))`,
-        // so ld64 picks the hexa-emit strong symbol when this .o is linked.
-        // Adapter is 12 B pure arithmetic — no syscall, no allocator-pair
-        // coupling, smallest in the series. ENV unset = no behavior change.
-        if env("HEXA_NATIVE_RT_PTR_OFFSET") == "1" {
-            let __npo_drv = __nself + "/../test/native_build/emit_hexa_ptr_offset_native_o.hexa"
-            let __npo_chk = exec("test -f '" + __npo_drv + "' && printf yes || printf no")
-            if __npo_chk == "yes" {
-                let __npo_hx = env("HEXA_LANG_INTERP")
-                let mut __npo_hx_cmd = "hexa"
-                if len(__npo_hx) > 0 { __npo_hx_cmd = __npo_hx }
-                let __npo_emit_out = exec("'" + __npo_hx_cmd + "' run '" + __npo_drv + "' 2>&1")
-                if len(__npo_emit_out) > 0 { println("    [rt-emit] " + __npo_emit_out) }
-                let __npo_o_chk = exec("test -f /tmp/hexa_ptr_offset_native.o && printf yes || printf no")
-                if __npo_o_chk == "yes" {
-                    __nrt_native_o = __nrt_native_o + "'/tmp/hexa_ptr_offset_native.o' "
-                    println("  [native rt] HEXA_NATIVE_RT_PTR_OFFSET=1 — appending /tmp/hexa_ptr_offset_native.o (overrides weak hexa_ptr_offset in runtime.c)")
-                } else {
-                    println("  [native rt] WARN: HEXA_NATIVE_RT_PTR_OFFSET=1 but emit driver produced no .o — falling back to C hexa_ptr_offset")
-                }
-            } else {
-                println("  [native rt] WARN: HEXA_NATIVE_RT_PTR_OFFSET=1 but emit driver not at " + __npo_drv)
-            }
+            __nrt_i = __nrt_i + 1
         }
         let __ntmp = exec("printf '%s.tmp.%s' '" + out + "' \"$$\"")
         let __nlink = "clang -O2 " + __nshared_link + os_clang_cflags() + "-Wno-trigraphs -fbracket-depth=4096 -I '" + __nself + "' " + __nrt_native_o + "'" + __nasm + "' '" + __nrtc + "' -o '" + __ntmp + "'" + os_clang_ldflags() + " 2>&1"
