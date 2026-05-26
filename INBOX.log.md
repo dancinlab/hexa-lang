@@ -1,5 +1,64 @@
 # INBOX — log
 
+## 2026-05-26T20:43Z — ubu-2 drill rebuild retry (INBOX line 8 re-verify)
+
+Retry of the INBOX line-8 item (`pool 호스트 hexa CLI — drill-runtime 잔존`,
+`map key 'f_a' not found` / `tag 4 vs tag 0`). Re-ran probe-first per
+instrument-first; the prior remote attempt (ssh ubu-2) had already landed.
+
+**Probe result (binary provenance)**
+- ubu-2 `~/.hx/bin/hexa.real`: rebuilt **2026-05-27 05:25** (today), size
+  2096072 B, md5 `d72b69379904532d7853d264d6ea71f6`, version `0.1.0-dispatch`.
+- Stale tell `strings | grep '%ld %ld'` = **0** → NOT the old fscanf build.
+- Built from `/tmp/hexa-lang-65fe0934` (clone @ `65fe093`, #1458). Current
+  main HEAD = `f759122b` (#1464) — clone is 6 commits behind, but the 6-commit
+  delta is only nvptx codegen + regex stdlib + docs (none touch drill runtime).
+- Prior rebuild **already happened** — backups present
+  (`hexa.real.bak.before-drill-rebuild-20260526` + 4 others).
+
+**Verdict: ALREADY FIXED (INBOX line 8 was already `- [x]` RESOLVED 2026-05-26).**
+- Original `map key 'f_a' not found` abort is GONE. Root cause (per line-8 note
+  + drill.hexa:290-298): drill is JIT-compiled from the ubu-2 worktree source,
+  whose `drill.hexa:290` read the stale field `verdict.f_a`; current main reads
+  `verdict.f_ai2_a` (landed #634-followup, merged via #1001 `dfd51d72`). Prior
+  agent applied current-main `drill.hexa` to the ubu-2 worktree + cleared the
+  stale JIT cache. Driver rebuild was incidental (drill is not compiled into it).
+- **ubu-2 re-smoke (this retry)**: `hexa drill --seed "verify perfect number 6
+  …" --rounds 1` → clean:
+  ```
+  round 1: smash+414 free+211 abs=0 meta=0 hyper=0 res+26(σ=0.10) total=651
+  overlay+ 517 lines (pool=0)
+  DRILL_VERIFIER {"round":1,"verdict":"skip"}
+  max rounds reached (1) — total=651
+  {"...","rounds":1,"total":651,...,"verifier_verdict":"skip"}
+  DRILL_EXIT=0
+  ```
+  `--rounds 1` correctly bounds the loop (max_rounds=1), no segfault.
+
+**NEW side-finding (Mac-local only — NOT the INBOX item, NOT on ubu-2)**
+- Local Mac `hexa drill --seed "…" --rounds 1` prints `max_rounds=10` (the
+  `--rounds` flag is silently dropped) → loop proceeds to round 2 → **deterministic
+  segfault** right after `DRILL_VERIFIER {round:1,verdict:skip}`.
+- Boundary isolated: round-1 `checkpoint_save` completes (checkpoint file written
+  with round:1), crash fires entering **round 2's seed-pool path** in
+  `round_run_with_pool` (round ≥ 2 only — round 1 has empty pool `pool=0`). The
+  populated `seed_pool` from `extract_axiom_exprs(rr.discoveries)` (drill.hexa:415)
+  drives `smash(ex_seed,1)` over candidates accessed via `c.axiom`/`c.expr`
+  (round.hexa:309-327) — a candidate-shape / map-key mismatch on the Mac runtime.
+- Why Mac-only: `cli_args()` (compiler/_cli_args/parse.hexa:24) slices `argv()`
+  from index 2 (`[interp_bin, script_path]`), but the Mac cached-`hexa_run`
+  dispatch path supplies only ONE prefix element → the first real flag
+  (`--rounds`) is eaten. ubu-2's argv has the expected 2-element prefix so
+  `--rounds` survives and the loop bounds correctly (no round 2, no crash).
+- The `drill-fixpoint-sigsegv-r2` local branch shows a prior agent already
+  touched this segfault family.
+
+**This is a PHYSICAL LIMIT for this round, cleanly reported**: the INBOX-scoped
+ubu-2 drill runtime is FIXED + verified. The Mac-local segfault is a *separate*
+bug in the drill engine's round-2 seed-pool path (gated behind a Mac-only
+`--rounds` argv-drop) — out of scope for this ubu-2 INBOX item, filed here for a
+follow-up. No ubu-2 rebuild was needed (probe showed it current + working).
+
 ## 2026-05-27 — hexa run cache-key 가 imported-module hash 미포함 → stale import binding
 
  의 컴파일 캐시 키가  소스 해시만 반영하고  로 import 한 모듈()의 해시는 미포함. import 모듈을 편집해도  가 그대로면 캐시 히트 → 옛 모듈 바인딩 binary 재사용 → silent stale 결과.
