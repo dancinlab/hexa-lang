@@ -1,0 +1,15 @@
+use "stdlib/core/math"
+
+fn main() -> int {
+    println("start")
+    let s = sigma(6)
+    println("sigma6=" + to_string(s))
+    let p = euler_phi(6)
+    println("phi6=" + to_string(p))
+    let t = tau(6)
+    println("tau6=" + to_string(t))
+    let d = s * p - 6 * t
+    println("D6=" + to_string(d))
+    println("end")
+    0
+}

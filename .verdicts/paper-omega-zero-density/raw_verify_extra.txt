@@ -1,0 +1,65 @@
+### n=28 (2nd perfect, ω=2)
+verify --expr sigma(28)=56
+  calc   = 56  == expected 56
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+  absorb = · already in atlas — idempotent skip (default · @D g69)
+verify --expr phi(28)=12
+  calc   = 12  == expected 12
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+  absorb = · already in atlas — idempotent skip (default · @D g69)
+verify --expr tau(28)=6
+  calc   = 6  == expected 6
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+  absorb = · already in atlas — idempotent skip (default · @D g69)
+### n=7 (prime, ω=1)
+verify --expr sigma(7)=8
+  calc   = 8  == expected 8
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+  absorb = · already in atlas — idempotent skip (default · @D g69)
+verify --expr phi(7)=6
+  calc   = 6  == expected 6
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+  absorb = · already in atlas — idempotent skip (default · @D g69)
+verify --expr tau(7)=2
+  calc   = 2  == expected 2
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+  absorb = · already in atlas — idempotent skip (default · @D g69)
+### n=8 (2^3, ω=1)
+verify --expr sigma(8)=15
+  calc   = 15  == expected 15
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+  absorb = · already in atlas — idempotent skip (default · @D g69)
+verify --expr phi(8)=4
+  calc   = 4  == expected 4
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+  absorb = · already in atlas — idempotent skip (default · @D g69)
+verify --expr tau(8)=4
+  calc   = 4  == expected 4
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+  absorb = · already in atlas — idempotent skip (default · @D g69)
+### n=60 (2^2*3*5, ω=3)
+verify --expr sigma(60)=168
+  calc   = 168  == expected 168
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+  absorb = · already in atlas — idempotent skip (default · @D g69)
+verify --expr phi(60)=16
+  calc   = 16  == expected 16
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+  absorb = · already in atlas — idempotent skip (default · @D g69)
+verify --expr tau(60)=12
+  calc   = 12  == expected 12
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+  absorb = · already in atlas — idempotent skip (default · @D g69)
+### n=2310 done above; n=30030 (ω=6 primorial)
+verify --expr sigma(30030)=96768
+  calc   = 96768  == expected 96768
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+  absorb = · already in atlas — idempotent skip (default · @D g69)
+verify --expr phi(30030)=5760
+  calc   = 5760  == expected 5760
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+  absorb = · already in atlas — idempotent skip (default · @D g69)
+verify --expr tau(30030)=64
+  calc   = 64  == expected 64
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+  absorb = · already in atlas — idempotent skip (default · @D g69)
