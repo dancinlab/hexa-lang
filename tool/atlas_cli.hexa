@@ -15,6 +15,7 @@
 //     normal git to share. All arms share DiscoveryEvent → register_from_event.
 //       --from-verify <fn> <n|a b> <v>   recompute IN-PROCESS, register on 🔵/🟢
 //       --from-drill  --seed "<text>"    drive the drill engine, register candidates
+//       --from-discovery <slug>          fold .discoveries/<slug>.tape atoms (F14-F18 ceremony)
 //   - EXPORT (export [--out PATH]) writes the live atlas out as a portable .n6
 //     file (default n6/atlas.n6). n6/atlas.n6 is an EXPORT artifact only — NOT
 //     the runtime SSOT.
@@ -402,12 +403,84 @@ fn _recompute_register(fn_name: string, n: int) -> int {
     if fn_name == "euler_totient" || fn_name == "euler_phi" || fn_name == "phi" { return euler_phi(n) }
     if fn_name == "mobius" || fn_name == "mu" { return mobius(n) }
     if fn_name == "divisor_count" || fn_name == "tau" { return len(divisors(n)) }
-    if fn_name == "sigma_star" { return sigma_star(n) }   // Σ_{d||n} d — unitary divisor sum (INBOX #6 · mirror verify_cli)
     if fn_name == "sigma_3" { return sigma_k(n, 3) }   // Σ_{d|n} d³ — A001158 (INBOX #5 · mirror verify_cli · g0 sigma_k reuse)
-    if fn_name == "omega_big" || fn_name == "big_omega" { return omega_big(n) }   // Ω(n) w/ multiplicity — A001222 (INBOX #7 · mirror verify_cli)
-    if fn_name == "liouville" { return liouville_int(n) }   // λ(n)=(−1)^Ω(n) +1/−1 — A008836 (INBOX #7 · mirror verify_cli)
-    if fn_name == "liouville_summatory" { return liouville_summatory(n) }   // L(n)=Σλ(k) — A002819 (INBOX #7 · mirror verify_cli)
-    if fn_name == "pisano_period" { return pisano_period(n) }   // π(n) Fibonacci period mod n — A001175 (INBOX #8 · mirror verify_cli)
+    // sigma_star / omega_big / liouville / liouville_summatory / pisano_period —
+    // INLINED (not delegated to congruence_chain_engine) so the module flattener
+    // pulls each body into THIS compile unit alongside the sigma_k/divisors arms.
+    // The prior `return sigma_star(n)` delegation form built only stub-extern
+    // refs (`hexa_call1(sigma_star, n)` undeclared): these single-use callees
+    // were never traced reachable through the new arms, so clang failed. Same
+    // closure as the inlined `mertens` arm below + congruence_chain's `sopfr`
+    // note. Bodies are verbatim ports of congruence_chain_engine.hexa.
+    if fn_name == "sigma_star" {   // Σ_{d||n} d — unitary divisor sum (INBOX #6 · A034448)
+        if n <= 0 { return 0 }
+        let ds = divisors(n)
+        let mut s = 0
+        let mut i = 0
+        while i < len(ds) {
+            let d = ds[i]
+            let mut a = d
+            let mut b = n / d
+            while b != 0 { let t = a % b; a = b; b = t }
+            if a == 1 { s = s + d }
+            i = i + 1
+        }
+        return s
+    }
+    if fn_name == "omega_big" || fn_name == "big_omega" {   // Ω(n) w/ multiplicity — A001222 (INBOX #7)
+        let mut count = 0
+        let mut x = n
+        let mut d = 2
+        while d * d <= x {
+            while x % d == 0 { count = count + 1; x = x / d }
+            d = d + 1
+        }
+        if x > 1 { count = count + 1 }
+        return count
+    }
+    if fn_name == "liouville" {   // λ(n)=(−1)^Ω(n) +1/−1 — A008836 (INBOX #7)
+        let mut count = 0
+        let mut x = n
+        let mut d = 2
+        while d * d <= x {
+            while x % d == 0 { count = count + 1; x = x / d }
+            d = d + 1
+        }
+        if x > 1 { count = count + 1 }
+        if count % 2 == 0 { return 1 }
+        return -1
+    }
+    if fn_name == "liouville_summatory" {   // L(n)=Σλ(k) — A002819 (INBOX #7)
+        let mut sum = 0
+        let mut k = 1
+        while k <= n {
+            let mut count = 0
+            let mut x = k
+            let mut d = 2
+            while d * d <= x {
+                while x % d == 0 { count = count + 1; x = x / d }
+                d = d + 1
+            }
+            if x > 1 { count = count + 1 }
+            if count % 2 == 0 { sum = sum + 1 } else { sum = sum - 1 }
+            k = k + 1
+        }
+        return sum
+    }
+    if fn_name == "pisano_period" {   // π(n) Fibonacci period mod n — A001175 (INBOX #8)
+        if n <= 1 { return 1 }
+        let mut a = 0
+        let mut b = 1
+        let mut period = 0
+        while true {
+            let t = (a + b) % n
+            a = b
+            b = t
+            period = period + 1
+            if a == 0 && b == 1 { return period }
+        }
+        return period
+    }
     if fn_name == "is_perfect" {
         if sigma_k(n, 1) == 2 * n { return 1 }
         return 0
@@ -2160,16 +2233,162 @@ fn _adapt_verify_compute(fn_name: string, args: array, id_override: string, sour
         verdict: verdict, source_verb: "verify", provenance: prov }
 }
 
+// ── from-discovery — fold a `.discoveries/<slug>.tape` discovery atom(s) ──
+//
+// The discovery-tape format (see .discoveries/README.md, @D discovery_log):
+//   @X <id> := "<text>" :: discovery [slug=<slug> group=<G>]
+//     date                = "..."
+//     verdict_tier_target = "BLUE SUPPORTED-FORMAL" | "RED CLOSED-NEGATIVE" | ...
+//     atlas               = "<id> (manual splice ...)" | "no fold (honest gap)"
+//     ...
+// (an older variant uses `verdict-tier-target` with hyphens; both accepted.)
+//
+// This arm automates the F14-F18 manual-splice ceremony: read every `@X …
+// :: discovery` atom from the tape, map its verdict-tier to the canonical
+// promotable set, and fold each TERMINAL atom (🔵 formal / 🟢 numerical /
+// 🔴 closed-negative) as a kind-F AtlasNode via the shared _fold_into_embedded
+// sink. Honest-degrade atoms (🟠 INSUFFICIENT / "no fold (honest gap)") are
+// SKIPPED (never faked). Idempotent: an atom whose id is already in the atlas
+// is skipped with no duplicate appended.
+
+// _discovery_tape_path — resolve `.discoveries/<slug>.tape`. $HEXA_DISCOVERIES
+// (abs dir) wins; else the repo-local .discoveries dir (mirrors how
+// _resolve_embedded_path resolves the atlas SSOT).
+fn _discovery_tape_path(slug: string) -> string {
+    let override = env_var("HEXA_DISCOVERIES")
+    if len(override) > 0 { return override + "/" + slug + ".tape" }
+    let home = env_var("HOME")
+    return home + "/core/hexa-lang/.discoveries/" + slug + ".tape"
+}
+
+// _tape_field — extract the first `<key> = "<value>"` field value from a tape
+// atom block text (the lines between two `@X` headers). Accepts both
+// `verdict_tier_target` and `verdict-tier-target` via two calls. Returns "" if
+// absent.
+fn _tape_field(block: string, key: string) -> string {
+    let lines = block.split("\n")
+    let mut i = 0
+    while i < len(lines) {
+        let ln = to_string(lines[i]).trim()
+        if ln.starts_with(key) {
+            // after the key, expect `=` then a "..."-quoted value
+            let rest = ln.substring(len(key), len(ln)).trim()
+            if rest.starts_with("=") {
+                let v = rest.substring(1, len(rest)).trim()
+                // strip surrounding double-quotes if present
+                if len(v) >= 2 && v.starts_with("\"") {
+                    let inner = v.substring(1, len(v))
+                    let q = inner.find("\"")
+                    if q >= 0 { return inner.substring(0, q) }
+                    return inner
+                }
+                return v
+            }
+        }
+        i = i + 1
+    }
+    return ""
+}
+
+// _discovery_verdict — map a discovery-tape verdict_tier_target string to the
+// canonical promotable verdict. BLUE/🔵 → 🔵 SUPPORTED-FORMAL; GREEN/🟢 → 🟢
+// SUPPORTED-NUMERICAL; RED/🔴 CLOSED-NEGATIVE is a TERMINAL finding (paper_-
+// negative_ok @D) → promotable as 🔵 SUPPORTED-FORMAL (the closed-form ruling-
+// out IS the formal result). ORANGE/🟠 INSUFFICIENT / anything else → "skip".
+fn _discovery_verdict(tier: string) -> string {
+    let t = tier.to_lower()
+    if t.contains("🟢") || t.contains("numerical") { return "🟢 SUPPORTED-NUMERICAL" }
+    if t.contains("🔵") || t.contains("blue") || t.contains("formal") { return "🔵 SUPPORTED-FORMAL" }
+    if t.contains("🔴") || t.contains("red") || t.contains("closed-negative") || t.contains("closed negative") { return "🔵 SUPPORTED-FORMAL" }
+    return "skip"
+}
+
+// _build_raw_discovery — kind-F AtlasNode raw block for a folded discovery atom.
+// Mirrors the F14-F18 manual-splice shape: the discovery text becomes the node
+// statement, the source slug + verdict-tier are recorded in cite/provenance so
+// a reader can trace it back to the discovery tape.
+fn _build_raw_discovery(id: string, text: string, slug: string, tier: string, today: string) -> string {
+    return "@F " + id + " = " + text +
+           " :: formula [d=" + today + " active]\n" +
+           "  tier = \"" + tier + "\"\n" +
+           "  verified-by = \"discovery .discoveries/" + slug + ".tape (verdict_tier_target=" + tier + ")\"\n" +
+           "  cite = \"@D discovery_log · @D atlas_fold — folded from .discoveries/" + slug + ".tape\"\n" +
+           "  provenance = \"tool/atlas_cli.hexa register --from-discovery " + slug + " (tape atom → embedded.gen.hexa SSOT)\""
+}
+
+// _adapt_discovery_atoms — parse the discovery tape, return one DiscoveryEvent
+// per `@X … :: discovery` atom (promotable atoms get a non-"skip" verdict;
+// honest-gap atoms get "skip" so the dispatch degrades without faking a node).
+fn _adapt_discovery_atoms(slug: string) -> array {
+    let path = _discovery_tape_path(slug)
+    let body = read_file_safe(path)
+    let mut events: array = []
+    if len(body) == 0 { return events }
+    let today = _today_compact()
+    // Split on the `@X ` atom-header marker. Each chunk after the first split
+    // element begins with the rest of a `@X <id> := "<text>" :: discovery …`
+    // header followed by its field lines (up to the next `@X `).
+    let chunks = body.split("\n@X ")
+    let mut ci = 0
+    while ci < len(chunks) {
+        let raw_chunk = to_string(chunks[ci])
+        ci = ci + 1
+        // The very first chunk is the file preamble (before any @X) — skip it
+        // unless it itself starts with "@X " (file with no leading newline).
+        let mut chunk = raw_chunk
+        if !chunk.starts_with("@X ") {
+            // body.split("\n@X ") strips the "@X " prefix from chunks[1..]; the
+            // header now starts directly with "<id> :=" — but chunk[0] is the
+            // preamble. Detect a header by the " := " token + ":: discovery".
+            if !chunk.contains(" := ") || !chunk.contains(":: discovery") { continue }
+        } else {
+            chunk = chunk.substring(3, len(chunk))
+        }
+        // header line = first line of the chunk; id = token before " :="
+        let nl = chunk.find("\n")
+        let header = if nl >= 0 { chunk.substring(0, nl) } else { chunk }
+        let asn = header.find(" := ")
+        if asn < 0 { continue }
+        let id = header.substring(0, asn).trim()
+        if len(id) == 0 { continue }
+        // statement text = the first "..."-quoted span after " := "
+        let after = header.substring(asn + 4, len(header))
+        let mut text = ""
+        if after.starts_with("\"") {
+            let inner = after.substring(1, len(after))
+            let q = inner.find("\"")
+            text = if q >= 0 { inner.substring(0, q) } else { inner }
+        }
+        if len(text) == 0 { text = id }
+        // verdict tier — accept both underscore and hyphen field names
+        let mut tier = _tape_field(chunk, "verdict_tier_target")
+        if len(tier) == 0 { tier = _tape_field(chunk, "verdict-tier-target") }
+        let atlas_field = _tape_field(chunk, "atlas")
+        let verdict = _discovery_verdict(tier)
+        // Honest gap: tape explicitly says no fold → skip even if tier maps.
+        let mut final_verdict = verdict
+        if atlas_field.to_lower().contains("no fold") { final_verdict = "skip" }
+        let raw = _build_raw_discovery(id, text, slug, _discovery_verdict(tier), today)
+        let provenance = "hexa atlas register --from-discovery " + slug
+        events.push(DiscoveryEvent { kind: "F", id: id,
+            name: id + " (tier=" + tier + ")", raw: raw,
+            verdict: final_verdict, source_verb: "discovery", provenance: provenance })
+    }
+    return events
+}
+
 // cmd_register — the absorption verb. Each `--from-<verb>` arm produces a
 // DiscoveryEvent and hands it to register_from_event, which folds the node's
 // .n6 block DIRECTLY into compiler/atlas/embedded.gen.hexa (the binary-builtin
 // SSOT; visible to next lookup, no rebuild). Supported arms:
 //   --from-verify <fn> <args...> <v>    (any arity; delegated to `hexa verify`)
 //   --from-drill  --seed "<text>" [--rounds N] [--engine mk9|mk10]
+//   --from-discovery <slug>             (fold .discoveries/<slug>.tape atoms)
 // Options: --id (verify only; drill mints per-candidate ids).
 fn cmd_register(rest: array) {
-    let mut from_verb = ""                  // "verify" | "drill" | ""
+    let mut from_verb = ""                  // "verify" | "drill" | "discovery" | ""
     let mut id_override = ""
+    let mut discovery_slug = ""             // --from-discovery <slug>
     let mut want_compute = false            // --compute → value-less compute-and-fold
     // VERIFY-KIT V6 — external provenance attribution. --source flows into the
     // folded node's `source = "<text>"` field (OEIS id, DOI, …); --url adds the
@@ -2189,6 +2408,7 @@ fn cmd_register(rest: array) {
         if a == "--from-verify" { from_verb = "verify"; i = i + 1 }
         else if a == "--compute" { want_compute = true; i = i + 1 }
         else if a == "--from-drill" || a == "--from-kick" { from_verb = "drill"; i = i + 1 }
+        else if a == "--from-discovery" && i + 1 < n { from_verb = "discovery"; discovery_slug = to_string(rest[i + 1]); i = i + 2 }
         else if a == "--id" && i + 1 < n { id_override = to_string(rest[i + 1]); i = i + 2 }
         else if a == "--source" && i + 1 < n { node_source = to_string(rest[i + 1]); i = i + 2 }
         else if a == "--url" && i + 1 < n { node_url = to_string(rest[i + 1]); i = i + 2 }
@@ -2201,6 +2421,7 @@ fn cmd_register(rest: array) {
             println("       hexa atlas register --from-verify welch_t_crit <df> <v>          (🟢 NUMERICAL)")
             println("       hexa atlas register --from-verify wilson_hilferty_p <t> <df> <v> (🟢)")
             println("       hexa atlas register --from-drill  --seed \"<text>\" [--rounds N] [--engine mk9|mk10] [--id <id>]")
+            println("       hexa atlas register --from-discovery <slug>                     (fold .discoveries/<slug>.tape atoms)")
             println("")
             println("Options (verify): --source \"<attribution>\"  external provenance (OEIS id, DOI) → node `source =` field")
             println("                  --url    \"<link>\"         CC-BY-SA / DOI link → node `url =` field")
@@ -2306,6 +2527,71 @@ fn cmd_register(rest: array) {
             println("error: " + rerr)
             exit(5)
         }
+        return
+    }
+
+    if from_verb == "discovery" {
+        if len(discovery_slug) == 0 {
+            println("error: --from-discovery needs a <slug> (e.g. tecs-l-f15-novel-mk10)")
+            println("       see: hexa atlas register --help")
+            exit(2)
+        }
+        let tape_path = _discovery_tape_path(discovery_slug)
+        println("hexa atlas register --from-discovery " + discovery_slug)
+        println("  tape   = " + tape_path)
+        let body = read_file_safe(tape_path)
+        if len(body) == 0 {
+            println("  tier   = skip — discovery tape not found / empty: " + tape_path)
+            println("  reason = no `.discoveries/" + discovery_slug + ".tape` to fold; NO node appended.")
+            exit(2)
+        }
+        let events = _adapt_discovery_atoms(discovery_slug)
+        if len(events) == 0 {
+            println("  tier   = skip — no `@X … :: discovery` atom found in tape")
+            println("  reason = tape has no parseable discovery atom; NO node appended.")
+            exit(3)
+        }
+        let embed_path = _resolve_embedded_path()
+        let mut folded = 0
+        let mut skipped = 0
+        let mut degraded = 0
+        let mut ei = 0
+        while ei < len(events) {
+            let ev = events[ei]
+            ei = ei + 1
+            // Honest degrade: 🟠 INSUFFICIENT / "no fold" atoms never fold.
+            if ev.verdict != "🔵 SUPPORTED-FORMAL" && ev.verdict != "🟢 SUPPORTED-NUMERICAL" {
+                println("  degrade= " + ev.id + " (" + ev.name + ") — not terminal/promotable; honest-skip")
+                degraded = degraded + 1
+                continue
+            }
+            let ferr = _fold_into_embedded(ev.kind, ev.raw, ev.id)
+            if len(ferr) > 0 {
+                if embed_is_skip(ferr) {
+                    println("  skip   = " + ev.id + " (already in atlas — idempotent, no duplicate)")
+                    skipped = skipped + 1
+                } else {
+                    println("error: fold into embedded.gen.hexa failed — " + ferr)
+                    exit(5)
+                }
+            } else {
+                println("  atlas  = folded @" + ev.kind + " " + ev.id + " → live (" + ev.name + ")")
+                folded = folded + 1
+            }
+        }
+        println("  result = folded=" + to_string(folded) + " already-present=" + to_string(skipped) + " honest-degrade=" + to_string(degraded) + " (atoms=" + to_string(len(events)) + ")")
+        if folded == 0 {
+            if skipped > 0 {
+                println("  tier   = idempotent — all promotable atoms already in the atlas (nothing to commit)")
+                return
+            }
+            println("  tier   = skip — no promotable atom folded (all honest-degrade / absent)")
+            return
+        }
+        println("  tier   = 🔵 SUPPORTED-FORMAL  (" + to_string(folded) + " atom(s) folded from discovery tape)")
+        println("")
+        println("hexa atlas register: " + to_string(folded) + " discovery atom(s) landed in the live atlas (" + embed_path + ").")
+        println("  commit them with:  git -C ~/core/hexa-lang add compiler/atlas/embedded.gen.hexa && git commit -m " + _shq("atlas(discovery): register " + discovery_slug))
         return
     }
 
@@ -2438,6 +2724,7 @@ fn cmd_register(rest: array) {
     println("  --from-verify <fn> <a> <b> <v>        (2-op form)")
     println("  --from-verify … --source \"<attr>\"     external provenance (OEIS id, DOI) → node `source =`")
     println("  --from-drill  --seed \"<text>\" [--rounds N] [--engine mk9|mk10]")
+    println("  --from-discovery <slug>               (fold .discoveries/<slug>.tape atoms into the live atlas)")
     println("  see: hexa atlas register --help")
     exit(3)
 }
@@ -2936,6 +3223,9 @@ fn cmd_help() {
     println("  register --from-verify <fn> <n> <v>          recompute IN-PROCESS; register on 🔵/🟢")
     println("           --from-verify <fn> <a> <b> <v>      (2-op form)")
     println("           --from-drill  --seed \"<text>\" [--rounds N] [--engine mk9|mk10] [--id <id>]")
+    println("           --from-discovery <slug>             fold .discoveries/<slug>.tape discovery atoms")
+    println("                          (id · verdict_tier_target · atlas) → @F nodes; idempotent; honest-")
+    println("                          degrade on 🟠 INSUFFICIENT / 'no fold' atoms. Automates F14-F18 splice.")
     println("                          Each --from-<verb> arm runs the verb IN-PROCESS, builds the")
     println("                          verified AtlasNode IN MEMORY, and folds it into embedded.gen.hexa")
     println("                          — visible to the next lookup with NO rebuild. HONEST DEGRADE:")
