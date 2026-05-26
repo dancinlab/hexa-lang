@@ -1,0 +1,3 @@
+verify --expr sigma_k(6,5)=8052
+  calc   = 8052  == expected 8052
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
