@@ -1,0 +1,16 @@
+#!hexa strict
+// stdlib/component/component.hexa — component domain root dispatcher.
+//
+// LAYER: AURA N20 — component domain hexa-native pivot.
+// Mirrors stdlib/bio/bio.hexa + stdlib/chip/chip.hexa.
+
+let VERSION   = "0.1.0"
+let MODULE    = "hexa-component"
+
+fn main() {
+    print("# COMPONENT root dispatcher (hexa-native pivot · AURA N20)")
+    print("# version = " + VERSION)
+    print("# verb cells: specify · structure · design · analyze · synthesize · verify · handoff")
+    print("# substrate: hexa (cellrun.hexa dispatch) — per-verb producers may remain .py during migration")
+    print("__HEXA_COMPONENT_ROOT__ PASS")
+}
