@@ -82,6 +82,42 @@ fn _synthetic_input_block() -> [str] {
     ]
 }
 
+// ─── D4 substance: illustrative analysis pipeline + sim parameter targets ─
+
+fn _mne_dataset_real_block() -> [str] {
+    return [
+        "primary_dataset: Sleep-EDF Expanded (PhysioNet · 197 subjects · OPEN clinical EEG)",
+        "secondary_datasets: BNCI Horizon 2020 (motor imagery · OPEN) + EEGBCI (PhysioNet)",
+        "preprocessing_pipeline: load_edf → bandpass(0.5,50,fir) → notch(60) → ICA(15 comp) → epoch(30s, sleep)",
+        "alpha_band_extract: scipy.signal.welch (nperseg=2*fs · noverlap=fs) → integrate 8-13 Hz",
+        "expected_alpha_rel_power: 0.20-0.35 (resting eyes-closed adult · scalp electrode)",
+        "QA_metric: mean_rel_err < 0.05 vs hexa-native naive-DFT companion",
+    ]
+}
+
+fn _openems_antenna_real_block() -> [str] {
+    return [
+        "geometry: PCB chip antenna (2450AT18B100 footprint reference) on 4-layer FR-4 1.6mm",
+        "mesh: PML 8-cell · domain 60×40×20 mm · adaptive Δ ≤ λ/20 @ 2.45 GHz (~6 mm)",
+        "excitation: gaussian pulse + LPE port (50 Ω) · S11 sweep 2.0-3.0 GHz · 401 points",
+        "expected_S11: ≤ -10 dB across BLE band 2.4-2.4835 GHz (return loss target)",
+        "radiation_pattern: 3D nf2ff at fc=2.45 GHz · gain ~1.5-2.5 dBi (chip antenna typical)",
+        "matching_network: π-net L=2.7 nH + C=1.5 pF (initial smith-chart estimate)",
+    ]
+}
+
+fn _openems_sar_real_block() -> [str] {
+    return [
+        "phantom: ITIS Foundation Virtual Population — Duke head (adult male) anatomical model",
+        "tissue_subset: skin + fat + skull + dura + CSF + GM + WM (7-layer mastoid region)",
+        "distance: PCB antenna 8 mm from mastoid surface (post-aural clip standoff)",
+        "SAR_metric: 1g-averaged peak SAR per IEEE C95.3 + 10g-averaged per IEC 62209-2",
+        "expected_peak_1g_SAR: ≤ 0.5 W/kg at +8 dBm Tx (well under FCC 1.6 W/kg consumer limit)",
+        "expected_peak_10g_SAR: ≤ 0.3 W/kg (well under EU 2.0 W/kg limit)",
+        "honest_gap: openEMS is NOT FDA-MDDT-qualified · regulatory acceptance unresolved",
+    ]
+}
+
 fn _scope_caveats() -> [str] {
     return [
         "MNE-Python EEG band-power (alpha/beta/gamma) producer - D61-from-birth (script SSOT in hexa-lang/stdlib/aura/).",
@@ -89,6 +125,7 @@ fn _scope_caveats() -> [str] {
         "measurement_gate = GATE_OPEN permanently - analyze band-power on synthetic input is not an absorption claim (g3).",
         "openEMS antenna + SAR is NOT FDA-MDDT-qualified vs Sim4Life - that honest-gap belongs to V6 EM-side verify (G1 breakthrough candidate).",
         "absorbed=false PERMANENTLY (g3) - signal-processing scaffold, NEVER a clinical EEG finding.",
+        "D4 substantive blocks (mne_dataset_real / openems_antenna_real / openems_sar_real) are ILLUSTRATIVE simulation parameter targets, NOT a completed open-EEG run or accredited SAR measurement. Real runs live downstream + V6/G1 brk for Sim4Life parity.",
     ]
 }
 
@@ -113,6 +150,11 @@ fn _emit_header() {
     _emit_block("eeg_dsp",          _eeg_dsp_block())
     _emit_block("em_fdtd",          _em_fdtd_block())
     _emit_block("synthetic_input",  _synthetic_input_block())
+
+    // ─── D4 substantive blocks (illustrative sim parameter targets) ──
+    _emit_block("mne_dataset_real",      _mne_dataset_real_block())
+    _emit_block("openems_antenna_real",  _openems_antenna_real_block())
+    _emit_block("openems_sar_real",      _openems_sar_real_block())
 }
 
 fn _emit_caveats() {
