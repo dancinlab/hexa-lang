@@ -2,6 +2,16 @@
 
 Append-only history sister of `INBOX.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
+## 2026-05-26T22:10Z — `hexa verify` auto-absorb ∞ recursive fork hang + `--no-absorb` canonical workaround (cycle 3 stall root-cause)
+
+> TECS-L F-NEW retry agent 가 19/19 🔵 PASS 동시에 발견. 직전 cycle 3 의 "verify cache race" 진단 = misdiagnosis; 진짜 root cause = **auto-absorb 가 atlas register fork → 또 verify recurse → ∞**.
+
+- [ ] **`hexa verify --expr` (auto-absorb default ON) 가 atom 이 atlas 에 없을 때 ∞ recursive fork hang** — atlas register fork → `--from-verify` 가 `hexa verify` 재호출 → 또 register fork → ... 30s timeout exit 0 silent. 같은 atom 이 이미 atlas 에 있으면 idempotent skip 으로 즉시 PASS. 이전 sigma 6 12 첫 호출 87s ≠ cache race; 첫 호출 atlas register success + 그 후 호출들이 다른 atom 이라 또 fork hang.
+- [ ] **`--no-absorb` flag 가 canonical workaround** — agent retry 가 `hexa verify --expr <fn> <args> <v> --no-absorb` 로 19/19 즉시 🔵 PASS. [DEFAULT auto-absorb] 명시 opt-out — hexa-help 또는 verify -h 에 surface 필요. 이전 cycle 3 stall 의 진짜 원인 (cache race 오진 정정).
+- 우선순위: 🔥 BLOCKING — 모든 신규 atom verify 가 잠재적 hang. 직접 fix = (a) auto-absorb 의 recursive fork 차단 (atlas register 가 verify 안 부르고 직접 calc) 또는 (b) `--no-absorb` 디폴트 + atlas register 별도 verb.
+- 자매 발견 (같은 batch, calc gap family · #1230 후속): **`verify_cli` 음수 인자 dispatch 미지원** — `hexa verify --expr jacobi 2 3 -1` 등 음수 expected/arg 가 `to_int: trailing garbage in "--"` 또는 silent skip. jacobi(a,p) -1 결과 12 candidates deferred. #1230(sopfr/pow) family 확장.
+- proposed-by: agent (TECS-L F-NEW retry, 19/19 🔵 PASS + 메타 진단, 2026-05-26)
+
 ## 2026-05-26T19:50Z — Pepin–Lehmer (or 일반 결정형 primality) stdlib 부재 — F6 large-perfect 탐색 게이트 (v2)
 
 > TECS-L F2 /gap 42-lens sweep 결과 R5 seed shortlist Rank 3 (F6 D(n)=σφ−nτ beyond 10^8) 차단 발견. Lucas-Lehmer (Mersenne 전용, MR4) 만 stdlib 에 있고 일반 n primality 결정형 (Pepin / Pocklington / AKS / deterministic Miller-Rabin) 부재 → primorial#7·8589869056·33550336 너머 D(n) corroboration 이 primality 게이트에서 멈춤.
