@@ -392,6 +392,80 @@ chained-fixups import 테이블. 이 둘이 닫히면 runtime.o (libm/libSystem
 함수 import) 까지 hexa-native link 가능 → RUNTIME 의 extern-removal 과
 정확히 만나는 지점.
 
+### 다섯째 increment (2026-05-26 · 🛸 chunk-B final boss — dyld function import: `bl _write` → `__stubs` → `__got` → libSystem RUN)
+
+앞 세 increment 의 **all-internal symbol** 가정을 깬다 — 처음으로 **외부
+dylib 함수** (`_write` from libSystem) 를 호출하는 `.o` 를 hexa-native link
+하여 RUN 시킨다. 이게 chunk-B 의 final boss — `LC_DYLD_CHAINED_FIXUPS` 의
+실제 import 테이블 + `__stubs` (arm64 12-byte stub) + `__got` (chained-fixup
+endpoint) + BL-extern → stub redirect 모두 hexa-native 로 생성.
+
+- **외부 ref 수집**: BRANCH26 reloc 중 internal `def_names` 미해소 = libSystem
+  dyld import. `import_names: [string]` 에 unique-list 화 (dedup, scope =
+  단일 dylib = libSystem.B.dylib · ordinal 1). 1 import 마다 12-B `__stubs`
+  슬롯 + 8-B `__got` 슬롯 1쌍.
+- **`__stubs` 섹션 (`__TEXT` RX, 4-aligned, S_SYMBOL_STUBS | PURE_INSTRS,
+  reserved2=12)**: 슬롯당 3 instr —
+  - `adrp x16, __got_page` (PAGE21: `(got_page - stub_page) >> 12` 계산
+    후 immlo[28:29]/immhi[5:23] 인코딩)
+  - `ldr  x16, [x16, #(got_off & 0xfff)>>3]` (LDR-scaled imm12, scale=8
+    for u64)
+  - `br   x16` (`0xd61f0200`)
+- **`__got` 섹션 (`__DATA` RW, 8-aligned, S_NON_LAZY_SYMBOL_POINTERS=0x6)**:
+  슬롯당 u64 = `DYLD_CHAINED_PTR_64_OFFSET` bind format —
+  `bit63=bind | bits51..62=next | bits24..31=addend | bits0..23=ordinal`.
+  단일 import = `0x8000_0000_0000_0000` (bind=1, next=0=end-of-chain,
+  ordinal=0). N>1 import 는 `next=2` (stride-4 → 8-byte 다음 슬롯) +
+  마지막만 `next=0`.
+- **BL extern → stub 패치**: internal BRANCH26 패치 (셋째 inc) 의 사촌
+  pass — internal 미해소이고 `import_names` 에 있으면 `delta = (stubs_section_addr
+  + 12*ix - pc_addr) / 4` 로 imm26 fold.
+- **`LC_DYLD_CHAINED_FIXUPS` 페이로드 (empty → real)**: header 28B(+4 pad) +
+  `starts_in_image` (4 + 4*seg_count, 8-aligned) + `starts_in_segment[__DATA]`
+  (24 B: size=24 / page_size=0x4000 / pointer_format=6 / segment_offset / page_count=1
+  / page_start[0] = `__got` page-relative offset) + imports table
+  (`u32 packed = (name_offset << 9) | (weak << 8) | lib_ordinal`, lib_ordinal=1)
+  + symbols (leading NUL + `_write\0`). 페이로드가 56→96 B 로 커짐.
+
+- **측정 (arm64-Mac local, 2026-05-26)**: object A(`a_main.o`, `mov x0,#1 /
+  adrp+add → MSG / mov x2,#3 / bl _write / mov x0,#0 / svc #0x80 exit`) +
+  object B(`b_data.c`, `const char MSG[] = "hi\n"` → `__cstring`). 둘 다
+  `clang -c` = INPUT-only. LINK 에 `clang`/`ld`/`as` 없음:
+
+  ```
+  $ hexa run tool/hexa_ld.hexa -o dw_exe a_main.o b_data.o --lc-main __start
+  $ ./dw_exe
+  hi
+  exit=0
+  $ nm -u dw_exe
+  _write
+  $ otool -tv dw_exe        # bl _write -> 0x100000400 (__stubs[0])
+  00000001000003d8  bl  0x100000400
+  $ otool -s __TEXT __stubs dw_exe
+  0000000100000400  90000030 f9400210 d61f0200      # adrp+ldr+br
+  $ otool -s __DATA __got dw_exe
+  0000000100004000  00000000 80000000               # bind=1, ord=0, next=0
+  ```
+
+  dyld 가 load 시 `__got[0]` 의 chain endpoint 를 따라 `_write@libSystem.B.dylib`
+  로 bind → stub 의 `ldr x16,[x16]` 가 그 주소 로드 → `br x16` 가 `_write`
+  로 점프 → 커널 `write(1, "hi\n", 3)` → stdout `hi` 출력 후 raw `svc #0x80`
+  `SYS_exit(0)`. 🟢 PASS. verdict: `.verdicts/hexa-ld-dyld-write/F-PHASEH-INC4.txt`.
+- **no-regression**: 첫(BRANCH26, exit42) + 둘째(PAGE21+__const, "hi from
+  cstring") + 셋째(multi-section, "ms ok" exit7) PoC 셋 모두 새 linker 로
+  PASS. 기본 `tool/build_aprime.sh` 는 `hexa_ld` 미참조 (grep -c=0) → 영향 없음.
+- **잔여 (다음 chunk-B inc 후보)**:
+  - **GOT_LOAD_PAGE21/PAGEOFF12 reloc** (data import — libm `_acos` 의
+    함수 포인터 변수 등). 현재는 BRANCH26 (코드 함수 호출) 만 dyld bind;
+    data symbol bind 는 별개 path. real `runtime.o` (161 undefined extern)
+    링크는 이 path 가 마저 닫혀야 함.
+  - **multi-dylib ordinal mapping**. 현재는 libSystem.B.dylib (ordinal 1)
+    고정. libm/libc++ 등 추가 dylib 는 `LC_LOAD_DYLIB` 추가 + ordinal
+    테이블 + import packed의 `lib_ordinal` 필드 동적화 필요.
+  - **lazy-bind (선택)**. 현재 path 는 모두 **non-lazy bind via __got**
+    (load 시 전부 resolve). clang 도 modern macOS 에서는 비슷한 선택이라
+    실용적으로는 충분.
+
 ### 넷째 increment (2026-05-26 · 🛸 emit-side reloc — `macho_obj_wrap_v2` 2-symbol .o + PAGE21/PAGEOFF12 RUN)
 
 지금까지 phase-H 의 세 increment 는 **링커(`tool/hexa_ld.hexa`)** 의
