@@ -4771,3 +4771,28 @@ the 8 잔여 items have settled to:
   and is deferred to its own cycle
 - aprime_cc smoke exit(42) PASS · 24 externs (baseline preserved) ·
   binary 1,162,760 B
+
+## L-multi-dylib 잔여 plan (next-session implementable spec) — 2026-05-27
+
+phase-H 가 default-flip(#1354) 까지 도달했고, 마지막 1개 잔여 = hexa_ld 의 **multi-dylib ordinal 지원**. 현재 `tool/hexa_ld.hexa` 가 모든 import 를 `lib_ordinal=1`(libSystem) 로 강제 → libm/libc++/외부 framework 등 다른 dylib 의 심볼 unsupported.
+
+### 구현 단위 (5 step)
+1. **LC_LOAD_DYLIB 다중 emit** — `_emit_lc_load_dylib(out, path)` 함수화. 현재 line ~1746-1747 의 단일 libSystem 호출을 list-driven 으로 (배열 `lib_paths` 순회).
+2. **dylib registry** — `lib_paths = ["/usr/lib/libSystem.B.dylib", "/usr/lib/libm.dylib", ...]`. 인덱스+1 = ordinal (1-based, ord=0 reserved).
+3. **symbol → ordinal 분류 휴리스틱** — 새 `classify_import_ordinal(name) -> int` 함수. libm 표준 set(`_cos _sin _tan _asin _acos _atan _atan2 _exp _exp2 _log _log10 _log2 _sqrt _cbrt _pow _floor _ceil _round _trunc _fmod _fabs _hypot _erf _gamma _lgamma _sinh _cosh _tanh _asinh _acosh _atanh _expm1 _log1p`) → ord=2; 나머지 → ord=1.
+4. **chained_fixups imports table 업데이트** — line ~1905-1906 의 `lib_ordinal:8` 비트필드를 `classify_import_ordinal(name)` 결과로 채움. 현재는 hardcoded 1.
+5. **sizeofcmds 재계산** — 추가 LC_LOAD_DYLIB 마다 cmd_size += len("/usr/lib/...") + padding 반영. `mh_sizeofcmds` 갱신.
+
+### 검증 (g5)
+- 테스트 .o: `bl _write` (libSystem) + `bl _cos` (libm) 두 import 사용.
+- 링크: `hexa run tool/hexa_ld.hexa -o out --lc-main _start test.o`.
+- `otool -l out`: LC_LOAD_DYLIB 2개 (libSystem · libm) + LC_DYLD_CHAINED_FIXUPS bind 2 imports (각 ord=1·2).
+- 실행: cos(0)=1.0 활용 → exit 1 또는 stdout 확인 → 정상.
+- no-regression: 기존 PoC(#1276/#1282/#1286/#1307/#1348) 4 개 전부 PASS (libSystem-only 케이스는 ord=1 default 유지).
+
+### 잔여
+- 다른 dylib(libc++/Foundation/CoreFoundation 등)은 별도 axis (각 분류 set + ord 추가).
+- 분류 휴리스틱 missing case → fallback to libSystem(ord=1) + WARN log.
+- 정밀 plan, 한 세션 foreground 추정 ~2-4h 구현 + 검증.
+
+→ phase-H 의 사실상 마지막 코드 잔여. 이 후 chunk-B 의 hexa-native object→exe 전 구간이 모든 libSystem-class dylib 까지 cover.
