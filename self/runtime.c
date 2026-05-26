@@ -6681,64 +6681,6 @@ HexaVal hexa_farr_pauli_exp_inplace(HexaVal re_v, HexaVal im_v,
     return hexa_int(0);
 }
 
-#if 0  // RFC 039: body hoisted to _hx_pauli_exp_raw above; original kept inline for reference.
-    int64_t dim = 1;
-    for (int k = 0; k < (int)n_qubits; k++) dim *= 2;
-    double c = hxlcl_cos(alpha);
-    double s = hxlcl_sin(alpha);
-    int cy_mod = (int)(count_Y % 4);
-    double sign_y = ((count_Y % 2) == 0) ? 1.0 : -1.0;
-    int64_t parity_mask = z_mask | y_mask;
-
-    if (flip_mask == 0) {
-        // Diagonal: j == i; new_amp_i = (cos + i*sin*phase(i)) * amp_i.
-        // For diagonal Pauli, count_Y is necessarily 0 (no Y in flip_mask=0).
-        // phase(i) is purely real = (-1)^parity. So:
-        //   new_re = c * re_i - (s * sign) * im_i
-        //   new_im = (s * sign) * re_i + c * im_i
-        for (int64_t i = 0; i < dim; i++) {
-            int pc = _hx_pauli_popcount6(i & parity_mask);
-            double sign = (pc % 2 == 0) ? 1.0 : -1.0;
-            double ri = re[i], ii = im[i];
-            re[i] = c * ri - (s * sign) * ii;
-            im[i] = (s * sign) * ri + c * ii;
-        }
-        return hexa_int(0);
-    }
-
-    // General case: pair iteration.
-    for (int64_t i = 0; i < dim; i++) {
-        int64_t j = i ^ flip_mask;
-        if (i >= j) continue;  // process each pair once
-        int pc = _hx_pauli_popcount6(i & parity_mask);
-        double sign_i = (pc % 2 == 0) ? 1.0 : -1.0;
-        double pi_re, pi_im;
-        switch (cy_mod) {
-            case 0: pi_re = sign_i;       pi_im = 0.0;          break;
-            case 1: pi_re = 0.0;          pi_im = sign_i;       break;
-            case 2: pi_re = -sign_i;      pi_im = 0.0;          break;
-            default: pi_re = 0.0;         pi_im = -sign_i;      break;
-        }
-        // factor_{i→j} = (i*sin a) * (pi_re + i*pi_im) = sin a * (-pi_im + i*pi_re)
-        double fij_re = -s * pi_im;
-        double fij_im =  s * pi_re;
-        // factor_{j→i} = sign_y * factor_{i→j}
-        double fji_re = sign_y * fij_re;
-        double fji_im = sign_y * fij_im;
-        double ri = re[i], ii = im[i];
-        double rj = re[j], ij = im[j];
-        // new_amp_i = c*(ri,ii) + (fji_re,fji_im)*(rj,ij)
-        double new_ri = c * ri + fji_re * rj - fji_im * ij;
-        double new_ii = c * ii + fji_re * ij + fji_im * rj;
-        // new_amp_j = (fij_re,fij_im)*(ri,ii) + c*(rj,ij)
-        double new_rj = fij_re * ri - fij_im * ii + c * rj;
-        double new_ij = fij_re * ii + fij_im * ri + c * ij;
-        re[i] = new_ri;  im[i] = new_ii;
-        re[j] = new_rj;  im[j] = new_ij;
-    }
-    return hexa_int(0);
-}
-#endif  // end #if 0 RFC 039 reference block
 
 // farr_pauli_expectation(re_h, im_h, flip_mask, z_mask, y_mask, count_Y, n_qubits) -> float
 // Returns <psi|P|psi> for Hermitian Pauli P. For Hermitian H, the result is
