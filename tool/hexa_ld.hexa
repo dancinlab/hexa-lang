@@ -48,6 +48,15 @@ struct ParsedObj {
     // the output executable's __text section, with relocations
     // adjusted to the new base offset).
     text:     [u8],
+    // Phase-H inc2: a single DATA section captured from the .o —
+    // `__cstring` or `__const` (the section that holds string / read-
+    // only constants referenced via adrp/add PAGE21+PAGEOFF12). We
+    // capture exactly one such section per object for the minimal case
+    // (the 2-object string test). `data_sect_idx` is the 1-based
+    // Mach-O section index of that section so we can map a defined
+    // symbol's `n_sect` to it; 0 = this object carries no data section.
+    data:          [u8],
+    data_sect_idx: i64,
     // Symbols this object DEFINES (visible to other objects).
     defined:  [LinkSym],
     // Symbols this object REFERENCES but does not define (resolved
@@ -63,12 +72,18 @@ struct ParsedObj {
 
 struct LinkSym {
     name:    string,
-    // Object-local offset into this .o's __text. Final address is
-    // (text_section_base_in_exe + this_obj's_text_offset_in_concat
-    //  + this offset).
+    // Object-local offset into the symbol's section. For a __text
+    // symbol this is the offset into this .o's __text; for a data
+    // symbol (n_sect == data_sect_idx) it is the offset into the
+    // captured `data` section. Final address is computed at link time
+    // from the section's merged base + this offset.
     offset:  i64,
     // 0 = global/external, 1 = local/private.
     scope:   i64,
+    // 1-based Mach-O section index this symbol is defined in (n_sect).
+    // Used to route the symbol's final address: __text vs data section.
+    // 0 for undefined (extern) symbols.
+    sect:    i64,
 }
 
 struct ParsedReloc {
@@ -170,6 +185,20 @@ pub fn parse_macho_obj(path: string) -> ParsedObj {
     let mut text_offset  = 0
     let mut text_size    = 0
 
+    // Phase-H inc2: the single captured DATA section (__cstring/__const)
+    // — file offset, byte size, and the 1-based Mach-O section index
+    // (the running section counter across all LC_SEGMENT_64 sections, in
+    // emit order, which is what nlist_64.n_sect references). 0 = none.
+    let mut data_offset    = 0
+    let mut data_size      = 0
+    let mut data_sect_idx  = 0
+    // text_sect_idx tracks which 1-based section index is __text so the
+    // symbol routing pass below can identify __text symbols.
+    let mut text_sect_idx  = 0
+    // Running 1-based section index across all segments (Mach-O numbers
+    // sections globally, not per-segment).
+    let mut sect_counter   = 0
+
     let mut lc_off = 32
     let mut ci = 0
     while ci < ncmds {
@@ -180,12 +209,23 @@ pub fn parse_macho_obj(path: string) -> ParsedObj {
             let mut s = 0
             let mut sect_off = lc_off + 72
             while s < nsects {
+                sect_counter = sect_counter + 1
                 let sectname = _r_name16(buf, sect_off)
                 if sectname == "__text" {
+                    text_sect_idx = sect_counter
                     text_size   = _r_u64(buf, sect_off + 40)
                     text_offset = _r_u32(buf, sect_off + 48)
                     text_reloff = _r_u32(buf, sect_off + 56)
                     text_nreloc = _r_u32(buf, sect_off + 60)
+                }
+                // Capture the FIRST read-only data section that holds
+                // string / const bytes referenced via PAGE21/PAGEOFF12.
+                // clang lands a named `const char[]` in __const and a
+                // bare string literal in __cstring — handle both.
+                if (sectname == "__cstring" || sectname == "__const") && data_sect_idx == 0 {
+                    data_sect_idx = sect_counter
+                    data_size     = _r_u64(buf, sect_off + 40)
+                    data_offset   = _r_u32(buf, sect_off + 48)
                 }
                 sect_off = sect_off + 80
                 s = s + 1
@@ -204,6 +244,11 @@ pub fn parse_macho_obj(path: string) -> ParsedObj {
     let mut ti = 0
     while ti < text_size { text.push(buf[text_offset + ti] & 0xff); ti = ti + 1 }
 
+    // Phase-H inc2: capture the data section bytes (__cstring/__const).
+    let mut data:        [Int] = []
+    let mut dti = 0
+    while dti < data_size { data.push(buf[data_offset + dti] & 0xff); dti = dti + 1 }
+
     let mut defined:     [LinkSym] = []
     let mut extern_refs: [LinkSym] = []
     let mut si = 0
@@ -216,7 +261,11 @@ pub fn parse_macho_obj(path: string) -> ParsedObj {
         let name    = _r_cstr(buf, stroff, strx)
         let n_ext   = n_type & 0x01
         let scope_v = 1 - n_ext
-        let sym = LinkSym { name: name, offset: n_value, scope: scope_v }
+        // For a symbol defined in a section, `n_value` is the symbol's
+        // address in that section, which for a relocatable .o equals its
+        // section-relative offset (section addr is 0). We record n_sect
+        // so the link pass can route __text vs data symbols.
+        let sym = LinkSym { name: name, offset: n_value, scope: scope_v, sect: n_sect }
         if n_sect == 0 { extern_refs.push(sym) } else { defined.push(sym) }
         si = si + 1
     }
@@ -249,12 +298,14 @@ pub fn parse_macho_obj(path: string) -> ParsedObj {
     }
 
     return ParsedObj {
-        path:        path,
-        text:        text,
-        defined:     defined,
-        extern_refs: extern_refs,
-        relocs:      relocs,
-        dwarf_line:  [],
+        path:          path,
+        text:          text,
+        data:          data,
+        data_sect_idx: data_sect_idx,
+        defined:       defined,
+        extern_refs:   extern_refs,
+        relocs:        relocs,
+        dwarf_line:    [],
     }
 }
 
