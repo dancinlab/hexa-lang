@@ -497,11 +497,19 @@ PR #191 closed the *single-tile* WMMA fire. The RFC 067 §3 P4 spec asks for 64�
 
 Today's PR #193 reconciled `f16 → b16` storage; bf16 reg type still trips ptxas 12.0 `.reg .bf16` parse.
 
-- [ ] **PTX 7.8 toolchain bump probe** — test bf16 acceptance on `.version 8.0` / `.version 8.x` PTX targets
-- [ ] **`add.bf16` instruction support** — verify ptxas accepts the bf16 arithmetic path
-- [ ] **hexa codegen flip** — if PTX 8.x parses cleanly, emit `.version 8.0` + native `.reg .bf16` decl; else stay with `.reg .b16` and use bitcast
-- [ ] **bf16 vec-add fire** — same pattern as PR #189 but bf16 inputs
-- [ ] **`F-RFC068-NUMERIC-EQ-BF16`** PASS
+**HONEST-NEGATIVE (2026-05-26): the `.version 8.7` bump did NOT unblock native `.reg .bf16`.** PR #1202 bumped bare `sm_120` from `.version 8.0` → `.version 8.7` in `_nvptx_ptx_version_for_sm_arch`, raising the hypothesis that the higher PTX ISA would now let the RTX 5070 sm_120 driver-JIT accept native `.reg .bf16` + `add.bf16`. **Refuted by direct silicon probe** on ubu-2 (RTX 5070 sm_120, driver 580.159.03, `cuModuleLoadDataEx` driver-JIT, pure-ASCII PTX). Three hand-written `bf16_vadd` PTX variants, all `.version 8.7 / .target sm_120`:
+
+- **control** (`.reg .b16` storage bitcast + `add.bf16`, the existing PR #193 path) → `MODULE_LOAD: OK`, `byte_mismatch=0/1024`, `max_abs=0` (harness + 8.7/sm_120 driver-JIT path validated working).
+- **native-A** (`.reg .bf16` + `mov.b16` reinterpret + `add.bf16`, `.b16` ld/st) → `MODULE_LOAD: FAIL rc=218` — verbatim driver-JIT message: `ptxas application ptx input, line 28; fatal : Parsing error near '.bf16': syntax error` (rejected exactly at the `.reg .bf16 %fb<5>;` declaration).
+- **native-B** (full-native `ld.global.bf16` / `st.global.bf16` + `.reg .bf16` + `add.bf16`) → `MODULE_LOAD: FAIL rc=218` — verbatim: `Parsing error near '.bf16': syntax error` (line 21, same `.reg .bf16` decl).
+
+**Finding:** the blocker is the `.reg .bf16` register *type tag* in the JIT ptxas grammar, NOT the PTX `.version` directive. Both the standalone toolkit ptxas (CUDA 12.0 V12.0.140) and the driver-internal JIT (580.159.03) reject `.reg .bf16` even at PTX ISA 8.7 on sm_120. The `.b16` storage bitcast (PR #193) remains the only accepted bf16 path. **No codegen change** — `_nvptx_kind_to_ptx_ty` keeping `.bf16` for the WMMA fragment dtype suffix (`.f32.bf16.bf16.f32`) is correct (that is an *opcode operand-type* token, which ptxas DOES accept — distinct from a `.reg` type tag). Probe artifacts: `archive/fires/gpu_bf16_2c_native_reg_probe_2026_05_26/`.
+
+- [x] **PTX 7.8 toolchain bump probe** — `.version 8.7` tested on RTX 5070 sm_120 driver-JIT (2026-05-26); native `.reg .bf16` REJECTED at 8.7 (see honest-negative above)
+- [x] **`add.bf16` instruction support** — accepted on `.reg .b16` containers (control PASS); rejected when paired with native `.reg .bf16` regs (the reg type is the blocker, not the opcode)
+- [x] **hexa codegen flip** — NO FLIP: probe refuted native `.reg .bf16` at 8.7; codegen stays with `.reg .b16` + bitcast (unchanged from PR #193)
+- [x] **bf16 vec-add fire** — fired on ubu-2 RTX 5070 (`.b16` control variant): N=1024 byte_mismatch=0/1024 max_abs=0 (re-confirms `rfc068_p4_bf16` at `.version 8.7`)
+- [x] **`F-RFC068-NUMERIC-EQ-BF16`** PASS (control `.b16` path, byte-eq vs bf16 round-trip reference; native `.reg .bf16` path remains unavailable)
 
 ### 2d — Hexa-native dispatch (replace direct-bash + sidesetep HEXA_FIRST_WARN)
 
