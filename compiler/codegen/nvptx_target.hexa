@@ -1191,6 +1191,58 @@ fn _nvptx_lower_stmt(buf: [LInstr], s: Stmt, kinds: [PReg], shared_idx_off: [i64
     // emits the body. Non-intrinsic STMT_CALLs remain a stub (a real
     // call ABI is 055-P3c-territory).
     if s.kind == STMT_CALL {
+        // RFC 055 atomic-add intrinsic — `gpu_atomic_add(base, idx, val)`
+        // returns the OLD value at base[idx] (f64 today; signature mirrors
+        // CUDA `atomicAdd`). 3-arg lowering mirrors IndexSet's addr-compute
+        // (mul.lo.s64 + add.s64) followed by the PTX atom instruction:
+        //   mul.lo.s64 %rd_idxs_addr, <idx>, 8;
+        //   add.s64    %rd_idxs_addr, %rd_idxs_addr, <base>;
+        //   atom.global.add.f64 %fd_dst, [%rd_idxs_addr], <val>;
+        // The dst register holds the OLD f64 value (kernels that discard
+        // the return use a void-LHS, lowering still emits the atom — the
+        // dst.id == -1 sentinel path takes the dst-less variant below).
+        //   ref: PTX ISA 8.7 §9.7.13.2 atom — atomic memory operations.
+        if s.op == "gpu_atomic_add" && len(s.args) >= 3 {
+            let base_op = s.args[0]
+            let idx_op  = s.args[1]
+            let val_op  = s.args[2]
+            let base_reg = _nvptx_operand_text_kinds(base_op, kinds)
+            let idx_reg  = _nvptx_operand_text_kinds(idx_op,  kinds)
+            let val_reg  = _nvptx_operand_text_kinds(val_op,  kinds)
+            let addr_reg = "%rd_idxs_addr"
+            // step 1: byte offset = idx * 8 (f64 = 8 B; future cycle adds
+            // elem-size threading via Local.type_id, mirror of RFC 085
+            // Step D's name_hint suffix decode).
+            let mut a1 = []
+            a1.push(_nvptx_op(addr_reg))
+            a1.push(_nvptx_op(idx_reg))
+            a1.push(_nvptx_op("8"))
+            out.push(_nvptx_instr("mul.lo.s64", a1, "atomic_add byte off = idx * 8"))
+            // step 2: addr = base + off
+            let mut a2 = []
+            a2.push(_nvptx_op(addr_reg))
+            a2.push(_nvptx_op(addr_reg))
+            a2.push(_nvptx_op(base_reg))
+            out.push(_nvptx_instr("add.s64", a2, "atomic_add addr = base + off"))
+            // step 3: atom.global.add.f64 %dst, [addr], val  (or void-dst)
+            let mut a3 = []
+            if s.dst.id >= 0 {
+                let dst_reg = _nvptx_lookup_reg_for_local(kinds, s.dst.id)
+                a3.push(_nvptx_op(dst_reg))
+            } else {
+                // No dst — sink register. Use a sink reg; ptxas accepts
+                // `_` placeholder via separate `%fd_sink` scratch decl.
+                // Simplest: classify_locals Pass 5b reserves the `_dst`
+                // pattern, but to keep this PR minimal we route the no-
+                // dst case to a follow-up cycle and require a let-binding
+                // `let _old = gpu_atomic_add(arr, idx, val)` today.
+                a3.push(_nvptx_op("%fd0"))
+            }
+            a3.push(_nvptx_op(_nvptx_addr_deref(addr_reg)))
+            a3.push(_nvptx_op(val_reg))
+            out.push(_nvptx_instr("atom.global.add.f64", a3, "atomic add f64"))
+            return out
+        }
         // RFC 055 §5 multi-block global thread index. PTX has no single
         // sreg for "blockIdx * blockDim + threadIdx", so the call expands
         // to a 5-instr composition using one .u32 scratch reg (declared
@@ -2231,6 +2283,11 @@ fn _nvptx_classify_local_for_stmt(s: Stmt) -> string {
         // RFC 071 P4+ — gpu_warp_shuffle_xor mirrors the 32-bit dst bank
         // (closes N70 GAP-A; same .b32 form as the idx variant).
         if s.op == "gpu_warp_shuffle_xor" { return NVPTX_RKIND_U32 }
+        // RFC 055 atomic-add — `gpu_atomic_add(base, idx, val) -> f64`
+        // returns the OLD value at base[idx]. Classified into the F64
+        // bank (`%fd<id>`); the emit at STMT_CALL site uses the dst reg
+        // as the destination operand of `atom.global.add.f64`.
+        if s.op == "gpu_atomic_add" { return NVPTX_RKIND_F64 }
         // RFC 071 P3+ — int-cast intrinsics. `to_i64(x)` / `to_i32(x)`
         // are the primary widening / narrowing casts the HIR→MIR layer
         // synthesizes when an integer operand needs to match an array
