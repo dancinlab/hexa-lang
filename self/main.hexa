@@ -1776,6 +1776,41 @@ fn cmd_regen_cc() {
     if len(cc_obj_out) > 0 { println(cc_obj_out) }
     let obj_ok = exec("test -f /tmp/hexa_cc.new.o && printf yes || printf no")
     if obj_ok == "yes" {
+        // PR #1287 §3 (2026-05-26): auto-build self/runtime.o if missing.
+        // The link step below references self/runtime.o — when that .o is
+        // absent (fresh clone · `rm runtime.o` · CI runner with no prior
+        // `hexa cc` rebuild) clang silently emits `no such file or
+        // directory` and the pipeline reports `compiled=no` with no
+        // actionable hint. Mirror the cmd_cc rebuild recipe (line ~1289)
+        // exactly: OS-aware macro (Darwin → -D_DARWIN_C_SOURCE matches
+        // tool/build_aprime.sh §2 PR #1290; Linux → -D_GNU_SOURCE; default
+        // none), -O2, single-TU compile of self/runtime.c. Auto-build is
+        // preferred (option 2a) over a terse error (2b) because the recipe
+        // is fully determined and the user already invoked --regen — no
+        // extra ceremony required.
+        let rt_c = __hxroot + "/self/runtime.c"
+        let rt_o = __hxroot + "/self/runtime.o"
+        let rt_have = exec("test -f '" + rt_o + "' && printf yes || printf no")
+        if rt_have != "yes" {
+            let uname_link = exec("uname 2>/dev/null | tr -d ' \\n\\t'")
+            let mut rt_defs = ""
+            if uname_link == "Linux" { rt_defs = "-D_GNU_SOURCE " }
+            else if uname_link == "Darwin" { rt_defs = "-D_DARWIN_C_SOURCE " }
+            let rt_cmd = "clang -O2 " + rt_defs + "-c '" + rt_c + "' -o '" + rt_o + "' 2>&1"
+            println("  [rt] auto-build (self/runtime.o missing): " + rt_cmd)
+            let rt_out = exec(rt_cmd)
+            if len(rt_out) > 0 { println(rt_out) }
+            let rt_now = exec("test -f '" + rt_o + "' && printf yes || printf no")
+            if rt_now != "yes" {
+                println("  ERROR: self/runtime.o auto-build failed.")
+                println("    Build it manually with:")
+                println("      " + rt_cmd)
+                println("    Or run: tool/build_aprime.sh")
+                println("  (skip link — runtime.o unavailable)")
+                println("  compiled=no")
+                return
+            }
+        }
         let cc_link = "clang -O2 /tmp/hexa_cc.new.o '" + __hxroot + "/self/runtime.o' -o /tmp/hexat.new" + os_clang_ldflags() + " 2>&1 | head -40"
         println("  " + cc_link)
         let cc_link_out = exec(cc_link)
