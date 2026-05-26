@@ -2,6 +2,15 @@
 
 Append-only history sister of `INBOX.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
+## 2026-05-26T19:50Z — Pepin–Lehmer (or 일반 결정형 primality) stdlib 부재 — F6 large-perfect 탐색 게이트
+
+> TECS-L F2 /gap 42-lens sweep 결과 R5 seed shortlist Rank 3 (F6 D(n)=σφ−nτ beyond 10^8) 차단 발견. Lucas-Lehmer (Mersenne 전용, MR4) 만 stdlib 에 있고 일반 n primality 결정형 (Pepin / Pocklington / AKS / deterministic Miller-Rabin) 부재 → primorial#7·8589869056·33550336 너머 D(n) corroboration 이 primality 게이트에서 멈춤.
+
+- [ ] **`stdlib/number/primality.hexa` 일반 결정형 부재** — Lucas-Lehmer 외 일반 n primality 결정형 (Pepin 등) 없음. F6 D(n) sweep beyond 10^8 (Ochoa-Rao P_6 너머) 가 이 인프라 의존.
+- 후속 = #1230(sopfr/pow) · #1281(verify_cli binary-내장) 패밀리와 동급의 stdlib calc 확장 후보. F2 보고서 (R5 seed Rank 3) 인용.
+- 우선순위: 🟠 deferred frontier — M10 corroboration 만 영향, TECS-L 코어 닫힘에는 비차단. 코어가 1≤n≤(perfect P_5=33550336) 스팟체크로 닫혀 있어 직접 fix 없이 적층 가능.
+- proposed-by: agent (TECS-L F2 /gap 42-lens sweep, R5 seed 도출, 2026-05-26)
+
 ## 2026-05-26T18:15Z — verify_cli arm/calc_dispatch 가 hexa binary 내장 → .hexa swap 무효, arm 활성 = source-build 필수 (#1230/#1235 보강)
 
 > #1230(calc-fn gap)·#1235(verify_cli sopfr/pow arm) 소스 land 후 활성 검증 중 발견. deployed .hexa swap + cache 75개 무효 후에도 sopfr 여전 🟠 — verify_cli/calc_dispatch 가 hexa binary 에 컴파일-내장돼 .hexa 소스 변경 무관.
