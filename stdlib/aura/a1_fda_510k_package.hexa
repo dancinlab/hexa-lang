@@ -1,0 +1,204 @@
+#!hexa strict
+// stdlib/aura/a1_fda_510k_package.hexa — `aura + A1` FDA 510(k)
+// submission-ready draft package emitter (hexa-native).
+//
+// LAYER: accredited-gate-readiness draft. Emits an
+// aura_a1_fda_510k_package_record sentinel carrying the 510(k)
+// Premarket Notification draft package structure — every section
+// the eSTAR template requires for Class II submission.
+//
+// CONTEXT: aura.md §"Accredited-lab gates" A1:
+//   "FDA 510(k) review — submitted dossier(D7 결과) + Q-Sub
+//    pre-submission feedback + Substantial Equivalence determination"
+//
+// This file emits the SECTIONED DRAFT of what the eSTAR submission
+// will contain. The actual submission + FDA review (90-day clock) is
+// outside this cell — but every section header + content pointer is
+// LANDED here for the submission-ready handoff.
+//
+// Honesty (g3 · @D d1):
+//   * absorbed=false PERMANENTLY — a draft package is NOT cleared.
+//   * scope_caveat: actual submission requires Q-Sub feedback +
+//     real performance data + actual labeling artifacts.
+//
+// Sentinels:
+//   __HEXA_AURA_A1_FDA_510K_PACKAGE__ PASS
+//   AURA_A1_FDA_510K_PACKAGE_OK gate=GATE_OPEN absorbed=false
+//
+// Pattern: mirrors stdlib/aura/g1_mri_safety_path.hexa.
+
+let VERSION       = "0.1.0"
+let MODULE        = "aura-a1-fda-510k-package"
+let GEOMETRY_ID   = "aura_a1_fda_510k_package_v1"
+let RECORD_KIND   = "aura_a1_fda_510k_package_record"
+
+// ─── eSTAR section 1: device info + administrative ────────────────────
+
+fn _admin_block() -> [str] {
+    return [
+        "submission_type: Traditional 510(k) Premarket Notification (PMN)",
+        "applicant: AURA Wearable BCI (illustrative entity)",
+        "contact_official: name + title + email + phone (TBD on engagement)",
+        "device_name: AURA-100 (post-aural wearable BCI)",
+        "regulation_number: 21 CFR 882.1400 (Electroencephalograph)",
+        "product_code: GWQ (Electroencephalograph)",
+        "device_class: II (non-implantable wearable)",
+        "review_panel: Neurological Devices (CDRH/OND)",
+    ]
+}
+
+// ─── eSTAR section 2: indications for use + intended use ──────────────
+
+fn _indications_block() -> [str] {
+    return [
+        "intended_use_statement: continuous post-aural EEG monitoring + alpha-band biofeedback for adult home-healthcare wellness use",
+        "indications_for_use: alpha-band neurofeedback for relaxation + meditation tracking; sleep-stage estimation (REM/NREM proxy)",
+        "exclusion: not for diagnosis of neurological disorders (epilepsy, seizure detection)",
+        "exclusion: not for pediatric use (<18) absent dedicated pre-submission",
+        "exclusion: not MRI-conditional pending V6 EM-side verify + Sim4Life-parity workflow",
+        "Rx_or_OTC: OTC (over-the-counter) — wellness use, non-diagnostic",
+    ]
+}
+
+// ─── eSTAR section 3: substantial equivalence (predicate comparison) ──
+
+fn _substantial_equivalence_block() -> [str] {
+    return [
+        "primary_predicate: InteraXon Muse S Athena (510(k) cleared consumer EEG headband)",
+        "secondary_predicate: Beacon Biosignals Dreem 3 (510(k) cleared sleep EEG headband)",
+        "tertiary_predicate: NeuroSky MindWave Mobile (510(k) cleared single-channel EEG)",
+        "comparison_table: form_factor / channel_count / SoC / battery / radio / IFU per FDA guidance",
+        "differences_addressed: post-aural form factor (NEW) + 16-ch density + nRF5340 BLE 5.3 + IPX4",
+        "differences_dont_raise_new_safety_concerns: rationale per 21 CFR 807.92(a)(3)",
+        "SE_determination_path: comparison + bench-testing equivalence + risk-analysis support",
+    ]
+}
+
+// ─── eSTAR section 4: device description ──────────────────────────────
+
+fn _device_description_block() -> [str] {
+    return [
+        "form_factor: mastoid / temporal-bone clip · clamshell + post-auricular anchor",
+        "electrodes: 16-channel Ag/AgCl (dry/wet selectable) · 5mm active + 8mm reference",
+        "AFE: TI ADS1299 dual-IC daisy-chain · 24-bit ΣΔ ADC · gain 1-24",
+        "radio: Nordic nRF5340 dual-core M33 · BLE 5.3 · LE 2M PHY",
+        "battery: Li-Po 200 mAh × 2 (rechargeable) OR CR2032 (disposable)",
+        "enclosure: medical-grade silicone + ABS sub-frame · IPX4 splash",
+        "weight: ≤ 25 g per side (≤ 50 g bilateral)",
+    ]
+}
+
+// ─── eSTAR section 5: performance + safety data summary ───────────────
+
+fn _performance_safety_block() -> [str] {
+    return [
+        "bench_performance_data: noise + CMRR + sample-rate + BLE-throughput characterization",
+        "biocompatibility: ISO 10993-1 cytotoxicity + sensitization + irritation panel (A3 ref)",
+        "EMC: IEC 60601-1-2 Ed.4.1 emission + immunity full report (A3 ref)",
+        "electrical_safety: IEC 60601-1 general safety + applied-part Type BF",
+        "software: IEC 62304 Class B moderate-LOC + 21 CFR Part 11 audit trail",
+        "cybersecurity: FDA 524B Premarket Cybersecurity Guidance",
+        "human_factors: IEC 62366-1 usability + 15-user formative + summative",
+    ]
+}
+
+// ─── eSTAR section 6: labeling ───────────────────────────────────────
+
+fn _labeling_block() -> [str] {
+    return [
+        "package_label: per 21 CFR 801.5 + 801.15 + 801.18",
+        "instructions_for_use: per 21 CFR 801.109 + FDA guidance",
+        "warnings_precautions: 'MR Unsafe' until G1 brk · skin-contact biocompat · battery safety",
+        "contraindications: implanted active medical devices · pediatric · pregnancy (caution)",
+        "UDI: per 21 CFR 830 · GS1 DI/PI",
+        "Spanish_translation: per FDA OPDP guidance (if marketed in US Hispanic market)",
+    ]
+}
+
+// ─── eSTAR section 7: standards + bibliography ───────────────────────
+
+fn _standards_block() -> [str] {
+    return [
+        "ANSI/AAMI/IEC 60601-1 Ed.3.2 (general safety)",
+        "ANSI/AAMI/IEC 60601-1-2 Ed.4.1 (EMC)",
+        "ANSI/AAMI/IEC 60601-1-6 (usability)",
+        "ANSI/AAMI/IEC 60601-1-11 (home-healthcare)",
+        "ANSI/AAMI/IEC 62304 (medical device software)",
+        "ISO 14971:2019 (risk management)",
+        "ISO 10993-1 (biological evaluation)",
+        "FDA Recognized Consensus Standards Database — query + cite",
+    ]
+}
+
+// ─── eSTAR section 8: 510(k) summary OR statement + truthful + accuracy ─
+
+fn _summary_attestation_block() -> [str] {
+    return [
+        "510k_summary_or_statement: 510(k) summary (publicly available · per 21 CFR 807.92)",
+        "truthful_and_accurate_statement: per 21 CFR 807.87(k) + 18 USC 1001 attestation",
+        "indications_for_use_statement: separate IFU form per FDA Form 3881",
+        "user_fee_cover_sheet: FDA Form 3601 + MDUFA fee payment confirmation",
+        "premarket_application_form: FDA Form 3514 (cover sheet)",
+        "letter_to_file: documentation per 21 CFR 820 (DHF reference)",
+    ]
+}
+
+fn _scope_caveats() -> [str] {
+    return [
+        "A1 FDA 510(k) package is a DRAFT submission outline, NOT a cleared device.",
+        "Actual submission requires: real Q-Sub feedback + real performance data + signed attestations.",
+        "User fee per MDUFA V (TBD per year + Class II) is paid at actual submission.",
+        "90-day FDA review clock starts only AFTER acceptance review (RTA) passes.",
+        "absorbed=false PERMANENTLY (g3) - draft outline, NEVER an FDA clearance.",
+    ]
+}
+
+fn _emit_block(label: str, lines: [str]) {
+    print("# [" + label + "]")
+    let n = lines.len()
+    let mut i = 0
+    while i < n {
+        print("#   - " + lines[i])
+        i = i + 1
+    }
+    print("#")
+}
+
+fn _emit_header() {
+    print("# AURA A1 - FDA 510(k) eSTAR submission-ready DRAFT package")
+    print("# device_target = post-aural / temporal-bone clip BCI (Class II)")
+    print("# version = " + VERSION)
+    print("# ringfence: DRAFT outline - NOT a cleared device")
+    print("#")
+    _emit_block("admin",                      _admin_block())
+    _emit_block("indications_for_use",        _indications_block())
+    _emit_block("substantial_equivalence",    _substantial_equivalence_block())
+    _emit_block("device_description",         _device_description_block())
+    _emit_block("performance_safety_data",    _performance_safety_block())
+    _emit_block("labeling",                   _labeling_block())
+    _emit_block("standards_bibliography",     _standards_block())
+    _emit_block("summary_attestation",        _summary_attestation_block())
+}
+
+fn _emit_caveats() {
+    let c = _scope_caveats()
+    let n = c.len()
+    let mut i = 0
+    while i < n {
+        print("# scope_caveat: " + c[i])
+        i = i + 1
+    }
+}
+
+fn main() {
+    _emit_header()
+    _emit_caveats()
+
+    print("AURA_A1_FDA_510K_PACKAGE_OK record_kind=" + RECORD_KIND
+        + " geometry_id=" + GEOMETRY_ID
+        + " gate=GATE_OPEN absorbed=false"
+        + " version=" + VERSION
+        + " sections=8 fda_clock=90day")
+
+    print("__HEXA_AURA_A1_FDA_510K_PACKAGE__ PASS")
+}
