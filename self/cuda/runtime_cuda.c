@@ -901,6 +901,79 @@ __global__ void _hx_k_softmax_rows(const double* __restrict__ X,
 }
 
 /* ────────────────────────────────────────────────────────────────────
+ * Kernel 1c (RFC gpu-resident-large-vocab-lmhead-loss, ADDITIVE) —
+ * ce_seed: GPU-resident large-vocab lm-head cross-entropy loss + seed
+ * gradient, ONE kernel, logits never leave the device.
+ *
+ *   row r ∈ [0,R), logits L[r,*] over a vocab of size V:
+ *     m       = max_v L[r,v]                          (block-reduce)
+ *     s       = Σ_v exp(L[r,v] - m)                    (block-reduce)
+ *     lse     = m + log(s)                             (log-sum-exp)
+ *     loss[r] = lse - L[r, target[r]]                 = -log softmax(target)
+ *     dlogits[r,v] = softmax(L[r,v]) - onehot(v == target[r])
+ *
+ * Layout matches _hx_k_softmax_rows: one block per row (gridDim.x = R),
+ * HX_RR_BLOCK threads striding the row; the two reductions use the same
+ * deterministic _hx_block_max / _hx_block_sum tree. Per-row loss is
+ * written to OUT_LOSS[r] (length R; the caller sums the R values on host
+ * — R is small, e.g. 512). The seed grad fills OUT_DL[r*V + v] in place.
+ *
+ * HONEST SCOPE — bit-identity NOT claimed (online/parallel reduce order
+ * differs from the host FP64 sequential loop); follows the forge `_gpu`
+ * convention (rel-err tolerance, not max|Δ|=0). The targets arrive as a
+ * double-encoded farr (token ids stored as doubles); each is rounded to
+ * the nearest int64 vocab index.
+ * ──────────────────────────────────────────────────────────────────── */
+__global__ void _hx_k_ce_seed(const double* __restrict__ L,
+                              const double* __restrict__ TGT,
+                              double* __restrict__ OUT_LOSS,
+                              double* __restrict__ OUT_DL,
+                              int64_t R, int64_t V) {
+    int64_t r = blockIdx.x;
+    if (r >= R) return;
+    const double* lr = L + r * V;
+    double*       dr = OUT_DL + r * V;
+
+    __shared__ double smem[HX_RR_BLOCK / 32];
+
+    /* target index for this row (double-encoded → rounded int64). */
+    int64_t tgt = (int64_t)(TGT[r] + (TGT[r] >= 0.0 ? 0.5 : -0.5));
+
+    /* Pass 1: row max. */
+    double vmax = -1.0e308;
+    for (int64_t j = threadIdx.x; j < V; j += blockDim.x) {
+        double v = lr[j];
+        if (v > vmax) vmax = v;
+    }
+    double m = _hx_block_max(vmax, smem);
+
+    /* Pass 2: write exp(x - m) into dlogits, accumulate sum-exp. */
+    double vsum = 0.0;
+    for (int64_t j = threadIdx.x; j < V; j += blockDim.x) {
+        double e = exp(lr[j] - m);
+        dr[j] = e;
+        vsum += e;
+    }
+    double s   = _hx_block_sum(vsum, smem);
+    double inv = (s > 0.0) ? (1.0 / s) : 0.0;
+
+    /* CE loss for this row = lse - L[target] = (m + log s) - L[target].
+     * One thread (lane 0 of block) writes OUT_LOSS[r]; guard tgt range. */
+    if (threadIdx.x == 0) {
+        double lse = m + log(s);
+        double lt  = (tgt >= 0 && tgt < V) ? lr[tgt] : 0.0;
+        OUT_LOSS[r] = lse - lt;
+    }
+
+    /* Pass 3: normalize → softmax, then subtract onehot(target). */
+    for (int64_t j = threadIdx.x; j < V; j += blockDim.x) {
+        double p = dr[j] * inv;
+        if (j == tgt) p -= 1.0;
+        dr[j] = p;
+    }
+}
+
+/* ────────────────────────────────────────────────────────────────────
  * Kernel 1b (flame Phase 4-D-9, ADDITIVE — RFC 058 12→13→14 precedent)
  * ────────────────────────────────────────────────────────────────────
  * causal_softmax_rows: per-row causal-prefix softmax for the attention
@@ -1129,6 +1202,52 @@ int _hx_cuda_farr_softmax_rows_gpu(int64_t x_id, int64_t R, int64_t C,
 #else
     (void)x_id; (void)R; (void)C; (void)out_id;
     fprintf(stderr, "[cuda] softmax_rows: built without __CUDACC__ "
+                    "(use nvcc -x cu)\n");
+    return -1;
+#endif
+}
+
+/* ── ce_seed host wrapper (RFC gpu-resident-large-vocab-lmhead-loss).
+ * GPU-resident large-vocab lm-head CE loss + seed grad in ONE kernel.
+ * Mirrors _hx_cuda_farr_softmax_rows_gpu's contract: validate → H2D the
+ * two inputs (logits[R*V], targets[R]) → _ensure_dev_alloc_out for the
+ * two caller-allocated outputs (out_loss[R], out_dlogits[R*V]) → launch
+ * one block-per-row kernel → cudaDeviceSynchronize → D2H both outputs.
+ * The logits farr is the lm-head matmul output that STAYS device-
+ * resident (the RFC's whole point — no 78M H2D round-trip); _h2d() sees
+ * it DEVICE && !dirty_host and SKIPs the redundant copy (RFC 056 §6.1).
+ * loss is per-row (caller sums R values on host). Returns 0 ok / -1. */
+int _hx_cuda_farr_ce_seed_gpu(int64_t logits_id, int64_t target_ids_id,
+                              int64_t R, int64_t V,
+                              int64_t out_loss_id, int64_t out_dlogits_id) {
+#ifdef __CUDACC__
+    if (R <= 0 || V <= 0) {
+        fprintf(stderr, "[cuda] ce_seed: bad shape R=%lld V=%lld\n",
+                (long long)R, (long long)V);
+        return -1;
+    }
+    if (_h2d(logits_id) != 0)     return -1;
+    if (_h2d(target_ids_id) != 0) return -1;
+    if (_ensure_dev_alloc_out(out_loss_id, R) != 0)         return -1;
+    if (_ensure_dev_alloc_out(out_dlogits_id, R * V) != 0)  return -1;
+    const double* L   = g_slots[logits_id].d_buf;
+    const double* TGT = g_slots[target_ids_id].d_buf;
+    double* OUT_LOSS  = g_slots[out_loss_id].d_buf;
+    double* OUT_DL    = g_slots[out_dlogits_id].d_buf;
+    dim3 grid((unsigned)R), block(HX_RR_BLOCK);
+    _hx_k_ce_seed<<<grid, block>>>(L, TGT, OUT_LOSS, OUT_DL, R, V);
+    cudaError_t er = cudaDeviceSynchronize();
+    if (er != cudaSuccess) {
+        fprintf(stderr, "[cuda] ce_seed launch failed: %s\n",
+                cudaGetErrorString(er));
+        return -1;
+    }
+    if (_d2h_out(out_loss_id, R) != 0)        return -1;
+    return _d2h_out(out_dlogits_id, R * V);
+#else
+    (void)logits_id; (void)target_ids_id; (void)R; (void)V;
+    (void)out_loss_id; (void)out_dlogits_id;
+    fprintf(stderr, "[cuda] ce_seed: built without __CUDACC__ "
                     "(use nvcc -x cu)\n");
     return -1;
 #endif
