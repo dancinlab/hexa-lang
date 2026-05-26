@@ -2,6 +2,16 @@
 
 Append-only history sister of `INBOX.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
+## 2026-05-27T02:15Z — `hexa cc --regen` 의 `runtime.o` 누락 → verify_cli binary 갱신 차단 (#1281 family · INBOX 3 activation blocker)
+
+> F21 (PR #1395 머지) 의 verify_cli arms 모두 source land 확인: `verify_cli.hexa:433` `_recompute "mertens" → mertens(n)` arm + `congruence_chain_engine.hexa:137` `pub fn mertens` 정의. `hexa parse tool/verify_cli.hexa` 도 clean. 그러나 `hexa cc --regen` link 단계에서 `clang: error: no such file or directory: '/Users/ghost/.hx/bin/self/runtime.o'` → verify_cli 재컴파일 실패 → deployed binary 갱신 차단 → `hexa verify --expr mertens 6 -1 --no-absorb` 여전 🟠 INSUFFICIENT.
+
+- [ ] **`~/.hx/bin/self/runtime.o` 누락** — deployed install (`~/.hx/bin/self/`) 에 runtime.o 가 없음. cc --regen 의 link 가 이 .o 를 require 하나, hexa-cc self-build infra 가 이를 deploy 안 함. #1283 (loop runtime FLOOR + install symlink completeness) family.
+- 영향: **모든 verify_cli `_recompute` arm 추가가 binary 활성화 미달성** (F21 의 3 arms 만 아니라 모든 신규 calc-fn 후보). #1230/#1281/#1314 family 의 메타 차단.
+- 우선순위: 🔥 BLOCKING — verify-infra 전체 확장 lane 차단. hexa-cc self-build (`~/.hx/bin/self/`) 가 runtime.o 같은 link artifact 도 deploy 하도록 install hook 수정 필요.
+- 대안 (workaround): manual deployed binary swap (hexa-cc 우회) — pool ubu-2 의 source-build → scp deployed. 그러나 mac arm64 vs linux x86_64 분리 (#587 family).
+- proposed-by: main session (TECS-L F21 source land 후 binary activation 시도 중 진단, 2026-05-27)
+
 ## 2026-05-27T00:30Z — TECS-L F19/F20 verify-infra extension — 3 new candidate fns (`elliptic_witness` · `tunnell_count_{odd,even}` · `mertens`)
 
 > F19 Clay attempt(PR #1372) 시 BSD/RH lane 에 calc-fn 부재로 인해 4-op witness · ternary-form count · Mertens partial sum 을 **컴포넌트 산술 재조립**으로만 verify 했음. F20 에서 이 calc-gap 을 좁히려 `mertens(n)` (single-arg) 은 stdlib+verify_cli 에 직접 land 시도; 4-op 두 가지는 더 복잡 (multi-arg / ternary enum) 이라 spec 만 영속화 + 후속 라운드 구현 deferred. **모두 verify-infra 확장 (calc-fn 부재 = g5 violation 회피 deferred)**, novel atom 주장 아님.
