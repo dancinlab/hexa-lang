@@ -1,0 +1,256 @@
+// test/native_build/emit_hexa_exit_native_o.hexa
+//
+// HEXA_BACKEND flip · chunk-B phase-H "일곱째 increment" — production-wire
+// FIRST PROBE: hexa-native override for the `_hexa_exit` runtime fn.
+//
+// EMITS: a Mach-O .o file exporting strong external `_hexa_exit` whose body
+// is a HexaVal-ABI → raw-ABI adapter prepended to the rt_exit primitive's
+// machine-code (svc #0x80 SYS_exit) bytes. When the cmd_build native-path
+// clang link command appends this .o BEFORE self/runtime.c, ld64 binds the
+// `bl _hexa_exit` callsite to hexa-emit's strong symbol (the C-side
+// `hexa_exit` carries `__attribute__((weak))` after this cycle's surgical
+// edit) — the C runtime's fn is silently superseded by the hexa-emit one.
+//
+// ── ABI ADAPTER ──
+//
+// CALLER ABI (aprime_cc emit, _STMT_CALL pair-args):
+//   x0 = HexaVal.tag   (= TAG_INT = 0 when caller is `exit(int_lit)`)
+//   x1 = HexaVal.payload  (= the int exit-code)
+//   x2..x7 = unused (0-arg HexaVal)
+//
+// PRIMITIVE ABI (rt_exit per self/codegen/runtime_arm64.hexa L36):
+//   x0 = exit-code (raw int — passed straight to SYS_exit)
+//   stack-pushes x29/x30 then sets x16=1, svc #0x80
+//
+// ADAPTER GLUE (this file emits):
+//   mov x0, x1                       // payload → exit-code
+//   <rt_exit bytes verbatim>         // existing 16-byte syscall sequence
+//
+// Total adapter body = 4 (mov) + 16 (rt_exit) = 20 bytes.
+//
+// ── HONESTY ──
+//
+// Cross-cutting:
+//   - closure = runs exact (the rc=42 byte-level falsifier of the predecessor
+//     `poc_rt_exit_obj_emit` PoC re-applied at the production call-site).
+//   - f1/f2 — clang ONLY as link-side oracle, NEVER in this .o's emit path.
+//   - selfhosted opt-in — HEXA_NATIVE_RT_EXIT=1 gates the cmd_build append;
+//     unset = no behavior change (default build_aprime.sh stays byte-eq).
+//   - g5 verbatim — verify smoke script pastes raw rc + stdout.
+//
+// SELF-CONTAINED: same module-loader rationale as poc_rt_exit_obj_emit.hexa
+// (the v2 wrapper is inlined byte-for-byte). The single deliberate change
+// vs the predecessor PoC is the EXPORTED SYMBOL NAME: `_hexa_exit` (11 B)
+// instead of `_hexa_main` (10 B). All other v2 wrapper bytes are identical
+// (the only diff propagation is the strtab-size +1 and the strtab payload).
+
+// ═══════════════════════════════════════════════════════════════════
+// Adapter body — HexaVal-ABI prefix + rt_exit primitive bytes
+// (verbatim from self/codegen/runtime_arm64.hexa::rt_exit, lines 36-60)
+// ═══════════════════════════════════════════════════════════════════
+fn hexa_exit_adapter_bytes() -> [int] {
+    let mut c = []
+    // ── ABI adapter (4 bytes) ──
+    // mov x0, x1   (= orr x0, xzr, x1)   0xAA0103E0  → e0 03 01 aa LE
+    c.push(0xe0); c.push(0x03); c.push(0x01); c.push(0xaa)
+    // ── rt_exit verbatim (16 bytes) ──
+    // stp x29, x30, [sp, #-16]!          0xA9BF7BFD
+    c.push(253); c.push(123); c.push(191); c.push(169)
+    // mov x29, sp                         0x910003FD
+    c.push(253); c.push(3); c.push(0); c.push(145)
+    // mov x16, #1 (SYS_exit)             0xD2800030
+    c.push(48); c.push(0); c.push(128); c.push(210)
+    // svc #0x80                           0xD4001001
+    c.push(1); c.push(16); c.push(0); c.push(212)
+    return c
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Inlined from self/codegen/macho.hexa (constants + helpers + obj_wrap)
+// Identical to the predecessor PoC except for the symbol name + strtab
+// payload at the end.
+// ═══════════════════════════════════════════════════════════════════
+fn mh_magic_64_v() -> int { return 0xFEEDFACF }
+fn mh_object_v() -> int { return 1 }
+fn cpu_type_arm64_v() -> int { return 0x0100000C }
+fn cpu_subtype_all_v() -> int { return 0 }
+fn lc_segment_64_v() -> int { return 0x19 }
+fn lc_symtab_v() -> int { return 0x02 }
+fn lc_build_version_v() -> int { return 0x32 }
+fn s_attr_pure_v() -> int { return 0x80000000 }
+fn s_attr_some_v() -> int { return 0x00000400 }
+fn n_ext_v() -> int { return 0x01 }
+fn n_sect_v() -> int { return 0x0e }
+
+fn align_to_v(val: int, align: int) -> int {
+    return (val + align - 1) / align * align
+}
+
+fn push_u16_le_v(buf: [int], val: int) -> [int] {
+    return buf.push(val % 256).push((val / 256) % 256)
+}
+
+fn push_u32_le_v(buf: [int], val: int) -> [int] {
+    return buf.push(val % 256).push((val / 256) % 256).push((val / 65536) % 256).push((val / 16777216) % 256)
+}
+
+fn push_u64_le_v(buf: [int], val: int) -> [int] {
+    let mut b = push_u32_le_v(buf, val % 0x100000000)
+    return push_u32_le_v(b, val / 0x100000000)
+}
+
+// Inlined from self/codegen/macho.hexa::macho_obj_wrap (L34-136).
+// Symbol exported = `_hexa_exit` (strtab_size = 1 + 11 NUL-term = 12).
+fn macho_obj_wrap_hexa_exit(code: [int], main_offset: int) -> [int] {
+    let mut out = []
+    let code_size = len(code)
+
+    let header_size = 32
+    let segment_cmd_size = 152
+    let symtab_cmd_size = 24
+    let build_version_cmd_size = 24
+    let sizeofcmds = segment_cmd_size + symtab_cmd_size + build_version_cmd_size
+
+    let code_offset = align_to_v(header_size + sizeofcmds, 8)
+    let symtab_offset = align_to_v(code_offset + code_size, 4)
+    let nlist_size = 16
+    let strtab_offset = symtab_offset + nlist_size
+    // strtab = "\0_hexa_exit\0" = 1 + 11 = 12 bytes (same as "_hexa_main\0").
+    let strtab_size = 1 + 11
+
+    // Mach-O Header (32 bytes)
+    out = push_u32_le_v(out, mh_magic_64_v())
+    out = push_u32_le_v(out, cpu_type_arm64_v())
+    out = push_u32_le_v(out, cpu_subtype_all_v())
+    out = push_u32_le_v(out, mh_object_v())
+    out = push_u32_le_v(out, 3)
+    out = push_u32_le_v(out, sizeofcmds)
+    out = push_u32_le_v(out, 0)
+    out = push_u32_le_v(out, 0)
+
+    // LC_SEGMENT_64
+    out = push_u32_le_v(out, lc_segment_64_v())
+    out = push_u32_le_v(out, segment_cmd_size)
+    let mut i = 0
+    while i < 16 { out.push(0); i = i + 1 }
+    out = push_u64_le_v(out, 0)
+    out = push_u64_le_v(out, align_to_v(strtab_offset + strtab_size, 8))
+    out = push_u64_le_v(out, code_offset)
+    out = push_u64_le_v(out, strtab_offset + strtab_size - code_offset)
+    out = push_u32_le_v(out, 7)
+    out = push_u32_le_v(out, 7)
+    out = push_u32_le_v(out, 1)
+    out = push_u32_le_v(out, 0)
+
+    // Section header: __text (80 bytes)
+    out.push(95); out.push(95); out.push(116); out.push(101); out.push(120); out.push(116)
+    let mut j = 0
+    while j < 10 { out.push(0); j = j + 1 }
+    out.push(95); out.push(95); out.push(84); out.push(69); out.push(88); out.push(84)
+    j = 0
+    while j < 10 { out.push(0); j = j + 1 }
+    out = push_u64_le_v(out, 0)
+    out = push_u64_le_v(out, code_size)
+    out = push_u32_le_v(out, code_offset)
+    out = push_u32_le_v(out, 2)
+    out = push_u32_le_v(out, 0)
+    out = push_u32_le_v(out, 0)
+    out = push_u32_le_v(out, s_attr_pure_v() + s_attr_some_v())
+    out = push_u32_le_v(out, 0)
+    out = push_u32_le_v(out, 0)
+    out = push_u32_le_v(out, 0)
+
+    // LC_SYMTAB
+    out = push_u32_le_v(out, lc_symtab_v())
+    out = push_u32_le_v(out, symtab_cmd_size)
+    out = push_u32_le_v(out, symtab_offset)
+    out = push_u32_le_v(out, 1)
+    out = push_u32_le_v(out, strtab_offset)
+    out = push_u32_le_v(out, strtab_size)
+
+    // LC_BUILD_VERSION
+    out = push_u32_le_v(out, lc_build_version_v())
+    out = push_u32_le_v(out, build_version_cmd_size)
+    out = push_u32_le_v(out, 1)
+    out = push_u32_le_v(out, 0x000E0000)
+    out = push_u32_le_v(out, 0x000E0000)
+    out = push_u32_le_v(out, 0)
+
+    // Pad to code_offset
+    while len(out) < code_offset { out.push(0) }
+
+    // Code section
+    let mut k = 0
+    while k < len(code) { out.push(code[k]); k = k + 1 }
+
+    // Pad to symtab_offset
+    while len(out) < symtab_offset { out.push(0) }
+
+    // Symbol table: nlist_64 (16 bytes)
+    out = push_u32_le_v(out, 1)
+    out.push(n_sect_v() + n_ext_v())
+    out.push(1)
+    out = push_u16_le_v(out, 0)
+    out = push_u64_le_v(out, main_offset)
+
+    // String table — "\0_hexa_exit\0" (12 bytes)
+    out.push(0)
+    // "_hexa_exit\0"  (95='_' 104='h' 101='e' 120='x' 97='a'
+    //                  95='_' 101='e' 120='x' 105='i' 116='t' 0=NUL)
+    out.push(95); out.push(104); out.push(101); out.push(120); out.push(97)
+    out.push(95); out.push(101); out.push(120); out.push(105); out.push(116); out.push(0)
+
+    return out
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Driver
+// ═══════════════════════════════════════════════════════════════════
+fn emit_hexa_exit_native_o() {
+    println("[wire] HEXA_BACKEND flip · 일곱째 increment — _hexa_exit native override")
+
+    let code = hexa_exit_adapter_bytes()
+    if len(code) != 20 {
+        println("FAIL: adapter expected 20 bytes (mov 4 + rt_exit 16), got " + to_string(len(code)))
+        return
+    }
+    println("  adapter bytes  : " + to_string(len(code)) + " (20 expected — 4 mov + 16 rt_exit)")
+
+    // mov x0, x1 (e0 03 01 aa) sanity at offset 0
+    if code[0] != 0xe0 || code[1] != 0x03 || code[2] != 0x01 || code[3] != 0xaa {
+        println("FAIL: mov x0, x1 prefix mismatch")
+        return
+    }
+    println("  ABI prefix     : e0 03 01 aa (mov x0, x1) OK")
+
+    // SVC trailer at offset 16 (1, 16, 0, 212 = 0xD4001001 LE)
+    if code[16] != 1 || code[17] != 16 || code[18] != 0 || code[19] != 212 {
+        println("FAIL: SVC trailer mismatch")
+        return
+    }
+    println("  SVC trailer    : 01 10 00 d4 (svc #0x80) OK")
+
+    let obj = macho_obj_wrap_hexa_exit(code, 0)
+    println("  obj_wrap size  : " + to_string(len(obj)) + " bytes total")
+
+    // MH_MAGIC_64 LE at offset 0 (0xFEEDFACF → cf fa ed fe)
+    if obj[0] != 0xcf || obj[1] != 0xfa || obj[2] != 0xed || obj[3] != 0xfe {
+        println("FAIL: MH_MAGIC_64 mismatch")
+        return
+    }
+    println("  MH_MAGIC_64    : cf fa ed fe OK")
+
+    // filetype = MH_OBJECT (1) at offset 12
+    if obj[12] != 1 {
+        println("FAIL: filetype not MH_OBJECT")
+        return
+    }
+    println("  filetype       : 1 (MH_OBJECT) OK")
+
+    let out = "/tmp/hexa_exit_native.o"
+    write_bytes(out, obj)
+    println("  wrote          : " + out)
+    println("[wire] EMIT OK — link via cmd_build native path with HEXA_NATIVE_RT_EXIT=1")
+}
+
+emit_hexa_exit_native_o()
