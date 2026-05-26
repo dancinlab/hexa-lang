@@ -623,6 +623,23 @@ repr floor remains." NOT blocked at arithmetic (de-risked). Campaign continues
 per-op, fixpoint-verified, event-driven — number-parse family (atof #1201 ·
 atoll/atoi #1205) was the warm-up; arithmetic core is next.
 
+### 2026-05-26 — `.c none` arithmetic core 5/5 LANDED (`+` add · #1226) — arith lane EXHAUSTED
+
+`+` (`hexa_add_slow` → `rt_add_slow`, #1226) 랜딩으로 산술 코어 5/5 완주:
+`+`(#1226) `−`(#1217) `×`(#1219) `÷`·`%`(#1224). add 는 새 정수 intrinsic
+불필요 (`+` known-int 는 native) — float 만 `__raw_add_f` 브리지 (bool-coerce
++ `__hx_to_double`, string→0.0 quirk 까지 C byte-identical), string 은 **실제
+C 함수 `hexa_str_concat` 직접** 호출 (alias `str_concat` 은 codegen-rewrite
+의존 → pre-mapping bootstrap 에서 bare-emit undeclared · `+` 는 재진입), array
+는 `push` 루프. 검증: build 0 · smoke 42 · **ext=1** (zero-libm) · correctness
+(int/float/string/array → exit 42) · **byte-identity 183L** (string-concat-heavy
+프로그램 NEW≡BASE — aprime_cc 내부 hexa_add_slow ≡ C, fixpoint-safe).
+
+**arith lane EXHAUSTED** (closure-is-physical-limit): 5개 portable arith op 모두
+landed. 남은 `fma` 는 FUSED 하드웨어 FMA = `@asm`/codegen floor (순수 hexa
+불가, terminal). `.c none` 의 다음 frontier 는 arith 위 — 비교/변환 ops →
+string/arena/GC HexaVal-repr core (RUNTIME.md L48 가 flag 한 irreducible floor).
+
 ### 2026-05-26 — `.c none` arithmetic core 4/5 LANDED (−·×·÷·% · ÷·% via new `__raw_*` intrinsic 4-surface)
 
 shape-2 (full dispatch-in-hexa) 채택. 산술 코어 5op 중 4개가 hexa-source
