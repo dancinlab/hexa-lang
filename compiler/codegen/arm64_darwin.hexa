@@ -1452,6 +1452,63 @@ fn _emit_int_box(buf: [LInstr], why: string) -> [LInstr] {
     return out
 }
 
+// HEXA_BACKEND flip · chunk A step 2 — inline `hexa_bool(b)` repr-pack.
+//
+// `hexa_bool(int b) = (HexaVal){.tag=TAG_BOOL, .b=b}` (runtime_core.c
+// :1283). Returned in the x0:x1 register PAIR (x0 = tag, x1 = payload),
+// exactly like hexa_int — TAG_BOOL=2 is the only difference. At every
+// bool box site below the 0/1 result is already in x0 (after a uxtw /
+// eor that leaves the truth value in x0), so boxing is a no-alloc
+// 2-instruction repr-pack identical to the const_bool operand lowering
+// in `_hv_load` (movz lo #2 = TAG_BOOL; payload in hi):
+//
+//     mov  x1, x0      ; payload → x1   (MUST precede the x0 clobber)
+//     movz x0, #2      ; tag = TAG_BOOL (2)
+//
+// This removes the `bl _hexa_bool` from the emitted user `.s` — the
+// step-2 sibling of step-1's hexa_int inline toward the .hexa-only @goal.
+//
+// GATING (no-regression): OPT-IN behind `HEXA_INLINE_BOOL_BOX=1`, wired
+// ON only by `self/main.hexa`'s HEXA_BACKEND=native build path. When
+// unset (the DEFAULT — build_aprime.sh stage-5 fixpoint smoke etc.) the
+// legacy `bl hexa_bool` is emitted byte-identically, so the self-host
+// gen1≡gen2 fixpoint is not perturbed.
+fn _arm64_inline_bool_box_enabled() -> bool {
+    return env("HEXA_INLINE_BOOL_BOX") == "1"
+}
+
+// Emit the bool→HexaVal box. The C int payload (0/1) is assumed in x0
+// (the callers below uxtw / eor into x0 first). Either the inline
+// repr-pack (gated) or the legacy `bl hexa_bool`.
+fn _emit_bool_box(buf: [LInstr], why: string) -> [LInstr] {
+    let mut out = buf
+    if _arm64_inline_bool_box_enabled() {
+        // payload x0 → x1 BEFORE clobbering x0 with the tag.
+        out.push(_arm64_instr2("mov", _arm64_op_reg("x1"),
+                         _arm64_op_reg("x0"), why + ": inline box payload → x1"))
+        out.push(_arm64_instr2("movz", _arm64_op_reg("x0"),
+                         _arm64_op_label("#2"), why + ": inline box TAG_BOOL"))
+        return out
+    }
+    out.push(_arm64_instr1("bl", _arm64_op_label("hexa_bool"), why))
+    return out
+}
+
+// HEXA_BACKEND flip · chunk A step 2 — float box status (RESIDUAL/NONE).
+//
+// `hexa_float(double f) = (HexaVal){.tag=TAG_FLOAT, .f=f}` (runtime_core.c
+// :1282). UNLIKE hexa_int/hexa_bool there is NO `bl _hexa_float` box site
+// in this backend to inline:
+//   • float LITERALS are already inlined in `_hv_load` const_float (above):
+//     movz lo #1 (TAG_FLOAT) + adrp/add/ldr the 8-byte IEEE-754 pool value
+//     into hi — a full repr-pack, no constructor call.
+//   • float-returning builtins (e.g. `float`/`to_float` → `hexa_to_float`)
+//     return a complete HexaVal in x0:x1 directly; `_builtin_ret_box`
+//     emits only "int"/"bool", never a "float" box.
+// So the `_hexa_float` symbol seen in some `.s` originates inside
+// runtime_core.c's own libm wrappers (rt_sin/rt_exp/…), NOT from a codegen
+// box site — there is nothing to inline here. No `fmov x1, dN` site exists.
+
 // Cycle h20: extra params try_buf_bytes (total fn jmp_buf region size)
 // and try_slot_idx (this statement's slot index in 0..try_count).
 // try_slot_idx is meaningful only for STMT_TRY_SETJMP / STMT_TRY_POP;
@@ -1667,8 +1724,7 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
                                  "ne: truthy(eq) → w0"))
                 buf.push(_arm64_instr3("eor", _arm64_op_reg("x0"),
                                  _arm64_op_reg("x0"), _arm64_op_label("#1"), "ne: !truthy"))
-                buf.push(_arm64_instr1("bl", _arm64_op_label("hexa_bool"),
-                                 "ne: box bool"))
+                buf = _emit_bool_box(buf, "ne: box bool")
                 buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1")
                 return buf
             }
@@ -1751,8 +1807,7 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
                              "has_key: map_contains_key → int"))
             buf.push(_arm64_instr2("uxtw", _arm64_op_reg("x0"),
                              _arm64_op_reg("w0"), "has_key: zext"))
-            buf.push(_arm64_instr1("bl", _arm64_op_label("hexa_bool"),
-                             "has_key: box bool"))
+            buf = _emit_bool_box(buf, "has_key: box bool")
             if s.dst.id >= 0 { buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1") }
             return buf
         }
@@ -1845,8 +1900,7 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
         if box == "bool" {
             buf.push(_arm64_instr2("uxtw", _arm64_op_reg("x0"),
                              _arm64_op_reg("w0"), "ret bool: zero-ext"))
-            buf.push(_arm64_instr1("bl", _arm64_op_label("hexa_bool"),
-                             "ret bool: box → HexaVal"))
+            buf = _emit_bool_box(buf, "ret bool: box → HexaVal")
         }
         if s.dst.id >= 0 {
             buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1")
@@ -2070,8 +2124,7 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
                 buf.push(_arm64_instr3("eor", _arm64_op_reg("x0"),
                                  _arm64_op_reg("x0"), _arm64_op_label("#1"),
                                  "unop !: !truthy"))
-                buf.push(_arm64_instr1("bl", _arm64_op_label("hexa_bool"),
-                                 "unop !: box bool"))
+                buf = _emit_bool_box(buf, "unop !: box bool")
                 buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1")
                 return buf
             }
