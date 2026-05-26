@@ -648,6 +648,7 @@ fn _nvptx_is_math_intrinsic(op: string) -> bool {
     if op == "exp"      { return true }
     if op == "log"      { return true }
     if op == "sin"      { return true }
+    if op == "cos"      { return true }
     if op == "abs"      { return true }
     return false
 }
@@ -657,7 +658,7 @@ fn _nvptx_is_math_intrinsic(op: string) -> bool {
 // for a non-math op (caller should not have routed it here).
 fn _nvptx_math_arity(op: string) -> i64 {
     if op == "max" || op == "min" { return 2 }
-    if op == "sqrt" || op == "rsqrt" || op == "rsqrt_rn" || op == "exp" || op == "log" || op == "sin" || op == "abs" { return 1 }
+    if op == "sqrt" || op == "rsqrt" || op == "rsqrt_rn" || op == "exp" || op == "log" || op == "sin" || op == "cos" || op == "abs" { return 1 }
     return 0
 }
 
@@ -2192,6 +2193,114 @@ fn _nvptx_lower_stmt(buf: [LInstr], s: Stmt, kinds: [PReg], shared_idx_off: [i64
                     out.push(_nvptx_instr(PTX_OP_MUL_F64, s12, "sin f64: dst = (-1)^n · sin(r)"))
                     return out
                 }
+                // cos f64 — same range-reduction as sin; cos is even so the
+                // polynomial is the even-order Taylor and there is NO final
+                // r-multiply (Q(r²) IS cos(r)).
+                //
+                //   n  = round(x / π)                 (cvt.rni — nearest int)
+                //   r  = x - n·π                      (Cody-Waite 2-part π)
+                //   cos(x) = (-1)^n · Q(r²)
+                //   Q(z) = 1 - z/2 + z²/24 - z³/720 + z⁴/40320  (z = r²)
+                //   sign = 1 - 2·(n & 1)              (branch-free (-1)^n)
+                //
+                // Accuracy: r ∈ [-π/2, π/2] → 5-term truncation |r^10/10!|
+                // < 3e-5; each fma round ≤ 0.5 ulp × 4 ≈ 2 ulp. Identity
+                // cross-check: cos(0)=1, cos(π)= -1 fall out exactly from
+                // the (-1)^n sign at r=0. Large |x| → Payne-Hanek follow-up.
+                //
+                // Scratch regs (cos Pass, keyed on dst.id): nf · r · r2 · p
+                // · s (.f64) + ni (.u64 parity).
+                if s.op == "cos" && dst_kind == NVPTX_RKIND_F64 {
+                    let x_reg  = _nvptx_operand_text_kinds(s.args[0], kinds)
+                    let nf_reg = _nvptx_reg_cosf64_nf(s.dst.id)
+                    let ni_reg = _nvptx_reg_cosf64_ni(s.dst.id)
+                    let r_reg  = _nvptx_reg_cosf64_r(s.dst.id)
+                    let r2_reg = _nvptx_reg_cosf64_r2(s.dst.id)
+                    let p_reg  = _nvptx_reg_cosf64_p(s.dst.id)
+                    let sg_reg = _nvptx_reg_cosf64_s(s.dst.id)
+                    // step 1: nf = round(x / π)
+                    let mut c1 = []
+                    c1.push(_nvptx_op(nf_reg))
+                    c1.push(_nvptx_op(x_reg))
+                    c1.push(_nvptx_op(PTX_INV_PI_HEXF64))
+                    out.push(_nvptx_instr(PTX_OP_MUL_F64, c1, "cos f64: x / π"))
+                    let mut c2 = []
+                    c2.push(_nvptx_op(nf_reg))
+                    c2.push(_nvptx_op(nf_reg))
+                    out.push(_nvptx_instr("cvt.rni.f64.f64", c2, "cos f64: n = round(x/π)"))
+                    // step 2: ni = (s64) n   (parity)
+                    let mut c3 = []
+                    c3.push(_nvptx_op(ni_reg))
+                    c3.push(_nvptx_op(nf_reg))
+                    out.push(_nvptx_instr("cvt.rzi.s64.f64", c3, "cos f64: ni = (s64) n"))
+                    // step 3: nf = -n, then Cody-Waite r = x - n·π (2-part)
+                    let mut c4 = []
+                    c4.push(_nvptx_op(nf_reg))
+                    c4.push(_nvptx_op(nf_reg))
+                    out.push(_nvptx_instr("neg.f64", c4, "cos f64: -n"))
+                    let mut c5 = []
+                    c5.push(_nvptx_op(r_reg))
+                    c5.push(_nvptx_op(nf_reg))
+                    c5.push(_nvptx_op(PTX_PI_HI_HEXF64))
+                    c5.push(_nvptx_op(x_reg))
+                    out.push(_nvptx_instr(PTX_OP_FMA_RN_F64, c5, "cos f64: r = x - n·π_hi"))
+                    let mut c6 = []
+                    c6.push(_nvptx_op(r_reg))
+                    c6.push(_nvptx_op(nf_reg))
+                    c6.push(_nvptx_op(PTX_PI_LO_HEXF64))
+                    c6.push(_nvptx_op(r_reg))
+                    out.push(_nvptx_instr(PTX_OP_FMA_RN_F64, c6, "cos f64: r -= n·π_lo"))
+                    // step 4: r² = r * r
+                    let mut c7 = []
+                    c7.push(_nvptx_op(r2_reg))
+                    c7.push(_nvptx_op(r_reg))
+                    c7.push(_nvptx_op(r_reg))
+                    out.push(_nvptx_instr(PTX_OP_MUL_F64, c7, "cos f64: r² = r·r"))
+                    // step 5: Horner Q(z=r²) = D0 + z(D1 + z(D2 + z(D3 + z·D4)))
+                    let mut ch0 = []
+                    ch0.push(_nvptx_op(p_reg))
+                    ch0.push(_nvptx_op(PTX_COSF64_C4_HEXF64))
+                    out.push(_nvptx_instr("mov.f64", ch0, "cos f64 Horner: p = D4 (1/40320)"))
+                    let mut chc: [string] = []
+                    chc.push(PTX_COSF64_C3_HEXF64)
+                    chc.push(PTX_COSF64_C2_HEXF64)
+                    chc.push(PTX_COSF64_C1_HEXF64)
+                    chc.push(PTX_COSF64_C0_HEXF64)
+                    let mut chi = 0
+                    while chi < len(chc) {
+                        let mut chf = []
+                        chf.push(_nvptx_op(p_reg))
+                        chf.push(_nvptx_op(r2_reg))
+                        chf.push(_nvptx_op(p_reg))
+                        chf.push(_nvptx_op(chc[chi]))
+                        out.push(_nvptx_instr(PTX_OP_FMA_RN_F64, chf, "cos f64 Horner step"))
+                        chi = chi + 1
+                    }
+                    // (no r-multiply — Q(r²) is already cos(r))
+                    // step 6: sign = 1 - 2·(n & 1)  (branch-free (-1)^n)
+                    let mut c9 = []
+                    c9.push(_nvptx_op(ni_reg))
+                    c9.push(_nvptx_op(ni_reg))
+                    c9.push(_nvptx_op("1"))
+                    out.push(_nvptx_instr("and.b64", c9, "cos f64: parity = n & 1"))
+                    let mut c10 = []
+                    c10.push(_nvptx_op(sg_reg))
+                    c10.push(_nvptx_op(ni_reg))
+                    out.push(_nvptx_instr("cvt.rn.f64.s64", c10, "cos f64: parity as f64 (0 or 1)"))
+                    let mut c11 = []
+                    c11.push(_nvptx_op(sg_reg))
+                    c11.push(_nvptx_op(sg_reg))
+                    c11.push(_nvptx_op(PTX_F64_NEG_TWO_HEXF64))
+                    c11.push(_nvptx_op(PTX_COSF64_C0_HEXF64))
+                    out.push(_nvptx_instr(PTX_OP_FMA_RN_F64, c11, "cos f64: sign = 1 - 2·parity"))
+                    // step 7: dst = sign · cos(r)
+                    let mut c12 = []
+                    c12.push(_nvptx_op(dst_reg))
+                    c12.push(_nvptx_op(p_reg))
+                    c12.push(_nvptx_op(sg_reg))
+                    out.push(_nvptx_instr(PTX_OP_MUL_F64, c12, "cos f64: dst = (-1)^n · cos(r)"))
+                    return out
+                }
                 // Fall-through honest stub for any other unmatched op/kind
                 // combination (e.g. a future intrinsic that lands in
                 // _nvptx_is_math_intrinsic before its codegen arm).
@@ -3403,6 +3512,17 @@ fn _nvptx_classify_locals(mfn: MFunc) -> [PReg] {
                     regs.push(PReg { name: _nvptx_reg_sinf64_ni(s.dst.id), kind: NVPTX_RKIND_U64, frag_role: "", frag_dtype: "", frag_layout: "" })
                 }
             }
+            if s.kind == STMT_CALL && s.op == "cos" && s.dst.id >= 0 {
+                let dkc = _nvptx_lookup_kind_for_local(regs, s.dst.id)
+                if dkc == NVPTX_RKIND_F64 {
+                    regs.push(PReg { name: _nvptx_reg_cosf64_nf(s.dst.id), kind: NVPTX_RKIND_F64, frag_role: "", frag_dtype: "", frag_layout: "" })
+                    regs.push(PReg { name: _nvptx_reg_cosf64_r(s.dst.id),  kind: NVPTX_RKIND_F64, frag_role: "", frag_dtype: "", frag_layout: "" })
+                    regs.push(PReg { name: _nvptx_reg_cosf64_r2(s.dst.id), kind: NVPTX_RKIND_F64, frag_role: "", frag_dtype: "", frag_layout: "" })
+                    regs.push(PReg { name: _nvptx_reg_cosf64_p(s.dst.id),  kind: NVPTX_RKIND_F64, frag_role: "", frag_dtype: "", frag_layout: "" })
+                    regs.push(PReg { name: _nvptx_reg_cosf64_s(s.dst.id),  kind: NVPTX_RKIND_F64, frag_role: "", frag_dtype: "", frag_layout: "" })
+                    regs.push(PReg { name: _nvptx_reg_cosf64_ni(s.dst.id), kind: NVPTX_RKIND_U64, frag_role: "", frag_dtype: "", frag_layout: "" })
+                }
+            }
             sl = sl + 1
         }
         lb = lb + 1
@@ -4605,6 +4725,28 @@ fn _nvptx_reg_sinf64_s(id: i64) -> string {
 }
 fn _nvptx_reg_sinf64_ni(id: i64) -> string {
     return "%rd_sin_ni_" + to_string(id)
+}
+
+// cos f64 polynomial scratch (RFC 055 §13 trig family) — declared in
+// `_nvptx_classify_locals` cos Pass; consumed at the `s.op == "cos"`
+// emit site. nf · r · r2 · p · s (.f64) + ni (.u64 parity).
+fn _nvptx_reg_cosf64_nf(id: i64) -> string {
+    return "%fd_cos_nf_" + to_string(id)
+}
+fn _nvptx_reg_cosf64_r(id: i64) -> string {
+    return "%fd_cos_r_" + to_string(id)
+}
+fn _nvptx_reg_cosf64_r2(id: i64) -> string {
+    return "%fd_cos_r2_" + to_string(id)
+}
+fn _nvptx_reg_cosf64_p(id: i64) -> string {
+    return "%fd_cos_p_" + to_string(id)
+}
+fn _nvptx_reg_cosf64_s(id: i64) -> string {
+    return "%fd_cos_s_" + to_string(id)
+}
+fn _nvptx_reg_cosf64_ni(id: i64) -> string {
+    return "%rd_cos_ni_" + to_string(id)
 }
 
 // RFC 055 §5 multi-block global thread index — per-call scratch reg.

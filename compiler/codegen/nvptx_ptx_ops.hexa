@@ -206,6 +206,18 @@ pub let PTX_SINF64_C2_HEXF64: string  = "0d3F81111111111111"  // 1/120
 pub let PTX_SINF64_C3_HEXF64: string  = "0dBF2A01A01A01A01A"  // -1/5040
 pub let PTX_SINF64_C4_HEXF64: string  = "0d3EC71DE3A556C734"  // 1/362880
 
+// ── cos f64 polynomial (RFC 055 §13 trig family) ──────────────
+// Same range reduction as sin (n = round(x/π); r = x - n·π); cos is
+// even so the final r-multiply is dropped:
+//   cos(x) = (-1)^n · Q(r²)
+//   Q(z) = 1 - z/2 + z²/24 - z³/720 + z⁴/40320   (z = r²)
+// Hex literals — verified via python3 `struct.pack("<d", v)`.
+pub let PTX_COSF64_C0_HEXF64: string  = "0d3FF0000000000000"  // 1
+pub let PTX_COSF64_C1_HEXF64: string  = "0dBFE0000000000000"  // -1/2
+pub let PTX_COSF64_C2_HEXF64: string  = "0d3FA5555555555555"  // 1/24
+pub let PTX_COSF64_C3_HEXF64: string  = "0dBF56C16C16C16C17"  // -1/720
+pub let PTX_COSF64_C4_HEXF64: string  = "0d3EFA01A01A01A01A"  // 1/40320
+
 // ── PTX integer index arithmetic (loop / addressing) ──────────
 pub let PTX_OP_MOV_U32: string        = "mov.u32"      // read sreg / move
 pub let PTX_OP_ADD_S32: string        = "add.s32"
