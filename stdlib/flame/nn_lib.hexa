@@ -625,11 +625,21 @@ pub fn nn_embedding_bwd_scatter(dX: int, ids: int, dtable_inout: int,
 // d5_matvec_g / GPU-routed path on no-CUDA build.
 pub fn nn_lm_head_fwd(temb: int, zT: int, logits_out: int, V: int, d: int) {
     let prod = farr_matmul(temb, V, d, zT, 1)
-    // copy prod (V-len) into logits_out (caller-allocated).
-    let mut k = 0
-    while k < V {
-        let _ = farr_set(logits_out, k, farr_get(prod, k))
-        k = k + 1
+    // GPU-resident large-vocab port (ASK #2): copy prod (V-len) into
+    // logits_out via ONE device memcpy (farr_copy_slice_gpu) instead of the
+    // per-element host loop. At V=151643 the old
+    // `farr_set(logits, k, farr_get(prod, k))` loop ran V host-scalar box
+    // ops AND — when the GPU matmul left `prod` device-resident — forced a
+    // per-element D2H sync on each `farr_get` (RFC 040 lazy-D2H). The slice
+    // copy is one cudaMemcpy (CUDA) / memmove (no-CUDA), bit-exact to the
+    // element copy. rc != 0 → host fallback (no-CUDA correctness reference).
+    let rc = farr_copy_slice_gpu(prod, 0, logits_out, 0, V)
+    if to_int(rc) != 0 {
+        let mut k = 0
+        while k < V {
+            let _ = farr_set(logits_out, k, farr_get(prod, k))
+            k = k + 1
+        }
     }
     let _ = farr_free(prod)
 }
@@ -644,29 +654,58 @@ pub fn nn_lm_head_fwd(temb: int, zT: int, logits_out: int, V: int, d: int) {
 //   dzT_out is overwritten (it has no other contributor).
 pub fn nn_lm_head_bwd(temb: int, zT: int, dl: int,
                       dtemb_out: int, dzT_out: int, V: int, d: int) {
-    // accumulate dtemb += dl ⊗ zT
-    let mut k = 0
-    while k < V {
-        let dlk = farr_get(dl, k)
-        let mut j = 0
-        while j < d {
-            let cur = farr_get(dtemb_out, k * d + j)
-            let _ = farr_set(dtemb_out, k * d + j, cur + dlk * farr_get(zT, j))
-            j = j + 1
+    // GPU-resident large-vocab port (ASK #1). At V=151643·d=768 the two
+    // host double-loops below are each V·d = 116M scalar box ops (minutes
+    // on the host). Route them through the already-byte-eq forge kernels:
+    //   dtemb += dl ⊗ zT  →  outer = farr_outer_gpu(dl,zT,V,d) [V·d] then
+    //                        farr_add_inplace_gpu(dtemb_out, outer, V·d)
+    //   dzT  = tembᵀ · dl  →  farr_matmul_t_gpu(temb,V,d,dl) [d] then
+    //                        farr_copy_slice_gpu(_,0,dzT_out,0,d)  (overwrite)
+    // The CPU fallbacks of these builtins reduce in the SAME order as the
+    // host loops below (bit-exact no-CUDA reference); CUDA = forge `_gpu`
+    // rel-tol (RFC 040 §2.2). Any rc != 0 / id < 0 → host fallback.
+    let outer_id = to_int(farr_outer_gpu(dl, zT, V, d))
+    let mut gpu_dtemb_ok = false
+    if outer_id >= 0 {
+        let rc_add = to_int(farr_add_inplace_gpu(dtemb_out, outer_id, V * d))
+        if rc_add == 0 { gpu_dtemb_ok = true }
+        let _ = farr_free(outer_id)
+    }
+    if gpu_dtemb_ok == false {
+        // host fallback — accumulate dtemb += dl ⊗ zT
+        let mut k = 0
+        while k < V {
+            let dlk = farr_get(dl, k)
+            let mut j = 0
+            while j < d {
+                let cur = farr_get(dtemb_out, k * d + j)
+                let _ = farr_set(dtemb_out, k * d + j, cur + dlk * farr_get(zT, j))
+                j = j + 1
+            }
+            k = k + 1
         }
-        k = k + 1
     }
     // dzT = tembᵀ · dl  ; loop order matches d5_matvec_t_g (rows=V, cols=d).
-    let mut j2 = 0
-    while j2 < d {
-        let mut acc = 0.0
-        let mut k2 = 0
-        while k2 < V {
-            acc = acc + farr_get(temb, k2 * d + j2) * farr_get(dl, k2)
-            k2 = k2 + 1
+    let dzT_id = to_int(farr_matmul_t_gpu(temb, V, d, dl))
+    let mut gpu_dzT_ok = false
+    if dzT_id >= 0 {
+        let rc_cp = to_int(farr_copy_slice_gpu(dzT_id, 0, dzT_out, 0, d))
+        if rc_cp == 0 { gpu_dzT_ok = true }
+        let _ = farr_free(dzT_id)
+    }
+    if gpu_dzT_ok == false {
+        // host fallback
+        let mut j2 = 0
+        while j2 < d {
+            let mut acc = 0.0
+            let mut k2 = 0
+            while k2 < V {
+                acc = acc + farr_get(temb, k2 * d + j2) * farr_get(dl, k2)
+                k2 = k2 + 1
+            }
+            let _ = farr_set(dzT_out, j2, acc)
+            j2 = j2 + 1
         }
-        let _ = farr_set(dzT_out, j2, acc)
-        j2 = j2 + 1
     }
 }
 

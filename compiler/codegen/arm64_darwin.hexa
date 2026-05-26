@@ -1410,6 +1410,48 @@ fn _builtin_ret_box(name: string) -> string {
     return ""
 }
 
+// HEXA_BACKEND flip · chunk A step 1 — inline `hexa_int(n)` repr-pack.
+//
+// `hexa_int(int64_t n) = (HexaVal){.tag=TAG_INT, .i=n}` (runtime_core.c
+// :1281). The C runtime returns it in the x0:x1 register PAIR (AAPCS64
+// 16-byte struct: x0 = tag, x1 = payload). When the int value is already
+// in x0 (a runtime C int from e.g. hexa_str_index_of / hexa_len), boxing
+// is a no-alloc 2-instruction repr-pack — identical to the const_int
+// operand lowering in `_hv_load` (movz lo #0 = TAG_INT; value in hi):
+//
+//     mov  x1, x0      ; payload → x1   (MUST precede the x0 clobber)
+//     movz x0, #0      ; tag = TAG_INT  (0)
+//
+// This removes the `bl _hexa_int` from the emitted user `.s` and is the
+// prerequisite to dropping the runtime.c link (the .hexa-only @goal).
+//
+// GATING (no-regression): the inline is OPT-IN behind the native-backend
+// flag `HEXA_INLINE_INT_BOX=1`, wired ON only by `self/main.hexa`'s
+// HEXA_BACKEND=native build path. When unset (the DEFAULT — every other
+// consumer of `--emit=asm`, incl. the build_aprime.sh stage-5 fixpoint
+// smoke), the legacy `bl hexa_int` is emitted byte-identically, so the
+// self-host gen1≡gen2 fixpoint is not perturbed.
+fn _arm64_inline_int_box_enabled() -> bool {
+    return env("HEXA_INLINE_INT_BOX") == "1"
+}
+
+// Emit the int→HexaVal box. The C int payload is assumed in x0 (the
+// callers below sxtw w0→x0 first). Either the inline repr-pack (gated)
+// or the legacy `bl hexa_int`.
+fn _emit_int_box(buf: [LInstr], why: string) -> [LInstr] {
+    let mut out = buf
+    if _arm64_inline_int_box_enabled() {
+        // payload x0 → x1 BEFORE clobbering x0 with the tag.
+        out.push(_arm64_instr2("mov", _arm64_op_reg("x1"),
+                         _arm64_op_reg("x0"), why + ": inline box payload → x1"))
+        out.push(_arm64_instr2("movz", _arm64_op_reg("x0"),
+                         _arm64_op_label("#0"), why + ": inline box TAG_INT"))
+        return out
+    }
+    out.push(_arm64_instr1("bl", _arm64_op_label("hexa_int"), why))
+    return out
+}
+
 // Cycle h20: extra params try_buf_bytes (total fn jmp_buf region size)
 // and try_slot_idx (this statement's slot index in 0..try_count).
 // try_slot_idx is meaningful only for STMT_TRY_SETJMP / STMT_TRY_POP;
@@ -1734,8 +1776,7 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
                              "index_of: str index_of"))
             buf.push(_arm64_instr2("sxtw", _arm64_op_reg("x0"),
                              _arm64_op_reg("w0"), "index_of: sign-ext"))
-            buf.push(_arm64_instr1("bl", _arm64_op_label("hexa_int"),
-                             "index_of: box to HexaVal"))
+            buf = _emit_int_box(buf, "index_of: box to HexaVal")
             if s.dst.id >= 0 { buf = _hv_store_dst(buf, rm, s.dst, "x0", "x1") }
             return buf
         }
@@ -1799,8 +1840,7 @@ fn _emit_arm64_stmt(out: [LInstr], modhash: string, fname: string, s: Stmt,
         if box == "int" {
             buf.push(_arm64_instr2("sxtw", _arm64_op_reg("x0"),
                              _arm64_op_reg("w0"), "ret int: sign-ext"))
-            buf.push(_arm64_instr1("bl", _arm64_op_label("hexa_int"),
-                             "ret int: box → HexaVal"))
+            buf = _emit_int_box(buf, "ret int: box → HexaVal")
         }
         if box == "bool" {
             buf.push(_arm64_instr2("uxtw", _arm64_op_reg("x0"),
