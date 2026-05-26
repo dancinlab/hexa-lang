@@ -1,5 +1,87 @@
 # INBOX — log
 
+## 2026-05-27T04:15Z — atlas 6 tier symmetric registration (PR #1449 후속 broadening)
+
+**severity: high** — PR #1449는 🔴 FALSIFIED만 처리. 사용자 통찰: "모든 tier가 다 있어야 될 듯". g5 rubric은 본래 **6-element complete set** (🔵 🟢 🟡 🟠 🔴 ⚪) — atlas register는 현재 2/6만 지원.
+
+### 현재 매트릭스
+
+| tier | name | atlas verb | status |
+|---|---|---|---|
+| 🔵 | SUPPORTED-FORMAL | `register --from-verify` | ✓ closed-form/symbolic exact |
+| 🟢 | SUPPORTED-NUMERICAL | `register --from-verify` | ✓ libm recompute match |
+| 🟡 | SUPPORTED-BY-CITATION | ✗ verb 없음 | literature record only (no recompute) |
+| 🟠 | INSUFFICIENT/DEFERRED | ✗ verb 없음 | no calc path / external dep |
+| 🔴 | FALSIFIED | ✗ verb 없음 (PR #1449) | calc disagrees · CLOSED-negative |
+| ⚪ | SPECULATION-FENCED | ✗ verb 없음 | `hexa verify --fence` 있으나 register 안 함 |
+
+**2/6 = 33% 1급 · 4/6 = 67% markdown stranded** (atlas_fold_pending.md / fence-log / citation-list scattered).
+
+### 제안 fix — symmetric 6-verb API
+
+```
+# 🟡 SUPPORTED-BY-CITATION — atlas registry without recompute
+hexa atlas register --from-citation <claim_fn> <args> --tier 🟡 --doi <doi> --note <verbatim_quote>
+# example: register --from-citation Tc-measured CaH₆ --tier 🟡 --doi 10.1038/s41586-022-04395-7 --note "Ma et al. 215K @ 170 GPa"
+
+# 🟠 INSUFFICIENT/DEFERRED — external dep marker
+hexa atlas register --from-defer <claim_fn> <args> --tier 🟠 --blocker <external_dep> --eta <approx>
+# example: register --from-defer RTSC-absorbed-true --tier 🟠 --blocker "measured oracle PASS (wet-lab)" --eta "unknown"
+
+# 🔴 FALSIFIED — closed-negative (PR #1449)
+hexa atlas register --from-falsify <claim_fn> <args> --tier 🔴 --falsifier <F-id> --citation <PR|sha>
+
+# ⚪ SPECULATION-FENCED — imagination/metaphor honest fence
+hexa atlas register --from-fence <claim_text> --tier ⚪ --kind <metaphor|sf|hypothesis>
+# example: register --from-fence "hexa lattice n=6 as universal substrate" --tier ⚪ --kind metaphor
+# (또는 기존 `hexa verify --fence` 가 자동 atlas register → idempotent)
+```
+
+### honest-triad chain 닫힘
+
+현재 atlas는 "claim + citation + severity" 중 **claim+citation만** 보존, severity (tier) 부재. 6-tier symmetric 후:
+
+```
+atlas lookup --claim 'Mg₂IrH₆ ambient stable'
+  → @N material_verdict-mg2irh6 · tier 🔴 · falsifier F-N6-1 · cited PR #247
+
+atlas lookup --claim 'RTSC absorbed=true'
+  → @D absorbed-rtsc-final · tier 🟠 · blocker 'measured oracle PASS' · eta unknown
+
+atlas lookup --claim 'hexa lattice n=6 substrate'
+  → @M lattice-substrate-claim · tier ⚪ · kind metaphor · fence-citation /LATTICE_POLICY.md
+```
+
+### bonus — `hexa atlas stats --tier-breakdown`
+
+현재 `stats` 가 node-kind counts만 표시 (P/C/L/E/F/R/S/X/Q). 추가:
+
+```
+hexa atlas stats --tier-breakdown
+  🔵 SUPPORTED-FORMAL    : 1247
+  🟢 SUPPORTED-NUMERICAL :  892
+  🟡 SUPPORTED-BY-CITATION:  56  (DOI cited, no recompute)
+  🟠 INSUFFICIENT/DEFERRED:  12  (external dep)
+  🔴 FALSIFIED           :   8  (closed-negative)
+  ⚪ SPECULATION-FENCED  :  43  (honest fence)
+```
+
+### cross-ref
+
+- PR #1449 (🔴 closed-negative · 이 PR의 sibling) — 🔴 alone instead of 6-symmetric
+- PR #1447 (RTSC /gap upstream-fix) — micromamba + stdlib/rtsc
+- commons g5 (verify tier rubric) — 6-element complete set canonical
+- commons g62 (atlas register at checkpoints) — 모든 verdict 등록 mandate (현재 🟢/🔵만 enforce)
+- commons g63 (honest sweep) — FALSIFIED never skipped (atlas-rooted enforcement)
+
+### priority — high
+
+- [ ] **4 신규 register verb** — `--from-citation` · `--from-defer` · `--from-falsify` · `--from-fence`
+- [ ] **tier field 표준화** — 모든 AtlasNode에 `tier: 🔵|🟢|🟡|🟠|🔴|⚪` 명시 field
+- [ ] **`atlas lookup --tier <T>`** — tier-filtered surface
+- [ ] **`atlas stats --tier-breakdown`** — tier 분포 1급 시각화
+- [ ] **migration script** — 기존 atlas_fold_pending / fence-log / citation-list 일괄 import
+
 ## 2026-05-27T04:05Z — atlas 1급 closed-negative 부재 (g63 structural gap)
 
 **severity: high** — atlas SSOT (`compiler/atlas/embedded.gen.hexa`, n6/atlas.n6)가 🟢/🔵 SUPPORTED 노드만 1급 저장. 🔴 FALSIFIED는 별도 markdown (RTSC `atlas_fold_pending.md`)에 stranded → 후속 session/agent가 atlas만 lookup하면 already-falsified candidate를 모르고 재dispatch 가능 (g63 "FALSIFIED is a CLOSED negative · never skipped" 명시 위배).
