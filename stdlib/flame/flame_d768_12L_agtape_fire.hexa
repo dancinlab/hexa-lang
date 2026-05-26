@@ -206,27 +206,42 @@ fn _agt_decoder_step(M: int, MgOut: int, idsf: int, target: int,
     let zr = ag_slice(tp, X, (T - 1) * d, d, T * d)
     let zT = ag_rmsnorm_mh(tp, zr, gF, 1, d)
     let logits = ag_lmhead(tp, tokE, zT, V, d)
-    // gn2 = Σ (softmax(logits)−onehot)²  (nn_decoder_gn2 dt_exp formula)
-    let mut mx = t_get(logits, 0)
-    let mut mi = 1
-    while mi < V {
-        if t_get(logits, mi) > mx { mx = t_get(logits, mi) }
-        mi = mi + 1
-    }
-    let mut tot = 0.0
-    let mut mj = 0
-    while mj < V { tot = tot + dt_exp(t_get(logits, mj) - mx); mj = mj + 1 }
+    // gn2 = Σ (softmax(logits)−onehot)²  (nn_decoder_gn2 dt_exp formula).
+    //
+    // GPU-resident large-vocab port (ASK #3 + #4). The old code walked the
+    // V-length `logits` THREE times on the host in FP64 (max-reduce →
+    // sum-exp → per-element softmax-onehot seed) via `t_get`. At V=151643
+    // that is 3·V dt_exp/box ops AND — because `ag_lmhead`'s matmul can
+    // leave `logits` device-resident — the FIRST `t_get` triggers a full
+    // V-element D2H (RFC 040 lazy-D2H); each subsequent host walk re-reads
+    // the materialised host buffer (no re-sync, since no GPU op runs in
+    // between). The dominant per-step cost that pinned the d768 fire at
+    // minutes.
+    //
+    // Replace with ONE forge kernel: farr_ce_seed_gpu computes, for the
+    // single last-position row (R=1), per-row CE loss + dlogits =
+    // softmax(logits) − onehot(target) entirely on the device — logits
+    // stay device-resident, no host walk of the V vector. The dlogits farr
+    // IS the backward seed (identical role to the old `seed`), fed straight
+    // into ag_backward_reg. gn2 (the campaign metric) = Σ dlogits² — one
+    // host reduction pass over the seed (down from 3·V; one D2H amortised
+    // on CUDA). On a no-CUDA build farr_ce_seed_gpu routes to the host FP64
+    // reference, so the metric + seed are correct everywhere.
+    let tgt_ids = t_zeros(1)
+    t_set(tgt_ids, 0, to_float(target))
+    let ce_loss = t_zeros(1)
     let seed = t_zeros(V)
+    let _ = farr_ce_seed_gpu(logits, tgt_ids, 1, V, ce_loss, seed)
+    // gn2 = Σ seed²  (single reduction pass; matches the old metric form).
     let mut gn2 = 0.0
     let mut mk = 0
     while mk < V {
-        let pk = dt_exp(t_get(logits, mk) - mx) / tot
-        let tg = if mk == target { 1.0 } else { 0.0 }
-        let dv = pk - tg
-        t_set(seed, mk, dv)
+        let dv = t_get(seed, mk)
         gn2 = gn2 + dv * dv
         mk = mk + 1
     }
+    t_free(ce_loss)
+    t_free(tgt_ids)
     ag_backward_reg(tp, logits, seed)
     // gather → dense MgOut
     // mk2-C5: device zero-fill + device slice copies. The 100M-double
