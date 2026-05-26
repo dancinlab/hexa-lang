@@ -31,6 +31,7 @@ fn _cloud_help() {
     println("  cloud poll      <host> <pid> [conn]                    exit 0 if remote pid alive, else 1")
     println("  cloud tail      <host> <logfile> [conn] [--grep RE] [--until RE]   live-stream a remote log (Monitor bridge)")
     println("                                                         tail -F | sed -u: print --grep lines, print+quit on --until (default: JOB DONE|crash); follows forever if --until ''")
+    println("                                                         exit 0 = --until matched (clean end · JOB DONE/OOMKilled/Traceback/…) · 255 = ssh transport drop · other = log truncated mid-stream (sed/tail pipe failed)")
     println("  cloud watch     <host> <pid> [conn] [--interval N] [--max-wait S] [--then-down <id> [--provider P]]")
     println("                                                         loop poll until pid dies (exit 0) / max-wait (124); optional teardown")
     println("  cloud ssh-port  <id> [--provider P]                    print live ssh host:port of a pod (vast|runpod)")
@@ -84,6 +85,28 @@ fn _cloud_help() {
     println("variables all parse on the remote side. Use `exec` for ad-hoc")
     println("inspection (`cd /work && nvidia-smi | head -5`); caller owns quoting.")
     println("`host` is an ssh destination or ~/.ssh/config alias.")
+}
+
+// _mh_json_str — JSON-encode a path-typed string for the __MONITOR_HANDLE__=
+// one-liner emitted by `cloud nohup` (and later `cloud fire`). Escapes `"`
+// and `\\`; other control chars are vanishingly unlikely in the only inputs
+// (ssh host, remote logfile path). Mirrors the existing `__CLOUD_PID__=`
+// marker shape — caller extracts with grep '^__MONITOR_HANDLE__='.
+fn _mh_json_str(s: str) -> str {
+    let mut out = "\""
+    let mut i = 0
+    while i < len(s) {
+        let c = s.substring(i, i + 1)
+        if c == "\"" {
+            out = out + "\\\""
+        } else if c == "\\" {
+            out = out + "\\\\"
+        } else {
+            out = out + c
+        }
+        i = i + 1
+    }
+    return out + "\""
 }
 
 // _cli_atoi — parse a non-negative decimal string; non-digits ignored.
@@ -803,6 +826,19 @@ fn main() {
             println(r.stdout_)
         }
         println("[cloud] " + r.message)
+        // __MONITOR_HANDLE__= : grep-able JSON one-liner so a harness (Monitor
+        // attach, micro-exp batch driver, a wrapping skill) can pick up host +
+        // pid + logfile + ready-to-run tail_cmd without parsing the human
+        // [cloud] message. Mirrors the existing __CLOUD_PID__= marker pattern.
+        // Emitted only on a successful dispatch with a known logfile path.
+        if r.ok == 1 && len(r.logfile) > 0 {
+            println("__MONITOR_HANDLE__={"
+                + "\"host\":" + _mh_json_str(host)
+                + ",\"pid\":" + str(r.pid)
+                + ",\"log\":" + _mh_json_str(r.logfile)
+                + ",\"tail_cmd\":" + _mh_json_str("hexa cloud tail " + host + " " + r.logfile)
+                + "}")
+        }
         if r.ok == 1 {
             let rc = _cloud_early_life_check(host, ssh_opts, r.pid, early_life)
             exit(rc)
