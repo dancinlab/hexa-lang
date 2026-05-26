@@ -1,0 +1,3 @@
+verify --expr sigma_k(28,10)=296486304875250
+  calc   = 296486304875250  == expected 296486304875250
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
