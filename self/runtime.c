@@ -2968,7 +2968,22 @@ HexaVal hexa_host_ffi_call_6(
 
 // ── G5: Pointer arithmetic builtins ─────────────────────
 
-HexaVal hexa_ptr_alloc(HexaVal size) {
+/* HEXA_BACKEND flip · chunk-B phase-H 아홉째 increment (2026-05-26):
+ * Marked `__attribute__((weak))` so a hexa-emit `_hexa_ptr_alloc` strong
+ * symbol (emitted by test/native_build/emit_hexa_ptr_alloc_native_o.hexa,
+ * appended to the cmd_build native-path clang link when
+ * HEXA_NATIVE_RT_PTR_ALLOC=1) cleanly overrides this C definition under
+ * Mach-O ld64. Default (env unset) = strong-only, no behavior change.
+ * The hexa-emit override carries a HexaVal-ABI adapter that bridges the
+ * struct-by-value (x0=tag, x1=size) caller convention to the raw-ABI
+ * rt_alloc primitive (x0=size, svc #0x80 with SYS_mmap=197), then wraps
+ * the returned ptr back into a HexaVal (x0=TAG_INT, x1=ptr).
+ * RESIDUAL — allocator-pair mismatch: the override uses mmap, but
+ * `hexa_ptr_free` (below) still calls libc `free()`. Safe only for paths
+ * that allocate without freeing (or co-override `_hexa_ptr_free` with
+ * munmap). See RUNTIME.md phase-H 아홉째 increment + PR #1321/#1324
+ * for the precedent on `_hexa_exit`. */
+__attribute__((weak)) HexaVal hexa_ptr_alloc(HexaVal size) {
     int64_t n = HX_IS_INT(size) ? HX_INT(size) : 0;
     if (n <= 0) return hexa_int(0);
     void* p = calloc(1, (size_t)n);
