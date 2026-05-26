@@ -2161,9 +2161,14 @@ correctness (per M10/M16; see cycle-69 catalog + PR #251/#426 analysis)
 
 - [ ] crypto bulk: chacha20, x25519, sha256, ed25519, libsodium-equivalent
 - [ ] networking full: TLS 1.3 in hexa? (very heavy)
-- [ ] GPU kernels (hxcuda_*.cu, hxblas_*) — **vendor C ABI**;
-      legitimately deferred to FFI
-- [ ] pty/posix_spawn/dlopen — keep as C? Or hexa-native shell?
+- [x] GPU kernels (hxcuda_*.cu, hxblas_*) — **vendor C ABI** = FFI terminal state
+      per `Policy DECIDED 2026-05-26 Option A` (below). Layer ③ irreducible-external
+      interface — FFI is the CORRECT closure, not a violation. CUDA driver
+      (`cuModuleLoad*`) + Metal ABI already live via FFI.
+- [x] pty/posix_spawn/dlopen — **DECIDED**: stays kernel-floor (layer ② svc-trap
+      for posix_spawn/dlopen) or vendor-FFI (pty via openpty). Per policy 2026-05-26,
+      hexa-native shell is not required — FFI surface for `dlopen` is acceptable
+      (layer ③). pty/posix_spawn already svc-trap via `_hxlcl_syscall*_cf`.
 
 **Policy DECIDED (2026-05-26) — Option A: principled FFI allow-list.**
 Per `LATTICE_POLICY.md` (real-limits-first) + `feedback-closure-is-physical-limit`,
