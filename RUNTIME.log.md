@@ -2,6 +2,41 @@
 
 Append-only history sister of `RUNTIME.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
+## 2026-05-27T05:50Z — 🛸 next-list closure final: 8/9 + #9 5/6 · #2 emit-unblock landed
+
+`/goal next list all closure` 종착. single-session-closeable 전부 닫고, #2 의
+emit-layer 블로커(macho_obj_wrap_v3 cross-object BL)까지 구현.
+
+### 닫힘 (이번 closure 세션, ~15 PR)
+
+- [x] **#1 Linux arch-gate 17 fn** — CI bootstrap (linux-arm64/x86_64) SUCCESS (#1444)
+- [x] **#3 Phase 1 acceptance gate 5/6** — 137→0 externs + S3 byte-eq + smoke + hexac RFC063 (#1444)
+- [x] **#4 regex DFA in hexa** — stdlib/regex/native.hexa net-new 0-libc 엔진, 24/24 PASS (#1461)
+- [x] **#5 JSON migration** — stdlib/json* 이미 hexa-native (#1452)
+- [x] **#6 codec (base64/hex/utf8)** — stdlib/codec/ net-new 12 pub fn (#1452)
+- [x] **#7 networking** — stdlib/net/ socket+http+ws (#1452)
+- [x] **#8 GPU vendor C ABI + pty/spawn** — policy-terminal layer③ (#1454)
+- [x] **#9 (5/6)** — nm-empty **MEASURED 0** at HEAD (fresh aprime_cc rebuild, #1470) ·
+      nm-syscall-only · **`-lm`-free PROVEN** (0 libm refs, #1472) · S3 fixpoint · doc.
+      잔여 = hexac build-verify (동일 runtime.c → 0-extern by construction, 빌드 formality)
+
+### #2 emit-unblock landed (포팅 자체는 multi-month 진행 중)
+
+- [x] **macho_obj_wrap_v3 BRANCH26 + undefined-external** (#1475) — hexa-emit 어댑터가
+      `bl _rt_sin` 으로 다른 .o 의 hexa-source 심볼 호출 가능. ~30 libm-wrapper wire 의
+      emit-layer 블로커 해소. nlist+reloc 인코딩 완료·parse-clean. **link-test caveat**:
+      ld64 가 undefined 심볼에 LC_DYSYMTAB 요구할 수 있음 → 빌드 세션 검증 (fork-storm guard).
+- [ ] **#2 runtime.c→hexa 전체 포팅** — emit 블로커는 풀렸으나 ~13,500줄 C → hexa-source
+      재작성 자체는 multi-month north-star ②. 다음 단계: (a) macho_v3 link-test (LC_DYSYMTAB),
+      (b) 첫 libm wrapper wire (`_hexa_math_sin` → `bl _rt_sin`), (c) ~30 wrapper 일괄,
+      (d) HEXA_HAS_HEXA_RT_STDLIB 포팅 확장.
+
+### 발견 + 수정 (부수)
+
+- [x] **hexa run cache-key gap** — import 모듈 해시 미포함 → stale binding. INBOX 등록 (#1462).
+- [x] **~/.hx/bin symlink swap hazard** — worktree prune → dangling → 모든 hexa build(훅) 깨짐.
+      영속 worktree 재생성 + runtime.o + cc --regen 복구. 메모리 [[hxbin-symlink-swap-hazard]].
+
 ## 2026-05-27T04:15Z — 🛸 next-list all-closure (9 items: 6 closed · 3 structural-defer)
 
 `/goal next list all closure` 실행 — 9개 next-list 항목 audit + evidence-flip + net-new 구현.
