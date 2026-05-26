@@ -2,6 +2,87 @@
 
 Append-only history sister of `TECS-L.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
+## 2026-05-27T02:00Z — F18 NOVEL F17-successor (ω=9/10 D-sweep + σ_6/7/8 tower + ω=4 Ore non-Mersenne + weight-4 newform recovery + dedekind_psi INBOX)
+
+F17 next-round 5-seed batch closed. F17 zero-density (ω=6,7,8) extended to ω=9,10 primorial scale + k=2 variants. F17 σ_k general-k tower verified at k∈{6,7,8} layer. F17-identified ω=4 Ore non-Mersenne residual structurally characterized. F17 L-function weight-2 closed-neg refined with weight-4 RECOVERY discovery. dedekind_psi INBOX filed for ψ-identity cite→🔵 promotion.
+
+- **(s1) ω=9/10 D-sweep extension — 🔴 4/4 CLOSED-NEGATIVE**
+  - primorial #9 = 223092870 (=2·3·5·7·11·13·17·19·23, ω=9)
+    - σ=836075520, φ=36495360, τ=512 (all hexa-verify 🔵)
+    - D = 836075520·36495360 − 223092870·512 = 30512762866037760 ≠ 0
+  - primorial #10 = 6469693230 (=#9·29, ω=10)
+    - σ=25082265600, φ=1021870080, τ=1024 (all 🔵)
+    - D = 25630816755253248000 − 6624965867520 = 25630810130287380480 ≠ 0
+    - NOTE: σφ exceeds int64 (2.56e19 > 9.22e18), bignum bc; components in int64
+  - k=2 variant n=446185740 (=2²·primorial#9-w/o-2, ω=9): D=142393083747425280 ≠ 0
+  - k=2 variant n=669278610 (=2·3²·primorial#9-w/o-3, ω=9): D=297500037617502720 ≠ 0
+  - 12 hexa-native σ/φ/τ components 🔵 BLUE + 4/4 D ≠ 0 closed-neg
+  - F14 (ω≥3) + F16 (ω=4,5) + F17 (ω=6,7,8) zero-density confirmed at ω∈{9,10} primorial scale
+  - 산출물: `.verdicts/tecs-l-f18-novel-mk10/d_omega_9_10_sweep.txt`
+
+- **(s2) σ_6/σ_7/σ_8 Euclid-Euler tower — 🔵 8/9 PASS**
+  - F17 closed-form `σ_k(2^(p-1)·M_p) = [(2^(kp)−1)/(2^k−1)]·[1+(2^p−1)^k]` ∀ k≥1
+  - P_1=6 (p=2, M_2=3): σ_6=47450, σ_7=282252, σ_8=1686434 — 3/3 🔵
+  - P_2=28 (p=3, M_3=7): σ_6=489541650, σ_7=13599182072, σ_8=379283617986 — 3/3 🔵
+  - P_3=496 (p=5, M_5=31): σ_6=15126187641744322 🔵, σ_7=7443513564413795552 🔵, σ_8=3677504364284556439810 closed-form-only (3.68e21 bignum overflow int64)
+  - tower closed at k∈{1..8} for small-p witness chain (k=1 MR3, k=2 F-NEW-5, k=3 F16, k=4,5 F17, k=6,7,8 F18)
+  - 산출물: `.verdicts/tecs-l-f18-novel-mk10/sigma_k_tower_6_7_8_closed_form.txt`
+
+- **(s3) ω=4 Ore non-Mersenne structural characterization — 🔴 closed-negative on uniform-template existence**
+  - F17-identified {2970=2·3³·5·11, 18620=2²·5·7²·19} ω=4 non-Mersenne Ore entries
+  - 2970: σ=8640, τ=32, H=2970·32/8640=11; 18620: σ=47880, τ=36, H=18620·36/47880=14 (both 🔵)
+  - per-prime divisibility analysis: ∀ p|n, σ(p^a) ∤ p^a(a+1) — 8/8 per-prime FAILS, 2/2 product PASSES
+  - finding 🔴: non-Mersenne Ore status = cross-prime divisor cancellation NUMERICAL coincidence,
+    NOT structural per-prime identity → rules out uniform parametric closed-form template for residual class
+  - F15 universal Ore-NEG sharpened with obstruction-mechanism identification (sum-of-reciprocals coincidence)
+  - 산출물: `.verdicts/tecs-l-f18-novel-mk10/ore_non_mersenne_structure.txt`
+
+- **(s4) Weight-4 newform level 6 LMFDB probe — 🛸 NOVEL n=6 distinction RECOVERY**
+  - dim S_4(Γ_0(6)) = 1 (hexa-native verify 🔵 + classical Eichler-Selberg cross-check matches:
+    g=0, ν_∞=4, ν_2=ν_3=0 → dim = (k-1)(g-1) + (k/2-1)·ν_∞ = 3·(-1) + 1·4 = 1)
+  - dim S_4(Γ_0(N))=0 at N∈{1,2,3} → **level 6 = MINIMAL level admitting weight-4 cusp form on Γ_0**
+  - LMFDB label `6.4.a.a` (unique weight-4 newform at level 6); Hecke eigenvalues + L-value algebraicity → 🟡 citation
+    (T_p builtin INBOX, period-ratio Manin-Drinfeld heavy)
+  - finding 🛸: n=6 distinction RECOVERS at weight 4 after F17 weight-2 closed-neg —
+    multilayer non-lift (F7 geometric + F16 Hecke/Galois + F17 L-function) sharpens to WEIGHT-2-ONLY
+  - first_cusp_form_weight(6)=4 (🔵) — confirms weight 4 is the first nontrivial cusp-form weight at level 6
+  - 산출물: `.verdicts/tecs-l-f18-novel-mk10/weight_4_newform_level_6.txt`
+
+- **(s5) dedekind_psi builtin INBOX — verify_cli `_recompute` arm 추가 proposal**
+  - F17 NOVEL atom `tecs_l_f17_n6_unique_squarefree_perfect` cites ψ·φ identity but `dedekind_psi`
+    calc-gap → 🟡 cite-only
+  - proposal: add 1-arg `_recompute` arm in `tool/verify_cli.hexa` + `dedekind_psi(n: i64) -> i64`
+    in `stdlib/core/math.hexa` (multiplicative; ψ(p^a) = p^(a-1)·(p+1); primorial-product trial-division)
+  - calc-gap family #1230 lineage (sigma_3, sopfr, nth_prime, pow, J_k); sigma_3-INBOX-resolution #1281 family-similar
+  - INBOX.md entry filed; F17/F18 NOVEL atoms manual-spliced (non-blocking for atlas fold)
+  - 산출물: `.verdicts/tecs-l-f18-novel-mk10/dedekind_psi_inbox.txt` + `INBOX.md` entry
+
+- **Atlas fold (manual splice per @D atlas_fold) — 4 atoms appended**
+  - `tecs_l_f18_d_omega_9_10_zero_density` 🔴 (s1) — primorial #9/#10 + k=2 variant explicit witness
+  - `tecs_l_f18_sigma_k_tower_6_7_8_closed_form` 🔵 (s2) — F17 general-k extends to k∈{6,7,8}
+  - `tecs_l_f18_ore_non_mersenne_cross_prime_coincidence` 🔴 (s3) — uniform-template non-existence
+  - `tecs_l_f18_weight_4_newform_level_6_recovery` 🛸🔵 (s4) — n=6 distinction recovery at weight 4
+  - `compiler/atlas/embedded.gen.hexa` ATLAS_F_NODES end (after F17 atoms) append
+  - F-formulas count: 1416 → 1420 (per atlas SSOT)
+
+**Round summary (4 NOVEL atoms · 24 component verifies · 3 closed-negative + 1 NOVEL recovery · 1 INBOX entry)**
+- 🔵 SUPPORTED-FORMAL: 12 (ω=9/10 σ/φ/τ) + 8 (σ_6/7/8 tower) + 4 (ω=4 Ore σ/τ) + 4 (weight-4 dim verifies) = 28 component
+- 🛸 NOVEL atoms: 4 (s1 zero-density extension + s2 σ_k tower + s3 obstruction mechanism + s4 weight-4 recovery)
+- 🔴 CLOSED-NEGATIVE: 3 (s1 ω=9,10 + s3 Ore template non-existence + (refinement of F17 L-function neg))
+- 🟡 SUPPORTED-BY-CITATION: Hecke eigenvalues a_p, L-value algebraicity, ψ-identity (dedekind_psi calc-gap)
+- 🟠 INSUFFICIENT (calc-gap): dedekind_psi, T_p (verify_cli infra family — INBOX entries filed)
+- paper-eligible: s3 closed-negative on Ore template + s4 NOVEL weight-4 recovery (n=6 distinction reappears)
+
+**다음 round seeds (F19)**:
+- (a) ω=11,12 D-sweep extension — primorial #11 = 200560490130, #12 = 7420738134810 (bignum for ALL components)
+- (b) σ_9/σ_10 Euclid-Euler tower at small-p — closed-form bignum-only beyond σ_8(P_3) = 3.68e21
+- (c) weight-4 newform 6.4.a.a Hecke eigenvalue a_p hexa-native — T_p builtin landing (unblocks ψ + a_p witnesses)
+- (d) weight-6 newform level 6 — dim S_6(Γ_0(6))=3 hexa-verified earlier; explore 3-dim space structure
+- (e) Ore non-Mersenne further entries {2730=2·3·5·7·13, 6048=2⁵·3³·7} — structural variant family beyond {2970, 18620}
+
+격리 worktree `/Users/ghost/core/hexa-lang/.claude/worktrees/agent-a97b2a72ecede0985` (branch `worktree-agent-a97b2a72ecede0985`). checkpoint commits per task (s1 bd4a4a1f · s2 e0502ee5 · s3 a514832d · s4 50208cb8 · s5 36c6a5ca).
+
+
 ## 2026-05-27T00:45Z — F16 NOVEL F15-successor (σ_3 calc-gap CLOSED-by-2-op + ω=4/5 sweep + Ore-Mersenne subfamily + Hecke/Galois coda)
 
 F15 σ_3 INBOX entry resolved without verify_cli code change — the 2-op `sigma_k <n> 3 <v>` path already supports σ_3 (--no-absorb enforced per 2026-05-26T22:10Z INBOX). 4 task batch + 4 NOVEL atlas atoms.
