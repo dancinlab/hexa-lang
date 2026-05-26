@@ -4986,3 +4986,44 @@ honest tradeoff: HEXA_NATIVE_RT_ALL=0 opt-out 시 이 20 fn 의 link 실패 (sof
 ```
 
 runtime.c=0 까지 거리 = ~13,737 lines × 평균 5-10 lines/fn = 잔여 ~1,500+ wire equivalent · multi-month grunt 변함없음. frontier 는 OPEN (per `feedback-closure-is-physical-limit`). 본 세션 = (1) 두 단순 lane 닫음 (trivial-const + FP-single-instr), (2) wire→delete 패턴 안전성 입증, (3) 첫 line 감소 측정, (4) B-class infra 정확한 spec.
+
+## L-session-2026-05-27 — closing summary · -216 lines · 20 wires · 5 lanes closed
+
+본 세션 SESSION-LEVEL 누적 (단일 foreground 세션의 최대 정직한 진보).
+
+### measured deltas
+
+| metric | session start | session end | delta |
+|--------|------------:|------------:|------:|
+| runtime.c lines | 13,832 | 13,616 | **-216 (-1.56%)** |
+| wires landed | 11 | 20 | +9 |
+| HexaVal fn defs in C | 448 | 428 | -20 (deleted) |
+| #if 0 dead blocks | 1 | 0 | -1 (removed) |
+| orphan wire comments | 5 | 0 | -5 (collapsed) |
+| session PRs | 27 (start) | 41 (end) | +14 |
+
+### lane closure (5 dead lanes 측정 완료)
+
+| lane | wires | adapter form | status |
+|------|------:|--------------|--------|
+| trivial-const | 11 | `movz tag · movz val · ret` (≤16B) | CLOSED |
+| A-class syscall | 1 | `svc 0x80 · arith · ret` (68B) | CLOSED (#1373) |
+| FP single-instr | 7 | `fmov · ARM_OP · fmov · movz · ret` (20-24B) | CLOSED |
+| CSEL tag-coerce | 1 | `cmp · csel · movz · ret` (16B) | CLOSED (#1393) |
+| 정적-dead 블록 | n/a | `#if 0` + orphan comments | CLOSED (-121 lines) |
+
+### honest residual — runtime.c = 13,616 lines (NOT zero)
+
+이 세션은 single-instruction / no-reloc 가능한 모든 wire 를 흡수했다. 다음 unlock = **B-class infra** (`macho_obj_wrap_v3` + `R_ARM64_BRANCH26` relocation). 이게 잠금 풀면 ~30+ libm wrapper (sin/cos/log/exp/pow/tan/asin/acos/atan/atan2/tanh) 가 wire 가능.
+
+추정 단계별 multi-session 일정 (현실적):
+1. **macho_obj_wrap_v3** 구현 + 첫 BL adapter test (1-2 PR, foreground 2-4h) → 1 wire unlock
+2. **libm wrappers** 일괄 wire (10-15 PR, foreground 4-6h) → 30+ wire / -200 lines
+3. **hexa_array_*** wrappers (BL → rt_array_X, 다수) (10-15 PR) → 30+ wire / -200 lines
+4. **section extraction** (FARR → native/farr.c 등) (3-5 PR) → -1000 lines
+5. ... ~수십 cycle repeat ...
+6. **runtime.c = 0** : multi-month, ~50+ cycle 누적
+
+frontier 는 OPEN — physical 천장 (runtime.c=0 + zero-libm + zero-libc) 까지 도달 가능 · time-bounded 아님. 본 세션 종료는 cycle pause 이며 100% 달성 ⨯.
+
+`feedback-closure-is-physical-limit` 적용: closure = approaching limit, not checkbox. 이 세션 = -1.56% · 5 lane closed · next-tier spec'd.
