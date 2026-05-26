@@ -396,10 +396,33 @@ fn parse_type() -> TypeRef {
     if check_kind(TokenKind::LBracket) {
         advance()
         let inner = parse_type()
+        // RFC 085 — sized-array `[T; N]` syntax. The N (an integer literal)
+        // is parsed and encoded into the TypeRef `name` as `Array:<N>` so
+        // downstream consumers (classify_locals Pass 0.5, future HIR/MIR
+        // size threading) can recover it without a full schema-add ripple
+        // (TypeRef has ~36 literal sites; per-site update is a separate
+        // cycle). Bare `[T]` keeps the existing `name = "Array"` (no count).
+        // Currently consumed by the @shared SHARED bank allocator —
+        // `Array:256` for `[f64; 256]` matches the existing 2048 B default
+        // exactly (256 × 8), so this parser change is byte-eq with PR #1323
+        // sweep_pred.hexa today and unlocks non-256 sizes for future PRs.
+        let mut array_name = "Array"
+        if check_kind(TokenKind::Semicolon) {
+            advance()
+            // Expect integer literal — the type-level size. We accept any
+            // i64 literal as text; conversion deferred to consumer (so
+            // negative N would surface as a downstream type error).
+            if check_kind(TokenKind::IntLit) {
+                let n_tok = advance()
+                array_name = "Array:" + n_tok.text
+            }
+            // Else: malformed `[T; <non-int>]` — silently fall back to
+            // bare Array (the prior eat-RBracket-and-pray behavior).
+        }
         eat(TokenKind::RBracket)
         let mut args = []
         args.push(inner)
-        return TypeRef { kind: "generic", name: "Array", args: args, span: t.span }
+        return TypeRef { kind: "generic", name: array_name, args: args, span: t.span }
     }
     if check_kind(TokenKind::Ident) {
         let id = advance()
