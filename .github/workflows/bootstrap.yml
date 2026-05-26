@@ -134,6 +134,22 @@ jobs:
           export HEXA_MAC_BUILD_OK=1
           ./hexa tool/stdlib_selftest_aggregate.hexa --ci-gate
 
+      - name: forge farr32 codegen smoke — hexa build --c-only → clang -fsyntax-only
+        shell: bash
+        run: |
+          set -euo pipefail
+          # INBOX #4: catch a Linux farr32 codegen regression (#1187 bare emit)
+          # at the C level — no GPU, no link, no run. -Werror on implicit decls
+          # is the exact gate (Mac silently accepted; Linux clang rejects). On
+          # the Linux jobs this compiles the runtime.h `#else` branch that
+          # all-Mac dev never exercises.
+          export HEXA_LANG="$PWD"
+          export HEXA_MAC_BUILD_OK=1
+          ./hexa build tool/forge_farr32_codegen_smoke.hexa -o /tmp/farr32_smoke.c --c-only
+          clang -fsyntax-only -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs \
+            -Werror=implicit-function-declaration -I self /tmp/farr32_smoke.c
+          echo "forge farr32 codegen smoke: OK"
+
       - name: Tail logs on failure
         if: failure()
         shell: bash
@@ -248,6 +264,22 @@ jobs:
           export HEXA_MAC_BUILD_OK=1
           ./hexa tool/stdlib_selftest_aggregate.hexa --ci-gate
 
+      - name: forge farr32 codegen smoke — hexa build --c-only → clang -fsyntax-only
+        shell: bash
+        run: |
+          set -euo pipefail
+          # INBOX #4: catch a Linux farr32 codegen regression (#1187 bare emit)
+          # at the C level — no GPU, no link, no run. -Werror on implicit decls
+          # is the exact gate (Mac silently accepted; Linux clang rejects). On
+          # the Linux jobs this compiles the runtime.h `#else` branch that
+          # all-Mac dev never exercises.
+          export HEXA_LANG="$PWD"
+          export HEXA_MAC_BUILD_OK=1
+          ./hexa build tool/forge_farr32_codegen_smoke.hexa -o /tmp/farr32_smoke.c --c-only
+          clang -fsyntax-only -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs \
+            -Werror=implicit-function-declaration -I self /tmp/farr32_smoke.c
+          echo "forge farr32 codegen smoke: OK"
+
       - name: Tail logs on failure
         if: failure()
         shell: bash
@@ -353,6 +385,22 @@ jobs:
           export HEXA_MODULE_LOADER="$PWD/build/hexa_module_loader"
           export HEXA_MAC_BUILD_OK=1
           ./hexa tool/stdlib_selftest_aggregate.hexa --ci-gate
+
+      - name: forge farr32 codegen smoke — hexa build --c-only → clang -fsyntax-only
+        shell: bash
+        run: |
+          set -euo pipefail
+          # INBOX #4: catch a Linux farr32 codegen regression (#1187 bare emit)
+          # at the C level — no GPU, no link, no run. -Werror on implicit decls
+          # is the exact gate (Mac silently accepted; Linux clang rejects). On
+          # the Linux jobs this compiles the runtime.h `#else` branch that
+          # all-Mac dev never exercises.
+          export HEXA_LANG="$PWD"
+          export HEXA_MAC_BUILD_OK=1
+          ./hexa build tool/forge_farr32_codegen_smoke.hexa -o /tmp/farr32_smoke.c --c-only
+          clang -fsyntax-only -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs \
+            -Werror=implicit-function-declaration -I self /tmp/farr32_smoke.c
+          echo "forge farr32 codegen smoke: OK"
 
       - name: Tail logs on failure
         if: failure()
