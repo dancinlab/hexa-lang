@@ -122,3 +122,50 @@ publishable. This fire ruled out the assumption that PR #1313 + PR #1318
 piece 4+5 closed the @shared pipeline end-to-end. The source-derived
 emit path uncovered two structural bugs in the lowering+codegen that the
 hand-MIR test fixtures bypass by construction. PR-C piece 6 closes them.
+
+---
+
+## RETRY 2026-05-26 (post-PR-#1322 piece 6 merge) — PASS
+
+**Verdict:** 🟢 SUPPORTED-NUMERICAL — full PR-C 6-piece campaign CLOSED
+end-to-end source-to-silicon. F-GPU-SWEEP-SHARED-REDUCE-NUMERIC: terminal.
+
+### Verbatim ubu-2 output
+
+```
+$ ptxas /tmp/pf2/tool/sweep_pred.hexa.ptx -arch=sm_80 -o /tmp/sweep_pred.cubin
+PTXAS_RC=0
+
+$ /tmp/sweep_pred_host /tmp/pf2/tool/sweep_pred.hexa.ptx
+got=32896 expected=32896 max|delta|=0
+PASS partial[0]=32896.000 (max|delta|=0)
+HOST_RC=0
+```
+
+### PTX shape verification (post-piece-6)
+
+```
+L12:    .shared .align 8 .b8 _hexa_sh_sweep_pred[2048];        ← piece 4 ✓
+L50:    mov.u64 %sh3, _hexa_sh_sweep_pred + 0;                  ← piece 4 ✓
+L51:    // PR-C piece 6 - skipped default-init STMT_ASSIGN for
+        SHARED-bank dst (op=let, id=3)                          ← piece 6 ✓ (clobber suppressed)
+        (no `mov.f64 %sh3, 0;` clobber)                         ← piece 6 ✓
+L62:    st.shared.f64 [%rd_idxs_addr], %fd13;                   ← piece 5 ✓
+L65:    st.shared.f64 [%rd_idxs_addr], 0.0;                     ← piece 5 ✓
+        ld.shared.f64 / st.shared.f64 / bar.sync 0 ALL present  ← pieces 5 + barrier ✓
+```
+
+Bug 3 from the original writeup (the `mov.f64 %fd5, %fd4` reading
+uninitialized `%fd4` at L52) is COSMETIC — `%fd5` is dead and ptxas
+accepts undefined-source `.reg` moves silently. Not a blocker.
+
+### Conclusion
+
+- PR-C piece 2+3 (#1313) + 4+5 (#1318) + 6 (#1322) = end-to-end source
+  `@shared let sm: [f64; N] = []` → PTX `.shared` allocation + correct
+  `ld.shared.f64` / `st.shared.f64` / `bar.sync 0` lowering → ptxas
+  accepts → driver-JIT → RTX 5070 silicon → byte-exact numeric result.
+- 8th confirmed @gpu_kernel idiom (vadd · saxpy · relu · 2D · serial-
+  reduce · math · iadd · @shared tree-reduce).
+- This historical document preserved verbatim above for the original
+  closed-negative finding that motivated piece 6.
