@@ -18,9 +18,9 @@
 #include <math.h>
 #include <cuda.h>
 
-#define N      1024
+#define N      256
 #define BLOCK  256
-#define GRID   ((N + BLOCK - 1) / BLOCK)
+#define GRID   1
 
 static const char* cu_err(CUresult cr){ const char* s=NULL; cuGetErrorString(cr,&s); return s?s:"(no message)"; }
 

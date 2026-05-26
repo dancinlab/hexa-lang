@@ -5,9 +5,13 @@
 // dense f64 input range; the host harness compares against CPU libm
 // with tolerance max_rel_err < 1e-9.
 //
-// Input shape (host-side): N = 1024, a[i] = (i / N) * 10.0 - 5.0
-// (range [-5, +5] — safely within the polynomial accuracy envelope,
-//  exp(±5) ≈ 148.4 / 0.00674).
+// Input shape (host-side): N = 256, blockDim = 256, gridDim = 1.
+// a[i] = (i / N) * 10.0 - 5.0 (range [-5, +5] — safely within the
+// polynomial accuracy envelope; exp(±5) ≈ 148.4 / 0.00674).
+//
+// Single-block to match `gpu_thread_id_x()`'s block-local semantics
+// (one launch ⇒ tid is the global index). For multi-block tests a
+// future global-thread-id intrinsic is needed.
 
 @gpu_kernel
 fn exp_f64_probe(a: [f64], c: [f64], n: i64) {
