@@ -1367,6 +1367,149 @@ rc=42
   3 개 enable 시 3 개 .o append — 합치면 link 명령 line 단축 + emit cost
   amortize.
 
+
+### 열한째 increment (2026-05-26 · 🛸 gate consolidation — 3 개 per-primitive `if env(...)` 블록 → 단일 테이블-구동 loop + `HEXA_NATIVE_RT_ALL=1` 우산)
+
+일곱째 (#1321 `_hexa_exit`) · 아홉째 (#1326 `_hexa_ptr_alloc`) · 열번째
+(#1328 `_hexa_ptr_offset`) increment 가 차례로 추가한 3 개 primitive
+override 게이트는 `self/main.hexa::cmd_build` 의 native-backend 경로
+(L2675-2763) 에 **거의 동일한 모양의 `if env("HEXA_NATIVE_RT_*") == "1" { ... }`
+블록 세 개** 로 누적되어 있었다. 각 블록은 (env 변수명, emit driver `.hexa`
+경로, 출력 `.o` 경로, override 되는 weak C 심볼명) 네 토큰만 다르고 나머지는
+모두 같다 — 다음 primitive 가 wire 될 때마다 ~30 줄을 복사해서 토큰만 갈아
+끼우는 패턴이었다. 본 increment 는 **이 세 블록을 단일 parallel-array +
+`while` 루프** 로 통합하고, 추가로 **`HEXA_NATIVE_RT_ALL=1` 우산 env** 를
+도입한다 — 셋 다 한 번에 켜고 싶을 때 변수 하나로 충분.
+
+**리팩토링 (자료 구조)**:
+
+```hexa
+let __nrt_envs   = ["HEXA_NATIVE_RT_EXIT",
+                    "HEXA_NATIVE_RT_PTR_ALLOC",
+                    "HEXA_NATIVE_RT_PTR_OFFSET"]
+let __nrt_drvs   = [__nself + "/../test/native_build/emit_hexa_exit_native_o.hexa",
+                    __nself + "/../test/native_build/emit_hexa_ptr_alloc_native_o.hexa",
+                    __nself + "/../test/native_build/emit_hexa_ptr_offset_native_o.hexa"]
+let __nrt_outs   = ["/tmp/hexa_exit_native.o",
+                    "/tmp/hexa_ptr_alloc_native.o",
+                    "/tmp/hexa_ptr_offset_native.o"]
+let __nrt_syms   = ["hexa_exit", "hexa_ptr_alloc", "hexa_ptr_offset"]
+let __nrt_all_on = (env("HEXA_NATIVE_RT_ALL") == "1")
+let mut __nrt_native_o = ""
+let mut __nrt_i = 0
+while __nrt_i < len(__nrt_envs) {
+    let __nrt_env  = __nrt_envs[__nrt_i]
+    // ...
+    let mut __nrt_on = __nrt_all_on
+    if !__nrt_on { __nrt_on = (env(__nrt_env) == "1") }
+    if __nrt_on {
+        // hexa run <drv>; test -f <out>; __nrt_native_o += "'<out>' "
+    }
+    __nrt_i = __nrt_i + 1
+}
+```
+
+핵심 설계:
+
+- **4 개의 parallel array** (env · driver · out · sym) — primitive 추가는 각
+  array 에 한 entry 씩, 4 줄 변경으로 끝.
+- **`HEXA_NATIVE_RT_ALL=1` 우산** — 단일 변수로 모든 primitive ON. 개별
+  variable 의 값이 무엇이든 (또는 unset) 무관하게 우산이 이김.
+- **개별 게이트 backward-compat** — `HEXA_NATIVE_RT_EXIT=1` 단독 == 이전과 동일,
+  `rt_exit` 만 wire 된다. 우산이 꺼져 있으면 (`__nrt_all_on == false`) 각 row
+  의 env 를 1:1 검사한다.
+- **로그 형식 보존** — `[native rt] HEXA_NATIVE_RT_EXIT=1 — appending ...`
+  메시지 verbatim, primitive 이름만 row 별로 치환. 우산 ON 일 때도 row 의
+  env 변수명이 그대로 노출되어 origin / debugging context 가 명확.
+
+**파일 변화량**: `self/main.hexa` +8 / -33 (3 개 블록 80 줄 → 통합 루프 55 줄,
+순 차감). 세 번째 primitive 가 land 된 시점에서 가장 좋은 ROI — 두 개일 때는
+공통-패턴 추출의 가치가 borderline 이었지만, 셋이 되니 형판이 명확해졌고
+앞으로 5번째 · 6번째가 올 때마다 새로 30 줄 복사 대신 entry 추가 한 줄로 끝.
+
+**g5 verbatim — 4 시나리오 (Mac arm64 `ssh mini` offload, fresh-built
+`hexa_cli_driver` 1903312 B)**:
+
+```
+$ # scenario (a) — 모든 env unset, baseline (no-regression)
+$ unset HEXA_NATIVE_RT_EXIT HEXA_NATIVE_RT_PTR_ALLOC HEXA_NATIVE_RT_PTR_OFFSET HEXA_NATIVE_RT_ALL
+$ HEXA_BACKEND=native ./build/hexa_cli_driver build test/native_build/smoke_exit_42.hexa -o /tmp/smk/smoke_a 2>&1 | grep '\[native rt\]'
+(no [native rt] log lines — gate cleanly skipped)
+$ /tmp/smk/smoke_a; echo rc=$?
+rc=42
+$ nm /tmp/smk/smoke_a | grep -E ' T _hexa_(exit|ptr_alloc|ptr_offset)$'
+000000010004a5a4 T _hexa_exit            # C body
+000000010001da1c T _hexa_ptr_alloc       # C body
+000000010001db04 T _hexa_ptr_offset      # C body
+$ wc -c /tmp/smk/smoke_a
+  457968 /tmp/smk/smoke_a                # ← origin/main scenario-a 와 동일 size
+
+$ # scenario (b) — RT_EXIT 단독 (per-primitive backward-compat)
+$ HEXA_NATIVE_RT_EXIT=1 HEXA_BACKEND=native ./build/hexa_cli_driver build test/native_build/smoke_exit_42.hexa -o /tmp/smk/smoke_b
+  [rt-emit] [wire] HEXA_BACKEND flip · 일곱째 increment — _hexa_exit native override
+  [native rt] HEXA_NATIVE_RT_EXIT=1 — appending /tmp/hexa_exit_native.o (overrides weak hexa_exit in runtime.c)
+$ ls /tmp/hexa_*_native.o
+/tmp/hexa_exit_native.o                  # 단 1 개만 produced
+
+$ # scenario (c) — RT_PTR_ALLOC + RT_PTR_OFFSET 동시 (selective compose)
+$ HEXA_NATIVE_RT_PTR_ALLOC=1 HEXA_NATIVE_RT_PTR_OFFSET=1 \
+    HEXA_BACKEND=native ./build/hexa_cli_driver build test/native_build/smoke_exit_42.hexa -o /tmp/smk/smoke_c
+  [rt-emit] [wire] HEXA_BACKEND flip · 아홉째 increment — _hexa_ptr_alloc native override
+  [native rt] HEXA_NATIVE_RT_PTR_ALLOC=1 — appending /tmp/hexa_ptr_alloc_native.o (overrides weak hexa_ptr_alloc in runtime.c)
+  [rt-emit] [wire] HEXA_BACKEND flip · 열번째 increment — _hexa_ptr_offset native override
+  [native rt] HEXA_NATIVE_RT_PTR_OFFSET=1 — appending /tmp/hexa_ptr_offset_native.o (overrides weak hexa_ptr_offset in runtime.c)
+$ ls /tmp/hexa_*_native.o
+/tmp/hexa_ptr_alloc_native.o
+/tmp/hexa_ptr_offset_native.o            # RT_EXIT row 는 진입 안 함
+
+$ # scenario (d) — RT_ALL=1 우산 (모든 row ON)
+$ HEXA_NATIVE_RT_ALL=1 HEXA_BACKEND=native ./build/hexa_cli_driver build test/native_build/smoke_exit_42.hexa -o /tmp/smk/smoke_d
+  [rt-emit] [wire] HEXA_BACKEND flip · 일곱째 increment — _hexa_exit native override
+  [native rt] HEXA_NATIVE_RT_EXIT=1 — appending /tmp/hexa_exit_native.o (overrides weak hexa_exit in runtime.c)
+  [rt-emit] [wire] HEXA_BACKEND flip · 아홉째 increment — _hexa_ptr_alloc native override
+  [native rt] HEXA_NATIVE_RT_PTR_ALLOC=1 — appending /tmp/hexa_ptr_alloc_native.o (overrides weak hexa_ptr_alloc in runtime.c)
+  [rt-emit] [wire] HEXA_BACKEND flip · 열번째 increment — _hexa_ptr_offset native override
+  [native rt] HEXA_NATIVE_RT_PTR_OFFSET=1 — appending /tmp/hexa_ptr_offset_native.o (overrides weak hexa_ptr_offset in runtime.c)
+$ ls /tmp/hexa_*_native.o
+/tmp/hexa_exit_native.o
+/tmp/hexa_ptr_alloc_native.o
+/tmp/hexa_ptr_offset_native.o            # 세 개 모두 produced (개별 RT_* env 는 unset 이었음)
+```
+
+**no-regression 확정**:
+
+- scenario (a) baseline 의 `[native 2/2] clang ...` 명령은 origin/main 의
+  스칼라-블록 버전과 토큰 단위로 동일 (PID·`.s` stem 만 build 마다 다름).
+  output binary size 457968 B 가 origin/main scenario (a) (위 stash-pop
+  비교) 와 정확히 일치.
+- scenario (b) — env 단독 → 단 1 개 `.o` 만 emit, primitive 별 로그 형식
+  origin/main 과 byte-identical.
+- scenario (c) — selective 두 row 진입, RT_EXIT row 는 진입 안 함 (env unset).
+- scenario (d) — 우산 ON 시 모든 row 가 자기 env 가 unset 이어도 ON 처리.
+  로그가 각 row 의 env 변수명을 verbatim 노출해 origin context 명확.
+
+**Mac 환경의 사전 알려진 잔재 (본 PR 무관)**: emit driver 가 생성하는
+`/tmp/hexa_exit_native.o` 가 origin/main 의 driver 가 emit 하는 것과 동일하게
+`ld: unknown file type` 으로 거부되는 issue 가 있다 — 이는 emit driver 의
+`obj_wrap` 잔여 (#1321 originating residual) 이고, 본 게이트 통합 PR 의 책임
+밖. stash-pop 으로 origin/main 의 driver 를 재빌드해 동일 시나리오 (b) 를
+재현했고 **byte-identical 에러 메시지** 를 확인.
+
+**잔여 (다음 increment 후보)**:
+
+- (A) **N 번째 primitive 추가의 verify** — 본 통합으로 다음 primitive 는
+  `.hexa` 파일 4 줄 + `test/native_build/emit_*.hexa` 한 파일 + runtime.c
+  `__attribute__((weak))` 추가만으로 끝. 측정 단위 진행 비용 (이전 cycle 기준
+  ~30 줄/wire) → ~4 줄/wire 로 ~88% 감소.
+- (B) **`HEXA_OVERRIDABLE` macro** — 열번째 increment 잔여 (D) 그대로. C-side
+  의 `__attribute__((weak))` + comment 보일러플레이트를 `HEXA_OVERRIDABLE` 한
+  단어로 마킹. 본 PR 의 hexa-side 통합과 짝.
+- (C) **단일 multi-sym `.o`** — 열번째 increment 잔여 (E) 그대로. `RT_ALL=1`
+  의 build path 가 3 개 `.o` 를 append 하는 대신 한 `.o` 에 묶이면 link 명령
+  line 단축 + emit cost amortize. v3 wrapper 가 이미 준비됨.
+
+
+
 ### 열한째 increment (2026-05-26 · 🛸 pair-safe alloc/free closure — `_hexa_ptr_free` 16-B header-pattern override → #1326 잔여 (B) CLOSED)
 
 아홉째 increment (`_hexa_ptr_alloc` 60-B HexaVal-ABI adapter, #1326) 의 잔여
@@ -1484,6 +1627,7 @@ backward-compat 으로 무시한다.
   free 는 항상 짝이라 한 .o 에 묶는 게 자연.
 
 ## Domain map (Phase 0 → 3 + post)
+
 
 ```
 COMPILER.md            ← compiler self-host fixpoint (cycle 22-41)
