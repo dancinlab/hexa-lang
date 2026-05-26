@@ -475,6 +475,46 @@ pub fn ag_lmhead(tape: int, temb: int, zT: int, V: int, d: int) -> int {
     return logits
 }
 
+// GPU-resident large-vocab lm-head cross-entropy loss + seed grad
+// (RFC gpu-resident-large-vocab-lmhead-loss). REPLACES the host loss
+// loop that materialised the R·V logits (78M doubles at V=151643) and
+// walked them three times in FP64 on the host (max-reduce, sum-exp,
+// (softmax-onehot) seed) — the dominant per-step cost that pinned the
+// d768 fire at minutes while the matmul itself was already GPU/ms.
+//
+//   logits_tid : the ag_lmhead output tid — its farr STAYS device-
+//                resident (no t_get round-trip to host).
+//   target_ids : a farr[R] of float-encoded target token ids (the
+//                gold next-token per row). For the single-position
+//                lm-head (R=1) this is a length-1 farr holding `target`.
+//   R, V       : rows × vocab. logits farr length = R·V.
+//
+// One GPU kernel computes per-row CE loss + dlogits = softmax(logits)
+// - onehot(target). The dlogits farr is fed straight into ag_seed_grad
+// (so ag_backward_reg propagates it), and the summed CE loss is
+// returned. Caller still calls ag_backward_reg(tape, logits_tid, _).
+// bit-identity NOT claimed (parallel reduce order) — forge `_gpu`
+// rel-err convention. On a no-CUDA build farr_ce_seed_gpu routes to the
+// host FP64 reference, so this path is correct everywhere.
+pub fn ag_ce_seed(tape: int, logits_tid: int, target_ids: int,
+                  R: int, V: int) -> float {
+    let out_loss = t_zeros(R)
+    let dlogits  = t_zeros(R * V)
+    let _ = farr_ce_seed_gpu(logits_tid, target_ids, R, V,
+                             out_loss, dlogits)
+    // seed the backward pass with the GPU-computed dlogits.
+    ag_seed_grad(tape, logits_tid, dlogits)
+    // sum the per-row CE loss (R is small — e.g. T·nsamp, not V).
+    let mut loss = 0.0
+    let mut r = 0
+    while r < R {
+        loss = loss + t_get(out_loss, r)
+        r = r + 1
+    }
+    t_free(out_loss)
+    return loss
+}
+
 // o = SwiGLU(r) ; r[d] Wg/Wu[h·d] Wd[d·h] → o[d]. tape owns a/b/s/o.
 pub fn ag_swiglu(tape: int, r: int, Wg: int, Wu: int, Wd: int,
                  d: int, h: int) -> int {

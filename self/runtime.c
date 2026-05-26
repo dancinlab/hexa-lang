@@ -9899,6 +9899,12 @@ extern int  _hx_cuda_farr_transpose_scatter_gpu(int64_t src_id,
                                                 int64_t dst_id,
                                                 int64_t rows, int64_t cols,
                                                 int64_t dst_off);
+// RFC gpu-resident-large-vocab-lmhead-loss: GPU CE loss + seed grad.
+extern int  _hx_cuda_farr_ce_seed_gpu(int64_t logits_id,
+                                      int64_t target_ids_id,
+                                      int64_t R, int64_t V,
+                                      int64_t out_loss_id,
+                                      int64_t out_dlogits_id);
 #endif
 
 // ── CPU helpers (Phase B2 no-CUDA fallback). Each: (a) validate ids,
@@ -10157,6 +10163,59 @@ static int64_t _hx_farr_rope_cpu(int64_t t_id, int64_t cos_id,
     return out_id;
 }
 #pragma STDC FP_CONTRACT DEFAULT
+
+// _hx_farr_ce_seed_cpu(logits_id, target_ids_id, R, V, out_loss_id,
+//   out_dlogits_id) -> int rc (0 ok / -1). The host FP64 reference for
+//   the GPU CE/seed kernel (RFC gpu-resident-large-vocab-lmhead-loss)
+//   AND the no-CUDA fallback. Unlike the other farr CPU helpers this
+//   does NOT allocate — the two outputs are CALLER-allocated and filled
+//   in place: out_loss[r] = per-row CE = (max - L[target]) + log(Σexp),
+//   out_dlogits[r*V+v] = softmax(L[r,v]) - onehot(v==target[r]). Targets
+//   arrive double-encoded (token ids as doubles) — rounded to int64.
+//   libm exp/log (hxlcl_exp/hxlcl_log) match the GPU kernel's path.
+static int _hx_farr_ce_seed_cpu(int64_t logits_id, int64_t target_ids_id,
+                                int64_t R, int64_t V,
+                                int64_t out_loss_id, int64_t out_dlogits_id) {
+    if (logits_id < 0     || logits_id >= _hx_farr_count)     return -1;
+    if (target_ids_id < 0 || target_ids_id >= _hx_farr_count) return -1;
+    if (out_loss_id < 0   || out_loss_id >= _hx_farr_count)   return -1;
+    if (out_dlogits_id < 0|| out_dlogits_id >= _hx_farr_count)return -1;
+    if (R <= 0 || V <= 0) return -1;
+    HexaFarrEntry* le = &_hx_farr_table[logits_id];
+    HexaFarrEntry* te = &_hx_farr_table[target_ids_id];
+    HexaFarrEntry* lo = &_hx_farr_table[out_loss_id];
+    HexaFarrEntry* dl = &_hx_farr_table[out_dlogits_id];
+    if (!le->buf || !te->buf || !lo->buf || !dl->buf) return -1;
+    if (le->len < R * V || te->len < R || lo->len < R || dl->len < R * V)
+        return -1;
+    const double* L   = le->buf;
+    const double* TGT = te->buf;
+    double* OUT_LOSS  = lo->buf;
+    double* OUT_DL    = dl->buf;
+    for (int64_t r = 0; r < R; r++) {
+        const double* lr = L + r * V;
+        double*       dr = OUT_DL + r * V;
+        double tf = TGT[r];
+        int64_t tgt = (int64_t)(tf + (tf >= 0.0 ? 0.5 : -0.5));
+        double m = lr[0];
+        for (int64_t j = 1; j < V; j++) if (lr[j] > m) m = lr[j];
+        double s = 0.0;
+        for (int64_t j = 0; j < V; j++) {
+            double e = hxlcl_exp(lr[j] - m);
+            dr[j] = e;
+            s += e;
+        }
+        double inv = (s > 0.0) ? (1.0 / s) : 0.0;
+        double lt  = (tgt >= 0 && tgt < V) ? lr[tgt] : 0.0;
+        OUT_LOSS[r] = (m + hxlcl_log(s)) - lt;
+        for (int64_t j = 0; j < V; j++) {
+            double p = dr[j] * inv;
+            if (j == tgt) p -= 1.0;
+            dr[j] = p;
+        }
+    }
+    return 0;
+}
 
 // _hx_farr_adamw_step_cpu(...) -> new farr_id [n] = updated W. m,v
 // updated IN PLACE on their farr buffers (matches the AdamW state
@@ -10512,6 +10571,41 @@ HexaVal hexa_farr_transpose_scatter_gpu(HexaVal src_v, HexaVal dst_v,
 #endif
 }
 
+// farr_ce_seed_gpu(logits, target_ids, R, V, out_loss, out_dlogits)
+// -> int rc (0 ok / -1). RFC gpu-resident-large-vocab-lmhead-loss:
+// GPU-resident large-vocab lm-head CE loss + seed grad in ONE kernel.
+// 6-arg → past the hexa_callN ceiling → bare direct-C entry (same seam
+// as farr_rope_gpu). The two outputs are CALLER-allocated (the caller
+// t_zeros's out_loss[R] and out_dlogits[R*V]) and filled in place; this
+// returns rc, NOT a new farr handle. On HEXA_CUDA: wired to
+// _hx_cuda_farr_ce_seed_gpu (logits stay device-resident — the whole
+// point; no 78M H2D round-trip). No-CUDA: _hx_farr_ce_seed_cpu (the
+// host FP64 reference / numeric oracle). bit-identity NOT claimed
+// (parallel reduce order) — forge `_gpu` rel-err convention.
+HexaVal hexa_farr_ce_seed_gpu(HexaVal logits_v, HexaVal target_ids_v,
+                              HexaVal R_v, HexaVal V_v,
+                              HexaVal out_loss_v, HexaVal out_dlogits_v) {
+    int64_t logits_id  = hexa_as_num(logits_v);
+    int64_t target_id  = hexa_as_num(target_ids_v);
+    int64_t R          = hexa_as_num(R_v);
+    int64_t V          = hexa_as_num(V_v);
+    int64_t out_loss   = hexa_as_num(out_loss_v);
+    int64_t out_dl     = hexa_as_num(out_dlogits_v);
+#ifdef HEXA_CUDA
+    if (R <= 0 || V <= 0) return hexa_int(-1);
+    if (logits_id < 0 || logits_id >= _hx_farr_count) return hexa_int(-1);
+    if (target_id < 0 || target_id >= _hx_farr_count) return hexa_int(-1);
+    if (out_loss < 0  || out_loss  >= _hx_farr_count) return hexa_int(-1);
+    if (out_dl < 0    || out_dl    >= _hx_farr_count) return hexa_int(-1);
+    int rc = _hx_cuda_farr_ce_seed_gpu(logits_id, target_id, R, V,
+                                       out_loss, out_dl);
+    return hexa_int(rc);
+#else
+    return hexa_int(_hx_farr_ce_seed_cpu(logits_id, target_id, R, V,
+                                         out_loss, out_dl));
+#endif
+}
+
 // 6-arg bare direct-C entry points (past the hexa_callN ceiling).
 HexaVal farr_rope_gpu(HexaVal t, HexaVal cos, HexaVal sin,
                       HexaVal T, HexaVal nh, HexaVal hd) {
@@ -10520,6 +10614,12 @@ HexaVal farr_rope_gpu(HexaVal t, HexaVal cos, HexaVal sin,
 HexaVal farr_rope_bwd_gpu(HexaVal t, HexaVal cos, HexaVal sin,
                           HexaVal T, HexaVal nh, HexaVal hd) {
     return hexa_farr_rope_bwd_gpu(t, cos, sin, T, nh, hd);
+}
+HexaVal farr_ce_seed_gpu(HexaVal logits, HexaVal target_ids,
+                         HexaVal R, HexaVal V,
+                         HexaVal out_loss, HexaVal out_dlogits) {
+    return hexa_farr_ce_seed_gpu(logits, target_ids, R, V,
+                                 out_loss, out_dlogits);
 }
 
 // ── A1 (2026-05-10): per-phase arena reset side channel ─────────
