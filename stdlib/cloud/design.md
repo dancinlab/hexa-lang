@@ -215,3 +215,54 @@ smoke caught and fixed: `exec_capture` returns `[stdout, stderr, rc]` not a
 bare str (use element 0); the `/*`-substring lint false-positived on `/tmp/*`
 (now matches only true comment-fragment shapes — opens `/*`, closes `*/`, or
 inline `/* ` / ` */`).
+
+## Cycle C — `cloud dft-run <deck-dir>` (guarded DFT el-ph dispatch, INBOX #1249)
+
+`dft_dispatch.hexa` absorbs the demiurge RTSC campaign's hand-roll checklist
+(`demiurge/exports/sweep/DFT_POD_DISPATCH_RECIPE.md`) into one guarded verb so
+the four repeated-mistake classes cannot happen by omission:
+
+- **① rent** — `dft_rent_query` pins `reliability>0.97` (low-cost
+  interruptibles preempt in ~13 h → lost runs), 16+ physical cores, decent
+  bandwidth; `vast_create` already passes `--direct`; a TCP `echo REACHABLE`
+  precheck destroys + re-rents a proxy-only / dead host.
+- **② transport** — `vast_direct_endpoint` reads the bare `public_ipaddr` +
+  `ports["22/tcp"][0].HostPort` from the **plural** `show instances --raw`
+  (the single `show instance <id>` crashes on a null `start_date`, #1239(2)),
+  never the cloud-guard-blocked proxy host; connects with the vast identity
+  via `-i` (#1155 workaround).
+- **③ chain** — a hexa-native `dft_relax_to_scf_coords` parser (CELL_PARAMETERS
+  alat → angstrom × `0.52917720859`, ATOMIC_POSITIONS passthrough — NO hand
+  parser, which FATAL'd two campaigns); `-np` = `dft_physcores` (lscpu
+  Core×Socket, NOT nproc → no oversubscribe thrash); `--allow-run-as-root`,
+  `recover=.true.`, `timeout`, `setsid`.
+- **④ monitor** — numeric instance-id only in the registry (#1229 argv-fragment
+  guard); `dft_phonon_stable` fast-fails the moment any mode is below
+  −5 cm⁻¹ (imaginary → no full-BZ wait); non-interactive teardown.
+
+### Decision — preview by default, `--go` to spend; library module
+
+A bare `hexa cloud dft-run <deck>` is PREVIEW: validate the deck, print the
+guarded plan, and (if a local `relax.out` exists) run the coordinate parser so
+the geometry can be eyeballed — spending **nothing**. Only `--go` rents a
+billing pod and dispatches. `dft_dispatch.hexa` carries **no `main()`** (the
+verb lives in `cloud_cli.hexa`), so the pure helpers are `use`-able by
+`dft_dispatch_test.hexa` without auto-firing a top-level main (INBOX G2).
+
+### Deck convention (`<deck-dir>/`)
+
+`relax.in` · `ph.in` · `scf.in.head` + `scf.in.tail` (the generated
+`CELL_PARAMETERS`+`ATOMIC_POSITIONS` block is spliced BETWEEN the two halves
+by `dft_assemble_scf`, so a tail `K_POINTS` survives — no blind in-place
+splice) · `pseudo/`.
+
+Verification: pure helpers 17/17 (transpile `self/native/hexa_v2` → clang +
+`self/runtime.c` → run) — parser alat→angstrom (`0.529177`) + crystal
+passthrough, stability verdict (−5 cm⁻¹ cutoff, −3 noise stable,
+inconclusive), `physcores` 14×2=28 (not nproc 56), rent query, scf assembly;
+direct-endpoint parser syntax-checked + pattern-equivalent to the existing
+`vast_ssh_endpoint`/`_vast_collect_offer_ids` JSON paths. The `--go` e2e
+(rent/ssh/chain) is unverified without vastai + a live GPU — it is gated
+behind `--go` and composed from already-shipped lifecycle primitives. Harvest
+(λ_BZ / ω_log / Allen-Dynes Tc → `hexa atlas register`) and a generic
+`cloud job-run <chain-spec>` abstraction are follow-ups.
