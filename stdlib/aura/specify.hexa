@@ -1,0 +1,124 @@
+#!hexa strict
+// stdlib/aura/specify.hexa — `aura + specify` producer (hexa-native).
+//
+// LAYER: per-verb cell producer. Emits an aura_specify_record-shaped
+// sentinel line carrying the FDA Class II Design Input dossier-skeleton
+// header (21 CFR 820.30 + IEC 60601-1 + -1-2 EMC + Bluetooth SIG core
+// spec mapping) — TEMPLATE scaffold, NOT a submitted dossier.
+//
+// CONTEXT: AURA = post-aural / temporal-bone clip wearable BCI domain.
+// aura.demi [cell.specify] wires substrate=hexa → this script.
+//
+// Citations (domains/aura.md §5):
+//   * 21 CFR 820.30 Design Controls (FDA Class II medical device)
+//   * EU MDR 2017/745 General Safety + Performance Requirements
+//   * IEC 60601-1 Ed.3.2 + Amd.2 — medical electrical equipment
+//   * IEC 60601-1-2 Ed.4.1 — EMC requirements
+//   * Bluetooth SIG Core Specification v5.x
+//   * ISO 14971 — Risk management for medical devices
+//   * ISO 10993-1 — Biological evaluation (skin-contact)
+//
+// Honesty (g3 · @D d1 · aura.demi line 75-79):
+//   * measurement_gate = GATE_OPEN permanently
+//   * absorbed = false PERMANENTLY — dossier skeleton is aspirational
+//     scaffolding, NEVER an FDA-cleared submission. Accredited
+//     clearance lives past Notified Body audit + 510(k) review which
+//     are downstream of every verb-cell in this map.
+//
+// Sentinels:
+//   __HEXA_AURA_SPECIFY__ PASS         — dispatcher loaded + emitted
+//   AURA_SPECIFY_OK gate=GATE_OPEN absorbed=false  — cellrun parse line
+//
+// Usage:
+//   hexa run stdlib/aura/specify.hexa
+//
+// Pattern: mirrors stdlib/bio/bio.hexa root-dispatcher sentinel style.
+
+let VERSION         = "0.1.0"
+let MODULE          = "aura-specify"
+let GEOMETRY_ID     = "aura_specify_v1"
+let RECORD_KIND     = "aura_specify_record"
+let DEVICE_CLASS    = "II"           // FDA — non-implantable wearable
+let DEVICE_CLASS_EU = "IIa"          // EU MDR 2017/745
+
+// ─── design-input source register (provenance roll-up) ────────────────
+
+fn _design_input_sources() -> [str] {
+    return [
+        "21 CFR 820.30 - FDA Design Controls",
+        "EU MDR 2017/745 - General Safety and Performance Requirements",
+        "IEC 60601-1 Ed.3.2 + Amd.2 - Medical electrical equipment",
+        "IEC 60601-1-2 Ed.4.1 - EMC requirements",
+        "Bluetooth SIG Core Specification v5.x",
+        "ISO 14971 - Risk management for medical devices",
+        "ISO 10993-1 - Biological evaluation (skin-contact)",
+    ]
+}
+
+// ─── IEC 60601-1-2 immunity baseline (4th edition home-healthcare) ────
+
+fn _emc_immunity_levels() -> [str] {
+    return [
+        "ESD +/-8 kV contact / +/-15 kV air (IEC 61000-4-2)",
+        "Radiated RF 3-80 V/m (IEC 61000-4-3)",
+        "Conducted RF 3-10 V (IEC 61000-4-6)",
+        "PFMF 30 A/m (IEC 61000-4-8)",
+        "Proximity-field 9-28 V/m wireless (IEC 61000-4-39)",
+    ]
+}
+
+// ─── header emit (announce-only · no allocation of real-dossier values) ─
+
+fn _emit_header() {
+    print("# AURA SPECIFY — FDA Class II Design Input dossier skeleton")
+    print("# device_class_fda = " + DEVICE_CLASS)
+    print("# device_class_eu  = " + DEVICE_CLASS_EU)
+    print("# regulatory_base  = 21 CFR 820.30 + EU MDR 2017/745")
+    print("# safety_base      = IEC 60601-1 Ed.3.2")
+    print("# emc_base         = IEC 60601-1-2 Ed.4.1")
+    print("# radio_base       = Bluetooth SIG Core Spec v5.x")
+    print("# risk_base        = ISO 14971")
+    print("# biocompat_base   = ISO 10993-1 (skin-contact)")
+    print("#")
+    let src = _design_input_sources()
+    let n = src.len()
+    let mut i = 0
+    while i < n {
+        print("# source[" + i.str() + "] " + src[i])
+        i = i + 1
+    }
+    print("#")
+    let imm = _emc_immunity_levels()
+    let m = imm.len()
+    let mut j = 0
+    while j < m {
+        print("# immunity[" + j.str() + "] " + imm[j])
+        j = j + 1
+    }
+    print("#")
+}
+
+// ─── scope-caveats (g3 honesty floor — every claim ringfenced) ────────
+
+fn _emit_caveats() {
+    print("# scope_caveat: FDA Design Input (21 CFR 820.30) + IEC 60601-1 + -1-2 EMC dossier skeleton - TEMPLATE only, not a submitted dossier.")
+    print("# scope_caveat: Bluetooth SIG qualification + EU MDR conformity assessment with a Notified Body = accredited-lab gates separate from this cell.")
+    print("# scope_caveat: Class II classification (non-implantable wearable BCI) is the working assumption - final classification depends on FDA pre-submission feedback.")
+    print("# scope_caveat: absorbed=false PERMANENTLY (g3) - dossier skeleton is aspirational scaffolding, NEVER an FDA-cleared submission.")
+}
+
+// ─── main entry ───────────────────────────────────────────────────────
+
+fn main() {
+    _emit_header()
+    _emit_caveats()
+
+    // cellrun parse line — single-line summary the dispatcher consumes
+    print("AURA_SPECIFY_OK record_kind=" + RECORD_KIND
+        + " geometry_id=" + GEOMETRY_ID
+        + " gate=GATE_OPEN absorbed=false"
+        + " version=" + VERSION)
+
+    // module sentinel (per bio.hexa convention)
+    print("__HEXA_AURA_SPECIFY__ PASS")
+}
