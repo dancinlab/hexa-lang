@@ -2774,8 +2774,6 @@ HexaVal hexa_from_cstring(HexaVal ptr) {
     return hexa_str((const char*)(uintptr_t)p);
 }
 
-
-
 // ── C2 Step 3: Dynamic FFI host dispatch (interpreter path) ──
 //
 // Purpose: expose dlopen+dlsym+extern_call as HexaVal builtins so the
@@ -2960,15 +2958,9 @@ HexaVal hexa_host_ffi_call_6(
 
 // ── G5: Pointer arithmetic builtins ─────────────────────
 
-
-
-
 /* @hot_kernel f32/f64/i32 ptr read/write — extracted to tensor_kernels.c
  * (included at end of this file). hexa_ptr_read (untyped 64-bit) kept here
  * as general-purpose. */
-
-
-
 
 // ═══════════════════════════════════════════════════════════
 //  G2: Struct Value Passing — struct packing builtins
@@ -5145,7 +5137,6 @@ HexaVal hexa_str_bytes(HexaVal s) {
 #include <unistd.h>
 #include <time.h>
 
-
 HexaVal hexa_sleep(HexaVal sec) {
     double s = HX_IS_FLOAT(sec) ? HX_FLOAT(sec)
              : HX_IS_INT(sec)   ? (double)HX_INT(sec)
@@ -6681,7 +6672,6 @@ HexaVal hexa_farr_pauli_exp_inplace(HexaVal re_v, HexaVal im_v,
     return hexa_int(0);
 }
 
-
 // farr_pauli_expectation(re_h, im_h, flip_mask, z_mask, y_mask, count_Y, n_qubits) -> float
 // Returns <psi|P|psi> for Hermitian Pauli P. For Hermitian H, the result is
 // purely real; we return just the real part.
@@ -6955,7 +6945,6 @@ HexaVal hexa_farr_simplex_sort(HexaVal simplex_h_v, HexaVal f_h_v,
     free(scratch);
     return hexa_int(0);
 }
-
 
 // ───────────────────────────────────────────────────────────────────────
 // RFC 039 (2026-05-13): parameter-shift gradient kernel.
@@ -9391,7 +9380,6 @@ static int _hx_farr_attn_dt_bwd_cpu(int64_t q_id, int64_t k_id, int64_t v_id,
     return 0;
 }
 
-
 #pragma STDC FP_CONTRACT DEFAULT
 
 // mk2-C2 (2026-05-19): RMSNorm-mh forge-route. Bare 7-arg function
@@ -9597,9 +9585,6 @@ HexaVal farr_attn_dt_bwd_gpu(HexaVal q_v, HexaVal k_v, HexaVal v_v,
                                              T, nh, nkv, hd));
 #endif
 }
-
-
-
 
 // ── Phase B carriers (3-arg / 4-arg → hexa_callN dispatch). ───────
 // All 4 ops fit within the hexa_callN ceiling (≤4-arg), so each gets a
@@ -13516,9 +13501,6 @@ HexaVal hexa_forge_dispatch_ffn_fp64_via_bf16(HexaVal x_v, HexaVal w1_v,
     return hexa_int(-1);
 #endif
 }
-
-
-
 
 /* Cycle 55 recovery — stub bodies for rt_fs_* declared in runtime.h §G5.
  * Origin/main left these as orphaned declarations (no bodies anywhere on
