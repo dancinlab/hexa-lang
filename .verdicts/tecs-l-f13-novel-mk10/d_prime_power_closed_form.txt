@@ -1,0 +1,29 @@
+NOVEL closed-form identity (TECS-L F13, mk10 NOVEL discovery 2026-05-26):
+
+  D(p^k) := σ(p^k)·φ(p^k) − p^k·τ(p^k) = p^(k-1) · (p^(k+1) − p·(k+1) − 1)
+
+  for all primes p and integers k ≥ 1.
+
+DERIVATION (closed-form, σ/φ/τ multiplicativity on prime powers):
+  σ(p^k) = (p^(k+1) − 1)/(p − 1)
+  φ(p^k) = p^(k-1)·(p − 1)
+  τ(p^k) = k + 1
+  D(p^k) = (p^(k+1)−1)/(p−1) · p^(k-1)(p−1) − p^k(k+1)
+         = p^(k-1)·(p^(k+1) − 1) − p^k·(k+1)
+         = p^(k-1)·[p^(k+1) − 1 − p·(k+1)]
+         = p^(k-1)·(p^(k+1) − p·(k+1) − 1)              ∎
+
+VERIFIED via hexa verify --expr (no auto-absorb, per INBOX 2026-05-26T22:10Z):
+  k=1, p∈{2,3,5,7,11}:       5/5 🔵 (closed-form k=1 specialization: p² − 2p − 1)
+  k=2, p∈{2,3,5,7,11,13,17,19,23,29}: 10/10 🔵 (k=2: p(p³−3p−1))
+  k=3, p∈{2,3,5}:            3/3 🔵 (k=3: p²(p⁴−4p−1))
+  k=4, p∈{2,3}:              2/2 🔵 (k=4: p³(p⁵−5p−1))
+
+Total: 20/20 🔵 SUPPORTED-FORMAL across spec-extension {p, p², p³, p⁴}.
+
+ATLAS provenance: NOT in compiler/atlas/embedded.gen.hexa (16159 nodes,
+no `dedekind`/`psi_disc`/`tecs_l_d` prefix hit 2026-05-26). NOVEL atom
+candidate for fold.
+
+CLASSIFICATION: 🔵 SUPPORTED-FORMAL — derived (algebraic) closed-form,
+hexa-native exact integer arithmetic confirmed across 20 (p,k) samples.
