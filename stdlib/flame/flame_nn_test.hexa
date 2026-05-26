@@ -996,16 +996,19 @@ if lh_fwd < 0.000000000001 {
 } else {
     print("FAIL  F-RFC043-LAYER-EQ-LMHEAD-FWD    max|Δ|="); print(lh_fwd); println(" (>1e-12)")
 }
-// BWD is pure hexa scalar loops both sides → byte-eq.
+// BWD since #1262 routes through forge kernels: dtemb = farr_outer_gpu +
+// farr_add_inplace_gpu (elementwise — EXACTLY byte-eq with the host dl⊗zT
+// accumulate), dzT = farr_matmul_t_gpu (an FMA-fusible reduction — RFC-040
+// §2.2 last-ulp vs the hexa-side scalar ref, same caveat as LMHEAD-FWD).
 if lh_dtemb == 0.0 {
-    if lh_dzT == 0.0 {
-        println("PASS  F-RFC043-LAYER-EQ-LMHEAD-BWD    max|{dtemb_accum, dzT}_flame − {ref}_ref| = 0.0 (byte-eq · dl⊗zT + tembᵀ·dl closed)")
+    if lh_dzT < 0.000000000001 {
+        print("PASS  F-RFC043-LAYER-EQ-LMHEAD-BWD    max|dtemb_accum|=0.0 (byte-eq · dl⊗zT) · max|dzT|="); print(lh_dzT); println(" < 1e-12 (RFC 040 §2.2 FMA tembᵀ·dl)")
         pass = pass + 1
     } else {
-        println("FAIL  F-RFC043-LAYER-EQ-LMHEAD-BWD    dzT deviation non-zero")
+        print("FAIL  F-RFC043-LAYER-EQ-LMHEAD-BWD    dzT deviation max|Δ|="); print(lh_dzT); println(" (>1e-12)")
     }
 } else {
-    println("FAIL  F-RFC043-LAYER-EQ-LMHEAD-BWD    dtemb deviation non-zero")
+    print("FAIL  F-RFC043-LAYER-EQ-LMHEAD-BWD    dtemb deviation max|Δ|="); println(lh_dtemb)
 }
 
 // ── RoPE ──────────────────────────────────────────────────────────────

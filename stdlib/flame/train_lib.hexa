@@ -51,8 +51,14 @@ pub fn nn_decoder_adamw_step(M: int, Mg: int, Mm: int, Mv: int,
     // on the lm-head/tok-emb term; the V=256 smoke/corpus tests stay on
     // the host reference. Tunable but conservative.
     if n > 10000000 {
-        let newW = to_int(farr_adamw_step_gpu(M, Mm, Mv, Mg, n,
-                                              lr, b1, b2, eps, wd, t))
+        // Bind the kernel result to a `let` BEFORE to_int(): a
+        // `to_int(farr_adamw_step_gpu(...))` expands the call 3× in the
+        // generated C ternary, so the optimizer moments (m,v) would be
+        // stepped 2-3× per call (silent state corruption). One `let` =
+        // one emit = one step.
+        let newW_h = farr_adamw_step_gpu(M, Mm, Mv, Mg, n,
+                                         lr, b1, b2, eps, wd, t)
+        let newW = to_int(newW_h)
         // newW < 0 ⇒ kernel rejected BEFORE mutating m/v (the entry
         // validates ids/n/step_t first) ⇒ safe to fall through to the host
         // reference. newW >= 0 ⇒ m/v already stepped in place; we MUST NOT
