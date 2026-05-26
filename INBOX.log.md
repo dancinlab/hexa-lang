@@ -2,6 +2,44 @@
 
 Append-only history sister of `INBOX.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
+## 2026-05-26T2021Z — ✅ ubu-2 drill `map key 'f_a'` FIXED (source-drift + JIT cache, NOT binary drift)
+
+**INBOX.md line 8 RESOLVED** — `ssh ubu-2 hexa drill` 의 `overlay+ 517 lines` → `map key 'f_a' not found` + `cannot compare tag 4 with tag 0 (operator >)` (EXIT=1) 해소.
+
+### Probe + Reproduce
+- `which hexa` → `~/.local/bin/hexa` → `~/core/hexa-lang/hexa` (shim) → `exec -a hexa $dir/hxv2`. **실제 invoke = `~/core/hexa-lang/{hxv2,hexa.real}`** (NOT `~/.hx/bin/hexa.real`; `~/.local/bin` 이 PATH 1순위).
+- ubu-2 작업트리 HEAD = `9b0a01a1`(#900), origin/main `65fe0934` 대비 **529 commits drift**.
+- 재현 확정: `hexa drill --seed "prove the sum of two even integers is even" --rounds 1` → `map key 'f_a'`, EXIT=1.
+
+### Rebuild (native gcc amalgam — memory note 준수)
+- fresh clone `/tmp/hexa-lang-65fe0934`(origin/main), `LOCAL_BUILD=1 CLANG=gcc HEXA_MAC_BUILD_OK=1 ~/core/hexa-lang/hexa.real build tool/build_hexa_cli.hexa` → `./build/artifacts/app` 실행. `build_hexa_cli.hexa` Step 0 = checked-in `self/native/hexa_cc.c` amalgam-swap → gcc bootstrap (완전 self-contained, musl-cross/`self/native/hexat` 불요). `[5/5] smoke` OK, driver 2096072 B. 배포(백업 `*.bak.before-drill-rebuild-20260526`).
+
+### ★ 진짜 root cause (재빌드만으로는 안 풀림 — argv[0] bisect)
+재빌드 driver 로도 PATH `hexa drill` 여전히 에러. bisect 결정타 (같은 바이너리·repo·env, 유일 차이 = argv[0]):
+- `argv[0]=hexa_cli_driver` → drill PASS (EXIT=0)
+- `argv[0]=hexa` (production shim 의 `exec -a hexa`) → `map key 'f_a'` ERROR (EXIT=1)
+
+원인: `hexa drill` 은 driver 에 컴파일-인 되어 있지 **않음** (binary 에 `cmd_drill_entry`/`f_a` 0개, `main_native.c` 에 `f_a` 0개). dispatch 가 `hexa run` JIT 경로로 ubu-2 작업트리 소스를 컴파일 → `build/artifacts/hexa_run.*.c`. 작업트리(#900) `compiler/drill/drill.hexa:290` 가 `verdict.f_a > 0`(구 필드명) → 현 runtime 의 hard `map key 'f_a'` abort. 현-main 은 동일 라인을 `verdict.f_ai2_a > 0` 로 수정(#634 후속 field-name mismatch, in-source 주석 명시). 즉 **stale source + stale JIT 캐시**, stale binary 아님.
+
+### Fix (1-file source patch + cache clear)
+- ubu-2 작업트리 `~/core/hexa-lang/compiler/drill/drill.hexa` 를 현-main 버전으로 교체 (백업 `drill.hexa.bak.before-f-a-fix-20260526`). 작업트리 owner = summer · force-reset 금지 → 1파일 수술적 적용.
+- stale JIT 캐시 `build/artifacts/hexa_run.*.c` (7315개) 클리어 → drill 재컴파일 강제.
+
+### Re-smoke (production PATH `hexa drill`) — FIXED
+```
+$ ssh ubu-2 hexa drill --seed "prove the sum of two even integers is even" --rounds 1
+  overlay+ 517 lines (pool=0)
+  DRILL_VERIFIER {"round":1,"verdict":"skip"}
+  max rounds reached (1) — total=676
+  {"seed":"…","rounds":1,"total":676,"saturated":false,…,"verifier_verdict":"skip"}
+DRILL_EXIT=0
+```
+`map key 'f_a'` / `cannot compare tag 4 with tag 0` 양쪽 소멸. 2-round 도 EXIT=0. before/after `hexa --version` = `hexa 0.1.0-dispatch` (양쪽 동일).
+
+### Verdict: FIXED · 교훈
+- drill exit 1 → **0**.
+- INBOX 노트의 "native gcc amalgam 재빌드" 가설은 **부분적** — driver 재빌드는 무관, 핵심은 작업트리 `drill.hexa` 동기화 + JIT 캐시 클리어. ubu-2 작업트리(#900, 529 commits behind)를 현-main 으로 sync 하면 이 류 source-drift 재발 차단(단 owner=summer, force-reset 금지 → handoff).
+
 ## 2026-05-26T18:15Z — verify_cli arm/calc_dispatch 가 hexa binary 내장 → .hexa swap 무효, arm 활성 = source-build 필수 (#1230/#1235 보강)
 
 > #1230(calc-fn gap)·#1235(verify_cli sopfr/pow arm) 소스 land 후 활성 검증 중 발견. deployed .hexa swap + cache 75개 무효 후에도 sopfr 여전 🟠 — verify_cli/calc_dispatch 가 hexa binary 에 컴파일-내장돼 .hexa 소스 변경 무관.
