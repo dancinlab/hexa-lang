@@ -740,6 +740,37 @@ fn get_document(uri: string) -> string {
 
 // ── Main LSP loop ──────────────────────────────────────────
 
+// Non-blocking line read with periodic parent-death (ppid==1) check.
+// Polls stdin with a 500ms timeout via `term_poll_stdin`; on timeout, checks
+// `term_getppid()` — if orphaned (parent died, reparented to launchd/init),
+// returns "" to signal EOF so the main loop exits cleanly. Reads one byte at
+// a time via `term_read_byte` once stdin is ready; accumulates until \n.
+// This is the COMPLETE LSP-leak fix (was: 24 idle hexa-lsp accumulated, all
+// stuck in blocking readline() on zombie pipes that never close after parent
+// SIGKILL). Combined with the line-top ppid guard, the LSP now wakes up at
+// most every 500ms to verify it still has a parent.
+fn read_line_or_orphan() -> string {
+    let mut buf = ""
+    while true {
+        let ready = term_poll_stdin(500)   // 500ms poll timeout
+        if ready == 0 {
+            // timeout — check for orphan
+            if term_getppid() == 1 { return "" }
+            // else keep polling
+        } else if ready < 0 {
+            return ""   // poll error / EOF
+        } else {
+            let b = term_read_byte()
+            if b < 0 { return "" }   // EOF
+            if b == 10 { return buf }   // \n
+            if b != 13 {   // skip CR
+                buf = buf + chr(b)
+            }
+        }
+    }
+    return buf
+}
+
 fn run_lsp() {
     // Read JSON-RPC messages from stdin, dispatch, write responses to stdout.
     // Content-Length framing per LSP spec.
@@ -751,8 +782,8 @@ fn run_lsp() {
         // any read return. Partial fix (won't break a currently-blocked readline);
         // a non-blocking-I/O refactor is the complete fix (follow-up).
         if term_getppid() == 1 { running = false } else {
-        // Read Content-Length header
-        let header = readline()
+        // Read Content-Length header (non-blocking via poll+ppid guard — leak fix)
+        let header = read_line_or_orphan()
         if header == "" {
             running = false
         } else {
@@ -761,8 +792,8 @@ fn run_lsp() {
             if hdr_trimmed.starts_with("Content-Length:") {
                 let len_str = hdr_trimmed.substring(15, len(hdr_trimmed)).trim()
                 let content_len = to_int(len_str)
-                // Skip blank line after headers
-                let blank = readline()
+                // Skip blank line after headers (non-blocking via poll+ppid guard)
+                let blank = read_line_or_orphan()
                 // Read body
                 let body = input(content_len)
                 // Dispatch
