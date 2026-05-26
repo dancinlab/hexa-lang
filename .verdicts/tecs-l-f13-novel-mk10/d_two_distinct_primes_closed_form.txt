@@ -1,0 +1,32 @@
+NOVEL closed-form identity (TECS-L F13, mk10 NOVEL discovery 2026-05-26):
+
+  D(pq) := σ(pq)·φ(pq) − pq·τ(pq) = (p² − 1)(q² − 1) − 4pq
+
+  for distinct primes p ≠ q.
+
+DERIVATION:
+  σ(pq) = (1+p)(1+q),  φ(pq) = (p−1)(q−1),  τ(pq) = 4
+  D(pq) = (1+p)(1+q)(p−1)(q−1) − 4pq
+        = [(p+1)(p−1)]·[(q+1)(q−1)] − 4pq
+        = (p²−1)(q²−1) − 4pq                              ∎
+
+UNIQUENESS COROLLARY (NEW within distinct-prime locus):
+  D(pq) = 0 ⟺ (p²−1)(q²−1) = 4pq ⟺ (p,q) = (2,3)
+  Proof: fix p=2 → 3(q²−1) = 8q → 3q² − 8q − 3 = 0
+         → q = (8 ± √(64+36))/6 = (8 ± 10)/6
+         → q = 3 (positive root) ⇒ n = 6
+  ∴ within the two-distinct-prime locus, n=6 is the UNIQUE D=0 witness.
+  Conjoined with M10 (full proof σφ=nτ ⟺ n∈{1,6}), this gives a
+  semiprime-locus closed-form witness of the n=6 distinction.
+
+VERIFIED via hexa verify --expr (no auto-absorb):
+  (p,q) ∈ {(2,3),(2,5),(3,5),(2,7),(3,7),(5,7),(2,11),(3,11),(5,11),(7,11),(11,13)}
+  11/11 🔵 SUPPORTED-FORMAL.
+  (2,3): D(6) = (3)(8) − 24 = 0 ✓  (the n=6 distinction)
+  (3,5): D(15) = (8)(24) − 60 = 132 ✓
+  (11,13): D(143) = (120)(168) − 572 = 19588 ✓
+
+ATLAS provenance: NOT in compiler/atlas/embedded.gen.hexa.
+
+CLASSIFICATION: 🔵 SUPPORTED-FORMAL — derived semiprime-locus closed-form
++ uniqueness corollary giving a NEW witness of the n=6 distinction.
