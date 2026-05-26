@@ -2140,9 +2140,13 @@ correctness (per M10/M16; see cycle-69 catalog + PR #251/#426 analysis)
 
 ## Phase 2 — Tier-B stdlib primitives (~50 fns, est 4-8 cycles)
 
-- [ ] regex: `_regcomp`, `_regexec`, `_regfree` (DFA in hexa) — `stdlib/regex/`
-      EXISTS as POSIX ERE wrapper (delegates to libc regcomp/regexec via
-      `hexa_regex_*` builtins). DFA-in-hexa replacement still open.
+- [x] regex: `_regcomp`, `_regexec`, `_regfree` (DFA in hexa) — `stdlib/regex/native.hexa`
+      net-new 2026-05-27: pure-hexa recursive-descent + backtracking
+      NFA-simulation matcher (0 libc). ERE subset: literal · . · * + ? · {n,m} ·
+      [...] [^...] ranges · ^ $ · | · (...). 24/24 self-test PASS
+      (`native_test.hexa` @ci_gate). The libc `stdlib/regex/mod.hexa` bridge
+      stays for capture-groups/backrefs; the common-subset match path is now
+      libc-free.
 - [x] JSON: parse/serialize (already mostly hexa; finish migration) — `stdlib/json.hexa`
       + `stdlib/json_object.hexa` + `stdlib/jsonl_pool.hexa` land hexa-native.
 - [x] Bytes ↔ string codec (UTF-8 / hex / base64) — `stdlib/codec/` net-new (2026-05-27):
