@@ -48,7 +48,7 @@ $L_0:
     ld.param.u64 %rd1, [sweep_pred_param_1];  // load kernel param 1 into reg
     ld.param.u64 %rd2, [sweep_pred_param_2];  // load kernel param 2 into reg
     mov.u64 %sh3, _hexa_sh_sweep_pred + 0;  // init @shared base = _hexa_sh_sweep_pred + 0
-    mov.f64 %sh3, 0;  // assign
+    // PR-C piece 6 - skipped default-init STMT_ASSIGN for SHARED-bank dst (op=let, id=3)
     mov.f64 %fd5, %fd4;  // assign
     mov.u32 %r6, %tid.x;  // gpu_thread_id_x()
     cvt.s64.s32 %rd7, %r6;  // to_i64 (s32 to s64)
