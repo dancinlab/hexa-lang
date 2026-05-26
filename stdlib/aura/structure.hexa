@@ -1,0 +1,150 @@
+#!hexa strict
+// stdlib/aura/structure.hexa — `aura + structure` producer (hexa-native).
+//
+// LAYER: per-verb cell producer. Emits an aura_structure_record-shaped
+// sentinel carrying the post-aural / temporal-bone clip wearable BCI
+// architectural partitioning — multi-electrode dry/wet EEG sensor
+// array + AFE/ADC + BLE radio + battery + mastoid mechanical clip
+// — TEMPLATE scaffold, NOT a built bill-of-materials.
+//
+// CONTEXT: AURA = post-aural / temporal-bone clip wearable BCI domain.
+// aura.demi [cell.structure] wires substrate=hexa → this script.
+//
+// Citations (domains/aura.md §1 + §2 + §6):
+//   * Sensor array — dry vs wet EEG trade (option shelf: aura.md §6)
+//   * AFE — low-noise instrumentation amp + ADC (24-bit sigma-delta)
+//   * Radio — Bluetooth SIG Core Spec v5.x (nRF Connect SDK reference)
+//   * Battery — disposable vs rechargeable (option shelf: aura.md §6)
+//   * Mechanical — mastoid / temporal-bone clip (FreeCAD + KiCad StepUp)
+//   * IEC 60601-1 type B/BF applied-part classification reference
+//
+// Honesty (g3 · @D d1 · aura.demi line 56-60):
+//   * measurement_gate = GATE_OPEN permanently
+//   * absorbed = false PERMANENTLY — partitioning skeleton is
+//     architectural scaffold, NEVER a built device. The mechanical
+//     enclosure + PCB fab + AFE silicon selection live downstream in
+//     chip + component cells (this cell is meta).
+//
+// Sentinels:
+//   __HEXA_AURA_STRUCTURE__ PASS         — dispatcher loaded
+//   AURA_STRUCTURE_OK gate=GATE_OPEN absorbed=false  — cellrun parse line
+//
+// Usage:
+//   hexa run stdlib/aura/structure.hexa
+//
+// Pattern: mirrors stdlib/aura/specify.hexa (V1 PR #1338).
+
+let VERSION       = "0.1.0"
+let MODULE        = "aura-structure"
+let GEOMETRY_ID   = "aura_structure_v1"
+let RECORD_KIND   = "aura_structure_record"
+
+// ─── architectural blocks (partitioning skeleton) ─────────────────────
+
+fn _sensor_array_block() -> [str] {
+    return [
+        "multi-electrode array (count placeholder · target 8-32 channels)",
+        "electrode type option: dry (Ag/AgCl plated · no gel) | wet (gel-coupled · higher SNR)",
+        "reference electrode + ground (mastoid bony prominence anchor)",
+        "skin-contact biocompatibility per ISO 10993-1 (skin-contact)",
+        "applied-part classification: Type BF per IEC 60601-1",
+    ]
+}
+
+fn _afe_adc_block() -> [str] {
+    return [
+        "low-noise instrumentation amp (input-referred noise placeholder · target < 1 uV-pp 0.5-50 Hz)",
+        "right-leg-drive (RLD) common-mode rejection",
+        "24-bit sigma-delta ADC (Texas Instruments ADS1299-class reference · placeholder)",
+        "anti-alias filter: 1st-order RC + digital decimation",
+        "sample rate placeholder (target 250-500 Hz per channel)",
+    ]
+}
+
+fn _radio_block() -> [str] {
+    return [
+        "Bluetooth Low Energy 5.x (Bluetooth SIG Core Spec v5.x)",
+        "SoC option: Nordic nRF52 / nRF53 / nRF54 (nRF Connect SDK · Zephyr)",
+        "antenna: PCB chip antenna OR matched trace (openEMS validation at V4 analyze cell)",
+        "GATT profile: custom EEG streaming service (UUID placeholder) + standard Battery + Device Info",
+        "BLE link budget placeholder (target -60 dBm RSSI at 1 m · indoor)",
+    ]
+}
+
+fn _battery_block() -> [str] {
+    return [
+        "battery option: disposable coin cell (CR2032 · ~225 mAh) | rechargeable Li-Po (placeholder mAh)",
+        "power management IC (PMIC) with LDO + boost (placeholder)",
+        "expected runtime placeholder (target 12-24 h per session · depending on sample-rate)",
+        "charging interface (rechargeable only): USB-C 5V / wireless Qi (option)",
+        "battery safety per IEC 62133-2 (Li-Po) — accredited cell + protection IC",
+    ]
+}
+
+fn _mechanical_block() -> [str] {
+    return [
+        "mastoid / temporal-bone clip — post-aural anchor",
+        "enclosure material: medical-grade silicone OR ABS+TPE (skin-contact-rated)",
+        "ingress protection: IPX4 target (splash) for daily-wear scenario",
+        "weight placeholder (target < 15 g per side · ergonomic ceiling)",
+        "MCAD authoring: FreeCAD parametric + KiCad StepUp PCB↔mechanical co-design",
+    ]
+}
+
+fn _scope_caveats() -> [str] {
+    return [
+        "multi-electrode dry/wet EEG sensor array + AFE/ADC + BLE radio + battery partitioning skeleton - TEMPLATE.",
+        "mastoid / temporal-bone clip mechanical = FreeCAD KiCad-StepUp territory (chip+component cells own MCAD, this is meta).",
+        "measurement_gate = GATE_OPEN permanently - structure skeleton is not an absorption claim (g3).",
+        "absorbed=false PERMANENTLY (g3) - partitioning is architectural scaffold, NEVER a built bill-of-materials.",
+    ]
+}
+
+// ─── emit helpers ─────────────────────────────────────────────────────
+
+fn _emit_block(label: str, lines: [str]) {
+    print("# [" + label + "]")
+    let n = lines.len()
+    let mut i = 0
+    while i < n {
+        print("#   - " + lines[i])
+        i = i + 1
+    }
+    print("#")
+}
+
+fn _emit_header() {
+    print("# AURA STRUCTURE — wearable BCI architectural partitioning skeleton")
+    print("# device_target = post-aural / temporal-bone clip BCI")
+    print("# version = " + VERSION)
+    print("#")
+    _emit_block("sensor_array",   _sensor_array_block())
+    _emit_block("afe_adc",        _afe_adc_block())
+    _emit_block("radio_ble",      _radio_block())
+    _emit_block("battery_power",  _battery_block())
+    _emit_block("mechanical",     _mechanical_block())
+}
+
+fn _emit_caveats() {
+    let c = _scope_caveats()
+    let n = c.len()
+    let mut i = 0
+    while i < n {
+        print("# scope_caveat: " + c[i])
+        i = i + 1
+    }
+}
+
+// ─── main entry ───────────────────────────────────────────────────────
+
+fn main() {
+    _emit_header()
+    _emit_caveats()
+
+    print("AURA_STRUCTURE_OK record_kind=" + RECORD_KIND
+        + " geometry_id=" + GEOMETRY_ID
+        + " gate=GATE_OPEN absorbed=false"
+        + " version=" + VERSION)
+
+    print("__HEXA_AURA_STRUCTURE__ PASS")
+}
