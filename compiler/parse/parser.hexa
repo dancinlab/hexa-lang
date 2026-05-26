@@ -412,7 +412,7 @@ fn parse_type() -> TypeRef {
             // Expect integer literal — the type-level size. We accept any
             // i64 literal as text; conversion deferred to consumer (so
             // negative N would surface as a downstream type error).
-            if check_kind(TokenKind::IntLit) {
+            if check_kind(TokenKind::Number) {
                 let n_tok = advance()
                 array_name = "Array:" + n_tok.text
             }

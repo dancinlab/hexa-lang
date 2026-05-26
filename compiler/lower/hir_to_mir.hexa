@@ -2839,19 +2839,28 @@ fn _path_hash(s: string) -> i64 {
     return h
 }
 
+// RFC 085 Step B sibling fix — also strips the `|<type-name>` suffix
+// added by parse_let_expr (parser.hexa) for `let sm: T` syntax. Without
+// this strip the binding name registered via `_bind(ctx, nm, dst.id)`
+// would include the type suffix, breaking every subsequent scope lookup
+// of the let variable. (Discovered: F-SHARED-512-NUMERIC fire emit had
+// `div.rn.f64 %fd, 0, 2;` instead of `div.s64 %rd_stride, %rd_stride, 2;`
+// because `stride` lookup returned a const_int(0) fallback.)
 fn _strip_mut_prefix(t: string) -> string {
     let chars = t.chars()
     let n = len(chars)
+    let mut start = 0
     if n >= 4 && chars[0] == 'm' && chars[1] == 'u' && chars[2] == 't' && chars[3] == ':' {
-        let mut out = ""
-        let mut i = 4
-        while i < n {
-            out = out + to_string(chars[i])
-            i = i + 1
-        }
-        return out
+        start = 4
     }
-    return t
+    let mut out = ""
+    let mut i = start
+    while i < n {
+        if chars[i] == '|' { break }
+        out = out + to_string(chars[i])
+        i = i + 1
+    }
+    return out
 }
 
 fn _mir_digit_val(c: char) -> i64 {
