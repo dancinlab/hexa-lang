@@ -687,17 +687,23 @@ fn link_macho_arm64(objs: [ParsedObj], out_path: string, entry: string, _is_stat
             sxx = sxx + 1
         }
 
-        // Route defined symbols → slot + offset.
+        // Route defined symbols → slot + offset. A symbol's n_value is
+        // its ADDRESS in the .o (sections in a relocatable .o are laid
+        // out sequentially with nonzero addrs), so the SECTION-RELATIVE
+        // offset = n_value - section.addr. We must subtract the input
+        // section's addr before adding the merged slot base.
         let mut di = 0
         while di < len(obj.defined) {
             let d = obj.defined[di]
             // Find the input section with this n_sect index.
             let mut slot = -1
             let mut soff_base = 0
+            let mut sec_addr = 0
             let mut sj = 0
             while sj < len(obj.sects) {
                 let sc = obj.sects[sj]
                 if sc.index == d.sect {
+                    sec_addr = sc.addr
                     if sc.sectname == "__text"        { slot = SLOT_TEXT;    soff_base = base0 }
                     else if sc.sectname == "__const"  { slot = SLOT_CONST;   soff_base = base1 }
                     else if sc.sectname == "__cstring"{ slot = SLOT_CSTRING; soff_base = base2 }
@@ -708,11 +714,12 @@ fn link_macho_arm64(objs: [ParsedObj], out_path: string, entry: string, _is_stat
                 sj = sj + 1
             }
             if slot >= 0 {
+                let rel_off = d.offset - sec_addr
                 dsym_names.push(d.name)
                 dsym_slot.push(slot)
-                dsym_offset.push(soff_base + d.offset)
+                dsym_offset.push(soff_base + rel_off)
                 if slot == SLOT_TEXT && !entry_found && d.name == entry {
-                    entry_off_in_text = soff_base + d.offset
+                    entry_off_in_text = soff_base + rel_off
                     entry_found = true
                 }
             }
