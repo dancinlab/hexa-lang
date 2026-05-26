@@ -152,7 +152,11 @@ SMK="$TMP/prog.hexa"; SMS="$TMP/prog.s"; SMO="$TMP/prog.o"
 RTO="$TMP/rt_arm64.o"; SMB="$TMP/prog"
 printf 'fn main() {\n  let x = 6 * 7\n  exit(x)\n}\n' > "$SMK"
 "$OUT" _drv.hexa --emit=asm --target=arm64-apple-darwin -o "$SMS" "$SMK" 2>&1 | tail -1
-clang -c -O2 -arch arm64 -std=gnu11 -D_GNU_SOURCE -Wno-trigraphs -I self -I . \
+EXTRA_DEFS=""
+if [ "$(uname -s)" = "Darwin" ]; then
+    EXTRA_DEFS="-D_DARWIN_C_SOURCE"
+fi
+clang -c -O2 -arch arm64 -std=gnu11 -D_GNU_SOURCE $EXTRA_DEFS -Wno-trigraphs -I self -I . \
     self/runtime.c -o "$RTO" 2>&1 | grep -iE 'error:' | head -3
 clang -arch arm64 "$SMS" -c -o "$SMO" 2>&1 | grep -iE 'error:' | head -3
 clang -arch arm64 "$SMO" "$RTO" -o "$SMB" -lm 2>&1 | grep -iE 'undefined|error:' | head -5
