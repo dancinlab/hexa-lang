@@ -154,6 +154,47 @@ hexa-native 로 교체 (assemble = `clang -c` 는 별도 chunk).
   - no-regression: 기본 `tool/build_aprime.sh` smoke `exit(42)==42 PASS`
     (기본 경로 = clang, 미변경).
 
+### 둘째 increment (2026-05-26 · 🛸 PAGE21 + PAGEOFF12 + `__const` — 문자열 RUN 실측)
+
+첫 increment 의 reloc 은 `BRANCH26` (`bl`) 한 종류뿐이라, 데이터(문자열/
+상수)를 `adrp x,SYM@PAGE` + `add x,x,SYM@PAGEOFF` 로 참조하는 obj 는
+링크 불가였다 (`tool/hexa_ld` 가 `__text` 외 섹션을 **drop**). 이 increment
+가 그 gap 의 최소 케이스를 닫는다:
+
+- **`__cstring`/`__const` 파싱**: `parse_macho_obj` 가 `__text` 외에 첫
+  read-only data 섹션(`__cstring` 또는 `__const`) 의 바이트 + 1-based
+  section index 를 캡처. `LinkSym` 에 `sect`(n_sect) 필드 추가 → 정의 심볼을
+  `__text` vs data 로 라우팅.
+- **섹션 레이아웃**: merge 된 data 섹션을 `__text` 뒤(16B-align gap)에 배치,
+  `__TEXT` 세그먼트에 두 번째 `section_64 __const` 를 정확한 vmaddr 로 emit
+  (`text_nsects` 1→2, `lc_text_size`/`sizeofcmds` 보정).
+- **PAGE21 (adrp, type 3)**: `imm = (tgt_page − pc_page) >> 12`,
+  `*_page = addr & ~0xfff`. immlo(=imm[1:0])→bits[30:29], immhi(=imm[20:2])
+  →bits[23:5] 로 split 인코딩.
+- **PAGEOFF12 (add/ldr lo12, type 4)**: `imm = tgt & 0xfff`. ADD(no-shift)
+  케이스라 bits[21:10] 에 unscaled 배치 (clang 은 `&symbol` 에 `add` emit
+  → 최소 케이스). LDR scale 은 잔여.
+
+- **측정 (ssh mini, arm64-Mac)**: object A(`a_main.o`, `adrp/add` →
+  `write(svc); exit`) + object B(`b_msg.o`, `const char hxld_msg[]="hi from
+  cstring\n"` → `__const`) 둘 다 `clang -c` = INPUT-only. LINK 에
+  `clang`/`ld`/`as` 없음:
+
+  ```
+  LINK_RC=0
+  RUN_RC=0 STDOUT=[hi from cstring]
+  nm-u=[]
+  __start: adrp x1, 0 ; 0x100000000 / add x1, x1, #0x310
+  __const @ 0x100000310: "hi from cstring\n\0"
+  ```
+
+  adrp page-delta 0 (tgt_page==pc_page), add `#0x310` → x1=`0x100000310`
+  = **정확히 `__const` VM addr**. 문자열을 그 주소에서 읽어 출력. 🟢 PASS.
+  verdict: `.verdicts/hexa-ld-page21-pageoff12/F-PHASEH-INC2.txt`.
+- **no-regression**: #1276 `F-P1-LINKEXEC` (BRANCH26 2-obj exit(42))
+  현재 linker 로 재실행 → `EXIT42_RC=42 · nm-u=[]` (BRANCH26 미회귀).
+  기본 `build_aprime.sh` 는 `hexa_ld` 미참조(grep 무매치) → 영향 없음.
+
 ### 🔴 핵심 발견 — macOS 는 fully-static (no-dyld) 를 RUN 못함
 
 당초 목표는 `LC_UNIXTHREAD` + dyld 없는 **fully-static** Mach-O 였으나,
@@ -178,21 +219,23 @@ hexa-native 로 교체 (assemble = `clang -c` 는 별도 chunk).
 trivial `fn main(){exit(42)}` 를 **실제 runtime.o** 와 링크하면 (real
 runtime.c → `clang -c rt.o`, 506 KB) 다음이 미해소 (현재 exit 138):
 
-- **reloc 타입 확장**: 현재 BRANCH26 (3751건) 만 패치. 실제 runtime.o 는
-  PAGE21 (3027) + PAGEOFF12 (4574) [ADRP/ADD 데이터 접근] + GOTLDP/
-  GOTLDPOFF (335×2) + ADDEND (387) 필요.
-- **multi-section 레이아웃**: linker 가 `__text` 만 merge. runtime.o 는
-  `__const`/`__cstring`/`__data`/`__bss`/`__literal8/16`/`__mod_init_func`
-  보유 → `__DATA`/`__TEXT` 세그먼트로 배치 필요 (현재 drop → 데이터 접근
-  fault).
+- **reloc 타입 확장**: BRANCH26(첫 inc) + PAGE21/PAGEOFF12(둘째 inc, ✅
+  ADRP/ADD 데이터 접근 — `__const` 한정·ADD unscaled) 해소. 잔여 =
+  PAGEOFF12 **LDR scale** (size-별 shift) + GOTLDP/GOTLDPOFF (335×2,
+  `_GOT_LOAD_PAGE21`/`PAGEOFF12` → `__got` 슬롯) + ADDEND (387).
+- **multi-section 레이아웃**: linker 가 이제 `__text` + **1개** data 섹션
+  (`__cstring`/`__const`) 을 `__TEXT` 에 merge (둘째 inc, ✅). 잔여 =
+  **여러** data 섹션 동시 처리 + `__data`/`__bss` (RW → `__DATA` 세그먼트)
+  + `__literal8/16`/`__mod_init_func`. 현재는 첫 read-only data 1개만 캡처.
 - **dyld import binding**: runtime.o 가 libm `_acos` 등 161개 undefined
   extern 참조 → chained-fixups import 테이블 + GOT 채우기 필요. (RUNTIME
   step 2-4 가 이들을 inline svc / hexa-native 로 제거하면 이 항목 소멸 —
   Phase H 와 step 1-4 가 여기서 만난다.)
 
-요약: **BRANCH26-only / single-`__text` 케이스는 hexa-native link 완성·
-RUN 검증**. full runtime 링크 = PAGE21/PAGEOFF12/GOT reloc + multi-section
-+ dyld import 의 3개 축이 잔여 (각각 다음 increment).
+요약: **BRANCH26 + PAGE21/PAGEOFF12 / `__text`+1 data-section 케이스는
+hexa-native link 완성·RUN 검증** (`exit(42)` + `__const` 문자열 출력 둘 다).
+full runtime 링크 = GOT/ADDEND/LDR-scale reloc + multi-(RW)section + dyld
+import 의 3개 축이 잔여 (각각 다음 increment).
 
 ## Domain map (Phase 0 → 3 + post)
 
