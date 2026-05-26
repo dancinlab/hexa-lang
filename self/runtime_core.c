@@ -6470,6 +6470,15 @@ HexaVal hexa_type_of(HexaVal v) {
 // fast path without function-call ABI overhead.
 /* PHASE 1.2.B (2026-05-15): de-staticized. Slow-path fallback for the
  * hexa_add macro emitted into runtime.h — user.c TUs link against this. */
+// RUNTIME.md Step 4 .c-none arith core op 5: hexa_add_slow (the slow path behind
+// the int+int hexa_add MACRO) delegates to hexa-source rt_add_slow under
+// HEXA_HAS_HEXA_RT_STDLIB. The float branch uses the __raw_add_f escape (defined
+// below) so the hexa code never re-enters hexa_add via `+`. #else C body kept
+// bit-for-bit for the standalone link.
+#ifdef HEXA_HAS_HEXA_RT_STDLIB
+extern HexaVal rt_add_slow(HexaVal a, HexaVal b);
+HexaVal hexa_add_slow(HexaVal a, HexaVal b) { return rt_add_slow(a, b); }
+#else
 HexaVal hexa_add_slow(HexaVal a, HexaVal b) {
     // Bool → int coercion (Python canonical: True=1, False=0).  Without this,
     // `true + 1` fell through to `hexa_to_string + str_concat` → "true1".
@@ -6497,6 +6506,17 @@ HexaVal hexa_add_slow(HexaVal a, HexaVal b) {
     HexaVal sa = hexa_to_string(a);
     HexaVal sb = hexa_to_string(b);
     return hexa_str_concat(sa, sb);
+}
+#endif
+// float-add escape for rt_add_slow — mirrors hexa_add_slow's float branch
+// exactly: bool→int coerce, then hexa_float(__hx_to_double(a) + __hx_to_double(b))
+// (so a non-numeric operand coerces to 0.0, same quirk as C). NOT inlined by
+// codegen (multi-statement) — emitted as a direct/fp call, resolved here. Same
+// __raw_* class as __raw_idiv/imod/fmod.
+static inline HexaVal __raw_add_f(HexaVal a, HexaVal b) {
+    if (HX_IS_BOOL(a)) a = hexa_int(HX_BOOL(a) ? 1 : 0);
+    if (HX_IS_BOOL(b)) b = hexa_int(HX_BOOL(b) ? 1 : 0);
+    return hexa_float(__hx_to_double(a) + __hx_to_double(b));
 }
 
 // ROI-37: inline macro — int+int hot path avoids 32-byte HexaVal call ABI.
