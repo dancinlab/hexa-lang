@@ -85,6 +85,7 @@ fn _empty_expr() -> Expr {
         kind: ExprKind::Ident,
         span: _empty_span(),
         text: "",
+        annotations: [],
         children: [],
         atlas_ref: _empty_atlas_ref()
     }
@@ -97,6 +98,7 @@ fn _atlas_expr(kind: string, id: string, file: string, line: i64, col: i64) -> E
         kind: ExprKind::AtlasRef,
         span: sp,
         text: id,
+        annotations: [],
         children: [],
         atlas_ref: aref
     }

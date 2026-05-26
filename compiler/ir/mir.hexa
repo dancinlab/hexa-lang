@@ -38,7 +38,16 @@ pub struct Local {
     // follow-on cycle — currently no source-grammar feeds this field,
     // so it stays "" in every codegen run today. Synthetic test
     // fixtures verify the lowering side independently of HIR.
-    precision: string
+    precision: string,
+    // RFC PR-C piece 3 — Memory space / bank tag.
+    // "" (default) = the regalloc-default arena (CPU stack slot, GPU
+    // private/.local). "shared" is set by `hir_to_mir.hexa` when the
+    // HIR Let carries a bare `@shared` annotation; consumed by NVPTX
+    // codegen (piece 4) to emit `.shared .align N .b8 sm[N]` directives
+    // in `_emit_ptx_func` and to route IndexGet/IndexSet through
+    // `ld.shared`/`st.shared` in piece 5. Other targets ignore the
+    // field for now — zero behavior change on the CPU byte-eq path.
+    space: string
 }
 
 // ── Operands ──────────────────────────────────────────────────

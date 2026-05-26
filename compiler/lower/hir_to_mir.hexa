@@ -60,7 +60,7 @@ pub let mut _lr_lambda_ctr: i64 = 0
 // ── Sentinels ────────────────────────────────────────────────
 
 fn _miss_local() -> Local {
-    return Local { id: -1, arena_id: 0, type_id: 0, name_hint: "", precision: "" }
+    return Local { id: -1, arena_id: 0, type_id: 0, name_hint: "", precision: "", space: "" }
 }
 
 fn _const_int_op(v: i64) -> Operand {
@@ -333,7 +333,8 @@ fn _fresh_local(ctx: LowerCtx, t: Type, hint: string) -> LowerCtx {
         arena_id: ctx.arena_root,
         type_id: _type_id_of(t),
         name_hint: hint,
-        precision: ""
+        precision: "",
+        space: ""
     }
     _lr_locals.push(l)
     return LowerCtx {
@@ -344,6 +345,46 @@ fn _fresh_local(ctx: LowerCtx, t: Type, hint: string) -> LowerCtx {
         cur_block: ctx.cur_block,
         has_returned: ctx.has_returned
     }
+}
+
+// PR-C piece 3 — variant that stamps the Local's `space` tag (e.g.
+// "shared") from a body-level `@shared let sm: [f64; N]` source.
+// Only Let lowering routes through this; every other `_fresh_local`
+// caller stays on the default `space: ""` path.
+fn _fresh_local_with_space(ctx: LowerCtx, t: Type, hint: string,
+                            space: string) -> LowerCtx {
+    let id = ctx.next_local
+    let l = Local {
+        id: id,
+        arena_id: ctx.arena_root,
+        type_id: _type_id_of(t),
+        name_hint: hint,
+        precision: "",
+        space: space
+    }
+    _lr_locals.push(l)
+    return LowerCtx {
+        next_local: id + 1,
+        next_block: ctx.next_block,
+        next_arena: ctx.next_arena,
+        arena_root: ctx.arena_root,
+        cur_block: ctx.cur_block,
+        has_returned: ctx.has_returned
+    }
+}
+
+// PR-C piece 3 — Extract the GPU memory `space` ("shared" / "") from a
+// HIR Let's annotations. Today we only recognize bare `@shared`; future
+// banks (`@constant`, `@texture`) plug in here.
+fn _space_from_let_anns(anns: [Annotation]) -> string {
+    let mut i = 0
+    while i < len(anns) {
+        if anns[i].name == "shared" {
+            return "shared"
+        }
+        i = i + 1
+    }
+    return ""
 }
 
 // RFC 068 P2 helpers — Mixed-precision MIR layer.
@@ -1023,7 +1064,8 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
             arena_id: raw_dst.arena_id,
             type_id: raw_dst.type_id,
             name_hint: raw_dst.name_hint,
-            precision: dst_precision
+            precision: dst_precision,
+            space: ""
         }
         _lr_locals[len(_lr_locals) - 1] = dst
         let op_name = _op_with_precision(e.text, dst_precision)
@@ -1336,7 +1378,11 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
             args: [], ret: [], domain: "", unit: ""
         }
         if len(e.children) > 0 { rhs_t = e.children[0].typ }
-        ctx2 = _fresh_local(ctx2, rhs_t, nm)
+        // PR-C piece 3 — propagate `@shared` (and friends) onto the MIR
+        // Local's `space` tag so NVPTX codegen can later emit a `.shared`
+        // directive. Non-let lowerings stay on plain `_fresh_local`.
+        let space = _space_from_let_anns(e.annotations)
+        ctx2 = _fresh_local_with_space(ctx2, rhs_t, nm, space)
         let dst = _lr_locals[len(_lr_locals) - 1]
         let mut args: [Operand] = []
         args.push(rhs_op)
@@ -1428,7 +1474,8 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
                         arena_id: -999,
                         type_id: _type_id_of(e.children[1].typ),
                         name_hint: lhs.text,
-        precision: ""
+        precision: "",
+        space: ""
                     }
                     is_global = true
                 }
@@ -2992,7 +3039,8 @@ fn _hir_empty_expr_holder() -> HExpr {
         text: "",
         children: [],
         atlas: AtlasBinding { ref_kind: "", id: "", atlas_index: -1, atlas_hash: "" },
-        def: DefId { module: "", index: -1 }
+        def: DefId { module: "", index: -1 },
+        annotations: []
     }
 }
 
@@ -3311,7 +3359,8 @@ pub fn lower_hir(module: HModule) -> MModule {
                 arena_id: 0,
                 type_id: _type_id_of(itk.sig_return),
                 name_hint: nm,
-        precision: ""
+        precision: "",
+        space: ""
             }
             globals.push(l)
         }

@@ -43,11 +43,11 @@ import "./nvptx_tma_ops.hexa"
 //    self-contained for the test-harness pattern) ────────────────────
 
 fn _local(id: i64, name: string) -> Local {
-    return Local { id: id, arena_id: 1, type_id: 0, name_hint: name, precision: "" }
+    return Local { id: id, arena_id: 1, type_id: 0, name_hint: name, precision: "", space: "" }
 }
 
 fn _miss_local() -> Local {
-    return Local { id: -1, arena_id: 0, type_id: 0, name_hint: "", precision: "" }
+    return Local { id: -1, arena_id: 0, type_id: 0, name_hint: "", precision: "", space: "" }
 }
 
 fn _op_local(local_id: i64) -> Operand {
@@ -971,7 +971,7 @@ fn _test_tma_matmul_emit() -> bool {
 // gpu_kind=GPU_KIND_KERNEL, Pass 0 classifies it into the F32 bank
 // (`%fs<id>`), matching how a real `@gpu_kernel fn k(x: f32)` param flows.
 fn _local_f32_param(id: i64, name: string) -> Local {
-    return Local { id: id, arena_id: 1, type_id: 4, name_hint: name, precision: "" }
+    return Local { id: id, arena_id: 1, type_id: 4, name_hint: name, precision: "", space: "" }
 }
 
 fn _math_call(dst: Local, op: string, a: Operand) -> Stmt {
@@ -1434,7 +1434,7 @@ fn _test_warp_shuffle_f64() -> bool {
 // `%r<mask>`. This case pins that narrow.
 
 fn _local_i64(id: i64, name: string) -> Local {
-    return Local { id: id, arena_id: 1, type_id: 1, name_hint: name, precision: "" }
+    return Local { id: id, arena_id: 1, type_id: 1, name_hint: name, precision: "", space: "" }
 }
 
 fn _stmt_assign(dst: Local, op: string, a: Operand) -> Stmt {
@@ -2022,7 +2022,8 @@ fn _local_with_precision(id: i64, name: string, precision: string) -> Local {
         arena_id: 1,
         type_id: 0,
         name_hint: name,
-        precision: precision
+        precision: precision,
+        space: ""
     }
 }
 
@@ -2556,7 +2557,8 @@ fn _hir_node(kind: string, typ: Type, text: string, kids: [HExpr]) -> HExpr {
         text: text,
         children: kids,
         atlas: _hir_atlas_binding(),
-        def: _hir_def()
+        def: _hir_def(),
+        annotations: []
     }
 }
 
@@ -2590,6 +2592,7 @@ fn _hir_fn(name: string, pnames: [string], ptypes: [Type], ret: Type, body: HExp
             kind: ExprKind::Ident,
             span: _hir_span(),
             text: pnames[p],
+            annotations: [],
             children: [],
             atlas_ref: AtlasRef { kind: "", id: "", span: _hir_span() }
         })
@@ -3750,7 +3753,7 @@ fn _test_mixed_width_cmp() -> bool {
 //  is the load-bearing property and reproduces irrespective of guards.)
 
 fn _local_array_i64(id: i64, name: string) -> Local {
-    return Local { id: id, arena_id: 1, type_id: 101, name_hint: name, precision: "" }
+    return Local { id: id, arena_id: 1, type_id: 101, name_hint: name, precision: "", space: "" }
 }
 
 fn _stmt_index_get(dst: Local, base_id: i64, idx_id: i64) -> Stmt {

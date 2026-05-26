@@ -21,10 +21,10 @@ import "../ir/mir.hexa"
 import "./nvptx_target.hexa"
 
 fn _l(id: i64, name: string) -> Local {
-    return Local { id: id, arena_id: 1, type_id: 0, name_hint: name, precision: "" }
+    return Local { id: id, arena_id: 1, type_id: 0, name_hint: name, precision: "", space: "" }
 }
 fn _li64(id: i64, name: string) -> Local {
-    return Local { id: id, arena_id: 1, type_id: 1, name_hint: name, precision: "" }
+    return Local { id: id, arena_id: 1, type_id: 1, name_hint: name, precision: "", space: "" }
 }
 fn _opl(id: i64) -> Operand {
     return Operand { kind: "local", local_id: id, int_val: 0, float_val: 0.0, str_val: "", global_id: -1 }
@@ -36,7 +36,7 @@ fn _opcf(v: f64) -> Operand {
     return Operand { kind: "const_float", local_id: -1, int_val: 0, float_val: v, str_val: "", global_id: -1 }
 }
 fn _miss() -> Local {
-    return Local { id: -1, arena_id: 0, type_id: 0, name_hint: "", precision: "" }
+    return Local { id: -1, arena_id: 0, type_id: 0, name_hint: "", precision: "", space: "" }
 }
 fn _binop(dst: Local, op: string, a: Operand, b: Operand) -> Stmt {
     let mut xs = []; xs.push(a); xs.push(b)

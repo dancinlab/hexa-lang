@@ -159,7 +159,8 @@ fn _inl_fresh_local(st: InlState, src: Local) -> InlState {
         arena_id: src.arena_id,
         type_id: src.type_id,
         name_hint: src.name_hint,
-        precision: ""
+        precision: "",
+        space: ""
     }
     let mut locals = st.locals
     locals.push(l)
@@ -237,7 +238,8 @@ fn _inl_remap_dst(dst: Local, m: InlMap) -> Local {
         arena_id: dst.arena_id,
         type_id: dst.type_id,
         name_hint: dst.name_hint,
-        precision: ""
+        precision: "",
+        space: ""
     }
 }
 
@@ -287,7 +289,8 @@ fn _inl_expand_call(
             arena_id: p.arena_id,
             type_id: p.type_id,
             name_hint: p.name_hint,
-        precision: ""
+        precision: "",
+        space: ""
         }
         let mut a: [Operand] = []
         if i < len(call_args) {

@@ -312,7 +312,8 @@ fn _p21_local(id: i64, name: string) -> Local {
         arena_id: 1,
         type_id: 0,
         name_hint: name,
-        precision: ""
+        precision: "",
+        space: ""
     }
 }
 
@@ -322,7 +323,8 @@ fn _p21_miss_local() -> Local {
         arena_id: 0,
         type_id: 0,
         name_hint: "",
-        precision: ""
+        precision: "",
+        space: ""
     }
 }
 
