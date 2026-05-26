@@ -48,6 +48,9 @@ fn _cloud_help() {
     println("connection flags [conn] (before `--`):")
     println("  --port <n>      ssh to a non-22 port (RunPod / vast.ai)")
     println("  --insecure      accept a changing/unknown host key (ephemeral pods)")
+    println("  --identity <p>  present a specific private key (-i p, IdentitiesOnly);")
+    println("                  e.g. ~/.ssh/id_vast_anima for a vast-registered key")
+    println("                  (#1155: default ~/.ssh/id_ed25519 is publickey-denied)")
     println("  --max-wall <s>  (run only) cap remote wall-clock at <s> seconds;")
     println("                  on expiry the remote command is killed and run")
     println("                  exits 124 (max-wall exceeded)")
@@ -113,6 +116,22 @@ fn _ssh_opts_cli(av: [str], start: int) -> [str] {
             opts.push("-o")
             opts.push("UserKnownHostsFile=/dev/null")
             i = i + 1
+        } else if t == "--identity" {
+            // #1155: present a SPECIFIC private key (e.g. the vast-registered
+            // ~/.ssh/id_vast_anima). Without this, hexa cloud's ssh offered
+            // only the Mac default ~/.ssh/id_ed25519 — unregistered on vast →
+            // `Permission denied (publickey)` on every direct-IP pod, forcing a
+            // raw-ssh workaround OUTSIDE the sanctioned `hexa cloud` path.
+            // IdentitiesOnly=yes stops ssh-agent keys from racing ahead of it.
+            if i + 1 < len(av) {
+                opts.push("-i")
+                opts.push(av[i + 1])
+                opts.push("-o")
+                opts.push("IdentitiesOnly=yes")
+                i = i + 2
+            } else {
+                i = i + 1
+            }
         } else if t == "--port" {
             if i + 1 < len(av) {
                 opts.push("-p")
@@ -628,7 +647,7 @@ fn main() {
         return
     }
     if sub == "version" || sub == "--version" || sub == "-v" {
-        println("hexa cloud 0.3.1 — registry pod-id sink guard + run/nohup no longer pollute reconcile (#1229 B→A) · [0.3.0: dft-run · vast_direct_endpoint #1239(2)]")
+        println("hexa cloud 0.3.2 — --identity <key> for run/exec/nohup/copy (#1155 vast publickey) · [0.3.1: registry sink guard #1229 · 0.3.0: dft-run #1249]")
         return
     }
     if sub == "rent" || sub == "up" {
