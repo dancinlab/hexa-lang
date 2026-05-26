@@ -640,12 +640,13 @@ fn _nvptx_binop_mnemonic_for_kind(op: string, kind: string) -> string {
 // _nvptx_is_math_intrinsic — does this STMT_CALL op name denote one of
 // the wired floating-point math builtins?
 fn _nvptx_is_math_intrinsic(op: string) -> bool {
-    if op == "sqrt"  { return true }
-    if op == "rsqrt" { return true }
-    if op == "max"   { return true }
-    if op == "min"   { return true }
-    if op == "exp"   { return true }
-    if op == "abs"   { return true }
+    if op == "sqrt"     { return true }
+    if op == "rsqrt"    { return true }
+    if op == "rsqrt_rn" { return true }
+    if op == "max"      { return true }
+    if op == "min"      { return true }
+    if op == "exp"      { return true }
+    if op == "abs"      { return true }
     return false
 }
 
@@ -654,7 +655,7 @@ fn _nvptx_is_math_intrinsic(op: string) -> bool {
 // non-math op (caller should not have routed it here).
 fn _nvptx_math_arity(op: string) -> i64 {
     if op == "max" || op == "min" { return 2 }
-    if op == "sqrt" || op == "rsqrt" || op == "exp" || op == "abs" { return 1 }
+    if op == "sqrt" || op == "rsqrt" || op == "rsqrt_rn" || op == "exp" || op == "abs" { return 1 }
     return 0
 }
 
@@ -1756,6 +1757,29 @@ fn _nvptx_lower_stmt(buf: [LInstr], s: Stmt, kinds: [PReg], shared_idx_off: [i64
                     rs2.push(_nvptx_op(dst_reg))
                     rs2.push(_nvptx_op(dst_reg))
                     out.push(_nvptx_instr("rcp.rn.f64", rs2, "rsqrt f64: dst = 1.0 / sqrt(x)"))
+                    return out
+                }
+                // `rsqrt_rn` — opt-in IEEE-correct rsqrt for f32 + f64.
+                // Default `rsqrt` keeps the fast `rsqrt.approx.f32` path
+                // (≈2^-23 rel tol, hardware unit) for source-level kernels
+                // that prioritize throughput. Source-level `rsqrt_rn(x)`
+                // opts into the 2-instr round-to-nearest composition for
+                // either kind (sqrt.rn + rcp.rn — within ~1 ulp libm).
+                // f64 `rsqrt` already uses this path above (no approx
+                // exists for f64); the new arm extends the same shape to
+                // f32 + makes the choice user-visible at the source level.
+                if s.op == "rsqrt_rn" {
+                    let x_reg = _nvptx_operand_text_kinds(s.args[0], kinds)
+                    let mut rrk = "f64"
+                    if dst_kind == NVPTX_RKIND_F32 { rrk = "f32" }
+                    let mut rr1 = []
+                    rr1.push(_nvptx_op(dst_reg))
+                    rr1.push(_nvptx_op(x_reg))
+                    out.push(_nvptx_instr("sqrt.rn." + rrk, rr1, "rsqrt_rn " + rrk + ": dst = sqrt(x)"))
+                    let mut rr2 = []
+                    rr2.push(_nvptx_op(dst_reg))
+                    rr2.push(_nvptx_op(dst_reg))
+                    out.push(_nvptx_instr("rcp.rn." + rrk, rr2, "rsqrt_rn " + rrk + ": dst = 1.0 / sqrt(x)"))
                     return out
                 }
                 // Fall-through honest stub for any other unmatched op/kind
