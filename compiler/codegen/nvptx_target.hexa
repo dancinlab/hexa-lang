@@ -1244,6 +1244,74 @@ fn _nvptx_lower_stmt(buf: [LInstr], s: Stmt, kinds: [PReg], shared_idx_off: [i64
             out.push(_nvptx_instr("atom.global.add.f64", a3, "atomic add f64"))
             return out
         }
+        // RFC 055 atomic-min/max — `gpu_atomic_min(base, idx, val)` /
+        // `gpu_atomic_max(...)` mirror of A1 atom.add (PR #1423). 3-arg
+        // shape, addr compute identical, swap `add.f64` mnemonic for
+        // `min.f64` / `max.f64` (PTX atom uses `min`/`max` subop names).
+        // Dst = OLD value at base[idx].
+        //   ref: PTX ISA 8.7 §9.7.13.2 atom — atomic memory operations.
+        let is_atom_min = s.op == "gpu_atomic_min"
+        let is_atom_max = s.op == "gpu_atomic_max"
+        if (is_atom_min || is_atom_max) && len(s.args) >= 3 {
+            let base_reg = _nvptx_operand_text_kinds(s.args[0], kinds)
+            let idx_reg  = _nvptx_operand_text_kinds(s.args[1], kinds)
+            let val_reg  = _nvptx_operand_text_kinds(s.args[2], kinds)
+            let addr_reg = "%rd_idxs_addr"
+            let mut a1 = []
+            a1.push(_nvptx_op(addr_reg))
+            a1.push(_nvptx_op(idx_reg))
+            a1.push(_nvptx_op("8"))
+            out.push(_nvptx_instr("mul.lo.s64", a1, "atomic_min/max byte off"))
+            let mut a2 = []
+            a2.push(_nvptx_op(addr_reg))
+            a2.push(_nvptx_op(addr_reg))
+            a2.push(_nvptx_op(base_reg))
+            out.push(_nvptx_instr("add.s64", a2, "atomic_min/max addr"))
+            let mut a3 = []
+            if s.dst.id >= 0 {
+                a3.push(_nvptx_op(_nvptx_lookup_reg_for_local(kinds, s.dst.id)))
+            } else {
+                a3.push(_nvptx_op("%fd0"))
+            }
+            a3.push(_nvptx_op(_nvptx_addr_deref(addr_reg)))
+            a3.push(_nvptx_op(val_reg))
+            let mnem = if is_atom_min { "atom.global.min.f64" } else { "atom.global.max.f64" }
+            out.push(_nvptx_instr(mnem, a3, s.op + " f64"))
+            return out
+        }
+        // RFC 055 atomic-cas — `gpu_atomic_cas(base, idx, old, new) -> f64`.
+        // 4-arg shape: addr compute + `atom.global.cas.b64 %dst, [addr],
+        // %old, %new;`. CAS returns the value previously at [addr];
+        // caller compares to confirm successful swap. Used for lock-free
+        // queues / spin-locks / sentinel publishing.
+        if s.op == "gpu_atomic_cas" && len(s.args) >= 4 {
+            let base_reg = _nvptx_operand_text_kinds(s.args[0], kinds)
+            let idx_reg  = _nvptx_operand_text_kinds(s.args[1], kinds)
+            let old_reg  = _nvptx_operand_text_kinds(s.args[2], kinds)
+            let new_reg  = _nvptx_operand_text_kinds(s.args[3], kinds)
+            let addr_reg = "%rd_idxs_addr"
+            let mut a1 = []
+            a1.push(_nvptx_op(addr_reg))
+            a1.push(_nvptx_op(idx_reg))
+            a1.push(_nvptx_op("8"))
+            out.push(_nvptx_instr("mul.lo.s64", a1, "atomic_cas byte off"))
+            let mut a2 = []
+            a2.push(_nvptx_op(addr_reg))
+            a2.push(_nvptx_op(addr_reg))
+            a2.push(_nvptx_op(base_reg))
+            out.push(_nvptx_instr("add.s64", a2, "atomic_cas addr"))
+            let mut a3 = []
+            if s.dst.id >= 0 {
+                a3.push(_nvptx_op(_nvptx_lookup_reg_for_local(kinds, s.dst.id)))
+            } else {
+                a3.push(_nvptx_op("%fd0"))
+            }
+            a3.push(_nvptx_op(_nvptx_addr_deref(addr_reg)))
+            a3.push(_nvptx_op(old_reg))
+            a3.push(_nvptx_op(new_reg))
+            out.push(_nvptx_instr("atom.global.cas.b64", a3, "atomic cas b64"))
+            return out
+        }
         // RFC 055 §5 multi-block global thread index. PTX has no single
         // sreg for "blockIdx * blockDim + threadIdx", so the call expands
         // to a 5-instr composition using one .u32 scratch reg (declared
@@ -1560,6 +1628,45 @@ fn _nvptx_lower_stmt(buf: [LInstr], s: Stmt, kinds: [PReg], shared_idx_off: [i64
                 out.push(_nvptx_instr(PTX_OP_SHFL_SYNC_BFLY_B32, a,
                     "gpu_warp_shuffle_xor(v, lane_mask)"))
             }
+            return out
+        }
+        // RFC 055 F5 — `gpu_warp_shuffle_down(v, delta) -> u32` /
+        // `gpu_warp_shuffle_up(v, delta) -> u32`. Mirror of _xor (mode
+        // dispatch changes between bfly / down / up subop family).
+        // 32-bit src single-instr; f64 caller should compose via 2-step
+        // u32 split + 2× shuffle (mirror of _xor f64 path — deferred).
+        let is_shfl_down = s.op == "gpu_warp_shuffle_down"
+        let is_shfl_up   = s.op == "gpu_warp_shuffle_up"
+        if (is_shfl_down || is_shfl_up) && len(s.args) >= 2 {
+            let dst_reg = _nvptx_lookup_reg_for_local(kinds, s.dst.id)
+            let src_reg = _nvptx_reg_u32(s.args[0].local_id)
+            let delta_reg = _nvptx_reg_u32(s.args[1].local_id)
+            let mut a = []
+            a.push(_nvptx_op(dst_reg))
+            a.push(_nvptx_op(src_reg))
+            a.push(_nvptx_op(delta_reg))
+            a.push(_nvptx_op("0x1f"))
+            a.push(_nvptx_op("0xffffffff"))
+            let mnem = if is_shfl_down { "shfl.sync.down.b32" } else { "shfl.sync.up.b32" }
+            out.push(_nvptx_instr(mnem, a, s.op + "(v, delta)"))
+            return out
+        }
+        // RFC 055 F3 — `select(cond, a, b) -> f64`. PTX selp instruction
+        // branch-free conditional. Eliminates divergence in warp execution.
+        //   selp.f64 %dst, %a, %b, %p_cond;
+        // cond operand must be a predicate (.pred bank); operand
+        // classification has been done by upstream binop arms.
+        if s.op == "select" && len(s.args) >= 3 {
+            let dst_reg = _nvptx_lookup_reg_for_local(kinds, s.dst.id)
+            let cond_reg = _nvptx_operand_text_kinds(s.args[0], kinds)
+            let a_reg = _nvptx_operand_text_kinds(s.args[1], kinds)
+            let b_reg = _nvptx_operand_text_kinds(s.args[2], kinds)
+            let mut a = []
+            a.push(_nvptx_op(dst_reg))
+            a.push(_nvptx_op(a_reg))
+            a.push(_nvptx_op(b_reg))
+            a.push(_nvptx_op(cond_reg))
+            out.push(_nvptx_instr("selp.f64", a, "select(cond, a, b)"))
             return out
         }
         // RFC 067 LANDED — Real WMMA instruction emit. Replaces the
@@ -2426,6 +2533,15 @@ fn _nvptx_classify_local_for_stmt(s: Stmt) -> string {
         // bank (`%fd<id>`); the emit at STMT_CALL site uses the dst reg
         // as the destination operand of `atom.global.add.f64`.
         if s.op == "gpu_atomic_add" { return NVPTX_RKIND_F64 }
+        // RFC 055 atomic-min/max/cas — f64 OLD-value return.
+        if s.op == "gpu_atomic_min" { return NVPTX_RKIND_F64 }
+        if s.op == "gpu_atomic_max" { return NVPTX_RKIND_F64 }
+        if s.op == "gpu_atomic_cas" { return NVPTX_RKIND_F64 }
+        // RFC 055 select.f64 — branch-free conditional, f64 dst.
+        if s.op == "select" { return NVPTX_RKIND_F64 }
+        // RFC 055 gpu_warp_shuffle_down/up — u32 dst (mirror of _xor).
+        if s.op == "gpu_warp_shuffle_down" { return NVPTX_RKIND_U32 }
+        if s.op == "gpu_warp_shuffle_up"   { return NVPTX_RKIND_U32 }
         // RFC 071 P3+ — int-cast intrinsics. `to_i64(x)` / `to_i32(x)`
         // are the primary widening / narrowing casts the HIR→MIR layer
         // synthesizes when an integer operand needs to match an array
