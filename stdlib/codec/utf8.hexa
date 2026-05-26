@@ -1,0 +1,143 @@
+// HEXA Standard Library — codec/utf8
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// UTF-8 encode/decode validation + codepoint iteration — pure hexa, no
+// libc dependency. Closes RUNTIME.md Phase 2 stdlib primitive (Bytes ↔
+// string codec subset).
+//
+// Hexa strings are already UTF-8 byte sequences (the runtime stores
+// the canonical byte array). This module exposes the codepoint-level
+// view + validation for callers that need to count graphemes/codepoints
+// without delegating to libc iconv/ICU.
+//
+// Surface:
+//   pub fn utf8_is_valid(s: string) -> bool          — byte sequence is valid UTF-8
+//   pub fn utf8_codepoint_count(s: string) -> int    — number of codepoints (-1 if invalid)
+//   pub fn utf8_codepoints(s: string) -> [int]       — list of codepoints ([] if invalid)
+//   pub fn utf8_from_codepoints(cps: [int]) -> string — encode codepoint list to UTF-8
+//
+// Invariants:
+//   • Validates RFC 3629: max 4 bytes, no overlong, no surrogates (U+D800-DFFF),
+//     no codepoints > U+10FFFF.
+//   • utf8_codepoint_count returns -1 (NOT 0) on invalid — distinct from empty.
+//   • utf8_from_codepoints rejects values outside [0, 0x10FFFF] minus surrogates
+//     by emitting nothing for that codepoint (caller can guard).
+
+@pure
+fn _utf8_leading_size(b: int) -> int {
+    // Number of bytes in this UTF-8 sequence given the leading byte.
+    // 0 = invalid leading byte (continuation or > 0xF4).
+    if b < 0x80 { return 1 }
+    if b < 0xC2 { return 0 }   // 0x80-0xBF continuation or 0xC0-0xC1 overlong
+    if b < 0xE0 { return 2 }
+    if b < 0xF0 { return 3 }
+    if b < 0xF5 { return 4 }
+    return 0
+}
+
+@pure
+pub fn utf8_is_valid(s: string) -> bool {
+    let n = byte_len(s)
+    let mut i = 0
+    while i < n {
+        let b0 = s.byte_at(i)
+        let sz = _utf8_leading_size(b0)
+        if sz == 0 { return false }
+        if i + sz > n { return false }
+        // Validate continuation bytes (must be 10xxxxxx = 0x80-0xBF).
+        let mut k = 1
+        while k < sz {
+            let bk = s.byte_at(i + k)
+            if bk < 0x80 || bk > 0xBF { return false }
+            k = k + 1
+        }
+        // Validate codepoint range + overlong + surrogate.
+        if sz >= 2 {
+            let b1 = s.byte_at(i + 1)
+            // Overlong: 2-byte starting with 0xC0/0xC1 (caught above as < 0xC2).
+            // 3-byte overlong: 0xE0 followed by < 0xA0.
+            if sz == 3 && b0 == 0xE0 && b1 < 0xA0 { return false }
+            // Surrogate: U+D800-DFFF (3-byte 0xED followed by >= 0xA0).
+            if sz == 3 && b0 == 0xED && b1 >= 0xA0 { return false }
+            // 4-byte overlong: 0xF0 followed by < 0x90.
+            if sz == 4 && b0 == 0xF0 && b1 < 0x90 { return false }
+            // 4-byte > U+10FFFF: 0xF4 followed by >= 0x90.
+            if sz == 4 && b0 == 0xF4 && b1 >= 0x90 { return false }
+        }
+        i = i + sz
+    }
+    return true
+}
+
+@pure
+pub fn utf8_codepoint_count(s: string) -> int {
+    if !utf8_is_valid(s) { return -1 }
+    let n = byte_len(s)
+    let mut count = 0
+    let mut i = 0
+    while i < n {
+        let sz = _utf8_leading_size(s.byte_at(i))
+        i = i + sz
+        count = count + 1
+    }
+    return count
+}
+
+@pure
+pub fn utf8_codepoints(s: string) -> [int] {
+    if !utf8_is_valid(s) { return [] }
+    let n = byte_len(s)
+    let mut cps: [int] = []
+    let mut i = 0
+    while i < n {
+        let b0 = s.byte_at(i)
+        let sz = _utf8_leading_size(b0)
+        let mut cp = 0
+        if sz == 1 {
+            cp = b0
+        } else if sz == 2 {
+            cp = ((b0 - 0xC0) * 64) + (s.byte_at(i+1) - 0x80)
+        } else if sz == 3 {
+            cp = ((b0 - 0xE0) * 4096) + ((s.byte_at(i+1) - 0x80) * 64) + (s.byte_at(i+2) - 0x80)
+        } else if sz == 4 {
+            cp = ((b0 - 0xF0) * 262144) + ((s.byte_at(i+1) - 0x80) * 4096)
+               + ((s.byte_at(i+2) - 0x80) * 64) + (s.byte_at(i+3) - 0x80)
+        }
+        cps.push(cp)
+        i = i + sz
+    }
+    return cps
+}
+
+@pure
+pub fn utf8_from_codepoints(cps: [int]) -> string {
+    let n = len(cps)
+    let mut out: [int] = []
+    let mut i = 0
+    while i < n {
+        let cp = cps[i]
+        if cp < 0 || cp > 0x10FFFF {
+            // Invalid — skip this codepoint.
+        } else if cp >= 0xD800 && cp <= 0xDFFF {
+            // Surrogate — skip.
+        } else if cp < 0x80 {
+            out.push(cp)
+        } else if cp < 0x800 {
+            out.push(0xC0 + (cp / 64))
+            out.push(0x80 + (cp % 64))
+        } else if cp < 0x10000 {
+            out.push(0xE0 + (cp / 4096))
+            out.push(0x80 + ((cp / 64) % 64))
+            out.push(0x80 + (cp % 64))
+        } else {
+            out.push(0xF0 + (cp / 262144))
+            out.push(0x80 + ((cp / 4096) % 64))
+            out.push(0x80 + ((cp / 64) % 64))
+            out.push(0x80 + (cp % 64))
+        }
+        i = i + 1
+    }
+    return bytes_to_str(out)
+}
