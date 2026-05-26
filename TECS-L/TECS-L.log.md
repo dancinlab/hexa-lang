@@ -3,6 +3,18 @@
 Append-only history sister of `TECS-L.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
 
+## 2026-05-26 · R2 round 2 — F-NEW-1/2/3 batch closure (19/19 🔵 SUPPORTED-FORMAL)
+
+- [x] **F-NEW-1 — Γ₀(N) sweep N=31..40 CLOSED**: 10/10 candidates 🔵. gamma0_index(N)=ψ(N) hexa-native closed-form exact ∀ N∈[31,40] — ψ(31)=32 · ψ(32)=48 · ψ(33)=48 · ψ(34)=54 · ψ(35)=48 · ψ(36)=72 · ψ(37)=38 · ψ(38)=60 · ψ(39)=56 · ψ(40)=72. MF1 [1,30] → [1,40] extension. → `.verdicts/tecs-l-f-new-1/gamma0_{31..40}.txt` 10 raw verdict.
+- [x] **F-NEW-2 — σ(M_p)=2^p Lucas-Lehmer 인접 batch CLOSED**: 5/5 candidates 🔵. σ(31)=32 · σ(127)=128 · σ(8191)=8192 · σ(131071)=131072 · σ(524287)=524288. Euclid-Euler 완전수 정리 family MR3, p∈{5,7,13,17,19} Mersenne 소수 prime-witness. → `.verdicts/tecs-l-f-new-2/sigma_*.txt` 5 raw verdict.
+- [x] **F-NEW-3 — jacobi (a/p) 양수 batch CLOSED**: 4/4 양수 candidates 🔵. jacobi(2,7)=1 · jacobi(3,11)=1 · jacobi(5,11)=1 · jacobi(7,3)=1. → `.verdicts/tecs-l-f-new-3/jacobi_*.txt` 4 raw verdict.
+- [x] **음수 jacobi calc gap → INBOX 후보**: 음수 인자 12 candidates (a<0 · a∈{-1,-2,-3,-5}·p∈{3,5,7,11}) = a<0 dispatch 미지원 (verify_cli numeric path 양수만). cap n=12 calc-gap family #1230 후속 (INBOX 신규 entry 후보).
+- **요약**: total 19 candidates · 🔵=19 · 🟢=0 · 🟡=0 · 🟠=0 · 🔴=0 · 0 falsified. F-NEW promote 3개 milestone 전부 close.
+- **방법**: PATH-relative `hexa verify --expr <fn> <args...> --no-absorb` (atlas auto-absorb 재귀 회피 — 첫 hang 진단 후 적용; #1295 RFC 080 dispatch family 와 별개의 verify-internal recursion). 각 batch 후 checkpoint commit.
+- **다음 round seeds**: (a) F-NEW-1 N=41..60 (20 candidates · sieve closed-form extension) · (b) σ_2(N) divisor-square sum batch (5-10 candidates) · (c) verify_cli a<0 jacobi dispatch fix (INBOX) — calc gap closure.
+- 격리 worktree `.claude/worktrees/agent-a68d06c46ffa191f8` (branch `worktree-agent-a68d06c46ffa191f8`).
+
+
 ## 2026-05-26 · 새 대축 R3 — CM1-CM7 Clay 7 candidate honest closure (수학 대축 G 완결)
 
 - [x] CM1-CM7 (수학 대축 축 G) — Clay 7 Millennium candidate g5 triage **honest closure**: aggregate CANDIDATE_SPECS_ONLY (0/7 본 도메인 formal proof, README 확인). **candidate 전부 🟠** (BSD·Hodge·N-S·P-vs-NP·Riemann·Yang-Mills 미증명 조직화 가설) + **Poincaré 🟡** (Perelman 2003 외부 증명) + 각 난제 **lattice layer 🔵** (σ/τ/φ @ n=6 M2 cite; YM β₀=σ−sopfr=12−5=7, sopfr 🟠 calculator gap). → `.verdicts/tecs-l-cm17-clay/`
