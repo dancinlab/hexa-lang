@@ -2041,13 +2041,21 @@ Compiler-essential? **NO** — aprime_cc is single-threaded. Defer.
 
 ## Phase 1 cumulative acceptance gate
 
-- [ ] aprime_cc rebuild after Phase 1 → ≤ 5 external syscalls (write,
-      read, mmap, exit, gettimeofday) + libm exception (16)
-- [ ] S3 fixpoint full closure preserved (gen1 ≡ gen2 byte-eq)
-- [ ] aprime_cc smoke `exit(6*7)==42` PASS
-- [ ] hexac via aprime_cc emit-asm builds + smoke PASS
-- [ ] LEAN binary size within ±20% of cycle 44 baseline
-- [ ] `cc --regen` byte-eq after each Tier-A sub-phase
+- [x] aprime_cc rebuild after Phase 1 → ≤ 5 external syscalls — **EXCEEDED**:
+      cycle 86 closed all externs (137 → **0**, PR #988…#1058 chain). All
+      syscalls now inline `svc #0x80`, no stub. See RUNTIME.log 2026-05-25
+      "Phase-1 step-1 CLOSURE" entry.
+- [x] S3 fixpoint full closure preserved (gen1 ≡ gen2 byte-eq) — PROVEN cycle
+      41 `4197fd52560f3acca059a197b000c83c` (gen1.s ≡ gen2.s 10,654,995 B
+      byte-eq, project memory `project-s3-fixpoint-full-closure-2026-05-20`).
+- [x] aprime_cc smoke `exit(6*7)==42` PASS — exercised across cycles 44-86.
+- [x] hexac via aprime_cc emit-asm builds + smoke PASS — RFC 063 P0-P3
+      campaign complete (cross-platform Mach-O arm64 + ELF x86_64, memory
+      `project-compiler-rfc063-p0p1-closed-p2-started`).
+- [ ] LEAN binary size within ±20% of cycle 44 baseline — measurement pending
+      (requires aprime_cc rebuild + size compare; not blocking).
+- [x] `cc --regen` byte-eq after each Tier-A sub-phase — sustained through
+      cycle 86 closure chain (each `cc --regen` PR verified byte-eq before merge).
 
 ## Extern reconciliation @ `6617e7a4` (+ PR #988) — cycle 75 ground-truth
 

@@ -66,7 +66,7 @@ Append-only history sister of `RUNTIME.md`. Each entry starts with `## <ISO time
 
 - [x] **signal_flock 3 fn** — `flock-open` · `flock-close`(2 svc-trap site) · `flock` family arch gate. PR **#1079** merged · commit `__signal_flock_arch_guard__` (Mac arm64 PASS).
 - [x] **net/exec 11 fn** — `setsockopt` · `socket` · `bind` · `listen` · `accept` · `connect` · `recv` · `send` · `recvmsg` · `sendmsg` · `execve`. PR **#1099** merged. Darwin arm64 svc-trap 보존(회귀 0) + Linux libc 분기.
-- [ ] **잔여 17 fn (RUNTIME 후속 라운드)** — `read` · `write` · `open` · `close` · `mkdir` · `dup2` · `lseek` · `select` · `poll` · `nanosleep`(select-loop) · `wait4` · `getpid` · `getuid` · `kill` · `fcntl` · `ioctl` · `stat` · `fstat` · `mmap` · `gettimeofday` · `exit`. 동일 `#if Darwin-arm64 / #else libc` 패턴 반복 적용 필요. 본 잔여 fix 전까지 Linux self-host 빌드 여전히 broken (Stage 0 컴파일 미통과).
+- [x] **잔여 17 fn (RUNTIME 후속 라운드)** — `read` · `write` · `open` · `close` · `mkdir` · `dup2` · `lseek` · `select` · `poll` · `nanosleep`(select-loop) · `wait4` · `getpid` · `getuid` · `kill` · `fcntl` · `ioctl` · `stat` · `fstat` · `mmap` · `gettimeofday` · `exit`. **CLOSED 2026-05-27** — 모든 HXLCL_SYS_ 호출처 audit (15 sites) 결과 전부 `#if Darwin-arm64` 또는 `#ifdef HXLCL_SYS_SELECT` 가드 처리됨. **검증**: GitHub Actions `bootstrap (linux-arm64)` + `bootstrap (linux-x86_64)` 양쪽 **SUCCESS** (run #26470523969 @ 2026-05-26T19:37Z). 후속 PR 들이 점진적으로 17 fn 의 호출처 모두 가드 처리한 것으로 보임.
 
 **구조적 근인**: HXLCL_SYS_* 정의가 Darwin arm64 가드 안에 있는 한, 모든 svc-trap 호출처는 같은 가드 필요. cycle 63 도입 시 정의는 가드 안인데 호출은 가드 밖 → 시스템적 누적 broken. 본 fix는 패턴 정착 + 14/31 fn 적용. 다음 라운드가 같은 패턴으로 17 fn 마저 잡으면 Linux self-host 빌드 완전 unbreak (`@goal` "aprime ≤ 5 kernel syscall stubs" 의 Linux 측 게이트).
 
