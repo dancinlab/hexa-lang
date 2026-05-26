@@ -2140,11 +2140,19 @@ correctness (per M10/M16; see cycle-69 catalog + PR #251/#426 analysis)
 
 ## Phase 2 — Tier-B stdlib primitives (~50 fns, est 4-8 cycles)
 
-- [ ] regex: `_regcomp`, `_regexec`, `_regfree` (DFA in hexa)
-- [ ] JSON: parse/serialize (already mostly hexa; finish migration)
-- [ ] Bytes ↔ string codec (UTF-8 / hex / base64)
-- [ ] Networking (TCP/UDP via syscalls; HTTP/2 in hexa)
-- [ ] Threading (green threads in hexa or keep C pthread?)
+- [ ] regex: `_regcomp`, `_regexec`, `_regfree` (DFA in hexa) — `stdlib/regex/`
+      EXISTS as POSIX ERE wrapper (delegates to libc regcomp/regexec via
+      `hexa_regex_*` builtins). DFA-in-hexa replacement still open.
+- [x] JSON: parse/serialize (already mostly hexa; finish migration) — `stdlib/json.hexa`
+      + `stdlib/json_object.hexa` + `stdlib/jsonl_pool.hexa` land hexa-native.
+- [x] Bytes ↔ string codec (UTF-8 / hex / base64) — `stdlib/codec/` net-new (2026-05-27):
+      `base64.hexa` (RFC 4648), `hex.hexa` (base16), `utf8.hexa` (RFC 3629 validate +
+      codepoint iter). Pure hexa, no libc.
+- [x] Networking (TCP/UDP via syscalls; HTTP/2 in hexa) — `stdlib/net/` has
+      `socket.hexa` (TCP via socket+bind+listen+accept+connect svc-trap),
+      `http_client.hexa`/`http_server.hexa`, `websocket_native.hexa`,
+      `concurrent_serve.hexa`. HTTP/2 still open.
+- [ ] Threading (green threads in hexa or keep C pthread?) — architectural decision.
 - [ ] Crypto helpers: HMAC-DRBG, scrypt, pbkdf2 (slow path)
 - [ ] More math (gamma, beta, erf — for stdlib/quantum, sim_universe)
 - [ ] Time format (ISO 8601, RFC 3339)
