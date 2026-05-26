@@ -116,6 +116,12 @@ pub struct Expr {
     kind: ExprKind,
     span: Span,
     text: string,
+    // RFC PR-C piece 2: bare annotations (e.g. `@shared let sm: [f64; 256]`)
+    // attached to expression-position statements. Currently consumed by the
+    // GPU codegen path for `@shared` body-let → PTX `.shared` directive
+    // (piece 4+5). Default `[]` for every other Expr — propagates through
+    // HIR (`HExpr.annotations`) → MIR (`Local.space`).
+    annotations: [Annotation],
     children: [Expr],
     atlas_ref: AtlasRef
 }

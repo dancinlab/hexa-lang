@@ -191,19 +191,19 @@ fn _check_not_contains(ok_in: bool, hay: string, needle: string, label: string) 
 // ── MIR construction helpers for the vec-add MIR fixture ─────────────
 
 fn _miss_local() -> Local {
-    return Local { id: -1, arena_id: 0, type_id: 0, name_hint: "", precision: "" }
+    return Local { id: -1, arena_id: 0, type_id: 0, name_hint: "", precision: "", space: "" }
 }
 
 fn _kern_local(id: i64, name: string) -> Local {
     // arena_id 0 = kernel buffer (mirrors `_metal_local_address_space`'s
     // device-memory branch).
-    return Local { id: id, arena_id: 0, type_id: 0, name_hint: name, precision: ".f32" }
+    return Local { id: id, arena_id: 0, type_id: 0, name_hint: name, precision: ".f32", space: "" }
 }
 
 fn _priv_local(id: i64, name: string) -> Local {
     // arena_id > 0 = function-local thread-private (mirrors the
     // _metal_local_address_space "thread" branch).
-    return Local { id: id, arena_id: 1, type_id: 0, name_hint: name, precision: ".f32" }
+    return Local { id: id, arena_id: 1, type_id: 0, name_hint: name, precision: ".f32", space: "" }
 }
 
 fn _op_local(local_id: i64) -> Operand {
@@ -431,7 +431,7 @@ fn _test_classifier_helpers() -> bool {
     let mut ok = true
     let kbuf = _kern_local(0, "kbuf")
     let pvar = _priv_local(1, "pvar")
-    let untag = Local { id: 2, arena_id: 1, type_id: 0, name_hint: "untag", precision: "" }
+    let untag = Local { id: 2, arena_id: 1, type_id: 0, name_hint: "untag", precision: "", space: "" }
 
     if _metal_local_address_space(kbuf) != METAL_AS_DEVICE {
         println("  FAIL: kernel-buffer Local should classify as device (got '" + _metal_local_address_space(kbuf) + "')")

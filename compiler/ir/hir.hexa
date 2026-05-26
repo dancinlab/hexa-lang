@@ -52,7 +52,13 @@ pub struct HExpr {
     text: string,
     children: [HExpr],
     atlas: AtlasBinding,
-    def: DefId           // for ident/call resolved to a definition
+    def: DefId,          // for ident/call resolved to a definition
+    // RFC PR-C piece 3: bare annotations preserved from AST `Expr.annotations`.
+    // Today only `let`-position annotations (e.g. `@shared let sm: [f64; 256]`)
+    // are populated by the lowering; other Expr kinds default to `[]`.
+    // Consumed by `hir_to_mir.hexa` → `Local.space` (piece 3) and ultimately
+    // by NVPTX codegen `_emit_ptx_func` (piece 4).
+    annotations: [Annotation]
 }
 
 // ── HIR items (typed) ─────────────────────────────────────────

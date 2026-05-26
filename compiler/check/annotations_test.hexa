@@ -52,6 +52,7 @@ fn _empty_block(file: string, line: i64) -> Expr {
         kind: ExprKind::Block,
         span: _span(file, line, 1, 1),
         text: "",
+        annotations: [],
         children: [],
         atlas_ref: _empty_atlas_ref()
     }
@@ -62,6 +63,7 @@ fn _ident_expr(name: string, file: string, line: i64, col: i64) -> Expr {
         kind: ExprKind::Ident,
         span: _span(file, line, col, len(name)),
         text: name,
+        annotations: [],
         children: [],
         atlas_ref: _empty_atlas_ref()
     }
@@ -72,6 +74,7 @@ fn _string_expr(s: string, file: string, line: i64, col: i64) -> Expr {
         kind: ExprKind::LiteralString,
         span: _span(file, line, col, len(s) + 2),
         text: s,
+        annotations: [],
         children: [],
         atlas_ref: _empty_atlas_ref()
     }
@@ -86,6 +89,7 @@ fn _kwarg_expr(key: string, val: string, file: string, line: i64, col: i64) -> E
         kind: ExprKind::Assign,
         span: _span(file, line, col + len(key), 1),
         text: "=",
+        annotations: [],
         children: kids,
         atlas_ref: _empty_atlas_ref()
     }

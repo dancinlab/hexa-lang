@@ -153,6 +153,7 @@ fn _empty_expr() -> Expr {
         kind: ExprKind::Ident,
         span: Span { file: "", line: 0, col: 0, len: 0 },
         text: "",
+        annotations: [],
         children: [],
         atlas_ref: AtlasRef { kind: "", id: "", span: Span { file: "", line: 0, col: 0, len: 0 } }
     }

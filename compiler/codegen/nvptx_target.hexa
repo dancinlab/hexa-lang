@@ -4731,7 +4731,8 @@ fn _nvptx_unroll_clone_stmt(s: Stmt, dsts: [i64], offset: i64) -> Stmt {
             arena_id: s.dst.arena_id,
             type_id: s.dst.type_id,
             name_hint: s.dst.name_hint,
-        precision: ""
+        precision: "",
+        space: ""
         }
     }
     // Renumber operands referencing body-defined Locals.
@@ -4976,7 +4977,8 @@ pub fn _nvptx_unroll_pass(mfn: MFunc, factor: i64) -> MFunc {
                         arena_id: L.arena_id,
                         type_id: L.type_id,
                         name_hint: L.name_hint + "_u" + to_string(ic),
-        precision: ""
+        precision: "",
+        space: ""
                     })
                     found = true
                 }
@@ -4990,7 +4992,8 @@ pub fn _nvptx_unroll_pass(mfn: MFunc, factor: i64) -> MFunc {
                     arena_id: 1,
                     type_id: 0,
                     name_hint: "unroll_clone",
-        precision: ""
+        precision: "",
+        space: ""
                 })
             }
             di = di + 1

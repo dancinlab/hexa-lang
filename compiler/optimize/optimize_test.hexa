@@ -25,12 +25,13 @@ fn _local(id: i64, name: string) -> Local {
         arena_id: 1,
         type_id: 1,
         name_hint: name,
-        precision: ""
+        precision: "",
+        space: ""
     }
 }
 
 fn _miss_local() -> Local {
-    return Local { id: -1, arena_id: 0, type_id: 0, name_hint: "", precision: "" }
+    return Local { id: -1, arena_id: 0, type_id: 0, name_hint: "", precision: "", space: "" }
 }
 
 fn _op_local(local_id: i64) -> Operand {

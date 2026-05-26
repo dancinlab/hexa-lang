@@ -88,7 +88,8 @@ fn _ty(kind: string) -> Type {
 fn _he(kind: string, typ: Type, text: string, kids: [HExpr]) -> HExpr {
     return HExpr {
         kind: kind, span: _span0(), typ: typ, text: text,
-        children: kids, atlas: _atlas0(), def: _resolved_def()
+        children: kids, atlas: _atlas0(), def: _resolved_def(),
+        annotations: []
     }
 }
 

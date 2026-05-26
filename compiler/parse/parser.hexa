@@ -78,6 +78,7 @@ fn empty_expr() -> Expr {
         kind: ExprKind::Ident,
         span: empty_span(),
         text: "",
+        annotations: [],
         children: [],
         atlas_ref: empty_atlas()
     }
@@ -445,6 +446,7 @@ fn parse_assignment() -> Expr {
             kind: ExprKind::Assign,
             span: op.span,
             text: op.text,
+            annotations: [],
             children: kids,
             atlas_ref: empty_atlas()
         }
@@ -469,6 +471,7 @@ fn parse_logical_or() -> Expr {
             kind: ExprKind::BinOp,
             span: op.span,
             text: op.text,
+            annotations: [],
             children: kids,
             atlas_ref: empty_atlas()
         }
@@ -488,6 +491,7 @@ fn parse_logical_and() -> Expr {
             kind: ExprKind::BinOp,
             span: op.span,
             text: op.text,
+            annotations: [],
             children: kids,
             atlas_ref: empty_atlas()
         }
@@ -509,6 +513,7 @@ fn parse_bitwise() -> Expr {
             kind: ExprKind::BinOp,
             span: op.span,
             text: op.text,
+            annotations: [],
             children: kids,
             atlas_ref: empty_atlas()
         }
@@ -528,6 +533,7 @@ fn parse_equality() -> Expr {
             kind: ExprKind::BinOp,
             span: op.span,
             text: op.text,
+            annotations: [],
             children: kids,
             atlas_ref: empty_atlas()
         }
@@ -547,6 +553,7 @@ fn parse_comparison() -> Expr {
             kind: ExprKind::BinOp,
             span: op.span,
             text: op.text,
+            annotations: [],
             children: kids,
             atlas_ref: empty_atlas()
         }
@@ -566,6 +573,7 @@ fn parse_additive() -> Expr {
             kind: ExprKind::BinOp,
             span: op.span,
             text: op.text,
+            annotations: [],
             children: kids,
             atlas_ref: empty_atlas()
         }
@@ -585,6 +593,7 @@ fn parse_multiplicative() -> Expr {
             kind: ExprKind::BinOp,
             span: op.span,
             text: op.text,
+            annotations: [],
             children: kids,
             atlas_ref: empty_atlas()
         }
@@ -606,6 +615,7 @@ fn parse_unary() -> Expr {
             kind: ExprKind::UnOp,
             span: op.span,
             text: op.text,
+            annotations: [],
             children: kids,
             atlas_ref: empty_atlas()
         }
@@ -626,6 +636,7 @@ fn parse_postfix() -> Expr {
                 kind: ExprKind::Field,
                 span: name_tok.span,
                 text: name_tok.text,
+                annotations: [],
                 children: kids,
                 atlas_ref: empty_atlas()
             }
@@ -647,6 +658,7 @@ fn parse_postfix() -> Expr {
                 kind: ExprKind::Call,
                 span: close.span,
                 text: "",
+                annotations: [],
                 children: kids,
                 atlas_ref: empty_atlas()
             }
@@ -662,6 +674,7 @@ fn parse_postfix() -> Expr {
                 kind: ExprKind::Index,
                 span: close.span,
                 text: "",
+                annotations: [],
                 children: kids,
                 atlas_ref: empty_atlas()
             }
@@ -699,6 +712,7 @@ fn parse_primary() -> Expr {
             kind: k,
             span: t.span,
             text: t.text,
+            annotations: [],
             children: [],
             atlas_ref: empty_atlas()
         }
@@ -709,6 +723,7 @@ fn parse_primary() -> Expr {
             kind: ExprKind::LiteralString,
             span: t.span,
             text: t.text,
+            annotations: [],
             children: [],
             atlas_ref: empty_atlas()
         }
@@ -721,6 +736,7 @@ fn parse_primary() -> Expr {
             kind: ExprKind::LiteralChar,
             span: t.span,
             text: t.text,
+            annotations: [],
             children: [],
             atlas_ref: empty_atlas()
         }
@@ -731,6 +747,7 @@ fn parse_primary() -> Expr {
             kind: ExprKind::LiteralBool,
             span: t.span,
             text: t.text,
+            annotations: [],
             children: [],
             atlas_ref: empty_atlas()
         }
@@ -743,6 +760,7 @@ fn parse_primary() -> Expr {
             kind: ExprKind::AtlasRef,
             span: t.span,
             text: t.text,
+            annotations: [],
             children: [],
             atlas_ref: aref
         }
@@ -772,6 +790,7 @@ fn parse_primary() -> Expr {
                 kind: ExprKind::EnumPath,
                 span: t.span,
                 text: t.text + "::" + v_tok.text,
+                annotations: [],
                 children: kids,
                 atlas_ref: empty_atlas()
             }
@@ -816,6 +835,7 @@ fn parse_primary() -> Expr {
             kind: ExprKind::Ident,
             span: t.span,
             text: t.text,
+            annotations: [],
             children: [],
             atlas_ref: empty_atlas()
         }
@@ -868,6 +888,7 @@ fn parse_primary() -> Expr {
                 kind: ExprKind::ArrayLit,
                 span: lb.span,
                 text: "",
+                annotations: [],
                 children: [],
                 atlas_ref: empty_atlas()
             }
@@ -876,6 +897,7 @@ fn parse_primary() -> Expr {
             kind: ExprKind::ArrayLit,
             span: lb.span,
             text: "",
+            annotations: [],
             children: elems,
             atlas_ref: empty_atlas()
         }
@@ -920,6 +942,7 @@ fn parse_primary() -> Expr {
                 kind: ExprKind::Ident,
                 span: key_tok.span,
                 text: key_text,
+                annotations: [],
                 children: entry_kids,
                 atlas_ref: empty_atlas()
             })
@@ -930,6 +953,7 @@ fn parse_primary() -> Expr {
             kind: ExprKind::StructLit,
             span: hb.span,
             text: "",
+            annotations: [],
             children: entries,
             atlas_ref: empty_atlas()
         }
@@ -948,6 +972,7 @@ fn parse_primary() -> Expr {
             kind: ExprKind::StructLit,
             span: lb.span,
             text: "",
+            annotations: [],
             children: [],
             atlas_ref: empty_atlas()
         }
@@ -977,7 +1002,7 @@ fn parse_primary() -> Expr {
         return parse_continue_expr()
     }
     if check_kind(TokenKind::KwLet) {
-        return parse_let_expr()
+        return parse_let_expr([])
     }
     if check_kind(TokenKind::KwTry) {
         return parse_try_expr()
@@ -999,6 +1024,7 @@ fn parse_primary() -> Expr {
         kind: ExprKind::Ident,
         span: t.span,
         text: t.text,
+        annotations: [],
         children: [],
         atlas_ref: empty_atlas()
     }
@@ -1032,6 +1058,7 @@ fn parse_struct_lit_after_name(name_tok: Token) -> Expr {
             kind: ExprKind::Ident,
             span: f_name.span,
             text: f_name.text,
+            annotations: [],
             children: f_kids,
             atlas_ref: empty_atlas()
         })
@@ -1042,6 +1069,7 @@ fn parse_struct_lit_after_name(name_tok: Token) -> Expr {
         kind: ExprKind::StructLit,
         span: name_tok.span,
         text: name_tok.text,
+        annotations: [],
         children: kids,
         atlas_ref: empty_atlas()
     }
@@ -1066,6 +1094,7 @@ fn parse_for_expr() -> Expr {
         kind: ExprKind::For,
         span: kw.span,
         text: name_tok.text,
+        annotations: [],
         children: kids,
         atlas_ref: empty_atlas()
     }
@@ -1096,6 +1125,7 @@ fn parse_match_expr() -> Expr {
         kind: ExprKind::Match,
         span: kw.span,
         text: "",
+        annotations: [],
         children: kids,
         atlas_ref: empty_atlas()
     }
@@ -1112,6 +1142,7 @@ fn parse_match_pattern() -> Expr {
             kind: ExprKind::Wildcard,
             span: t.span,
             text: "_",
+            annotations: [],
             children: [],
             atlas_ref: empty_atlas()
         }
@@ -1149,6 +1180,7 @@ fn parse_block_expr() -> Expr {
         kind: ExprKind::Block,
         span: open.span,
         text: "",
+        annotations: [],
         children: kids,
         atlas_ref: empty_atlas()
     }
@@ -1191,6 +1223,7 @@ fn parse_if_expr() -> Expr {
         kind: ExprKind::If,
         span: kw.span,
         text: "",
+        annotations: [],
         children: kids,
         atlas_ref: empty_atlas()
     }
@@ -1211,6 +1244,7 @@ fn parse_while_expr() -> Expr {
         kind: ExprKind::While,
         span: kw.span,
         text: "",
+        annotations: [],
         children: kids,
         atlas_ref: empty_atlas()
     }
@@ -1229,6 +1263,7 @@ fn parse_return_expr() -> Expr {
         kind: ExprKind::Return,
         span: kw.span,
         text: "",
+        annotations: [],
         children: kids,
         atlas_ref: empty_atlas()
     }
@@ -1258,6 +1293,7 @@ fn parse_try_expr() -> Expr {
             kind: ExprKind::Block,
             span: kw.span,
             text: "",
+            annotations: [],
             children: [],
             atlas_ref: empty_atlas()
         })
@@ -1265,6 +1301,7 @@ fn parse_try_expr() -> Expr {
             kind: ExprKind::Try,
             span: kw.span,
             text: "_",
+            annotations: [],
             children: kids_err,
             atlas_ref: empty_atlas()
         }
@@ -1295,6 +1332,7 @@ fn parse_try_expr() -> Expr {
         kind: ExprKind::Try,
         span: kw.span,
         text: catch_var,
+        annotations: [],
         children: kids,
         atlas_ref: empty_atlas()
     }
@@ -1313,6 +1351,7 @@ fn parse_throw_expr() -> Expr {
         kind: ExprKind::Throw,
         span: kw.span,
         text: "",
+        annotations: [],
         children: kids,
         atlas_ref: empty_atlas()
     }
@@ -1365,6 +1404,7 @@ fn parse_closure_expr() -> Expr {
         kind: ExprKind::Closure,
         span: kw.span,
         text: to_string(n_params),
+        annotations: [],
         children: kids,
         atlas_ref: empty_atlas()
     }
@@ -1386,6 +1426,7 @@ fn parse_closure_param() -> Expr {
             kind: ExprKind::Ident,
             span: name_tok.span,
             text: ty.name,
+            annotations: [],
             children: [],
             atlas_ref: empty_atlas()
         })
@@ -1396,6 +1437,7 @@ fn parse_closure_param() -> Expr {
         kind: ExprKind::Ident,
         span: name_tok.span,
         text: pname,
+        annotations: [],
         children: kids,
         atlas_ref: empty_atlas()
     }
@@ -1411,6 +1453,7 @@ fn parse_break_expr() -> Expr {
         kind: ExprKind::Break,
         span: kw.span,
         text: "",
+        annotations: [],
         children: [],
         atlas_ref: empty_atlas()
     }
@@ -1423,12 +1466,13 @@ fn parse_continue_expr() -> Expr {
         kind: ExprKind::Continue,
         span: kw.span,
         text: "",
+        annotations: [],
         children: [],
         atlas_ref: empty_atlas()
     }
 }
 
-fn parse_let_expr() -> Expr {
+fn parse_let_expr(anns: [Annotation]) -> Expr {
     let kw = peek()
     advance()
     let is_mut = eat(TokenKind::KwMut)
@@ -1451,13 +1495,27 @@ fn parse_let_expr() -> Expr {
         kind: ExprKind::Let,
         span: kw.span,
         text: text,
+        annotations: anns,
         children: kids,
         atlas_ref: empty_atlas()
     }
 }
 
 // statement-as-expr: anything legal inside a block. Returns an Expr.
+//
+// PR-C piece 2: collect any `@name(...)` annotations that precede the stmt
+// and thread them into `parse_let_expr` so body-level `@shared let sm: [f64; N]`
+// reaches HIR/MIR. Annotations on a non-let stmt are silently dropped at this
+// layer (parser-level diagnostic deferred) — matches `parse_item`'s
+// unknown-leader tolerance pattern.
 fn parse_stmt() -> Expr {
+    let mut anns: [Annotation] = []
+    while check_kind(TokenKind::At) {
+        anns.push(parse_annotation())
+    }
+    if check_kind(TokenKind::KwLet) {
+        return parse_let_expr(anns)
+    }
     return parse_expr()
 }
 
@@ -1728,6 +1786,7 @@ fn parse_extern_fn_item(is_pub: bool, anns: [Annotation]) -> Item {
         kind: ExprKind::Block,
         span: kw.span,
         text: "",
+        annotations: [],
         children: [],
         atlas_ref: empty_atlas()
     }
@@ -2009,6 +2068,7 @@ fn _parse_module_one(tokens: [Token], file: string) -> Module {
                         kind: ExprKind::Ident,
                         span: it.span,
                         text: nm,
+                        annotations: [],
                         children: [],
                         atlas_ref: empty_atlas()
                     }
@@ -2019,6 +2079,7 @@ fn _parse_module_one(tokens: [Token], file: string) -> Module {
                         kind: ExprKind::Assign,
                         span: it.span,
                         text: "=",
+                        annotations: [],
                         children: akids,
                         atlas_ref: empty_atlas()
                     })
@@ -2067,6 +2128,7 @@ fn _parse_module_one(tokens: [Token], file: string) -> Module {
                     kind: ExprKind::Block,
                     span: cand.body.span,
                     text: "",
+                    annotations: [],
                     children: new_children,
                     atlas_ref: empty_atlas()
                 }
@@ -2090,6 +2152,7 @@ fn _parse_module_one(tokens: [Token], file: string) -> Module {
                 kind: ExprKind::Block,
                 span: top_stmts[0].span,
                 text: "",
+                annotations: [],
                 children: top_stmts,
                 atlas_ref: empty_atlas()
             }
@@ -2240,6 +2303,7 @@ pub fn parse(tokens: [Token], file: string) -> Module {
             kind: ExprKind::Block,
             span: last_item.body.span,
             text: "",
+            annotations: [],
             children: merged_children,
             atlas_ref: empty_atlas()
         }

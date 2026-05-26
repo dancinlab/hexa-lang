@@ -88,6 +88,7 @@ fn _ident_expr(name: string, file: string, line: i64, col: i64) -> Expr {
         kind: ExprKind::Ident,
         span: _span(file, line, col, len(name)),
         text: name,
+        annotations: [],
         children: [],
         atlas_ref: _empty_atlas_ref()
     }
@@ -100,6 +101,7 @@ fn _atlas_expr(kind: string, id: string, file: string, line: i64, col: i64) -> E
         kind: ExprKind::AtlasRef,
         span: sp,
         text: id,
+        annotations: [],
         children: [],
         atlas_ref: aref
     }
@@ -110,6 +112,7 @@ fn _block_expr(children: array, file: string, line: i64) -> Expr {
         kind: ExprKind::Block,
         span: _span(file, line, 1, 1),
         text: "",
+        annotations: [],
         children: children,
         atlas_ref: _empty_atlas_ref()
     }

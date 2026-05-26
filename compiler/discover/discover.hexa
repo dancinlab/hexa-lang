@@ -608,6 +608,7 @@ fn _find_eq(e: Expr) -> Expr {
         kind: ExprKind::Ident,
         span: e.span,
         text: "",
+        annotations: [],
         children: [],
         atlas_ref: AtlasRef { kind: "", id: "", span: e.span }
     }

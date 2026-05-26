@@ -56,6 +56,7 @@ fn _ident_expr(name: string, file: string, line: i64, col: i64) -> Expr {
         kind: ExprKind::Ident,
         span: _span(file, line, col, len(name)),
         text: name,
+        annotations: [],
         children: [],
         atlas_ref: _empty_atlas_ref()
     }
@@ -66,6 +67,7 @@ fn _int_expr(text: string, file: string, line: i64, col: i64) -> Expr {
         kind: ExprKind::LiteralInt,
         span: _span(file, line, col, len(text)),
         text: text,
+        annotations: [],
         children: [],
         atlas_ref: _empty_atlas_ref()
     }
@@ -76,6 +78,7 @@ fn _string_expr(text: string, file: string, line: i64, col: i64) -> Expr {
         kind: ExprKind::LiteralString,
         span: _span(file, line, col, len(text)),
         text: text,
+        annotations: [],
         children: [],
         atlas_ref: _empty_atlas_ref()
     }
@@ -86,6 +89,7 @@ fn _bool_expr(text: string, file: string, line: i64, col: i64) -> Expr {
         kind: ExprKind::LiteralBool,
         span: _span(file, line, col, len(text)),
         text: text,
+        annotations: [],
         children: [],
         atlas_ref: _empty_atlas_ref()
     }
@@ -99,6 +103,7 @@ fn _bin_expr(op: string, lhs: Expr, rhs: Expr, file: string, line: i64, col: i64
         kind: ExprKind::BinOp,
         span: _span(file, line, col, len(op)),
         text: op,
+        annotations: [],
         children: kids,
         atlas_ref: _empty_atlas_ref()
     }
@@ -116,6 +121,7 @@ fn _call_expr(callee: Expr, args: [Expr], file: string, line: i64, col: i64) -> 
         kind: ExprKind::Call,
         span: _span(file, line, col, 1),
         text: "",
+        annotations: [],
         children: kids,
         atlas_ref: _empty_atlas_ref()
     }
@@ -128,6 +134,7 @@ fn _return_expr(value: Expr, file: string, line: i64, col: i64) -> Expr {
         kind: ExprKind::Return,
         span: _span(file, line, col, 6),
         text: "",
+        annotations: [],
         children: kids,
         atlas_ref: _empty_atlas_ref()
     }
@@ -140,6 +147,7 @@ fn _let_expr(name: string, rhs: Expr, file: string, line: i64, col: i64) -> Expr
         kind: ExprKind::Let,
         span: _span(file, line, col, 3),
         text: name,
+        annotations: [],
         children: kids,
         atlas_ref: _empty_atlas_ref()
     }
@@ -150,6 +158,7 @@ fn _block(children: [Expr], file: string, line: i64, col: i64) -> Expr {
         kind: ExprKind::Block,
         span: _span(file, line, col, 1),
         text: "",
+        annotations: [],
         children: children,
         atlas_ref: _empty_atlas_ref()
     }
@@ -229,6 +238,7 @@ fn _enum_path(enum_name: string, variant_name: string, args: [Expr], file: strin
         kind: ExprKind::EnumPath,
         span: _span(file, line, col, len(text)),
         text: text,
+        annotations: [],
         children: args,
         atlas_ref: _empty_atlas_ref()
     }

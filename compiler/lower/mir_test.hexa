@@ -61,7 +61,8 @@ fn _hexpr(kind: string, typ: Type, text: string, kids: [HExpr]) -> HExpr {
         text: text,
         children: kids,
         atlas: _empty_atlas_binding(),
-        def: _miss_def()
+        def: _miss_def(),
+        annotations: []
     }
 }
 
@@ -133,6 +134,7 @@ fn _hfn(name: string, param_names: [string], param_types: [Type], ret: Type, bod
             kind: ExprKind::Ident,
             span: _empty_span(),
             text: param_names[p],
+            annotations: [],
             children: [],
             atlas_ref: AtlasRef { kind: "", id: "", span: _empty_span() }
         })
@@ -642,6 +644,7 @@ fn _hfn_gpu_kernel(name: string, param_names: [string], param_types: [Type], ret
             kind: ExprKind::Ident,
             span: _empty_span(),
             text: param_names[p],
+            annotations: [],
             children: [],
             atlas_ref: AtlasRef { kind: "", id: "", span: _empty_span() }
         })

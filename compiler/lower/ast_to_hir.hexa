@@ -1340,7 +1340,27 @@ fn _mk_hexpr(kind: string, sp: Span, typ: Type, text: string,
         text: text,
         children: children,
         atlas: atlas,
-        def: def
+        def: def,
+        annotations: []
+    }
+}
+
+// PR-C piece 3 — Let-position variant that preserves AST annotations
+// (e.g. `@shared`) on the HExpr. Other call sites continue to use the
+// `_mk_hexpr` default-empty form, so the ripple is contained to the
+// single `_is_let_expr_kind` lowering arm.
+fn _mk_hexpr_anns(kind: string, sp: Span, typ: Type, text: string,
+                  children: [HExpr], atlas: AtlasBinding, def: DefId,
+                  anns: [Annotation]) -> HExpr {
+    return HExpr {
+        kind: kind,
+        span: sp,
+        typ: typ,
+        text: text,
+        children: children,
+        atlas: atlas,
+        def: def,
+        annotations: anns
     }
 }
 
@@ -1357,6 +1377,7 @@ fn _mk_ast_ident(name: string, sp: Span) -> Expr {
         kind: ExprKind::Ident,
         span: sp,
         text: name,
+        annotations: [],
         children: [],
         atlas_ref: _empty_atlas_ref(sp)
     }
@@ -1367,6 +1388,7 @@ fn _mk_ast_lit_int(text: string, sp: Span) -> Expr {
         kind: ExprKind::LiteralInt,
         span: sp,
         text: text,
+        annotations: [],
         children: [],
         atlas_ref: _empty_atlas_ref(sp)
     }
@@ -1381,6 +1403,7 @@ fn _mk_ast_let(name: string, is_mut: bool, rhs: Expr, sp: Span) -> Expr {
         kind: ExprKind::Let,
         span: sp,
         text: t,
+        annotations: [],
         children: kids,
         atlas_ref: _empty_atlas_ref(sp)
     }
@@ -1394,6 +1417,7 @@ fn _mk_ast_binop(op: string, l: Expr, r: Expr, sp: Span) -> Expr {
         kind: ExprKind::BinOp,
         span: sp,
         text: op,
+        annotations: [],
         children: kids,
         atlas_ref: _empty_atlas_ref(sp)
     }
@@ -1407,6 +1431,7 @@ fn _mk_ast_assign(op: string, l: Expr, r: Expr, sp: Span) -> Expr {
         kind: ExprKind::Assign,
         span: sp,
         text: op,
+        annotations: [],
         children: kids,
         atlas_ref: _empty_atlas_ref(sp)
     }
@@ -1420,6 +1445,7 @@ fn _mk_ast_call1(callee_name: string, arg: Expr, sp: Span) -> Expr {
         kind: ExprKind::Call,
         span: sp,
         text: "",
+        annotations: [],
         children: kids,
         atlas_ref: _empty_atlas_ref(sp)
     }
@@ -1433,6 +1459,7 @@ fn _mk_ast_index(base: Expr, idx: Expr, sp: Span) -> Expr {
         kind: ExprKind::Index,
         span: sp,
         text: "",
+        annotations: [],
         children: kids,
         atlas_ref: _empty_atlas_ref(sp)
     }
@@ -1443,6 +1470,7 @@ fn _mk_ast_block(stmts: [Expr], sp: Span) -> Expr {
         kind: ExprKind::Block,
         span: sp,
         text: "",
+        annotations: [],
         children: stmts,
         atlas_ref: _empty_atlas_ref(sp)
     }
@@ -1456,6 +1484,7 @@ fn _mk_ast_while(cond: Expr, body: Expr, sp: Span) -> Expr {
         kind: ExprKind::While,
         span: sp,
         text: "",
+        annotations: [],
         children: kids,
         atlas_ref: _empty_atlas_ref(sp)
     }
@@ -1742,6 +1771,9 @@ fn _lower_expr(e: Expr, atlas: AtlasIndex, sc: LowerScope) -> LowerResult {
     }
 
     // ── let: lower RHS first, then bind. Type = unit (statement-shaped). ──
+    // PR-C piece 3 — `_mk_hexpr_anns` threads AST `Expr.annotations` (e.g.
+    // `@shared`) onto the HIR Let so `hir_to_mir.hexa` can stamp the
+    // resulting `Local.space` and ultimately the NVPTX `.shared` directive.
     if _is_let_expr_kind(k) {
         let mut new_sc = sc
         let mut kids: [HExpr] = []
@@ -1758,8 +1790,9 @@ fn _lower_expr(e: Expr, atlas: AtlasIndex, sc: LowerScope) -> LowerResult {
             if len(kids) > 0 { rhs_t = kids[0].typ }
             new_sc = _define_in_scope(new_sc, nm, rhs_t)
         }
-        let h = _mk_hexpr(kind_tag, e.span, _hir_t_unit(), e.text,
-                          kids, _empty_atlas_binding(), _hir_miss_def_id())
+        let h = _mk_hexpr_anns(kind_tag, e.span, _hir_t_unit(), e.text,
+                               kids, _empty_atlas_binding(), _hir_miss_def_id(),
+                               e.annotations)
         return LowerResult { expr: h, sc: new_sc }
     }
 
@@ -2068,7 +2101,8 @@ fn _empty_hbody(sp: Span) -> HExpr {
         text: "",
         children: [],
         atlas: _empty_atlas_binding(),
-        def: _hir_miss_def_id()
+        def: _hir_miss_def_id(),
+        annotations: []
     }
 }
 
@@ -2100,6 +2134,7 @@ fn _lower_item(it: Item, def: DefId, atlas: AtlasIndex,
                 kind: ExprKind::Ident,
                 span: par.span,
                 text: par.name,
+                annotations: [],
                 children: [],
                 atlas_ref: AtlasRef { kind: "", id: "", span: par.span }
             })

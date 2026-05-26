@@ -1,0 +1,91 @@
+// HEXA Native Compiler — PR-C piece 2 falsifier
+//
+// Verifies that bare body-level `@<name> let ...` lands on the resulting
+// `Expr.annotations` list rather than being silently dropped by the parser.
+//
+// Falsifier: `@shared let sm: [f64; 256] = []` inside a function body →
+// `let_expr.annotations[0].name == "shared"`.
+
+import "../lex/tokens.hexa"
+import "../lex/lexer.hexa"
+import "./ast.hexa"
+import "./parser.hexa"
+
+fn _print_status(name: string, ok: bool) {
+    if ok {
+        println("  PASS " + name)
+    } else {
+        println("  FAIL " + name)
+    }
+}
+
+fn _find_let_in_block(block: Expr) -> Expr {
+    let mut i = 0
+    while i < len(block.children) {
+        let c = block.children[i]
+        if c.kind == ExprKind::Let {
+            return c
+        }
+        i = i + 1
+    }
+    // not found — return a sentinel
+    return Expr {
+        kind: ExprKind::Ident,
+        span: Span { file: "", line: 0, col: 0, len: 0 },
+        text: "MISSING",
+        annotations: [],
+        children: [],
+        atlas_ref: AtlasRef { kind: "", id: "", span: Span { file: "", line: 0, col: 0, len: 0 } }
+    }
+}
+
+fn case_at_shared_on_body_let() {
+    // `fn k() { @shared let sm: [f64; 256] = [] }` — bare-annotation
+    // body-let. The parser must thread the `@shared` annotation into
+    // the resulting `Expr.annotations` list (piece 2 falsifier).
+    let src = "fn k() -> i64 { @shared let sm: [f64; 256] = []; return 0 }"
+    let toks = lex(src, "<inline>")
+    let m = parse(toks, "<inline>")
+
+    // shape — single fn item with a block body.
+    let mut ok_shape = (len(m.items) == 1)
+    if ok_shape {
+        ok_shape = (m.items[0].body.kind == ExprKind::Block)
+    }
+    _print_status("shape (1 fn / block body)", ok_shape)
+
+    // body — first stmt is a Let with one annotation `shared`.
+    let body = m.items[0].body
+    let let_expr = _find_let_in_block(body)
+    let mut ok_kind = (let_expr.kind == ExprKind::Let)
+    _print_status("first stmt is Let", ok_kind)
+
+    let mut ok_anns = (len(let_expr.annotations) == 1)
+    _print_status("Let has 1 annotation", ok_anns)
+
+    let mut ok_name = false
+    if len(let_expr.annotations) > 0 {
+        ok_name = (let_expr.annotations[0].name == "shared")
+    }
+    _print_status("annotation name == \"shared\"", ok_name)
+}
+
+fn case_plain_let_has_empty_anns() {
+    // Plain `let x = 1` MUST NOT pick up annotations from neighbouring
+    // code (default empty list).
+    let src = "fn k() -> i64 { let x = 1; return x }"
+    let toks = lex(src, "<inline>")
+    let m = parse(toks, "<inline>")
+    let body = m.items[0].body
+    let let_expr = _find_let_in_block(body)
+    let ok_empty = (len(let_expr.annotations) == 0)
+    _print_status("plain let has 0 annotations", ok_empty)
+}
+
+println("══════════════════════════════════════════════")
+println("  HEXA — Parser PR-C piece 2 annotation falsifier")
+println("══════════════════════════════════════════════")
+case_at_shared_on_body_let()
+case_plain_let_has_empty_anns()
+println("══════════════════════════════════════════════")
+println("  done.")
