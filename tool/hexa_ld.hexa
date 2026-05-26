@@ -1,5 +1,10 @@
 // tool/hexa_ld.hexa
 //
+// Phase-H inc3 (#1283 cont.) — extend single-`__const` layout to FULL
+// MULTI-SECTION: __TEXT (__text, __const, __cstring) + a separate
+// __DATA segment (__data, __bss) with per-section vmaddrs, bss
+// vmsize>filesize, PAGEOFF12 LDR-scale, ARM64_RELOC_ADDEND.
+//
 // S7-P1 SCAFFOLD — Native Mach-O arm64 linker.
 //
 // RFC 063 § P1. Replaces the `ld` / `ld64` fork in `aprime_cc
