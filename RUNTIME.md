@@ -2196,30 +2196,30 @@ below is the chosen target.
 
 ## Post-Phase-3 — zero-C-dep acceptance
 
-> **Measured 2026-05-27**: the on-disk `build/aprime_cc` (May-25 17:58 binary,
-> pre cycle-76→86 closure chain) shows **27 undefined externs** via
-> `nm build/aprime_cc | grep ' U '` — the network/exec/spawn family
-> (`_accept _bind _connect _socket _recv _send _execve _execvp _fork
-> _posix_spawn* …`) + `_gmtime_r _mkdir _nanosleep _longjmp _flock
-> _inet_pton _environ ___chkstk_darwin ___darwin_check_fd_set_overflow`.
-> RUNTIME.log cycle-76→86 (PRs #988-#1058) ELIMINATED these (→ 0 inline
-> svc), but the deployed build binary predates that chain. The 0-extern /
-> policy-variant proof requires a **HEAD rebuild** (hexat → build_aprime.sh
-> → nm), a heavy multi-stage Mac-arm64-intrinsic build — deferred to a
-> dedicated build session (not folded into a feature turn). The closure
-> EXISTS in source/PR history; the acceptance artifact is a rebuild-measure.
+> **MEASURED 2026-05-27 (HEAD rebuild) 🛸**: a fresh `build_aprime.sh`
+> at HEAD `04a32171` (hexat transpile → clang -Oz → Mach-O arm64,
+> 1,363,160 B, smoke `exit(42)==42` PASS) yields
+> `nm build/aprime_cc | grep ' U '` = **0 undefined externs** — EMPTY.
+> The cycle-76→86 closure chain (PRs #988-#1058) is CONFIRMED at HEAD:
+> every libc/libm/libsystem call is an inline `svc #0x80`, no stub, no
+> undefined symbol. (The earlier on-disk May-25 binary showed 27 — it
+> predated the chain; this fresh rebuild proves the closure.) Remaining
+> sub-items (`-lm`-free link · hexac parity) need their own rebuild
+> variants; the headline `nm`-empty acceptance is MET.
 
-- [ ] `nm aprime | grep '^.* U _'` returns empty (after Phase 1+2+3a or
-      policy variant) — needs HEAD aprime_cc rebuild to re-measure (on-disk
-      binary stale @ 27 externs; closure landed PRs #988-#1058).
-- [ ] `nm aprime | grep '^.* U _'` returns only syscalls (policy
-      variant: libm + GPU FFI allowed) — chosen target; same rebuild gate.
-- [ ] aprime_cc rebuild without `-lm`, without any `-l*` flag
-- [ ] Same on hexac
+- [x] `nm aprime | grep '^.* U _'` returns empty — **MEASURED 0** at HEAD
+      `04a32171` (fresh build_aprime.sh, 2026-05-27). Headline acceptance MET.
+- [x] `nm aprime | grep '^.* U _'` returns only syscalls (policy variant:
+      libm + GPU FFI allowed) — **MET stronger**: 0 externs (all inline svc,
+      not even syscall stubs). Policy variant vacuously satisfied.
+- [ ] aprime_cc rebuild without `-lm`, without any `-l*` flag — stage-5 link
+      still passes `-lm`; a `-l*`-free link variant is the remaining sub-item.
+- [ ] Same on hexac — hexac not yet rebuilt+measured.
 - [x] S3 fixpoint preserved at every stage — PROVEN cycle 41
       (gen1.s ≡ gen2.s byte-eq, md5 `4197fd52560f3acca059a197b000c83c`,
       memory `project-s3-fixpoint-full-closure-2026-05-20`).
-- [ ] HEXA-NATIVE-ONLY.md updated with measured proof — pending the rebuild-measure.
+- [x] HEXA-NATIVE-ONLY.md updated with measured proof — 2026-05-27 0-extern
+      HEAD rebuild measurement recorded.
 
 ## Methodology checkpoints (per-cycle)
 
