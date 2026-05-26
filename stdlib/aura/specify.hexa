@@ -67,7 +67,83 @@ fn _emc_immunity_levels() -> [str] {
     ]
 }
 
-// ─── header emit (announce-only · no allocation of real-dossier values) ─
+// ─── D1 substance: illustrative dossier values (NOT regulatory commitment) ─
+//
+// These reference targets fill the Design Input placeholders with
+// ILLUSTRATIVE values intended to demonstrate the dossier shape. The
+// actual values are driven by Voice-of-User capture, predicate-device
+// research, and clinical priority review which all live upstream of
+// this producer. absorbed=false stays PERMANENTLY (g3) even with
+// substantive content — accredited closure requires accredited-lab
+// gates (A1-A4 milestones), not template substance.
+
+fn _intended_use_block() -> [str] {
+    return [
+        "device_name: AURA-100 (illustrative product name)",
+        "intended_use_statement: Continuous post-aural EEG monitoring + alpha-band biofeedback for home-healthcare adult users",
+        "form_factor: mastoid / temporal-bone clip · non-implantable wearable",
+        "intended_use_environment: home-healthcare (IEC 60601-1-11 applicable)",
+        "user_population: adult (18+) · self-administered · non-diagnostic wellness use",
+    ]
+}
+
+fn _indications_for_use_block() -> [str] {
+    return [
+        "primary IFU: alpha-band neurofeedback for relaxation + meditation tracking",
+        "secondary IFU: sleep-stage estimation (REM/NREM proxy via alpha + EOG) home-tracking",
+        "exclusion: not intended for diagnosis of neurological disorders (epilepsy, seizure detection, etc.)",
+        "exclusion: not intended for pediatric use (<18) absent dedicated pediatric pre-submission",
+        "exclusion: not MRI-conditional pending V6 EM-side verify + A1 510(k) clearance",
+    ]
+}
+
+fn _predicate_devices_block() -> [str] {
+    return [
+        "illustrative predicate: InteraXon Muse S — consumer EEG headband (510(k) cleared)",
+        "illustrative predicate: Beacon Biosignals Dreem 3 — sleep EEG headband (510(k) cleared)",
+        "illustrative predicate: NeuroSky MindWave — single-channel EEG (510(k) cleared)",
+        "comparison axis: form factor (post-aural vs frontal) · channel count · BLE radio · battery topology",
+        "Substantial Equivalence path: 510(k) per 21 CFR 807.92(a)(3) — D7 handoff territory",
+    ]
+}
+
+fn _user_needs_block() -> [str] {
+    return [
+        "UN-01: ≥12 h continuous wear without skin irritation (ISO 10993-1)",
+        "UN-02: <60 s pairing time (BLE 5.x) from cold boot",
+        "UN-03: >10 m line-of-sight BLE range @ -60 dBm RSSI",
+        "UN-04: alpha-band relative power resolution ≤ 5% rel error vs Welch oracle",
+        "UN-05: charging interface (rechargeable variant) ≤ 90 min full charge",
+        "UN-06: water-resistance IPX4 (splash) for daily home use",
+        "UN-07: data privacy — no PHI uploaded without explicit user consent (HIPAA-aware)",
+    ]
+}
+
+fn _performance_requirements_block() -> [str] {
+    return [
+        "PR-01: input-referred noise ≤ 1 uV-pp 0.5-50 Hz (AFE)",
+        "PR-02: CMRR ≥ 80 dB @ 60 Hz (RLD-driven)",
+        "PR-03: ADC resolution 24-bit (sigma-delta · ADS1299-class reference)",
+        "PR-04: sample rate ≥ 250 Hz per channel (alpha-band Nyquist margin)",
+        "PR-05: BLE throughput ≥ 8 kB/s sustained (raw stream per channel)",
+        "PR-06: battery runtime ≥ 12 h continuous (250 Hz × 8 ch streaming)",
+        "PR-07: weight ≤ 30 g per side (mastoid clip ergonomic ceiling)",
+    ]
+}
+
+fn _safety_requirements_block() -> [str] {
+    return [
+        "SR-01: ISO 14971 risk analysis + risk control measures (DHF tracked)",
+        "SR-02: IEC 60601-1 Type BF applied part classification (skin contact)",
+        "SR-03: ISO 10993-1 biocompatibility (cytotoxicity + sensitization + irritation panel)",
+        "SR-04: IEC 60601-1-2 Ed.4.1 EMC essential-performance maintenance under immunity stress",
+        "SR-05: lithium-polymer battery safety per IEC 62133-2 (rechargeable variant)",
+        "SR-06: software safety per IEC 62304 Class B (moderate-to-major LOC)",
+        "SR-07: usability summative validation per IEC 62366-1 (15+ user formative study)",
+    ]
+}
+
+// ─── header emit (announce-only + D1 substantive blocks) ──────────────
 
 fn _emit_header() {
     print("# AURA SPECIFY — FDA Class II Design Input dossier skeleton")
@@ -96,6 +172,25 @@ fn _emit_header() {
         j = j + 1
     }
     print("#")
+
+    // ─── D1 substantive blocks (illustrative reference targets) ──
+    _emit_block("intended_use",            _intended_use_block())
+    _emit_block("indications_for_use",     _indications_for_use_block())
+    _emit_block("predicate_devices",       _predicate_devices_block())
+    _emit_block("user_needs",              _user_needs_block())
+    _emit_block("performance_requirements", _performance_requirements_block())
+    _emit_block("safety_requirements",     _safety_requirements_block())
+}
+
+fn _emit_block(label: str, lines: [str]) {
+    print("# [" + label + "]")
+    let n = lines.len()
+    let mut k = 0
+    while k < n {
+        print("#   - " + lines[k])
+        k = k + 1
+    }
+    print("#")
 }
 
 // ─── scope-caveats (g3 honesty floor — every claim ringfenced) ────────
@@ -105,6 +200,7 @@ fn _emit_caveats() {
     print("# scope_caveat: Bluetooth SIG qualification + EU MDR conformity assessment with a Notified Body = accredited-lab gates separate from this cell.")
     print("# scope_caveat: Class II classification (non-implantable wearable BCI) is the working assumption - final classification depends on FDA pre-submission feedback.")
     print("# scope_caveat: absorbed=false PERMANENTLY (g3) - dossier skeleton is aspirational scaffolding, NEVER an FDA-cleared submission.")
+    print("# scope_caveat: D1 substantive blocks (intended_use / IFU / predicate / user_needs / performance / safety) are ILLUSTRATIVE reference targets, NOT regulatory commitments. Real values driven by VOU capture + predicate research + clinical priority review live upstream.")
 }
 
 // ─── main entry ───────────────────────────────────────────────────────
