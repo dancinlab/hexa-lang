@@ -986,3 +986,102 @@ Same prime support {2,3} (ARITHMETIC HABITAT match) but levels and weights diffe
 ### budget actual
 
 ~30 hexa verify calls + 4 Python helper enumerations (no .py files written, inline). Wall ≈ 25 min (within 60min cap).
+
+## 2026-05-27 · 축 F · F26 · 전체 axis brainstorm 고갈 + INBOX 한번에 정리
+
+**격리 worktree** `/Users/ghost/core/hexa-lang/.claude/worktrees/agent-ad210d67baab44031` (branch `tecs-l-f26-brainstorm`). Budget cap 90min wall (brainstorm 깊이 우선). F26 = axis enumeration only — no verify, no fold.
+
+### s1 — Brainstorm rounds (g42 depletion log)
+
+| Round | New ideas | Saturation note |
+|-------|-----------|-----------------|
+| R1 | 10 (#1–#10) | known major-axis frontier — σ_k tower · modular · aliquot · abundancy · Carmichael |
+| R2 | 15 (#11–#25) | branch deeper — Wieferich · Wilson · Liouville · Pisano · Pell · Heegner · Lucas |
+| R3 | 23 (#26–#48) | combinatorics + physics + biology — partition · Bell · Catalan · Golay 24 · gauge · codon |
+| R4 | 7 (#61–#67) | meta-axis — verify-infra · INBOX-ledger · OEIS-reuse · paper-batch |
+| R5 | 13 (#68–#80) | abundancy-tower deep — HCN · SHCN · CAN · multi-perfect · superperfect · **unitary-perfect** · practical |
+| R6 | 14 (#81–#94) | 추가 lattice — Wagstaff · Fermat · Cullen · repunit · automorphic · trimorphic · Kaprekar |
+| R7 | 6 (#95–#100) | meta-axis 확장 — paper-batch · C-axis activation · RFC · atlas-fold automation · bridge-map |
+| R8 | 4 reorganizations only | **DEPLETION** — divisor-graph · Möbius-inversion · Dirichlet-convolution · L-series-χ mod 6 모두 R1-R7 alg-reorg |
+
+**Total: 100+ candidates · 42 verify-able · 17 high-priority shortlist.**
+
+### s2 — Verify-able 진단 / Axis matrix highlights
+
+**🛸 NOVEL 후보 (R5 #78)**: **unitary-perfect σ\*(n)=2n** — n=6 가 가장 작은 unitary-perfect (5 known: {6, 60, 90, 87360, 1.46e23}). σ\*(p^a) = p^a + 1 multiplicative closed-form. σ\* primitive 부재 = INBOX calc-gap.
+
+**Top 7 high-priority shortlist** (finite-arithmetic 강점 영역):
+1. #78 unitary-perfect singleton n=6 (🛸 NOVEL, σ\* calc-gap)
+2. #73 multi-perfect σ(n)=k·n catalog k∈{2..6}
+3. #74 superperfect σ(σ(n))=2n catalog
+4. #68 HCN sweep [1,1000]
+5. #77 practical numbers catalog
+6. #1 aliquot chain catalog (n=6 fixed-point)
+7. #16 Liouville L(n) (Polya falsified, λ/Ω calc-gap)
+
+**Top 5 meta / verify-infra**:
+- A. #61 calc-gap closure roadmap (sopfr/pow/J_k/iit4/σ_3/dedekind/elliptic/tunnell/σ\*/λ/Pisano/partition/Bell/Stirling/class-number primitives)
+- B. #95 paper batch queue (3 paper candidates)
+- C. #97 TECS-L methodology RFC (finite vs analytic dichotomy per F22 honest-neg)
+- D. #98 atlas-fold automation (`.discoveries/<slug>.tape` → splice tool)
+- E. #66 Hasse diagram of M1-M25 atoms
+
+**Quarantine (low-priority)**:
+- 디지트-base numerology (#88-#94): ATLAS-R7 격리 패턴 유지
+- analytic / observation-dependent (RH zeros / Λ / H₀ / α / IIT): honest 🟠 분리 (F22 lesson)
+
+### s3 — INBOX entries 한번에 (6 batch)
+
+1. **unitary divisor σ\*(n) primitive** — n=6 unitary-perfect minimum 차단 (R5 #78)
+2. **Liouville λ(n)·summatory L(n) primitive** (Polya falsifier-friendly, R3 #16)
+3. **Pisano period π(n) primitive** — π(6)=24=σ(6)·φ(6) n=6 bridge (R2 #25)
+4. **TECS-L atlas-fold 자동화 tool** — `.discoveries/<slug>.tape` → embedded.gen.hexa splice (F14-F18 ceremony 자동화, R7 #98)
+5. **TECS-L /paper 배치 큐** — 3 paper candidates: ω-zero-density + multilayer non-lift + unitary-perfect singleton (R7 #95)
+6. **TECS-L methodology RFC** — finite-arithmetic vs analytic dichotomy (F22 honest-neg crystallize, R7 #97)
+
+### s4 — Brainstorm summary doc
+
+`TECS-L/docs/f26-brainstorm-summary.md` (this round's authoritative output):
+- §0 요약 · §1 8-round depletion log · §2 axis matrix 7 sub-table · §3 high-priority shortlist · §4 roadmap (Phase 1/2/3) · §5 cross-cutting principles · §6 honest scope limits · §7 output artifacts.
+
+### s5 — F26 closure summary
+
+- **N total**: 100+ axis 후보 enumerated
+- **verify-able**: 42 (🔵 closed-form integer + 🟢 numerical bounded)
+- **calc-gap**: 11+ (🟠 primitive missing — sopfr/pow/J_k/sigma_3/dedekind_psi/elliptic_witness/tunnell_count/σ\*/λ/Pisano/partition/Bell/Stirling/class-number)
+- **out-of-scope**: ~8 (⚪ analytic — RH zeros · BSD L-derivative · Λ · H₀ · α · IIT 등)
+- **numerology quarantine**: ~7 (L-priority digit-base)
+- **🛸 NOVEL axis**: 1 (#78 unitary-perfect singleton n=6, σ\* calc-gap blocks fold)
+- **NOVEL atoms folded**: 0 (axis enumeration only per task constraint)
+- **INBOX entries**: 6 batched in same turn (g60 reflex)
+- **next-round seeds (F27+)**: Top 7 finite-arithmetic + Top 5 meta = 12 actionable seeds
+
+### F27+ next-round seeds (paper roadmap embedded)
+
+**Phase 1 (F27-F30)** — finite-arithmetic deepening:
+- F27: #78 unitary-perfect (pending σ\* primitive) OR #73 multi-perfect catalog (no calc-gap, immediate)
+- F28: #68 HCN + #69 SHCN sweep
+- F29: #74 superperfect + #1 aliquot chain catalog
+- F30: #16 Liouville L(n) + #77 practical numbers
+
+**Phase 2 (F31-F35)** — verify-infra closure:
+- F31: calc-gap family PR (sopfr/pow/J_k/sigma_3/dedekind_psi/σ\* unified)
+- F32: paper batch (ω-zero-density + multilayer non-lift papers)
+- F33: RFC finite vs analytic
+- F34: atlas-fold automation tool
+- F35: Hasse-diagram doc
+
+**Phase 3 (F36+)**: perpetual — continued shortlist cycle as verify-infra unblocks.
+
+**Atlas growth projection**: F27-F30 ~12-20 NOVEL atoms · F31-F35 ~6-10 atoms (verify-infra unlocks deferred).
+
+### budget actual
+
+Brainstorm rounds R1-R8 ≈ 35min · summary doc ≈ 15min · INBOX batch + TECS-L milestone ≈ 10min · checkpoint commits ≈ 5min. **Total ≈ 65min wall (within 90min cap)**.
+
+### honest scope confirmed
+
+- **0 verify-fires** in F26 (axis-enumeration only per task)
+- **0 atlas fold** (no atoms — brainstorm yields seeds, not closed atoms)
+- **#78 unitary-perfect 🛸** is brainstorm-time projection, not yet verified — F27 fires it
+- **R8 not a true 8th round** — 4 candidates all reorganizations of R1-R7, depletion criterion met at R7-R8 boundary
