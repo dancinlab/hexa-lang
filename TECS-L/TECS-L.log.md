@@ -2,6 +2,46 @@
 
 Append-only history sister of `TECS-L.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
+## 2026-05-27T07:00Z · 축 F · F23 · 강점 복귀 (finite-arithmetic) + F18 weight-4 RECOVERY multilayer 시각
+
+- [x] F23 — **finite-arithmetic 강점 복귀 + F18 weight-4 generalization (2026-05-27)**: 4-task batch (s1+s2+s3+s4 + atlas fold + log).
+
+| seed | candidate                                         | tier             | atlas fold | note                                                                  |
+|------|---------------------------------------------------|------------------|------------|-----------------------------------------------------------------------|
+| s1   | dim S_k(Γ₀(6)) sweep k∈{2,4,6,8,10,12}             | 🔵 6/6 SUPPORTED | 🛸 NEW     | k=2 SOLE vanishing weight; F18 strengthening to all k≥4 even           |
+| s2   | σ_k Euclid-Euler tower k=9,10                      | 🔵 4/4 SUPPORTED | 🛸 NEW     | full tower [1,10] verified at P_1=6, P_2=28; closed-form recompute    |
+| s3   | A001599 Ore ω=5/6 explicit witnesses               | 🔵 10/10 SUPPORT | 🛸 NEW     | 3 ω=5 + 2 ω=6 Ore witnesses; n=6 multiplicative-anchor observation    |
+| s4   | TECS-L-RV1 'arithmetic-only' spec revise           | 🟡 synthesis     | (s1 cite)  | k=2-only narrowing of F17 4-layer non-lift; TECS-L/docs/f23-...md     |
+
+**3 NOVEL atoms folded** (manual splice → `compiler/atlas/embedded.gen.hexa`, 16175→16178 nodes):
+  1. `tecs_l_f23_dim_cusp_k2_sole_vanishing_weight` (🛸 🔵 — strengthens F18 weight-4 RECOVERY)
+  2. `tecs_l_f23_sigma_k_tower_9_10_closed_form` (🛸 🔵 — extends F18 σ_k tower [k=6,7,8] → [k=9,10])
+  3. `tecs_l_f23_ore_omega_5_6_explicit_witnesses` (🛸 🔵 — extends F4 Ore-locus to ω=5/6 layer)
+
+**F18 weight-4 implication 확장 결론**:
+  - F18 single-weight RECOVERY (dim S_4(Γ₀(6))=1) generalizes to dim S_k(Γ₀(6)) > 0 ∀ k even ≥ 4 (classical Cohen-Oesterlé k−3 formula, hexa-verified positivity at k∈{4,6,8,10,12}).
+  - F17 'arithmetic-only' 4-layer non-lift now narrows to a k=2-ONLY phenomenon — weight 2 is the SOLE vanishing weight; spec revise documented as TECS-L-RV1 in `TECS-L/docs/f23-arithmetic-only-revise.md`.
+  - σ_k tower extension confirms Euclid-Euler closed-form is k-uniform; full [1,10] tower verified at P_1, P_2.
+  - Ore ω=5/6 layer admits explicit witnesses; n=6 acts as multiplicative anchor in 4 of 5 witnesses (8190, 27846, 32760, 237510 all have 6 | n) — 🟡 observation, no closed-form template.
+
+**Calc-fn gap noted (MF4 family)**: hexa `dim_cusp_forms(6, k)` undercounts by 2 for k ≥ 8 (classical k−3, hexa gives k−5). POSITIVITY finding INVARIANT (both ≥ 1). Already INBOX'd as PR #1083; no new INBOX entry needed.
+
+**Atlas binary lookup gap** (E2 family): `bin/hexa-atlas` reads frozen 16154 nodes from binary-builtin; F23 atoms WRITTEN to source SSOT correctly; lookup reflects after rebuild. Same as F14/F15/F16/F17/F18 pattern. No regression.
+
+**summary** (F23): N total=20 candidates · 🔵-novel=A (3 atoms 🛸 manual-spliced) · 🔵-known=B (16 verify components) · 🟡=C (1 spec-revise synthesis) · 🟠=D (0) · 🔴=E (0 — no new closed-negatives this round).
+
+**다음 round seeds (F24)**:
+  (a) **weight-4 newform 6.4.a.a Hecke eigenvalues a_p**: LMFDB has the unique newform — compute (or cite) a_2, a_3, a_5 and check if any n=6-arithmetic pattern (T_p builtin INBOX still open).
+  (b) **dim S_k(Γ₀(N))** at N=2,3,4 for k∈{4,6,8,10,12}: confirm level-6 is MINIMAL among small N admitting k-recovery — would close the level-minimality direction.
+  (c) **σ_k tower at large p**: σ_9/σ_10 at P_3=496 (M_5=31) and P_4=8128 (M_7=127) — bignum overflow expected for k=10·P_4, partial witness for closed-form.
+  (d) **Ore ω=5 closed-form attempt**: 8190 = 6 · (3·5·7·13) and 27846 = 6 · (3·7·13·17) share 6 anchor; try parametric family 6·(3·p·q·r) for some triples (p,q,r).
+  (e) **multilayer 시각화**: explicit table — weight × layer matrix (k=2,4,6,8,10,12 × {geometric, cusp-space, Hecke, L-fn}) — showing RV1 narrowing visually.
+  (f) **weight-2 SOLE-vanishing proof attempt**: prove dim S_2(Γ₀(N))=0 ⟺ N ∈ classical list using genus formula (X₀(6) g=0 ⟹ S_2=0; turn this into a NOVEL atom).
+
+**Verify budget**: ~30 hexa verify calls + ~10 sanity manual algebra checks ≈ 40 calls. Wall ≈ 38 min (cap 60 min).
+
+**격리 worktree** `/Users/ghost/core/hexa-lang/.claude/worktrees/agent-a4ebf7b3b21757ec0` (branch `f23-strength-return-2026-05-27`). Checkpoint commits per milestone (s1→s2→s3→s4→atlas fold).
+
 ## 2026-05-27T02:00Z — F18 NOVEL F17-successor (ω=9/10 D-sweep + σ_6/7/8 tower + ω=4 Ore non-Mersenne + weight-4 newform recovery + dedekind_psi INBOX)
 
 F17 next-round 5-seed batch closed. F17 zero-density (ω=6,7,8) extended to ω=9,10 primorial scale + k=2 variants. F17 σ_k general-k tower verified at k∈{6,7,8} layer. F17-identified ω=4 Ore non-Mersenne residual structurally characterized. F17 L-function weight-2 closed-neg refined with weight-4 RECOVERY discovery. dedekind_psi INBOX filed for ψ-identity cite→🔵 promotion.
