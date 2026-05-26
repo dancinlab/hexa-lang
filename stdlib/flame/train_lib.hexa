@@ -32,9 +32,39 @@ use "stdlib/flame/optim_lib"
 use "stdlib/flame/flame_math"
 
 // AdamW step over the entire packed M (param) using packed Mg (grads).
+//
+// GPU-resident large-vocab port (ASK #3). At V=151643·d=768 the packed M
+// is m_size ≈ 151M doubles; the host `opt_adamw_step` (RFC 034 adamw_step
+// builtin) walks all 151M elements on the host every step — a per-step
+// wall on the order of minutes. When `n` is large we route to
+// `farr_adamw_step_gpu(W,m,v,g,...)` (the dt2_adamw_step byte-eq forge
+// kernel): m,v are updated in place, and it RETURNS a fresh W farr which
+// we copy back into M via a device memcpy. On a no-CUDA build the kernel
+// routes to `_hx_farr_adamw_step_cpu` (the trusted FP64 reference), so the
+// CPU-vs-GPU correctness gate compares the SAME path. Below the threshold
+// (e.g. the V=256 byte-eq tests) we keep the unchanged `opt_adamw_step`
+// host path verbatim — V=256 trajectory is preserved bit-for-bit.
 pub fn nn_decoder_adamw_step(M: int, Mg: int, Mm: int, Mv: int,
                              n: int, lr: float, b1: float, b2: float,
                              eps: float, wd: float, t: int) {
+    // Threshold: only the real-vocab (V≈10^5) packed M crosses 10M params
+    // on the lm-head/tok-emb term; the V=256 smoke/corpus tests stay on
+    // the host reference. Tunable but conservative.
+    if n > 10000000 {
+        let newW = to_int(farr_adamw_step_gpu(M, Mm, Mv, Mg, n,
+                                              lr, b1, b2, eps, wd, t))
+        // newW < 0 ⇒ kernel rejected BEFORE mutating m/v (the entry
+        // validates ids/n/step_t first) ⇒ safe to fall through to the host
+        // reference. newW >= 0 ⇒ m/v already stepped in place; we MUST NOT
+        // re-run opt_adamw_step (would double-step the moments). Copy the
+        // fresh W back into M and return.
+        if newW >= 0 {
+            let _ = farr_copy_slice_gpu(newW, 0, M, 0, n)
+            let _ = farr_free(newW)
+            return
+        }
+        // kernel rejected (no state mutated) → host fallback below.
+    }
     opt_adamw_step(M, Mg, Mm, Mv, n, lr, b1, b2, eps, wd, t)
 }
 
