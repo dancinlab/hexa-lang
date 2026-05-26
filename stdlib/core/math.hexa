@@ -108,12 +108,22 @@ fn _add_mod(a, b, n) -> int {
     return a + b
 }
 
+// All mutable locals below use `let mut` rather than the legacy
+// rebinding `let` form. Plain `let foo = …; foo = …` interacts with
+// the codegen's module-global comptime-fold table — every binding of
+// `foo` across the program shares one fold slot, so a function call
+// (which may bind same-named locals in another function) can leave a
+// stale literal in the slot and freeze `foo` at its initial value
+// (see memory `reference_comptime_fold_shadow_family` — D17 #724,
+// F-FOLD #797 family; reproduced live in this file's outer witness
+// loop at is_prime_det during initial bring-up). `let mut` opts the
+// binding out of the fold table entirely, so the rebind is honored.
 pub fn mul_mod(a, b, n) -> int {
     if n == 1 { return 0 }
-    let res = 0
-    let x = a % n
+    let mut res = 0
+    let mut x = a % n
     if x < 0 { x = x + n }
-    let y = b % n
+    let mut y = b % n
     if y < 0 { y = y + n }
     while y > 0 {
         if y % 2 == 1 { res = _add_mod(res, x, n) }
@@ -125,10 +135,10 @@ pub fn mul_mod(a, b, n) -> int {
 
 pub fn pow_mod(base, exp, n) -> int {
     if n == 1 { return 0 }
-    let res = 1
-    let b = base % n
+    let mut res = 1
+    let mut b = base % n
     if b < 0 { b = b + n }
-    let e = exp
+    let mut e = exp
     while e > 0 {
         if e % 2 == 1 { res = mul_mod(res, b, n) }
         b = mul_mod(b, b, n)
@@ -142,13 +152,13 @@ pub fn pow_mod(base, exp, n) -> int {
 // Returns true iff `a` proves n composite (strong-pseudoprime witness);
 // false if a is non-witness (n is probably prime by a).
 fn _mr_is_composite_witness(a, n, d, r) -> bool {
-    let x = pow_mod(a, d, n)
+    let mut x = pow_mod(a, d, n)
     if x == 1 || x == n - 1 { return false }
-    let i = 1
-    while i < r {
+    let mut mi = 1
+    while mi < r {
         x = mul_mod(x, x, n)
         if x == n - 1 { return false }
-        i = i + 1
+        mi = mi + 1
     }
     true
 }
@@ -176,20 +186,20 @@ pub fn is_prime_det(n) -> bool {
     if n % 2 == 0 { return false }
 
     // factor n − 1 = 2^r · d with d odd
-    let d = n - 1
-    let r = 0
+    let mut d = n - 1
+    let mut r = 0
     while d % 2 == 0 {
         d = d / 2
         r = r + 1
     }
 
     let witnesses = [2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37]
-    let i = 0
-    while i < 12 {
-        let a = witnesses[i]
+    let mut wi = 0
+    while wi < 12 {
+        let a = witnesses[wi]
         if a >= n { return true }
         if _mr_is_composite_witness(a, n, d, r) { return false }
-        i = i + 1
+        wi = wi + 1
     }
     true
 }

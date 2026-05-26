@@ -41,7 +41,7 @@ fn is_prime_trial(n) -> bool {
     if n < 2 { return false }
     if n < 4 { return true }
     if n % 2 == 0 || n % 3 == 0 { return false }
-    let i = 5
+    let mut i = 5
     while i * i <= n {
         if n % i == 0 || n % (i + 2) == 0 { return false }
         i = i + 6
@@ -56,10 +56,10 @@ fn add_mod_t(a, b, n) -> int {
 
 fn mul_mod_t(a, b, n) -> int {
     if n == 1 { return 0 }
-    let res = 0
-    let x = a % n
+    let mut res = 0
+    let mut x = a % n
     if x < 0 { x = x + n }
-    let y = b % n
+    let mut y = b % n
     if y < 0 { y = y + n }
     while y > 0 {
         if y % 2 == 1 { res = add_mod_t(res, x, n) }
@@ -71,10 +71,10 @@ fn mul_mod_t(a, b, n) -> int {
 
 fn pow_mod_t(base, exp, n) -> int {
     if n == 1 { return 0 }
-    let res = 1
-    let b = base % n
+    let mut res = 1
+    let mut b = base % n
     if b < 0 { b = b + n }
-    let e = exp
+    let mut e = exp
     while e > 0 {
         if e % 2 == 1 { res = mul_mod_t(res, b, n) }
         b = mul_mod_t(b, b, n)
@@ -84,13 +84,13 @@ fn pow_mod_t(base, exp, n) -> int {
 }
 
 fn mr_is_composite_witness_t(a, n, d, r) -> bool {
-    let x = pow_mod_t(a, d, n)
+    let mut x = pow_mod_t(a, d, n)
     if x == 1 || x == n - 1 { return false }
-    let i = 1
-    while i < r {
+    let mut mi = 1
+    while mi < r {
         x = mul_mod_t(x, x, n)
         if x == n - 1 { return false }
-        i = i + 1
+        mi = mi + 1
     }
     true
 }
@@ -99,19 +99,19 @@ fn is_prime_det_t(n) -> bool {
     if n < 2 { return false }
     if n == 2 || n == 3 { return true }
     if n % 2 == 0 { return false }
-    let d = n - 1
-    let r = 0
+    let mut d = n - 1
+    let mut r = 0
     while d % 2 == 0 {
         d = d / 2
         r = r + 1
     }
     let witnesses = [2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37]
-    let i = 0
-    while i < 12 {
-        let a = witnesses[i]
+    let mut wi = 0
+    while wi < 12 {
+        let a = witnesses[wi]
         if a >= n { return true }
         if mr_is_composite_witness_t(a, n, d, r) { return false }
-        i = i + 1
+        wi = wi + 1
     }
     true
 }
@@ -128,7 +128,7 @@ check_eq_bool("n=4",  is_prime_det_t(4),  false)
 
 // Cross-check against trial division for every n in [2, 200]. Any
 // disagreement is a real pseudoprime; failing loudly is the whole point.
-let nn = 2
+let mut nn = 2
 while nn <= 200 {
     check_eq_bool("cross n=" + to_string(nn), is_prime_det_t(nn), is_prime_trial(nn))
     nn = nn + 1
