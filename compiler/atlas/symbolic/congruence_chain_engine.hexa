@@ -168,6 +168,32 @@ pub fn sigma_k(n: int, k: int) -> int {
     return s
 }
 
+// σ*(n) = Σ_{d||n} d — sum of UNITARY divisors (OEIS A034448).
+// d||n ⟺ d|n AND gcd(d, n/d) = 1 (d and its cofactor are coprime).
+// Multiplicative; σ*(p^a) = p^a + 1. n=6 is the smallest unitary-perfect:
+// σ*(6) = 12 = 2·6. Mirrors stdlib/core/math.hexa::sigma_star so atlas_cli
+// (which does NOT `use stdlib/core/math`) has a reachable register-side
+// recompute — the atlas_cli.hexa::_recompute_register sigma_star arm.
+pub fn sigma_star(n: int) -> int {
+    if n <= 0 { return 0 }
+    let ds = divisors(n)
+    let mut s = 0
+    let mut i = 0
+    while i < len(ds) {
+        let d = ds[i]
+        let mut a = d
+        let mut b = n / d
+        while b != 0 {
+            let t = a % b
+            a = b
+            b = t
+        }
+        if a == 1 { s = s + d }
+        i = i + 1
+    }
+    return s
+}
+
 // sopfr(n) → sum of prime factors with multiplicity (OEIS A001414).
 // Trial division up to √x; the residual x>1 is the final prime factor.
 // sopfr(1)=0 (empty product), sopfr(prime p)=p. Mirrors the integer-exact
