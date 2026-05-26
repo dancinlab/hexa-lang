@@ -12,6 +12,14 @@
   finding_6 = "DYSYMTAB: nlocalsym/iextdefsym/nextdefsym/iundefsym/nundefsym all populated (was: only nextdefsym)"
 
   # HARD RESIDUALS to FULL byte-eq (verified non-derivable):
-  residual_1 = "strtab BYTE ORDER = LLVM-MC MCContext symbol-interning order (parse-order + internal temp-symbol shuffle: bb3,ltmp2,bb2,ltmp1,bb1,ltmp0,bb0). NOT derivable outside LLVM. -> name_offset values diverge."
-  residual_2 = "DWARF __debug_line_str embeds absolute build CWD -> not host-portable."
-  verdict = "🟠->scoped: FULL byte-eq NOT reachable (2 LLVM-MC-internal fields). REACHABLE closure = symtab LAYOUT/ORDER parity (r_symbolnum aligns) + __HEXA sections + LC_BUILD_VERSION. Implement that; document the 2 residuals."
+  residual_1 = "strtab BYTE ORDER = MCStringTableBuilder suffix-merge sort, not symbol-order. Shifts every n_strx + strsize (±1..5 B). NOT derivable outside LLVM-MC. The remaining whole-.o diff is THIS and only this."
+  residual_2 = "DWARF __debug_line_str embeds absolute build CWD -> not host-portable. We deliberately do NOT emit __debug_*; byte-eq target is the CWD-independent (.file/.loc-stripped) clang object, which we match section-for-section."
+
+  # MEASURED at HEAD vs #1257 baseline (mini, arm64 macOS 26.5, clang 21.0.0). Verbatim.
+  m_smoke      = "tool/build_aprime.sh @ HEAD: smoke exit(42)==42 PASS — default path untouched. Baseline also PASS."
+  m_text_eq    = "__text byte-eq vs clang -c: HOLDS @ HEAD (trivial/fib/while = 17/74/44 words IDENTICAL). HEAD __text == baseline __text (UNCHANGED) == clang."
+  m_symtab     = "nm -ap IDENTICAL to clang (symbols+n_type+n_sect+n_value+ORDER). DYSYMTAB IDENTICAL (ilocal0 nlocal6 iext6 next1 iundef7 nundef2). Sections+LCs IDENTICAL."
+  m_closeness  = "whole-.o size gap vs CWD-indep clang ref: baseline 367/459/466 B -> HEAD 1/1/5 B (trivial/fib/while). Remaining diff = strtab byte-order + n_strx + strsize only."
+  m_corpus_note= "corpus structural harnesses (SYMTAB/RELOC/FRAME) fail to BUILD at BOTH baseline+HEAD: they construct PReg{name,kind} (2 fields) but lir.hexa PReg grew to 5 (RFC 067 P3). Pre-existing staleness, NOT this work."
+
+  verdict = "🟢 scoped-closure LANDED: symtab LAYOUT/ORDER + __HEXA sections + LC_BUILD_VERSION = byte-eq w/ clang. FULL byte-eq blocked ONLY by residual_1 (strtab interning). residual_2 (DWARF) is the non-portable default-clang variant, out of target."

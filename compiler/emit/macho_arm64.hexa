@@ -13,20 +13,43 @@
 // (the `--emit=obj` + `--backend=native` + `arm64-apple-darwin` path
 // at main.hexa:882 writes the `.o` via `pack_lir` + `serialize`).
 //
-// F-P0-OBJEQ status (verified 2026-05-26, arm64 macOS):
-//   - {trivial, fib, while/if} corpus: `__text` bytes BYTE-EQ vs
-//     `clang -c`; reloc table count + address + kind + ordering
-//     (descending-address) BYTE-EQ; natively-emitted `.o` links +
-//     runs to the correct exit code (42 / 13 / 30).
-//   - Residual to FULL object byte-eq: reloc `r_symbolnum` indices
-//     still differ because the symbol-table layout omits clang's
-//     local block labels (`__L*_bb*`), `ltmp*`, and the `__HEXA,
-//     __cap` / `__HEXA,__abi` section symbols — a symbol-table-
-//     layout increment, separate from the encoding/reloc work here.
-//   - Not yet handled (separate increment): string/global refs that
-//     lower to `adrp sym@PAGE` + `add sym@PAGEOFF` + a `__cstring`
-//     section with PAGE21/PAGEOFF12 relocations (the encoder returns
-//     0 for `adrp` and mis-parses the `@PAGEOFF` label as an imm).
+// F-P0-OBJEQ status (verified 2026-05-26, arm64 macOS 26.5, Apple
+// clang 21.0.0 — measured on `mini`, all numbers verbatim):
+//   - `__text` BYTE-EQ vs `clang -c`: HOLDS for {trivial, fib, while}
+//     (17 / 74 / 44 instr words IDENTICAL); HEAD `__text` is also
+//     byte-identical to the pre-symtab baseline (#1257) — this work
+//     did NOT perturb `__text`.
+//   - Symbol table now BYTE-EQ in LAYOUT: `nm -ap` (symbols, n_type,
+//     n_sect, n_value, ORDER) is IDENTICAL to clang, and DYSYMTAB
+//     (ilocalsym 0 / nlocalsym 6 / iextdefsym 6 / nextdefsym 1 /
+//     iundefsym 7 / nundefsym 2) is IDENTICAL. Sections (__text,
+//     __HEXA,__cap, __HEXA,__abi) + load commands (LC_SEGMENT_64,
+//     LC_BUILD_VERSION, LC_SYMTAB, LC_DYSYMTAB) IDENTICAL.
+//   - Whole-`.o` size gap vs the CWD-independent clang object
+//     (`.s` with `.file`/`.loc` stripped): closed from baseline
+//     367 / 459 / 466 B  ->  HEAD 1 / 1 / 5 B (trivial / fib / while).
+//
+// RESIDUAL to FULL byte-eq (the next substantial increment — both
+// verified non-derivable from outside LLVM-MC):
+//   (1) STRTAB-INTERNING ORDER. clang's strtab is built by
+//       MCStringTableBuilder's suffix-merge sort, so the byte order
+//       of the names differs from our symbol-order interning. That
+//       shifts every `n_strx` (name_offset) and the `strsize` field
+//       (±1..5 B). The symbol IDENTITIES, ORDER, n_type/n_sect/
+//       n_value, and DYSYMTAB indices all already match — ONLY the
+//       per-name string offsets diverge. Matching this requires
+//       reproducing MCStringTableBuilder's suffix-merge interning.
+//   (2) DWARF `__debug_line` / `__debug_line_str`. The default
+//       `clang -c` object carries these (from `.file`/`.loc`) and
+//       `__debug_line_str` EMBEDS the absolute build CWD — so the
+//       default clang `.o` is not host/CWD-portable (two CWDs ->
+//       two shas). We deliberately do NOT emit `__debug_*`; the
+//       byte-eq target is the CWD-independent (`.file`/`.loc`-
+//       stripped) clang object, which has no DWARF and which we
+//       match section-for-section.
+//   - Also out of scope here (separate increment): string/global
+//     refs that lower to `adrp sym@PAGE` + `add sym@PAGEOFF` + a
+//     `__cstring` section with PAGE21/PAGEOFF12 relocations.
 //
 // Falsifier (from RFC 063 § P0): `F-P0-OBJEQ` — byte-eq vs
 // `clang -c -arch arm64 T.s -o T.ref.o` on {trivial, fib, while, if,
