@@ -222,9 +222,7 @@ static char *__attribute__((noinline)) hxlcl_strndup(const char *s, size_t cap) 
 // (delegating to hexa-source rt_atoll) lives below, after the cycle-5 atof
 // def — this early helper zone is pre-HexaVal (same relocate technique as atof).
 static long long __attribute__((noinline)) hxlcl_atoll(const char *s);
-static int __attribute__((noinline)) hxlcl_atoi(const char *s) {
-    return (int)hxlcl_atoll(s);
-}
+static int __attribute__((noinline)) hxlcl_atoi(const char *s) { return (int)hxlcl_atoll(s); }
 static long long __attribute__((noinline)) hxlcl_strtoll(const char *nptr, char **endptr, int base) {
     if (!nptr) { if (endptr) *endptr = (char *)nptr; return 0; }
     const char *s = nptr;
@@ -1153,24 +1151,14 @@ static inline int _hxlcl_pipe_cf(int fds[2]) {
 // follow-up cycle scales this same `_cf` pattern. A failed read/close now
 // returns -1 + sets errno (not a bogus positive errno-as-result), so the
 // content-leak / bogus-fd hazards that motivated #251 cannot recur.
-static long __attribute__((noinline)) hxlcl_read(int fd, void *buf, unsigned long n) {
-    return _hxlcl_syscall3_cf(HXLCL_SYS_READ, (long)fd, (long)buf, (long)n);
-}
+static long __attribute__((noinline)) hxlcl_read(int fd, void *buf, unsigned long n) { return _hxlcl_syscall3_cf(HXLCL_SYS_READ, (long)fd, (long)buf, (long)n); }
 // RUNTIME tail (cycle 82): svc-trap mkdir (136) — a direct kernel syscall,
 // 2 args. Replaces the libc mkdir call in runtime_core.c + the generated
 // code's s4-lowered mkdir. carry-set -> -1 + errno.
-static int __attribute__((noinline)) hxlcl_mkdir(const char *path, int mode) {
-    return (int)_hxlcl_syscall2_cf(HXLCL_SYS_MKDIR, (long)path, (long)mode);
-}
-static long __attribute__((noinline)) hxlcl_write(int fd, const void *buf, unsigned long n) {
-    return _hxlcl_syscall3_cf(HXLCL_SYS_WRITE, (long)fd, (long)buf, (long)n);
-}
-static int __attribute__((noinline)) hxlcl_close(int fd) {
-    return (int)_hxlcl_syscall1_cf(HXLCL_SYS_CLOSE, (long)fd);
-}
-static int __attribute__((noinline)) hxlcl_getpid(void) {
-    return (int)_hxlcl_syscall1(HXLCL_SYS_GETPID, 0);
-}
+static int __attribute__((noinline)) hxlcl_mkdir(const char *path, int mode) { return (int)_hxlcl_syscall2_cf(HXLCL_SYS_MKDIR, (long)path, (long)mode); }
+static long __attribute__((noinline)) hxlcl_write(int fd, const void *buf, unsigned long n) { return _hxlcl_syscall3_cf(HXLCL_SYS_WRITE, (long)fd, (long)buf, (long)n); }
+static int __attribute__((noinline)) hxlcl_close(int fd) { return (int)_hxlcl_syscall1_cf(HXLCL_SYS_CLOSE, (long)fd); }
+static int __attribute__((noinline)) hxlcl_getpid(void) { return (int)_hxlcl_syscall1(HXLCL_SYS_GETPID, 0); }
 // RUNTIME Tier-A.6 — ___chkstk_darwin native stack-probe.
 // 8 large-frame functions (net.c hexa_net_read_n has a 64 KB
 // `char stackbuf[65536]`, plus hexa_exec / exec_capture / sha256_file /
@@ -1213,9 +1201,7 @@ __attribute__((naked,used,noreturn)) void hxlcl_longjmp(void *buf, int val) { __
 // (no errno / carry-flag path), so the plain _hxlcl_syscall1 trap (not the
 // _cf carry-flag variant) is correct. Drops the libc `_getuid` extern that
 // net.c's os_getuid() pulled in (RUNTIME Tier-A.4 POSIX direct svc trap).
-static int __attribute__((noinline)) hxlcl_getuid(void) {
-    return (int)_hxlcl_syscall1(HXLCL_SYS_GETUID, 0);
-}
+static int __attribute__((noinline)) hxlcl_getuid(void) { return (int)_hxlcl_syscall1(HXLCL_SYS_GETUID, 0); }
 // RUNTIME.md Tier-A.4 — backtrace / backtrace_symbols_fd hexa-native stubs.
 // These libc execinfo(3) fns are pulled in ONLY by the HEXA_OOB_TRACE
 // diagnostic path in runtime_core.c (array OOB tracer). A self-host compiler
@@ -1236,9 +1222,7 @@ static void __attribute__((noinline)) hxlcl_backtrace_symbols_fd(void *const *bu
 // cycle 66 — libc dup2 (same carry-flag issue as close).
 extern int dup2(int oldfd, int newfd);
 // cycle 71 — dup2 re-trapped via carry-flag-correct svc 0x80 (SYS_DUP2=90).
-static int __attribute__((noinline)) hxlcl_dup2(int oldfd, int newfd) {
-    return (int)_hxlcl_syscall2_cf(HXLCL_SYS_DUP2, (long)oldfd, (long)newfd);
-}
+static int __attribute__((noinline)) hxlcl_dup2(int oldfd, int newfd) { return (int)_hxlcl_syscall2_cf(HXLCL_SYS_DUP2, (long)oldfd, (long)newfd); }
 // cycle 66 — restore libc pipe() backing. The cycle 63+64 svc-0x80
 // path mis-handled the Darwin pipe(2) pair-return: the kernel
 // returns the two fds in x0/x1 registers, NOT in the user-provided
@@ -1251,9 +1235,7 @@ extern int pipe(int fds[2]);
 // cycle 71 — pipe re-trapped via the carry-flag PAIR-RETURN trap
 // (_hxlcl_pipe_cf captures BOTH x0/x1 fds — fixes the cycle-63/64
 // garbage-fds[1] bug that PR #251 reverted to libc to escape).
-static int __attribute__((noinline)) hxlcl_pipe(int fds[2]) {
-    return _hxlcl_pipe_cf(fds);
-}
+static int __attribute__((noinline)) hxlcl_pipe(int fds[2]) { return _hxlcl_pipe_cf(fds); }
 // RUNTIME net/exec ⑥ (cycle 80): svc-trap fork (2) — Darwin BSD PAIR-RETURN.
 // fork returns the child pid in x0 for BOTH processes; the child is
 // disambiguated by x1==1 (parent has x1==0). cycle-66 left this on libc
@@ -1268,15 +1250,9 @@ static int __attribute__((noinline)) hxlcl_fork(void) {
     if (r1 == 1) return 0;   // child
     return (int)r0;          // parent: child pid
 }
-static int __attribute__((noinline)) hxlcl_kill(int pid, int sig) {
-    return (int)_hxlcl_syscall2(HXLCL_SYS_KILL, (long)pid, (long)sig);
-}
-static int __attribute__((noinline)) hxlcl_fcntl(int fd, int cmd, long arg) {
-    return (int)_hxlcl_syscall3(HXLCL_SYS_FCNTL, (long)fd, (long)cmd, arg);
-}
-static int __attribute__((noinline)) hxlcl_ioctl(int fd, unsigned long req, void *arg) {
-    return (int)_hxlcl_syscall3(HXLCL_SYS_IOCTL, (long)fd, (long)req, (long)arg);
-}
+static int __attribute__((noinline)) hxlcl_kill(int pid, int sig) { return (int)_hxlcl_syscall2(HXLCL_SYS_KILL, (long)pid, (long)sig); }
+static int __attribute__((noinline)) hxlcl_fcntl(int fd, int cmd, long arg) { return (int)_hxlcl_syscall3(HXLCL_SYS_FCNTL, (long)fd, (long)cmd, arg); }
+static int __attribute__((noinline)) hxlcl_ioctl(int fd, unsigned long req, void *arg) { return (int)_hxlcl_syscall3(HXLCL_SYS_IOCTL, (long)fd, (long)req, (long)arg); }
 // PR #426 follow-up — libc lseek (same Darwin arm64 carry-flag class as
 // open/read/write/close/dup2 in cycle-66 / #414). The raw `svc #0x80`
 // `_hxlcl_syscall3` cannot read the carry flag, so a failed lseek returns
@@ -1289,23 +1265,15 @@ static int __attribute__((noinline)) hxlcl_ioctl(int fd, unsigned long req, void
 // cycle 71 — lseek re-trapped via carry-flag-correct svc 0x80 (SYS_LSEEK=199).
 // A failed lseek now returns -1+errno instead of a positive errno that a
 // `< 0` sentinel test would mistake for a valid offset (PR #426 hazard).
-static long __attribute__((noinline)) hxlcl_lseek(int fd, long off, int whence) {
-    return _hxlcl_syscall3_cf(HXLCL_SYS_LSEEK, (long)fd, off, (long)whence);
-}
-static int __attribute__((noinline)) hxlcl_select(int nfds, void *r, void *w, void *e, void *t) {
-    return (int)_hxlcl_syscall6(HXLCL_SYS_SELECT, (long)nfds, (long)r, (long)w, (long)e, (long)t, 0);
-}
-static int __attribute__((noinline)) hxlcl_poll(void *fds, unsigned int nfds, int timeout) {
-    return (int)_hxlcl_syscall3(HXLCL_SYS_POLL, (long)fds, (long)nfds, (long)timeout);
-}
+static long __attribute__((noinline)) hxlcl_lseek(int fd, long off, int whence) { return _hxlcl_syscall3_cf(HXLCL_SYS_LSEEK, (long)fd, off, (long)whence); }
+static int __attribute__((noinline)) hxlcl_select(int nfds, void *r, void *w, void *e, void *t) { return (int)_hxlcl_syscall6(HXLCL_SYS_SELECT, (long)nfds, (long)r, (long)w, (long)e, (long)t, 0); }
+static int __attribute__((noinline)) hxlcl_poll(void *fds, unsigned int nfds, int timeout) { return (int)_hxlcl_syscall3(HXLCL_SYS_POLL, (long)fds, (long)nfds, (long)timeout); }
 // cycle 66 — libc waitpid (wait4 syscall has 4 args + needs proper
 // errno/EINTR handling that the raw syscall path drops).
 extern int waitpid(int pid, int *status, int options);
 // cycle 71 — waitpid re-trapped via the wait4 syscall (SYS_WAIT4=7) with
 // carry-flag-correct error handling; 4th arg (struct rusage*) = NULL.
-static int __attribute__((noinline)) hxlcl_waitpid(int pid, int *status, int options) {
-    return (int)_hxlcl_syscall4_cf(HXLCL_SYS_WAIT4, (long)pid, (long)status, (long)options, 0);
-}
+static int __attribute__((noinline)) hxlcl_waitpid(int pid, int *status, int options) { return (int)_hxlcl_syscall4_cf(HXLCL_SYS_WAIT4, (long)pid, (long)status, (long)options, 0); }
 /* Cycle 65: variadic to handle both 2-arg and 3-arg open() callers. */
 extern int open(const char *path, int flags, ...);
 static int __attribute__((noinline)) hxlcl_open_sys(const char *path, int flags, ...) {
@@ -1337,13 +1305,9 @@ static int __attribute__((noinline)) hxlcl_open_sys(const char *path, int flags,
 // (Darwin uses __DARWIN_INODE64 symbol renaming — no extern decl, must
 // use the header's `struct stat *` signature).
 // cycle 71 — fstat re-trapped via carry-flag-correct svc 0x80 (SYS_FSTAT=339).
-static int __attribute__((noinline)) hxlcl_fstat(int fd, void *buf) {
-    return (int)_hxlcl_syscall2_cf(HXLCL_SYS_FSTAT, (long)fd, (long)buf);
-}
+static int __attribute__((noinline)) hxlcl_fstat(int fd, void *buf) { return (int)_hxlcl_syscall2_cf(HXLCL_SYS_FSTAT, (long)fd, (long)buf); }
 // cycle 71 — stat re-trapped via carry-flag-correct svc 0x80 (SYS_STAT=338).
-static int __attribute__((noinline)) hxlcl_stat(const char *path, void *buf) {
-    return (int)_hxlcl_syscall2_cf(HXLCL_SYS_STAT, (long)path, (long)buf);
-}
+static int __attribute__((noinline)) hxlcl_stat(const char *path, void *buf) { return (int)_hxlcl_syscall2_cf(HXLCL_SYS_STAT, (long)path, (long)buf); }
 // Cycle 65 — close out remaining real syscalls.
 #define HXLCL_SYS_GETTIMEOFDAY 116
 static void __attribute__((noinline, noreturn)) hxlcl_exit(int code) {
@@ -1364,9 +1328,7 @@ static void __attribute__((noinline, noreturn)) hxlcl_exit(int code) {
 // cycle 71 — mmap re-trapped via carry-flag-correct svc 0x80 (SYS_MMAP=197).
 // On error the cf6 helper returns -1, which cast to (void *) is exactly
 // MAP_FAILED ((void *)-1) — probe-verified mmap(badfd) -> MAP_FAILED+EBADF.
-static void *__attribute__((noinline)) hxlcl_mmap(void *addr, unsigned long len, int prot, int flags, int fd, long off) {
-    return (void *)_hxlcl_syscall6_cf(HXLCL_SYS_MMAP, (long)addr, (long)len, (long)prot, (long)flags, (long)fd, off);
-}
+static void *__attribute__((noinline)) hxlcl_mmap(void *addr, unsigned long len, int prot, int flags, int fd, long off) { return (void *)_hxlcl_syscall6_cf(HXLCL_SYS_MMAP, (long)addr, (long)len, (long)prot, (long)flags, (long)fd, off); }
 static int __attribute__((noinline)) hxlcl_clock_gettime(int clk, void *ts) {
     // Use gettimeofday(2) (syscall 116) since clock_gettime is a vDSO
     // function on Darwin with no direct syscall number. timespec[0..1]
@@ -1419,48 +1381,20 @@ __attribute__((used,noinline)) int hxlcl_fd_overflow(int a, const void *b, int n
 #include <time.h>
 #include <stdarg.h>
 
-static long __attribute__((noinline)) hxlcl_read(int fd, void *buf, unsigned long n) {
-    return (long)read(fd, buf, (size_t)n);
-}
-static long __attribute__((noinline)) hxlcl_write(int fd, const void *buf, unsigned long n) {
-    return (long)write(fd, buf, (size_t)n);
-}
-static int __attribute__((noinline)) hxlcl_close(int fd) {
-    return close(fd);
-}
-static int __attribute__((noinline)) hxlcl_getpid(void) {
-    return (int)getpid();
-}
-static int __attribute__((noinline)) hxlcl_dup2(int oldfd, int newfd) {
-    return dup2(oldfd, newfd);
-}
-static int __attribute__((noinline)) hxlcl_pipe(int fds[2]) {
-    return pipe(fds);
-}
-static int __attribute__((noinline)) hxlcl_fork(void) {
-    return (int)fork();
-}
-static int __attribute__((noinline)) hxlcl_kill(int pid, int sig) {
-    return kill((pid_t)pid, sig);
-}
-static int __attribute__((noinline)) hxlcl_fcntl(int fd, int cmd, long arg) {
-    return fcntl(fd, cmd, arg);
-}
-static int __attribute__((noinline)) hxlcl_ioctl(int fd, unsigned long req, void *arg) {
-    return ioctl(fd, req, arg);
-}
-static long __attribute__((noinline)) hxlcl_lseek(int fd, long off, int whence) {
-    return (long)lseek(fd, (off_t)off, whence);
-}
-static int __attribute__((noinline)) hxlcl_select(int nfds, void *r, void *w, void *e, void *t) {
-    return select(nfds, (fd_set *)r, (fd_set *)w, (fd_set *)e, (struct timeval *)t);
-}
-static int __attribute__((noinline)) hxlcl_poll(void *fds, unsigned int nfds, int timeout) {
-    return poll((struct pollfd *)fds, (nfds_t)nfds, timeout);
-}
-static int __attribute__((noinline)) hxlcl_waitpid(int pid, int *status, int options) {
-    return (int)waitpid((pid_t)pid, status, options);
-}
+static long __attribute__((noinline)) hxlcl_read(int fd, void *buf, unsigned long n) { return (long)read(fd, buf, (size_t)n); }
+static long __attribute__((noinline)) hxlcl_write(int fd, const void *buf, unsigned long n) { return (long)write(fd, buf, (size_t)n); }
+static int __attribute__((noinline)) hxlcl_close(int fd) { return close(fd); }
+static int __attribute__((noinline)) hxlcl_getpid(void) { return (int)getpid(); }
+static int __attribute__((noinline)) hxlcl_dup2(int oldfd, int newfd) { return dup2(oldfd, newfd); }
+static int __attribute__((noinline)) hxlcl_pipe(int fds[2]) { return pipe(fds); }
+static int __attribute__((noinline)) hxlcl_fork(void) { return (int)fork(); }
+static int __attribute__((noinline)) hxlcl_kill(int pid, int sig) { return kill((pid_t)pid, sig); }
+static int __attribute__((noinline)) hxlcl_fcntl(int fd, int cmd, long arg) { return fcntl(fd, cmd, arg); }
+static int __attribute__((noinline)) hxlcl_ioctl(int fd, unsigned long req, void *arg) { return ioctl(fd, req, arg); }
+static long __attribute__((noinline)) hxlcl_lseek(int fd, long off, int whence) { return (long)lseek(fd, (off_t)off, whence); }
+static int __attribute__((noinline)) hxlcl_select(int nfds, void *r, void *w, void *e, void *t) { return select(nfds, (fd_set *)r, (fd_set *)w, (fd_set *)e, (struct timeval *)t); }
+static int __attribute__((noinline)) hxlcl_poll(void *fds, unsigned int nfds, int timeout) { return poll((struct pollfd *)fds, (nfds_t)nfds, timeout); }
+static int __attribute__((noinline)) hxlcl_waitpid(int pid, int *status, int options) { return (int)waitpid((pid_t)pid, status, options); }
 /* variadic to handle both 2-arg and 3-arg open() callers (matches arm64). */
 static int __attribute__((noinline)) hxlcl_open_sys(const char *path, int flags, ...) {
     int mode = 0;
@@ -1470,21 +1404,13 @@ static int __attribute__((noinline)) hxlcl_open_sys(const char *path, int flags,
     va_end(ap);
     return open(path, flags, mode);
 }
-static int __attribute__((noinline)) hxlcl_fstat(int fd, void *buf) {
-    return fstat(fd, (struct stat *)buf);
-}
-static int __attribute__((noinline)) hxlcl_stat(const char *path, void *buf) {
-    return stat(path, (struct stat *)buf);
-}
+static int __attribute__((noinline)) hxlcl_fstat(int fd, void *buf) { return fstat(fd, (struct stat *)buf); }
+static int __attribute__((noinline)) hxlcl_stat(const char *path, void *buf) { return stat(path, (struct stat *)buf); }
 static void __attribute__((noinline, noreturn)) hxlcl_exit(int code) {
     _exit(code);
 }
-static void *__attribute__((noinline)) hxlcl_mmap(void *addr, unsigned long len, int prot, int flags, int fd, long off) {
-    return mmap(addr, (size_t)len, prot, flags, fd, (off_t)off);
-}
-static int __attribute__((noinline)) hxlcl_clock_gettime(int clk, void *ts) {
-    return clock_gettime((clockid_t)clk, (struct timespec *)ts);
-}
+static void *__attribute__((noinline)) hxlcl_mmap(void *addr, unsigned long len, int prot, int flags, int fd, long off) { return mmap(addr, (size_t)len, prot, flags, fd, (off_t)off); }
+static int __attribute__((noinline)) hxlcl_clock_gettime(int clk, void *ts) { return clock_gettime((clockid_t)clk, (struct timespec *)ts); }
 static int __attribute__((noinline)) hxlcl_darwin_check_fd_set_overflow(int fd, const void *p, int n) {
     (void)fd; (void)p; (void)n;
     return 0;  // never overflowing
