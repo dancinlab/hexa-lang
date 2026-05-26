@@ -4881,3 +4881,57 @@ hexa_struct_*        struct primitives → hexa-native struct ABI 정착 후
 - physical 한계 (frontier OPEN per feedback-closure-is-physical-limit): hexa-native runtime 의 모든 OS interaction 이 svc 0x80 으로만 닿고, 그 위 모든 알고리즘은 .hexa source. 이 천장은 가능, time-bounded 아님
 
 → trivial-lane 닫힘. 다음 phase = (A) 8 syscall-wire + (B) cross-obj BL infra + (C) HEXA_HAS_HEXA_RT_STDLIB 포팅 확장. 본 cycle pause.
+
+## L-fp-single-instr-lane-exhausted — +8 wires (19/448 total), next-tier B requires cross-obj BL (2026-05-27)
+
+L-trivial-lane-exhausted 후속. **FP single-instr 패밀리** 가 hardware-direct ARM64 instr 한 개로 완결되는 모든 wrappper 를 흡수 — 새 lane closure.
+
+### 추가 wire (12 → 19)
+
+| # | symbol | bytes | ARM64 instr | merge PR |
+|---|--------|------:|-------------|---------:|
+| 12 | `hexa_mono_ns` | 68 | svc 0x80 SYS_gettimeofday + arith | #1373 |
+| 13 | `hexa_math_sqrt` | 20 | FSQRT d0, d0 | #1375 |
+| 14 | `hexa_math_abs` | 20 | FABS d0, d0 | #1377 |
+| 15 | `hexa_math_floor` | 20 | FRINTM d0, d0 | #1379 |
+| 16 | `hexa_math_ceil` | 20 | FRINTP d0, d0 | #1380 |
+| 17 | `hexa_math_round` | 20 | FRINTA d0, d0 | #1382 |
+| 18 | `hexa_math_min` | 24 | FMIN d0, d0, d1 | #1383 |
+| 19 | `hexa_math_max` | 24 | FMAX d0, d0, d1 | #1385 |
+
+`fmov d, x · ARM_OP · fmov x, d · movz tag · ret` = 5-6 instr · 20-24 B 가 표준 형태. 1-arg / 2-arg 모두 같은 토폴로지.
+
+### 왜 다음 wire 가 더 비싼가 (B-class infra 선결)
+
+남은 math fn 의 거의 모든 wrapper 가 **libm 호출** 형태:
+```
+hexa_math_sin/cos/tan/tanh/log/exp/asin/acos/atan/atan2 …
+  →  hxlcl_sin(HX_FLOAT(x))  (libm 또는 hexa-source rt_X 의 wrapper)
+```
+
+이를 override 하려면 .o 어댑터가 `BL _hxlcl_sin` (또는 `_sin` libm dyld import) 를 emit. 현재 `tool/hexa_ld.hexa` 는 **dyld 함수 import 만** BL 가능 (libSystem.B.dylib ord=1 + L-multi-dylib 잔여). cross-object hexa-emit `.o` 끼리의 BL 은 미지원 — **B-class infra 가 잠금장치**.
+
+B-class infra spec (다음 세션):
+1. `hexa_ld` 의 cross-object symbol resolve — `.o` 가 다른 `.o` 의 export 심볼 호출 가능
+2. multi-dylib ord 매핑 — libm (ord=2) + libc++ (ord=3) 등 (L-multi-dylib 와 합류)
+3. (1)+(2) 시 ~30+ math wrapper 가 BL+pack 어댑터 (40-60 B 각) 로 wire 가능
+
+### 누적 진보
+
+```
+▓░░░░░░░░░░░░░░░░░░░ 4.2% · 19/448 fns wired
+```
+
+| metric | 값 |
+|--------|---:|
+| runtime.c lines | 13,769 (unchanged) |
+| HexaVal fn count | 448 |
+| wired (weak-override) | 19 (+8 this batch) |
+| % progress | 4.2% |
+| session PRs (cum) | 33 |
+| lanes closed | trivial-const (11) · FP-single-instr (7) · A-class syscall (1) |
+| next lane | B-class infra (cross-obj BL · multi-dylib ord) |
+
+### honest residual
+
+physical 천장은 OPEN 유지 (per `feedback-closure-is-physical-limit`). runtime.c → 0 은 도달 가능 · time-bounded 아님. 본 세션은 1-instruction lane 들의 완전한 흡수 — 다음은 **인프라 한 단계 (B)** 가 잠금. 인프라가 풀리면 ~30-100 wire 가 BL+pack 어댑터 lane 으로 추가 흡수 가능 · 그 이후 lane = HEXA_HAS_HEXA_RT_STDLIB 의 stdlib 포팅 확장 (현 ~115 fn → 437+).
