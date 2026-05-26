@@ -868,7 +868,14 @@ fn serialize(obj: MachoArm64Obj) -> [Int] {
     // __cap (size 0) and __abi (12 B) sit immediately after __text; both
     // are 1-byte aligned so no inter-section padding.
     let meta_off = data_off + text_size_aligned   // == __cap.offset == __abi.offset
-    let reloff   = meta_off + abi_len
+    // clang aligns the relocation table to an 8-byte file boundary: it
+    // pads the section data after __abi up to the next multiple of 8.
+    // (Verified: clang reloff is 536/712/616 for the corpus — all %8==0.)
+    let data_end = meta_off + abi_len
+    let mut reloc_pad = 0
+    let drem = data_end & 7
+    if drem != 0 { reloc_pad = 8 - drem }
+    let reloff   = data_end + reloc_pad
     let symoff   = reloff + 8 * nreloc
     let stroff   = symoff + 16 * nsyms
 
@@ -930,6 +937,9 @@ fn serialize(obj: MachoArm64Obj) -> [Int] {
     // __cap is empty (no bytes). __abi: the 12-byte stamp.
     let mut ai = 0
     while ai < abi_len { out.push(abi[ai] & 0xff); ai = ai + 1 }
+    // 8-byte alignment pad so the relocation table starts on an 8-byte
+    // boundary (matches clang's reloff alignment).
+    _zero_n(out, reloc_pad)
 
     // Relocations: emit one `relocation_info` per Arm64Reloc. r_extern is
     // 1 — all our relocs are symbol-based BRANCH26 to undefined externs.
