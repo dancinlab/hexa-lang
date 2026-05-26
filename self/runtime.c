@@ -5430,10 +5430,10 @@ HexaVal hexa_math_isinf(HexaVal x)    { return rt_isinf(hexa_float(HX_FLOAT(x)))
 HexaVal hexa_math_isfinite(HexaVal x) { return rt_isfinite(hexa_float(HX_FLOAT(x))); }
 #endif
 #ifndef HEXA_HAS_HEXA_RT_STDLIB
-HexaVal hexa_math_max(HexaVal a, HexaVal b) { return hexa_float(fmax(HX_FLOAT(a), HX_FLOAT(b))); }
+__attribute__((weak)) HexaVal hexa_math_max(HexaVal a, HexaVal b) { return hexa_float(fmax(HX_FLOAT(a), HX_FLOAT(b))); }
 #else
 extern HexaVal rt_max_float(HexaVal a, HexaVal b);
-HexaVal hexa_math_max(HexaVal a, HexaVal b) { return rt_max_float(a, b); }
+__attribute__((weak)) HexaVal hexa_math_max(HexaVal a, HexaVal b) { return rt_max_float(a, b); }
 #endif
 
 // ── ML builtins: matvec, dot ─────────────────────────────────
