@@ -2778,7 +2778,7 @@ HexaVal hexa_from_cstring(HexaVal ptr) {
     return hexa_str((const char*)(uintptr_t)p);
 }
 
-HexaVal hexa_ptr_null() { return hexa_int(0); }
+__attribute__((weak)) HexaVal hexa_ptr_null() { return hexa_int(0); }
 
 /* HEXA_BACKEND flip · 열셋째 increment — production-wire FOURTH PROBE.
  * Marked `__attribute__((weak))` so a hexa-emit `_hexa_ptr_addr` strong
@@ -5309,8 +5309,8 @@ int64_t hexa_float_to_int(double f) {
 #ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal hexa_math_tanh(HexaVal x) { return hexa_float(tanh(HX_FLOAT(x))); }
 HexaVal hexa_math_tan(HexaVal x)  { return hexa_float(tan(HX_FLOAT(x))); }
-HexaVal hexa_math_abs(HexaVal x)  { return hexa_float(fabs(HX_FLOAT(x))); }
-HexaVal hexa_math_sqrt(HexaVal x) { return hexa_float(sqrt(HX_FLOAT(x))); }
+__attribute__((weak)) HexaVal hexa_math_abs(HexaVal x)  { return hexa_float(fabs(HX_FLOAT(x))); }
+__attribute__((weak)) HexaVal hexa_math_sqrt(HexaVal x) { return hexa_float(sqrt(HX_FLOAT(x))); }
 #else
 extern HexaVal rt_tanh(HexaVal x);
 extern HexaVal rt_tan(HexaVal x);
@@ -5318,8 +5318,8 @@ extern HexaVal rt_abs_float(HexaVal v);
 extern HexaVal rt_sqrt(HexaVal v);
 HexaVal hexa_math_tanh(HexaVal x) { return rt_tanh(hexa_float(HX_FLOAT(x))); }
 HexaVal hexa_math_tan(HexaVal x)  { return rt_tan(hexa_float(HX_FLOAT(x))); }
-HexaVal hexa_math_abs(HexaVal x)  { return rt_abs_float(hexa_float(HX_FLOAT(x))); }
-HexaVal hexa_math_sqrt(HexaVal x) { return rt_sqrt(hexa_float(HX_FLOAT(x))); }
+__attribute__((weak)) HexaVal hexa_math_abs(HexaVal x)  { return rt_abs_float(hexa_float(HX_FLOAT(x))); }
+__attribute__((weak)) HexaVal hexa_math_sqrt(HexaVal x) { return rt_sqrt(hexa_float(HX_FLOAT(x))); }
 #endif
 HexaVal hexa_math_sin(HexaVal x)  { return hexa_float(hxlcl_sin(HX_FLOAT(x))); }
 HexaVal hexa_math_cos(HexaVal x)  { return hexa_float(hxlcl_cos(HX_FLOAT(x))); }
@@ -5356,16 +5356,16 @@ HexaVal hexa_math_exp(HexaVal x)  { return hexa_float(hxlcl_exp(HX_FLOAT(x))); }
 // boundary so the libm surface goes away while the wrapper signature
 // stays unchanged.
 #ifndef HEXA_HAS_HEXA_RT_STDLIB
-HexaVal hexa_math_floor(HexaVal x){ return hexa_float(floor(HX_FLOAT(x))); }
-HexaVal hexa_math_ceil(HexaVal x) { return hexa_float(ceil(HX_FLOAT(x))); }
-HexaVal hexa_math_round(HexaVal x){ return hexa_float(round(HX_FLOAT(x))); }
+__attribute__((weak)) HexaVal hexa_math_floor(HexaVal x){ return hexa_float(floor(HX_FLOAT(x))); }
+__attribute__((weak)) HexaVal hexa_math_ceil(HexaVal x) { return hexa_float(ceil(HX_FLOAT(x))); }
+__attribute__((weak)) HexaVal hexa_math_round(HexaVal x){ return hexa_float(round(HX_FLOAT(x))); }
 #else
 extern HexaVal rt_floor(HexaVal v);
 extern HexaVal rt_ceil(HexaVal v);
 extern HexaVal rt_round(HexaVal v);
-HexaVal hexa_math_floor(HexaVal x){ return hexa_float((double)HX_INT(rt_floor(hexa_float(HX_FLOAT(x))))); }
-HexaVal hexa_math_ceil(HexaVal x) { return hexa_float((double)HX_INT(rt_ceil(hexa_float(HX_FLOAT(x))))); }
-HexaVal hexa_math_round(HexaVal x){ return hexa_float((double)HX_INT(rt_round(hexa_float(HX_FLOAT(x))))); }
+__attribute__((weak)) HexaVal hexa_math_floor(HexaVal x){ return hexa_float((double)HX_INT(rt_floor(hexa_float(HX_FLOAT(x))))); }
+__attribute__((weak)) HexaVal hexa_math_ceil(HexaVal x) { return hexa_float((double)HX_INT(rt_ceil(hexa_float(HX_FLOAT(x))))); }
+__attribute__((weak)) HexaVal hexa_math_round(HexaVal x){ return hexa_float((double)HX_INT(rt_round(hexa_float(HX_FLOAT(x))))); }
 #endif
 #ifndef HEXA_HAS_HEXA_RT_STDLIB
 HexaVal hexa_math_pow(HexaVal b, HexaVal e) { return hexa_float(pow(HX_FLOAT(b), HX_FLOAT(e))); }
@@ -5392,10 +5392,10 @@ HexaVal hexa_math_fmod(HexaVal a, HexaVal b) {
 }
 #endif
 #ifndef HEXA_HAS_HEXA_RT_STDLIB
-HexaVal hexa_math_min(HexaVal a, HexaVal b) { return hexa_float(fmin(HX_FLOAT(a), HX_FLOAT(b))); }
+__attribute__((weak)) HexaVal hexa_math_min(HexaVal a, HexaVal b) { return hexa_float(fmin(HX_FLOAT(a), HX_FLOAT(b))); }
 #else
 extern HexaVal rt_min_float(HexaVal a, HexaVal b);
-HexaVal hexa_math_min(HexaVal a, HexaVal b) { return rt_min_float(a, b); }
+__attribute__((weak)) HexaVal hexa_math_min(HexaVal a, HexaVal b) { return rt_min_float(a, b); }
 #endif
 // G1-FLOAT-PRIM 2026-05-06 — see .roadmap.stdlib.G1-FLOAT-PRIM. lgamma is the
 // log-gamma function used by Beta-Binomial conjugate posteriors throughout
@@ -5430,10 +5430,10 @@ HexaVal hexa_math_isinf(HexaVal x)    { return rt_isinf(hexa_float(HX_FLOAT(x)))
 HexaVal hexa_math_isfinite(HexaVal x) { return rt_isfinite(hexa_float(HX_FLOAT(x))); }
 #endif
 #ifndef HEXA_HAS_HEXA_RT_STDLIB
-HexaVal hexa_math_max(HexaVal a, HexaVal b) { return hexa_float(fmax(HX_FLOAT(a), HX_FLOAT(b))); }
+__attribute__((weak)) HexaVal hexa_math_max(HexaVal a, HexaVal b) { return hexa_float(fmax(HX_FLOAT(a), HX_FLOAT(b))); }
 #else
 extern HexaVal rt_max_float(HexaVal a, HexaVal b);
-HexaVal hexa_math_max(HexaVal a, HexaVal b) { return rt_max_float(a, b); }
+__attribute__((weak)) HexaVal hexa_math_max(HexaVal a, HexaVal b) { return rt_max_float(a, b); }
 #endif
 
 // ── ML builtins: matvec, dot ─────────────────────────────────
@@ -8795,7 +8795,7 @@ extern int  _hx_cuda_farr_unpin_device(int64_t farr_id);
 // cuda_available() -> int. 1 if a CUDA device + toolkit are detected at
 // runtime, else 0. Coherent with cuda_device_count(): one implies the
 // other > 0.
-HexaVal hexa_cuda_available(void) {
+__attribute__((weak)) HexaVal hexa_cuda_available(void) {
 #ifdef HEXA_CUDA
     /* RFC 040 Phase A real impl (2026-05-16): probe via runtime_cuda.c TU. */
     return hexa_int(_hx_cuda_runtime_available());
@@ -8806,7 +8806,7 @@ HexaVal hexa_cuda_available(void) {
 
 // cuda_device_count() -> int. Number of visible GPUs (0 if none / no
 // CUDA toolkit). Returns 0 on the no-CUDA build always.
-HexaVal hexa_cuda_device_count(void) {
+__attribute__((weak)) HexaVal hexa_cuda_device_count(void) {
 #ifdef HEXA_CUDA
     return hexa_int(_hx_cuda_device_count_impl());
 #else
@@ -11384,7 +11384,7 @@ HexaVal hexa_now_monotonic_s(void) {
 // formatting, which caused stderr_tmp collisions (fix 1472b62d). Callers
 // building unique filenames should use to_string(mono_ns()) directly
 // and skip the mktemp fork in runtime_tmpname fallback (perf).
-HexaVal hexa_mono_ns(void) {
+__attribute__((weak)) HexaVal hexa_mono_ns(void) {
     struct timespec ts;
     hxlcl_clock_gettime(CLOCK_MONOTONIC, &ts);
     return hexa_int((int64_t)ts.tv_sec * 1000000000LL + (int64_t)ts.tv_nsec);

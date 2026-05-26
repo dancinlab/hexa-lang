@@ -1,0 +1,46 @@
+# BSD / Congruent-Number partial-angle: rank witness on E_n: y^2 = x^3 - n^2 x
+# CN problem (Tunnell 1983 conditional on BSD): n square-free positive is a
+# congruent number  <=>  L(E_n, 1) = 0  <=>  rank(E_n(Q)) >= 1.
+#
+# Closed-form witness (Mazur 1977 specialized): E_n always has 2-torsion
+#   {infinity, (0,0), (n,0), (-n,0)} = Z/2Z x Z/2Z.
+# So #E_n(Q)_tors = 4 for ALL square-free n >= 1.
+#
+# Per E_n curve, n is CN  <=>  there exists (x,y) in Q^2 with y^2=x^3-n^2*x AND y != 0.
+# i.e. there is a non-torsion rational point  <=>  rank >= 1.
+#
+# Hexa-native verify lane: integer arithmetic on (x,y,n) witnesses.
+
+n | n square-free? | CN? (classical) | Witness rational point (x, y) with y^2 = x^3 - n^2*x
+1 | yes            | NO  (Fermat)    | none exists; rank=0; E_1(Q) = Z/2 x Z/2 (size 4)
+2 | yes            | NO              | none exists; rank=0; E_2(Q) = Z/2 x Z/2 (size 4)
+3 | yes            | NO              | none exists; rank=0; E_3(Q) = Z/2 x Z/2 (size 4)
+4 | NO (=2^2)      | (skip; CN problem requires sqfree)
+5 | yes            | YES             | (-4, 6)  check: 6^2=36; (-4)^3 - 25*(-4) = -64+100 = 36. PASS
+6 | yes            | YES (3-4-5)     | (-3, 9)  check: 9^2=81; (-3)^3 - 36*(-3) = -27+108=81. PASS
+7 | yes            | YES (Heegner/EZ)| (-9/16, ...) classical; we record literature, no integer witness
+
+# Integer-witness verify (load-bearing arithmetic only; per cell exact integer):
+n=5 witness:  x=-4, y=6     RHS = x^3 - n^2*x = (-4)^3 - 25*(-4) = -64 + 100 = 36 = 6^2 = LHS  EXACT INTEGER
+n=6 witness:  x=-3, y=9     RHS = (-3)^3 - 36*(-3) = -27 + 108 = 81 = 9^2 = LHS  EXACT INTEGER
+
+# Both witnesses give non-2-torsion points (y != 0), so each has rank >= 1.
+# This DIRECTLY proves: 5 and 6 ARE congruent numbers (without needing BSD).
+# 5: smallest odd CN (Fibonacci 1225).  6: smallest CN (right triangle 3-4-5, area=6).
+
+n=6 link: this is the EXACT same n=6 of the TECS-L identity locus (sigma*phi=n*tau core).
+The n=6 congruent-number witness is INDEPENDENT of the sigma/tau/phi identity locus
+(different math axes), but the locus is non-trivial in BOTH axes at n=6 — observation,
+NOT a claim of mechanistic link.
+
+# Tier summary:
+# Hexa-native exact-integer arithmetic checks on (x^3 - n^2*x = y^2) are 🔵 (closed-form).
+# Per-n BSD rank claim using these witnesses: 🔵 for n in {5, 6} (witnesses suffice for rank >= 1).
+# n in {1, 2, 3} non-CN: classical Fermat-descent proof, no hexa-verify 1-step path → 🟡 citation.
+# Tunnell theta-count: requires ternary form enumeration; not in hexa verify builtin → 🟠 deferred.
+
+# HONEST SCOPE:
+# - This is NOT a proof of BSD (BSD is the L(E,1)=0 <=> rank>=1 STATEMENT, which we cite).
+# - This is a verify-able witness lane SUPPORTING one direction (existence of rational point
+#   => rank >= 1) at specific n. The hard direction (rank >= 1 => L(E,1)=0) is BSD itself.
+# - "Found a rational point ⇒ rank≥1" is unconditional; doesn't need BSD.

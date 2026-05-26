@@ -2476,6 +2476,17 @@ fn _nvptx_classify_locals(mfn: MFunc) -> [PReg] {
                 k = k + 1
             }
             if !dup {
+                // RFC 085 Step A landed in parser (TypeRef.name = "Array:<N>"
+                // for `[T;N]` syntax). Step B/C/D — thread that count
+                // through ast_to_hir → hir_to_mir → MIR Local.element_count
+                // → here — is a follow-up cycle (each schema add is a ~85-
+                // literal ripple across compiler/{parse,ir,lower}). Until
+                // then the 2048 B default holds; it matches `[f64; 256]`
+                // exactly (the F-GPU-SWEEP-SHARED-REDUCE-NUMERIC shape in
+                // PR #1323), so today's @shared kernels keep working.
+                // Non-256 element counts silently undersize/oversize until
+                // the threading lands — kernel authors should stick to 256
+                // f64 or equivalent (2048 B total) for now.
                 let sz = _nvptx_shared_default_bytes
                 regs.push(PReg {
                     name: _nvptx_reg_shared(lloc.id),
