@@ -200,7 +200,9 @@ fn macho_obj_wrap_v2(code: [int], main_offset: int, state_bytes: [int],
         let r_kind = reloc_kinds[ri]
         out = push_u32_le(out, r_off)
         let r_symbolnum = 1                  // _arena_state index
-        let r_pcrel  = 1
+        // PAGE21 (kind=3) is pcrel; PAGEOFF12 (kind=4) is NOT.
+        let mut r_pcrel  = 0
+        if r_kind == 3 { r_pcrel = 1 }
         let r_length = 2
         let r_extern = 1
         let bits = (r_symbolnum % 0x1000000)
@@ -222,11 +224,15 @@ fn macho_obj_wrap_v2(code: [int], main_offset: int, state_bytes: [int],
     out = push_u16_le(out, 0)
     out = push_u64_le(out, main_offset)
     // sym[1] = _arena_state in __const
+    // n_value = absolute address within segment; __const.addr = code_size
+    // (we set it that way in the section header) plus the intra-section
+    // offset (0 for slot start). ld64 rejects n_value mismatch against
+    // section addr+offset with "address isn't in its designated section".
     out = push_u32_le(out, strx_state)
     out.push(0x0E + 0x01)
     out.push(2)                              // n_sect = __const
     out = push_u16_le(out, 0)
-    out = push_u64_le(out, 0)
+    out = push_u64_le(out, code_size)        // = __const.addr + 0
 
     // String table
     out.push(0)
@@ -296,4 +302,4 @@ fn main() {
     println("wrote          : /tmp/poc_arena_reloc.o")
 }
 
-main()
+// auto-invoke handles main()
