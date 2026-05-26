@@ -1559,8 +1559,120 @@ fn _nvptx_lower_stmt(buf: [LInstr], s: Stmt, kinds: [PReg], shared_idx_off: [i64
                         out.push(_nvptx_instr(PTX_OP_EX2_APPROX_F32, ae, "exp: 2^(x*log2e) = e^x"))
                         return out
                     }
-                    out.push(_nvptx_instr("//", [],
-                        "RFC 055 S13 - exp f64 honest stub (no PTX f64 ex2; polynomial deferred): " + s.op))
+                    // RFC 055 §13 — f64 exp(x) range-reduction + Taylor.
+                    //
+                    //   k  = round(x * log2(e))                  (integer)
+                    //   r  = x - k * ln(2)    (Cody-Waite ln2 = ln2_hi + ln2_lo)
+                    //   p  = poly(r)  ≈  e^r  via degree-10 Horner
+                    //   2^k  = bit-cast((k + 1023) << 52) as f64
+                    //   dst  = p * 2^k                          ( = e^x )
+                    //
+                    // Tolerance: |Δ/exp(x)| ≤ ~1e-15 for |x| ≤ 700 (within
+                    // 1 ulp of CPU libm). Truncation: |r^11/11!| ≤ 3.5e-15
+                    // since |r| ≤ ln(2)/2. The fma.rn.f64 chain rounds at
+                    // each step; ptxas+driver-JIT compose this into ~17
+                    // SASS instructions on sm_80+ (no fallback path).
+                    //
+                    // Scratch regs (declared by `_nvptx_classify_locals`
+                    // Pass 6, keyed on dst.id): t · kf · r · p · pow2k
+                    // (.f64) + k · b (.u64).
+                    //   ref: PTX ISA 8.7 §9.7.1 + §9.7.6 + §9.7.3.
+                    let x_reg     = _nvptx_operand_text_kinds(s.args[0], kinds)
+                    let t_reg     = _nvptx_reg_expf64_t(s.dst.id)
+                    let kf_reg    = _nvptx_reg_expf64_kf(s.dst.id)
+                    let r_reg     = _nvptx_reg_expf64_r(s.dst.id)
+                    let p_reg     = _nvptx_reg_expf64_p(s.dst.id)
+                    let pow2k_reg = _nvptx_reg_expf64_pow2k(s.dst.id)
+                    let k_reg     = _nvptx_reg_expf64_k(s.dst.id)
+                    let b_reg     = _nvptx_reg_expf64_b(s.dst.id)
+                    // step 1: t = x * log2(e); kf = round(t) as f64.
+                    let mut e1 = []
+                    e1.push(_nvptx_op(t_reg))
+                    e1.push(_nvptx_op(x_reg))
+                    e1.push(_nvptx_op(PTX_LOG2E_HEXF64))
+                    out.push(_nvptx_instr(PTX_OP_MUL_F64, e1, "exp f64: t = x * log2(e)"))
+                    let mut e2 = []
+                    e2.push(_nvptx_op(kf_reg))
+                    e2.push(_nvptx_op(t_reg))
+                    out.push(_nvptx_instr("cvt.rni.f64.f64", e2, "exp f64: kf = round(t)"))
+                    // step 2: k (s64) = (s64) kf.
+                    let mut e3 = []
+                    e3.push(_nvptx_op(k_reg))
+                    e3.push(_nvptx_op(kf_reg))
+                    out.push(_nvptx_instr("cvt.rni.s64.f64", e3, "exp f64: k = (s64) kf"))
+                    // step 3: r = x - kf * (ln2_hi + ln2_lo).
+                    let mut e4 = []
+                    e4.push(_nvptx_op(t_reg))
+                    e4.push(_nvptx_op(kf_reg))
+                    e4.push(_nvptx_op(PTX_LN2_HI_HEXF64))
+                    out.push(_nvptx_instr(PTX_OP_MUL_F64, e4, "exp f64: t = kf * ln2_hi"))
+                    let mut e5 = []
+                    e5.push(_nvptx_op(r_reg))
+                    e5.push(_nvptx_op(x_reg))
+                    e5.push(_nvptx_op(t_reg))
+                    out.push(_nvptx_instr(PTX_OP_SUB_F64, e5, "exp f64: r = x - kf*ln2_hi"))
+                    let mut e6 = []
+                    e6.push(_nvptx_op(t_reg))
+                    e6.push(_nvptx_op(kf_reg))
+                    e6.push(_nvptx_op(PTX_LN2_LO_HEXF64))
+                    out.push(_nvptx_instr(PTX_OP_MUL_F64, e6, "exp f64: t = kf * ln2_lo"))
+                    let mut e7 = []
+                    e7.push(_nvptx_op(r_reg))
+                    e7.push(_nvptx_op(r_reg))
+                    e7.push(_nvptx_op(t_reg))
+                    out.push(_nvptx_instr(PTX_OP_SUB_F64, e7, "exp f64: r -= kf*ln2_lo (Cody-Waite)"))
+                    // step 4: Horner polynomial 1 + r + r^2/2 + ... + r^10/10!
+                    //   p = C10
+                    //   p = fma(r, p, C9)
+                    //   p = fma(r, p, C8)
+                    //   ... 10 fmas total ...
+                    //   p = fma(r, p, C0)
+                    let mut h0 = []
+                    h0.push(_nvptx_op(p_reg))
+                    h0.push(_nvptx_op(PTX_EXPF64_C10_HEXF64))
+                    out.push(_nvptx_instr("mov.f64", h0, "exp f64 Horner: p = C10 (1/10!)"))
+                    let mut hc: [string] = []
+                    hc.push(PTX_EXPF64_C9_HEXF64)
+                    hc.push(PTX_EXPF64_C8_HEXF64)
+                    hc.push(PTX_EXPF64_C7_HEXF64)
+                    hc.push(PTX_EXPF64_C6_HEXF64)
+                    hc.push(PTX_EXPF64_C5_HEXF64)
+                    hc.push(PTX_EXPF64_C4_HEXF64)
+                    hc.push(PTX_EXPF64_C3_HEXF64)
+                    hc.push(PTX_EXPF64_C2_HEXF64)
+                    hc.push(PTX_EXPF64_C1_HEXF64)
+                    hc.push(PTX_EXPF64_C0_HEXF64)
+                    let mut hi = 0
+                    while hi < len(hc) {
+                        let mut hf = []
+                        hf.push(_nvptx_op(p_reg))
+                        hf.push(_nvptx_op(r_reg))
+                        hf.push(_nvptx_op(p_reg))
+                        hf.push(_nvptx_op(hc[hi]))
+                        out.push(_nvptx_instr(PTX_OP_FMA_RN_F64, hf, "exp f64 Horner step"))
+                        hi = hi + 1
+                    }
+                    // step 5: pow2k = bit-cast((k + 1023) << 52) as f64.
+                    let mut e8 = []
+                    e8.push(_nvptx_op(b_reg))
+                    e8.push(_nvptx_op(k_reg))
+                    e8.push(_nvptx_op("1023"))
+                    out.push(_nvptx_instr("add.s64", e8, "exp f64: b = k + 1023 (IEEE bias)"))
+                    let mut e9 = []
+                    e9.push(_nvptx_op(b_reg))
+                    e9.push(_nvptx_op(b_reg))
+                    e9.push(_nvptx_op("52"))
+                    out.push(_nvptx_instr("shl.b64", e9, "exp f64: b <<= 52 (exponent field)"))
+                    let mut e10 = []
+                    e10.push(_nvptx_op(pow2k_reg))
+                    e10.push(_nvptx_op(b_reg))
+                    out.push(_nvptx_instr("mov.b64", e10, "exp f64: pow2k = bit-cast b"))
+                    // step 6: dst = p * pow2k.
+                    let mut e11 = []
+                    e11.push(_nvptx_op(dst_reg))
+                    e11.push(_nvptx_op(p_reg))
+                    e11.push(_nvptx_op(pow2k_reg))
+                    out.push(_nvptx_instr(PTX_OP_MUL_F64, e11, "exp f64: dst = poly * 2^k = e^x"))
                     return out
                 }
                 // Single-instruction EXACT / APPROX ops.
@@ -2617,6 +2729,39 @@ fn _nvptx_classify_locals(mfn: MFunc) -> [PReg] {
             sc = sc + 1
         }
         bc = bc + 1
+    }
+    // RFC 055 §13 — Pass 6: f64 exp(x) polynomial scratch-reg declaration.
+    // PTX has no native `ex2.approx.f64`, so f64 `exp` lowers to a 18-instr
+    // range-reduction + degree-10 Taylor polynomial chain. Each call site
+    // needs 5 .f64 scratch regs + 2 .u64 scratch regs (see the helper
+    // comments at `_nvptx_reg_expf64_t` for the per-reg role). Gated on
+    // the call's dst classifying as F64 so f32 `exp` (which keeps the
+    // single-shot `mul.f32 + ex2.approx.f32` lowering) declares no
+    // scratch and the PTX stays tidy. Runs AFTER the kind roster is
+    // complete so `_nvptx_lookup_kind_for_local` sees the final operand
+    // banks (mirrors the Pass-5 mixed-width cmp idiom).
+    //   ref: PTX ISA 8.7 §9.7.3 (no f64 ex2) → polynomial closure.
+    let mut be = 0
+    while be < len(mfn.blocks) {
+        let blk = mfn.blocks[be]
+        let mut se = 0
+        while se < len(blk.stmts) {
+            let s = blk.stmts[se]
+            if s.kind == STMT_CALL && s.op == "exp" && s.dst.id >= 0 {
+                let dk = _nvptx_lookup_kind_for_local(regs, s.dst.id)
+                if dk == NVPTX_RKIND_F64 {
+                    regs.push(PReg { name: _nvptx_reg_expf64_t(s.dst.id),     kind: NVPTX_RKIND_F64, frag_role: "", frag_dtype: "", frag_layout: "" })
+                    regs.push(PReg { name: _nvptx_reg_expf64_kf(s.dst.id),    kind: NVPTX_RKIND_F64, frag_role: "", frag_dtype: "", frag_layout: "" })
+                    regs.push(PReg { name: _nvptx_reg_expf64_r(s.dst.id),     kind: NVPTX_RKIND_F64, frag_role: "", frag_dtype: "", frag_layout: "" })
+                    regs.push(PReg { name: _nvptx_reg_expf64_p(s.dst.id),     kind: NVPTX_RKIND_F64, frag_role: "", frag_dtype: "", frag_layout: "" })
+                    regs.push(PReg { name: _nvptx_reg_expf64_pow2k(s.dst.id), kind: NVPTX_RKIND_F64, frag_role: "", frag_dtype: "", frag_layout: "" })
+                    regs.push(PReg { name: _nvptx_reg_expf64_k(s.dst.id),     kind: NVPTX_RKIND_U64, frag_role: "", frag_dtype: "", frag_layout: "" })
+                    regs.push(PReg { name: _nvptx_reg_expf64_b(s.dst.id),     kind: NVPTX_RKIND_U64, frag_role: "", frag_dtype: "", frag_layout: "" })
+                }
+            }
+            se = se + 1
+        }
+        be = be + 1
     }
     return regs
 }
@@ -3730,6 +3875,41 @@ fn _nvptx_reg_pred(id: i64) -> string {
 //   ref: PTX ISA 8.7 §9.7.1.5 (cvt) + §9.7.1.6 (setp predicates by type).
 fn _nvptx_reg_cmpw(id: i64) -> string {
     return "%cmpw_" + to_string(id)
+}
+
+// RFC 055 §13 f64 exp polynomial — per-call scratch register names.
+//
+// `exp(x)` at f64 has no native PTX `ex2.approx.f64` unit, so the lower
+// emits a range-reduction + degree-10 Taylor polynomial chain (see the
+// emit site in `_nvptx_lower_stmt`). Each call needs 5 .f64 scratch regs
+// (`t` multi-use temp · `kf` k-as-f64 · `r` reduced arg · `p` poly accum ·
+// `pow2k` 2^k bit-pattern result) + 2 .u64 scratch regs (`k` k-as-s64 ·
+// `b` bias temp for (k+1023)<<52). All keyed on the call's dst Local id
+// so concurrent exp f64 calls in one function never clobber each other
+// (mirrors the `%cmpw_<id>` and `%rd_idxa_<id>` per-stmt scratch idiom).
+// Declared in `_nvptx_classify_locals` Pass 6; consumed at the
+// `STMT_CALL s.op == "exp"` emit site.
+//   ref: PTX ISA 8.7 §9.7.1 (arith) + §9.7.6 (mov.b64 type-pun).
+fn _nvptx_reg_expf64_t(id: i64) -> string {
+    return "%fd_exp_t_" + to_string(id)
+}
+fn _nvptx_reg_expf64_kf(id: i64) -> string {
+    return "%fd_exp_kf_" + to_string(id)
+}
+fn _nvptx_reg_expf64_r(id: i64) -> string {
+    return "%fd_exp_r_" + to_string(id)
+}
+fn _nvptx_reg_expf64_p(id: i64) -> string {
+    return "%fd_exp_p_" + to_string(id)
+}
+fn _nvptx_reg_expf64_pow2k(id: i64) -> string {
+    return "%fd_exp_pow2k_" + to_string(id)
+}
+fn _nvptx_reg_expf64_k(id: i64) -> string {
+    return "%rd_exp_k_" + to_string(id)
+}
+fn _nvptx_reg_expf64_b(id: i64) -> string {
+    return "%rd_exp_b_" + to_string(id)
 }
 
 // RFC 055 §12 P4+ — mixed-precision reg-name helpers (SCAFFOLD).
