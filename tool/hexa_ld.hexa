@@ -979,7 +979,18 @@ fn main() {
     let mut lc_main = "_main"
     let mut is_static = 0
 
-    let mut i = 2  // skip [hexa_program, script_path]
+    // argv() layout differs by launch mode:
+    //   `hexa run tool/hexa_ld.hexa …`  → [dispatch_bin, …user_args]   (start @ 1)
+    //   standalone aprime_cc binary      → [self, _drv.hexa, …user_args]
+    // Skip argv[0] always, then skip any leading `.hexa` runner token
+    // (the standalone-binary prefix) so the real flags line up either way.
+    let mut i = 1
+    if i < len(raw_args) {
+        let a0 = raw_args[i]
+        if len(a0) > 5 && a0.substring(len(a0) - 5, len(a0)) == ".hexa" {
+            i = i + 1
+        }
+    }
     while i < len(raw_args) {
         let a = raw_args[i]
         if a == "-o" {
@@ -1013,8 +1024,16 @@ fn main() {
         exit(1)
     }
 
-    // Driver dispatch — once link_macho_arm64 is implemented, this
-    // parses each input .o into ParsedObj and calls into the linker.
-    let rc = link_macho_arm64(0, out, lc_main, is_static)
+    // Driver dispatch — parse each input .o into a ParsedObj, then hand
+    // the vector to the linker. (Earlier scaffold passed a literal `0`
+    // here — the inputs were parsed but never threaded into the link
+    // call, so multi-object resolution never ran. Wired up below.)
+    let mut parsed: [ParsedObj] = []
+    let mut pj = 0
+    while pj < len(input_objs) {
+        parsed.push(parse_macho_obj(input_objs[pj]))
+        pj = pj + 1
+    }
+    let rc = link_macho_arm64(parsed, out, lc_main, is_static)
     exit(rc)
 }
