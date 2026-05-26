@@ -953,6 +953,26 @@ HexaVal farr_rope_gpu(HexaVal t, HexaVal cos, HexaVal sin,
 HexaVal farr_rope_bwd_gpu(HexaVal t, HexaVal cos, HexaVal sin,
                           HexaVal T, HexaVal nh, HexaVal hd);           /* runtime.c — RFC 041 seam */
 
+/* ── RFC gpu-resident-large-vocab-lmhead-loss: GPU CE/seed kernel ───
+ * farr_ce_seed_gpu(logits_id, target_ids_id, R, V, out_loss_id,
+ *                  out_dlogits_id) -> int rc (0 ok / -1).
+ * GPU-resident large-vocab lm-head cross-entropy loss + seed grad in
+ * ONE kernel — logits stay device-resident (no 78M H2D). The two
+ * outputs are CALLER-allocated and filled in place: out_loss[R] = per-
+ * row CE loss (caller sums the R values on host), out_dlogits[R*V] =
+ * softmax(logits) - onehot(target) (the backward seed). 6-arg → past
+ * the hexa_callN ceiling, so codegen lowers to a direct
+ * `hexa_farr_ce_seed_gpu` call (same seam as farr_rope_gpu). CUDA build
+ * → _hx_cuda_farr_ce_seed_gpu kernel; no-CUDA → _hx_farr_ce_seed_cpu
+ * (the host FP64 reference, also the numeric oracle). The bare
+ * `farr_ce_seed_gpu` form is the bootstrap-seam alias. */
+HexaVal hexa_farr_ce_seed_gpu(HexaVal logits_v, HexaVal target_ids_v,
+                              HexaVal R_v, HexaVal V_v,
+                              HexaVal out_loss_v, HexaVal out_dlogits_v); /* runtime.c — RFC lmhead-ce */
+HexaVal farr_ce_seed_gpu(HexaVal logits_v, HexaVal target_ids_v,
+                         HexaVal R_v, HexaVal V_v,
+                         HexaVal out_loss_v, HexaVal out_dlogits_v);      /* runtime.c — RFC lmhead-ce seam */
+
 /* ── RFC 050 L1 slice 1: forge dispatcher callable from hexa ────────
  * codegen.hexa lowers the 5-arg `forge_dispatch_matmul` builtin to a
  * direct `hexa_forge_dispatch_matmul` call. It packs a ForgeShapeInfo +

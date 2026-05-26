@@ -6965,6 +6965,15 @@ fn gen2_expr(node) {
                 if name == "farr_rope_bwd_gpu" {
                     return "hexa_farr_rope_bwd_gpu(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ", " + arg_strs[4] + ", " + arg_strs[5] + ")"
                 }
+                // RFC gpu-resident-large-vocab-lmhead-loss: GPU CE loss +
+                // seed grad (logits, target_ids, R, V, out_loss,
+                // out_dlogits) -> int rc. CUDA build → __global__
+                // _hx_k_ce_seed kernel; else _hx_farr_ce_seed_cpu (host
+                // FP64 reference). #1187 lesson: a new GPU builtin needs
+                // BOTH this call-name mapping AND the runtime.h proto.
+                if name == "farr_ce_seed_gpu" {
+                    return "hexa_farr_ce_seed_gpu(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ", " + arg_strs[4] + ", " + arg_strs[5] + ")"
+                }
             }
             if len(node.args) == 7 {
                 // feat/primitive-float-array — CNOT kernel.
