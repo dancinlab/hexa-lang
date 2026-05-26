@@ -32,6 +32,7 @@ use "self/stdlib/fs"
 use "compiler/atlas/calc_dispatch"   // calc_eps / calc_is_float_fn / calc_is_zero_arg_float_fn — float-recompute SSOT
 use "stdlib/consciousness/iit4/faithful_phi"   // VERIFY-KIT V5.2 — iit4_faithful_phi recompute engine (n<=8 exact MIP-EI)
 use "self/runtime/bignum_mini_pure"            // VERIFY-KIT V10 — arbitrary-precision σ(P)=2P at p where P overflows int64
+use "stdlib/core/math"                          // sopfr() — sum of prime factors w/ multiplicity (resolves verify_cli:431 arm)
 
 // HXC retired 2026-05-22 — verify now reads from static_atlas() which
 // parses n6/atlas.n6 via the merger (no hxc). HXC_PATH constant kept as
@@ -447,7 +448,8 @@ fn _recompute(fn_name: string, n: int) -> int {
     // 31,61,89,…}). The non-tautological core is the independent geometric-sum
     // check Σ2^i == 2^p−1 inside mersenne_perfect_sigma_pure. (g0/g33 minimal
     // slice — bignum only, NOT PSLQ/symbolic/ODE.)
-    if fn_name == "mersenne_perfect_sigma" { return mersenne_perfect_sigma_pure(n) }
+    // V10 mersenne_perfect_sigma_pure 미구현 — bignum σ(2^(p-1)·(2^p−1))=2·P 검증은 별도 PR. 현재는 NOCALC 으로 🟠 경로(다른 arm 영향 0).
+    if fn_name == "mersenne_perfect_sigma" { return NOCALC }
     // ── combinatorial / prime integer primitives (VERIFY-KIT V7) ──────────
     // OEIS 🟠→🔵 mutual-feed: A000040 prime×67 + A000108/A000142/A000110/
     // A000041 gain an exact-integer recompute path (no --tol; closed-forms
