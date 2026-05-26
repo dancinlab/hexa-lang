@@ -440,6 +440,24 @@ fn macho_obj_wrap_v2(code: [int], main_offset: int, state_bytes: [int],
 //   v2 (_hexa_main + _arena_state, 2 relocs) — retained, unchanged.
 //   v3 (N text symbols + optional __const + relocs) — ADDITIVE.
 //
+// 2026-05-27 extension — UNDEFINED external symbols + BRANCH26 (the #2
+// runtime.c→hexa-port unblock):
+//   - sym_sections[i] == 0 ⇒ symbol i is an UNDEFINED external (N_UNDF):
+//     declared here, DEFINED in another .o, resolved by ld64 at link.
+//     n_type = N_EXT only (0x01), n_sect = 0, n_value = 0.
+//   - reloc kind 2 = ARM64_RELOC_BRANCH26 (pcrel=1): a `bl <sym>` whose
+//     target lives in another object. This lets a hexa-emit adapter
+//     (e.g. _hexa_math_sin) `bl _rt_sin` into a hexa-SOURCE rt_* symbol —
+//     the lane that unlocks ~30 libm-wrapper wires without libc.
+//   CAVEAT (link-test pending): ld64 MAY require an LC_DYSYMTAB load
+//     command partitioning local/extdef/undef symbol ranges when undefined
+//     symbols are present. This build emits LC_SYMTAB only. If a link test
+//     (`clang adapter.o rt_sin.o -o exe`) fails with a dysymtab complaint,
+//     add LC_DYSYMTAB (ilocalsym/iextdefsym/iundefsym + counts). Encoding
+//     of the nlist + reloc is complete; the dysymtab is the only possible
+//     follow-up. Deferred to a build session (not run here — fork-storm
+//     guard 2026-05-27). Convention: place defined syms first, undefined last.
+//
 // ld64 invariants honored:
 //   - strtab[0] = NUL (canonical n_strx=0 means empty name).
 //   - Per-symbol n_strx = offset within strtab.
@@ -601,10 +619,17 @@ fn macho_obj_wrap_v3(code: [int],
         let r_kind    = reloc_kinds[ri]
         let r_symnum  = reloc_symnums[ri]
         out = push_u32_le(out, r_off)
-        // PAGE21 (kind=3) is pcrel=1; PAGEOFF12 (kind=4) is pcrel=0
-        // (matches v2 invariant — ld64 rejects PAGEOFF12+pcrel=1).
+        // pcrel by kind: PAGE21 (3) and BRANCH26 (2) ARE pc-relative
+        // (adrp page-delta / bl 26-bit signed word-offset both encode a
+        // PC-relative displacement). PAGEOFF12 (4) is NOT (low-12-bit
+        // absolute) — ld64 rejects PAGEOFF12+pcrel=1.
+        // BRANCH26 (kind=2) is THE cross-object call reloc: a `bl <sym>`
+        // whose target (`_rt_sin` etc.) lives in another .o, resolved by
+        // ld64 at link time. This is the #2 (runtime.c→hexa port) unblock —
+        // hexa-emit adapters can now `bl` into hexa-source rt_* symbols.
         let mut r_pcrel = 0
         if r_kind == 3 { r_pcrel = 1 }
+        if r_kind == 2 { r_pcrel = 1 }
         let r_length = 2                       // 4-byte slot
         let r_extern = 1                       // symbol-based reloc
         let bits = (r_symnum % 0x1000000)
@@ -625,11 +650,24 @@ fn macho_obj_wrap_v3(code: [int],
         let s_section = sym_sections[sj]
         // n_value for __text sym (sect=1) = section.addr (0) + offset.
         // n_value for __const sym (sect=2) = section.addr (code_size) + offset.
+        // s_section == 0 ⇒ UNDEFINED external (N_UNDF): the symbol is
+        // DECLARED here but DEFINED in another .o (cross-object BL target,
+        // e.g. _rt_sin). ld64 resolves it at link time. Such a symbol has
+        // n_type = N_EXT only (NO N_SECT bit), n_sect = 0 (NO_SECT),
+        // n_value = 0. Pair with a BRANCH26 (kind=2) reloc that references
+        // this symbol's index. ORDERING: undefined externs SHOULD follow
+        // all defined symbols in the table (ld64 convention); callers that
+        // mix both must place defined first, undefined last.
         let mut n_value = s_offset
         if s_section == 2 { n_value = code_size + s_offset }
+        let mut n_type_b = n_sect() + n_ext()     // 0x0f = N_SECT | N_EXT (defined)
+        if s_section == 0 {
+            n_type_b = n_ext()                    // 0x01 = N_EXT only (undefined)
+            n_value = 0
+        }
         out = push_u32_le(out, s_strx)            // n_strx
-        out.push(n_sect() + n_ext())              // n_type = N_SECT | N_EXT
-        out.push(s_section)                       // n_sect
+        out.push(n_type_b)                        // n_type
+        out.push(s_section)                       // n_sect (0 = NO_SECT for undef)
         out = push_u16_le(out, 0)                 // n_desc
         out = push_u64_le(out, n_value)           // n_value
         sj = sj + 1
