@@ -11615,9 +11615,16 @@ HexaVal hexa_utc_compact_now(void) {
 
 // to_bool(v): generic truthy coercion. Mirrors hexa_truthy semantics
 // but returns a TAG_BOOL HexaVal (as opposed to int).
+// RUNTIME.md Step 4 .c-none: hexa_to_bool delegates to hexa-source rt_to_bool
+// (numeric.hexa) under HEXA_HAS_HEXA_RT_STDLIB. #else C body kept.
+#ifdef HEXA_HAS_HEXA_RT_STDLIB
+extern HexaVal rt_to_bool(HexaVal v);
+HexaVal hexa_to_bool(HexaVal v) { return rt_to_bool(v); }
+#else
 HexaVal hexa_to_bool(HexaVal v) {
     return hexa_bool(hexa_truthy(v) ? 1 : 0);
 }
+#endif
 
 // http_get(url): popen("curl -s <url>") → TAG_STR body. Keeps the
 // dependency surface at /usr/bin/curl (universal on macOS/linux) and

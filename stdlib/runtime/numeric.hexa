@@ -1682,3 +1682,11 @@ pub fn rt_to_int(v: HexaVal) -> HexaVal {
     return __raw_d2i(v)
 }
 
+// rt_to_bool — hexa-source port of runtime.c hexa_to_bool (Step 4 .c-none).
+// C body = hexa_bool(hexa_truthy(v) ? 1 : 0). `if v` lowers to the same
+// hexa_truthy(v) condition, so this is byte-faithful with no bridge.
+pub fn rt_to_bool(v: HexaVal) -> bool {
+    if v { return true }
+    return false
+}
+
