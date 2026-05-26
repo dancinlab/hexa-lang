@@ -2704,7 +2704,8 @@ fn cmd_build(src, out, c_only, target, shared) {
                             "HEXA_NATIVE_RT_CUDA_DEVICE_COUNT",
                             "HEXA_NATIVE_RT_MONO_NS",
                             "HEXA_NATIVE_RT_MATH_SQRT",
-                            "HEXA_NATIVE_RT_MATH_ABS"]
+                            "HEXA_NATIVE_RT_MATH_ABS",
+                            "HEXA_NATIVE_RT_MATH_FLOOR"]
         let __nrt_drvs   = [__nself + "/../test/native_build/emit_hexa_exit_native_o.hexa",
                             __nself + "/../test/native_build/emit_hexa_ptr_alloc_native_o.hexa",
                             __nself + "/../test/native_build/emit_hexa_ptr_offset_native_o.hexa",
@@ -2718,7 +2719,8 @@ fn cmd_build(src, out, c_only, target, shared) {
                             __nself + "/../test/native_build/emit_hexa_cuda_device_count_native_o.hexa",
                             __nself + "/../test/native_build/emit_hexa_mono_ns_native_o.hexa",
                             __nself + "/../test/native_build/emit_hexa_math_sqrt_native_o.hexa",
-                            __nself + "/../test/native_build/emit_hexa_math_abs_native_o.hexa"]
+                            __nself + "/../test/native_build/emit_hexa_math_abs_native_o.hexa",
+                            __nself + "/../test/native_build/emit_hexa_math_floor_native_o.hexa"]
         let __nrt_outs   = ["/tmp/hexa_exit_native.o",
                             "/tmp/hexa_ptr_alloc_native.o",
                             "/tmp/hexa_ptr_offset_native.o",
@@ -2732,7 +2734,8 @@ fn cmd_build(src, out, c_only, target, shared) {
                             "/tmp/hexa_cuda_device_count_native.o",
                             "/tmp/hexa_mono_ns_native.o",
                             "/tmp/hexa_math_sqrt_native.o",
-                            "/tmp/hexa_math_abs_native.o"]
+                            "/tmp/hexa_math_abs_native.o",
+                            "/tmp/hexa_math_floor_native.o"]
         let __nrt_syms   = ["hexa_exit",
                             "hexa_ptr_alloc",
                             "hexa_ptr_offset",
@@ -2746,7 +2749,8 @@ fn cmd_build(src, out, c_only, target, shared) {
                             "hexa_cuda_device_count",
                             "hexa_mono_ns",
                             "hexa_math_sqrt",
-                            "hexa_math_abs"]
+                            "hexa_math_abs",
+                            "hexa_math_floor"]
         // L-δ TERMINAL FLIP (2026-05-27): default opt-in → opt-out.
         // All 5 wires (exit · ptr_alloc · ptr_free · ptr_offset · ptr_addr)
         // are env-OFF/ON behavior-equivalent verified (#1297/#1326/#1329/
