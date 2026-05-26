@@ -217,18 +217,31 @@ pub fn sigma(n) -> int {
 
 // sigma_star(n) = Σ_{d||n} d — sum of UNITARY divisors.
 // d||n ⟺ d|n AND gcd(d, n/d) = 1 (d and its cofactor are coprime).
-// Multiplicative; σ*(p^a) = p^a + 1 (the only unitary divisors of p^a
-// are 1 and p^a). n=6 is the smallest unitary-perfect: σ*(6) = 12 = 2·6.
+// σ* is MULTIPLICATIVE with σ*(p^a) = p^a + 1 (the only unitary divisors of
+// a prime power are 1 and p^a). So σ*(n) = ∏_{p^a || n} (p^a + 1). We use the
+// closed-form prime-power product (trial division, sopfr-style) rather than
+// brute divisor-enumeration with an inner gcd call — exact-integer arithmetic,
+// codegen-stable (cf. stdlib_trig_libm precedent). n=6 = 2·3 is the smallest
+// unitary-perfect: σ*(6) = (2+1)(3+1) = 12 = 2·6.
 pub fn sigma_star(n) -> int {
-    let sum = 0
-    let i = 1
-    while i <= n {
-        if n % i == 0 {
-            if gcd(i, n / i) == 1 { sum = sum + i }
+    if n <= 0 { return 0 }
+    let prod = 1
+    let x = n
+    let d = 2
+    while d * d <= x {
+        if x % d == 0 {
+            let pk = 1
+            while x % d == 0 {
+                pk = pk * d
+                x = x / d
+            }
+            prod = prod * (pk + 1)
         }
-        i = i + 1
+        d = d + 1
     }
-    sum
+    // residual x > 1 is a prime appearing to the first power
+    if x > 1 { prod = prod * (x + 1) }
+    prod
 }
 
 pub fn euler_phi(n) -> int {
