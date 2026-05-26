@@ -84,12 +84,59 @@ fn _bringup_block() -> [str] {
     ]
 }
 
+// ─── D3 substance: illustrative design artifact targets ──────────────
+
+fn _kicad_schematic_real_block() -> [str] {
+    return [
+        "schematic_sheets: 6 (mcu + afe_x2 + radio + pmic + connector)",
+        "net_count_estimate: ~120 (incl. power · ground · 16 EEG ch + REF + GND + RLD)",
+        "ratsnest_density_target: ≤ 4 vias/cm^2 (4-layer FR-4 routing budget)",
+        "footprint_libs: KiCad standard + Snapeda (ADS1299 + nRF5340 + BQ25180 + TPS62840)",
+        "drc_rules: medical-grade creepage/clearance 0.4 mm min @ 50 V (IEC 60601-1 Annex L)",
+        "ngspice_blocks: AFE noise + RLD CMRR + π-network antenna match",
+    ]
+}
+
+fn _ngspice_afe_sim_real_block() -> [str] {
+    return [
+        "test_circuit: ADS1299 input stage + 1st-order anti-alias (4.7 kΩ + 3.3 nF)",
+        "noise_source_model: thermal (4kT·R · room temp 300 K) + flicker (1/f scaled)",
+        "freq_sweep: 0.1 Hz to 1 kHz · log decade · 50 points",
+        "expected_output: input-referred noise ~0.9-1.1 µV-pp 0.5-50 Hz (datasheet match)",
+        "AC analysis: gain frequency response at gain=24 · -3 dB point ~10 kHz (anti-alias)",
+        "Monte-Carlo: 100-run with R ±1% / C ±5% / temp 0-40°C tolerance",
+    ]
+}
+
+fn _freecad_enclosure_real_block() -> [str] {
+    return [
+        "model_topology: clamshell (2 halves) + integrated post-aural clip arm",
+        "parametric_drivers: clip_length 25mm · shell_thickness 1.5mm · electrode_well_dia 6mm",
+        "KiCad_StepUp_link: PCB outline import + 3D component models for clearance check",
+        "gasket_groove: 0.5 mm cross-section silicone O-ring channel (IPX4 path)",
+        "snap_fit_features: 4 cantilever snaps · 1.2 mm deflection · 0.3 mm interference",
+        "prototype_export: STEP + STL for SLA print + DXF for soft-tool 2D drawing",
+    ]
+}
+
+fn _nrf_firmware_real_block() -> [str] {
+    return [
+        "SDK_version: nRF Connect SDK v2.5+ · Zephyr 3.5+ baseline",
+        "board_target: nrf5340dk_nrf5340_cpuapp + custom shield overlay (devicetree)",
+        "main_threads: ble_streamer + sensor_driver + power_manager + heartbeat",
+        "drivers: ADS1299 SPI driver + RLD GPIO + battery ADC + LED",
+        "BLE_stack: Zephyr Bluetooth host + SoftDevice Controller (nRF53 net core)",
+        "build_command: 'west build -b nrf5340dk/nrf5340/cpuapp --sysbuild' + imgtool sign",
+    ]
+}
+
 fn _scope_caveats() -> [str] {
     return [
         "KiCad PCB skeleton + FreeCAD enclosure stub - TEMPLATE files, not vendor-validated AFE design.",
         "nRF Connect SDK firmware partitioning = downstream firmware cell territory (D73).",
         "measurement_gate = GATE_OPEN permanently - design scaffolding is not an absorption claim (g3).",
         "absorbed=false PERMANENTLY (g3) - TEMPLATE EDA/MCAD/firmware stubs, NEVER a tape-out / vendor-validated silicon selection.",
+        "D3 substantive blocks (kicad_schematic_real / ngspice_afe_sim_real / freecad_enclosure_real / nrf_firmware_real) are ILLUSTRATIVE design artifact targets, NOT a tape-out PCB nor a built enclosure nor a signed firmware image. Real artifacts live downstream at fab+assembly+firmware-cell.",
     ]
 }
 
@@ -115,6 +162,12 @@ fn _emit_header() {
     _emit_block("mech_cad",     _mech_cad_block())
     _emit_block("firmware_sdk", _firmware_block())
     _emit_block("dev_bringup",  _bringup_block())
+
+    // ─── D3 substantive blocks (illustrative design artifact targets) ─
+    _emit_block("kicad_schematic_real",  _kicad_schematic_real_block())
+    _emit_block("ngspice_afe_sim_real",  _ngspice_afe_sim_real_block())
+    _emit_block("freecad_enclosure_real", _freecad_enclosure_real_block())
+    _emit_block("nrf_firmware_real",     _nrf_firmware_real_block())
 }
 
 fn _emit_caveats() {
