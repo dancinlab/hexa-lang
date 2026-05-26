@@ -2700,7 +2700,8 @@ fn cmd_build(src, out, c_only, target, shared) {
                             "HEXA_NATIVE_RT_PTR_READ",
                             "HEXA_NATIVE_RT_PTR_WRITE",
                             "HEXA_NATIVE_RT_PTR_NULL",
-                            "HEXA_NATIVE_RT_CUDA_AVAILABLE"]
+                            "HEXA_NATIVE_RT_CUDA_AVAILABLE",
+                            "HEXA_NATIVE_RT_CUDA_DEVICE_COUNT"]
         let __nrt_drvs   = [__nself + "/../test/native_build/emit_hexa_exit_native_o.hexa",
                             __nself + "/../test/native_build/emit_hexa_ptr_alloc_native_o.hexa",
                             __nself + "/../test/native_build/emit_hexa_ptr_offset_native_o.hexa",
@@ -2710,7 +2711,8 @@ fn cmd_build(src, out, c_only, target, shared) {
                             __nself + "/../test/native_build/emit_hexa_ptr_read_native_o.hexa",
                             __nself + "/../test/native_build/emit_hexa_ptr_write_native_o.hexa",
                             __nself + "/../test/native_build/emit_hexa_ptr_null_native_o.hexa",
-                            __nself + "/../test/native_build/emit_hexa_cuda_available_native_o.hexa"]
+                            __nself + "/../test/native_build/emit_hexa_cuda_available_native_o.hexa",
+                            __nself + "/../test/native_build/emit_hexa_cuda_device_count_native_o.hexa"]
         let __nrt_outs   = ["/tmp/hexa_exit_native.o",
                             "/tmp/hexa_ptr_alloc_native.o",
                             "/tmp/hexa_ptr_offset_native.o",
@@ -2720,7 +2722,8 @@ fn cmd_build(src, out, c_only, target, shared) {
                             "/tmp/hexa_ptr_read_native.o",
                             "/tmp/hexa_ptr_write_native.o",
                             "/tmp/hexa_ptr_null_native.o",
-                            "/tmp/hexa_cuda_available_native.o"]
+                            "/tmp/hexa_cuda_available_native.o",
+                            "/tmp/hexa_cuda_device_count_native.o"]
         let __nrt_syms   = ["hexa_exit",
                             "hexa_ptr_alloc",
                             "hexa_ptr_offset",
@@ -2730,7 +2733,8 @@ fn cmd_build(src, out, c_only, target, shared) {
                             "hexa_ptr_read",
                             "hexa_ptr_write",
                             "hexa_ptr_null",
-                            "hexa_cuda_available"]
+                            "hexa_cuda_available",
+                            "hexa_cuda_device_count"]
         // L-δ TERMINAL FLIP (2026-05-27): default opt-in → opt-out.
         // All 5 wires (exit · ptr_alloc · ptr_free · ptr_offset · ptr_addr)
         // are env-OFF/ON behavior-equivalent verified (#1297/#1326/#1329/
