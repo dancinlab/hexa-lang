@@ -1,0 +1,226 @@
+// @raw117_exempt
+// ════════════════════════════════════════════════════════════════════════
+// stdlib/flame/flame_lmhead_allpos_bwd_test.hexa — RFC 059 §4 P1②-a
+//
+// Wires the full-position tied LM head into the ag_tape reverse-mode (the
+// "zero new math" stage). The forward (nn_lm_head_fwd_allpos + nn_ce_loss_-
+// allpos, PR #1481) was landed already; this stage adds the ag_tape node
+// kind `ag_k_lmhead_allpos()=14`, its recorder `ag_lmhead_allpos`, the CE
+// seed helper `ag_ce_seed_allpos`, and the reverse arm in ag_backward_reg
+// (replays nn_lm_head_bwd per row over all T). NO new gradient math — the
+// per-position vjp is the EXISTING nn_lm_head_bwd.
+//
+// Falsifiers (cheap CPU oracle, no GPU):
+//
+//   F-RFC059B-ALLPOS-T1-BYTEEQ   with T=1, the all-position head reverse
+//                                (dtemb, dZ) is byte-identical (max|Δ|=0)
+//                                to the existing single-position ag_lmhead
+//                                reverse — the loop runs once → same node.
+//
+//   F-RFC059B-ALLPOS-GRADCHECK   with T=3, the reverse-mode analytic grad
+//                                ∂L/∂temb and ∂L/∂Z (from ag_grad) matches
+//                                a central finite-difference of the full
+//                                loss L = nn_ce_loss_allpos(nn_lm_head_fwd_-
+//                                allpos(temb,Z), targets) at ε=1e-5. The
+//                                grad-check is rel-error (NOT byte-eq) per
+//                                RFC 059 §6.1 — central-diff is an O(ε²)
+//                                approximation. Gate: rel ≤ 1e-6 (RFC 059
+//                                §6.2 composed-reverse-mode floor), probing
+//                                a few coordinates of both temb and Z.
+// ════════════════════════════════════════════════════════════════════════
+
+use "stdlib/flame/tensor_lib"
+use "stdlib/flame/nn_lib"
+use "stdlib/flame/flame_math"
+use "stdlib/flame/ag_tape"
+
+fn nn_abs(x: float) -> float {
+    if x < 0.0 { return 0.0 - x }
+    return x
+}
+
+fn maxdiff(a: int, b: int, n: int) -> float {
+    let mut m = 0.0
+    let mut i = 0
+    while i < n {
+        let dv = nn_abs(t_get(a, i) - t_get(b, i))
+        if dv > m { m = dv }
+        i = i + 1
+    }
+    return m
+}
+
+// L(temb, Z) = nn_ce_loss_allpos(nn_lm_head_fwd_allpos(temb,Z), targets)
+// fresh forward each call (finite-diff probe).
+fn loss_eval(temb: int, Z: int, targets: int, T: int, V: int, d: int) -> float {
+    let logits = t_zeros(T * V)
+    nn_lm_head_fwd_allpos(temb, Z, logits, T, V, d)
+    let l = nn_ce_loss_allpos(logits, targets, T, V)
+    t_free(logits)
+    return l
+}
+
+// central-difference of L w.r.t. param[idx]: (L(+ε) − L(−ε)) / 2ε.
+// `which` = 0 → perturb temb[idx], 1 → perturb Z[idx].
+fn central_diff(temb: int, Z: int, targets: int, T: int, V: int, d: int,
+                which: int, idx: int, eps: float) -> float {
+    let p = if which == 0 { temb } else { Z }
+    let saved = t_get(p, idx)
+    t_set(p, idx, saved + eps)
+    let lp = loss_eval(temb, Z, targets, T, V, d)
+    t_set(p, idx, saved - eps)
+    let lm = loss_eval(temb, Z, targets, T, V, d)
+    t_set(p, idx, saved)          // restore
+    return (lp - lm) / (2.0 * eps)
+}
+
+fn rel_err(analytic: float, fd: float) -> float {
+    let atol = 0.000001
+    let denom = if nn_abs(fd) > atol { nn_abs(fd) } else { atol }
+    return nn_abs(analytic - fd) / denom
+}
+
+println("=== flame RFC 059 §4 P1②-a — ag_k_lmhead_allpos backward selftest (CPU oracle) ===")
+
+let mut pass = 0
+let total = 2
+
+// ── F-RFC059B-ALLPOS-T1-BYTEEQ ──────────────────────────────────────────
+// T=1: ag_lmhead_allpos reverse ≡ ag_lmhead reverse (max|Δ|=0).
+let V1 = 4
+let d1 = 5
+let temb1 = t_zeros(V1 * d1)
+let Z1 = t_zeros(1 * d1)
+let mut e1 = 0
+while e1 < V1 * d1 {
+    t_set(temb1, e1, to_float((e1 * 3) % 19 - 9) * 0.013)
+    e1 = e1 + 1
+}
+let mut z1 = 0
+while z1 < d1 {
+    t_set(Z1, z1, to_float(z1 - 2) * 0.027 + 0.1)
+    z1 = z1 + 1
+}
+let targets1 = t_zeros(1)
+t_set(targets1, 0, 2.0)
+
+// (a) single-position reference tape
+let tpA = ag_t_begin(2)
+let lgA = ag_lmhead(tpA, temb1, Z1, V1, d1)
+let lossA = ag_ce_seed_allpos(tpA, lgA, targets1, 1, V1)   // T=1 CE seed
+ag_backward_reg(tpA, lgA, t_zeros(V1))                     // 0-len-ish seed
+let dtembA = t_copy(ag_grad(tpA, temb1))
+let dZA = t_copy(ag_grad(tpA, Z1))
+
+// (b) all-position tape, T=1
+let tpB = ag_t_begin(2)
+let lgB = ag_lmhead_allpos(tpB, temb1, Z1, 1, V1, d1)
+let lossB = ag_ce_seed_allpos(tpB, lgB, targets1, 1, V1)
+ag_backward_reg(tpB, lgB, t_zeros(1 * V1))
+let dtembB = ag_grad(tpB, temb1)
+let dZB = ag_grad(tpB, Z1)
+
+let m_dtemb = maxdiff(dtembA, dtembB, V1 * d1)
+let m_dZ = maxdiff(dZA, dZB, d1)
+let m_loss = nn_abs(lossA - lossB)
+print("      T=1  max|Δ dtemb|="); print(m_dtemb)
+print("  max|Δ dZ|="); print(m_dZ)
+print("  |Δ loss|="); println(m_loss)
+if m_dtemb == 0.0 && m_dZ == 0.0 && m_loss == 0.0 {
+    println("PASS  F-RFC059B-ALLPOS-T1-BYTEEQ    ag_lmhead_allpos(T=1) reverse ≡ ag_lmhead reverse (max|Δ|=0)")
+    pass = pass + 1
+} else {
+    println("FAIL  F-RFC059B-ALLPOS-T1-BYTEEQ    (T=1 should reduce to single-position node)")
+}
+ag_t_free_state(tpA); ag_t_free_reg(tpA); ag_t_end(tpA)
+ag_t_free_state(tpB); ag_t_free_reg(tpB); ag_t_end(tpB)
+t_free(dtembA); t_free(dZA)
+
+// ── F-RFC059B-ALLPOS-GRADCHECK ──────────────────────────────────────────
+// T=3, V=4, d=5: reverse-mode analytic vs central finite-difference.
+let T = 3
+let V = 4
+let d = 5
+let temb = t_zeros(V * d)
+let Z = t_zeros(T * d)
+let mut e = 0
+while e < V * d {
+    t_set(temb, e, to_float((e * 7) % 23 - 11) * 0.017 + 0.05)
+    e = e + 1
+}
+let mut z = 0
+while z < T * d {
+    t_set(Z, z, to_float((z * 5) % 17 - 8) * 0.021 - 0.03)
+    z = z + 1
+}
+let targets = t_zeros(T)
+t_set(targets, 0, 1.0)
+t_set(targets, 1, 3.0)
+t_set(targets, 2, 0.0)
+
+// analytic grad via tape (single backward walk, registry accumulate).
+let tp = ag_t_begin(2)
+let lg = ag_lmhead_allpos(tp, temb, Z, T, V, d)
+let loss = ag_ce_seed_allpos(tp, lg, targets, T, V)
+ag_backward_reg(tp, lg, t_zeros(T * V))
+let g_temb = ag_grad(tp, temb)
+let g_Z = ag_grad(tp, Z)
+print("      composite loss L = "); println(loss)
+
+let eps = 0.00001
+let mut worst = 0.0
+
+// probe a handful of temb coords (which=0) and Z coords (which=1)
+// temb probes: indices 0, 7, 13, 19
+let pt0 = central_diff(temb, Z, targets, T, V, d, 0, 0, eps)
+let pt1 = central_diff(temb, Z, targets, T, V, d, 0, 7, eps)
+let pt2 = central_diff(temb, Z, targets, T, V, d, 0, 13, eps)
+let pt3 = central_diff(temb, Z, targets, T, V, d, 0, 19, eps)
+let r_t0 = rel_err(t_get(g_temb, 0), pt0)
+let r_t1 = rel_err(t_get(g_temb, 7), pt1)
+let r_t2 = rel_err(t_get(g_temb, 13), pt2)
+let r_t3 = rel_err(t_get(g_temb, 19), pt3)
+if r_t0 > worst { worst = r_t0 }
+if r_t1 > worst { worst = r_t1 }
+if r_t2 > worst { worst = r_t2 }
+if r_t3 > worst { worst = r_t3 }
+print("      temb[0]  analytic="); print(t_get(g_temb, 0)); print(" fd="); print(pt0); print(" rel="); println(r_t0)
+print("      temb[7]  analytic="); print(t_get(g_temb, 7)); print(" fd="); print(pt1); print(" rel="); println(r_t1)
+print("      temb[13] analytic="); print(t_get(g_temb, 13)); print(" fd="); print(pt2); print(" rel="); println(r_t2)
+print("      temb[19] analytic="); print(t_get(g_temb, 19)); print(" fd="); print(pt3); print(" rel="); println(r_t3)
+
+// Z probes: indices 0, 4, 8, 12 (spans all T rows)
+let pz0 = central_diff(temb, Z, targets, T, V, d, 1, 0, eps)
+let pz1 = central_diff(temb, Z, targets, T, V, d, 1, 4, eps)
+let pz2 = central_diff(temb, Z, targets, T, V, d, 1, 8, eps)
+let pz3 = central_diff(temb, Z, targets, T, V, d, 1, 12, eps)
+let r_z0 = rel_err(t_get(g_Z, 0), pz0)
+let r_z1 = rel_err(t_get(g_Z, 4), pz1)
+let r_z2 = rel_err(t_get(g_Z, 8), pz2)
+let r_z3 = rel_err(t_get(g_Z, 12), pz3)
+if r_z0 > worst { worst = r_z0 }
+if r_z1 > worst { worst = r_z1 }
+if r_z2 > worst { worst = r_z2 }
+if r_z3 > worst { worst = r_z3 }
+print("      Z[0]  analytic="); print(t_get(g_Z, 0)); print(" fd="); print(pz0); print(" rel="); println(r_z0)
+print("      Z[4]  analytic="); print(t_get(g_Z, 4)); print(" fd="); print(pz1); print(" rel="); println(r_z1)
+print("      Z[8]  analytic="); print(t_get(g_Z, 8)); print(" fd="); print(pz2); print(" rel="); println(r_z2)
+print("      Z[12] analytic="); print(t_get(g_Z, 12)); print(" fd="); print(pz3); print(" rel="); println(r_z3)
+
+print("      worst rel-error (temb+Z, 8 probes) = "); println(worst)
+if worst <= 0.000001 {
+    println("PASS  F-RFC059B-ALLPOS-GRADCHECK    central-diff vs analytic rel ≤ 1e-6 (T=3·V=4·d=5; RFC 059 §6.2)")
+    pass = pass + 1
+} else {
+    print("FAIL  F-RFC059B-ALLPOS-GRADCHECK    worst rel="); print(worst); println(" (>1e-6)")
+}
+ag_t_free_state(tp); ag_t_free_reg(tp); ag_t_end(tp)
+
+t_free(temb1); t_free(Z1); t_free(targets1)
+t_free(temb); t_free(Z); t_free(targets)
+
+print("=== ")
+print(pass)
+print("/")
+print(total)
+println(" PASS ===")
