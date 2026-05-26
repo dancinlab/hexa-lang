@@ -8806,7 +8806,7 @@ __attribute__((weak)) HexaVal hexa_cuda_available(void) {
 
 // cuda_device_count() -> int. Number of visible GPUs (0 if none / no
 // CUDA toolkit). Returns 0 on the no-CUDA build always.
-HexaVal hexa_cuda_device_count(void) {
+__attribute__((weak)) HexaVal hexa_cuda_device_count(void) {
 #ifdef HEXA_CUDA
     return hexa_int(_hx_cuda_device_count_impl());
 #else
