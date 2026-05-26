@@ -2,6 +2,50 @@
 
 Append-only history sister of `TECS-L.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
+## 2026-05-27T00:45Z — F16 NOVEL F15-successor (σ_3 calc-gap CLOSED-by-2-op + ω=4/5 sweep + Ore-Mersenne subfamily + Hecke/Galois coda)
+
+F15 σ_3 INBOX entry resolved without verify_cli code change — the 2-op `sigma_k <n> 3 <v>` path already supports σ_3 (--no-absorb enforced per 2026-05-26T22:10Z INBOX). 4 task batch + 4 NOVEL atlas atoms.
+
+- **(s1) σ_3 calc-gap CLOSED-BY-DESIGN + Euclid-Euler closed form — 🔵 4/4 PASS**
+  - σ_3 accessible via `hexa verify --expr sigma_k <n> 3 <v> --no-absorb` (2-op path) — NO `_recompute` arm addition needed; F15 INBOX entry CLOSED-by-design
+  - sigma_3 perfect-subset: P_1=6→252, P_2=28→25112, P_3=496→139456352, P_4=8128→613681507712 (4/4 🔵 BLUE, all in int64 range)
+  - NOVEL closed-form: σ_3(2^(p-1)·M_p) = [(2^(3p)−1)/7] · [1 + (2^p−1)³] from σ_3-multiplicativity
+  - bignum extrapolation to P_5..P_7 (closed-form only, int64 overflows at 4.3e22)
+  - 산출물: `.verdicts/tecs-l-f16-novel-mk10/sigma_3_perfect_*.txt` + `sigma_3_perfect_closed_form.txt`
+- **(s2) ω=4/5 D-discrepancy sweep — 🔴 8/8 CLOSED-NEGATIVE (F14 zero-density CONFIRMED beyond ω=3)**
+  - 8 candidates × 3 components = 24 hexa-native verify 🔵 + D(n) ≠ 0 closed-negative
+  - ω=4: n ∈ {210, 330, 420, 1155} → D ∈ {24288, 63840, 118944, 1087440}
+  - ω=5: n ∈ {2310, 2730, 4620, 9240} → D ∈ {3243840, 4557504, 15261120, 65763840}
+  - F14 ω≥3 zero-density extends predictably to ω=4 and ω=5 explicit witnesses
+  - 산출물: `.verdicts/tecs-l-f16-novel-mk10/d_omega_4_5_sweep.txt`
+- **(s3) Ore A001599 next-50 sweep — 🛸 NOVEL Mersenne-extended Ore subfamily + 🔴 n=270 universality counterexample**
+  - F15 universal Ore-NEG SHARPENED — for n = 2^a · b · M_p (b coprime to 2·M_p, M_p Mersenne prime), H(n) admits PARTIAL closed form `H = [2^(a+1)·b·M_p·(a+1)·τ(b)] / [(2^(a+1)−1)·σ(b)·2^p]` (multiplicativity-derived; integer-divisibility is the subfamily characterization)
+  - 4 Mersenne-extended witnesses: n=140=2²·5·M₃ (H=5), n=672=2⁵·3·M₃ (H=8), n=6200=2³·5²·M₅ (H=10), n=105664=2⁶·13·M₇ (H=13) — all 4/4 🔵 component-verified
+  - 🔴 n=270=2·3³·5 is Ore (H=6) but contains NO Mersenne prime — universality of Mersenne-extended subfamily FALSIFIED → subfamily is PROPER subset of ω=3 Ore set, F15 universal-NEG holds at outer level
+  - 산출물: `.verdicts/tecs-l-f16-novel-mk10/ore_mersenne_extended_family.txt`
+- **(s4) Hecke / Galois layer probe — 🔴 multilayer non-lift coda (F7/F15 program closed)**
+  - Hecke: dim S₂(Γ₀(6))=0 trivial; higher-weight S_k(Γ₀(6)) decomposes as oldforms from levels 1,2,3 (no n=6 peak). T_p eigenvalue builtin absent from `verify_cli _recompute` — same family as σ_3 INBOX (now closed), 🟡 citation
+  - Galois: Gal(Q(ζ_6)/Q) = (Z/6Z)* = Z/2Z = Gal(Q(ζ_3)/Q) (ζ_6 = -ζ_3, cyclotomic collapse — φ-degeneracy only, NOT σφ=nτ-driven)
+  - F7 (geometric) + F15 (Γ(N)) extend to Hecke + Galois: n=6 σφ=nτ identity remains ARITHMETIC-LAYER phenomenon only
+  - 4 φ components 🔵 + dim_cusp_forms reconfirms MF4 known-gap
+  - 산출물: `.verdicts/tecs-l-f16-novel-mk10/hecke_galois_probe.txt`
+- **(s5) atlas fold — 4 F16 NOVEL atoms manual splice 🛸🛸🛸🛸**
+  - `compiler/atlas/embedded.gen.hexa` 16213 → 16217 lines
+  - atoms: `tecs_l_f16_sigma_3_euclid_euler_closed_form` (🔵) · `tecs_l_f16_d_omega_4_5_zero_density` (🔴) · `tecs_l_f16_ore_mersenne_extended_subfamily` (🔵+🔴) · `tecs_l_f16_hecke_galois_arithmetic_layer` (🔴)
+
+**Round summary (4 NOVEL atoms · 40 component verifies · 10 closed-negative findings)**
+- 🔵 SUPPORTED-FORMAL: 4 sigma_3 perfect-subset + 24 (ω=4/5) components + 8 (Ore subfamily) components + 4 (φ) components
+- 🔴 CLOSED-NEGATIVE: 8 D(ω=4/5)≠0 + 1 n=270 universality-NEG + 1 Hecke/Galois multilayer non-lift
+- 🟠 INSUFFICIENT: T_p builtin (verify_cli infra family) — calculator-extension family deferred
+- 🟡 CITATION: Hecke oldform decomposition (Diamond-Shurman §5)
+
+**다음 round seeds (F17)** —
+- (a) **ω=6/7 D-sweep extension**: n = 30030 (2·3·5·7·11·13), 510510 (×17), 9699690 (×19) — F14 zero-density on primorial extreme tail
+- (b) **σ_4/σ_5 Euclid-Euler closed-form extension**: σ_k(2^(p-1)·M_p) = [(2^(kp)−1)/(2^k−1)] · [1 + (2^p−1)^k] (same derivation pattern as F16 σ_3)
+- (c) **A001599 omega=4 Ore subfamily structure scan**: 1638, 2970, 8190, 27846 — search for closed-form pattern in higher-omega Ore set
+- (d) **L-function probe at n=6**: L(s, Γ_0(6)) functional equation conductor=N²=36 — does τ(6)=4 appear in critical-value algebraicity?
+- (e) **arxiv mining round 2**: post-2020 papers citing OEIS A001599 / Dedekind ψ — verify in hexa-native
+
 ## 2026-05-27T00:00Z — F15 NOVEL F14-successor (D(2^a·q·r) + Ore non-perfect family + σ_3 INBOX + Γ(N) coda)
 
 F14 zero-density theorem 의 4-task batch successor. F13/F14 의 closed-form 패턴(D(p^k)·D(pq)·D(2^k·q))을 한 layer 더 lift + F7 modular-curve non-lift 의 full-level coda + σ_3 calc-gap honest 처리.
