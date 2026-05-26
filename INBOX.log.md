@@ -2,6 +2,16 @@
 
 Append-only history sister of `INBOX.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
+## 2026-05-26T18:15Z — verify_cli arm/calc_dispatch 가 hexa binary 내장 → .hexa swap 무효, arm 활성 = source-build 필수 (#1230/#1235 보강)
+
+> #1230(calc-fn gap)·#1235(verify_cli sopfr/pow arm) 소스 land 후 활성 검증 중 발견. deployed .hexa swap + cache 75개 무효 후에도 sopfr 여전 🟠 — verify_cli/calc_dispatch 가 hexa binary 에 컴파일-내장돼 .hexa 소스 변경 무관.
+
+- [ ] **verify_cli binary-내장** — deployed `~/.hx/bin/tool/verify_cli.hexa` 에 sopfr arm 존재(grep count 1, #1235 swap) + `~/.hexa-cache` 전체 무효(75개 rm) 후에도 `verify --expr sopfr 6 5 → 🟠 "no path"`. 즉 hexa(0.1.0-dispatch·hexa-cc 둘 다) 가 verify_cli 를 **binary-내장**으로 resolve, deployed .hexa swap/cache 무효 무관. arm 활성 = **hexa binary source-build**(verify_cli 재컴파일) 필수. (INBOX line 70 "설치본 .hexa 고정" 은 실측상 부정확 — binary 내장.)
+- [ ] **calc_dispatch sopfr/pow 등록 누락** — #1230(1)(2) 가 verify_cli `_recompute`/`_recompute2` arm 만 추가, `compiler/atlas/calc_dispatch.hexa` dispatch 게이트(`calc_is_*_fn`)에 sopfr/pow 미등록 → verify 가 _recompute 도달 전 "no path" 차단 가능성. #1235 arm 완성 = calc_dispatch 등록 동반 필요.
+- 진전: hexa-cc → 0.1.0-dispatch 복귀로 **런처 result-단축 quirk 해소**(↓ #1275 (2) — sopfr 가 "OK" 아닌 🟠 verdict 정상). loop_state_cycle(#1275 (1))은 0.1.0-dispatch 도 build 실패 잔존.
+- 종합: #1230/#1235/#1275 소스는 land 완료 — 활성은 hexa source-build(verify_cli 재컴파일 + calc_dispatch 등록) 후. prebuilt download(hx install)는 #1241 후에도 실패 → source-build = build_hexa_cli(mini) / hexa cc.
+- proposed-by: agent (TECS-L verify_cli arm 활성 검증, 2026-05-26)
+
 ## 2026-05-26T18:10Z — hexa-cc self-host 과도기가 TECS-L cycle verb 전체 차단 (loop runtime FLOOR + 런처 quirk)
 
 > TECS-L 범용 첫 cycle (LLM budget 무제한 해제 후) 시도 중 발견. cycle next-list(C1 Atlas-LLM·F2 /gap·F10 /micro-exp) verb 3종이 전부 deployed hexa-cc self-host 과도기에 막힘. self-host baseline(memory project_hexa_selfhosted_state) "runtime FLOOR 잔여" 구체 증상.
