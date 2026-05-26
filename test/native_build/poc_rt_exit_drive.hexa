@@ -29,7 +29,7 @@ fn poc_drive() {
     // [1/5] Build the hexa-native emit producer.
     println("[1/5] hexa build " + emit_src + " -o " + emit_bin)
     let _ = exec("rm -f '" + emit_bin + "' '" + obj + "' '" + linked + "' 2>/dev/null")
-    let build_out = exec("hexa build '" + emit_src + "' -o '" + emit_bin + "' 2>&1 | tail -20")
+    let build_out = exec("HEXA_MAC_BUILD_OK=1 hexa build '" + emit_src + "' -o '" + emit_bin + "' 2>&1 | tail -20")
     println(build_out)
     let chk1 = exec("test -x '" + emit_bin + "' && printf yes || printf no")
     if chk1 != "yes" {
