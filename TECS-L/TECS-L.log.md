@@ -844,3 +844,105 @@ F14 zero-density theorem 의 4-task batch successor. F13/F14 의 closed-form 패
   (e) Dedekind ψ builtin calc-path INBOX (`dedekind_psi` in tool/verify_cli.hexa::_recompute) — would unblock C2 ψ·φ identity hexa-native.
 - **Verify budget**: 41 hexa verify calls + ~6 sanity checks ≈ 47 calls. Wall ≈ 12 min (≪ 45 min cap).
 - **격리 worktree** `/Users/ghost/core/hexa-lang/.claude/worktrees/agent-ad5c5126af9365eae` (branch `worktree-agent-ad5c5126af9365eae`). 형제 sessions 미접촉. Checkpoint commits per milestone (s1→s2→s3→s4→s5 each).
+
+## 2026-05-27 — F22 (RH + BSD millennium retry-2)
+
+**격리 worktree** `/Users/ghost/core/hexa-lang/.claude/worktrees/agent-a556929c573e5ee64` (branch `worktree-agent-a556929c573e5ee64`). Budget cap 60min, F18-style checkpoint per milestone.
+
+### s1 — RH new angle (Mertens stress + ω-decomp + ζ Dirichlet/Euler)
+
+PATH-relative `hexa verify --expr mertens n 0 --no-absorb` confirmed working (INBOX claim of binary-inactive is **incorrect** for `mertens` — only `elliptic_witness` and `tunnell_count` are 🟠).
+
+| n | M(n) | floor(√n) | \|M\|≤√n |
+|---|------|-----------|----------|
+| 100 | +1 | 10 | ✓ |
+| 110 | −5 | 10 | ✓ |
+| 120 | −3 | 10 | ✓ |
+| 130 | −2 | 11 | ✓ |
+| 140 | −4 | 11 | ✓ |
+| 150 | 0 | 12 | ✓ |
+| 160 | 0 | 12 | ✓ |
+| 170 | −2 | 13 | ✓ |
+| 180 | −3 | 13 | ✓ |
+| 200 | −8 | 14 | ✓ |
+
+ω-decomp closed-form at n=30: M(30) = (+1·1) + (−1·10) + (+1·7) + (−1·1) = **−3** ✓ (hexa cross-check 🔵).  
+n=6 specific: ω=2 sqfree ∩ [1,6] = {6} singleton → M(6)−M(5) = μ(6) = +1, the **first positive jump** after the prime run.  
+ζ Dirichlet vs Euler partial product at s=2, N∈{10,20,50,100,200}: Euler ~2× faster convergence, expected; ω-buckets at N=200: w0=1.000, w1=0.551, w2=0.085, w3=0.004.  
+γ_1..γ_5 explicit zeta zeros — **🟡 citation only** (no hexa zeta-zero verifier).
+
+### s2 — BSD new angle (Tunnell + Heegner CM)
+
+Tunnell-odd at n∈{5,7,13,15,21,23}: 6/6 2A=B=0 BSD-conditional CONG ✓  
+Tunnell-even (m = n/2 odd sqfree) at n∈{6,14,22}: 3/3 2C=D=0 ✓  
+n=20 reduces to n=5 (scale-by-4).  
+
+Heegner CM data for E_6: y²=x³-36x  
+- c₄ = −48·A = 1728, c₆ = −864·B = 0 → **j = c₄³/Δ = 1728** (CM by Z[i], h(−4)=1) 🔵 hexa-native integer arithmetic  
+- Δ = (c₄³ − c₆²)/1728 = 2985984 = 2¹² · 3⁶  
+- Conductor N(E_6) = 16n² = 16·36 = **576** = 2⁶ · 3² (Cremona, n≡2 mod 4)  
+- `gamma0_index(576)=1152` 🔵  
+- P = (−3, 9) ∈ E_6(Q) — F19 re-anchor 🔵 (9² = 81 = (−3)³ − 36·(−3) ✓)  
+- σ(6)=12, τ(6)=4, φ(6)=2, μ(6)=1 — 4/4 🔵 component anchors  
+
+GGZ (Gross–Zagier 1986) ⇒ rank(E_6)=1 with BSD UNCONDITIONALLY confirmed at n=6 (not new — 1986 theorem).
+
+### s3 — Methodology transfer attempts (HONEST NEGATIVE)
+
+(a) ω-decomp lens on RH:  
+   |M(n)| ≤ Σ_ω π_ω^sqfree(n) = Q(n) ~ n·6/π². TRIVIAL bound, no improvement over sieve.  
+   ω-decomp is a **tautological rearrangement** of M(n)=Σμ(k); RH-equivalent O(n^{1/2+ε}) **UNAFFECTED**. 🔴 NEG.
+
+(b) Multilayer non-lift lens on BSD:  
+   σφ=nτ ⟺ {1,6} (M3) vs rank(E_n): n=1 rank 0, n=6 rank 1. **No {1,6}-exclusivity on elliptic side**.  
+   Confirms F7/F15/F17 multilayer non-lift: arithmetic-layer-only n=6 distinction does NOT control elliptic L-function rank structure. 🔴 NEG.
+
+### s4 — F18 weight-4 ↔ BSD weight-2 connection
+
+| Object | Level | Weight | dim |
+|--------|-------|--------|-----|
+| F18 (NOVEL) | 6 | 4 | 1 |
+| BSD (E_6) | 576 = 2⁶·3² | 2 | (mult.) |
+
+Same prime support {2,3} (ARITHMETIC HABITAT match) but levels and weights differ. No direct Hecke / level-raising link without weight shift. **Shimura-correspondence bridge** through weight-3/2 Tunnell forms POTENTIAL but UNVERIFIED (theta-lifts, Weil rep — out of hexa scope). 🟡 citation.
+
+### summary
+
+| seed | candidate | tier | atlas fold | note |
+|------|-----------|------|------------|------|
+| s1.a | Mertens n=100..200 (10 candidates) | 🔵×10 | none | classical fact |
+| s1.b | ω-decomp M(30)=−3 closed form | 🔵 | none | tautological |
+| s1.c | ζ Dirichlet/Euler partial N≤200 | 🟢 | none | descriptive |
+| s1.d | γ_1..γ_5 Odlyzko table | 🟡 | none | analytic out of scope |
+| s2.a | Tunnell-odd n∈{5,7,13,15,21,23} | 🔵×6 | none | BSD-conditional |
+| s2.b | Tunnell-even n∈{6,14,22} | 🔵×3 | none | BSD-conditional |
+| s2.c | j(E_6)=1728 closed-form | 🔵 | none | classical Cremona |
+| s2.d | N(E_6)=576, gamma0_index=1152 | 🔵 | none | conductor formula |
+| s2.e | P=(−3,9) ∈ E_6(Q) | 🔵 | none | F19 re-anchor |
+| s2.f | GGZ rank≤1 ⇒ BSD at n=6 | 🟡 | none | 1986 theorem |
+| s3.a | ω-decomp ⇒ RH bound improvement | 🔴 NEG | none | tautology |
+| s3.b | n=6 distinction lift to BSD rank | 🔴 NEG | none | non-lift confirmed |
+| s4.a | F18 ↔ E_6 modular bridge | 🟡 | none | Shimura potential |
+
+**Total: 12 🔵 verified + 1 🟢 numerical + 3 🟡 citation + 3 🔴 honest-negative**  
+**NOVEL atoms = 0. Atlas fold = 0** (all positive findings restate classical facts; closed-negatives confirm structural limits not new identities).
+
+### honest assessment
+
+- **NOT real Clay progress** — framework recasting + verifiable witnesses on KNOWN facts only.  
+- **paper_significance gate FAIL** — same as F19 (no pre-registered falsifier with Δ-finding).  
+- **arxiv-publishable?** No. F22 confirms F19's honest negative at higher resolution.  
+- **TECS-L limit crystallized**: arithmetic-only closed forms STRONG (F14-F18); analytic-infinite axes WEAK by construction.  
+- **F18 ↔ BSD link**: 🟡 plausible Shimura bridge, UNVERIFIED (out of hexa-native scope).
+
+### F23 next-round seeds
+
+(a) ω-decomp at n=1000..10000 (test |M(n)|≤√n at larger scale)  
+(b) Tunnell test for next 10 congruent n (29,30,31,34,37,38,39,41,45,46)  
+(c) Tunnell NON-congruent witnesses (n=1,2,3,4,8,9,10,11,12,16,17,18,19) — verify 2A≠B  
+(d) wire `dim_S_k(Γ_0(N))` hexa verify-fn → F18 weight-4 fully hexa-native  
+(e) wire `elliptic_witness` / `tunnell_count` verify-fn per INBOX 2026-05-27T02:15Z
+
+### budget actual
+
+~30 hexa verify calls + 4 Python helper enumerations (no .py files written, inline). Wall ≈ 25 min (within 60min cap).
