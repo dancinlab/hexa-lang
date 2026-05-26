@@ -1398,6 +1398,63 @@ fn link_macho_arm64(objs: [ParsedObj], out_path: string, entry: string, _is_stat
                     text_bytes[patch_off + 2] = (patched >> 16) & 0xff
                     text_bytes[patch_off + 3] = (patched >> 24) & 0xff
                 }
+            } else if pr.kind == 5 || pr.kind == 6 {
+                // ── Phase-H inc5: ARM64_RELOC_GOT_LOAD_PAGE21/PAGEOFF12 ──
+                //
+                // The user's `adrp x9, _sym@GOTPAGE` + `ldr x9, [x9,
+                // _sym@GOTPAGEOFF]` targets the __got slot for _sym, not
+                // _sym itself. dyld (via chained_fixups) populates that
+                // slot at load time with the resolved external address.
+                //
+                // For internal targets we degenerate to the kind 3/4
+                // path (handled by the data-import scan in the layout
+                // pass — internal kind-5/6 refs are NOT added to
+                // import_names). For external imports we look up the
+                // GOT slot index in `import_names` and treat:
+                //
+                //   tgt_addr = got_section_addr + 8 * import_idx
+                //
+                // exactly like a regular PAGE21 / PAGEOFF12 reloc, with
+                // the PAGEOFF12 scale forced to 3 (LDR x = 8 B).
+                let patch_off = pbase + pr.offset
+                let mut got_idx = -1
+                let mut gi = 0
+                while gi < len(import_names) {
+                    if import_names[gi] == pr.sym_name { got_idx = gi; break }
+                    gi = gi + 1
+                }
+                if got_idx >= 0 {
+                    let slot_addr = got_section_addr + 8 * got_idx
+                    let w0 = text_bytes[patch_off + 0]
+                    let w1 = text_bytes[patch_off + 1]
+                    let w2 = text_bytes[patch_off + 2]
+                    let w3 = text_bytes[patch_off + 3]
+                    let cur = w0 | (w1 << 8) | (w2 << 16) | (w3 << 24)
+                    let mut patched = cur
+                    if pr.kind == 5 {
+                        // GOT_LOAD_PAGE21 — adrp: page-delta of GOT slot.
+                        let pc_addr  = text_section_addr + patch_off
+                        let tgt_page = slot_addr & (0 - 0x1000)
+                        let pc_page  = pc_addr  & (0 - 0x1000)
+                        let page_imm = (tgt_page - pc_page) / 0x1000
+                        let immlo = page_imm & 0x3
+                        let immhi = (page_imm >> 2) & 0x7ffff
+                        let cleared = cur & 0x9f00001f
+                        patched = cleared | (immlo << 29) | (immhi << 5)
+                    } else {
+                        // GOT_LOAD_PAGEOFF12 — always LDR x (8-B load), so
+                        // scale = 3. The imm12 field holds the slot's
+                        // offset within its 4 KB page, divided by 8.
+                        let off12_raw = slot_addr & 0xfff
+                        let imm12 = off12_raw >> 3
+                        let cleared = cur & 0xffc003ff
+                        patched = cleared | ((imm12 & 0xfff) << 10)
+                    }
+                    text_bytes[patch_off + 0] = patched & 0xff
+                    text_bytes[patch_off + 1] = (patched >> 8) & 0xff
+                    text_bytes[patch_off + 2] = (patched >> 16) & 0xff
+                    text_bytes[patch_off + 3] = (patched >> 24) & 0xff
+                }
             }
             pri = pri + 1
         }
