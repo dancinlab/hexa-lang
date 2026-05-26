@@ -2,6 +2,16 @@
 
 Append-only history sister of `INBOX.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
+## 2026-05-26T09:00Z — verify_cli calc-fn gap 3종 처방 (TECS-L 새 대축 next-layer · #1204 RESOLVED 후 노출)
+
+> #1204(_Generic worktree-rebuild)는 #1198/#1213(`build_hexa_module_loader.sh`)로 RESOLVED 확인 (worktree `sigma 6 12 → 🔵`). 그 RESOLVED **후** main-tree verify 로 드러난 **next-layer 3종** (rebuild 막힘 아닌 whitelist/등록/deployed-stale layer). F9 패턴 (calc-fn gap → fix at source). 처방 포함 → RUNTIME 세션 안전 실행 권장 (직접 재설치는 동작 중 deployed verify 깰 위험).
+
+- [ ] **(1) sopfr whitelist arm 부재** — `verify --expr sopfr 6 5 → 🟠 "calculator NO path for sopfr"`. CM0 lattice (n=6 sopfr=5) 막음. fix: `tool/verify_cli.hexa` `_recompute(fn_name,n)` (line ~427, tau arm 다음) 에 `if fn_name == "sopfr" { return sopfr(n) }`. sopfr 정의 = `stdlib/core/math.hexa:140 pub fn sopfr`. (sigma_k/euler_phi/divisors 출처 패턴 따라 import/use 정합 필요.)
+- [ ] **(2) pow whitelist arm 부재** — `verify --expr pow 4 3 64 → 🟠 "no path for pow"`. LF1 codon 4³=64 막음. fix: `_recompute2(fn_name,a,b)` (line ~542, sigma_k arm 옆) 에 pow int arm.
+- [ ] **(3) phi_demo deployed-stale** — `verify --expr phi_demo 1 3.83659 → to_int trailing garbage` (int 경로 추락). 근데 `compiler/atlas/calc_dispatch.hexa:151` 에 phi_demo 가 `calc_is_float_fn` 에 **이미 등록됨** + verify_cli line 3507 `_phi_demo` arm 존재. → deployed `~/.hx/bin/tool/verify_cli.hexa`(07:50)가 최신 calc_dispatch 반영 안 함 (stale). fix: deployed verify_cli 재설치 (#1198 복구로 worktree rebuild 가능). 재설치 후 `phi_demo 1 3.83659 --tol` → 🟢 Φ★ (V5.2 wire, LIFE IIT Φ).
+- 활성 효과: CM0 sopfr 🟠→🔵 · LF1 codon 🟠→🔵 · LIFE IIT Φ DEFERRED→🟢 (TECS-L 새 대축 verify-able 확장).
+- proposed-by: agent (TECS-L 범용 새 대축 R1-R3, 2026-05-26) · 사용자 "verify_cli 확장" 지시 → 처방 handoff (재설치 위험 회피)
+
 ## 2026-05-26T08:40Z — 🔌 hexa cloud 개선 4건 (reconcile GHOST 오판 · registry 오염 · cloud_cli 재발-wipe · prebuilt-binary 전송) · from demiurge RTSC
 
 > RTSC 캠페인(8 vast pod) 운용 중 발견한 `hexa cloud` 개선점 묶음. #967(heavy-word route)·#989(lifecycle verb)·#1155(vast ssh 키)와 별개 신규 4건.
