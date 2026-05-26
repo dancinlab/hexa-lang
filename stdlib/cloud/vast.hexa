@@ -132,10 +132,16 @@ fn _vast_strip_to_json(s: str) -> str {
 // drop the boot-failure rate from ~60-70% to ~0%. Applied unless the
 // caller opts into the general pool (verified_only == 0). Each predicate
 // is a single token (vastai parses the whole query as one space-joined
-// argument). reliability2>=0.95 + verified=true + rentable=true is the
+// argument). reliability>=0.95 + verified=true + rentable=true is the
 // campaign-proven combination.
+//
+// NB: the query-DSL field is `reliability`, NOT `reliability2` — the latter
+// is only an offer-JSON output field; vastai rejects it as an unknown query
+// key, returning 0 offers so every `hexa cloud rent` silently fails. (vast
+// docs: `vastai search offers 'reliability > 0.99 num_gpus>=4'`.) Filed twice
+// from live vast campaigns (INBOX #1038(1) · #1239(1)).
 fn _vast_default_filters() -> [str] {
-    return ["rentable=true", "verified=true", "reliability2>=0.95"]
+    return ["rentable=true", "verified=true", "reliability>=0.95"]
 }
 
 // _vast_build_query — join the caller's query with the default filters
@@ -194,7 +200,7 @@ fn _vast_collect_offer_ids(out: str) -> [str] {
 
 // vast_search_offers — `vastai search offers '<query>' -n --raw`.
 // When `verified_only` is 1 (the default for `hexa cloud rent`), the
-// campaign-proven `rentable=true verified=true reliability2>=0.95`
+// campaign-proven `rentable=true verified=true reliability>=0.95`
 // predicates are prepended; pass verified_only==0 to search the general
 // (unverified) pool. The `-n` flag raises the result cap (without it
 // vastai silently truncates to a handful of entries). Returns the FIRST
