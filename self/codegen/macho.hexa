@@ -160,6 +160,241 @@ fn macho_wrap(code: [int], main_offset: int) -> [int] {
     return macho_obj_wrap(code, main_offset)
 }
 
+// ───────────────────────────────────────────────────────────────
+// macho_obj_wrap_v2 — MH_OBJECT carrying TWO symbols + reloc table.
+// ───────────────────────────────────────────────────────────────
+// HEXA_BACKEND flip chunk-B, phase-H emit-side closure for PR #1297
+// residual #2: state-relative primitives (rt_arena_*).
+//
+// v1 (macho_obj_wrap) emits a single-symbol __text-only .o with
+// reloff=0/nreloc=0. v2 adds:
+//   - a second section `__const` carrying `state_bytes` (the arena
+//     state slot — 24 bytes of zero-initialized base/ptr/end);
+//   - a second exported symbol `_arena_state` pointing at it;
+//   - N relocation_info records in `__text.reloff`, each targeting
+//     `_arena_state` with kind ∈ {ARM64_RELOC_PAGE21=3,
+//     ARM64_RELOC_PAGEOFF12=4} so the linker (`tool/hexa_ld.hexa`
+//     PR #1282 / 5c464c71) resolves the adrp/add immediates.
+//
+// Arguments:
+//   code         — __text bytes (machine code, e.g. rt_arena_reset_v2).
+//   main_offset  — offset of `_hexa_main` within `code` (entry point).
+//   state_bytes  — initial bytes of the `__const` section (24 zeros
+//                  for an arena state slot).
+//   reloc_offs   — text-relative byte offsets where reloc records
+//                  apply (1 per adrp / add instruction word).
+//   reloc_kinds  — parallel array of ARM64_RELOC_* kinds (3 or 4).
+//
+// The two arrays MUST be the same length. Order matches the order
+// reloc records appear in the output table; this is irrelevant to
+// the linker (it iterates), but stable for reproducibility.
+//
+// File layout (offsets computed at the top of the fn):
+//   [0x00 .. 0x20)         mach_header_64                (32 bytes)
+//   [0x20 .. 0x20+SOC)     load commands                  (sizeofcmds)
+//   [code_offset ..)       __text bytes
+//   [const_offset ..)      __const bytes (state slot)
+//   [reloc_offset ..)      relocation table (8 B × N)
+//   [symtab_offset ..)     nlist_64 records (16 B × 2)
+//   [strtab_offset ..)     strtab "\0_hexa_main\0_arena_state\0"
+//
+// Symbol convention:
+//   sym[0] = `_hexa_main`   in __text (n_sect=1) at main_offset
+//   sym[1] = `_arena_state` in __const (n_sect=2) at offset 0
+//
+// Compatibility with v1: v1 callers keep working — v2 is additive.
+fn macho_obj_wrap_v2(code: [int], main_offset: int, state_bytes: [int],
+                     reloc_offs: [int], reloc_kinds: [int]) -> [int] {
+    let mut out = []
+    let code_size  = len(code)
+    let state_size = len(state_bytes)
+    let nreloc     = len(reloc_offs)
+
+    // String table layout: "\0_hexa_main\0_arena_state\0"
+    //   byte 0  : NUL
+    //   byte 1  : "_hexa_main\0"   (11 bytes)
+    //   byte 12 : "_arena_state\0" (13 bytes)
+    // Total = 1 + 11 + 13 = 25 bytes.
+    let strx_main  = 1
+    let strx_state = 12
+    let strtab_size = 1 + 11 + 13
+
+    // Load commands: LC_SEGMENT_64 (72 + 80*2 = 232) + LC_SYMTAB (24)
+    // + LC_BUILD_VERSION (24) = 280 bytes.
+    let segment_cmd_size = 72 + 80 + 80
+    let symtab_cmd_size = 24
+    let build_version_cmd_size = 24
+    let sizeofcmds = segment_cmd_size + symtab_cmd_size + build_version_cmd_size
+
+    let header_size = 32
+    let code_offset  = align_to(header_size + sizeofcmds, 8)
+    let const_offset = align_to(code_offset + code_size, 8)
+    let reloc_offset = align_to(const_offset + state_size, 4)
+    let reloc_size   = 8 * nreloc
+    let symtab_offset = reloc_offset + reloc_size
+    let nlist_size = 16
+    let nsyms = 2
+    let strtab_offset = symtab_offset + nlist_size * nsyms
+    let total_end = strtab_offset + strtab_size
+
+    // ── Mach-O header (32 bytes) ──────────────────────────────────
+    out = push_u32_le(out, mh_magic_64())
+    out = push_u32_le(out, cpu_type_arm64())
+    out = push_u32_le(out, cpu_subtype_all())
+    out = push_u32_le(out, mh_object())
+    out = push_u32_le(out, 3)                  // ncmds
+    out = push_u32_le(out, sizeofcmds)
+    out = push_u32_le(out, 0)                  // flags
+    out = push_u32_le(out, 0)                  // reserved
+
+    // ── LC_SEGMENT_64 (1 segment, 2 sections) ────────────────────
+    out = push_u32_le(out, lc_segment_64())
+    out = push_u32_le(out, segment_cmd_size)
+    // segname = 16 NUL bytes (MH_OBJECT convention)
+    let mut i = 0
+    while i < 16 { out.push(0); i = i + 1 }
+    out = push_u64_le(out, 0)                  // vmaddr
+    out = push_u64_le(out, total_end - code_offset)  // vmsize
+    out = push_u64_le(out, code_offset)        // fileoff
+    out = push_u64_le(out, total_end - code_offset)  // filesize
+    out = push_u32_le(out, 7)                  // maxprot
+    out = push_u32_le(out, 7)                  // initprot
+    out = push_u32_le(out, 2)                  // nsects
+    out = push_u32_le(out, 0)                  // flags
+
+    // ── section_64 __text (80 bytes) ─────────────────────────────
+    // sectname "__text" + padding to 16
+    out.push(95).push(95).push(116).push(101).push(120).push(116)
+    let mut j = 0
+    while j < 10 { out.push(0); j = j + 1 }
+    // segname "__TEXT" + padding to 16
+    out.push(95).push(95).push(84).push(69).push(88).push(84)
+    j = 0
+    while j < 10 { out.push(0); j = j + 1 }
+    out = push_u64_le(out, 0)                  // addr
+    out = push_u64_le(out, code_size)          // size
+    out = push_u32_le(out, code_offset)        // offset
+    out = push_u32_le(out, 2)                  // align = log2(4)
+    out = push_u32_le(out, reloc_offset)       // reloff — populated!
+    out = push_u32_le(out, nreloc)             // nreloc — populated!
+    out = push_u32_le(out, s_attr_pure_instructions() + s_attr_some_instructions())
+    out = push_u32_le(out, 0)                  // reserved1
+    out = push_u32_le(out, 0)                  // reserved2
+    out = push_u32_le(out, 0)                  // reserved3
+
+    // ── section_64 __const (80 bytes) — read-only data ───────────
+    // sectname "__const" (7 chars) + padding to 16
+    out.push(95).push(95).push(99).push(111).push(110).push(115).push(116)
+    j = 0
+    while j < 9 { out.push(0); j = j + 1 }
+    // segname "__TEXT" + padding to 16 (linker PR #1282 routes __const
+    // inside __TEXT — same merged-text segment in the executable)
+    out.push(95).push(95).push(84).push(69).push(88).push(84)
+    j = 0
+    while j < 10 { out.push(0); j = j + 1 }
+    out = push_u64_le(out, code_size)          // addr (offset within seg)
+    out = push_u64_le(out, state_size)         // size
+    out = push_u32_le(out, const_offset)       // offset
+    out = push_u32_le(out, 3)                  // align = log2(8)
+    out = push_u32_le(out, 0)                  // reloff (no relocs into __const)
+    out = push_u32_le(out, 0)                  // nreloc
+    out = push_u32_le(out, 0)                  // flags = S_REGULAR
+    out = push_u32_le(out, 0)                  // reserved1
+    out = push_u32_le(out, 0)                  // reserved2
+    out = push_u32_le(out, 0)                  // reserved3
+
+    // ── LC_SYMTAB (24 bytes) ─────────────────────────────────────
+    out = push_u32_le(out, lc_symtab())
+    out = push_u32_le(out, symtab_cmd_size)
+    out = push_u32_le(out, symtab_offset)
+    out = push_u32_le(out, nsyms)              // 2 symbols
+    out = push_u32_le(out, strtab_offset)
+    out = push_u32_le(out, strtab_size)
+
+    // ── LC_BUILD_VERSION (24 bytes) ──────────────────────────────
+    out = push_u32_le(out, lc_build_version())
+    out = push_u32_le(out, build_version_cmd_size)
+    out = push_u32_le(out, 1)                  // platform = MACOS
+    out = push_u32_le(out, 0x000E0000)         // minos = 14.0
+    out = push_u32_le(out, 0x000E0000)         // sdk = 14.0
+    out = push_u32_le(out, 0)                  // ntools
+
+    // ── Pad to code_offset ───────────────────────────────────────
+    while len(out) < code_offset { out.push(0) }
+
+    // ── __text payload ───────────────────────────────────────────
+    let mut k = 0
+    while k < len(code) { out.push(code[k]); k = k + 1 }
+
+    // ── Pad to const_offset ──────────────────────────────────────
+    while len(out) < const_offset { out.push(0) }
+
+    // ── __const payload (state slot) ─────────────────────────────
+    let mut sb = 0
+    while sb < state_size { out.push(state_bytes[sb]); sb = sb + 1 }
+
+    // ── Pad to reloc_offset ──────────────────────────────────────
+    while len(out) < reloc_offset { out.push(0) }
+
+    // ── Relocation table — N records, each 8 bytes ───────────────
+    // Per <mach-o/reloc.h> struct relocation_info:
+    //   int32_t  r_address       — section-relative byte offset of patch
+    //   uint32_t bits = r_symbolnum:24 | r_pcrel:1 | r_length:2
+    //                  | r_extern:1   | r_type:4
+    //
+    // All arena relocs target _arena_state (symbol index 1, since
+    // _hexa_main is index 0). r_pcrel=1 (adrp PC-relative, add PC-rel
+    // adjustment by the linker's pair logic), r_length=2 (4-byte slot),
+    // r_extern=1 (symbol-based).
+    let mut ri = 0
+    while ri < nreloc {
+        let r_off  = reloc_offs[ri]
+        let r_kind = reloc_kinds[ri]
+        out = push_u32_le(out, r_off)
+        // r_symbolnum=1 (_arena_state), pcrel=1, length=2, extern=1, type=r_kind
+        let r_symbolnum = 1
+        let r_pcrel  = 1
+        let r_length = 2
+        let r_extern = 1
+        let bits = (r_symbolnum % 0x1000000)
+                 + (r_pcrel * 0x1000000)
+                 + (r_length * 0x2000000)
+                 + (r_extern * 0x8000000)
+                 + ((r_kind % 16) * 0x10000000)
+        out = push_u32_le(out, bits)
+        ri = ri + 1
+    }
+
+    // ── Pad to symtab_offset ─────────────────────────────────────
+    while len(out) < symtab_offset { out.push(0) }
+
+    // ── Symbol table: nlist_64 × 2 (16 B each) ───────────────────
+    // sym[0] = _hexa_main  (n_sect=1, n_value=main_offset)
+    out = push_u32_le(out, strx_main)          // n_strx
+    out.push(n_sect() + n_ext())               // n_type = N_SECT | N_EXT
+    out.push(1)                                // n_sect = 1 (__text)
+    out = push_u16_le(out, 0)                  // n_desc
+    out = push_u64_le(out, main_offset)        // n_value
+    // sym[1] = _arena_state (n_sect=2, n_value=0)
+    out = push_u32_le(out, strx_state)         // n_strx
+    out.push(n_sect() + n_ext())               // n_type = N_SECT | N_EXT
+    out.push(2)                                // n_sect = 2 (__const)
+    out = push_u16_le(out, 0)                  // n_desc
+    out = push_u64_le(out, 0)                  // n_value (offset within __const)
+
+    // ── String table ─────────────────────────────────────────────
+    // "\0_hexa_main\0_arena_state\0"
+    out.push(0)                                // leading NUL
+    // "_hexa_main\0" (11 bytes)
+    out.push(95).push(104).push(101).push(120).push(97)
+    out.push(95).push(109).push(97).push(105).push(110).push(0)
+    // "_arena_state\0" (13 bytes)
+    out.push(95).push(97).push(114).push(101).push(110).push(97)
+    out.push(95).push(115).push(116).push(97).push(116).push(101).push(0)
+
+    return out
+}
+
 // Push N zero bytes.
 fn push_zeros(buf: [int], n: int) -> [int] {
     let mut b = buf
