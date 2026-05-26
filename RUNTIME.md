@@ -829,6 +829,130 @@ verifiable (`p3 == p1`) → `rt_arena_release` 의 `munmap(size = end-base)`
   PAGE21/PAGEOFF12 자체 적용). 그 시점에 `HEXA_BACKEND=hexa` 의 *전형*
   artifact 가 `cc`-free 가 된다.
 
+### 일곱째 increment (2026-05-26 · 🛸 headline production-wire FIRST PROBE — hexa-emit `_hexa_exit` override → `exit(42)` PASS rc=42)
+
+여섯째 increment 까지의 emit-side 형판 (네 개의 `rt_arena_*` primitive 가
+하나의 `.o` 로 묶여 link + RUN PASS) 위에서, **헤드라인 잔여 (B)
+production-wire** 가 처음으로 *실제 compile pipeline 의 link 단계* 에
+hexa-emit `.o` 를 끼워넣는 형태로 **단일-함수 PoC** 를 닫는다. 본
+increment 가 `runtime.c` 의 한 함수 (`hexa_exit`, ABI = 단일 HexaVal pair
+받아 raw int 으로 syscall) 를 hexa-emit 으로 **superseed** 하는 최초의
+end-to-end wire 다.
+
+**핵심 ABI 통찰 (audit)**:
+
+| primitive (raw ABI)         | C-runtime fn (HexaVal ABI)          | bridge      |
+|-----------------------------|-------------------------------------|-------------|
+| `rt_exit(x0=code)` (16 B)   | `hexa_exit(HexaVal)` (x0=tag,x1=val) | mov x0,x1   |
+| `rt_print_str(x0=ptr,x1=n)` | `hexa_println(HexaVal)` (str unbox)  | unbox+adapt |
+| `rt_println(...)`           | `hexa_println(...)`                  | (위와 동일) |
+| `rt_print_int(x0=int)`      | `hexa_to_string` + `hexa_println`    | 다단         |
+| `rt_alloc(x0=size)`         | (없음 — 내부)                        | direct      |
+| `rt_str_len(x0=ptr)`        | `hexa_str_len` (HexaVal→int)         | adapt+box   |
+| `rt_arena_*(...)`           | (없음 — 새 API)                      | direct      |
+| `rt_memcpy_neon` (3-arg)    | (codegen 내부 lowering)              | direct      |
+| `rt_strlen_neon`            | (codegen 내부 lowering)              | direct      |
+| `rt_memcmp_neon` (3-arg)    | (codegen 내부 lowering)              | direct      |
+
+**결론**: ABI mismatch 가 *구조적* 이지만 *해결 가능* — primitive 가 raw
+ABI 인 한 (`mov x0, x1` ~ 가벼운 adapter 만 필요할 때) Mach-O `weak`
+override 로 깔끔하게 wire 된다. 본 PoC 는 가장 단순한 케이스
+(`hexa_exit`, mov x0,x1 만) 로 그 형판을 증명한다.
+
+**3-요소 wire**:
+
+1. `self/runtime.c::hexa_exit` 에 `__attribute__((weak))` 부착. C-runtime
+   body 는 unchanged — 단순히 linker 가 strong 동명 심볼이 link 입력에
+   있을 때 그것을 우선하게 한다 (ld64 invariant).
+2. `test/native_build/emit_hexa_exit_native_o.hexa` — strong `_hexa_exit`
+   를 export 하는 `.o` 를 emit. body = `mov x0, x1` (4 B HexaVal payload →
+   raw exit code) + `rt_exit` verbatim 16 B (stp/mov x29/mov x16=1/svc
+   #0x80). 총 20 B `__text`, strtab `_hexa_exit\0` 11 B + leading NUL =
+   12 B, `obj_wrap_v` 280 B `.o`. 인프라는 v2 wrapper (선행 PoC 의 동일
+   wrapper, 심볼명만 `_hexa_main` → `_hexa_exit`) 재사용.
+3. `self/main.hexa` cmd_build (`HEXA_BACKEND=native` 경로 L2676) — env
+   `HEXA_NATIVE_RT_EXIT=1` 일 때 emit driver 를 `hexa run` 으로 호출 →
+   생성된 `/tmp/hexa_exit_native.o` 를 clang link 의 입력 *맨 앞* 에
+   추가 (.s + runtime.c 보다 앞). env unset = 기존 link 명령 byte-eq
+   (no-regression).
+
+**g5 verbatim — wire smoke (Mac arm64 로컬)**:
+
+```
+$ aprime_cc _drv.hexa --emit=asm -o build/artifacts/smoke.s test/native_build/smoke_exit_42.hexa
+atlas: loaded 16159 nodes from embedded.gen.hexa
+
+$ # BASELINE: weak runtime.c only
+$ xcrun clang ... build/artifacts/smoke.s self/runtime.c -o smoke_base
+13 warnings generated.
+$ ./smoke_base ; echo rc=$?
+rc=42
+
+$ # OVERRIDE: hexa-emit .o + weak runtime.c
+$ xcrun clang ... /tmp/hexa_exit_native.o build/artifacts/smoke.s self/runtime.c -o smoke_ovr
+13 warnings generated.
+$ ./smoke_ovr ; echo rc=$?
+rc=42
+
+$ # PROOF — override binary's _hexa_exit body (4 instr = adapter)
+$ xcrun otool -tv smoke_ovr | grep -A6 '^_hexa_exit:'
+_hexa_exit:
+0000000100000770	mov	x0, x1
+0000000100000774	stp	x29, x30, [sp, #-0x10]!
+0000000100000778	mov	x29, sp
+000000010000077c	mov	x16, #0x1
+0000000100000780	svc	#0x80
+
+$ # CONTRAST — baseline binary's _hexa_exit body (C fmov/fcvtzs pattern)
+$ xcrun otool -tv smoke_base | grep -A6 '^_hexa_exit:'
+_hexa_exit:
+00000001000472c0	stp	x29, x30, [sp, #-0x10]!
+00000001000472c4	mov	x29, sp
+00000001000472c8	fmov	d0, x1
+00000001000472cc	fcvtzs	w8, d0
+00000001000472d0	cmp	w0, #0x1
+00000001000472d4	csel	w8, w8, wzr, eq
+```
+
+`smoke_ovr` 의 `_hexa_exit` 가 정확히 20 바이트의 hexa-emit body —
+`baseline 의 fmov/fcvtzs/cmp/csel` 패턴이 모두 사라지고 `mov x0,x1` 이
+선두에 들어와 있음 → **ld64 가 weak C 심볼을 hexa-emit strong 으로
+교체** 했다. svc #0x80 + x16=1 (SYS_exit) 이 직접 발사 → rc=42.
+
+**no-regression**:
+
+- v1 PoC `poc_rt_exit_obj_emit` (#1297) — local rebuild + emit PASS
+  (`wrote /tmp/poc_rt_exit.o` + `[poc] EMIT OK`).
+- v2 PoC `poc_arena_reloc_emit` (#1302) — emit PASS (`obj size : 425`).
+- v3 PoC `poc_multi_sym_emit` (#1311) — emit PASS (`obj size : 391`
+  bytes).
+- 여섯째 inc `poc_arena_bundle` (#1316) — emit + link + RUN PASS (`rc=42`).
+- `runtime.c::hexa_exit` weak attribute — `.o` size 동일 (508624 B),
+  symbol nlist `T _hexa_exit` flag 비트만 차이; functional body unchanged
+  → 기본 cmd_build (env unset) byte-eq 보존.
+- 기본 `build_aprime.sh` 경로 — `HEXA_BACKEND` 미설정 시 patch 가 진입
+  안 함 (`if env("HEXA_NATIVE_RT_EXIT") == "1"` 게이트). C path
+  unchanged.
+
+**잔여 (다음 increment 후보)**:
+
+- (A) wire ceremony 정착 — `hexa.real` 의 baked-in `self/main.hexa` 가
+  본 worktree 의 env-gated 패치를 모르므로 production 효과는 `hexa.real`
+  rebuild (aprime_cc 재컴파일 → bootstrap) 까지 대기. 본 increment 는
+  *형판* 을 증명; rebuild 는 별 PR (`ssh mini` offload).
+- (B) primitive 횡축 확장 — 같은 형판으로 `rt_print_int` (HexaVal int →
+  int 추출 후 itoa + write syscall) → `rt_print_str` (HexaVal str payload
+  → ptr/len → write) → `rt_println` 순으로 적용. 각 fn 에 ABI adapter
+  prefix 의 길이만 다름 (단순 single mov 부터 unbox+strlen 까지). primitive
+  당 별도 strong `.o` + weak runtime.c 짝 패턴.
+- (C) 단일-multi-sym `.o` 통합 — 위 (B) 의 N 개 primitive 를 `macho_obj_wrap_v3`
+  (다섯째 increment) 으로 한 `.o` 에 묶어 한 번에 link → cmd_build 의
+  `HEXA_NATIVE_RT_*` env 매트릭스가 `HEXA_NATIVE_RT_ALL=1` 단일 게이트
+  로 수렴.
+- (D) `weak` 정책 통합 — `hexa_*` runtime.c 함수에 `__attribute__((weak))`
+  를 일괄 부착하는 macro 도입 (`HEXA_OVERRIDABLE`). primitive 단위 wire
+  가 확장될수록 individual edit 대신 macro 1 곳 정의.
+
 ## Domain map (Phase 0 → 3 + post)
 
 ```

@@ -5198,7 +5198,16 @@ HexaVal hexa_str_bytes(HexaVal s) {
 #include <unistd.h>
 #include <time.h>
 
-HexaVal hexa_exit(HexaVal code) {
+// HEXA_BACKEND flip · chunk-B phase-H 일곱째 increment (2026-05-26):
+// Marked `__attribute__((weak))` so a hexa-emit `_hexa_exit` strong symbol
+// (emitted by test/native_build/emit_hexa_exit_native_o.hexa, appended to
+// the cmd_build native-path clang link when HEXA_NATIVE_RT_EXIT=1) cleanly
+// overrides this C definition under Mach-O ld64. Default (env unset) =
+// strong-only, no behavior change. The hexa-emit override carries a tiny
+// ABI adapter (mov x0,x1) that converts the codegen-side HexaVal pair
+// (x0=tag, x1=int_value) into the raw-ABI exit-code rt_exit primitive
+// expects (x0=exit_code). See RUNTIME.md phase-H 일곱째 increment.
+__attribute__((weak)) HexaVal hexa_exit(HexaVal code) {
     int c = HX_IS_INT(code) ? (int)HX_INT(code)
           : HX_IS_FLOAT(code) ? (int)HX_FLOAT(code)
           : 0;

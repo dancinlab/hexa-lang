@@ -1,0 +1,16 @@
+=== predecessor PoC rt_exit (#1311) ===
+  filetype       : 1 (MH_OBJECT) OK
+  wrote          : /tmp/poc_rt_exit.o
+[poc] EMIT OK — link/run via host shell driver
+rc=42
+
+=== predecessor PoC arena bundle (#1316) ===
+filetype         : 1 (MH_OBJECT) OK
+wrote            : /tmp/poc_arena_bundle.o
+[poc] EMIT OK
+rc=42
+
+=== predecessor PoC multi-sym (#1302) ===
+filetype       : 1 (MH_OBJECT) OK
+wrote          : /tmp/poc_multi_sym.o
+[poc] EMIT OK

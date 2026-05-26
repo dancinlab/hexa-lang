@@ -2672,8 +2672,41 @@ fn cmd_build(src, out, c_only, target, shared) {
         // .so/.dylib (0644), not an executable (0755).
         let mut __nshared_link = ""
         if shared == "1" { __nshared_link = "-fPIC -shared " }
+        // HEXA_BACKEND flip · 일곱째 increment — hexa-native runtime override.
+        // When HEXA_NATIVE_RT_EXIT=1, emit a hexa-native `_hexa_exit` .o
+        // (test/native_build/emit_hexa_exit_native_o.hexa) and append it to
+        // the clang link. The C-side `hexa_exit` in runtime.c carries
+        // `__attribute__((weak))`; ld64 binds the `bl _hexa_exit` callsite
+        // to the hexa-emit strong symbol instead. ENV unset = no behavior
+        // change (default build_aprime.sh stays byte-identical).
+        // The emit driver writes to /tmp/hexa_exit_native.o. We rebuild
+        // every cmd_build invocation (small + cheap, ~280 bytes) — no cache
+        // staleness risk if the emit driver changes.
+        let mut __nrt_native_o = ""
+        if env("HEXA_NATIVE_RT_EXIT") == "1" {
+            let __nemit_drv = __nself + "/../test/native_build/emit_hexa_exit_native_o.hexa"
+            let __nemit_chk = exec("test -f '" + __nemit_drv + "' && printf yes || printf no")
+            if __nemit_chk == "yes" {
+                // Resolve the hexa interpreter the same way the bootstrap
+                // path does — pick the live driver argv[0].
+                let __nhx = env("HEXA_LANG_INTERP")
+                let mut __nhx_cmd = "hexa"
+                if len(__nhx) > 0 { __nhx_cmd = __nhx }
+                let __nemit_out = exec("'" + __nhx_cmd + "' run '" + __nemit_drv + "' 2>&1")
+                if len(__nemit_out) > 0 { println("    [rt-emit] " + __nemit_out) }
+                let __no_chk = exec("test -f /tmp/hexa_exit_native.o && printf yes || printf no")
+                if __no_chk == "yes" {
+                    __nrt_native_o = "'/tmp/hexa_exit_native.o' "
+                    println("  [native rt] HEXA_NATIVE_RT_EXIT=1 — appending /tmp/hexa_exit_native.o (overrides weak hexa_exit in runtime.c)")
+                } else {
+                    println("  [native rt] WARN: HEXA_NATIVE_RT_EXIT=1 but emit driver produced no .o — falling back to C hexa_exit")
+                }
+            } else {
+                println("  [native rt] WARN: HEXA_NATIVE_RT_EXIT=1 but emit driver not at " + __nemit_drv)
+            }
+        }
         let __ntmp = exec("printf '%s.tmp.%s' '" + out + "' \"$$\"")
-        let __nlink = "clang -O2 " + __nshared_link + os_clang_cflags() + "-Wno-trigraphs -fbracket-depth=4096 -I '" + __nself + "' '" + __nasm + "' '" + __nrtc + "' -o '" + __ntmp + "'" + os_clang_ldflags() + " 2>&1"
+        let __nlink = "clang -O2 " + __nshared_link + os_clang_cflags() + "-Wno-trigraphs -fbracket-depth=4096 -I '" + __nself + "' " + __nrt_native_o + "'" + __nasm + "' '" + __nrtc + "' -o '" + __ntmp + "'" + os_clang_ldflags() + " 2>&1"
         println("  [native 2/2] " + __nlink)
         let __nr2 = exec(__nlink)
         if len(__nr2) > 0 { println("    " + __nr2) }
