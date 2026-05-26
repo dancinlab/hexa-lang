@@ -457,13 +457,30 @@ fn rt_print_int() {
 }
 
 // ── rt_alloc ─────────────────────────────────────────────────
-// alloc(x0=size) — anonymous mmap allocation, returns pointer in x0
-// mmap(NULL, size, PROT_READ|PROT_WRITE, MAP_ANON|MAP_PRIVATE, -1, 0)
+// alloc(x0=size N) — anonymous mmap allocation with 16-B size header,
+// returns user-facing ptr (= header_addr + 16) in x0.
+//
+// Layout:
+//   [header_addr + 0..8]  : stored N (original user size)
+//   [header_addr + 8..16] : pad (alignment to 16 B)
+//   [header_addr + 16..N+16]: user buffer (returned ptr starts here)
+//
+// Pair: rt_free recovers header_addr = ptr - 16, reads N from [addr],
+// then munmap(addr, N+16). The 16-B header preserves 16-B alignment for
+// the returned ptr (mmap pages are page-aligned, plus 16 stays aligned).
+//
+// HEXA_BACKEND flip · chunk-B phase-H "열한째 increment" (2026-05-26):
+// pair-safe alloc/free closure for the #1326 residual (B). Prior rt_alloc
+// (48 B raw mmap, no header) is INCOMPATIBLE with libc `free()` AND with
+// any pair'd munmap that doesn't know the size — this header form makes
+// the alloc/free pair symmetric and size-self-describing.
+//
+// mmap(NULL, N+16, PROT_READ|PROT_WRITE, MAP_ANON|MAP_PRIVATE, -1, 0)
 //   x0 = 0 (addr=NULL)     x3 = 0x1002 (MAP_ANON|MAP_PRIVATE, macOS)
-//   x1 = size               x4 = -1 (fd)
+//   x1 = N+16 (mmap size)   x4 = -1 (fd)
 //   x2 = 3 (PROT_RW)       x5 = 0 (offset)
 //   x16 = 197 (SYS_mmap)
-// 12 instructions, 48 bytes
+// 17 instructions, 68 bytes.
 
 fn rt_alloc() {
     let mut c = []
@@ -477,11 +494,21 @@ fn rt_alloc() {
     c.push(3)
     c.push(0)
     c.push(145)
-    // mov x1, x0  (size -> x1)      0xAA0003E1
-    c.push(225)
+    // stp x19, x20, [sp, #-16]!     0xA9BF53F3  (save x19 callee-saved)
+    c.push(243)
+    c.push(83)
+    c.push(191)
+    c.push(169)
+    // mov x19, x0  (save N)         0xAA0003F3
+    c.push(243)
     c.push(3)
     c.push(0)
     c.push(170)
+    // add x1, x0, #16  (N+16→x1)    0x91004001
+    c.push(1)
+    c.push(64)
+    c.push(0)
+    c.push(145)
     // mov x0, #0  (addr=NULL)       0xD2800000
     c.push(0)
     c.push(0)
@@ -517,12 +544,76 @@ fn rt_alloc() {
     c.push(16)
     c.push(0)
     c.push(212)
+    // str x19, [x0]  (header=N)     0xF9000013
+    c.push(19)
+    c.push(0)
+    c.push(0)
+    c.push(249)
+    // add x0, x0, #16  (ptr+=16)    0x91004000
+    c.push(0)
+    c.push(64)
+    c.push(0)
+    c.push(145)
+    // ldp x19, x20, [sp], #16       0xA8C153F3
+    c.push(243)
+    c.push(83)
+    c.push(193)
+    c.push(168)
     // ldp x29, x30, [sp], #16       0xA8C17BFD
     c.push(253)
     c.push(123)
     c.push(193)
     c.push(168)
     // ret                            0xD65F03C0
+    c.push(192)
+    c.push(3)
+    c.push(95)
+    c.push(214)
+    return c
+}
+
+// ── rt_free ──────────────────────────────────────────────────
+// free(x0=user ptr) — recover header, munmap(addr, N+16). Leaf fn.
+//
+// Pair to rt_alloc above — assumes the input ptr came from rt_alloc
+// (i.e. has a 16-B size header at [ptr - 16]). The mmap region was
+// allocated with size N+16; munmap also takes N+16.
+//
+// munmap(addr, length):
+//   x0 = addr     (= user_ptr - 16, i.e. the original mmap address)
+//   x1 = length   (= stored N + 16)
+//   x16 = 73      (SYS_munmap on macOS arm64)
+//
+// 6 instructions, 24 bytes (leaf — no prologue/epilogue).
+
+fn rt_free() {
+    let mut c = []
+    // sub x0, x0, #16   (x0 = header addr)   0xD1004000
+    c.push(0)
+    c.push(64)
+    c.push(0)
+    c.push(209)
+    // ldr x1, [x0]      (x1 = stored N)      0xF9400001
+    c.push(1)
+    c.push(0)
+    c.push(64)
+    c.push(249)
+    // add x1, x1, #16   (x1 = N + 16)        0x91004021
+    c.push(33)
+    c.push(64)
+    c.push(0)
+    c.push(145)
+    // mov x16, #73 (SYS_munmap)              0xD2800930
+    c.push(48)
+    c.push(9)
+    c.push(128)
+    c.push(210)
+    // svc #0x80                              0xD4001001
+    c.push(1)
+    c.push(16)
+    c.push(0)
+    c.push(212)
+    // ret                                    0xD65F03C0
     c.push(192)
     c.push(3)
     c.push(95)
@@ -1379,6 +1470,7 @@ fn test_runtime_arm64() {
     let pln = rt_println()
     let pint = rt_print_int()
     let alloc_bytes = rt_alloc()
+    let free_bytes = rt_free()
     let slen = rt_str_len()
     let ainit = rt_arena_init()
     let aalloc = rt_arena_alloc()
@@ -1391,6 +1483,7 @@ fn test_runtime_arm64() {
     println("  rt_println       : " + to_string(len(pln)) + " bytes")
     println("  rt_print_int     : " + to_string(len(pint)) + " bytes")
     println("  rt_alloc         : " + to_string(len(alloc_bytes)) + " bytes")
+    println("  rt_free          : " + to_string(len(free_bytes)) + " bytes")
     println("  rt_str_len       : " + to_string(len(slen)) + " bytes")
     println("  rt_arena_init    : " + to_string(len(ainit)) + " bytes")
     println("  rt_arena_alloc   : " + to_string(len(aalloc)) + " bytes")
@@ -1403,7 +1496,10 @@ fn test_runtime_arm64() {
     if len(pstr) != 36 { println("  FAIL: rt_print_str expected 36, got " + to_string(len(pstr))); ok = false }
     if len(pln) != 52 { println("  FAIL: rt_println expected 52, got " + to_string(len(pln))); ok = false }
     if len(pint) != 184 { println("  FAIL: rt_print_int expected 184, got " + to_string(len(pint))); ok = false }
-    if len(alloc_bytes) != 48 { println("  FAIL: rt_alloc expected 48, got " + to_string(len(alloc_bytes))); ok = false }
+    // rt_alloc 48 → 68 (+20 · header pattern: stp x19/x20, mov x19=N,
+    //   add x1=N+16, str x19, add x0+=16, ldp x19/x20). Pair-safe with rt_free.
+    if len(alloc_bytes) != 68 { println("  FAIL: rt_alloc expected 68, got " + to_string(len(alloc_bytes))); ok = false }
+    if len(free_bytes) != 24 { println("  FAIL: rt_free expected 24, got " + to_string(len(free_bytes))); ok = false }
     if len(slen) != 44 { println("  FAIL: rt_str_len expected 44, got " + to_string(len(slen))); ok = false }
     // PR #1297 residual #2 — adr (4 B) → adrp+add (8 B) widening for
     // _arena_state PAGE21+PAGEOFF12 reloc machinery. Per-fn deltas:
@@ -1425,6 +1521,7 @@ fn test_runtime_arm64() {
     if len(pln) % 4 != 0 { println("  FAIL: rt_println not aligned"); ok = false }
     if len(pint) % 4 != 0 { println("  FAIL: rt_print_int not aligned"); ok = false }
     if len(alloc_bytes) % 4 != 0 { println("  FAIL: rt_alloc not aligned"); ok = false }
+    if len(free_bytes) % 4 != 0 { println("  FAIL: rt_free not aligned"); ok = false }
     if len(slen) % 4 != 0 { println("  FAIL: rt_str_len not aligned"); ok = false }
     if len(ainit) % 4 != 0 { println("  FAIL: rt_arena_init not aligned"); ok = false }
     if len(aalloc) % 4 != 0 { println("  FAIL: rt_arena_alloc not aligned"); ok = false }
@@ -1441,6 +1538,8 @@ fn test_runtime_arm64() {
     if pint[n3 - 4] != 192 { println("  FAIL: rt_print_int no RET"); ok = false }
     let n4 = len(alloc_bytes)
     if alloc_bytes[n4 - 4] != 192 { println("  FAIL: rt_alloc no RET"); ok = false }
+    let nf = len(free_bytes)
+    if free_bytes[nf - 4] != 192 { println("  FAIL: rt_free no RET"); ok = false }
     let n5 = len(slen)
     if slen[n5 - 4] != 192 { println("  FAIL: rt_str_len no RET"); ok = false }
     let na1 = len(ainit)
@@ -1508,6 +1607,60 @@ fn test_runtime_arm64() {
         k = k + 1
     }
     if !found_munmap { println("  FAIL: rt_arena_release missing mov x16, #73 (SYS_munmap)"); ok = false }
+
+    // Verify rt_free contains mov x16, #73 (SYS_munmap) — pair-safe with rt_alloc.
+    //   encoded as 0xD2800930 → little-endian bytes 48, 9, 128, 210.
+    let mut found_free_munmap = false
+    let mut kf = 0
+    while kf + 3 < len(free_bytes) {
+        if free_bytes[kf] == 48 {
+            if free_bytes[kf + 1] == 9 {
+                if free_bytes[kf + 2] == 128 {
+                    if free_bytes[kf + 3] == 210 {
+                        found_free_munmap = true
+                    }
+                }
+            }
+        }
+        kf = kf + 1
+    }
+    if !found_free_munmap { println("  FAIL: rt_free missing mov x16, #73 (SYS_munmap)"); ok = false }
+
+    // Verify rt_alloc contains add x1, x0, #16 (header offset adjust).
+    //   encoded as 0x91004001 → little-endian bytes 1, 64, 0, 145.
+    let mut found_alloc_hdr_add = false
+    let mut ka = 0
+    while ka + 3 < len(alloc_bytes) {
+        if alloc_bytes[ka] == 1 {
+            if alloc_bytes[ka + 1] == 64 {
+                if alloc_bytes[ka + 2] == 0 {
+                    if alloc_bytes[ka + 3] == 145 {
+                        found_alloc_hdr_add = true
+                    }
+                }
+            }
+        }
+        ka = ka + 1
+    }
+    if !found_alloc_hdr_add { println("  FAIL: rt_alloc missing add x1, x0, #16 (header math)"); ok = false }
+
+    // Verify rt_alloc contains str x19, [x0] (write header).
+    //   encoded as 0xF9000013 → little-endian bytes 19, 0, 0, 249.
+    let mut found_alloc_str = false
+    let mut ks = 0
+    while ks + 3 < len(alloc_bytes) {
+        if alloc_bytes[ks] == 19 {
+            if alloc_bytes[ks + 1] == 0 {
+                if alloc_bytes[ks + 2] == 0 {
+                    if alloc_bytes[ks + 3] == 249 {
+                        found_alloc_str = true
+                    }
+                }
+            }
+        }
+        ks = ks + 1
+    }
+    if !found_alloc_str { println("  FAIL: rt_alloc missing str x19, [x0] (header write)"); ok = false }
 
     if ok {
         println("  ALL CHECKS PASS")
