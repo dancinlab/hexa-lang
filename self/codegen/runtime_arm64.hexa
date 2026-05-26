@@ -1029,13 +1029,18 @@ fn test_neon_string_ops() {
 //     [ 8] ptr  : next free byte (bump pointer; reset() sets ptr = base)
 //     [16] end  : base + size (mmap'd limit)
 //
-// State access convention (interp NaN-boxing limitation):
-//   Each fn emits `adr x9, #0` as a placeholder — the codegen patches
-//   the PC-relative offset so x9 points to the shared arena_state blob
-//   that the linker/embedder places once per binary. This keeps each
-//   fn self-contained for byte-count testing (same convention as
-//   rt_exit/rt_alloc) while allowing all 4 fns to share one state
-//   region. All `adr x9, #0` placeholders are marked in comments.
+// State access convention (PR #1297 residual #2 — widened to adrp+add):
+//   Each fn emits an `adrp x9, _arena_state@PAGE` + `add x9, x9,
+//   _arena_state@PAGEOFF` pair (8 bytes) as a placeholder — the linker
+//   (`tool/hexa_ld.hexa` PR #1282 + `macho_obj_wrap_v2` PR #1302) emits
+//   matching ARM64_RELOC_PAGE21 (kind=3) + ARM64_RELOC_PAGEOFF12
+//   (kind=4) records at the same byte offsets, patching the adrp page
+//   immediate (immhi:immlo) + add unscaled imm12 so x9 lands on the
+//   absolute VM address of the shared `_arena_state` blob in __const.
+//   This supersedes the prior single `adr x9, #0` (4 B) placeholder
+//   which had no matching reloc kind in the v1 wrap. Each fn stays
+//   self-contained for byte-count testing while all 4 share one state
+//   region.
 //
 // macOS ARM64 syscall ABI:
 //   SYS_mmap  = 197  (x0=addr, x1=len, x2=prot, x3=flags, x4=fd, x5=off)
@@ -1045,7 +1050,8 @@ fn test_neon_string_ops() {
 // ── rt_arena_init ────────────────────────────────────────────
 // arena_init(x0=size_mb) — mmap(size_mb << 20) anonymous RW region.
 // Stores base/ptr/end into the shared arena_state.
-// 18 instructions, 72 bytes.
+// 19 instructions, 76 bytes (was 72; +4 B from adr→adrp+add widening
+// per PR #1297 residual #2).
 //
 // macOS svc #0x80 (mmap) CLOBBERS the syscall-arg registers on return
 // (x0 = base, x1 = 0). The size (x1 = size_mb << 20) must therefore be
@@ -1114,11 +1120,16 @@ fn rt_arena_init() {
     c.push(16)
     c.push(0)
     c.push(212)
-    // adr x9, #0  (arena_state; codegen patches)    0x10000009
+    // adrp x9, _arena_state@PAGE  (PAGE21 reloc patches)  0x90000009
     c.push(9)
     c.push(0)
     c.push(0)
-    c.push(16)
+    c.push(144)
+    // add  x9, x9, _arena_state@PAGEOFF (PAGEOFF12 reloc) 0x91000129
+    c.push(41)
+    c.push(1)
+    c.push(0)
+    c.push(145)
     // str x0, [x9]       (state.base = x0)          0xF9000120
     c.push(32)
     c.push(1)
@@ -1160,15 +1171,21 @@ fn rt_arena_init() {
 // Hot-path cost (overflow-free):
 //   2 loads + 1 add + 1 cmp + 1 branch + 1 store + 1 mov + ret = 7 ops
 //
-// 11 instructions, 44 bytes (< 64, meets spec).
+// 12 instructions, 48 bytes (was 44; +4 B from adr→adrp+add widening
+// per PR #1297 residual #2). Still < 64 — hot-path spec preserved.
 
 fn rt_arena_alloc() {
     let mut c = []
-    // adr x9, #0  (arena_state; codegen patches)    0x10000009
+    // adrp x9, _arena_state@PAGE  (PAGE21 reloc patches)  0x90000009
     c.push(9)
     c.push(0)
     c.push(0)
-    c.push(16)
+    c.push(144)
+    // add  x9, x9, _arena_state@PAGEOFF (PAGEOFF12 reloc) 0x91000129
+    c.push(41)
+    c.push(1)
+    c.push(0)
+    c.push(145)
     // ldr x1, [x9, #8]   (x1 = state.ptr = old)     0xF9400521
     c.push(33)
     c.push(5)
@@ -1225,15 +1242,21 @@ fn rt_arena_alloc() {
 // ── rt_arena_reset ───────────────────────────────────────────
 // arena_reset() — state.ptr = state.base (bulk free).
 // The mmap'd region is kept for subsequent allocations.
-// 4 instructions, 16 bytes.
+// 5 instructions, 20 bytes (was 16; +4 B from adr→adrp+add widening
+// per PR #1297 residual #2).
 
 fn rt_arena_reset() {
     let mut c = []
-    // adr x9, #0  (arena_state; codegen patches)    0x10000009
+    // adrp x9, _arena_state@PAGE  (PAGE21 reloc patches)  0x90000009
     c.push(9)
     c.push(0)
     c.push(0)
-    c.push(16)
+    c.push(144)
+    // add  x9, x9, _arena_state@PAGEOFF (PAGEOFF12 reloc) 0x91000129
+    c.push(41)
+    c.push(1)
+    c.push(0)
+    c.push(145)
     // ldr x0, [x9]       (x0 = state.base)          0xF9400120
     c.push(32)
     c.push(1)
@@ -1255,7 +1278,8 @@ fn rt_arena_reset() {
 // ── rt_arena_release ─────────────────────────────────────────
 // arena_release() — munmap(base, end-base); zero state.
 // Called at process teardown or when shrinking memory pressure.
-// 15 instructions, 60 bytes.
+// 17 instructions, 68 bytes (was 60; +8 B from TWO adr→adrp+add
+// widenings per PR #1297 residual #2 — one before munmap, one after).
 
 fn rt_arena_release() {
     let mut c = []
@@ -1269,11 +1293,16 @@ fn rt_arena_release() {
     c.push(3)
     c.push(0)
     c.push(145)
-    // adr x9, #0  (arena_state; codegen patches)    0x10000009
+    // adrp x9, _arena_state@PAGE  (PAGE21 reloc patches)  0x90000009
     c.push(9)
     c.push(0)
     c.push(0)
-    c.push(16)
+    c.push(144)
+    // add  x9, x9, _arena_state@PAGEOFF (PAGEOFF12 reloc) 0x91000129
+    c.push(41)
+    c.push(1)
+    c.push(0)
+    c.push(145)
     // ldr x0, [x9]       (x0 = state.base)          0xF9400120
     c.push(32)
     c.push(1)
@@ -1299,11 +1328,16 @@ fn rt_arena_release() {
     c.push(16)
     c.push(0)
     c.push(212)
-    // adr x9, #0  (arena_state; codegen patches)    0x10000009
+    // adrp x9, _arena_state@PAGE  (PAGE21 reloc patches)  0x90000009
     c.push(9)
     c.push(0)
     c.push(0)
-    c.push(16)
+    c.push(144)
+    // add  x9, x9, _arena_state@PAGEOFF (PAGEOFF12 reloc) 0x91000129
+    c.push(41)
+    c.push(1)
+    c.push(0)
+    c.push(145)
     // mov x10, #0                                    0xD280000A
     c.push(10)
     c.push(0)
@@ -1371,10 +1405,16 @@ fn test_runtime_arm64() {
     if len(pint) != 184 { println("  FAIL: rt_print_int expected 184, got " + to_string(len(pint))); ok = false }
     if len(alloc_bytes) != 48 { println("  FAIL: rt_alloc expected 48, got " + to_string(len(alloc_bytes))); ok = false }
     if len(slen) != 44 { println("  FAIL: rt_str_len expected 44, got " + to_string(len(slen))); ok = false }
-    if len(ainit) != 72 { println("  FAIL: rt_arena_init expected 72, got " + to_string(len(ainit))); ok = false }
-    if len(aalloc) != 44 { println("  FAIL: rt_arena_alloc expected 44, got " + to_string(len(aalloc))); ok = false }
-    if len(areset) != 16 { println("  FAIL: rt_arena_reset expected 16, got " + to_string(len(areset))); ok = false }
-    if len(arel) != 60 { println("  FAIL: rt_arena_release expected 60, got " + to_string(len(arel))); ok = false }
+    // PR #1297 residual #2 — adr (4 B) → adrp+add (8 B) widening for
+    // _arena_state PAGE21+PAGEOFF12 reloc machinery. Per-fn deltas:
+    //   init   72 → 76 (+4 · 1 site)
+    //   alloc  44 → 48 (+4 · 1 site)
+    //   reset  16 → 20 (+4 · 1 site)
+    //   release 60 → 68 (+8 · 2 sites)
+    if len(ainit) != 76 { println("  FAIL: rt_arena_init expected 76, got " + to_string(len(ainit))); ok = false }
+    if len(aalloc) != 48 { println("  FAIL: rt_arena_alloc expected 48, got " + to_string(len(aalloc))); ok = false }
+    if len(areset) != 20 { println("  FAIL: rt_arena_reset expected 20, got " + to_string(len(areset))); ok = false }
+    if len(arel) != 68 { println("  FAIL: rt_arena_release expected 68, got " + to_string(len(arel))); ok = false }
 
     // Spec constraint: rt_arena_alloc must be < 64 bytes (hot path)
     if len(aalloc) >= 64 { println("  FAIL: rt_arena_alloc must be < 64 bytes"); ok = false }
