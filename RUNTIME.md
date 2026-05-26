@@ -620,6 +620,31 @@ primitives at the bottom (large; likely a closed-negative on the repr
 circularity) — otherwise the C core IS the honest bootstrap floor. This is the
 terminal state, not a failure: the portable layer reached its physical limit.
 
+### 2026-05-26 — 🛸🛸 MILESTONE: HEXA_BACKEND flip DE-RISKED — VIABLE (cycle round-1, 4 agents)
+
+`/cycle` 4-agent 병렬 de-risk 가 flip 의 viability 를 **실측 확정**:
+
+1. **native backend 정확성 게이트 = 100% (27/27)** — `HEXA_BACKEND=native` (native-emit
+   user code + C runtime.c link) 가 컴파일하는 모든 프로그램이 C 경로와 **exit-code +
+   byte-identical stdout 일치**: arith·cmp·conv(이번 포팅 ops on mut/opaque)·recursion·
+   map·nested array·closure·multi-file import·실 stdlib 5 suite(~127 assertion)·int
+   overflow·neg-mod. native-only miscompile/crash **0개**. 실패는 프론트엔드 parser
+   gap(`=>` arm·bare block, C 에서도 동일) 뿐 = 백엔드 무관. → **user-code codegen 은
+   sound. flip 의 잔여 = runtime FLOOR(아직 C runtime.c), codegen 아님.**
+2. **floor 실행검증**: `rt_exit` assemble+run → exit 42 PROVEN-EXEC. `rt_arena_*` 로직
+   정확하나 (a) `adr x9,#0` codegen-relocation 필요(설계상) (b) **rt_arena_init
+   x1-clobber 버그** (mmap svc 가 x1=0 → end==base = zero-capacity) 발견 → **#1252 로
+   fix+land** (`mov x6,x1` svc前 저장, assemble+run 으로 비음수 arena 증명, falsifier 확인).
+3. **wire-plan**: native 경로(main.hexa L2552-2662)가 user.s + `clang link runtime.c`.
+   잔여 = runtime FLOOR(repr 생성자 hexa_int/float/bool/str · arena · GC)를 C→hexa.
+   smallest-first = codegen 이 `hexa_int` 등 repr-packing 을 inline emit(→ `bl hexa_int`
+   제거). 최대 blocker = native 경로가 아직 clang 으로 assemble+link → 진짜 zero-cc 는
+   hexa-native assembler+linker 필요(`macho.hexa` 기반, phase H).
+
+**결론: flip VIABLE.** ①user-code codegen 100% sound (게이트) + ②floor arena 수정 +
+③wire-plan 확보. round-2 = floor 교체 wiring (repr inline → hexa runtime 임베드 →
+runtime.c 링크 제거 → hexa-native 링커). step-4 의 deepest serial tier (self-build risk).
+
 ### 2026-05-26 — 🛸 MILESTONE: value-transform layer hexa-native COMPLETE (11 fns) — incremental lane exhausted, inflection to native-asm `.s` floor
 
 Go-model RUNTIME 골 재확정 (2026-05-26, user): **zero `.c` · `.s` floor STAYS
