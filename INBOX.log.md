@@ -2,6 +2,13 @@
 
 Append-only history sister of `INBOX.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
+## 2026-05-26T09:30Z — 🐛 verify_cli 빌드/출력 2건 (UFO V2 lattice fold #1244 중 발견 · from demiurge UFO)
+
+- [ ] **`sopfr` stdlib-fn 미선언 codegen** — verify_cli L431 `return sopfr(n)` (stdlib/core/math.hexa `pub fn sopfr`) 가 생성 C 에서 `undeclared identifier 'sopfr'` → verify_cli 전체 빌드 실패. bessel/gamma `_Generic` 류와 동일 stdlib-pub-fn 네이밍 갭의 신규 인스턴스 (origin/main 2c8f17b7→72090b86 사이 추가; #1222 시점엔 없어 빌드됨). build/hexa_v2 codegen-fixed 본으로도 미해소.
+- [ ] **`hexa verify --expr` "OK: --expr" 반복-출력 quirk** — fresh build(해시 bust·캐시 클리어·exit 0) 후 첫 `--expr` 만 verdict 출력, 이후 모든 `--expr` 가 `OK: --expr` 만 출력(verdict 미표시). 파일 redirect·pty(`script`)·Read-tool 모두 동일 → 프로세스/런처 레벨 result 단축. 同 build 내 다중 atom verbatim verdict 를 막음.
+
+owner = hexa-lang 빌드/툴체인 세션. UFO #1244 는 sopfr install-stub + sigma_pow 대표 verdict(🟢 |Δ|=0.0)로 우회 랜딩.
+
 ## 2026-05-26T09:10Z — 🔌 cloud_cli rent 필터 버그 2건 (reliability2 오타 + cpu_ram GB/MB · show-instance None crash) · from demiurge RTSC (#1229 후속)
 
 > #1229(cloud 개선 4건) 후속 — vast pod preempt 재provision 중 추가 발견한 cloud_cli/provisioning 구체 버그 2건.
