@@ -1,5 +1,65 @@
 # INBOX — log
 
+## 2026-05-27T04:05Z — atlas 1급 closed-negative 부재 (g63 structural gap)
+
+**severity: high** — atlas SSOT (`compiler/atlas/embedded.gen.hexa`, n6/atlas.n6)가 🟢/🔵 SUPPORTED 노드만 1급 저장. 🔴 FALSIFIED는 별도 markdown (RTSC `atlas_fold_pending.md`)에 stranded → 후속 session/agent가 atlas만 lookup하면 already-falsified candidate를 모르고 재dispatch 가능 (g63 "FALSIFIED is a CLOSED negative · never skipped" 명시 위배).
+
+### 증상 (demiurge RTSC 캠페인 evidence)
+
+- 5+ closed-negative landed in RTSC 캠페인 (mg2pth6, mgb2h, Mg₂IrH₆, Li₂CuH₆, h3o-6³q-retroactive):
+  - 모두 `domains/rtsc.log.md` + `exports/material_discovery/atlas_fold_pending.md` 에 record
+  - 그러나 `hexa atlas lookup` 시 검색 불가 (atlas SSOT 미등록)
+- `hexa atlas register --help` 확인: `--from-verify` 와 `--from-drill` 만 존재 — 둘 다 🟢/🔵 SUPPORTED만 produce. closed-negative 등록 verb 부재.
+- node kinds P/C/L/E/F/R/S/X/Q 에 `@N` (NEGATIVE) 또는 `@V` (VERDICT) slot 없음.
+- `grep '🔴\|FALSIFIED' embedded.gen.hexa` = 20 hits (모두 citation/metadata string · structural 1급 atom 아님).
+
+### 제안 fix
+
+**옵션 A — 새 register verb `--from-falsify`** (가장 minimal):
+```
+hexa atlas register --from-falsify <claim_fn> <args> --tier 🔴 --falsifier <id> --citation <url|sha>
+```
+- 예: `register --from-falsify allen_dynes_tc "Mg₂IrH₆ ambient cation-VEC=19 stable" --tier 🔴 --falsifier F-N6-1 --citation PR#247`
+- 결과: @F (Function) 또는 새 @N (Negative) atom, tier=🔴 field, falsifier_id link, claim_invalidated 표시.
+
+**옵션 B — 새 node kind `@V` (VERDICT)**:
+- Verdict node가 (claim, evidence, tier=🔴/🟢/...) tuple 저장
+- Pre-registered falsifier (F-N6-*) → verdict link
+
+**옵션 C — 기존 atom의 `tier` field overload** (가장 invasive하지 않음):
+- 현재 atom tier가 implicit (verify time)
+- 명시적 `tier: 🔴` field + `falsified_by: <ref>` 추가
+- 모든 노드 종류에 적용 가능, schema migration 필요
+
+### use case — atlas-driven recheck (g63 enforcement)
+
+```
+# 다음 agent가 'Mg₂IrH₆ 시도하자' 결정 전:
+hexa atlas lookup --claim 'Mg₂IrH₆ ambient stable'
+→ @N material_verdict-mg2irh6-falsified · tier 🔴 · falsifier F-N6-1 · cited PR #247
+→ agent: "already closed-negative · skip"
+```
+
+vs 현재 (atlas only 🟢):
+```
+hexa atlas lookup 'Mg₂IrH₆' → not found
+→ agent: "unknown · let's try" → 같은 falsified DFT 재실행 → 자원 낭비
+```
+
+### cross-ref
+
+- demiurge `domains/RTSC/protocols/CANDIDATE_SCORING.md` (PR #284): falsifier-aware scoring 가정 — atlas 1급 negative 없으면 작동 안 함
+- demiurge `domains/RTSC/falsifiers/F-N6.md` (PR #282): pre-registered falsifier ledger, atlas link 부재
+- commons g63 (micro-exp honest sweep): FALSIFIED is a CLOSED-negative · never skipped
+- commons g65 (sweep aggregation): ledger.json에 verdict 명시
+
+### priority — high
+
+- [ ] **새 register verb 또는 node kind 설계** — atlas SSOT에 closed-negative 1급 등록 path 마련
+- [ ] **migration script** — 기존 `atlas_fold_pending.md` 5+ closed-negative 일괄 import
+- [ ] **falsifier ledger link** — F-N6-* IDs ↔ atlas atoms 양방향 cross-ref
+- [ ] **`hexa atlas lookup --tier 🔴`** — closed-negative 검색 1급 surface
+
 ## 2026-05-27T03:50Z — RTSC /gap full audit 발견 2 upstream-fix 후보
 
 demiurge RTSC `/gap full` 8-family sweep + top-3 priority fan-out (METHOD/STRATEGY/PROTOCOL) 중 발견. directly-fix-while-completing-atlas-absorb 후속 — atlas fold(h3as·labeh8)는 이미 완료(memory `reference_hexa_toolchain_rebuild`), 새 gap만 INBOX 등록.
