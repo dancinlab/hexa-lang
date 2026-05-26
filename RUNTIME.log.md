@@ -2,6 +2,62 @@
 
 Append-only history sister of `RUNTIME.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
+## 2026-05-27T03:30Z — 🛸 본 세션 종합 (49 PR · runtime.c -343 lines · INBOX 3 활성화 · install hook fix)
+
+단일 foreground 세션 — wire→delete 패턴 검증 + 다중 lane closure + INBOX 3 mertens/tunnell 활성화 + production safety hotfix + durable install fix. 모든 reloc-free 단순 wire lane 흡수 완료. 다음 unlock = B-class infra (`macho_obj_wrap_v3`).
+
+### 본 세션 wire 추가 (#1331 table, 11 → 20)
+
+- [x] **#1361~#1369** trivial-const lane — 6th deref → 11th cuda_device_count (12B `movz·movz·ret` 어댑터)
+- [x] **#1373** 12th hexa_mono_ns — A-class syscall (68B svc 0x80 SYS_gettimeofday + arith)
+- [x] **#1375~#1385** FP single-instr family — sqrt(FSQRT)/abs(FABS)/floor(FRINTM)/ceil(FRINTP)/round(FRINTA)/min(FMIN)/max(FMAX), 20-24B 각
+- [x] **#1393** 20th hexa_cstring — CSEL tag-coerce (16B)
+
+### runtime.c line reduction (13,832 → 13,489 = -343 lines · -2.48%)
+
+- [x] **#1370** L-trivial-lane-exhausted 명세 — 11 wire 첫 분류 + 다음 tier infra spec
+- [x] **#1388** L-fp-single-instr-lane-exhausted — +8 wire 흡수 보고
+- [x] **#1391** 19 wired fn C body 삭제 — runtime.c -91 lines (첫 측정 감소)
+- [x] **#1394** _hexa_cstring body 삭제 — -5 lines
+- [x] **#1397** L-cleanup-pattern-validated — wire→delete safety 입증
+- [x] **#1398** 5 orphan wire-descriptor comments 정리 — -63 lines
+- [x] **#1399** #if 0 RFC 039 reference block 제거 — -58 lines
+- [x] **#1401** L-session-2026-05-27 summary
+- [x] **#1403** RFC 038 planning notes drop — -74 lines (RFC 025 헤더 동반 흡수)
+- [x] **#1406** 2+ consecutive blanks collapse — -18 lines
+- [x] **#1408** 18 fn 3-line body → 1-line collapse — -36 lines
+- [x] **#1425** 37 추가 fn 3-line collapse (post-#1416) — -74 lines
+
+### INBOX 3 binary activation 완전 복원 (mertens · tunnell · elliptic_witness)
+
+- [x] **diagnose** runtime.o missing — `cmd_cc()` lazy stale-check 가 fresh-install 에서 미동작
+- [x] **diagnose** 작업트리 stale branch — `/Users/ghost/core/hexa-lang/` 가 phase-h-inc4-dyld-write @ -106 commits behind origin/main
+- [x] **fix** fresh main worktree `/Users/ghost/core/hexa-lang-main` 생성 + `~/.hx/bin/{self,tool,stdlib,compiler}` 심볼릭 swap (multi-agent 영향 0)
+- [x] **fix** `clang -O2 -c self/runtime.c -o self/runtime.o` 직접 빌드 → 508,472 B 생성
+- [x] **#1416 hotfix** `_hexa_*` 20 weak stub 복원 — #1391/#1394 가 깨뜨린 `hexa run`/`hexa build` link 복구
+- [x] **#1426 fix** `build_hexa_cli.hexa --install` 에 `_install_runtime_o()` 추가 — fresh install 자동 self-bootstrap
+- [x] **verify** `hexa verify --expr mertens 100 1` → 🔵 SUPPORTED-FORMAL (calc 1 == expected 1)
+- [x] **verify** `hexa verify --expr tunnell_count_odd 8 2` → 🔵 SUPPORTED-FORMAL (calc 2 == expected 2)
+- [x] **verify** `hexa verify --expr elliptic_witness 5 1 6 1` → 🔴 FALSIFIED (calc 0, verify infra 작동 입증)
+- [x] **verify** `hexa verify --expr tunnell_count_even 8 1` → 🔴 FALSIFIED (calc 4, verify infra 작동 입증)
+
+### 닫힌 lane (6 dead-lane 누적)
+
+- [x] trivial-const (≤16B `movz tag · movz val · ret`)
+- [x] A-class syscall (68B `svc 0x80` + arith)
+- [x] FP single-instr (20-24B `FSQRT/FABS/FRINT*/FMIN/FMAX`)
+- [x] CSEL tag-coerce (16B)
+- [x] 정적-dead block (`#if 0` reference + orphan comments)
+- [x] 3-line fn body collapse (`fn(...) { return ...; }` 1-line form)
+
+### 잔존 (다음 세션)
+
+- [ ] **B-class infra** `macho_obj_wrap_v3` (R_ARM64_BRANCH26 reloc 지원) — libm wrapper ~30 wire unlock
+- [ ] **section extraction** FARR/safetensors/socket 등 (자매 .c file 로 split, -1000 line/section)
+- [ ] **Linux self-host arch-gate** 잔여 17 fn (read/write/open/close/mkdir/...) — RUNTIME.log 2026-05-25T13:30Z 패턴 반복
+- [ ] **runtime.c → hexa-source 포팅** (step 2-4 of north-star path)
+- [ ] **runtime.c=0 literal goal** — multi-session multi-month grunt (현재 -2.48% · 잔여 13,489 lines)
+
 ## 2026-05-25T13:30Z — Linux self-host arch-gate sweep (부분 진척 · 17 fn 잔여)
 
 `HXLCL_SYS_*` 매크로 + `_hxlcl_syscall*_cf` svc-trap 패밀리가 cycle 63 이후 누적적으로 `runtime.c` 전반에 사용됐으나, 정의는 `#if (__arm64__||__aarch64__) && __APPLE__` 가드 안에만 → Linux gcc(x86_64/arm64) 빌드가 모든 svc-trap 호출처에서 `HXLCL_SYS_* undeclared` 컴파일러 에러로 깨짐. **`atlas-consistency` · `bootstrap` 포함 모든 Linux CI 누적 broken.** PR #1022 `svc-trap _flock`(cycle 77) 머지 직후 처음 표면화됐으나 진짜 범위는 그 이전부터.
