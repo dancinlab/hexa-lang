@@ -1,0 +1,8 @@
+verify --expr sigma_3(6)=252
+  tier   = 🟠 INSUFFICIENT
+  reason = calculator system has NO path for 'sigma_3'
+  gap    = extend tool/verify_cli.hexa::_recompute (계산기시스템 개선 후보)
+
+# F15 s3: sigma_3 calc-path absent — INBOX entry created
+# stdlib check: 'sigma_3' NOT defined in stdlib/core/math.hexa (verified absence)
+# This extends the calc-gap family (#1230, sigma_k k>=3, pow, J_k)

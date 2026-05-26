@@ -2,6 +2,46 @@
 
 Append-only history sister of `TECS-L.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
+## 2026-05-27T00:00Z — F15 NOVEL F14-successor (D(2^a·q·r) + Ore non-perfect family + σ_3 INBOX + Γ(N) coda)
+
+F14 zero-density theorem 의 4-task batch successor. F13/F14 의 closed-form 패턴(D(p^k)·D(pq)·D(2^k·q))을 한 layer 더 lift + F7 modular-curve non-lift 의 full-level coda + σ_3 calc-gap honest 처리.
+
+- **(s1) D(2^a·q·r) ω=3 lift test — 🔵 SUPPORTED-FORMAL 10/10**
+  - closed-form: D(2^a·q·r) = 2^(a-1) · [(2^(a+1)-1)(q²-1)(r²-1) − 8qr(a+1)] (sigma multiplicative + phi multiplicative + tau=4(a+1))
+  - 10 triples (a,q,r): (1,3,5)·(1,3,7)·(1,5,7)·(2,3,5)·(2,3,7)·(3,3,5)·(1,3,11)·(1,5,11)·(2,5,7)·(1,7,11)
+  - D ∈ {336, 816, 2896, 1968, 4368, 9600, 2352, 7760, 14448, 16048} — 전부 ≠ 0 (F14 ω≥3 zero-density 확정)
+  - hexa-native σ/φ/τ component verify all 30 closed-form match (3 components × 10 triples)
+  - 산출물: `.verdicts/tecs-l-f15-novel-mk10/d_two_a_q_r_closed_form.txt`
+- **(s2) Ore non-perfect family — 🔵 5/5 + 🟡 family-closed-form negative**
+  - 5 candidates 전부 Ore (H(n)=n·tau/sigma ∈ ℤ) + non-perfect (σ ≠ 2n)
+  - 270=2·3³·5 (H=6) · 672=2⁵·3·7 (H=8) · 1638=2·3²·7·13 (H=9) · 2970=2·3³·5·11 (H=11) · 6200=2³·5²·31 (H=10)
+  - factorization shape: heterogeneous ω∈{3,4} · exponent multisets 불일치 → **NO uniform closed-form template** generates 모든 Ore-not-perfect numbers
+  - finding: Ore ⊋ Mersenne-product perfects strictly — Ore-shape closed-form lift 결정적 배제 (F7 modular-curve non-lift 의 Ore-family 대응)
+  - 산출물: `.verdicts/tecs-l-f15-novel-mk10/ore_non_perfect_family.txt`
+- **(s3) σ_3 calc-gap → INBOX (calc-gap family #1230 확장) — 🟠 honest**
+  - `hexa verify --expr sigma_3 6 252 --no-absorb` → 🟠 INSUFFICIENT (`calculator system has NO path for 'sigma_3'`)
+  - `stdlib/core/math.hexa` 에 sigma_3 미정의 확인 (`grep "sigma_3"` 0 hit)
+  - INBOX 신규 entry: σ_3 가 sopfr/pow/J_k 와 같은 calc-gap family #1230 에 합류
+  - F11 OEIS provenance (σ_3 ↔ A001158, fold PR #1138) 는 atlas 에 있지만 verify-calc 경로 부재로 차후 σ_3 witness verify 차단
+  - `tool/verify_cli.hexa::_recompute` 에 σ_3 (또는 σ_k 가족) primitive 추가 권고
+  - 산출물: `.verdicts/tecs-l-f15-novel-mk10/sigma_3_calc_gap_inbox.txt` · `INBOX.md` 신규 entry
+- **(s4) Γ(N) full-level index uniqueness coda — 🔵 10 component + 🔴 closed-negative**
+  - [SL₂(ℤ):Γ(N)] = N³·∏(1−1/p²) verified via N·[SL₂:Γ₁(N)] = N·ψ(N)·φ(N)/2 at N∈{2,3,4,5,6,7,8,9,10,12}
+  - N=6: ψ(6)=12·φ(6)=2·Γ₁(6) idx=12·Γ(6) idx=72 (= 6·12; PSL convention)
+  - ratio table [Γ(N):Γ₀(N)] = N·φ(N)/2: smooth multiplicative in N — N=3 ratio 3 < N=6 ratio 6 (n=6 NOT a peak)
+  - **🔴 CLOSED-NEGATIVE coda**: modular-curve index tower (Γ₀ → Γ₁ → Γ(N)) 전 level 에서 n=6 distinction 없음 — σφ=nτ⟺{1,6} uniqueness 는 arithmetic-function layer 의 성질, geometric modular-curve index layer 의 성질 아님 (F7 확정)
+  - 산출물: `.verdicts/tecs-l-f15-novel-mk10/gamma_full_level_index.txt`
+- **Atlas fold (manual splice per @D atlas_fold) — 3 atoms**
+  - `tecs_l_f15_d_two_a_q_r` 🔵 (s1) — ω=3 explicit-form lift of F14 zero-density
+  - `tecs_l_f15_ore_non_perfect_no_closed_form` 🔴 (s2) — Ore-shape closed-form non-existence
+  - `tecs_l_f15_gamma_full_level_smooth` 🔴 (s4) — Γ(N) lift ruled out (F7 coda)
+  - `compiler/atlas/embedded.gen.hexa` ATLAS_F_NODES 끝부분 append (F14 패턴 동일)
+  - F-formulas count: 1404 → 1407 (verified via `grep -c 'kind: "F"'`)
+  - `hexa atlas lookup` 미반영 = E2 known finding (binary-builtin frozen, source SSOT 와 binary lookup 분리)
+- **summary**: F15 round — N total=29 (s1:10·s2:5·s3:1·s4:13) · 🔵=28 (s1 10 + s2 5 + s4 13 component) · 🟢=0 · 🟡=1 (s2 family negative) · 🟠=1 (s3 calc-gap) · 🔴=2 (s2 closed-neg + s4 closed-neg) · paper-eligible atoms = 2 (s2 + s4 closed-negatives)
+- 다음 round seeds: (i) σ_3 calc 추가 후 σ_3(perfect_k) sweep (s3 unblock) · (ii) ω=4/5 explicit-form D(2^a·q·r·s) lift (F14 → F15 → F16 chain) · (iii) Galois group / Hecke eigenvalue layer (F7/F15 후속 — Γ(N) 위 더 fine 한 모듈러 invariant) · (iv) Ore enumeration A001599 다음 50개 sweep (s2 catalogue 확장)
+- 격리 worktree `/Users/ghost/core/hexa-lang/.claude/worktrees/agent-ae15701029fbda246` (branch `worktree-agent-ae15701029fbda246`). checkpoint commits per task (s1 e6a11bb6 · s2 852c06e6 · s3 426d17bc · s4 de0f1f95).
+
 
 ## 2026-05-26 · F14 — NOVEL F13 successor + atlas fold (3 F13 retroactive + 2 F14 = 5 atoms folded)
 

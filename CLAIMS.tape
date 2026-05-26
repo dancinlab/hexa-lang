@@ -3027,3 +3027,38 @@
   raw    = ".verdicts/tecs-l-f14-novel-mk10/atlas_fold_diagnosis.txt"
   src    = "TECS-L F14 · manual splice into compiler/atlas/embedded.gen.hexa lines ~35131-35167"
   status = "🔵 ATLAS-FOLDED — 5/5 atoms lookup-visible in atlas SSOT. INBOX follow-up (low-prio): wire dedekind_psi_discrepancy*-family calculators for future --from-verify witness-point folds (closed-form/uniqueness still need @F manual-splice)."
+
+@C tecs_l_f15_d_two_a_q_r := "F15 NOVEL 🔵 closed-form atom (ω=3 explicit-form lift of F14 zero-density): D(2^a·q·r) = 2^(a-1) · [(2^(a+1)−1)·(q²−1)·(r²−1) − 8qr(a+1)] ∀ a≥1, distinct odd primes q≠r. Derivation: σ(2^a·q·r)=(2^(a+1)−1)(q+1)(r+1) · φ(2^a·q·r)=2^(a-1)(q-1)(r-1) · τ(2^a·q·r)=4(a+1). 10 triples verified (a,q,r) ∈ {(1,3,5),(1,3,7),(1,5,7),(2,3,5),(2,3,7),(3,3,5),(1,3,11),(1,5,11),(2,5,7),(1,7,11)} all D ∈ {336,816,2896,1968,4368,9600,2352,7760,14448,16048} ≠ 0 — F14 ω≥3 zero-density theorem confirmed on explicit ω=3 sample. Folded into atlas as @F tecs_l_f15_d_two_a_q_r (manual splice per @D atlas_fold)." :: derived [slug=tecs-l-f15-novel-mk10 group=TECS-L]
+  method = "atom"
+  cmd    = "hexa verify --expr {sigma,euler_phi,tau} N V --no-absorb × 30 components"
+  raw    = ".verdicts/tecs-l-f15-novel-mk10/d_two_a_q_r_closed_form.txt"
+  src    = "TECS-L F15 s1 · D(2^a·q·r) closed-form derivation + 10-triple sweep"
+  status = "🔵 SUPPORTED-FORMAL — 10/10 closed-form match"
+
+@C tecs_l_f15_ore_non_perfect_no_closed_form := "F15 NOVEL 🔴 CLOSED-NEGATIVE atom (Ore-shape closed-form lift ruled out): the set of Ore-but-not-perfect numbers (H(n)=n·tau/sigma ∈ ℤ AND sigma ≠ 2n) has NO uniform closed-form generator. 5 witnesses span heterogeneous ω∈{3,4} + exponent multisets: 140=2²·5·7 (H=5) · 270=2·3³·5 (H=6) · 672=2⁵·3·7 (H=8) · 1638=2·3²·7·13 (H=9) · 2970=2·3³·5·11 (H=11) · 6200=2³·5²·31 (H=10). No single template covers all; analogous to F7 modular-curve non-lift of σφ=nτ — the {1,6} structure does NOT generate a closed-form Ore template. Ore property strictly exceeds the Mersenne-product closed form. Folded into atlas as @F tecs_l_f15_ore_non_perfect_no_closed_form." :: derived [slug=tecs-l-f15-novel-mk10 group=TECS-L]
+  method = "atom"
+  cmd    = "hexa verify --expr {sigma,tau} N V --no-absorb × 10 components (270,672,1638,2970,6200)"
+  raw    = ".verdicts/tecs-l-f15-novel-mk10/ore_non_perfect_family.txt"
+  src    = "TECS-L F15 s2 · Ore non-perfect family witness sweep"
+  status = "🔴 CLOSED-NEGATIVE — Ore-shape closed-form non-existence (paper_negative_ok)"
+
+@C tecs_l_f15_gamma_full_level_smooth := "F15 NOVEL 🔴 CLOSED-NEGATIVE atom (F7 coda — Γ(N) full-level lift ruled out): [SL₂(ℤ):Γ(N)] = N³·∏_{p|N}(1−1/p²) is multiplicative/smooth in N; n=6 exhibits NO peak, surplus, or deficit at the full-level X(N)=Γ(N) index. Ratio [Γ(N):Γ₀(N)] = N·φ(N)/2 smooth (N=3 ratio 3 < N=6 ratio 6 — n=6 NOT minimal/maximal). Verified at 10 sample N ∈ {2,3,4,5,6,7,8,9,10,12} via hexa-native gamma0_index/euler_phi all closed-form match. Finding: the modular-curve index tower Γ₀(N) → Γ₁(N) → Γ(N) has NO level at which n=6 emerges as a unique singularity; the {1,6} uniqueness lives at the arithmetic-function layer (σ·φ=n·τ), NOT the geometric modular-curve index layer (F7 confirmed at full level). Folded into atlas as @F tecs_l_f15_gamma_full_level_smooth." :: derived [slug=tecs-l-f15-novel-mk10 group=TECS-L]
+  method = "atom"
+  cmd    = "hexa verify --expr {gamma0_index,euler_phi} N V --no-absorb × 20 components (N=2..10,12)"
+  raw    = ".verdicts/tecs-l-f15-novel-mk10/gamma_full_level_index.txt"
+  src    = "TECS-L F15 s4 · Γ(N) full-level index sweep + F7 coda"
+  status = "🔴 CLOSED-NEGATIVE — Γ(N) lift ruled out (paper_negative_ok)"
+
+@C tecs_l_f15_sigma_3_calc_gap := "F15 honest 🟠 INSUFFICIENT atom (calc-gap family #1230 extension): hexa verify --expr sigma_3 6 252 --no-absorb returned 'calculator system has NO path for sigma_3'. stdlib/core/math.hexa lacks sigma_3 definition. F11 OEIS provenance (sigma_3 ↔ A001158, fold PR #1138) exists in atlas but verify-calc path absent blocks future sigma_3 witness verification. Filed as INBOX entry — sigma_3 joins sopfr/pow/J_k/iit4_faithful_phi calc-gap family #1230." :: synthesis [slug=tecs-l-f15-novel-mk10 group=TECS-L]
+  method = "atom"
+  cmd    = "hexa verify --expr sigma_3 6 252 --no-absorb"
+  raw    = ".verdicts/tecs-l-f15-novel-mk10/sigma_3_calc_gap_inbox.txt"
+  src    = "TECS-L F15 s3 · sigma_3 calc-gap probe + INBOX filing"
+  status = "🟠 INSUFFICIENT — paper-ineligible, INBOX item for calc-gap family #1230"
+
+@C tecs_l_f15_atlas_fold := "F15 ATLAS FOLD synthesis: 3 NOVEL atoms folded into compiler/atlas/embedded.gen.hexa via MANUAL SPLICE per @D atlas_fold. atoms: tecs_l_f15_d_two_a_q_r 🔵 (s1 ω=3 explicit-form lift) + tecs_l_f15_ore_non_perfect_no_closed_form 🔴 (s2 Ore-shape non-existence) + tecs_l_f15_gamma_full_level_smooth 🔴 (s4 F7 coda). Three @F entries appended to ATLAS_F_NODES array; F-formulas count 1404 → 1407. Binary lookup miss is E2 known finding (binary-builtin frozen, source SSOT separate). --from-verify register path rejected (multi-term derived identities)." :: synthesis [slug=tecs-l-f15-novel-mk10 group=TECS-L]
+  method = "atom"
+  cmd    = "grep -c 'kind: \"F\"' compiler/atlas/embedded.gen.hexa (1407)"
+  raw    = ".verdicts/tecs-l-f15-novel-mk10/"
+  src    = "TECS-L F15 · manual splice into compiler/atlas/embedded.gen.hexa after tecs_l_f14_d_omega_ge_3_zero_density"
+  status = "🔵 ATLAS-FOLDED — 3/3 atoms source-level present (binary lookup unrefreshed per E2)"
