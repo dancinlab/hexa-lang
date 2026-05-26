@@ -2778,7 +2778,7 @@ HexaVal hexa_from_cstring(HexaVal ptr) {
     return hexa_str((const char*)(uintptr_t)p);
 }
 
-HexaVal hexa_ptr_null() { return hexa_int(0); }
+__attribute__((weak)) HexaVal hexa_ptr_null() { return hexa_int(0); }
 
 /* HEXA_BACKEND flip · 열셋째 increment — production-wire FOURTH PROBE.
  * Marked `__attribute__((weak))` so a hexa-emit `_hexa_ptr_addr` strong
