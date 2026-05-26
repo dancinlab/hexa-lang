@@ -687,26 +687,45 @@ fn _nvptx_cmp_mnemonic_for_type(op: string, ty_suffix: string) -> string {
 
 // _nvptx_cmp_operand_type_suffix — RFC 071 P3+ — pick the `.<ty>`
 // suffix for a `setp.<cond>` from a comparison binop's two source
-// operands. Inspects the classified kind of each `local` operand and
-// returns the first non-F64-default suffix encountered; falls back to
-// F64 (the 055-P3b default) when both operands are unclassified or
-// const literals. This is the "first non-default wins" policy — the
-// HIR→MIR layer never synthesizes mixed-bank compares for the current
-// scope (gpu/SPEC.md §4 — `<`, `<=` etc. take same-typed operands),
-// so the first-match strategy is sound. const-only operands keep the
-// F64 default since the MIR layer doesn't propagate a literal's type
-// into a per-Operand kind tag yet.
+// operands. Inspects the classified kind of BOTH `local` operands and
+// returns the WIDEST integer suffix when the operands have different
+// integer widths (`.s64` > `.s32`); falls back to F64 (the 055-P3b
+// default) when both operands are unclassified or const literals.
+//
+// N73 (RFC 071 P4+) — widest-wins, NOT "first non-default wins". The
+// canonical bounds-check `i < n` IS a mixed-bank compare: `i` is a
+// 32-bit thread-index (`gpu_thread_id_x()+...` → u32 bank, `.s32`),
+// `n` is an i64 param (loaded as u64, `.s64`). The old first-match
+// policy returned `.s32` (from `i`) and ptxas REJECTED the resulting
+// `setp.lt.s32 %p, %r, %rd` (the u64 operand `%rd` mismatches the
+// `.s32` suffix — "Arguments mismatch for instruction 'setp'"). The
+// fix inspects both operands and returns `.s64` whenever EITHER
+// classifies into the 64-bit integer bank, so the setp's suffix matches
+// the wider operand. The narrow operand is then sign-extended at the
+// emit site (the `%cmpw_<dst>` widen). FP banks + same-width int cases
+// stay byte-identical (a same-bank `.s32`/`.s32` returns `.s32`; a pure
+// `.f64`/`.f64` returns `.f64` — the `_test_setp_and_br_cond` default).
+// const-only operands keep the F64 default since the MIR layer doesn't
+// propagate a literal's type into a per-Operand kind tag yet.
 fn _nvptx_cmp_operand_type_suffix(a: Operand, b: Operand, kinds: [PReg]) -> string {
+    let mut sa = ".f64"
+    let mut sb = ".f64"
     if a.kind == "local" {
-        let ka = _nvptx_lookup_kind_for_local(kinds, a.local_id)
-        let sa = _nvptx_cmp_type_suffix_for_kind(ka)
-        if sa != ".f64" { return sa }
+        sa = _nvptx_cmp_type_suffix_for_kind(_nvptx_lookup_kind_for_local(kinds, a.local_id))
     }
     if b.kind == "local" {
-        let kb = _nvptx_lookup_kind_for_local(kinds, b.local_id)
-        let sb = _nvptx_cmp_type_suffix_for_kind(kb)
-        if sb != ".f64" { return sb }
+        sb = _nvptx_cmp_type_suffix_for_kind(_nvptx_lookup_kind_for_local(kinds, b.local_id))
     }
+    // Widest-int wins: if either operand is the 64-bit integer bank,
+    // the setp suffix MUST be `.s64` (the narrow operand is widened at
+    // the emit site). This handles the mixed-width `i32 < i64`
+    // bounds-check that the HIR→MIR layer DOES synthesize.
+    if sa == ".s64" || sb == ".s64" { return ".s64" }
+    // Otherwise the first non-F64-default suffix (same-width or single
+    // explicit bank) — preserves the prior byte-output for every
+    // non-mixed case (.s32/.s32, .f32, .f16, .bf16, single explicit).
+    if sa != ".f64" { return sa }
+    if sb != ".f64" { return sb }
     return ".f64"
 }
 
@@ -959,10 +978,45 @@ fn _nvptx_lower_stmt(buf: [LInstr], s: Stmt, kinds: [PReg], shared_idx_off: [i64
             let cmp_ty = _nvptx_cmp_operand_type_suffix(s.args[0], s.args[1], kinds)
             let cmp = _nvptx_cmp_mnemonic_for_type(s.op, cmp_ty)
             if len(cmp) > 0 {
+                // N73 (RFC 071 P4+ mixed-width cmp) — when the resolved
+                // suffix is `.s64` but a source operand still sits in a
+                // 32-bit integer bank (the `i < n` bounds-check: `i` is
+                // u32, `n` is u64), `setp.lt.s64` against a 32-bit reg is
+                // ptxas-ILLEGAL. Sign-extend the narrow operand into the
+                // 64-bit `%cmpw_<dst>` scratch (`cvt.s64.s32`) BEFORE the
+                // setp and use that widened reg as the setp operand. Both
+                // setp operands are then 64-bit. The scratch is declared
+                // by `_nvptx_classify_locals` Pass 5, keyed on dst.id.
+                //   ref: PTX ISA 8.7 §9.7.1.5 cvt + §9.7.1.6 setp.
+                let mut op0_txt = _nvptx_operand_text_kinds(s.args[0], kinds)
+                let mut op1_txt = _nvptx_operand_text_kinds(s.args[1], kinds)
+                if cmp_ty == ".s64" {
+                    let cmpw_reg = _nvptx_reg_cmpw(s.dst.id)
+                    if s.args[0].kind == "local" {
+                        let k0 = _nvptx_lookup_kind_for_local(kinds, s.args[0].local_id)
+                        if k0 == NVPTX_RKIND_U32 {
+                            let mut w = []
+                            w.push(_nvptx_op(cmpw_reg))
+                            w.push(_nvptx_op(op0_txt))
+                            out.push(_nvptx_instr("cvt.s64.s32", w, "widen cmp lhs (s32 to s64)"))
+                            op0_txt = cmpw_reg
+                        }
+                    }
+                    if s.args[1].kind == "local" {
+                        let k1 = _nvptx_lookup_kind_for_local(kinds, s.args[1].local_id)
+                        if k1 == NVPTX_RKIND_U32 {
+                            let mut w = []
+                            w.push(_nvptx_op(cmpw_reg))
+                            w.push(_nvptx_op(op1_txt))
+                            out.push(_nvptx_instr("cvt.s64.s32", w, "widen cmp rhs (s32 to s64)"))
+                            op1_txt = cmpw_reg
+                        }
+                    }
+                }
                 let mut a = []
                 a.push(_nvptx_op(_nvptx_lookup_reg_for_local(kinds, s.dst.id)))
-                a.push(_nvptx_op(_nvptx_operand_text_kinds(s.args[0], kinds)))
-                a.push(_nvptx_op(_nvptx_operand_text_kinds(s.args[1], kinds)))
+                a.push(_nvptx_op(op0_txt))
+                a.push(_nvptx_op(op1_txt))
                 out.push(_nvptx_instr(cmp, a, "cmp " + s.op))
                 return out
             }
@@ -2252,6 +2306,39 @@ fn _nvptx_classify_locals(mfn: MFunc) -> [PReg] {
         }
         bm = bm + 1
     }
+    // N73 (RFC 071 P4+ mixed-width cmp) — Pass 5: widen-scratch decl for
+    // mixed-width integer comparisons. A `setp.lt.s64` requires both
+    // operands to be 64-bit, but the canonical `i < n` bounds-check
+    // mixes a 32-bit thread-index (u32) with a 64-bit param (u64). The
+    // emit site sign-extends the narrow operand into `%cmpw_<dst>`
+    // (`cvt.s64.s32`); that scratch must be declared as `.reg .s64`
+    // (= u64 bank) per comparison dst. Gated on the actual mixed-width
+    // case — both operands `local` AND exactly one in the u64 bank, the
+    // other in the u32 bank — so same-width compares declare no scratch
+    // and the PTX stays tidy. Runs AFTER the kind roster is complete so
+    // `_nvptx_lookup_kind_for_local` sees the final operand banks.
+    //   ref: PTX ISA 8.7 §9.7.1.5 cvt + §9.7.1.6 setp.
+    let mut bc = 0
+    while bc < len(mfn.blocks) {
+        let blk = mfn.blocks[bc]
+        let mut sc = 0
+        while sc < len(blk.stmts) {
+            let s = blk.stmts[sc]
+            if s.kind == STMT_BINOP && s.dst.id >= 0 && len(s.args) >= 2 {
+                let is_cmp = s.op == "lt" || s.op == "<" || s.op == "le" || s.op == "<=" || s.op == "gt" || s.op == ">" || s.op == "ge" || s.op == ">=" || s.op == "eq" || s.op == "==" || s.op == "ne" || s.op == "!="
+                if is_cmp && s.args[0].kind == "local" && s.args[1].kind == "local" {
+                    let ka = _nvptx_lookup_kind_for_local(regs, s.args[0].local_id)
+                    let kb = _nvptx_lookup_kind_for_local(regs, s.args[1].local_id)
+                    let mixed = (ka == NVPTX_RKIND_U64 && kb == NVPTX_RKIND_U32) || (ka == NVPTX_RKIND_U32 && kb == NVPTX_RKIND_U64)
+                    if mixed {
+                        regs.push(PReg { name: _nvptx_reg_cmpw(s.dst.id), kind: NVPTX_RKIND_U64, frag_role: "", frag_dtype: "", frag_layout: "" })
+                    }
+                }
+            }
+            sc = sc + 1
+        }
+        bc = bc + 1
+    }
     return regs
 }
 
@@ -3294,6 +3381,22 @@ fn _nvptx_reg_u32(id: i64) -> string {
 // _nvptx_reg_pred — PTX predicate register name.
 fn _nvptx_reg_pred(id: i64) -> string {
     return "%p" + to_string(id)
+}
+
+// N73 (RFC 071 P4+ mixed-width cmp) — the 64-bit widen-scratch register
+// for a mixed-width integer comparison. When `i < n` compares a 32-bit
+// thread-index (`%r<id>`, u32 bank) against a 64-bit param (`%rd<id>`,
+// u64 bank), the narrow operand is sign-extended into `%cmpw_<dst>`
+// (`.reg .s64`) via `cvt.s64.s32` BEFORE the `setp.lt.s64`, so both
+// setp operands are 64-bit (ptxas rejects a `setp.s64` against a 32-bit
+// reg — see the `Arguments mismatch for instruction 'setp'` reject).
+// Keyed on the comparison's predicate dst Local id so concurrent cmps
+// never clobber each other's widened operand (mirrors the Pass-3
+// `%rd_idxa_<id>` scratch-decl idiom). Declared in `_nvptx_classify_locals`
+// Pass 5; consumed at the STMT_BINOP cmp emit site.
+//   ref: PTX ISA 8.7 §9.7.1.5 (cvt) + §9.7.1.6 (setp predicates by type).
+fn _nvptx_reg_cmpw(id: i64) -> string {
+    return "%cmpw_" + to_string(id)
 }
 
 // RFC 055 §12 P4+ — mixed-precision reg-name helpers (SCAFFOLD).
