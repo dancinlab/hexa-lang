@@ -543,16 +543,25 @@ origin/main..HEAD -- self/codegen/macho.hexa` 의 deletion = 0). PR #1297
   reset/release 4 fn 의 바이트를 함께 패키징하고 4+ 개 `_arena_*` 심볼을
   exporting. 오늘 `macho_obj_wrap_v2` 는 정확히 1 개 (`_hexa_main`) 만
   export. PR #1297 잔여 #1 (N-symbol strtab/nlist 확장 ~30 LOC) 과 동일.
-- (B) **ADR → ADRP+ADD widening at SOURCE**: 오늘 `rt_arena_*` 의 placeholder
-  는 4-byte `adr x9, #0` (`0x10000009`) 단일 명령. emit/link 측은 모두
-  ADRP+ADD (PAGE21/PAGEOFF12) 를 가정하므로 placeholder 를 2-instruction
-  (8 byte) 페어로 widen 해야 한다:
-    `adrp x9, _arena_state@PAGE`     (placeholder `0x90000009`)
-    `add  x9, x9, _arena_state@PAGEOFF` (placeholder `0x91000129`)
-  6 사이트 × 4 byte = +24 byte (4 fn 누적). `test_runtime_arm64` 의 expected
-  사이즈(ainit 68→76 · aalloc 44→48 · areset 16→20 · arel 60→68) 갱신
-  필요. 명백히 분리된 surface 라서 honest residual 정책에 따라 **이번
-  PR 에 묶지 않음**.
+- (B) **ADR → ADRP+ADD widening at SOURCE** — 🛸 **CLOSED · 2026-05-26**
+  (이 PR · PR #1297 잔여 #2 CLOSED). 직전까지 `rt_arena_*` 의 placeholder 는
+  4-byte `adr x9, #0` (`0x10000009`) 단일 명령이었고, emit/link 측은
+  ADRP+ADD (PAGE21/PAGEOFF12) 를 가정했으므로 source placeholder 가
+  reloc 머신과 불일치였다. 이번 PR 에서 `self/codegen/runtime_arm64.hexa`
+  의 5 instruction-site (init 1 · alloc 1 · reset 1 · release 2) 를 모두
+  2-instruction (8 byte) 페어로 widen 했다:
+    `adrp x9, _arena_state@PAGE`     (placeholder `0x90000009` · LE `9,0,0,144`)
+    `add  x9, x9, _arena_state@PAGEOFF` (placeholder `0x91000129` · LE `41,1,0,145`)
+  per-fn byte deltas (5 사이트 × 4 byte = +20 byte 누적):
+    rt_arena_init     72 → 76 (+4 · 1 site)
+    rt_arena_alloc    44 → 48 (+4 · 1 site, 여전히 < 64 hot-path spec)
+    rt_arena_reset    16 → 20 (+4 · 1 site)
+    rt_arena_release  60 → 68 (+8 · 2 sites)
+  `test_runtime_arm64` 의 expected 사이즈도 동일하게 갱신했고, ubu-2 위
+  build + run 으로 ALL CHECKS PASS 실측 (`hexa build` → exec → "ALL CHECKS
+  PASS"). NEON 그룹(memcpy/strlen/memcmp)도 unchanged + PASS. 이제 emit
+  (`macho_obj_wrap_v3` PR #1311) + link (`hexa_ld.hexa` PR #1282 · PAGE21
+  kind=3 + PAGEOFF12 kind=4) + source placeholder 가 한 줄로 정렬된다.
 
 ### 다섯째 emit-side increment (2026-05-26 · 🛸 `macho_obj_wrap_v3` — N text 심볼 + optional `__const` · PR #1297 잔여 #1 CLOSED)
 
