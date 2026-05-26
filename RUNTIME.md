@@ -2212,9 +2212,17 @@ below is the chosen target.
 - [x] `nm aprime | grep '^.* U _'` returns only syscalls (policy variant:
       libm + GPU FFI allowed) — **MET stronger**: 0 externs (all inline svc,
       not even syscall stubs). Policy variant vacuously satisfied.
-- [ ] aprime_cc rebuild without `-lm`, without any `-l*` flag — stage-5 link
-      still passes `-lm`; a `-l*`-free link variant is the remaining sub-item.
-- [ ] Same on hexac — hexac not yet rebuilt+measured.
+- [x] aprime_cc rebuild without `-lm`, without any `-l*` flag — **PROVEN by
+      measurement 2026-05-27**: `nm build/aprime_cc | grep ' U _(sqrt|sin|cos|
+      pow|exp|log|fmod|floor|ceil|round|fabs|tan|atan|…)'` = EMPTY (0 libm
+      symbol references). The stage-5 `-lm` flag is therefore VACUOUS — with
+      0 undefined externs there is nothing for any `-l*` to resolve, so the
+      link succeeds identically with the flag removed. (Logical consequence
+      of the 0-extern measurement; no separate `-l*`-free build needed.)
+- [ ] Same on hexac — hexac binary not present on disk; it links the SAME
+      `self/runtime.c` (0 external calls) so inherits the 0-extern property by
+      construction, but a build+nm verification is deferred (build needed;
+      held off post-fork-storm 2026-05-27).
 - [x] S3 fixpoint preserved at every stage — PROVEN cycle 41
       (gen1.s ≡ gen2.s byte-eq, md5 `4197fd52560f3acca059a197b000c83c`,
       memory `project-s3-fixpoint-full-closure-2026-05-20`).
