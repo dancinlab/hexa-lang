@@ -2707,7 +2707,14 @@ fn cmd_build(src, out, c_only, target, shared) {
                             "hexa_ptr_alloc",
                             "hexa_ptr_offset",
                             "hexa_ptr_addr"]
-        let __nrt_all_on = (env("HEXA_NATIVE_RT_ALL") == "1")
+        // L-δ TERMINAL FLIP (2026-05-27): default opt-in → opt-out.
+        // All 5 wires are env-OFF/ON-equivalent verified (#1297/#1326/#1328/
+        // #1340/#1329 e2e tests). Default behavior now: every wire ON, hexa-emit
+        // .o appended to clang link. Opt-out escape hatches preserved:
+        //   HEXA_NATIVE_RT_ALL=0      → disable all 5 wires
+        //   HEXA_NATIVE_RT_<NAME>=0   → disable one wire (e.g. HEXA_NATIVE_RT_EXIT=0)
+        // Legacy HEXA_NATIVE_RT_*=1 still works (no-op when already default-on).
+        let __nrt_all_on = (env("HEXA_NATIVE_RT_ALL") != "0")
         let mut __nrt_native_o = ""
         let mut __nrt_i = 0
         while __nrt_i < len(__nrt_envs) {
@@ -2715,8 +2722,10 @@ fn cmd_build(src, out, c_only, target, shared) {
             let __nrt_drv  = __nrt_drvs[__nrt_i]
             let __nrt_out  = __nrt_outs[__nrt_i]
             let __nrt_sym  = __nrt_syms[__nrt_i]
+            // Default-on; per-primitive opt-out via HEXA_NATIVE_RT_<NAME>=0.
             let mut __nrt_on = __nrt_all_on
-            if !__nrt_on { __nrt_on = (env(__nrt_env) == "1") }
+            if env(__nrt_env) == "0" { __nrt_on = false }   // per-primitive opt-out
+            if !__nrt_on { __nrt_on = (env(__nrt_env) == "1") }   // legacy opt-in (no-op when default-on)
             if __nrt_on {
                 let __nrt_drv_chk = exec("test -f '" + __nrt_drv + "' && printf yes || printf no")
                 if __nrt_drv_chk == "yes" {
