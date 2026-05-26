@@ -848,8 +848,57 @@ fn link_macho_arm64(objs: [ParsedObj], out_path: string, entry: string, _is_stat
         }
         xo = xo + 1
     }
+    // nfunc = count of imports that need a __stubs entry (function calls
+    // via BRANCH26). Captured here BEFORE the data-import scan extends
+    // `import_names`; the stubs section is sized off nfunc, not nimports.
+    let nfunc = len(import_names)
+
+    // ── Phase-H inc5: collect external DATA-import refs (GOT_LOAD) ─────
+    //
+    // adrp xN, _sym@GOTPAGE + ldr xN, [xN, _sym@GOTPAGEOFF] emits
+    //   ARM64_RELOC_GOT_LOAD_PAGE21    (kind 5)
+    //   ARM64_RELOC_GOT_LOAD_PAGEOFF12 (kind 6)
+    // referencing an extern symbol that has NO __stubs slot — the user
+    // code dereferences __got[idx] directly (e.g. ___stack_chk_guard,
+    // _environ). For each such unresolved extern we append a name to
+    // `import_names`; the chained-fixups bind table gets one entry per
+    // import (function or data), the function-import range [0..nfunc)
+    // additionally has stubs.
+    let mut xd = 0
+    while xd < len(objs) {
+        let dobj = objs[xd]
+        let mut xdi = 0
+        while xdi < len(dobj.relocs) {
+            let dr = dobj.relocs[xdi]
+            if dr.kind == 5 || dr.kind == 6 {       // GOT_LOAD_PAGE21 / PAGEOFF12
+                // Skip if name resolves internally (treat as a plain
+                // PAGE21/PAGEOFF12 of an internal symbol — degenerate
+                // case where clang emitted GOT-form for an internal sym).
+                let mut hit_d = false
+                let mut sld = 0
+                while sld < len(def_names) {
+                    if def_names[sld] == dr.sym_name { hit_d = true; break }
+                    sld = sld + 1
+                }
+                if !hit_d && len(dr.sym_name) > 0 {
+                    let mut dup_d = false
+                    let mut dld = 0
+                    while dld < len(import_names) {
+                        if import_names[dld] == dr.sym_name { dup_d = true; break }
+                        dld = dld + 1
+                    }
+                    if !dup_d {
+                        import_names.push(dr.sym_name)
+                    }
+                }
+            }
+            xdi = xdi + 1
+        }
+        xd = xd + 1
+    }
     let nimports = len(import_names)
     let has_imports = nimports > 0
+    let has_stubs   = nfunc > 0
 
     let text_size = len(text_bytes)
 
@@ -864,14 +913,17 @@ fn link_macho_arm64(objs: [ParsedObj], out_path: string, entry: string, _is_stat
     let has_bss     = bss_size     > 0
     // __TEXT carries __text + (optionally) __const + __cstring + __stubs.
     // Phase-H inc4: __stubs holds 12-byte arm64 dyld stubs for each
-    // imported libSystem function (one stub per import_names entry).
-    let stubs_size = 12 * nimports
+    // imported libSystem function (one stub per FUNCTION import).
+    // Phase-H inc5: data imports (GOT_LOAD only — no BRANCH26) skip
+    // __stubs since user code dereferences __got directly.
+    let stubs_size = 12 * nfunc
     let mut text_nsects = 1
     if has_const   { text_nsects = text_nsects + 1 }
     if has_cstring { text_nsects = text_nsects + 1 }
-    if has_imports { text_nsects = text_nsects + 1 }
+    if has_stubs   { text_nsects = text_nsects + 1 }
     // __DATA carries __data + (optionally) __bss + (inc4) __got.
-    // __got = 8-byte pointer slot per import, chained-fixups end-of-chain.
+    // __got = 8-byte pointer slot per import (function + data, both
+    // chained-fixups bound).
     let got_size = 8 * nimports
     let mut data_nsects = 0
     if has_data    { data_nsects = data_nsects + 1 }
