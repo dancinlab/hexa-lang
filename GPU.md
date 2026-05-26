@@ -1378,3 +1378,39 @@ CLAIMS.tape entries: `fusion_layerblock_cross_layer_structural` (🔵) +
 
 **§10 closure scoreboard**: unchanged 8/8 (axis-C box ADDED but stays
 `[ ]` per g3 honesty — structural ≠ wall confirmation pending round 9).
+- [x] RFC 086 P1-P3 cmd_regen_cc exec-context cg.c truncation root cause — 4 hypotheses research cycle
+- [x] RFC 085 non-f64 element kind threading — extend Local.type_id elem_size lookup for shared arrays beyond f64
+- [x] 512-case silicon fire on ubu-2 — verify RFC 085 Step B/C/D end-to-end with shared array N=512 vs N=256 byte-allocation correctness
+- [x] A1 gpu_atomic_add_f64 — atom.global.add.f64 for softmax denominator histogram scatter
+- [x] A2 gpu_warp_shuffle_xor — shfl.sync.bfly.b32 for sub-warp reduction attention K-Q dot
+- [x] A3 f64 log polynomial — range-reduce plus Taylor minimax mirror of exp rsqrt RFC 055 stub family last item
+- [x] A4 2D thread-id silicon fire — gpu_thread_id_y and gpu_block_id_y axis verification matmul-style 2D indexing
+- [x] A5 f32 elem @shared silicon fire — RFC 085 non-f64 PR 1413 verification with f32 element kind kernel
+- [x] A6 bank-conflict-free @shared padding — pad shared array stride to avoid 32-way conflict shared throughput up to 32x
+- [x] B1 @constant memory bank — .const space for kernel LUT softmax relu lookup tables
+- [x] B2 cp.async.shared.global sm_80+ async copy — H2D overlap GEMM perf 2x
+- [x] B3 bf16 WMMA silicon fire — RFC 068 family bf16 by bf16 to f32 Tensor Core mma
+- [x] B4 f32 rsqrt_rn silicon fire — verify PR 1358 opt-in IEEE-correct sqrt.rn.f32 plus rcp.rn.f32 path
+- [x] C1 RFC 071 P1-P4 source-to-silicon e2e — hexa build target nvptx64-sm_80 integration
+- [x] C2 coalesced access diagnostic — lint warning for non-coalesced memory access patterns
+- [x] C3 gpu_grid_sync cooperative groups — multi-block synchronization via cuda cooperative groups
+- [x] C4 TMA tensor memory accelerator sm_90+ — cp.async.bulk.tensor Hopper-only async tile copy
+- [x] D1 @constant memory bank impl — B1 design to 6-step codegen mirror of @shared landing for kernel LUT
+- [x] D2 cp.async.shared.global impl — B2 design to 3-instr emit plus sm_80 gate plus tile-overlap GEMM fire
+- [x] D3 HX0511 coalesced-access lint impl — MIR-level idx pattern detection plus diagnostic emit
+- [x] D4 gpu_grid_sync impl — cooperative groups bar.sync.aligned plus cudaLaunchCooperativeKernel host wrap
+- [x] E1 A4 2D thread silicon fire ubu-2 — gpu_thread_id_y kernel post-bootstrap fix run
+- [x] E2 A5 f32 elem silicon fire ubu-2 — f32 @shared kernel RFC 085 non-f64 silicon-confirm
+- [x] E3 A3 f64 log silicon fire ubu-2 — log polynomial libm tolerance 1e-5 vs CPU log
+- [x] E4 B4 f32 rsqrt_rn silicon fire ubu-2 — PR 1358 byte-exact path verification
+- [x] F1 gpu_atomic_cas — atom.cas.global.b64 for lock-free queue spin-lock primitive
+- [x] F2 gpu_atomic_min_max — atom.global.min and atom.global.max f64 s64 for parallel min-max reduction
+- [x] F3 select.f64 — branch-free conditional intrinsic for sub-warp masking and divergence avoidance
+- [x] F4 f64 sin and cos polynomial — RFC 055 trig family Fourier rotation rope attention
+- [x] F5 gpu_warp_shuffle_down_up — shfl.sync.down and shfl.sync.up for scan prefix-sum patterns
+- [x] G1 loop fusion adjacent kernels — single launch consolidation for kernel-launch-overhead removal
+- [x] G2 register-pressure analysis for unroll — over-unroll spill prevention heuristic
+- [x] G3 dead-code elimination in MIR — unused stmt removal for PTX size reduction
+- [x] H1 PTX to SASS preview — cubin disassemble helper for low-level debug and perf-tune
+- [x] H2 occupancy calculator — kernel launch grid block tuning helper
+- [x] H3 GPU runtime profiler hooks — start stop kernel timer per-kernel microsecond reporting
