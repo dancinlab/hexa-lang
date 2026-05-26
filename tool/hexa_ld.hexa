@@ -802,6 +802,53 @@ fn link_macho_arm64(objs: [ParsedObj], out_path: string, entry: string, _is_stat
         return 3
     }
 
+    // ── Phase-H inc4: collect external function-import refs ────────────
+    //
+    // Any BRANCH26 reloc that did NOT resolve internally (target name not
+    // in def_names) is a libSystem dyld import. We build a deduplicated
+    // list of these names; each gets a __stubs entry (12 B arm64) and a
+    // __got pointer slot (8 B). The BL is patched to point at the stub
+    // (PC-rel imm26), and chained-fixups bind the __got slot to the
+    // libSystem symbol at load time.
+    //
+    // SCOPE: this increment supports a SINGLE dylib (libSystem.B.dylib,
+    // ordinal 1 in chained_fixups). Multi-dylib + ordinal mapping is a
+    // future increment.
+    let mut import_names: [string] = []
+    let mut xo = 0
+    while xo < len(objs) {
+        let xobj = objs[xo]
+        let mut xi = 0
+        while xi < len(xobj.relocs) {
+            let xr = xobj.relocs[xi]
+            if xr.kind == 2 {                          // ARM64_RELOC_BRANCH26
+                // Internal hit?
+                let mut hit = false
+                let mut sl = 0
+                while sl < len(def_names) {
+                    if def_names[sl] == xr.sym_name { hit = true; break }
+                    sl = sl + 1
+                }
+                if !hit {
+                    // Already in import list?
+                    let mut dup = false
+                    let mut dl = 0
+                    while dl < len(import_names) {
+                        if import_names[dl] == xr.sym_name { dup = true; break }
+                        dl = dl + 1
+                    }
+                    if !dup && len(xr.sym_name) > 0 {
+                        import_names.push(xr.sym_name)
+                    }
+                }
+            }
+            xi = xi + 1
+        }
+        xo = xo + 1
+    }
+    let nimports = len(import_names)
+    let has_imports = nimports > 0
+
     let text_size = len(text_bytes)
 
     // ── Phase-H inc3: per-slot sizes + which sections are present ─────
