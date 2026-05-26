@@ -12,6 +12,7 @@ use "stdlib/cloud/preflight"
 use "stdlib/cloud/watchdog"
 use "stdlib/cloud/vast"
 use "stdlib/cloud/runpod"
+use "stdlib/cloud/dft_dispatch"
 
 fn _cloud_help() {
     println("hexa cloud — structured-argv remote dispatch (cycle A)")
@@ -40,6 +41,8 @@ fn _cloud_help() {
     println("  cloud adopt     <pod_id> [--purpose TEXT]              track an untracked (ORPHAN) pod")
     println("  cloud forget    <pod_id>                               mark a tracked (GHOST) pod status=closed")
     println("  cloud watchdog  [--threshold-min N] [--util-cap-pct N] [--kill]  idle-pod autokill sweep (DRY-RUN default)")
+    println("  cloud dft-run   <deck-dir> [--go] [--query Q] [--walltime-h N] [--identity P] [--image I] [--disk G] [--owner T]")
+    println("                                                         guarded DFT el-ph (QE) dispatch; PREVIEW ($0) unless --go. deck: relax.in·ph.in·scf.in.head·scf.in.tail·pseudo/")
     println("  cloud help | version")
     println("")
     println("connection flags [conn] (before `--`):")
@@ -609,7 +612,7 @@ fn main() {
     while i < len(av) {
         let t = av[i]
         if si < 0 {
-            if t == "rent" || t == "up" || t == "down" || t == "destroy" || t == "list" || t == "status" || t == "preflight" || t == "watchdog" || t == "run" || t == "exec" || t == "nohup" || t == "poll" || t == "tail" || t == "watch" || t == "ssh-port" || t == "copy-to" || t == "copy-from" || t == "orphans" || t == "reconcile" || t == "adopt" || t == "forget" || t == "help" || t == "--help" || t == "-h" || t == "version" || t == "--version" || t == "-v" {
+            if t == "rent" || t == "up" || t == "down" || t == "destroy" || t == "list" || t == "status" || t == "preflight" || t == "watchdog" || t == "run" || t == "exec" || t == "nohup" || t == "poll" || t == "tail" || t == "watch" || t == "ssh-port" || t == "copy-to" || t == "copy-from" || t == "orphans" || t == "reconcile" || t == "adopt" || t == "forget" || t == "dft-run" || t == "help" || t == "--help" || t == "-h" || t == "version" || t == "--version" || t == "-v" {
                 si = i
                 sub = t
             }
@@ -625,7 +628,7 @@ fn main() {
         return
     }
     if sub == "version" || sub == "--version" || sub == "-v" {
-        println("hexa cloud 0.2.4 — tail verb (live remote-log stream → Monitor bridge) · [0.2.3: nohup --early-life-check · watch · ssh-port · copy --verify-sha]")
+        println("hexa cloud 0.3.0 — dft-run verb (guarded QE el-ph dispatch · vast_direct_endpoint #1239(2) fix) · [0.2.4: tail · 0.2.3: nohup --early-life-check · watch · ssh-port · copy --verify-sha]")
         return
     }
     if sub == "rent" || sub == "up" {
@@ -683,6 +686,14 @@ fn main() {
         // --kill and exits 0 (clean sweep) / 1 (invalid args / help) / 2
         // (sweep failed: no runpodctl / no pods / list error).
         let rc = watchdog_run(av, si + 1)
+        exit(rc)
+    }
+    if sub == "dft-run" {
+        // Guarded DFT el-ph pod dispatch (QE pw.x/ph.x). PREVIEW by default
+        // ($0: validate deck + plan + parse a local relax.out); --go rents a
+        // billing pod and runs the rent/transport/chain/monitor-guarded chain.
+        // Encodes the demiurge RTSC checklist (dft_dispatch.hexa, INBOX #1249).
+        let rc = dft_run(av, si + 1)
         exit(rc)
     }
     if sub == "run" {

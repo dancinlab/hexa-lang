@@ -2,6 +2,13 @@
 
 Append-only history sister of `INBOX.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
+## 2026-05-26T15:40Z — 🛸 `hexa cloud dft-run <deck-dir>` — guarded QE el-ph dispatch (#1249) + bare-IP endpoint (#1239(2) fix)
+
+- [x] **`hexa cloud dft-run <deck-dir>` 흡수 (RFC #1249)** — demiurge `DFT_POD_DISPATCH_RECIPE.md` 4-guard 체크리스트를 `stdlib/cloud/dft_dispatch.hexa` 로 코드화. ① rent(reliability>0.97·verified·16+코어, create --direct 既存, echo REACHABLE precheck→unreachable면 destroy+재rent) · ② transport(bare-IP via `show instances --raw`, vast identity `-i`) · ③ chain(hexa-native relax→scf 좌표 파서·`-np`=phys cores·`--allow-run-as-root`·`recover=.true.`·`timeout`·`setsid`) · ④ monitor(numeric-id registry·허수모드<-5cm⁻¹→unstable·비대화 teardown). **PREVIEW 기본($0): deck 검증+plan+로컬 relax.out 파싱; `--go` 만 과금.** verb wired in cloud_cli (0.2.4→0.3.0).
+- [x] **#1239(2) `vastai show instance <id>` start_date=None crash 해소** — `vast_direct_endpoint`/`vast_parse_direct_endpoint` 가 복수 `show instances --raw` 에서 `public_ipaddr`+`22/tcp` HostPort(bare-IP, proxy 아님) 추출. transport guard ②의 기반.
+- [x] **검증**: 순수 helper 17/17 PASS (transpile `self/native/hexa_v2` → clang+runtime.c → run): QE relax→scf 파서(alat→angstrom 0.529177 정확·crystal passthrough)·안정성 verdict(<-5cm⁻¹·-3 noise·inconclusive)·physcores(14×2=28 not nproc 56)·rent query·assemble. 4 changed 파일 transpile-clean. e2e(rent/ssh/chain)는 vastai 부재로 미검증 → `--go` 게이트 뒤. `dft_dispatch_test.hexa` 영구 가드(CI 미와이어, 로컬/툴체인-healthy 시 실행).
+- [ ] **남은 #1249 후속**: harvest 단(λ_BZ·ω_log·Allen-Dynes Tc → `hexa atlas register`)은 미구현(stable verdict 후 수동) · 일반 `cloud job-run <chain-spec>` 추상화 · #1155(vast 등록키 자동 제시)·#1229(A reconcile GHOST·B registry 오염·C concurrent-wipe·D prebuilt 전송) 여전히 OPEN.
+
 ## 2026-05-26T15:10Z — 🔌 cloud rent `reliability2` query-field 오타 FIX (#1239(1)ⓐ · #1038(1)) — vast rent unblock
 
 - [x] **`stdlib/cloud/vast.hexa` `_vast_default_filters` `reliability2>=0.95` → `reliability>=0.95`** — vastai 검색-DSL 필드는 `reliability` 이고 `reliability2` 는 offer-JSON **출력** 필드에만 존재. query 에 `reliability2` 를 주면 미지 키로 거부 → offer 0건 → `hexa cloud rent` 가 항상 silent-fail. 공식문서 확인: `vastai search offers 'reliability > 0.99 num_gpus>=4'`. 코드 1줄 + stale 주석 3곳(vast.hexa 135/197 · cloud_cli.hexa 386) 정정. 로컬 parse-gate 는 배포 hexa 바이너리 destructive(소스 clobber)라 skip → CI bootstrap build-gate.

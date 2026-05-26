@@ -732,3 +732,73 @@ fn vast_wait_ssh(iid: str, max_tries: int, sleep_each_sec: int) -> VastSsh {
     }
     return _vast_fail_ssh("wait_ssh: never ready in " + to_string(max_tries * sleep_each_sec) + "s")
 }
+
+// ── direct bare-IP endpoint (DFT-dispatch transport guard ②) ──────────
+// vast_ssh_endpoint above returns the PROXY ssh_host (ssh*.vast.ai) from a
+// single `show instance <id>`. Two problems for a `--direct` pod: (a) the
+// proxy host is blocked by cloud-guard, so heavy chains must use the bare
+// public IP + the host-side port mapped to 22/tcp; (b) the single-instance
+// `show instance <id>` crashes on a freshly-created pod when `start_date`
+// is null (INBOX #1239(2)). vast_direct_endpoint uses the PLURAL
+// `show instances --raw` list (no start_date crash) and reads the direct
+// endpoint. The parse is split into a pure fn so it is unit-testable
+// without vastai (see dft_dispatch_test.hexa).
+
+// vast_parse_direct_endpoint — PURE: raw `show instances --raw` JSON (an
+// ARRAY of instance objects) + an instance id → the bare-IP endpoint
+// (`public_ipaddr` + ports["22/tcp"][0]["HostPort"]). ok=0 when the
+// instance is absent or its ip/port are not yet mapped.
+pub fn vast_parse_direct_endpoint(raw: str, iid: str) -> VastSsh {
+    let parsed = json_parse(_vast_strip_to_json(raw))
+    if type_of(parsed) != "array" {
+        return _vast_fail_ssh("direct_endpoint: non-array JSON — " + raw.substring(0, 160))
+    }
+    let mut i = 0
+    while i < len(parsed) {
+        let inst = parsed[i]
+        let id_v = json_object_get(inst, "id")
+        let mut id_s = ""
+        if type_of(id_v) == "int" {
+            id_s = to_string(id_v)
+        }
+        if type_of(id_v) == "string" {
+            id_s = to_string(id_v)
+        }
+        if id_s == iid {
+            let host = json_object_get_str(inst, "public_ipaddr", "")
+            let mut port = ""
+            let ports = json_object_get(inst, "ports")
+            if type_of(ports) == "map" {
+                let tcp = json_object_get(ports, "22/tcp")
+                if type_of(tcp) == "array" {
+                    if len(tcp) > 0 {
+                        port = json_object_get_str(tcp[0], "HostPort", "")
+                    }
+                }
+            }
+            if len(host) == 0 {
+                return _vast_fail_ssh("direct_endpoint: public_ipaddr not yet mapped for " + iid)
+            }
+            if len(port) == 0 {
+                return _vast_fail_ssh("direct_endpoint: 22/tcp HostPort not yet mapped for " + iid)
+            }
+            return VastSsh { ok: 1, host: host, port: port, message: "direct endpoint " + host + ":" + port }
+        }
+        i = i + 1
+    }
+    return _vast_fail_ssh("direct_endpoint: instance " + iid + " not in show-instances list")
+}
+
+// vast_direct_endpoint — `vastai show instances --raw` (plural — avoids the
+// #1239(2) single-instance start_date=None crash) → vast_parse_direct_endpoint.
+pub fn vast_direct_endpoint(iid: str) -> VastSsh {
+    if len(iid) == 0 {
+        return _vast_fail_ssh("direct_endpoint: empty instance id")
+    }
+    let vc = _vastai_path()
+    if len(vc) == 0 {
+        return _vast_fail_ssh("vastai not found (set VASTAI_DISABLE=1 to silence)")
+    }
+    let out = exec(_shq_local(vc) + " show instances --raw 2>&1")
+    return vast_parse_direct_endpoint(out, iid)
+}
