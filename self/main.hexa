@@ -2698,7 +2698,8 @@ fn cmd_build(src, out, c_only, target, shared) {
                             "HEXA_NATIVE_RT_PTR_FREE",
                             "HEXA_NATIVE_RT_DEREF",
                             "HEXA_NATIVE_RT_PTR_READ",
-                            "HEXA_NATIVE_RT_PTR_WRITE"]
+                            "HEXA_NATIVE_RT_PTR_WRITE",
+                            "HEXA_NATIVE_RT_PTR_NULL"]
         let __nrt_drvs   = [__nself + "/../test/native_build/emit_hexa_exit_native_o.hexa",
                             __nself + "/../test/native_build/emit_hexa_ptr_alloc_native_o.hexa",
                             __nself + "/../test/native_build/emit_hexa_ptr_offset_native_o.hexa",
@@ -2706,7 +2707,8 @@ fn cmd_build(src, out, c_only, target, shared) {
                             __nself + "/../test/native_build/emit_hexa_ptr_free_native_o.hexa",
                             __nself + "/../test/native_build/emit_hexa_deref_native_o.hexa",
                             __nself + "/../test/native_build/emit_hexa_ptr_read_native_o.hexa",
-                            __nself + "/../test/native_build/emit_hexa_ptr_write_native_o.hexa"]
+                            __nself + "/../test/native_build/emit_hexa_ptr_write_native_o.hexa",
+                            __nself + "/../test/native_build/emit_hexa_ptr_null_native_o.hexa"]
         let __nrt_outs   = ["/tmp/hexa_exit_native.o",
                             "/tmp/hexa_ptr_alloc_native.o",
                             "/tmp/hexa_ptr_offset_native.o",
@@ -2714,7 +2716,8 @@ fn cmd_build(src, out, c_only, target, shared) {
                             "/tmp/hexa_ptr_free_native.o",
                             "/tmp/hexa_deref_native.o",
                             "/tmp/hexa_ptr_read_native.o",
-                            "/tmp/hexa_ptr_write_native.o"]
+                            "/tmp/hexa_ptr_write_native.o",
+                            "/tmp/hexa_ptr_null_native.o"]
         let __nrt_syms   = ["hexa_exit",
                             "hexa_ptr_alloc",
                             "hexa_ptr_offset",
@@ -2722,7 +2725,8 @@ fn cmd_build(src, out, c_only, target, shared) {
                             "hexa_ptr_free",
                             "hexa_deref",
                             "hexa_ptr_read",
-                            "hexa_ptr_write"]
+                            "hexa_ptr_write",
+                            "hexa_ptr_null"]
         // L-δ TERMINAL FLIP (2026-05-27): default opt-in → opt-out.
         // All 5 wires (exit · ptr_alloc · ptr_free · ptr_offset · ptr_addr)
         // are env-OFF/ON behavior-equivalent verified (#1297/#1326/#1329/
