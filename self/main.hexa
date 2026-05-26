@@ -2694,19 +2694,23 @@ fn cmd_build(src, out, c_only, target, shared) {
         let __nrt_envs   = ["HEXA_NATIVE_RT_EXIT",
                             "HEXA_NATIVE_RT_PTR_ALLOC",
                             "HEXA_NATIVE_RT_PTR_OFFSET",
-                            "HEXA_NATIVE_RT_PTR_ADDR"]
+                            "HEXA_NATIVE_RT_PTR_ADDR",
+                            "HEXA_NATIVE_RT_PTR_FREE"]
         let __nrt_drvs   = [__nself + "/../test/native_build/emit_hexa_exit_native_o.hexa",
                             __nself + "/../test/native_build/emit_hexa_ptr_alloc_native_o.hexa",
                             __nself + "/../test/native_build/emit_hexa_ptr_offset_native_o.hexa",
-                            __nself + "/../test/native_build/emit_hexa_ptr_addr_native_o.hexa"]
+                            __nself + "/../test/native_build/emit_hexa_ptr_addr_native_o.hexa",
+                            __nself + "/../test/native_build/emit_hexa_ptr_free_native_o.hexa"]
         let __nrt_outs   = ["/tmp/hexa_exit_native.o",
                             "/tmp/hexa_ptr_alloc_native.o",
                             "/tmp/hexa_ptr_offset_native.o",
-                            "/tmp/hexa_ptr_addr_native.o"]
+                            "/tmp/hexa_ptr_addr_native.o",
+                            "/tmp/hexa_ptr_free_native.o"]
         let __nrt_syms   = ["hexa_exit",
                             "hexa_ptr_alloc",
                             "hexa_ptr_offset",
-                            "hexa_ptr_addr"]
+                            "hexa_ptr_addr",
+                            "hexa_ptr_free"]
         // L-δ TERMINAL FLIP (2026-05-27): default opt-in → opt-out.
         // All 5 wires (exit · ptr_alloc · ptr_free · ptr_offset · ptr_addr)
         // are env-OFF/ON behavior-equivalent verified (#1297/#1326/#1329/
@@ -2749,46 +2753,15 @@ fn cmd_build(src, out, c_only, target, shared) {
             }
             __nrt_i = __nrt_i + 1
         }
-        // HEXA_BACKEND flip · 열한째 increment — hexa-native `_hexa_ptr_free`
-        // override (pair-safe with `_hexa_ptr_alloc`, closes #1326 residual (B)).
-        // Emit a hexa-native .o for `_hexa_ptr_free`
-        // (test/native_build/emit_hexa_ptr_free_native_o.hexa) and append it
-        // to the clang link when HEXA_NATIVE_RT_PTR_FREE=1. The C-side
-        // `hexa_ptr_free` in runtime.c is `__attribute__((weak))`, so ld64
-        // picks the hexa-emit strong symbol when this .o is linked.
-        // PAIRING — default-flip safe ONLY when both ALLOC + FREE gates are on:
-        //   - both on : mmap-with-header + munmap (allocator-symmetric)
-        //   - alloc-only : mmap → libc free() (UB — prior #1326 residual)
-        //   - free-only  : calloc → munmap (UB — incorrect pairing)
-        // ENV unset = no behavior change.
-        if env("HEXA_NATIVE_RT_PTR_FREE") == "1" {
-            let __npf_drv = __nself + "/../test/native_build/emit_hexa_ptr_free_native_o.hexa"
-            let __npf_chk = exec("test -f '" + __npf_drv + "' && printf yes || printf no")
-            if __npf_chk == "yes" {
-                let __npf_hx = env("HEXA_LANG_INTERP")
-                let mut __npf_hx_cmd = "hexa"
-                if len(__npf_hx) > 0 { __npf_hx_cmd = __npf_hx }
-                let __npf_emit_out = exec("'" + __npf_hx_cmd + "' run '" + __npf_drv + "' 2>&1")
-                if len(__npf_emit_out) > 0 { println("    [rt-emit] " + __npf_emit_out) }
-                let __npf_o_chk = exec("test -f /tmp/hexa_ptr_free_native.o && printf yes || printf no")
-                if __npf_o_chk == "yes" {
-                    __nrt_native_o = __nrt_native_o + "'/tmp/hexa_ptr_free_native.o' "
-                    println("  [native rt] HEXA_NATIVE_RT_PTR_FREE=1 — appending /tmp/hexa_ptr_free_native.o (overrides weak hexa_ptr_free in runtime.c)")
-                    // PAIR-SAFETY ADVISORY — warn on free-only or alloc-only.
-                    if env("HEXA_NATIVE_RT_PTR_ALLOC") != "1" {
-                        println("  [native rt] WARN: HEXA_NATIVE_RT_PTR_FREE=1 without HEXA_NATIVE_RT_PTR_ALLOC=1 — incorrect pairing (calloc + munmap is UB). Enable both for pair-safe closure.")
-                    }
-                } else {
-                    println("  [native rt] WARN: HEXA_NATIVE_RT_PTR_FREE=1 but emit driver produced no .o — falling back to C hexa_ptr_free")
-                }
-            } else {
-                println("  [native rt] WARN: HEXA_NATIVE_RT_PTR_FREE=1 but emit driver not at " + __npf_drv)
-            }
-        } else {
-            // ALLOC-ONLY advisory (free env unset, alloc env on = pre-fix #1326 residual).
-            if env("HEXA_NATIVE_RT_PTR_ALLOC") == "1" {
-                println("  [native rt] NOTE: HEXA_NATIVE_RT_PTR_ALLOC=1 alone leaves alloc/free pair-mismatched (mmap + libc free = UB). Add HEXA_NATIVE_RT_PTR_FREE=1 for pair-safe closure (#1326 residual (B)).")
-            }
+        // L-η (#1331 K-η consolidate) — PTR_FREE folded into the table above (5th row).
+        // Pair-safety advisories preserved post-loop (alloc/free mismatch = UB):
+        let __nrt_alloc_on = __nrt_all_on || (env("HEXA_NATIVE_RT_PTR_ALLOC") == "1")
+        let __nrt_free_on  = __nrt_all_on || (env("HEXA_NATIVE_RT_PTR_FREE") == "1")
+        if __nrt_free_on && !__nrt_alloc_on {
+            println("  [native rt] WARN: HEXA_NATIVE_RT_PTR_FREE=1 without HEXA_NATIVE_RT_PTR_ALLOC=1 — incorrect pairing (calloc + munmap is UB). Enable both for pair-safe closure.")
+        }
+        if __nrt_alloc_on && !__nrt_free_on {
+            println("  [native rt] NOTE: HEXA_NATIVE_RT_PTR_ALLOC=1 alone leaves alloc/free pair-mismatched (mmap + libc free = UB). Add HEXA_NATIVE_RT_PTR_FREE=1 for pair-safe closure (#1326 residual (B)).")
         }
         let __ntmp = exec("printf '%s.tmp.%s' '" + out + "' \"$$\"")
         let __nlink = "clang -O2 " + __nshared_link + os_clang_cflags() + "-Wno-trigraphs -fbracket-depth=4096 -I '" + __nself + "' " + __nrt_native_o + "'" + __nasm + "' '" + __nrtc + "' -o '" + __ntmp + "'" + os_clang_ldflags() + " 2>&1"

@@ -651,6 +651,234 @@ fn macho_obj_wrap_v3(code: [int],
     return out
 }
 
+// ── macho_obj_wrap_v3_rw — R+W data variant (PoC #1316 promotion · L-ε) ──
+// Identical to macho_obj_wrap_v3 but emits the state slot in
+// __DATA,__data (R+W) instead of __TEXT,__const (R-only). Use when
+// the bundled .o needs writable state (e.g. rt_arena_init's
+// str x0,[x9] would SIGSEGV in __const).
+//
+// PoC files (test/native_build/poc_*) keep an inline copy of this
+// because the module_loader on the verify host can't resolve
+// use "self/codegen/macho" — they're self-contained by necessity.
+// This file is the SSOT for any future production caller that CAN
+// import self/codegen/macho (compiler/* + self/main.hexa).
+fn macho_obj_wrap_v3_rw(code: [int],
+                           sym_name_bytes: [[int]],
+                           sym_offsets: [int],
+                           sym_sections: [int],
+                           state_bytes: [int],
+                           reloc_offs: [int],
+                           reloc_kinds: [int],
+                           reloc_symnums: [int]) -> [int] {
+    let mut out = []
+    let code_size  = len(code)
+    let state_size = len(state_bytes)
+    let nreloc     = len(reloc_offs)
+    let nsyms      = len(sym_name_bytes)
+
+    let mut sym_strx: [int] = []
+    let mut strtab_size = 1
+    let mut si = 0
+    while si < nsyms {
+        sym_strx.push(strtab_size)
+        strtab_size = strtab_size + len(sym_name_bytes[si])
+        si = si + 1
+    }
+
+    // 2 segments (TEXT for __text + DATA for __data).
+    // TEXT segment cmd = 72 + 80 (1 section)
+    // DATA segment cmd = 72 + 80 (1 section)
+    let text_segment_cmd_size = 72 + 80
+    let data_segment_cmd_size = 72 + 80
+    let symtab_cmd_size = 24
+    let build_version_cmd_size = 24
+    let mut ncmds = 3                  // TEXT + SYMTAB + BUILD_VER (state-less case)
+    let mut sizeofcmds = text_segment_cmd_size + symtab_cmd_size + build_version_cmd_size
+    if state_size > 0 {
+        ncmds = 4
+        sizeofcmds = text_segment_cmd_size + data_segment_cmd_size + symtab_cmd_size + build_version_cmd_size
+    }
+
+    let header_size = 32
+    let code_offset = align_to(header_size + sizeofcmds, 8)
+
+    let mut data_offset = code_offset + code_size
+    if state_size > 0 {
+        data_offset = align_to(code_offset + code_size, 8)
+    }
+    let data_end = data_offset + state_size
+
+    let reloc_offset = align_to(data_end, 4)
+    let reloc_size   = 8 * nreloc
+    let symtab_offset = reloc_offset + reloc_size
+    let nlist_size = 16
+    let strtab_offset = symtab_offset + nlist_size * nsyms
+    let total_end = strtab_offset + strtab_size
+
+    // Mach-O header (32 bytes)
+    out = push_u32_le(out, 0xFEEDFACF)
+    out = push_u32_le(out, 0x0100000C)
+    out = push_u32_le(out, 0)
+    out = push_u32_le(out, 1)                  // MH_OBJECT
+    out = push_u32_le(out, ncmds)
+    out = push_u32_le(out, sizeofcmds)
+    out = push_u32_le(out, 0)
+    out = push_u32_le(out, 0)
+
+    // ── LC_SEGMENT_64 #1 — TEXT (72 + 80 = 152 bytes) ───────────────
+    // Segment carries only __text section (no __const inside TEXT).
+    out = push_u32_le(out, 0x19)
+    out = push_u32_le(out, text_segment_cmd_size)
+    let mut i0 = 0
+    while i0 < 16 { out.push(0); i0 = i0 + 1 }   // segname (16 NUL — anonymous in .o)
+    out = push_u64_le(out, 0)                    // vmaddr
+    out = push_u64_le(out, code_size)            // vmsize (__text only)
+    out = push_u64_le(out, code_offset)          // fileoff
+    out = push_u64_le(out, code_size)            // filesize
+    out = push_u32_le(out, 7)                    // maxprot
+    out = push_u32_le(out, 7)                    // initprot
+    out = push_u32_le(out, 1)                    // nsects = 1 (just __text)
+    out = push_u32_le(out, 0)                    // flags
+
+    // section_64 __text (80 bytes)
+    out.push(95).push(95).push(116).push(101).push(120).push(116)
+    let mut j0 = 0
+    while j0 < 10 { out.push(0); j0 = j0 + 1 }
+    out.push(95).push(95).push(84).push(69).push(88).push(84)
+    j0 = 0
+    while j0 < 10 { out.push(0); j0 = j0 + 1 }
+    out = push_u64_le(out, 0)                    // addr
+    out = push_u64_le(out, code_size)            // size
+    out = push_u32_le(out, code_offset)          // offset
+    out = push_u32_le(out, 2)                    // align = log2(4)
+    out = push_u32_le(out, reloc_offset)         // reloff
+    out = push_u32_le(out, nreloc)               // nreloc
+    out = push_u32_le(out, 0x80000400)           // S_ATTR_PURE + SOME
+    out = push_u32_le(out, 0)
+    out = push_u32_le(out, 0)
+    out = push_u32_le(out, 0)
+
+    // ── LC_SEGMENT_64 #2 — DATA (72 + 80 = 152 bytes) — if state ────
+    if state_size > 0 {
+        out = push_u32_le(out, 0x19)
+        out = push_u32_le(out, data_segment_cmd_size)
+        let mut iD = 0
+        while iD < 16 { out.push(0); iD = iD + 1 }
+        out = push_u64_le(out, code_size)            // vmaddr (after __text)
+        out = push_u64_le(out, state_size)           // vmsize
+        out = push_u64_le(out, data_offset)          // fileoff
+        out = push_u64_le(out, state_size)           // filesize
+        out = push_u32_le(out, 3)                    // maxprot = R+W
+        out = push_u32_le(out, 3)                    // initprot = R+W
+        out = push_u32_le(out, 1)                    // nsects = 1 (just __data)
+        out = push_u32_le(out, 0)                    // flags
+
+        // section_64 __data (80 bytes)
+        // sectname "__data" + 10 NUL pad
+        out.push(95).push(95).push(100).push(97).push(116).push(97)
+        let mut jD = 0
+        while jD < 10 { out.push(0); jD = jD + 1 }
+        // segname "__DATA" + 10 NUL pad
+        out.push(95).push(95).push(68).push(65).push(84).push(65)
+        jD = 0
+        while jD < 10 { out.push(0); jD = jD + 1 }
+        out = push_u64_le(out, code_size)            // addr (matches the section header above)
+        out = push_u64_le(out, state_size)           // size
+        out = push_u32_le(out, data_offset)          // offset
+        out = push_u32_le(out, 3)                    // align = log2(8)
+        out = push_u32_le(out, 0)                    // reloff (no relocs INTO __data)
+        out = push_u32_le(out, 0)                    // nreloc
+        out = push_u32_le(out, 0)                    // flags = S_REGULAR (writable)
+        out = push_u32_le(out, 0)
+        out = push_u32_le(out, 0)
+        out = push_u32_le(out, 0)
+    }
+
+    // LC_SYMTAB
+    out = push_u32_le(out, 0x02)
+    out = push_u32_le(out, symtab_cmd_size)
+    out = push_u32_le(out, symtab_offset)
+    out = push_u32_le(out, nsyms)
+    out = push_u32_le(out, strtab_offset)
+    out = push_u32_le(out, strtab_size)
+
+    // LC_BUILD_VERSION
+    out = push_u32_le(out, 0x32)
+    out = push_u32_le(out, build_version_cmd_size)
+    out = push_u32_le(out, 1)
+    out = push_u32_le(out, 0x000E0000)
+    out = push_u32_le(out, 0x000E0000)
+    out = push_u32_le(out, 0)
+
+    // Pad to code_offset, then __text payload
+    while len(out) < code_offset { out.push(0) }
+    let mut k0 = 0
+    while k0 < len(code) { out.push(code[k0]); k0 = k0 + 1 }
+
+    // Pad to data_offset, then __data payload (if any)
+    if state_size > 0 {
+        while len(out) < data_offset { out.push(0) }
+        let mut sb = 0
+        while sb < state_size { out.push(state_bytes[sb]); sb = sb + 1 }
+    }
+
+    // Pad to reloc_offset, then relocation table
+    while len(out) < reloc_offset { out.push(0) }
+    let mut ri = 0
+    while ri < nreloc {
+        let r_off     = reloc_offs[ri]
+        let r_kind    = reloc_kinds[ri]
+        let r_symnum  = reloc_symnums[ri]
+        out = push_u32_le(out, r_off)
+        let mut r_pcrel = 0
+        if r_kind == 3 { r_pcrel = 1 }
+        let r_length = 2
+        let r_extern = 1
+        let bits = (r_symnum % 0x1000000)
+                 + (r_pcrel * 0x1000000)
+                 + (r_length * 0x2000000)
+                 + (r_extern * 0x8000000)
+                 + ((r_kind % 16) * 0x10000000)
+        out = push_u32_le(out, bits)
+        ri = ri + 1
+    }
+
+    // Pad to symtab_offset, then nlist_64 × nsyms
+    while len(out) < symtab_offset { out.push(0) }
+    let mut sj = 0
+    while sj < nsyms {
+        let s_strx    = sym_strx[sj]
+        let s_offset  = sym_offsets[sj]
+        let s_section = sym_sections[sj]
+        // n_value for __text sym (sect=1) = 0 + offset.
+        // n_value for __data sym (sect=2) = code_size + offset (matches the
+        // __data section addr we set above).
+        let mut n_value = s_offset
+        if s_section == 2 { n_value = code_size + s_offset }
+        out = push_u32_le(out, s_strx)
+        out.push(0x0E + 0x01)
+        out.push(s_section)
+        out = push_u16_le(out, 0)
+        out = push_u64_le(out, n_value)
+        sj = sj + 1
+    }
+
+    // String table: "\0<name0>\0<name1>\0..."
+    out.push(0)
+    let mut sk = 0
+    while sk < nsyms {
+        let nb = sym_name_bytes[sk]
+        let mut nbi = 0
+        while nbi < len(nb) {
+            out.push(nb[nbi])
+            nbi = nbi + 1
+        }
+        sk = sk + 1
+    }
+
+    return out
+}
+
 // Push N zero bytes.
 fn push_zeros(buf: [int], n: int) -> [int] {
     let mut b = buf
