@@ -1,0 +1,2 @@
+COMPUTE: sigma_k(6,10) = 60526250
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form compute, self-verified deterministic · g_self_verify · TECS-L Tier1)
