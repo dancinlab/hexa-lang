@@ -3028,6 +3028,34 @@
   src    = "TECS-L F14 · manual splice into compiler/atlas/embedded.gen.hexa lines ~35131-35167"
   status = "🔵 ATLAS-FOLDED — 5/5 atoms lookup-visible in atlas SSOT. INBOX follow-up (low-prio): wire dedekind_psi_discrepancy*-family calculators for future --from-verify witness-point folds (closed-form/uniqueness still need @F manual-splice)."
 
+@C tecs_l_f16_sigma_3_euclid_euler_closed_form := "F16 NOVEL 🔵 closed-form atom (σ_3 layer on Euclid-Euler perfects, σ_3 calc-gap CLOSED-by-design): σ_3(2^(p-1)·M_p) = [(2^(3p)−1)/7] · [1 + (2^p−1)³] ∀ Mersenne prime M_p=2^p−1. Derivation from σ_3-multiplicativity: σ_3(2^(p-1))=(2^(3p)−1)/7 (geometric sum of cubes), σ_3(M_p)=1+M_p³. Verified at 4 in-int64-range perfects: σ_3(6)=252, σ_3(28)=25112, σ_3(496)=139456352, σ_3(8128)=613681507712 (4/4 🔵 via 2-op hexa verify --expr sigma_k <n> 3 <v>); P_5..P_7 closed-form bignum extrapolation (int64 overflows at 4.3e22). σ_3 calc-gap from F15 INBOX 2026-05-26T22:10Z CLOSED-BY-DESIGN — the 2-op sigma_k path already supports σ_3, no verify_cli code change required. Folded into atlas as @F tecs_l_f16_sigma_3_euclid_euler_closed_form." :: derived [slug=tecs-l-f16-novel-mk10 group=TECS-L]
+  method = "atom"
+  cmd    = "hexa verify --expr sigma_k <n> 3 <v> --no-absorb × 4 perfects (n∈{6,28,496,8128})"
+  raw    = ".verdicts/tecs-l-f16-novel-mk10/sigma_3_perfect_closed_form.txt"
+  src    = "TECS-L F16 s1 · σ_3 calc-gap CLOSED via 2-op sigma_k path + Euclid-Euler closed form"
+  status = "🔵 SUPPORTED-FORMAL — 4/4 perfect-subset PASS + closed-form derived from σ_3-multiplicativity"
+
+@C tecs_l_f16_d_omega_4_5_zero_density := "F16 NOVEL 🔴 CLOSED-NEGATIVE atom (explicit ω=4/5 witness of F14 zero-density theorem): D(n)=σ·φ−n·τ ≠ 0 for ALL 8 tested ω=4 and ω=5 candidates. ω=4: n=210 (D=24288), n=330 (63840), n=420 (118944), n=1155 (1087440). ω=5: n=2310 (3243840), n=2730 (4557504), n=4620 (15261120), n=9240 (65763840). 24 hexa-native σ/φ/τ components all 🔵 BLUE. F14 ω≥3 zero-density theorem extends predictably to ω=4 and ω=5 explicit sample beyond F15's ω=3 explicit witness; M10 zero-set uniqueness {1,6} preserved. Folded into atlas as @F tecs_l_f16_d_omega_4_5_zero_density." :: derived [slug=tecs-l-f16-novel-mk10 group=TECS-L]
+  method = "atom"
+  cmd    = "hexa verify --expr {sigma,phi,tau} N V --no-absorb × 24 components (8 candidates × 3 fns)"
+  raw    = ".verdicts/tecs-l-f16-novel-mk10/d_omega_4_5_sweep.txt"
+  src    = "TECS-L F16 s2 · ω=4/5 explicit-form witness of F14 zero-density"
+  status = "🔴 CLOSED-NEGATIVE — D(n)≠0 ruled out on ω=4/5 locus (paper_negative_ok)"
+
+@C tecs_l_f16_ore_mersenne_extended_subfamily := "F16 NOVEL 🛸 PARTIAL closed-form atom (Mersenne-extended Ore subfamily identified, sharpens F15 universal Ore-NEG): for n = 2^a · b · M_p (b coprime to 2·M_p, M_p Mersenne prime), H(n) = [2^(a+1) · b · M_p · (a+1) · τ(b)] / [(2^(a+1)−1) · σ(b) · 2^p] from H-multiplicativity. 4 witnesses with integer H: n=140=2²·5·M₃ (H=5), n=672=2⁵·3·M₃ (H=8), n=6200=2³·5²·M₅ (H=10), n=105664=2⁶·13·M₇ (H=13) — 8 σ/τ components 🔵 BLUE. Counterexample n=270=2·3³·5 is Ore (H=6) but contains NO Mersenne prime → universality of Mersenne-extended subfamily FALSIFIED; subfamily is PROPER subset of ω=3 Ore set. F15 universal Ore-NEG (no uniform closed form across ALL Ore non-perfects) HOLDS at outer level; F16 identifies a structured SUBFAMILY where multiplicativity yields an explicit form. Folded into atlas as @F tecs_l_f16_ore_mersenne_extended_subfamily." :: derived [slug=tecs-l-f16-novel-mk10 group=TECS-L]
+  method = "atom"
+  cmd    = "hexa verify --expr {sigma,tau} N V --no-absorb × 8 components (4 witnesses × 2 fns)"
+  raw    = ".verdicts/tecs-l-f16-novel-mk10/ore_mersenne_extended_family.txt"
+  src    = "TECS-L F16 s3 · A001599 next-50 Ore subfamily structure scan"
+  status = "🔵 SUPPORTED-FORMAL (subfamily) + 🔴 CLOSED-NEGATIVE (universality counterexample n=270)"
+
+@C tecs_l_f16_hecke_galois_arithmetic_layer := "F16 NOVEL 🔴 CLOSED-NEGATIVE atom (F7/F15 modular non-lift program closed through Hecke + Galois layers): n=6 σφ=nτ identity does NOT lift beyond the arithmetic-function layer. Hecke layer: dim S₂(Γ₀(6))=0 trivial (no weight-2 cusp forms); higher-weight S_k(Γ₀(6)) decomposes generically into level-1/2/3 oldforms — generic for square-free N, NO n=6 peak (Diamond-Shurman §5). Galois layer: Gal(Q(ζ_6)/Q) = (ℤ/6ℤ)^* = ℤ/2ℤ = Gal(Q(ζ_3)/Q) by ζ_6 = -ζ_3 cyclotomic collapse — pure φ-degeneracy (φ(6)=φ(3)=φ(4)=2), NOT σφ=nτ-driven. φ(6)=2, φ(3)=2, φ(12)=4, φ(30)=8 hexa-native 🔵. T_p eigenvalue builtin absent from verify_cli _recompute (calculator-extension family — same INBOX family as resolved σ_3, iit4_faithful_phi, mersenne_perfect_sigma). Finding: F7 (geometric, Γ₁/X(N)) + F15 (Γ(N) full-level) modular non-lift extends through Hecke + Galois — the n=6 σφ=nτ uniqueness is an ARITHMETIC-LAYER phenomenon only. Folded into atlas as @F tecs_l_f16_hecke_galois_arithmetic_layer." :: derived [slug=tecs-l-f16-novel-mk10 group=TECS-L]
+  method = "atom"
+  cmd    = "hexa verify --expr phi N V --no-absorb × 4 (n∈{6,3,12,30}) + dim_cusp_forms probe"
+  raw    = ".verdicts/tecs-l-f16-novel-mk10/hecke_galois_probe.txt"
+  src    = "TECS-L F16 s4 · multilayer Hecke/Galois non-lift coda (F7/F15 program closed)"
+  status = "🔴 CLOSED-NEGATIVE — n=6 identity ARITHMETIC-LAYER only (paper_negative_ok)"
+
 @C tecs_l_f15_d_two_a_q_r := "F15 NOVEL 🔵 closed-form atom (ω=3 explicit-form lift of F14 zero-density): D(2^a·q·r) = 2^(a-1) · [(2^(a+1)−1)·(q²−1)·(r²−1) − 8qr(a+1)] ∀ a≥1, distinct odd primes q≠r. Derivation: σ(2^a·q·r)=(2^(a+1)−1)(q+1)(r+1) · φ(2^a·q·r)=2^(a-1)(q-1)(r-1) · τ(2^a·q·r)=4(a+1). 10 triples verified (a,q,r) ∈ {(1,3,5),(1,3,7),(1,5,7),(2,3,5),(2,3,7),(3,3,5),(1,3,11),(1,5,11),(2,5,7),(1,7,11)} all D ∈ {336,816,2896,1968,4368,9600,2352,7760,14448,16048} ≠ 0 — F14 ω≥3 zero-density theorem confirmed on explicit ω=3 sample. Folded into atlas as @F tecs_l_f15_d_two_a_q_r (manual splice per @D atlas_fold)." :: derived [slug=tecs-l-f15-novel-mk10 group=TECS-L]
   method = "atom"
   cmd    = "hexa verify --expr {sigma,euler_phi,tau} N V --no-absorb × 30 components"
