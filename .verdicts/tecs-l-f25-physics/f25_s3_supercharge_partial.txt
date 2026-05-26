@@ -1,0 +1,15 @@
+verify --expr sigma(16)=31
+  calc   = 31  == expected 31
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+  absorb = · already in atlas — idempotent skip (default · @D g69)
+---
+verify --expr tau(16)=5
+  calc   = 5  == expected 5
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+  absorb = · already in atlas — idempotent skip (default · @D g69)
+---
+verify --expr sigma(32)=63
+  calc   = 63  == expected 63
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+  absorb = · already in atlas — idempotent skip (default · @D g69)
+---
