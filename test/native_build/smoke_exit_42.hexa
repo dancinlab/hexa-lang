@@ -1,0 +1,21 @@
+// test/native_build/smoke_exit_42.hexa
+//
+// HEXA_BACKEND flip · 일곱째 increment smoke — calls `exit(42)` at top-level.
+// aprime_cc auto-wraps top-level statements as the program entry; the
+// callsite `exit(42)` lowers to:
+//     movz x0, #0   ; TAG_INT
+//     movz x1, #42  ; payload
+//     bl _hexa_exit
+// — exactly the HexaVal (x0=tag, x1=val) pair-ABI that the hexa-emit
+// adapter (mov x0, x1; svc #0x80) handles.
+//
+// Verification matrix:
+//   HEXA_BACKEND=native (no rt override)     → C `hexa_exit`, rc=42
+//   HEXA_BACKEND=native HEXA_NATIVE_RT_EXIT=1 → hexa-emit `_hexa_exit`,
+//                                              rc=42 — proven via
+//                                              otool -tv showing only
+//                                              4 instructions at
+//                                              _hexa_exit (the adapter),
+//                                              not the bigger C body.
+
+exit(42)
