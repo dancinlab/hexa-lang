@@ -1487,15 +1487,39 @@ fn link_macho_arm64(objs: [ParsedObj], out_path: string, entry: string, _is_stat
     let mut linkedit_after = text_filesize
     if has_data_seg { linkedit_after = data_seg_fileoff + data_seg_filesize }
     let linkedit_fileoff = linkedit_after
-    // chained_fixups data (empty fixups — no imports, no rebases):
-    //   28 B header + 4 B pad (8-align) = 32 B, then dyld_chained_starts_
-    //   in_image = u32 seg_count + seg_count×u32 seg_info_offset (all 0),
-    //   then pad to 8-byte align. seg_count MUST match the number of
-    //   LC_SEGMENT_64 we emit (PAGEZERO + TEXT [+ DATA] + LINKEDIT).
+    // chained_fixups data layout — empty-vs-with-imports:
+    //   28 B header + 4 B pad (8-align) = 32 B
+    //   then dyld_chained_starts_in_image (4 + 4*seg_count, pad to 8)
+    //   then [if has_imports] dyld_chained_starts_in_segment (24 B for __DATA)
+    //   then imports table (4 B × nimports, pad to 8)
+    //   then symbols (NUL + names + NULs)
+    //   trailing pad to 8.
     let mut fixups_seg_count = 3                       // PAGEZERO + TEXT + LINKEDIT
     if has_data_seg { fixups_seg_count = 4 }
-    let starts_in_image_size = 4 + 4 * fixups_seg_count
+    let starts_in_image_hdr = 4 + 4 * fixups_seg_count
+    // Pad starts_in_image to 8-byte boundary BEFORE appending seg_info struct.
+    let siim_rem = starts_in_image_hdr & 7
+    let mut starts_in_image_size = starts_in_image_hdr
+    if siim_rem != 0 { starts_in_image_size = starts_in_image_size + (8 - siim_rem) }
+    // Offset of seg_info struct (for __DATA) from start of starts_in_image.
+    let cf_seg_info_off = starts_in_image_size
+    let cf_seg_info_size = 24                         // dyld_chained_starts_in_segment
+    // imports table size (4 B per import, padded to 8).
+    let imports_table_size_raw = 4 * nimports
+    let itrem = imports_table_size_raw & 7
+    let mut imports_table_size = imports_table_size_raw
+    if itrem != 0 { imports_table_size = imports_table_size + (8 - itrem) }
+    // symbols table size: 1 NUL byte at start + each name with NUL.
+    let mut symbols_table_size = 1                    // leading NUL
+    let mut snk = 0
+    while snk < nimports { symbols_table_size = symbols_table_size + len(import_names[snk]) + 1; snk = snk + 1 }
+    // Total chained_fixups blob: 32 (header) + starts_in_image + [if imports]
+    // seg_info + imports + symbols. Pad final to 8.
     let mut chained_fixups_size = 32 + starts_in_image_size
+    if has_imports {
+        chained_fixups_size = chained_fixups_size + cf_seg_info_size
+                            + imports_table_size + symbols_table_size
+    }
     let cfrem = chained_fixups_size & 7
     if cfrem != 0 { chained_fixups_size = chained_fixups_size + (8 - cfrem) }
     let exports_trie_size   = 8
@@ -1691,24 +1715,110 @@ fn link_macho_arm64(objs: [ParsedObj], out_path: string, entry: string, _is_stat
 
     // ── __LINKEDIT payload — chained_fixups + exports_trie ──
     //
-    // dyld_chained_fixups_header (28 bytes) + 4-byte pad to 8-align
-    // starts_in_image. imports/symbols offsets point just past the
-    // starts_in_image table (empty — no imports, no symbols).
-    let imports_off_in_fixups = 32 + starts_in_image_size
+    // Layout depends on has_imports:
+    //   header   28 B + pad 4   = 32 B
+    //   starts_in_image (hdr + pad)
+    //   [imports] starts_in_segment (24 B for __DATA chain)
+    //   [imports] imports table (4 B × nimports + pad)
+    //   [imports] symbols table (NUL + names)
+    //   trailing pad to 8.
+    let imports_off_in_fixups = 32 + starts_in_image_size + cf_seg_info_size
+    let symbols_off_in_fixups = imports_off_in_fixups + imports_table_size
+    let mut hdr_imports_off = 32 + starts_in_image_size
+    let mut hdr_symbols_off = 32 + starts_in_image_size
+    let mut hdr_imports_count = 0
+    if has_imports {
+        hdr_imports_off = imports_off_in_fixups
+        hdr_symbols_off = symbols_off_in_fixups
+        hdr_imports_count = nimports
+    }
     _w_u32(out, 0)                                 // fixups_version
     _w_u32(out, 32)                                // starts_offset (8-aligned after header+pad)
-    _w_u32(out, imports_off_in_fixups)             // imports_offset
-    _w_u32(out, imports_off_in_fixups)             // symbols_offset (no imports/symbols)
-    _w_u32(out, 0)                                 // imports_count
+    _w_u32(out, hdr_imports_off)                   // imports_offset
+    _w_u32(out, hdr_symbols_off)                   // symbols_offset
+    _w_u32(out, hdr_imports_count)                 // imports_count
     _w_u32(out, 1)                                 // imports_format = DYLD_CHAINED_IMPORT
     _w_u32(out, 0)                                 // symbols_format = uncompressed
     _w_zero_n(out, 4)                              // 4-byte pad to 8-align (offset 28 → 32)
     // dyld_chained_starts_in_image @ offset 32:
     _w_u32(out, fixups_seg_count)                  // seg_count
+    // seg_info_offset[i]: 0 for segments without fixups; for __DATA
+    // (the segment carrying __got) we point at the starts_in_segment
+    // struct placed right after starts_in_image.
+    // Segment order in our emit: 0=PAGEZERO, 1=TEXT, 2=DATA (if has),
+    // 3=LINKEDIT (or 2=LINKEDIT if no DATA).
+    let data_seg_idx = 2                           // when has_data_seg
     let mut fsc = 0
-    while fsc < fixups_seg_count { _w_u32(out, 0); fsc = fsc + 1 }   // seg_info_offset[i] = 0
-    // trailing pad to chained_fixups_size (8-aligned).
-    let cf_written = 32 + 4 + 4 * fixups_seg_count
+    while fsc < fixups_seg_count {
+        if has_imports && has_data_seg && fsc == data_seg_idx {
+            _w_u32(out, cf_seg_info_off)
+        } else {
+            _w_u32(out, 0)
+        }
+        fsc = fsc + 1
+    }
+    // Pad starts_in_image up to starts_in_image_size (8-aligned).
+    let siim_written = 4 + 4 * fixups_seg_count
+    if starts_in_image_size > siim_written {
+        _w_zero_n(out, starts_in_image_size - siim_written)
+    }
+    if has_imports {
+        // ── dyld_chained_starts_in_segment (24 B) — __DATA chain ─────
+        // struct fields (from dyld's chained-fixups format header):
+        //   u32 size            (24)
+        //   u16 page_size       (0x4000)
+        //   u16 pointer_format  (6 = DYLD_CHAINED_PTR_64_OFFSET)
+        //   u64 segment_offset  (offset of __DATA segment within image —
+        //                        = data_seg_fileoff for file=image case;
+        //                        clang uses 0x4000 for __DATA_CONST@4000)
+        //   u32 max_valid_pointer (0)
+        //   u16 page_count      (1 = chain spans 1 page)
+        //   u16 page_start[0]   (offset of first chain link within page)
+        //
+        // The first chain link is the FIRST __got slot. __got lies at
+        // got_fileoff within the file, but the page-relative offset is
+        // (got_section_addr & (page_size-1)).
+        _w_u32(out, cf_seg_info_size)              // size = 24
+        _w_u16(out, 0x4000)                        // page_size
+        _w_u16(out, 6)                             // DYLD_CHAINED_PTR_64_OFFSET
+        _w_u64(out, data_seg_fileoff)              // segment_offset (file off works since vmaddr@file)
+        _w_u32(out, 0)                             // max_valid_pointer
+        _w_u16(out, 1)                             // page_count
+        _w_u16(out, got_section_addr & (page - 1)) // page_start[0] — offset within page
+        // ── imports table — 4 B × nimports + pad to 8 ─────────────────
+        // Each import (DYLD_CHAINED_IMPORT format) is a 32-bit packed:
+        //   lib_ordinal:8 | weak_import:1 | name_offset:23
+        // We use lib_ordinal=1 (libSystem) for ALL imports in this
+        // increment (single-dylib scope). name_offset = byte offset
+        // into the symbols table (which starts with a leading NUL).
+        let mut sym_name_off = 1                   // first name follows leading NUL
+        let mut ii = 0
+        while ii < nimports {
+            let packed = (sym_name_off << 9) | (0 << 8) | 1
+            _w_u32(out, packed)
+            sym_name_off = sym_name_off + len(import_names[ii]) + 1
+            ii = ii + 1
+        }
+        // Pad imports table to 8-align.
+        let it_pad = imports_table_size - imports_table_size_raw
+        _w_zero_n(out, it_pad)
+        // ── symbols table — leading NUL + each name with NUL ─────────
+        out.push(0)                                // leading NUL
+        let mut sm = 0
+        while sm < nimports {
+            let nm = import_names[sm]
+            let nl = len(nm)
+            let mut bk = 0
+            while bk < nl { out.push(char_code(nm, bk) & 0xff); bk = bk + 1 }
+            out.push(0)
+            sm = sm + 1
+        }
+    }
+    // Trailing pad to chained_fixups_size (8-aligned).
+    let mut cf_written = 32 + starts_in_image_size
+    if has_imports {
+        cf_written = cf_written + cf_seg_info_size + imports_table_size + symbols_table_size
+    }
     if chained_fixups_size > cf_written { _w_zero_n(out, chained_fixups_size - cf_written) }
 
     // dyld_exports_trie (2 bytes minimum: terminal=0, child_count=0)
