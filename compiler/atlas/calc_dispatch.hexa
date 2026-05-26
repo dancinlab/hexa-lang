@@ -164,6 +164,13 @@ pub fn calc_is_float_fn(fn_name: string) -> bool {
         || fn_name == "cyclotron_freq_hz" || fn_name == "penning_axial_freq"
         || fn_name == "h_reduced_mass_factor" || fn_name == "antihydrogen_1s_binding"
         || fn_name == "gbar_free_fall_time"
+        // CERN Stage 5 Bethe-Bloch corrections (PDG §34 · 2026-05-26):
+        //   sternheimer_delta_al_bg046  · shell_correction_cu_bg255
+        //   bloch_l2_beta046_z1         · barkas_l1_cu_bg046_pbar
+        || fn_name == "sternheimer_delta_al_bg046"
+        || fn_name == "shell_correction_cu_bg255"
+        || fn_name == "bloch_l2_beta046_z1"
+        || fn_name == "barkas_l1_cu_bg046_pbar"
 }
 
 // calc_is_zero_arg_float_fn — is fn_name a 0-arg closed-form constant?
@@ -179,4 +186,9 @@ pub fn calc_is_zero_arg_float_fn(fn_name: string) -> bool {
         || fn_name == "transition_factor_1s2s"
         || fn_name == "recomb_3body_exponent"
         || fn_name == "mu_b_over_kb"
+        // CERN Stage 5 — 0-arg correction-value atoms (PDG §34):
+        || fn_name == "sternheimer_delta_al_bg046"
+        || fn_name == "shell_correction_cu_bg255"
+        || fn_name == "bloch_l2_beta046_z1"
+        || fn_name == "barkas_l1_cu_bg046_pbar"
 }

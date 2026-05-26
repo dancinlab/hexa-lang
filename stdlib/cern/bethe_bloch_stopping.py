@@ -154,18 +154,35 @@ def bethe_bloch_dedx(
     a_target: float,
     i_ev: float,
     m_e_mev: float,
+    stage: int = 3,
+    material_name: str = "",
+    proj_charge_sign: int = +1,
 ) -> dict:
     """Evaluate the PDG mean-stopping-power expression at one (KE,
     material) point via the ①a transport kernel. Returns the row dict
     ready for CSV emission.
 
-    Bethe-Bloch (PDG eq. 34.5, density-correction δ = 0):
-        -dE/dx = K · z² · (Z/A) · (1/β²) ·
-                 [ ½ · ln(2·m_e·c²·β²·γ²·T_max / I²) − β² ]
-    with
+    Stage 3 (default, density δ = 0, no shell, no Bloch, no Barkas):
+        PDG eq. 34.5 — closed-form mean stopping power.
+
+    Stage 5 (corrections-on):
+        PDG eq. 34.5 + Sternheimer δ(βγ) + Andersen-Ziegler shell C(βγ,I)
+        + Bloch L2 + Z1^3 Barkas L1·sign(z1). Requires `material_name`
+        in {Al,Cu,W,Pb} to look up Sternheimer-Berger-Seltzer coefficients.
+
+    With
         γ = 1 + KE / (m_proj·c²),   β² = 1 − 1/γ²,
         T_max = 2·m_e·c²·β²·γ² / (1 + 2γm_e/m_proj + (m_e/m_proj)²)
     """
+    coeffs = None
+    if stage == 5:
+        if material_name not in transport_kernel.STERNHEIMER_COEFFS:
+            raise ValueError(
+                f"stage=5 requires material_name in "
+                f"{list(transport_kernel.STERNHEIMER_COEFFS.keys())}; "
+                f"got {material_name!r}"
+            )
+        coeffs = transport_kernel.STERNHEIMER_COEFFS[material_name]
     return transport_kernel.bethe_bloch_dedx(
         ke_mev=ke_mev,
         projectile_mass_mev=m_proj_mev,
@@ -174,6 +191,9 @@ def bethe_bloch_dedx(
         target_a_gpermol=a_target,
         target_i_ev=i_ev,
         electron_mass_mev=m_e_mev,
+        stage=stage,
+        sternheimer_coeffs=coeffs,
+        projectile_charge_sign=proj_charge_sign,
     )
 
 
@@ -238,6 +258,12 @@ def main(argv: list[str]) -> int:
 
     m_pbar, m_e = antiproton_and_electron_mev()
 
+    # CERN_STAGE env var: 3 (default, Stage-3 closed-form δ=0 / Stage-1
+    # parity-compatible) or 5 (Stage-5 corrections-on). The producer is
+    # backward-compatible: a CernVerifyProducer Swift spawn with no env
+    # var keeps the byte-identical Stage-1/3 output it used to.
+    stage = int(os.environ.get("CERN_STAGE", "3"))
+
     rows: list[dict] = []
     for (mat, z, a, i_ev) in MATERIALS:
         for ke in KE_MEV_SAMPLES:
@@ -249,8 +275,11 @@ def main(argv: list[str]) -> int:
                 a_target=a,
                 i_ev=i_ev,
                 m_e_mev=m_e,
+                stage=stage,
+                material_name=mat,
+                proj_charge_sign=-1,   # antiproton — Z1^3 Barkas sign flip
             )
-            rows.append({
+            row = {
                 "material": mat,
                 "z_target": z,
                 "a_target_gpermol": a,
@@ -260,7 +289,16 @@ def main(argv: list[str]) -> int:
                 "gamma": r["gamma"],
                 "tmax_mev": r["tmax_mev"],
                 "dedx_mevcm2_per_g": r["dedx_mevcm2_per_g"],
-            })
+            }
+            if stage == 5:
+                row["sternheimer_delta"] = r["sternheimer_delta"]
+                row["shell_correction_c"] = r["shell_correction_c"]
+                row["shell_correction_c_over_z"] = r["shell_correction_c_over_z"]
+                row["bloch_correction_l2"] = r["bloch_correction_l2"]
+                row["barkas_correction_l1"] = r["barkas_correction_l1"]
+                row["bracket_stage3"] = r["bracket_stage3"]
+                row["bracket_stage5"] = r["bracket_stage5"]
+            rows.append(row)
 
     # ----- CSV -----
     csv_name = f"{GEOMETRY_ID}.csv"
