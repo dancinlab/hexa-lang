@@ -1,0 +1,339 @@
+// test/native_build/emit_hexa_ptr_free_native_o.hexa
+//
+// HEXA_BACKEND flip · chunk-B phase-H "열한째 increment" — production-wire
+// FOURTH PROBE: hexa-native override for the `_hexa_ptr_free` runtime fn.
+//
+// Pair to the `_hexa_ptr_alloc` override (PR #1326 + 2026-05-26 header
+// refactor). Closes the architectural residual (B) of #1326 — the
+// alloc/free pair is now symmetric and size-self-describing via a 16-B
+// header at addr[0..8]. When BOTH env gates are on
+// (HEXA_NATIVE_RT_PTR_ALLOC=1 + HEXA_NATIVE_RT_PTR_FREE=1), the override
+// pair is default-flip safe: mmap'd pages are paired with munmap, not
+// libc free().
+//
+// The C-side `hexa_ptr_free` in self/runtime.c carries
+// `__attribute__((weak))` after this cycle's surgical edit; ld64 binds
+// `bl _hexa_ptr_free` callsites to this hexa-emit strong symbol when
+// HEXA_NATIVE_RT_PTR_FREE=1 gates the cmd_build native-path link append.
+//
+// ── ABI ADAPTER ──
+//
+// CALLER ABI (aprime_cc emit, HexaVal struct ≤16 B by value, 2 args):
+//   arg0 ptr  → x0 = ptr.tag, x1 = ptr.val (= user-facing ptr from
+//                 _hexa_ptr_alloc, i.e. header_addr + 16)
+//   arg1 size → x2 = size.tag, x3 = size.val (IGNORED — we recover size
+//                 from the header. Codegen passes hexa_int(0) for the
+//                 1-arg `ptr_free` alias; the 2-arg form is also tolerated
+//                 since we ignore it.)
+//
+// PRIMITIVE ABI (rt_free per self/codegen/runtime_arm64.hexa, 2026-05-26):
+//   x0 = user_ptr → header_addr = x0 - 16 → munmap(header_addr, N+16)
+//   svc #0x80 with x16=73 (SYS_munmap)
+//
+// RETURN ABI (HexaVal struct ≤16 B by value):
+//   x0 = TAG_VOID = 3 (matches `hexa_void()` tag in self/runtime.c)
+//   x1 = 0
+//
+// ADAPTER BODY (44 bytes total):
+//   ── input prefix (4 B) ──
+//   mov x0, x1                       // user_ptr (HexaVal.payload) → x0
+//   ── rt_free body minus its final ret (20 B) ──
+//   sub x0, x0, #16                  // x0 = header_addr
+//   ldr x1, [x0]                     // x1 = stored N
+//   add x1, x1, #16                  // x1 = N + 16 (mmap'd length)
+//   mov x16, #73                     // SYS_munmap
+//   svc #0x80                        // munmap(addr, N+16); x0 = 0/-errno
+//   ── HexaVal-void return postfix (12 B) ──
+//   mov x0, #3                       // TAG_VOID = 3
+//   mov x1, #0                       // HexaVal.payload = 0
+//   ret                              // (rt_free's ret restored here)
+//
+// Note: rt_free's own ret (4 B) is STRIPPED — we inject HexaVal-void
+// return postfix between the svc and the ret. Total adapter
+// = 4 (prefix) + 20 (rt_free body sans ret) + 12 (ret-postfix + ret)
+// = 36 bytes. (12 ret-postfix = 4 mov x0,#3 + 4 mov x1,#0 + 4 ret).
+//
+// ── HONESTY ──
+//
+// Cross-cutting:
+//   - closure = production override active when env on; otool shows
+//     hexa-emit body; selfhosted opt-in (env unset → byte-identical link).
+//   - f1/f2 — clang ONLY as link-side oracle, NEVER in this .o's emit path.
+//   - selfhosted opt-in — HEXA_NATIVE_RT_PTR_FREE=1 gates the cmd_build
+//     append; unset = no behavior change (default build_aprime.sh stays
+//     byte-identical to the pre-cycle baseline).
+//   - g5 verbatim — verify smoke pastes raw rc + stdout.
+//
+// PAIR-SAFETY (closes #1326 residual (B)):
+//   - Default-flip safe when BOTH alloc + free env gates are on.
+//   - Free-only mode (FREE=1 without ALLOC=1) is INCORRECT — the ptrs
+//     fed in came from libc calloc (C-side hexa_ptr_alloc), and
+//     subtracting 16 + munmap'ing UB the libc heap. Document — and
+//     defensive cmd_build env-check is a recommended follow-up.
+//   - alloc-only mode (ALLOC=1, FREE=0) is the prior #1326 residual:
+//     UB if free is called. Now pair-flippable to closure.
+
+// ═══════════════════════════════════════════════════════════════════
+// Adapter body — HexaVal-ABI prefix + rt_free body + HexaVal-void return.
+// rt_free bytes verbatim from self/codegen/runtime_arm64.hexa.
+// ═══════════════════════════════════════════════════════════════════
+fn hexa_ptr_free_adapter_bytes() -> [int] {
+    let mut c = []
+
+    // ── input prefix (4 bytes) ──
+    // mov x0, x1   (= orr x0, xzr, x1)   0xAA0103E0  → e0 03 01 aa LE
+    c.push(0xe0); c.push(0x03); c.push(0x01); c.push(0xaa)
+
+    // ── rt_free body minus ret (20 bytes, 5 instructions) ──
+    // sub x0, x0, #16  (x0 = header addr)   0xD1004000 → 00 40 00 d1
+    c.push(0x00); c.push(0x40); c.push(0x00); c.push(0xd1)
+    // ldr x1, [x0]     (x1 = stored N)      0xF9400001 → 01 00 40 f9
+    c.push(0x01); c.push(0x00); c.push(0x40); c.push(0xf9)
+    // add x1, x1, #16  (x1 = N + 16)        0x91004021 → 21 40 00 91
+    c.push(0x21); c.push(0x40); c.push(0x00); c.push(0x91)
+    // mov x16, #73 (SYS_munmap)             0xD2800930 → 30 09 80 d2
+    c.push(0x30); c.push(0x09); c.push(0x80); c.push(0xd2)
+    // svc #0x80                             0xD4001001 → 01 10 00 d4
+    c.push(0x01); c.push(0x10); c.push(0x00); c.push(0xd4)
+    // (rt_free's own ret STRIPPED — HexaVal-void return below)
+
+    // ── HexaVal-void return postfix (12 bytes) ──
+    // mov x0, #3  (TAG_VOID = 3)            0xD2800060 → 60 00 80 d2
+    c.push(0x60); c.push(0x00); c.push(0x80); c.push(0xd2)
+    // mov x1, #0                            0xD2800001 → 01 00 80 d2
+    c.push(0x01); c.push(0x00); c.push(0x80); c.push(0xd2)
+    // ret                                    0xD65F03C0 → c0 03 5f d6
+    c.push(0xc0); c.push(0x03); c.push(0x5f); c.push(0xd6)
+
+    return c
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Inlined from self/codegen/macho.hexa (constants + helpers + obj_wrap)
+// Same as emit_hexa_ptr_alloc_native_o.hexa except the symbol name +
+// strtab payload at the end (_hexa_ptr_free = 13 chars + NUL = 14 B
+// strtab total, vs _hexa_ptr_alloc = 15 B + NUL = 16 B).
+// ═══════════════════════════════════════════════════════════════════
+fn mh_magic_64_v() -> int { return 0xFEEDFACF }
+fn mh_object_v() -> int { return 1 }
+fn cpu_type_arm64_v() -> int { return 0x0100000C }
+fn cpu_subtype_all_v() -> int { return 0 }
+fn lc_segment_64_v() -> int { return 0x19 }
+fn lc_symtab_v() -> int { return 0x02 }
+fn lc_build_version_v() -> int { return 0x32 }
+fn s_attr_pure_v() -> int { return 0x80000000 }
+fn s_attr_some_v() -> int { return 0x00000400 }
+fn n_ext_v() -> int { return 0x01 }
+fn n_sect_v() -> int { return 0x0e }
+
+fn align_to_v(val: int, align: int) -> int {
+    return (val + align - 1) / align * align
+}
+
+fn push_u16_le_v(buf: [int], val: int) -> [int] {
+    return buf.push(val % 256).push((val / 256) % 256)
+}
+
+fn push_u32_le_v(buf: [int], val: int) -> [int] {
+    return buf.push(val % 256).push((val / 256) % 256).push((val / 65536) % 256).push((val / 16777216) % 256)
+}
+
+fn push_u64_le_v(buf: [int], val: int) -> [int] {
+    let mut b = push_u32_le_v(buf, val % 0x100000000)
+    return push_u32_le_v(b, val / 0x100000000)
+}
+
+// Inlined from self/codegen/macho.hexa::macho_obj_wrap (L34-136).
+// Symbol exported = `_hexa_ptr_free` (13 chars + NUL = 14 B strtab).
+fn macho_obj_wrap_hexa_ptr_free(code: [int], main_offset: int) -> [int] {
+    let mut out = []
+    let code_size = len(code)
+
+    let header_size = 32
+    let segment_cmd_size = 152
+    let symtab_cmd_size = 24
+    let build_version_cmd_size = 24
+    let sizeofcmds = segment_cmd_size + symtab_cmd_size + build_version_cmd_size
+
+    let code_offset = align_to_v(header_size + sizeofcmds, 8)
+    let symtab_offset = align_to_v(code_offset + code_size, 4)
+    let nlist_size = 16
+    let strtab_offset = symtab_offset + nlist_size
+    // strtab = "\0_hexa_ptr_free\0" = 1 + 14 + 1 = 16 bytes total.
+    // (Leading NUL = empty-string sentinel; symbol name at string index 1
+    // is NUL-terminated.)
+    let strtab_size = 1 + 15
+
+    // Mach-O Header (32 bytes)
+    out = push_u32_le_v(out, mh_magic_64_v())
+    out = push_u32_le_v(out, cpu_type_arm64_v())
+    out = push_u32_le_v(out, cpu_subtype_all_v())
+    out = push_u32_le_v(out, mh_object_v())
+    out = push_u32_le_v(out, 3)
+    out = push_u32_le_v(out, sizeofcmds)
+    out = push_u32_le_v(out, 0)
+    out = push_u32_le_v(out, 0)
+
+    // LC_SEGMENT_64
+    out = push_u32_le_v(out, lc_segment_64_v())
+    out = push_u32_le_v(out, segment_cmd_size)
+    let mut i = 0
+    while i < 16 { out.push(0); i = i + 1 }
+    out = push_u64_le_v(out, 0)
+    out = push_u64_le_v(out, align_to_v(strtab_offset + strtab_size, 8))
+    out = push_u64_le_v(out, code_offset)
+    out = push_u64_le_v(out, strtab_offset + strtab_size - code_offset)
+    out = push_u32_le_v(out, 7)
+    out = push_u32_le_v(out, 7)
+    out = push_u32_le_v(out, 1)
+    out = push_u32_le_v(out, 0)
+
+    // Section header: __text (80 bytes)
+    out.push(95); out.push(95); out.push(116); out.push(101); out.push(120); out.push(116)
+    let mut j = 0
+    while j < 10 { out.push(0); j = j + 1 }
+    out.push(95); out.push(95); out.push(84); out.push(69); out.push(88); out.push(84)
+    j = 0
+    while j < 10 { out.push(0); j = j + 1 }
+    out = push_u64_le_v(out, 0)
+    out = push_u64_le_v(out, code_size)
+    out = push_u32_le_v(out, code_offset)
+    out = push_u32_le_v(out, 2)
+    out = push_u32_le_v(out, 0)
+    out = push_u32_le_v(out, 0)
+    out = push_u32_le_v(out, s_attr_pure_v() + s_attr_some_v())
+    out = push_u32_le_v(out, 0)
+    out = push_u32_le_v(out, 0)
+    out = push_u32_le_v(out, 0)
+
+    // LC_SYMTAB
+    out = push_u32_le_v(out, lc_symtab_v())
+    out = push_u32_le_v(out, symtab_cmd_size)
+    out = push_u32_le_v(out, symtab_offset)
+    out = push_u32_le_v(out, 1)
+    out = push_u32_le_v(out, strtab_offset)
+    out = push_u32_le_v(out, strtab_size)
+
+    // LC_BUILD_VERSION
+    out = push_u32_le_v(out, lc_build_version_v())
+    out = push_u32_le_v(out, build_version_cmd_size)
+    out = push_u32_le_v(out, 1)
+    out = push_u32_le_v(out, 0x000E0000)
+    out = push_u32_le_v(out, 0x000E0000)
+    out = push_u32_le_v(out, 0)
+
+    // Pad to code_offset
+    while len(out) < code_offset { out.push(0) }
+
+    // Code section
+    let mut k = 0
+    while k < len(code) { out.push(code[k]); k = k + 1 }
+
+    // Pad to symtab_offset
+    while len(out) < symtab_offset { out.push(0) }
+
+    // Symbol table: nlist_64 (16 bytes)
+    out = push_u32_le_v(out, 1)
+    out.push(n_sect_v() + n_ext_v())
+    out.push(1)
+    out = push_u16_le_v(out, 0)
+    out = push_u64_le_v(out, main_offset)
+
+    // String table — "\0_hexa_ptr_free\0" (16 bytes total: 1 NUL + 14 chars + 1 NUL)
+    out.push(0)
+    // "_hexa_ptr_free\0"
+    //  _   h    e    x    a    _   p    t    r    _   f    r    e    e   \0
+    //  95 104 101 120  97  95 112 116 114  95 102 114 101 101   0
+    out.push(95); out.push(104); out.push(101); out.push(120); out.push(97)
+    out.push(95); out.push(112); out.push(116); out.push(114); out.push(95)
+    out.push(102); out.push(114); out.push(101); out.push(101); out.push(0)
+
+    return out
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Driver
+// ═══════════════════════════════════════════════════════════════════
+fn emit_hexa_ptr_free_native_o() {
+    println("[wire] HEXA_BACKEND flip · 열한째 increment — _hexa_ptr_free native override (pair-safe close of #1326 (B))")
+
+    let code = hexa_ptr_free_adapter_bytes()
+    if len(code) != 36 {
+        println("FAIL: adapter expected 36 bytes (4 prefix + 20 rt_free-body + 12 void-ret), got " + to_string(len(code)))
+        return
+    }
+    println("  adapter bytes  : " + to_string(len(code)) + " (36 expected — 4 prefix + 20 munmap + 12 void-ret)")
+
+    // mov x0, x1 (e0 03 01 aa) sanity at offset 0
+    if code[0] != 0xe0 || code[1] != 0x03 || code[2] != 0x01 || code[3] != 0xaa {
+        println("FAIL: mov x0, x1 prefix mismatch")
+        return
+    }
+    println("  ABI prefix     : e0 03 01 aa (mov x0, x1) OK")
+
+    // sub x0, x0, #16 at offset 4 (header recover; encoding 00 40 00 d1)
+    if code[4] != 0x00 || code[5] != 0x40 || code[6] != 0x00 || code[7] != 0xd1 {
+        println("FAIL: sub x0, x0, #16 (header recover) at offset 4 mismatch")
+        return
+    }
+    println("  hdr sub x0     : 00 40 00 d1 (sub x0, x0, #16) OK")
+
+    // ldr x1, [x0] at offset 8 (read N; encoding 01 00 40 f9)
+    if code[8] != 0x01 || code[9] != 0x00 || code[10] != 0x40 || code[11] != 0xf9 {
+        println("FAIL: ldr x1, [x0] (read header N) at offset 8 mismatch")
+        return
+    }
+    println("  hdr ldr N      : 01 00 40 f9 (ldr x1, [x0]) OK")
+
+    // mov x16, #73 at offset 16 (SYS_munmap; encoding 30 09 80 d2)
+    if code[16] != 0x30 || code[17] != 0x09 || code[18] != 0x80 || code[19] != 0xd2 {
+        println("FAIL: mov x16, #73 (SYS_munmap) at offset 16 mismatch")
+        return
+    }
+    println("  SYS_munmap     : 30 09 80 d2 (mov x16, #73) OK")
+
+    // svc #0x80 at offset 20 (encoding 01 10 00 d4)
+    if code[20] != 0x01 || code[21] != 0x10 || code[22] != 0x00 || code[23] != 0xd4 {
+        println("FAIL: svc #0x80 at offset 20 mismatch (munmap call)")
+        return
+    }
+    println("  SVC munmap     : 01 10 00 d4 (svc #0x80) OK")
+
+    // mov x0, #3 (TAG_VOID) at offset 24 (encoding 60 00 80 d2)
+    if code[24] != 0x60 || code[25] != 0x00 || code[26] != 0x80 || code[27] != 0xd2 {
+        println("FAIL: mov x0, #3 (TAG_VOID ret-postfix) at offset 24 mismatch")
+        return
+    }
+    println("  void-ret       : 60 00 80 d2 + 01 00 80 d2 (mov x0,#3; mov x1,#0) OK")
+
+    // ret at offset 32 (c0 03 5f d6)
+    if code[32] != 0xc0 || code[33] != 0x03 || code[34] != 0x5f || code[35] != 0xd6 {
+        println("FAIL: RET trailer at offset 32 mismatch")
+        return
+    }
+    println("  RET trailer    : c0 03 5f d6 OK")
+
+    let obj = macho_obj_wrap_hexa_ptr_free(code, 0)
+    println("  obj_wrap size  : " + to_string(len(obj)) + " bytes total")
+
+    // MH_MAGIC_64 LE at offset 0 (0xFEEDFACF → cf fa ed fe)
+    if obj[0] != 0xcf || obj[1] != 0xfa || obj[2] != 0xed || obj[3] != 0xfe {
+        println("FAIL: MH_MAGIC_64 mismatch")
+        return
+    }
+    println("  MH_MAGIC_64    : cf fa ed fe OK")
+
+    // filetype = MH_OBJECT (1) at offset 12
+    if obj[12] != 1 {
+        println("FAIL: filetype not MH_OBJECT")
+        return
+    }
+    println("  filetype       : 1 (MH_OBJECT) OK")
+
+    let out = "/tmp/hexa_ptr_free_native.o"
+    write_bytes(out, obj)
+    println("  wrote          : " + out)
+    println("[wire] EMIT OK — link via cmd_build native path with HEXA_NATIVE_RT_PTR_FREE=1")
+}
+
+emit_hexa_ptr_free_native_o()

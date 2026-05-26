@@ -1367,6 +1367,7 @@ rc=42
   3 개 enable 시 3 개 .o append — 합치면 link 명령 line 단축 + emit cost
   amortize.
 
+
 ### 열한째 increment (2026-05-26 · 🛸 gate consolidation — 3 개 per-primitive `if env(...)` 블록 → 단일 테이블-구동 loop + `HEXA_NATIVE_RT_ALL=1` 우산)
 
 일곱째 (#1321 `_hexa_exit`) · 아홉째 (#1326 `_hexa_ptr_alloc`) · 열번째
@@ -1507,6 +1508,125 @@ $ ls /tmp/hexa_*_native.o
   의 build path 가 3 개 `.o` 를 append 하는 대신 한 `.o` 에 묶이면 link 명령
   line 단축 + emit cost amortize. v3 wrapper 가 이미 준비됨.
 
+
+
+### 열한째 increment (2026-05-26 · 🛸 pair-safe alloc/free closure — `_hexa_ptr_free` 16-B header-pattern override → #1326 잔여 (B) CLOSED)
+
+아홉째 increment (`_hexa_ptr_alloc` 60-B HexaVal-ABI adapter, #1326) 의 잔여
+(B) — `ptr_alloc=mmap` vs `ptr_free=free` **pair mismatch** — 가 default-flip
+safety 를 막고 있었다. mmap 으로 받은 page 를 libc `free()` 에 넘기면 heap
+corruption (UB) — 그래서 `HEXA_NATIVE_RT_PTR_ALLOC=1` 은 opt-in unsafe 로만
+land 되었다.
+
+본 increment 가 size-header allocation 패턴으로 pair-symmetric closure 를
+가져온다:
+
+```
+rt_alloc(N):
+  mmap_addr = mmap(NULL, N+16, RW, ANON|PRIV, -1, 0)
+  *(size_t*)mmap_addr = N            ; store original N at header[0..8]
+  return mmap_addr + 16              ; user ptr offset past 16-B header
+
+rt_free(user_ptr):
+  hdr_addr = user_ptr - 16           ; recover header address
+  N = *(size_t*)hdr_addr             ; read stored size
+  munmap(hdr_addr, N + 16)           ; pair-symmetric munmap
+```
+
+16-B header 가 8/16-B alignment 를 보존 (mmap 페이지는 page-aligned, +16 도
+align 유지). header 가 size 를 self-describe 하므로 free 가 외부에서 size
+인자 받을 필요 없음 — `hexa_ptr_free(HexaVal ptr, HexaVal size)` 의 size 는
+backward-compat 으로 무시한다.
+
+**구현 분해**:
+
+| axis            | rt_alloc (post-refactor)   | rt_free (NEW)              |
+|---             |---                          |---                          |
+| 인스트럭션      | 17 (vs 12 prior)            | 6 (leaf, no prologue)       |
+| size            | 68 B (48 + 20 for header)   | 24 B                        |
+| stack frame    | 2 frames (x29/x30, x19/x20) | leaf — no frame             |
+| syscall        | SYS_mmap (#197)             | SYS_munmap (#73)            |
+| 호출자 ABI     | x0=N → x0=user_ptr          | x0=user_ptr → munmap        |
+
+`_hexa_ptr_alloc` adapter 는 60 B → **80 B** (rt_alloc 의 inner body 가 +20 B
+커진 만큼). `_hexa_ptr_free` adapter 는 **36 B** — 4 B HexaVal-ABI prefix +
+20 B rt_free body + 12 B void-return postfix (mov x0=3, mov x1=0, ret).
+
+**env-gate 격자**:
+
+- `ALLOC=0 FREE=0` — C-side calloc + free (libc heap, 기본, no change)
+- `ALLOC=1 FREE=1` — **pair-safe**: mmap-with-header + munmap (default-flip
+  safe; **본 increment 의 closure**)
+- `ALLOC=1 FREE=0` — 아홉째 잔여 (mmap → libc free, UB) — 본 PR 이 alloc-only
+  모드는 그대로 두지만 advisory 출력 ("NOTE: alloc/free pair-mismatched")
+- `ALLOC=0 FREE=1` — 역방향 mismatch (calloc → munmap(addr-16, N+16), UB) —
+  cmd_build advisory ("WARN: incorrect pairing")
+
+**검증 (mini, macOS arm64)**:
+
+1. `runtime_arm64.hexa::test_runtime_arm64` self-test PASS:
+   ```
+   rt_alloc : 68 bytes   ← 48 + 20 (header math)
+   rt_free  : 24 bytes   ← NEW
+   ALL CHECKS PASS
+   ```
+
+2. emit 4 종 모두 PASS (`/Users/mini/.hx/bin/hexa run …`): exit, ptr_alloc,
+   ptr_free, ptr_offset. `nm` 으로 strong external 심볼 + `otool -tj` 으로
+   바이트 단위 일치 확인 (alloc=`aa0103e0 a9bf7bfd … d65f03c0`, 80 B;
+   free=`aa0103e0 d1004000 f9400001 91004021 d2800930 d4001001 d2800060
+   d2800001 d65f03c0`, 36 B).
+
+3. e2e link + run (`clang -O2 test_pair.c hexa_ptr_alloc_native.o
+   hexa_ptr_free_native.o -o test_pair && ./test_pair`):
+   ```
+   R1: alloc(128) -> ptr=0x1046b0010 (tag=0)         ← 0x010 = page+16
+   R1: read-back OK (p[0]=0xab, p[127]=0xcd)
+   R1: free OK (returned tag=3)                      ← TAG_VOID
+   R2: 1000x alloc/free loop OK (no OOM, no segfault, header math correct)
+   R3: pinned-ptr interleave OK
+   ALL ROUNDS PASS — alloc/free pair-safe (mmap+header / munmap)
+   ```
+
+   - R1: 단발 alloc → write/read at offsets 0,127 → free, tag-검증
+   - R2: 1000× alloc/free with size sweeping 16..16384 — no OOM (size-header
+     math 가 munmap length 를 정확히 산출하므로 page accumulation 없음)
+   - R3: pinned 4 KiB ptr 옆에서 100× short-lived alloc/free 인터리브 →
+     pinned 메모리 보존 확인 (header 가 paired munmap 으로 정확히 1 region
+     해제, 인접 region 영향 없음)
+
+4. ptr `0x1046b0010` last 12 bits = `0x010` (decimal 16) — header offset
+   wire-up 검증 (mmap 페이지 = `…000` 기준 +16 B).
+
+**무엇이 변했나** (자기-증언):
+
+- `self/codegen/runtime_arm64.hexa` — `rt_alloc` 48 B → 68 B (header math +
+  callee-saved frame); `rt_free` NEW 24 B (leaf); self-test 4 행 추가.
+- `test/native_build/emit_hexa_ptr_alloc_native_o.hexa` — adapter 60 B →
+  80 B (rt_alloc inner body 갱신); offset assertion 5 가지 추가.
+- `test/native_build/emit_hexa_ptr_free_native_o.hexa` — 신규 339 행 (alloc
+  driver 의 macho_obj_wrap 형판 복제 + symbol/strtab 만 `_hexa_ptr_free`
+  로 교체); adapter 36 B; 8 가지 offset assertion.
+- `self/runtime.c` — `hexa_ptr_free` 에 `__attribute__((weak))` + paring
+  주석 (4 격자 격자 explanation).
+- `self/main.hexa` cmd_build — `HEXA_NATIVE_RT_PTR_FREE=1` env-gate 추가
+  (parallel to alloc/exit/offset); pair-safety advisory 2 가지.
+
+**잔여 (다음 increment 후보, refresh)**:
+
+- (B') **production-effect verify for the pair** — 본 increment 도 #1324
+  pattern 의 follow-up 필요: hexa_cli_driver 를 `ALLOC=1 FREE=1` 로 재빌드
+  → otool diff 로 둘 다 baked in 검증. 본 PR 은 합성 e2e 까지.
+- (C') **alloc-only / free-only env 격자 hardening** — 현재 cmd_build 가
+  advisory text 만 출력. 강제 차단 (`exit 1` if `FREE=1 && ALLOC=0`) 으로
+  격자를 거버넌스 차원에서 닫는 안.
+- (D') 9th-10th-11th increment 으로 `__attribute__((weak))` + adapter
+  보일러 패턴이 3 회 반복 — D 격자 (HEXA_OVERRIDABLE macro) 의 ROI 가
+  더 분명해짐.
+- (E') 단일 multi-sym `.o` 합치기 (E 격자) 의 우선순위가 높아짐 — alloc +
+  free 는 항상 짝이라 한 .o 에 묶는 게 자연.
+
+## Domain map (Phase 0 → 3 + post)
 
 
 ```
