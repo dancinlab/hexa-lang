@@ -967,7 +967,7 @@ fn link_macho_arm64(objs: [ParsedObj], out_path: string, entry: string, _is_stat
     let mut osect_bss     = 0
     if has_const   { nx = nx + 1; osect_const   = nx }
     if has_cstring { nx = nx + 1; osect_cstring = nx }
-    if has_imports { nx = nx + 1; osect_stubs   = nx }
+    if has_stubs   { nx = nx + 1; osect_stubs   = nx }
     if has_data    { nx = nx + 1; osect_data    = nx }
     if has_imports { nx = nx + 1; osect_got     = nx }
     if has_bss     { nx = nx + 1; osect_bss     = nx }
@@ -1226,8 +1226,10 @@ fn link_macho_arm64(objs: [ParsedObj], out_path: string, entry: string, _is_stat
     //
     // For each unresolved BRANCH26 reloc (target name in import_names),
     // compute the PC-rel delta from the calling instruction's final
-    // address to the matching __stubs entry, and patch the imm26.
-    if has_imports {
+    // address to the matching __stubs entry, and patch the imm26. Only
+    // FUNCTION imports have stubs (nfunc); data imports never carry
+    // BRANCH26 so this loop's `ix` lookup naturally lands in [0, nfunc).
+    if has_stubs {
         let mut bro = 0
         while bro < len(objs) {
             let bobj = objs[bro]
@@ -1281,9 +1283,9 @@ fn link_macho_arm64(objs: [ParsedObj], out_path: string, entry: string, _is_stat
     //   ldr  x16, [x16, #imm12]      ; load __got[idx] (scaled by 8)
     //   br   x16                     ; tail-call to bound target
     let mut stubs_bytes: [Int] = []
-    if has_imports {
+    if has_stubs {
         let mut sti = 0
-        while sti < nimports {
+        while sti < nfunc {
             let stub_addr_i = stubs_section_addr + 12 * sti
             let got_addr_i  = got_section_addr   + 8  * sti
             // adrp x16, page
@@ -1455,7 +1457,9 @@ fn link_macho_arm64(objs: [ParsedObj], out_path: string, entry: string, _is_stat
     // section_64 __stubs (inc4) — 12-byte arm64 stubs in __TEXT (RX).
     // flags = S_SYMBOL_STUBS (0x8) | S_ATTR_PURE_INSTRUCTIONS (0x80000000)
     //       | S_ATTR_SOME_INSTRUCTIONS (0x400). reserved2 = 12 (stub size).
-    if has_imports {
+    // Phase-H inc5: emitted only when at least one FUNCTION import exists
+    // (nfunc > 0). Pure data-import images skip __stubs entirely.
+    if has_stubs {
         _w_name_fixed(out, "__stubs", 16)
         _w_name_fixed(out, "__TEXT", 16)
         _w_u64(out, stubs_section_addr)
@@ -1716,7 +1720,7 @@ fn link_macho_arm64(objs: [ParsedObj], out_path: string, entry: string, _is_stat
         while si2 < cstring_size { out.push(slot2_bytes[si2] & 0xff); si2 = si2 + 1 }
         fpos = cstring_fileoff + cstring_size
     }
-    if has_imports {
+    if has_stubs {
         _w_zero_n(out, stubs_fileoff - fpos)
         let mut ssi = 0
         while ssi < stubs_size { out.push(stubs_bytes[ssi] & 0xff); ssi = ssi + 1 }
