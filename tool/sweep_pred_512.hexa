@@ -1,0 +1,36 @@
+// tool/sweep_pred_512.hexa — F-SHARED-512-NUMERIC kernel
+//
+// Validates PR #1396 (RFC 085 Step B/C/D end-to-end [T;N] threading)
+// on a non-256 array size. Same shape as tool/sweep_pred.hexa but with
+// N=512, which crosses the prior 2048 B hardcoded default. Without the
+// threading, the .shared directive would silently allocate 2048 B
+// (256 × 8) and the kernel's sm[256..511] writes would corrupt
+// adjacent memory; with the threading, the directive emits
+// `.shared .align 8 .b8 _hexa_sh_sweep_pred_512[4096];` (= 512 × 8).
+//
+// Host shape: N=512, blockDim=512, gridDim=1, a[i] = i + 1.0.
+// Expected: partial[0] = N*(N+1)/2 = 512 × 513 / 2 = 131328.0 exact
+// (integer-valued FP64, all partial sums representable, max|Δ|=0).
+
+@gpu_kernel
+fn sweep_pred_512(a: [f64], partial: [f64], n: i64) {
+    @shared let sm: [f64; 512] = []
+    let mut tid: i64 = to_i64(gpu_thread_id_x())
+    if tid < n {
+        sm[to_i64(tid)] = a[to_i64(tid)]
+    } else {
+        sm[to_i64(tid)] = 0.0
+    }
+    gpu_barrier()
+    let mut stride: i64 = 256
+    while stride > 0 {
+        if tid < stride {
+            sm[to_i64(tid)] = sm[to_i64(tid)] + sm[to_i64(tid) + stride]
+        }
+        gpu_barrier()
+        stride = stride / 2
+    }
+    if tid == 0 {
+        partial[0] = sm[0]
+    }
+}
