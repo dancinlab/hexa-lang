@@ -860,15 +860,21 @@ fn link_macho_arm64(objs: [ParsedObj], out_path: string, entry: string, _is_stat
     let has_cstring = cstring_size > 0
     let has_data    = data_size    > 0
     let has_bss     = bss_size     > 0
-    // __TEXT carries __text + (optionally) __const + __cstring.
+    // __TEXT carries __text + (optionally) __const + __cstring + __stubs.
+    // Phase-H inc4: __stubs holds 12-byte arm64 dyld stubs for each
+    // imported libSystem function (one stub per import_names entry).
+    let stubs_size = 12 * nimports
     let mut text_nsects = 1
     if has_const   { text_nsects = text_nsects + 1 }
     if has_cstring { text_nsects = text_nsects + 1 }
-    // __DATA carries __data + (optionally) __bss. Emit __DATA only if it
-    // has at least one section.
+    if has_imports { text_nsects = text_nsects + 1 }
+    // __DATA carries __data + (optionally) __bss + (inc4) __got.
+    // __got = 8-byte pointer slot per import, chained-fixups end-of-chain.
+    let got_size = 8 * nimports
     let mut data_nsects = 0
-    if has_data { data_nsects = data_nsects + 1 }
-    if has_bss  { data_nsects = data_nsects + 1 }
+    if has_data    { data_nsects = data_nsects + 1 }
+    if has_imports { data_nsects = data_nsects + 1 }  // __got
+    if has_bss     { data_nsects = data_nsects + 1 }
     let has_data_seg = data_nsects > 0
 
     // ── Cycle 4: build symbol table + string table from inputs ────
@@ -894,17 +900,22 @@ fn link_macho_arm64(objs: [ParsedObj], out_path: string, entry: string, _is_stat
 
     // ── OUTPUT 1-based section indices (emit order) ──────────────────
     // __text always section 1. Then __const, __cstring (if present),
-    // then __data, __bss (if present). These are the n_sect values the
-    // symtab + section_64 emission must agree on.
+    // __stubs (inc4), then __data, __got (inc4), __bss (if present).
+    // These are the n_sect values the symtab + section_64 emission must
+    // agree on.
     let osect_text = 1
     let mut nx = 1
     let mut osect_const   = 0
     let mut osect_cstring = 0
+    let mut osect_stubs   = 0
     let mut osect_data    = 0
+    let mut osect_got     = 0
     let mut osect_bss     = 0
     if has_const   { nx = nx + 1; osect_const   = nx }
     if has_cstring { nx = nx + 1; osect_cstring = nx }
+    if has_imports { nx = nx + 1; osect_stubs   = nx }
     if has_data    { nx = nx + 1; osect_data    = nx }
+    if has_imports { nx = nx + 1; osect_got     = nx }
     if has_bss     { nx = nx + 1; osect_bss     = nx }
     // Map a slot id → output 1-based section index.
     // (used in the symtab pass + the nlist VM-addr fix-up below)
@@ -1115,9 +1126,13 @@ fn link_macho_arm64(objs: [ParsedObj], out_path: string, entry: string, _is_stat
     let cstring_pad = (16 - ((const_fileoff + const_size) & 15)) & 15
     let cstring_fileoff      = const_fileoff + const_size + cstring_pad
     let cstring_section_addr = VM_BASE + cstring_fileoff
+    // __stubs follows __cstring, 4-aligned (arm64 instr alignment).
+    let stubs_pad = (4 - ((cstring_fileoff + cstring_size) & 3)) & 3
+    let stubs_fileoff      = cstring_fileoff + cstring_size + stubs_pad
+    let stubs_section_addr = VM_BASE + stubs_fileoff
 
     // __TEXT segment content end (last file-backed byte of the segment).
-    let text_seg_content_end = cstring_fileoff + cstring_size
+    let text_seg_content_end = stubs_fileoff + stubs_size
     // __TEXT segment file extent — page-align upward.
     let mut text_filesize = text_seg_content_end
     let trem = text_filesize & (page - 1)
@@ -1126,25 +1141,118 @@ fn link_macho_arm64(objs: [ParsedObj], out_path: string, entry: string, _is_stat
 
     // ── __DATA segment — page-aligned after __TEXT ──────────────────
     // fileoff = text_filesize (page boundary). __data is file-backed;
-    // __bss is zero-fill (vmsize only, NOT in the file). __DATA.filesize
-    // covers __data; __DATA.vmsize covers __data + __bss (page-aligned).
+    // __got (inc4) is file-backed (chained-fixups end-of-chain ptr);
+    // __bss is zero-fill (vmsize only, NOT in the file).
+    //
+    // Layout: __data, then __got (8-aligned), then __bss (16-aligned).
     let data_seg_fileoff = text_filesize
     let data_seg_vmaddr  = VM_BASE + text_filesize
     // __data section at the very start of __DATA's file region.
     let data_fileoff      = data_seg_fileoff
     let data_section_addr = data_seg_vmaddr
-    // __bss directly follows __data in VM (16-aligned), no file bytes.
-    let bss_vmoff_pad = (16 - (data_size & 15)) & 15
-    let bss_section_addr = data_section_addr + data_size + bss_vmoff_pad
-    // __DATA file extent = just __data (bss has no file bytes).
-    let mut data_seg_filesize = data_size
+    // __got follows __data, 8-aligned (pointer-sized).
+    let got_pad = (8 - (data_size & 7)) & 7
+    let got_fileoff      = data_fileoff + data_size + got_pad
+    let got_section_addr = data_seg_vmaddr + data_size + got_pad
+    // __bss follows __got in VM (16-aligned), no file bytes.
+    let bss_after_got    = got_section_addr + got_size
+    let bss_vmoff_pad    = (16 - (bss_after_got & 15)) & 15
+    let bss_section_addr = bss_after_got + bss_vmoff_pad
+    // __DATA file extent = __data + __got (bss has no file bytes).
+    let mut data_seg_filesize = data_size + got_pad + got_size
     let drem = data_seg_filesize & (page - 1)
     if drem != 0 { data_seg_filesize = data_seg_filesize + (page - drem) }
-    // __DATA vm extent = __data + bss pad + bss, page-aligned.
-    let mut data_seg_vmsize = data_size + bss_vmoff_pad + bss_size
+    // __DATA vm extent = __data + __got + bss pad + bss, page-aligned.
+    let mut data_seg_vmsize = data_size + got_pad + got_size + bss_vmoff_pad + bss_size
     let dvrem = data_seg_vmsize & (page - 1)
     if dvrem != 0 { data_seg_vmsize = data_seg_vmsize + (page - dvrem) }
     if data_seg_vmsize < data_seg_filesize { data_seg_vmsize = data_seg_filesize }
+
+    // ── Phase-H inc4: patch BL <extern> to __stubs[idx] ─────────────
+    //
+    // For each unresolved BRANCH26 reloc (target name in import_names),
+    // compute the PC-rel delta from the calling instruction's final
+    // address to the matching __stubs entry, and patch the imm26.
+    if has_imports {
+        let mut bro = 0
+        while bro < len(objs) {
+            let bobj = objs[bro]
+            let bbase = obj_bases[bro]
+            let mut bri = 0
+            while bri < len(bobj.relocs) {
+                let br = bobj.relocs[bri]
+                if br.kind == 2 {                  // ARM64_RELOC_BRANCH26
+                    // Internal hit? skip — already patched above.
+                    let mut hit = false
+                    let mut sl2 = 0
+                    while sl2 < len(def_names) {
+                        if def_names[sl2] == br.sym_name { hit = true; break }
+                        sl2 = sl2 + 1
+                    }
+                    if !hit {
+                        // Find this name's index in import_names.
+                        let mut ix = -1
+                        let mut dl2 = 0
+                        while dl2 < len(import_names) {
+                            if import_names[dl2] == br.sym_name { ix = dl2; break }
+                            dl2 = dl2 + 1
+                        }
+                        if ix >= 0 {
+                            let patch_off = bbase + br.offset
+                            let pc_addr   = text_section_addr + patch_off
+                            let stub_addr = stubs_section_addr + 12 * ix
+                            let delta = (stub_addr - pc_addr) / 4
+                            let w0 = text_bytes[patch_off + 0]
+                            let w1 = text_bytes[patch_off + 1]
+                            let w2 = text_bytes[patch_off + 2]
+                            let w3 = text_bytes[patch_off + 3]
+                            let cur = w0 | (w1 << 8) | (w2 << 16) | (w3 << 24)
+                            let patched = (cur & 0xfc000000) | (delta & 0x03ffffff)
+                            text_bytes[patch_off + 0] = patched & 0xff
+                            text_bytes[patch_off + 1] = (patched >> 8) & 0xff
+                            text_bytes[patch_off + 2] = (patched >> 16) & 0xff
+                            text_bytes[patch_off + 3] = (patched >> 24) & 0xff
+                        }
+                    }
+                }
+                bri = bri + 1
+            }
+            bro = bro + 1
+        }
+    }
+
+    // ── Phase-H inc4: synthesize __stubs bytes ──────────────────────
+    // Each stub is 12 bytes for arm64:
+    //   adrp x16, _got_page          ; PAGE21 of __got[idx]
+    //   ldr  x16, [x16, #imm12]      ; load __got[idx] (scaled by 8)
+    //   br   x16                     ; tail-call to bound target
+    let mut stubs_bytes: [Int] = []
+    if has_imports {
+        let mut sti = 0
+        while sti < nimports {
+            let stub_addr_i = stubs_section_addr + 12 * sti
+            let got_addr_i  = got_section_addr   + 8  * sti
+            // adrp x16, page
+            let pc_page   = stub_addr_i & (0 - 0x1000)
+            let tgt_page  = got_addr_i  & (0 - 0x1000)
+            let page_imm  = (tgt_page - pc_page) / 0x1000
+            let immlo = page_imm & 0x3
+            let immhi = (page_imm >> 2) & 0x7ffff
+            // adrp Rd=16: bit pattern `1 immlo:2 10000 immhi:19 Rd:5`
+            //   = 0x90000010 base | immlo<<29 | immhi<<5
+            let adrp_w = 0x90000010 | (immlo << 29) | (immhi << 5)
+            _w_u32(stubs_bytes, adrp_w)
+            // ldr x16, [x16, #(off & 0xfff)>>3]  (LDR Xt unsigned imm12, scale=8)
+            let off12    = (got_addr_i & 0xfff) / 8     // scaled by access size
+            // Encoding: `1 11 11 0 01 01 imm12:12 Rn:5 Rt:5`
+            //   = 0xf9400000 base | imm12<<10 | Rn=16<<5 | Rt=16
+            let ldr_w = 0xf9400000 | ((off12 & 0xfff) << 10) | (16 << 5) | 16
+            _w_u32(stubs_bytes, ldr_w)
+            // br x16: 0xd61f0200
+            _w_u32(stubs_bytes, 0xd61f0200)
+            sti = sti + 1
+        }
+    }
 
     // ── Phase-H inc3: resolve PAGE21 (adrp) + PAGEOFF12 (add/ldr) ──
     //
@@ -1290,6 +1398,23 @@ fn link_macho_arm64(objs: [ParsedObj], out_path: string, entry: string, _is_stat
         _w_u32(out, 0x02)                            // S_CSTRING_LITERALS
         _w_u32(out, 0); _w_u32(out, 0); _w_u32(out, 0)
     }
+    // section_64 __stubs (inc4) — 12-byte arm64 stubs in __TEXT (RX).
+    // flags = S_SYMBOL_STUBS (0x8) | S_ATTR_PURE_INSTRUCTIONS (0x80000000)
+    //       | S_ATTR_SOME_INSTRUCTIONS (0x400). reserved2 = 12 (stub size).
+    if has_imports {
+        _w_name_fixed(out, "__stubs", 16)
+        _w_name_fixed(out, "__TEXT", 16)
+        _w_u64(out, stubs_section_addr)
+        _w_u64(out, stubs_size)
+        _w_u32(out, stubs_fileoff)
+        _w_u32(out, 2)                               // align log2(4)
+        _w_u32(out, 0)                               // reloff
+        _w_u32(out, 0)                               // nreloc
+        _w_u32(out, 0x80000408)                      // PURE_INSTRS|SOME_INSTRS|S_SYMBOL_STUBS
+        _w_u32(out, 0)                               // reserved1 (indirectsym idx)
+        _w_u32(out, 12)                              // reserved2 = stub size
+        _w_u32(out, 0)                               // reserved3
+    }
 
     // ── LC_SEGMENT_64 __DATA (RW: __data [+ __bss]) ──────────────────
     if has_data_seg {
@@ -1315,6 +1440,22 @@ fn link_macho_arm64(objs: [ParsedObj], out_path: string, entry: string, _is_stat
             _w_u32(out, 0)
             _w_u32(out, 0)
             _w_u32(out, 0)                           // flags = S_REGULAR
+            _w_u32(out, 0); _w_u32(out, 0); _w_u32(out, 0)
+        }
+        // section_64 __got (inc4) — pointer slots for dyld imports.
+        // flags = S_NON_LAZY_SYMBOL_POINTERS (0x6). reserved1 = indirect-
+        // symtab idx (we use 0 since this exe has no LC_DYSYMTAB indirect
+        // table — chained_fixups handle the bind).
+        if has_imports {
+            _w_name_fixed(out, "__got", 16)
+            _w_name_fixed(out, "__DATA", 16)
+            _w_u64(out, got_section_addr)
+            _w_u64(out, got_size)
+            _w_u32(out, got_fileoff)
+            _w_u32(out, 3)                           // align log2(8)
+            _w_u32(out, 0)                           // reloff
+            _w_u32(out, 0)                           // nreloc
+            _w_u32(out, 0x06)                        // S_NON_LAZY_SYMBOL_POINTERS
             _w_u32(out, 0); _w_u32(out, 0); _w_u32(out, 0)
         }
         // section_64 __bss (S_ZEROFILL = 1; size set, offset MUST be 0).
@@ -1497,18 +1638,52 @@ fn link_macho_arm64(objs: [ParsedObj], out_path: string, entry: string, _is_stat
         while si2 < cstring_size { out.push(slot2_bytes[si2] & 0xff); si2 = si2 + 1 }
         fpos = cstring_fileoff + cstring_size
     }
+    if has_imports {
+        _w_zero_n(out, stubs_fileoff - fpos)
+        let mut ssi = 0
+        while ssi < stubs_size { out.push(stubs_bytes[ssi] & 0xff); ssi = ssi + 1 }
+        fpos = stubs_fileoff + stubs_size
+    }
 
     // Pad the __TEXT segment file region up to its page-aligned end.
     if text_filesize > fpos {
         _w_zero_n(out, text_filesize - fpos)
     }
 
-    // ── __DATA payload: __data bytes (bss has NO file bytes), padded
-    //    to the segment's page-aligned filesize. ──
+    // ── __DATA payload: __data + __got bytes (bss has NO file bytes),
+    //    padded to the segment's page-aligned filesize. ──
     if has_data_seg {
         let mut ddi = 0
         while ddi < data_size { out.push(slot3_bytes[ddi] & 0xff); ddi = ddi + 1 }
-        let data_written = data_size
+        let mut data_written = data_size
+        if has_imports {
+            // Pad __data → __got boundary (8-byte align).
+            _w_zero_n(out, got_pad)
+            data_written = data_written + got_pad
+            // __got slots — DYLD_CHAINED_PTR_64_OFFSET bind format:
+            //   bit 63 = bind=1, bits 51..62 = next (12-bit page-step),
+            //   bits 32..50 = reserved=0, bits 24..31 = addend=0,
+            //   bits 0..23 = ordinal (import_names index).
+            // For a single import, next=0 (end of chain). For N>1, each
+            // slot points to the NEXT slot 8 bytes later → next=1 (the
+            // unit is "stride 4 bytes" in this format), and the LAST is
+            // next=0. Stride is 4 in DYLD_CHAINED_PTR_64_OFFSET so 8-byte
+            // gap = next=2.
+            let mut gi = 0
+            while gi < nimports {
+                let ord = gi & 0xffffff
+                let mut nxt = 2                      // stride-4 gap to next 8-byte slot
+                if gi == nimports - 1 { nxt = 0 }    // end of chain
+                // Build u64: (bind=1)<<63 | (nxt&0xfff)<<51 | ord
+                // Hexa Int is 64-bit signed; build via two u32 halves.
+                let lo = ord                         // bits 0..23 (rest 0)
+                let hi = 0x80000000 | (nxt << 19)    // bit31=bind, bits19..30=next
+                _w_u32(out, lo)
+                _w_u32(out, hi)
+                data_written = data_written + 8
+                gi = gi + 1
+            }
+        }
         if data_seg_filesize > data_written {
             _w_zero_n(out, data_seg_filesize - data_written)
         }
