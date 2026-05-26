@@ -579,73 +579,171 @@ fn _w_pstr_align4(out: [Int], s: string) -> Int {
 fn link_macho_arm64(objs: [ParsedObj], out_path: string, entry: string, _is_static: i64) -> Int {
     let out: [Int] = []
 
-    // Concat text from all input objects in input order + collect a
-    // global symbol → final-text-offset map so cycle 8's inter-module
-    // BL reloc fix-up can resolve cross-obj calls. Per-obj base offset
-    // is the running `len(text_bytes)` before that obj's text is
-    // appended.
-    let mut text_bytes: [Int] = []
+    // ── Phase-H inc3: FULL MULTI-SECTION LAYOUT ─────────────────────
+    //
+    // Output section model (fixed 5 slots — clang's canonical order):
+    //   slot 0  __TEXT,__text     (RX, file-backed)
+    //   slot 1  __TEXT,__const    (RX, file-backed, read-only const)
+    //   slot 2  __TEXT,__cstring  (RX, file-backed, C strings)
+    //   slot 3  __DATA,__data     (RW, file-backed, init'd globals)
+    //   slot 4  __DATA,__bss      (RW, zero-fill — vmsize only, no bytes)
+    //
+    // Each input section maps to one slot by (sectname). For every input
+    // obj we concatenate its slot bytes (with the slot's running 16-byte
+    // alignment) and record the per-(obj, input-section-index) base
+    // offset INTO that slot so reloc fix-up + symbol routing can compute
+    // a final offset. A defined symbol routes by its `n_sect`: we look up
+    // which slot that input section landed in and add (slot_base_of_obj +
+    // sym.offset).
+    let SLOT_TEXT    = 0
+    let SLOT_CONST   = 1
+    let SLOT_CSTRING = 2
+    let SLOT_DATA    = 3
+    let SLOT_BSS     = 4
+    let N_SLOTS      = 5
+
+    // Per-slot accumulated bytes (slot 4 / __bss has none — only a size).
+    let slot0_bytes: [Int] = []
+    let slot1_bytes: [Int] = []
+    let slot2_bytes: [Int] = []
+    let slot3_bytes: [Int] = []
+    let mut slot4_size = 0                            // __bss virtual size
+
+    // Per-obj, per-slot base offset within the slot. Stored as a flat
+    // array indexed [oi * N_SLOTS + slot]. -1 = this obj contributed
+    // nothing to that slot (so a symbol shouldn't route there).
+    let mut obj_slot_base: [Int] = []
+    // Map an input (obj, n_sect) → output slot id. Flat: we rebuild per
+    // obj during the symbol pass from obj.sects.
+
+    // entry symbol resolution (must be a __text symbol).
     let mut entry_off_in_text: Int = 0
     let mut entry_found = false
-    // Global defined-symbol resolution table (parallel arrays). Used by
-    // the BRANCH26 reloc pass — __text symbols only (their final value
-    // is the merged-text offset).
-    let mut def_names:    [string] = []
-    let mut def_offsets:  [Int]    = []
-    // Per-obj base offset into the merged __text (used during reloc pass
-    // to locate the calling instruction's final position).
-    let mut obj_bases: [Int] = []
 
-    // Phase-H inc2: merged DATA section (__cstring/__const), laid out
-    // AFTER the merged __text within the __TEXT segment. Per-obj data
-    // base = running len(data_bytes) before that obj's data is appended.
-    let mut data_bytes: [Int] = []
-    let mut obj_data_bases: [Int] = []
-    // Data-symbol resolution table — name → offset within merged data.
-    // Final VM address is computed once the data section's file offset is
-    // known (data_section_addr + this offset).
-    let mut dsym_names:   [string] = []
-    let mut dsym_offsets: [Int]    = []
+    // Global defined-symbol resolution table (parallel arrays). `dsym_slot`
+    // records which output slot the symbol lives in; `dsym_offset` its
+    // offset within that slot. Final VM addr = slot_vmaddr + offset.
+    let mut dsym_names:  [string] = []
+    let mut dsym_slot:   [Int]    = []
+    let mut dsym_offset: [Int]    = []
 
+    // Helper-free inline: route a sectname to a slot id (-1 = unknown,
+    // dropped). __bss / __common → SLOT_BSS.
     let mut oi = 0
     while oi < len(objs) {
         let obj = objs[oi]
-        let base = len(text_bytes)
-        obj_bases.push(base)
-        let data_base = len(data_bytes)
-        obj_data_bases.push(data_base)
-        // Register defined symbols globally, routed by section: a symbol
-        // in this obj's data section goes to the data-symbol table; all
-        // others are treated as __text symbols.
+        // Per-obj slot base BEFORE appending this obj's contributions.
+        let mut base0 = len(slot0_bytes)
+        let mut base1 = len(slot1_bytes)
+        let mut base2 = len(slot2_bytes)
+        let mut base3 = len(slot3_bytes)
+        let mut base4 = slot4_size
+        // 16-byte align each slot's per-obj start so cross-obj symbols
+        // keep their intra-section alignment.
+        let p0 = (16 - (base0 & 15)) & 15
+        let mut z0 = 0
+        while z0 < p0 { slot0_bytes.push(0); z0 = z0 + 1 }
+        base0 = len(slot0_bytes)
+        let p1 = (16 - (base1 & 15)) & 15
+        let mut z1 = 0
+        while z1 < p1 { slot1_bytes.push(0); z1 = z1 + 1 }
+        base1 = len(slot1_bytes)
+        let p2 = (16 - (base2 & 15)) & 15
+        let mut z2 = 0
+        while z2 < p2 { slot2_bytes.push(0); z2 = z2 + 1 }
+        base2 = len(slot2_bytes)
+        let p3 = (16 - (base3 & 15)) & 15
+        let mut z3 = 0
+        while z3 < p3 { slot3_bytes.push(0); z3 = z3 + 1 }
+        base3 = len(slot3_bytes)
+        let p4 = (16 - (base4 & 15)) & 15
+        base4 = base4 + p4
+        slot4_size = base4
+        obj_slot_base.push(base0)
+        obj_slot_base.push(base1)
+        obj_slot_base.push(base2)
+        obj_slot_base.push(base3)
+        obj_slot_base.push(base4)
+
+        // Append this obj's section bytes into the matching slot.
+        let mut sxx = 0
+        while sxx < len(obj.sects) {
+            let sc = obj.sects[sxx]
+            if sc.sectname == "__text" {
+                let mut k = 0
+                while k < len(sc.bytes) { slot0_bytes.push(sc.bytes[k] & 0xff); k = k + 1 }
+            } else if sc.sectname == "__const" {
+                let mut k = 0
+                while k < len(sc.bytes) { slot1_bytes.push(sc.bytes[k] & 0xff); k = k + 1 }
+            } else if sc.sectname == "__cstring" {
+                let mut k = 0
+                while k < len(sc.bytes) { slot2_bytes.push(sc.bytes[k] & 0xff); k = k + 1 }
+            } else if sc.sectname == "__data" {
+                let mut k = 0
+                while k < len(sc.bytes) { slot3_bytes.push(sc.bytes[k] & 0xff); k = k + 1 }
+            } else if sc.sectname == "__bss" || sc.sectname == "__common" {
+                slot4_size = slot4_size + sc.zfill_size
+            }
+            sxx = sxx + 1
+        }
+
+        // Route defined symbols → slot + offset.
         let mut di = 0
         while di < len(obj.defined) {
             let d = obj.defined[di]
-            if obj.data_sect_idx != 0 && d.sect == obj.data_sect_idx {
+            // Find the input section with this n_sect index.
+            let mut slot = -1
+            let mut soff_base = 0
+            let mut sj = 0
+            while sj < len(obj.sects) {
+                let sc = obj.sects[sj]
+                if sc.index == d.sect {
+                    if sc.sectname == "__text"        { slot = SLOT_TEXT;    soff_base = base0 }
+                    else if sc.sectname == "__const"  { slot = SLOT_CONST;   soff_base = base1 }
+                    else if sc.sectname == "__cstring"{ slot = SLOT_CSTRING; soff_base = base2 }
+                    else if sc.sectname == "__data"   { slot = SLOT_DATA;    soff_base = base3 }
+                    else if sc.sectname == "__bss" || sc.sectname == "__common" { slot = SLOT_BSS; soff_base = base4 }
+                    break
+                }
+                sj = sj + 1
+            }
+            if slot >= 0 {
                 dsym_names.push(d.name)
-                dsym_offsets.push(data_base + d.offset)
-            } else {
-                def_names.push(d.name)
-                def_offsets.push(base + d.offset)
-                if !entry_found && d.name == entry {
-                    entry_off_in_text = base + d.offset
+                dsym_slot.push(slot)
+                dsym_offset.push(soff_base + d.offset)
+                if slot == SLOT_TEXT && !entry_found && d.name == entry {
+                    entry_off_in_text = soff_base + d.offset
                     entry_found = true
                 }
             }
             di = di + 1
         }
-        // Append this obj's text bytes.
-        let mut ti = 0
-        while ti < len(obj.text) {
-            text_bytes.push(obj.text[ti] & 0xff)
-            ti = ti + 1
-        }
-        // Append this obj's data bytes (merged into one data section).
-        let mut dti = 0
-        while dti < len(obj.data) {
-            data_bytes.push(obj.data[dti] & 0xff)
-            dti = dti + 1
-        }
         oi = oi + 1
+    }
+
+    // ── Compatibility aliases so the downstream reloc + symtab passes
+    // (still written in the inc2 vocabulary) keep working. text_bytes
+    // IS slot0; def_names/def_offsets is the __text-symbol view of the
+    // unified table; data_bytes is slot1 (__const) for the legacy single-
+    // data path's symtab section index. obj_bases[oi] = this obj's __text
+    // slot base = obj_slot_base[oi*N_SLOTS + SLOT_TEXT].
+    let text_bytes = slot0_bytes
+    let mut def_names:   [string] = []
+    let mut def_offsets: [Int]    = []
+    let mut obj_bases:   [Int]    = []
+    let mut ob2 = 0
+    while ob2 < len(objs) {
+        obj_bases.push(obj_slot_base[ob2 * N_SLOTS + SLOT_TEXT])
+        ob2 = ob2 + 1
+    }
+    // Build the __text-only resolution table from the unified dsym table.
+    let mut du = 0
+    while du < len(dsym_names) {
+        if dsym_slot[du] == SLOT_TEXT {
+            def_names.push(dsym_names[du])
+            def_offsets.push(dsym_offset[du])
+        }
+        du = du + 1
     }
 
     // Cycle 8 — inter-module BL reloc fix-up. For each obj's reloc
@@ -696,19 +794,25 @@ fn link_macho_arm64(objs: [ParsedObj], out_path: string, entry: string, _is_stat
 
     let text_size = len(text_bytes)
 
-    // Phase-H inc2: merged DATA section size + whether we emit a second
-    // section in __TEXT. Lay the data section AFTER __text within the
-    // __TEXT segment, 16-byte aligned (clang aligns __const to 16). The
-    // data section's in-file offset / VM address is computed below once
-    // text_fileoff is known (it depends on sizeofcmds, which itself
-    // depends on whether this 2nd section exists).
-    let data_size = len(data_bytes)
-    let has_data  = data_size > 0
-    // 16-byte alignment gap inserted between __text and the data section.
-    let data_align = 16
-    let mut data_pad = 0
-    let drm = text_size & (data_align - 1)
-    if has_data && drm != 0 { data_pad = data_align - drm }
+    // ── Phase-H inc3: per-slot sizes + which sections are present ─────
+    let const_size   = len(slot1_bytes)
+    let cstring_size = len(slot2_bytes)
+    let data_size    = len(slot3_bytes)
+    let bss_size     = slot4_size
+    let has_const   = const_size   > 0
+    let has_cstring = cstring_size > 0
+    let has_data    = data_size    > 0
+    let has_bss     = bss_size     > 0
+    // __TEXT carries __text + (optionally) __const + __cstring.
+    let mut text_nsects = 1
+    if has_const   { text_nsects = text_nsects + 1 }
+    if has_cstring { text_nsects = text_nsects + 1 }
+    // __DATA carries __data + (optionally) __bss. Emit __DATA only if it
+    // has at least one section.
+    let mut data_nsects = 0
+    if has_data { data_nsects = data_nsects + 1 }
+    if has_bss  { data_nsects = data_nsects + 1 }
+    let has_data_seg = data_nsects > 0
 
     // ── Cycle 4: build symbol table + string table from inputs ────
     //
@@ -731,14 +835,27 @@ fn link_macho_arm64(objs: [ParsedObj], out_path: string, entry: string, _is_stat
 
     let mut nextdefsym: Int = 0
 
-    // Pass A — defined externals (scope==0) from each input obj. The
-    // per-obj `defined.offset` is section-relative; we already
-    // concatenated text by recording the running `len(text_bytes)`
-    // so each sym's final value = (text_section.addr) + running base
-    // + sym.offset. Cycle 3's `entry_off_in_text` used the same
-    // accumulation.
-    let mut text_base_acc = 0
-    let mut data_base_acc = 0
+    // ── OUTPUT 1-based section indices (emit order) ──────────────────
+    // __text always section 1. Then __const, __cstring (if present),
+    // then __data, __bss (if present). These are the n_sect values the
+    // symtab + section_64 emission must agree on.
+    let osect_text = 1
+    let mut nx = 1
+    let mut osect_const   = 0
+    let mut osect_cstring = 0
+    let mut osect_data    = 0
+    let mut osect_bss     = 0
+    if has_const   { nx = nx + 1; osect_const   = nx }
+    if has_cstring { nx = nx + 1; osect_cstring = nx }
+    if has_data    { nx = nx + 1; osect_data    = nx }
+    if has_bss     { nx = nx + 1; osect_bss     = nx }
+    // Map a slot id → output 1-based section index.
+    // (used in the symtab pass + the nlist VM-addr fix-up below)
+
+    // Pass A — defined externals (scope==0). We route each via the
+    // UNIFIED dsym table (slot + offset) built during layout. We store
+    // the OUTPUT section index in nlist_sect and the slot-relative offset
+    // in nlist_value; the 2nd pass below makes it an absolute VM addr.
     let mut oa = 0
     while oa < len(objs) {
         let obj = objs[oa]
@@ -746,35 +863,34 @@ fn link_macho_arm64(objs: [ParsedObj], out_path: string, entry: string, _is_stat
         while di < len(obj.defined) {
             let d = obj.defined[di]
             if d.scope == 0 {
-                let strx = len(strtab)
-                let nn = len(d.name)
-                let mut k = 0
-                while k < nn { strtab.push(char_code(d.name, k) & 0xff); k = k + 1 }
-                strtab.push(0)
-                nlist_strx.push(strx)
-                // n_type = N_SECT (0x0e) | N_EXT (0x01)
-                nlist_type.push(0x0e | 0x01)
-                // Phase-H inc2: route the n_sect / n_value by section. A
-                // data symbol (in the captured __cstring/__const) lands
-                // in OUTPUT section index 2; n_value carries its merged-
-                // data offset (made absolute in the 2nd pass below using
-                // data_section_addr). __text symbols stay section 1.
-                if obj.data_sect_idx != 0 && d.sect == obj.data_sect_idx {
-                    nlist_sect.push(2)              // OUTPUT __const section idx
-                    // Encode as a NEGATIVE-tagged value would be fragile;
-                    // instead we record (data_base + offset) and flag via
-                    // section idx 2 in the 2nd pass.
-                    nlist_value.push(data_base_acc + d.offset)
-                } else {
-                    nlist_sect.push(1)              // 1-based section idx: __text
-                    nlist_value.push(text_base_acc + d.offset)
+                // Find this symbol in the unified dsym table (by name).
+                let mut u = -1
+                let mut uk = 0
+                while uk < len(dsym_names) {
+                    if dsym_names[uk] == d.name { u = uk; break }
+                    uk = uk + 1
                 }
-                nextdefsym = nextdefsym + 1
+                if u >= 0 {
+                    let slot = dsym_slot[u]
+                    let mut osec = osect_text
+                    if slot == SLOT_CONST   { osec = osect_const }
+                    else if slot == SLOT_CSTRING { osec = osect_cstring }
+                    else if slot == SLOT_DATA    { osec = osect_data }
+                    else if slot == SLOT_BSS     { osec = osect_bss }
+                    let strx = len(strtab)
+                    let nn = len(d.name)
+                    let mut k = 0
+                    while k < nn { strtab.push(char_code(d.name, k) & 0xff); k = k + 1 }
+                    strtab.push(0)
+                    nlist_strx.push(strx)
+                    nlist_type.push(0x0e | 0x01)       // N_SECT | N_EXT
+                    nlist_sect.push(osec)
+                    nlist_value.push(dsym_offset[u])   // slot-relative; →abs below
+                    nextdefsym = nextdefsym + 1
+                }
             }
             di = di + 1
         }
-        text_base_acc = text_base_acc + len(obj.text)
-        data_base_acc = data_base_acc + len(obj.data)
         oa = oa + 1
     }
     // Pass B — undefined externals (extern_refs from each obj).
