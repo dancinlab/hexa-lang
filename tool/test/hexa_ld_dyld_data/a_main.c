@@ -12,10 +12,14 @@
 // LC_DYLD_CHAINED_FIXUPS (same bind format as function imports;
 // only difference is the absence of a __stubs trampoline).
 //
-// We pick `___stack_chk_guard` (a libSystem-exported i64 pointer)
-// because it is reliably present on every macOS / iOS host, has a
-// known stable name, and crucially does NOT require us to write to
-// it — read-only deref is all we need to verify the bind.
+// We pick `environ` (a libc-exported `char**` global) because it is
+// reliably present on every macOS / iOS host as a PUBLIC data export
+// (re-exported through libSystem.B.dylib), has a known stable name,
+// and crucially does NOT require us to write to it — read-only deref
+// is all we need to verify the bind. Earlier candidate
+// `___stack_chk_guard` was dropped: that symbol is a PRIVATE libc
+// SSP cookie and is NOT externally extern-visible (clang itself
+// refuses to link against it from a normal `extern long ...` ref).
 //
 // Control/INPUT: compiled with `clang -c` to a .o that REFERENCES
 // `___stack_chk_guard` via @GOTPAGE/@GOTPAGEOFF (n_sect=0 extern_ref
@@ -29,7 +33,7 @@
 //                             both worked — a broken bind would
 //                             segfault on the deref of x9)
 
-extern long ___stack_chk_guard;
+extern char **environ;
 
 __attribute__((naked, used))
 void _start(void) {
@@ -40,11 +44,11 @@ void _start(void) {
         // reloc target, and the second (plain load) just confirms
         // the slot's contents are a valid pointer (deref doesn't
         // crash).
-        "adrp x9, ____stack_chk_guard@GOTPAGE\n"
-        "ldr  x9, [x9, ____stack_chk_guard@GOTPAGEOFF]\n"
+        "adrp x9, _environ@GOTPAGE\n"
+        "ldr  x9, [x9, _environ@GOTPAGEOFF]\n"
         // Deref — if dyld bound the slot correctly this loads the
-        // canary value; if the bind / adrp / ldr patch is wrong
-        // we'd be reading a garbage address and segfault.
+        // `char**` pointer value; if the bind / adrp / ldr patch
+        // is wrong we'd be reading a garbage address and segfault.
         "ldr  x10, [x9]\n"
         // exit(0) via raw syscall — no extern function dependency
         // (we're isolating the data-import surface to a single
