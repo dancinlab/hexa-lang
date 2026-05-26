@@ -1,0 +1,25 @@
+RH explicit zeta zeros — Odlyzko table (CITATION ONLY, NOT verified — no zeta zero
+verifier in hexa-native; LMFDB / Odlyzko-Schönhage anchor):
+
+  γ_1 = 14.13472514173469379045...
+  γ_2 = 21.02203963877155499262...
+  γ_3 = 25.01085758014568876321...
+  γ_4 = 30.42487612585951321031...
+  γ_5 = 32.93506158773918969066...
+
+Each ρ_k = 1/2 + i·γ_k lies on the critical line Re(s)=1/2 (verified for first 10^13
+zeros by Platt-Trudgian 2020 numerical record). RH conjecture: ALL non-trivial zeros
+have Re(s)=1/2.
+
+Status: 🟡 CITATION (no hexa verifier; outside g5 scope. The arithmetic-only
+TECS-L framework does NOT touch analytic continuation of ζ(s) — limits and complex
+analysis are LLM-out-of-scope per feedback_closure_is_physical_limit.)
+
+Framework recasting attempt (HONEST: framework only, not progress):
+  RH ⟺ M(n) = O(n^{1/2+ε}) (von Koch 1901)
+  → can we use TECS-L omega-decomp to TIGHTEN the |M(n)| bound on a restricted
+    arithmetic locus (squarefree, primorial, ω-bounded)?
+  Observation: |M(n)| ≤ #{squarefree k≤n} ≤ n·6/π² (asymptotic density of sqfree).
+  Trivial. The ω-decomp gives NO better bound than the existing sieve estimates.
+  → HONEST NEGATIVE: ω-decomp is a tautological re-expression of M(n), not a
+    sharpened bound. RH-equivalent statement M(n)=O(n^{1/2+ε}) UNTOUCHED.

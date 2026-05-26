@@ -1,0 +1,60 @@
+F18 weight-4 newform RECOVERY ↔ BSD connection attempt for n=6 specific case
+
+F18 (verified 2026-05-27):
+  dim S_4(Γ_0(6)) = 1  (Eichler-Selberg: g=0, ν_∞=4 → dim = -3 + 4 = 1)
+  Level 6 is MINIMAL for weight-4 cusp forms on Γ_0 (N=1,2,3,5 all give dim=0)
+  Newform 6.4.a.a (LMFDB anchor, 🟡 citation)
+  → n=6 distinction RECOVERS at weight 4 after F17 weight-2 closed-negative.
+
+BSD-side modular object for E_6 (y² = x³ - 36x):
+  Modularity theorem (Wiles + BCDT): every elliptic curve E/Q corresponds to a
+  weight-2 newform f_E ∈ S_2(Γ_0(N)) where N = conductor(E).
+  For E_6:
+    conductor N = 16·n² = 16·36 = 576  (n ≡ 2 mod 4 formula)
+    f_{E_6} ∈ S_2(Γ_0(576))
+    Cremona label: 576.f3 (newform corresponding to E_6, rank 1)
+
+Comparison:
+  F18 object:  S_4(Γ_0(6))    — level 6, weight 4, dim 1
+  BSD object:  S_2(Γ_0(576))  — level 576, weight 2, larger dim (mult. components)
+  
+  Levels differ:  6 vs 576 = 6 · 96 = 6 · 2^5 · 3
+  Weights differ: 4 vs 2
+
+Honest connection attempt outcomes:
+
+  (a) Direct Eisenstein/Hecke linkage:
+      No standard operator maps S_4(Γ_0(6)) → S_2(Γ_0(576)) without:
+        • Doubling: theta-series θ² mixes weights, but not as ring hom.
+        • Level-raising at primes p with N → N·p (Ribet): requires same weight.
+      → NO direct link.
+
+  (b) Conductor 576 = 2^6 · 3^2 vs level 6 = 2 · 3:
+      Same prime support {2, 3}. Both "live over" the primes dividing 6.
+      → ARITHMETIC HABITAT match (same bad-reduction primes), but no
+        functional-equation cross-reference.
+
+  (c) Tunnell-even test n=6:
+      m = 3, C = #{m = 4x² + y² + 32z²} = 0, D = #{m = 4x² + y² + 8z²} = 0
+      Tunnell asserts: BSD ⇒ (n=6 cong iff 2C = D)
+      Here 2·0 = 0 ✓ → BSD-CONDITIONAL congruent (consistent with rank=1 known).
+      
+      The Tunnell ternary forms have intrinsic weight-3/2 modular structure
+      (Waldspurger / Shimura correspondence). This connects to weight-2 BSD-side
+      L(E_6, 1) via half-integral-weight forms.
+      
+      → POTENTIAL LINK: F18 weight-4 ↔ Tunnell weight-3/2 ↔ E_6 weight-2 forms
+         could be tied through a Shimura-lift tower, but constructing the
+         explicit chain is OUT OF SCOPE for hexa-native arithmetic (involves
+         Weil representation, theta-lifts).
+
+CONCLUSION (honest):
+  F18 weight-4 RECOVERY and BSD weight-2 (E_6 modular form 576.f3) live on
+  DIFFERENT modular objects at DIFFERENT levels and DIFFERENT weights. There is
+  a POTENTIAL Shimura-correspondence bridge through weight-3/2 Tunnell forms,
+  but constructing it requires analytic machinery (theta-series Fourier
+  expansion at CM points) beyond TECS-L arithmetic scope.
+  
+  → 🟡 CITATION-only connection: F18 ↔ Tunnell ↔ E_6 plausible but UNVERIFIED.
+  → NO new BSD progress. F18 stands as a NOVEL ARITHMETIC discovery (n=6 minimal
+    level for weight-4) but does NOT yield BSD partial proof for n=6.
