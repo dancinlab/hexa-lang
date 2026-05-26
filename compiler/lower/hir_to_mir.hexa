@@ -1381,8 +1381,29 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
         // PR-C piece 3 — propagate `@shared` (and friends) onto the MIR
         // Local's `space` tag so NVPTX codegen can later emit a `.shared`
         // directive. Non-let lowerings stay on plain `_fresh_local`.
+        //
+        // RFC 085 Step C (2026-05-27): for SHARED-bank lets with an
+        // `Array:<N>` type annotation (from `let sm: [T; N]` syntax,
+        // captured by parse_let_expr + parse_type), thread the count
+        // into the MIR Local's `name_hint` as a `:<N>` suffix. NVPTX
+        // classify_locals Pass 0.5 reads the suffix to compute the
+        // exact `.shared .align 8 .b8 _hexa_sh_<fn>[<N*8>]` size instead
+        // of the hardcoded 2048 B default. Non-array or untyped lets
+        // keep `name_hint = nm` and Pass 0.5 falls back to the default.
         let space = _space_from_let_anns(e.annotations)
-        ctx2 = _fresh_local_with_space(ctx2, rhs_t, nm, space)
+        let mut hint = nm
+        if space == "shared" {
+            let type_text = _hir_let_type_text(e.text)
+            let arr_prefix = "Array:"
+            if len(type_text) > len(arr_prefix) {
+                let head = type_text.substring(0, len(arr_prefix))
+                if head == arr_prefix {
+                    let count_str = type_text.substring(len(arr_prefix), len(type_text))
+                    hint = nm + ":" + count_str
+                }
+            }
+        }
+        ctx2 = _fresh_local_with_space(ctx2, rhs_t, hint, space)
         let dst = _lr_locals[len(_lr_locals) - 1]
         let mut args: [Operand] = []
         args.push(rhs_op)
