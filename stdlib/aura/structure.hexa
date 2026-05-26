@@ -97,6 +97,75 @@ fn _scope_caveats() -> [str] {
         "mastoid / temporal-bone clip mechanical = FreeCAD KiCad-StepUp territory (chip+component cells own MCAD, this is meta).",
         "measurement_gate = GATE_OPEN permanently - structure skeleton is not an absorption claim (g3).",
         "absorbed=false PERMANENTLY (g3) - partitioning is architectural scaffold, NEVER a built bill-of-materials.",
+        "D2 substantive blocks (sensor_array_real / afe_adc_real / radio_ble_real / battery_power_real / mechanical_real) are ILLUSTRATIVE BOM-level reference targets, NOT vendor-qualified silicon selections. Real BOM lives at chip + component cell with vendor audit + ngspice/HFSS validation.",
+    ]
+}
+
+// ─── D2 substance: illustrative BOM-level values (NOT vendor-validated) ─
+//
+// These fill the architectural-partitioning placeholders with
+// ILLUSTRATIVE BOM choices intended to demonstrate the structure
+// shape. Actual silicon selection requires vendor-qualification +
+// supply-chain audit + ngspice/HFSS validation which live downstream
+// in chip + component + design cells. absorbed=false stays PERMANENTLY.
+
+fn _sensor_array_real_block() -> [str] {
+    return [
+        "channel_count: 16 (8 per side · bilateral coverage)",
+        "electrode_material: Ag/AgCl plated (dry option) / hydrogel-coupled (wet option)",
+        "electrode_diameter: 5 mm (active) / 8 mm (reference)",
+        "skin_contact_area_total: ~6.3 cm^2 (16 ch × ~0.4 cm^2)",
+        "reference_placement: mastoid bony prominence (left + right · linked-mastoid)",
+        "ground_placement: post-auricular skin (RLD-driven)",
+        "biocompat_panel: ISO 10993-1 cytotoxicity + sensitization + irritation",
+    ]
+}
+
+fn _afe_adc_real_block() -> [str] {
+    return [
+        "AFE_IC: Texas Instruments ADS1299 (8-channel sigma-delta · 24-bit) · 2 ICs daisy-chained for 16-ch",
+        "instr_amp_gain: 1/2/4/6/8/12/24 selectable (default 24 for EEG µV-range)",
+        "input_referred_noise: ~1 µV-pp 0.5-50 Hz (datasheet typical @ gain=24)",
+        "CMRR: ≥ 110 dB @ 60 Hz (RLD enabled)",
+        "sample_rate: 250 / 500 / 1000 / 2000 SPS per channel (per ADS1299 control reg)",
+        "input_protection: ±15 V over-range tolerance (per ADS1299 datasheet)",
+        "anti_alias_filter: 1st-order RC (10 kHz cutoff · 4.7 kΩ + 3.3 nF illustrative)",
+    ]
+}
+
+fn _radio_real_block() -> [str] {
+    return [
+        "BLE_SoC: Nordic nRF5340 (dual-core: M33 application + M33 network · BLE 5.3 LE Audio capable)",
+        "alt_SoC: Nordic nRF52840 (single-core M4F · BLE 5.0 mature)",
+        "antenna: 2.4 GHz chip antenna (Johanson Technology 2450AT18B100 illustrative) + π-network matching",
+        "PHY: LE 2M PHY (2 Mbps) for sustained EEG streaming",
+        "max_tx_power: +8 dBm (per nRF5340 limit · regulatory: FCC 15.247 / ETSI EN 300 328)",
+        "GATT_services: custom EEG streaming (UUID TBD) + Battery (0x180F) + Device Information (0x180A)",
+        "BLE_throughput_target: ~10 kB/s sustained (16 ch × 250 Hz × 24-bit ~ 96 kbps + framing)",
+    ]
+}
+
+fn _battery_real_block() -> [str] {
+    return [
+        "battery_type: Li-Po pouch (rechargeable variant) — 200 mAh @ 3.7 V nominal per side",
+        "alt_disposable: CR2032 coin cell (single-side · ~225 mAh @ 3.0 V nominal)",
+        "PMIC: TI BQ25180 (charge IC, 0.5 A · battery monitoring · Li-Po protection)",
+        "LDO: TI TPS62840 (3.3 V buck-boost for nRF5340 + ADS1299 supply)",
+        "runtime_target: ≥ 12 h continuous (250 Hz × 16 ch sustained streaming · BLE 2M PHY)",
+        "charging_interface: USB-C 5 V (rechargeable) · ≤ 90 min full charge target",
+        "battery_safety: IEC 62133-2 certified Li-Po cell + integrated protection IC",
+    ]
+}
+
+fn _mechanical_real_block() -> [str] {
+    return [
+        "enclosure_topology: clamshell + post-auricular clip (mastoid anchor)",
+        "weight_target: ≤ 25 g per side (50 g total bilateral · ergonomic ceiling)",
+        "primary_material: medical-grade silicone (Shore A ~30) over ABS sub-frame",
+        "skin_contact_zones: hydrogel pad (wet) OR Ag/AgCl pin array (dry) — interchangeable",
+        "ingress_protection: IPX4 (splash · daily-wear use case · not for shower/swim)",
+        "MCAD_authoring: FreeCAD 1.0+ parametric model + KiCad StepUp PCB↔mechanical link",
+        "prototype_path: SLA resin print (Form 3 · Clear V4) + soft-tooled silicone overmold",
     ]
 }
 
@@ -123,6 +192,13 @@ fn _emit_header() {
     _emit_block("radio_ble",      _radio_block())
     _emit_block("battery_power",  _battery_block())
     _emit_block("mechanical",     _mechanical_block())
+
+    // ─── D2 substantive blocks (illustrative BOM-level reference targets) ──
+    _emit_block("sensor_array_real",   _sensor_array_real_block())
+    _emit_block("afe_adc_real",        _afe_adc_real_block())
+    _emit_block("radio_ble_real",      _radio_real_block())
+    _emit_block("battery_power_real",  _battery_real_block())
+    _emit_block("mechanical_real",     _mechanical_real_block())
 }
 
 fn _emit_caveats() {
