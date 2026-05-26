@@ -2,6 +2,13 @@
 
 Append-only history sister of `INBOX.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
+## 2026-05-26T16:30Z — 🔌 cloud registry 오염 FIX (#1229 B) → reconcile GHOST 오판 해소 (#1229 A)
+
+- [x] **#1229 B — registry argv-조각/host 오염 차단** — `cloud run`/`cloud nohup` 가 `pod_registry_record(host, prog, …)` 로 ssh 목적지(`root@<ip>`·proxy host)+명령조각(`echo`/`bash`/`/root/run.sh`)을 "pod" 로 적재하던 것을 제거(둘 다 host 연산이지 pod-lifecycle 이벤트 아님; pod 추적은 rent/adopt 가 numeric id 로 함). + sink 가드 `_pod_id_looks_valid` 추가 — `@`/`/`/`.`/공백/leading-`-` 토큰(ssh dest·host·IP·path·flag)을 `pod_registry_record` 가 거부(eprintln + drop). 11/11 standalone PASS (transpile→clang→run).
+- [x] **#1229 A — reconcile GHOST 오판 해소(B의 결과)** — 오염 host-string row 가 numeric provider-id 와 절대 안 맞아 전부 GHOST 로 찍히던 "35행 junk" 가 B 차단으로 소거. reconcile union(runpod+vast) 로직은 이미 정상이었음(이 PR 은 입력 오염만 제거).
+- [x] **검증**: pod_registry.hexa·cloud_cli.hexa transpile-clean · `pod_registry_guard_test.hexa` 영구 가드(11 케이스). cloud 0.3.0→0.3.1.
+- [ ] **남은 cloud**: #1155(vast 등록키 자동 제시 — 별도 PR) · #1229 C(concurrent-wipe = 트랜스파일러 mis-deploy family, #1259 가드로 부분 대응) · D(prebuilt 전송) · #1239(1)ⓑ(`cpu_ram`, repo 밖).
+
 ## 2026-05-26T15:40Z — 🛸 `hexa cloud dft-run <deck-dir>` — guarded QE el-ph dispatch (#1249) + bare-IP endpoint (#1239(2) fix)
 
 - [x] **`hexa cloud dft-run <deck-dir>` 흡수 (RFC #1249)** — demiurge `DFT_POD_DISPATCH_RECIPE.md` 4-guard 체크리스트를 `stdlib/cloud/dft_dispatch.hexa` 로 코드화. ① rent(reliability>0.97·verified·16+코어, create --direct 既存, echo REACHABLE precheck→unreachable면 destroy+재rent) · ② transport(bare-IP via `show instances --raw`, vast identity `-i`) · ③ chain(hexa-native relax→scf 좌표 파서·`-np`=phys cores·`--allow-run-as-root`·`recover=.true.`·`timeout`·`setsid`) · ④ monitor(numeric-id registry·허수모드<-5cm⁻¹→unstable·비대화 teardown). **PREVIEW 기본($0): deck 검증+plan+로컬 relax.out 파싱; `--go` 만 과금.** verb wired in cloud_cli (0.2.4→0.3.0).

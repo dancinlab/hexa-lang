@@ -154,11 +154,48 @@ fn _reg_field(line: str, key: str) -> str {
 // rewritten with the prior records minus the matching id, then the fresh
 // record appended) so the file does not grow one line per poll.
 //
-// `pod_id`  — provider pod/host id or ssh destination (the handle to poll).
+// `pod_id`  — the PROVIDER pod/instance id ONLY (numeric vast instance-id or
+//             alphanumeric runpod pod-id). NOT an ssh destination, path, or
+//             argv fragment — reconcile matches this id against the provider
+//             live-id sets, so an `root@<ip>` / `ssh1.vast.ai` / `/root/run.sh`
+//             / bare-flag value can never match and pollutes the table with
+//             phantom GHOST rows (INBOX #1229 B → A). `_pod_id_looks_valid`
+//             rejects those shapes.
 // `label`   — free-form purpose/name ("p21h-v3-qwen", launching repo, ...).
 // `status`  — "running" | "closed" | "lost".
+
+// _pod_id_looks_valid — a provider pod-id is a bare token (vast: digits;
+// runpod: alnum + `-`/`_`). Reject ssh destinations (`@`), hosts / IPs (`.`),
+// paths (`/`), whitespace (argv fragments), and leading-`-` flag values — the
+// pollution classes filed in INBOX #1229 B. 1 = looks like a real id, 0 = drop.
+fn _pod_id_looks_valid(pod_id: str) -> int {
+    let n = len(pod_id)
+    if n == 0 {
+        return 0
+    }
+    if pod_id.substring(0, 1) == "-" {
+        return 0
+    }
+    let mut i = 0
+    while i < n {
+        let c = pod_id.substring(i, i + 1)
+        if c == "@" || c == "/" || c == "." || c == " " || c == "\t" {
+            return 0
+        }
+        i = i + 1
+    }
+    return 1
+}
+
 fn pod_registry_record(pod_id: str, label: str, status: str) {
     if len(pod_id) == 0 {
+        return
+    }
+    // Sink guard (#1229 B): never record a non-pod-id token (ssh destination,
+    // host/IP, path, or argv fragment) — it only ever GHOSTs in reconcile.
+    if _pod_id_looks_valid(pod_id) == 0 {
+        eprintln("[cloud] registry: refusing non-pod-id '" + pod_id
+            + "' (expected a provider instance-id; use `cloud adopt <id>` to track an existing pod)")
         return
     }
     let dir = _reg_dir()
