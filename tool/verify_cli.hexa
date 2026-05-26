@@ -428,6 +428,7 @@ fn _recompute(fn_name: string, n: int) -> int {
     if fn_name == "sigma_2" { return sigma_k(n, 2) }
     if fn_name == "euler_totient" || fn_name == "euler_phi" || fn_name == "phi" { return euler_phi(n) }
     if fn_name == "mobius" || fn_name == "mu" { return mobius(n) }
+    if fn_name == "mertens" { return mertens(n) }   // M(n)=Σμ(k) (TECS-L F20 — RH-adjacent descriptive)
     if fn_name == "divisor_count" || fn_name == "tau" { return len(divisors(n)) }
     if fn_name == "sopfr" { return sopfr(n) }   // sum of prime factors w/ multiplicity (TECS-L CM0 lattice · F9 calc-gap fix)
     if fn_name == "is_perfect" {
