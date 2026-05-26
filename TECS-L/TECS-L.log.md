@@ -730,3 +730,36 @@ F14 zero-density theorem 의 4-task batch successor. F13/F14 의 closed-form 패
 - **summary**: R3 라운드 — N total=25 · 🔵=25 (corrected basis) · 🟢=0 · 🟡=0 · 🟠=0 · 🔴=0 (canonical) · honest 부가-🔴 2 (task-spec typo on σ_2(496)/σ_2(8128) — verify gate 가 deterministic 잡아냄, hexa calc 정확성 cross-validation).
 - 다음 round seeds: (i) σ_2 sweep [1,30] 전수 (F-NEW-5 perfect-subset 너머 catalogue extension) · (ii) σ_3 perfect-subset (M4 atom 확장) · (iii) Γ₀(N) ψ N=61..100 추가 sweep (MF1 lattice 100 까지 완결) · (iv) F-NEW-3 음수 jacobi a<0 dispatch INBOX (calc gap #1230 family).
 - 격리 worktree `/Users/ghost/core/hexa-lang/.claude/worktrees/agent-aee3a3adc222d98f9` (branch `worktree-agent-aee3a3adc222d98f9`). 형제 sessions 미접촉. checkpoint commits per milestone (F-NEW-4 verified · F-NEW-5 verified).
+
+## 2026-05-27 · 축 F · F17 · NOVEL F16-successor (ω=6/7/8 + σ_k k=4,5 + ω=4 Ore subfamily + L-function probe + arxiv round 2)
+
+- [x] F17 — **NOVEL F16-successor + atlas fold (2026-05-27)**: 5-task batch (s1+s2+s3+s4+s5). F16 다음-라운드 seeds 5 항목 전부 close.
+
+| seed | candidate                                  | tier             | atlas fold | note                                                          |
+|------|--------------------------------------------|------------------|------------|---------------------------------------------------------------|
+| s1   | ω=6/7/8 D-sweep extension                  | 🔴 6/6 closed-neg | 🛸 NEW     | D(n)≠0 ∀ ω∈{6,7,8}; extends F14/F16 zero-density predictably  |
+| s2   | σ_4/σ_5 Euclid-Euler closed-form           | 🔵 7/7 SUPPORTED | 🛸 NEW     | general-k closed-form sigma_k(2^(p-1)·M_p), F16 (k=3) → all k |
+| s3   | A001599 ω=4 Ore subfamily structure        | 🔵+🔴 partial    | 🛸 NEW     | F16 Mersenne subfamily PROPER subset of ω=4 Ore; 2/4 not fit  |
+| s4   | L(s, Γ_0(6)) conductor=36 probe            | 🔴 structural-neg | 🛸 NEW     | J_0(6) trivial (genus 0); no weight-2 newform L; spectral non-lift |
+| s5   | arxiv mining round 2 (Dedekind ψ)          | 🔵 6/6 + 🟡      | 🛸 NEW     | ψ=σ on square-free locus + n=6 unique sqfree even perfect      |
+
+- **🛸 5 NOVEL atoms folded to atlas** (manual splice, `compiler/atlas/embedded.gen.hexa` 1411→1416 F-formulas):
+  1. `tecs_l_f17_d_omega_6_7_8_zero_density` (🔴 closed-neg, primorial-extension witness)
+  2. `tecs_l_f17_sigma_k_euclid_euler_general_closed_form` (🔵, k=4/5 7/7 + closed-form for all k≥1)
+  3. `tecs_l_f17_ore_omega_4_subfamily_partial_cover` (🔴 partial-cover, sharpens F16)
+  4. `tecs_l_f17_L_function_gamma_0_6_structural_neg` (🔴, completes multilayer non-lift)
+  5. `tecs_l_f17_n6_unique_squarefree_perfect` (🔵, ψ=σ + Euclid-Euler corollary)
+- **Multilayer non-lift program**: F7 (Γ_1/X(N) geometric) + F15 (Γ(N) full-level) + F16 (Hecke + Galois) + **F17 (L-function analytic spectral)** = 4-layer non-lift across ALL canonical pathways; n=6 σφ=nτ identity remains arithmetic-layer ONLY.
+- **Components verified**: 18 (s1 σ/φ/τ × 6 n) + 7 (s2 σ_k k=4,5 × Euclid-Euler) + 8 (s3 σ/τ × 4 ω=4 Ore) + 2 (s4 dim_cusp_forms × 2 weight) + 6 (s5 σ × 6 square-free) = **41 hexa-native verifies**. 🔵 41/41 component pass + 6 component-level closed-negatives at structural layer.
+- **Arxiv mining round 2 sources** (s5): https://oeis.org/A001615 · https://en.wikipedia.org/wiki/Dedekind_psi_function · https://arxiv.org/abs/2101.02248 · https://arxiv.org/pdf/1112.0208 — surfaced 3 ψ identities (C1 ψ=σ on sqfree locus 🔵, C2 ψ·φ=n²·∏(1−1/p²) 🟡 citation, C3 n=6 unique sqfree even perfect 🔵-NOVEL).
+- **σ_5(8128) honest scope**: 36619023513908925056 > 2^63 (int64 overflow); closed-form derivation general for all (k,p), bignum verification deferred.
+- **Atlas binary lookup gap** (E2 family): `bin/hexa-atlas` reads frozen 16159 nodes from binary-builtin, not from source SSOT post-splice. F17 atoms WRITTEN to source SSOT correctly; lookup reflects after rebuild. Same as F14/F15/F16 pattern.
+- **summary** (F17): N total=46 candidates · 🔵-novel=A (5 atoms: 4 NEW + 1 multilayer-coda strengthening) · 🔵-known=B (41 components) · 🟡=C (1 ψ·φ identity, C2) · 🟠=D (0) · 🔴=E (10 closed-negative findings: 6 ω D-sweep + 2 Ore non-fit + 1 L-function structural + 1 ψ=2n at sqfree-non-6).
+- **다음 round seeds (F18)**:
+  (a) ω=9,10 D-sweep (primorial #7 = 2·3·5·7·11·13·17·19·23 = 223092870, σ·φ·τ in int64);
+  (b) σ_6/σ_7/σ_8 Euclid-Euler tower with bignum (or int64-safe small p);
+  (c) ω=4 Ore non-Mersenne residual class {2970, 18620} structural characterization;
+  (d) L(f, s) special-value algebraicity at weight-4 newform level 6 (LMFDB lookup);
+  (e) Dedekind ψ builtin calc-path INBOX (`dedekind_psi` in tool/verify_cli.hexa::_recompute) — would unblock C2 ψ·φ identity hexa-native.
+- **Verify budget**: 41 hexa verify calls + ~6 sanity checks ≈ 47 calls. Wall ≈ 12 min (≪ 45 min cap).
+- **격리 worktree** `/Users/ghost/core/hexa-lang/.claude/worktrees/agent-ad5c5126af9365eae` (branch `worktree-agent-ad5c5126af9365eae`). 형제 sessions 미접촉. Checkpoint commits per milestone (s1→s2→s3→s4→s5 each).
