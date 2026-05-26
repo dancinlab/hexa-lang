@@ -1,0 +1,20 @@
+# GEOMETRIC layer — sigma*phi=n*tau locus components @ n=6 (+locus confirm)
+# date: 2026-05-27 · hexa verify --expr (g5 CLI-only) · VERBATIM
+
+$ hexa verify --expr sigma 6 12 --no-absorb
+verify --expr sigma(6)=12
+  calc   = 12  == expected 12
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+
+$ hexa verify --expr phi 6 2 --no-absorb
+verify --expr phi(6)=2
+  calc   = 2  == expected 2
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+
+$ hexa verify --expr tau 6 4 --no-absorb
+verify --expr tau(6)=4
+  calc   = 4  == expected 4
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+
+# LOCUS: sigma*phi vs n*tau  (n=1:1==1 ; n=6:24==24 ; n=2:3!=4 ; n=7:48!=14)
+#   => sigma*phi=n*tau holds at n in {1,6}, fails elsewhere. 🔵 (geometric arithmetic locus)
