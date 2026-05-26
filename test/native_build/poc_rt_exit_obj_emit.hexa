@@ -1,0 +1,80 @@
+// test/native_build/poc_rt_exit_obj_emit.hexa
+//
+// Chunk B/A bridge PoC (per RUNTIME.md Phase-H §"첫 increment" follow-on):
+// Produce a Mach-O .o file from hexa-emitted ARM64 bytes (rt_exit primitive),
+// link with a tiny C caller, and verify exit(42) at runtime.
+//
+// SCOPE — one primitive (`rt_exit`, 16 bytes, no relocs, the simplest case).
+//
+// Pipeline (NO clang in object production):
+//   1. rt_exit() (self/codegen/runtime_arm64.hexa)         → [int] 16 bytes
+//   2. macho_obj_wrap(bytes, main_offset=0)                → MH_OBJECT .o
+//   3. write_bytes("/tmp/poc_rt_exit.o", obj_bytes)        → file on disk
+//
+// The link step (clang caller.c rt_exit.o -o caller) is OUT OF SCOPE for
+// this PoC — chunk B is the EMIT side; link is the separate Phase-H scope
+// (tool/hexa_ld.hexa, already-shipped RUNTIME.md §"첫 increment"). clang is
+// only used downstream of this artifact as the linker (control oracle for
+// the PoC; not part of the produced .o's emit path).
+//
+// The .o exposes ONE external symbol `_hexa_main` (the macho_obj_wrap
+// fixed export name). The C caller declares `extern void hexa_main(void)`
+// and tail-calls it. The bytes set x16=1 (SYS_exit) and svc #0x80 with
+// whatever x0 the caller passed (rt_exit DOES NOT touch x0) → exit(arg).
+//
+// Cross-cutting:
+//   - closure = runs exact (feedback-closure-is-physical-limit) — exit
+//     code 42 is the byte-level falsifier.
+//   - f1/f2 — clang ONLY as control oracle on the link side, NEVER in the
+//     produced .o's runtime emit (the 16 bytes come from rt_exit()).
+//   - no binaries committed.
+
+use self/codegen/runtime_arm64
+use self/codegen/macho
+
+fn poc_emit_rt_exit_obj() {
+    println("[poc] chunk B/A bridge — hexa-native .o emit for rt_exit")
+
+    // Step 1: hexa-emit ARM64 bytes for rt_exit primitive.
+    let code = rt_exit()
+    if len(code) != 16 {
+        println("FAIL: rt_exit() expected 16 bytes, got " + to_string(len(code)))
+        return
+    }
+    println("  rt_exit bytes  : " + to_string(len(code)) + " (16 expected)")
+
+    // Sanity: byte[12..15] must be the SVC trailer (1, 16, 0, 212 = 0xD4001001).
+    if code[12] != 1 || code[13] != 16 || code[14] != 0 || code[15] != 212 {
+        println("FAIL: SVC trailer mismatch")
+        return
+    }
+    println("  SVC trailer    : 01 10 00 d4 (svc #0x80) OK")
+
+    // Step 2: wrap into MH_OBJECT (.o). main_offset=0 → _hexa_main points at
+    // the start of __text, which is exactly the first byte of rt_exit.
+    let obj = macho_obj_wrap(code, 0)
+    println("  macho_obj_wrap : " + to_string(len(obj)) + " bytes total")
+
+    // Sanity: MH_MAGIC_64 little-endian at offset 0 (0xFEEDFACF → cf fa ed fe).
+    if obj[0] != 0xcf || obj[1] != 0xfa || obj[2] != 0xed || obj[3] != 0xfe {
+        println("FAIL: MH_MAGIC_64 mismatch at offset 0")
+        return
+    }
+    println("  MH_MAGIC_64    : cf fa ed fe OK")
+
+    // Sanity: filetype = MH_OBJECT (1) at offset 12.
+    if obj[12] != 1 {
+        println("FAIL: filetype not MH_OBJECT (got " + to_string(obj[12]) + ")")
+        return
+    }
+    println("  filetype       : 1 (MH_OBJECT) OK")
+
+    // Step 3: write to disk.
+    let out = "/tmp/poc_rt_exit.o"
+    write_bytes(out, obj)
+    println("  wrote          : " + out)
+
+    println("[poc] EMIT OK — link/run via host shell driver")
+}
+
+poc_emit_rt_exit_obj()
