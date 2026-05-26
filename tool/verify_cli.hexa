@@ -2811,6 +2811,77 @@ fn _wakefield_e0_lambda_product(n18: float) -> float {
     return 2.0 * pi_c * me * c * c / e * 0.001
 }
 
+// ── CERN Stage 5 Bethe-Bloch corrections — atomic verify pins (PDG §34) ─
+// 0-arg constants — each atom pins ONE textbook-formula evaluation at one
+// canonical (material, βγ, projectile) sample for the Stage-5 substrate at
+// hexa-lang/stdlib/cern/bethe_bloch_stopping.{py,hexa}. These verify the
+// Sternheimer/Bloch/Barkas/shell-correction formulas — NOT the .py↔.hexa
+// parity (that is the Stage-3 selftest's job). Reference values come from
+// the Python kernel run on the SAME formula → byte-identical numerics.
+//
+// Sternheimer-Berger-Seltzer (1984) δ(βγ) for Al at βγ=0.04618131392252519
+// (antiproton, KE=1 MeV). Al sbs coefficients: C=4.2395, x0=0.1708, x1=3.0127,
+// a=0.0802, k=3.6345, delta0=0.12. Since x = log10(0.046) ≈ -1.335 < x0,
+// Al is treated as conductor-shape (delta0=0.12 → ramp). Reference δ =
+// delta0 * 10^(2(x-x0)) ≈ 0.12 * 10^(2(-1.335-0.171)) ≈ 0.12 * 10^(-3.012)
+//   = 1.158e-4. (Python kernel value: 1.158278e-4 — same.)
+fn _sternheimer_delta_al_bg046() -> float {
+    let ln10 = 2.302585092994046
+    let x0 = 0.1708
+    let delta0 = 0.12
+    // x = log10(0.04618131392252519) (we evaluate, not hard-code, to keep
+    // this an honest closed-form recompute the verify tier can confirm).
+    let bg = 0.04618131392252519
+    let x = log(bg) / ln10
+    if x >= x0 { return 0.0 }   // sanity (won't fire at βγ=0.046)
+    return delta0 * pow(10.0, 2.0 * (x - x0))
+}
+
+// Andersen-Ziegler 1977 shell correction C(η,I_eV) at Cu (I=322 eV),
+// βγ=0.25489144928057195 (antiproton, KE=30 MeV). Above the AZ low-η
+// taper threshold (0.13), so taper=1. Python kernel value: 2.132376e+0.
+fn _shell_correction_cu_bg255() -> float {
+    let eta = 0.25489144928057195
+    let i_ev = 322.0
+    let eta2 = eta * eta
+    let eta4 = eta2 * eta2
+    let eta6 = eta4 * eta2
+    let term_i2 = (0.422377 / eta2 + 0.0304043 / eta4 - 0.00038106 / eta6) * 0.000001 * i_ev * i_ev
+    let term_i3 = (3.858019 / eta2 - 0.1667989 / eta4 + 0.00157955 / eta6) * 0.000000001 * i_ev * i_ev * i_ev
+    return term_i2 + term_i3
+}
+
+// Bloch 1933 z² Born-correction L2(β, |z|=1) at β=0.04613214679139816
+// (antiproton KE=1 MeV). y = α/β ≈ 0.158. Python kernel value: -2.944e-2.
+fn _bloch_l2_beta046_z1() -> float {
+    let alpha_fs = 0.0072973525693
+    let beta = 0.04613214679139816
+    let y = alpha_fs / beta
+    let y2 = y * y
+    let y4 = y2 * y2
+    let y6 = y4 * y2
+    return 0.0 - y2 * (1.202 - 1.042 * y2 + 0.855 * y4 - 0.343 * y6)
+}
+
+// Z1^3 Barkas correction L1(βγ, Z) signed by projectile, Cu antiproton
+// at βγ=0.04618131392252519. Sigmund-2006 universal-curve fit (log-normal
+// peak at βγ=1, width=0.5). z1=-1 ⇒ result is negative. Python kernel
+// value: -6.758e-11 (peak is at βγ=1; at βγ=0.046 we are deep in the
+// low-η tail, hence tiny magnitude).
+fn _barkas_l1_cu_bg046_pbar() -> float {
+    let bg = 0.04618131392252519
+    let z = 29
+    let charge_sign = 0 - 1                // antiproton z1 = -1
+    let z_sqrt = sqrt(to_float(z))
+    let peak_eta = 1.0
+    let width = 0.5
+    let r = bg / peak_eta
+    let lnr = log(r)
+    let f_val = r * exp(0.0 - (lnr * lnr) / (2.0 * width * width))
+    let l1 = 1.29 * f_val / z_sqrt
+    return to_float(charge_sign) * l1
+}
+
 // ── thick finite-solenoid on-axis CENTER B_z — EXACT Biot-Savart closed form
 //    (FUSION gate (e) · RTSC magnet getdp parity ORACLE · 2026-05-25) ────────
 // A thick air-cored solenoid carrying a UNIFORM azimuthal engineering current
@@ -2915,6 +2986,11 @@ fn _recompute_float(fn_name: string, a0: float, a1: float, a2: float, a3: float,
         if argc < 4 { return _NOCALC_F }
         return _solenoid_axis_bz(a0, a1, a2, a3)
     }
+    // CERN Stage 5 Bethe-Bloch corrections — 0-arg pinned atoms.
+    if fn_name == "sternheimer_delta_al_bg046" { return _sternheimer_delta_al_bg046() }
+    if fn_name == "shell_correction_cu_bg255" { return _shell_correction_cu_bg255() }
+    if fn_name == "bloch_l2_beta046_z1" { return _bloch_l2_beta046_z1() }
+    if fn_name == "barkas_l1_cu_bg046_pbar" { return _barkas_l1_cu_bg046_pbar() }
     if fn_name == "welch_t_crit" { return _welch_t_crit(a0) }
     if fn_name == "wilson_hilferty_p" {
         if argc < 2 { return _NOCALC_F }

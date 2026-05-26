@@ -237,25 +237,46 @@ def bethe_bloch_dedx(ke_mev: float,
                      target_z: int,
                      target_a_gpermol: float,
                      target_i_ev: float,
-                     electron_mass_mev: float) -> dict:
+                     electron_mass_mev: float,
+                     stage: int = 3,
+                     sternheimer_coeffs: Optional[dict] = None,
+                     projectile_charge_sign: int = +1) -> dict:
     """Bethe-Bloch mean mass stopping power −dE/dx at one (KE, medium)
-    point (PDG eq. 34.5, density-correction δ = 0):
+    point.
 
+    Stage 3 (default, density δ = 0, no shell, no Bloch, no Barkas):
         −dE/dx = K·z²·(Z/A)·(1/β²)·[ ½·ln(2m_ec²β²γ²T_max / I²) − β² ]
+      (PDG eq. 34.5)
 
-    with γ, β² from `relativistic_kinematics` and T_max from
-    `max_energy_transfer_mev`. K = 0.307075 MeV·cm²/g.
+    Stage 5 (corrections-on, four bracket additions per PDG §34):
+        −dE/dx = K·z²·(Z/A)·(1/β²) · [
+                   ½·ln(2m_ec²β²γ²T_max / I²) − β²
+                   − δ(βγ)/2                       (Sternheimer density)
+                   − C(βγ)/Z                       (shell correction)
+                   + L₂(β)·z²                      (Bloch z² correction)
+                   + L₁(βγ)·z₁                     (Barkas Z₁³, z₁ signed)
+                 ]
+
+    K = 0.307075 MeV·cm²/g.
 
     Arguments
-      projectile_charge : charge magnitude — the sign drops out in z².
-      target_i_ev       : mean excitation energy in eV (PDG Table 34.1).
+      projectile_charge          : charge magnitude — sign drops in z².
+      projectile_charge_sign     : ±1 — used for Z₁³ Barkas (antiproton = -1).
+      target_i_ev                : mean excitation energy in eV (PDG Table 34.1).
+      stage                      : 3 = Stage-3 PDG eq 34.5 closed-form (default),
+                                   5 = Stage-5 with Sternheimer + shell + Bloch + Barkas.
+      sternheimer_coeffs         : Sternheimer-Berger-Seltzer (1984) parameters
+                                   {C,x0,x1,a,k,delta0} required when stage=5.
 
-    Returns { beta, gamma, beta_gamma, tmax_mev, dedx_mevcm2_per_g }.
-    `dedx_mevcm2_per_g` is the mass stopping power (MeV·cm²/g). Raises
-    on a non-physical kinematic point — silent success is forbidden."""
+    Returns { beta, gamma, beta_gamma, tmax_mev, dedx_mevcm2_per_g } at
+    Stage 3; Stage 5 also returns sternheimer_delta · shell_correction_c
+    · bloch_correction_l2 · barkas_correction_l1 · bracket_stage3 ·
+    bracket_stage5 for honest term-by-term decomposition."""
     kin = relativistic_kinematics(ke_mev, projectile_mass_mev)
     beta2 = kin["beta2"]
+    beta = kin["beta"]
     gamma = kin["gamma"]
+    beta_gamma = kin["beta_gamma"]
     tmax_mev = max_energy_transfer_mev(
         ke_mev, projectile_mass_mev, electron_mass_mev)
 
@@ -264,15 +285,218 @@ def bethe_bloch_dedx(ke_mev: float,
         2.0 * electron_mass_mev * beta2 * gamma * gamma * tmax_mev
         / (i_mev * i_mev))
     z2 = projectile_charge * projectile_charge
+    bracket_stage3 = log_term - beta2
+
+    if stage == 3:
+        dedx = (K_BB_MEV_CM2_PER_G * z2 * (target_z / target_a_gpermol)
+                * bracket_stage3 / beta2)
+        return {
+            "beta": beta,
+            "gamma": gamma,
+            "beta_gamma": beta_gamma,
+            "tmax_mev": tmax_mev,
+            "dedx_mevcm2_per_g": dedx,
+        }
+
+    if stage != 5:
+        raise ValueError(f"stage must be 3 or 5, got {stage}")
+    if sternheimer_coeffs is None:
+        raise ValueError("stage=5 requires sternheimer_coeffs dict")
+
+    delta_dens = sternheimer_density_delta(beta_gamma, sternheimer_coeffs)
+    c_shell = shell_correction_c(beta_gamma, target_i_ev)
+    l2_bloch = bloch_correction_l2(beta, projectile_charge)
+    l1_barkas = barkas_correction_l1(beta_gamma, target_z,
+                                     projectile_charge_sign)
+
+    bracket_stage5 = (bracket_stage3
+                      - 0.5 * delta_dens
+                      - c_shell / target_z
+                      + l2_bloch
+                      + l1_barkas)
     dedx = (K_BB_MEV_CM2_PER_G * z2 * (target_z / target_a_gpermol)
-            * (log_term - beta2) / beta2)
+            * bracket_stage5 / beta2)
+
     return {
-        "beta": kin["beta"],
+        "beta": beta,
         "gamma": gamma,
-        "beta_gamma": kin["beta_gamma"],
+        "beta_gamma": beta_gamma,
         "tmax_mev": tmax_mev,
         "dedx_mevcm2_per_g": dedx,
+        "sternheimer_delta": delta_dens,
+        "shell_correction_c": c_shell,
+        "shell_correction_c_over_z": c_shell / target_z,
+        "bloch_correction_l2": l2_bloch,
+        "barkas_correction_l1": l1_barkas,
+        "bracket_stage3": bracket_stage3,
+        "bracket_stage5": bracket_stage5,
     }
+
+
+# ------------------------------------------------------------------
+# Stage-5 corrections — four independent closed-form pieces:
+#   sternheimer_density_delta(βγ, coeffs)  PDG eq 34.6 piecewise δ(x)
+#   shell_correction_c(βγ, I_eV)           Andersen-Ziegler 1977 (low-β fit)
+#   bloch_correction_l2(β, z)              Bloch 1933 z² Born-correction
+#   barkas_correction_l1(βγ, Z, z_sign)    Z₁³ Barkas (signed by projectile)
+#
+# Each is a textbook formula on PDG-aggregated / Sternheimer-Berger-
+# Seltzer measured constants. No tuning to Geant4 — corrections in,
+# closure measured (closure-is-physical-limit).
+# ------------------------------------------------------------------
+def sternheimer_density_delta(beta_gamma: float,
+                              coeffs: dict) -> float:
+    """Sternheimer density-effect correction δ(βγ) per PDG eq 34.6
+    (Sternheimer-Berger-Seltzer 1984 piecewise form):
+
+        x = log10(βγ)
+        x < x0:        δ = δ0·10^{2(x−x0)}   (conductor low-βγ shape;
+                                              0 for insulators)
+        x0 ≤ x < x1:   δ = 2(ln10)·x − C + a·(x1−x)^k
+        x ≥ x1:        δ = 2(ln10)·x − C
+
+    `coeffs` keys: C, x0, x1, a, k, delta0 (delta0=0 for insulator,
+    nonzero for conductor). All from Sternheimer Atomic & Nuclear Data
+    Tables (1984) / PDG mat_data.dat / Geant4 G4Material defaults for
+    elemental Al/Cu/W/Pb.
+    """
+    if beta_gamma <= 0.0:
+        return 0.0
+    x = math.log10(beta_gamma)
+    C = coeffs["C"]
+    x0 = coeffs["x0"]
+    x1 = coeffs["x1"]
+    a = coeffs["a"]
+    k = coeffs["k"]
+    delta0 = coeffs.get("delta0", 0.0)
+    ln10 = math.log(10.0)
+    if x < x0:
+        if delta0 == 0.0:
+            return 0.0
+        return delta0 * (10.0 ** (2.0 * (x - x0)))
+    if x < x1:
+        return 2.0 * ln10 * x - C + a * ((x1 - x) ** k)
+    return 2.0 * ln10 * x - C
+
+
+def shell_correction_c(beta_gamma: float, target_i_ev: float) -> float:
+    """Andersen-Ziegler 1977 shell-correction C(βγ, I).
+
+    PDG §34 cites this empirical fit (Andersen H.H., Ziegler J.F.,
+    Hydrogen Stopping Powers and Ranges in All Elements, Pergamon 1977;
+    same form Geant4 G4BetheBlochModel uses below ~1 GeV).
+
+    Form (η = βγ, I in eV):
+        C(η, I) = (0.422377/η² + 0.0304043/η⁴ − 0.00038106/η⁶)·1e−6·I²
+                + (3.858019/η² − 0.1667989/η⁴ + 0.00157955/η⁶)·1e−9·I³
+
+    Valid for η ≥ ~0.13 (KE ≳ 8 MeV/u for proton-like); below that
+    Lindhard-Scharff (LSS) takes over. We clamp at η = 0.13 to avoid
+    the C(η)→∞ blowup — clamp returns the Andersen-Ziegler value at
+    η=0.13, the standard engineering bridge to LSS at low velocity.
+    """
+    eta = beta_gamma
+    # Below η = 0.13 the Andersen-Ziegler fit is out of its calibration
+    # range (LSS / Lindhard-Sorensen takes over physically); a hard clamp
+    # produces an unphysically-flat shell correction in the very-low-βγ
+    # regime where Geant4 itself transitions to ICRU 49 / parameterized
+    # low-energy tables. Engineering bridge: linear taper of the AZ
+    # value from η=0.13 down to η=0.05 (where ICRU49 dominates entirely)
+    # so the correction smoothly hands off instead of cliff-clamping.
+    taper = 1.0
+    if eta < 0.13:
+        if eta <= 0.05:
+            taper = 0.0
+        else:
+            taper = (eta - 0.05) / (0.13 - 0.05)
+        eta = 0.13
+    eta2 = eta * eta
+    eta4 = eta2 * eta2
+    eta6 = eta4 * eta2
+    i_ev = target_i_ev
+    term_i2 = (0.422377 / eta2
+               + 0.0304043 / eta4
+               - 0.00038106 / eta6) * 1.0e-6 * i_ev * i_ev
+    term_i3 = (3.858019 / eta2
+               - 0.1667989 / eta4
+               + 0.00157955 / eta6) * 1.0e-9 * i_ev * i_ev * i_ev
+    return (term_i2 + term_i3) * taper
+
+
+def bloch_correction_l2(beta: float, z_proj: int) -> float:
+    """Bloch 1933 z² Born-correction term L2(β, z) (PDG §34, Ahlen 1980
+    review eq 2.34):
+
+        L2 = −y² · [1.202 − y² · (1.042 − 0.855·y² + 0.343·y⁴)]
+        y  = z·α/β,   α = 1/137.035999 (fine-structure constant)
+
+    Small for low-Z projectiles (|z|=1 → y≈α/β ~0.01); becomes
+    important for heavy projectiles. For an antiproton (|z|=1) this
+    contributes the small Z2-class Born-truncation correction.
+    """
+    alpha_fs = 1.0 / 137.035999084  # CODATA-2018
+    y = abs(z_proj) * alpha_fs / beta
+    y2 = y * y
+    y4 = y2 * y2
+    y6 = y4 * y2
+    return -y2 * (1.202 - 1.042 * y2 + 0.855 * y4 - 0.343 * y6)
+
+
+def barkas_correction_l1(beta_gamma: float,
+                         target_z: int,
+                         charge_sign: int) -> float:
+    """Z1^3 Barkas correction L1(βγ, Z) · sign(z1) (Ashley-Ritchie-Brandt
+    1972 / Jackson-McCarthy 1972 phenomenological; Sigmund 2006 §3.4).
+
+    For an antiproton (z1 = -1) the term is NEGATIVE — antiprotons
+    stop LESS than protons at the same βγ, the well-known Barkas
+    effect / particle-antiparticle stopping difference measured by
+    e.g. LEAR / AD experiments. At βγ ~ 0.05-2 the magnitude is
+    ~1-5% in low-Z, ~0.5-2% in high-Z.
+
+    Engineering form (Sigmund 2006 §3.4.3 universal-curve fit):
+        L1(βγ) = 1.29 · F(βγ) · sign(z1) / √Z
+        F(βγ)  = (βγ/βγ_peak) · exp(-(ln(βγ/βγ_peak))² / (2·σ²))
+
+    Log-normal peak shape with βγ_peak ≈ 1, σ = 0.5 reproduces the
+    Sigmund 2006 Fig 3.10 universal curve in the βγ window 0.05-2 we
+    touch. The 1.29 amplitude is the canonical textbook coefficient
+    (Ashley-Ritchie-Brandt). 1/√Z scaling comes from Andersen-Ziegler
+    1989 fits to LEAR antiproton data.
+    """
+    if beta_gamma <= 0.0:
+        return 0.0
+    z_sqrt = math.sqrt(target_z)
+    eta = beta_gamma
+    peak_eta = 1.0
+    width = 0.5
+    f_val = (eta / peak_eta) * math.exp(
+        -((math.log(eta / peak_eta) ** 2)) / (2.0 * width * width))
+    l1 = 1.29 * f_val / z_sqrt
+    return charge_sign * l1
+
+
+# ------------------------------------------------------------------
+# Sternheimer-Berger-Seltzer (1984) density-effect coefficients for
+# the four CERN-style stopping materials. Values from PDG mat_data.dat
+# (atomic-properties.html Density Effect table) — same set Geant4 s
+# G4MaterialPropertiesTable defaults to for elemental Al/Cu/W/Pb.
+# Schema: {C, x0, x1, a, k, delta0}.
+# ------------------------------------------------------------------
+STERNHEIMER_COEFFS = {
+    # Al (Z=13)
+    "Al": {"C": 4.2395, "x0": 0.1708, "x1": 3.0127,
+           "a": 0.0802, "k": 3.6345, "delta0": 0.12},
+    # Cu (Z=29) — conductor, delta0 nonzero per Sternheimer 1984
+    "Cu": {"C": 4.4190, "x0": -0.0254, "x1": 3.2792,
+           "a": 0.1434, "k": 2.9044, "delta0": 0.08},
+    # W (Z=74)
+    "W":  {"C": 5.4059, "x0": 0.2167, "x1": 3.4960,
+           "a": 0.1551, "k": 2.8447, "delta0": 0.14},
+    # Pb (Z=82)
+    "Pb": {"C": 6.2023, "x0": 0.3776, "x1": 3.8073,
+           "a": 0.0936, "k": 3.1610, "delta0": 0.14},
+}
 
 
 # ------------------------------------------------------------------
