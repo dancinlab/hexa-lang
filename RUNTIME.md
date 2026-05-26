@@ -118,6 +118,82 @@ hexa=`@asm`); that is the physical floor (`feedback-closure-is-physical-limit`).
 into the binary** — the runtime is hexa-emitted-native + a thin `@asm` floor,
 byte-identical to Go's end-state shape.
 
+## Phase H — hexa-native static Mach-O 링커 (HEXA_BACKEND flip · chunk B)
+
+> Step 1-4 가 **runtime.c→hexa source** 라면, Phase H 는 **object→exe
+> LINK 단계의 clang/ld 제거**. `#1269` 로 native `.o` emit 이 `clang -c`
+> 와 byte-identical 이 된 직후, object→executable 의 마지막 외부-도구
+> 의존이 바로 LINK 였다. Phase H 는 이 link 를 hexa-native 로 대체한다.
+
+**현재 native link 경로** (대체 대상, `self/main.hexa` ~L2552):
+`aprime_cc --emit=asm` → `user.s` → `clang -O2 user.s runtime.c -o bin`.
+마지막 `clang` 이 assemble + link 를 동시에 한다. Phase H 의 LINK 부분만
+hexa-native 로 교체 (assemble = `clang -c` 는 별도 chunk).
+
+### 첫 increment (2026-05-26 · 🛸 LINKS — exit(42) 실측)
+
+`tool/hexa_ld.hexa` (1020-line scaffold) 를 **실제로 링크하도록** 배선:
+
+- **driver 배선 버그 2건 fix**:
+  1. `main()` 이 `link_macho_arm64(0, …)` 로 리터럴 `0` 을 넘겨 입력
+     `.o` 들이 parse 만 되고 linker 로 전달 안 됐다 → 각 입력을
+     `parse_macho_obj` → `[ParsedObj]` 로 묶어 전달.
+  2. `argv()` 인덱스가 `2` 하드코딩 (`[prog, script, …]` 가정) — `hexa
+     run` 은 script 토큰을 제거하므로 user arg 가 1 부터 시작. argv[0]
+     스킵 + 선두 `.hexa` runner 토큰 스킵으로 run/standalone 양쪽 대응.
+
+- **측정 (arm64-Mac local, 사용자 OS)**: 2개 `MH_OBJECT` (`user.o` +
+  `rt.o`, 둘 다 `clang -c` = 허용된 INPUT) → 1개 `MH_EXECUTE` 가
+  **exit(42) 로 RUN**. LINK 단계에 `clang`/`ld`/`as` 없음. cross-object
+  `ARM64_RELOC_BRANCH26` (`bl _rt_answer`/`bl _rt_exit`, 다른 obj 에
+  정의된 심볼) 해소 확인. `nm -u` 비어있음 (함수 import 0 — minimal-
+  dynamic: dyld + libSystem 은 macOS bootstrap 규칙 충족용으로만 존재,
+  실제 import 없음).
+  - Falsifier `compiler/test/macho_p0_corpus/run_F_P1_LINKEXEC.hexa`:
+    `F-P1-LINKEXEC PASS — exit=42 · BRANCH26 resolved · nm -u empty`.
+  - no-regression: 기본 `tool/build_aprime.sh` smoke `exit(42)==42 PASS`
+    (기본 경로 = clang, 미변경).
+
+### 🔴 핵심 발견 — macOS 는 fully-static (no-dyld) 를 RUN 못함
+
+당초 목표는 `LC_UNIXTHREAD` + dyld 없는 **fully-static** Mach-O 였으나,
+실측 결과 modern macOS arm64 커널이 이를 거부한다:
+
+- Apple `ld -static -nostdlib` (LC_UNIXTHREAD) 출력 binary → **SIGKILL
+  (exit 137)**. codesign 해도 동일.
+- `clang -static` → **`crt0.o` 부재** (Apple 이 더 이상 static crt 미배포).
+- `ld -nostdlib` (dyld 만, libSystem 없이) → `ld: dynamic executables
+  must link with libSystem.dylib` 로 거부.
+
+따라서 macOS 의 도달 가능한 "static" 종착점 = **minimal-dynamic**:
+`LC_LOAD_DYLINKER` + `LC_LOAD_DYLIB libSystem` 은 존재 (dyld bootstrap
+규칙 충족용) 하되, **함수 import 0** (`nm -u` empty). RUNTIME campaign 의
+"0 external syscall (inline `svc #0x80`)" 가 이것을 가능케 한다 — libSystem
+을 링크하되 거기서 아무 심볼도 안 가져온다. 이 구조가 바로 기존
+`self/codegen/macho.hexa::macho_exec_wrap` + `tool/hexa_ld.hexa` 가 emit
+하는 형태이며, 실측 exit(42) 로 RUN 됨이 확인됐다.
+
+### full Phase H 로 가는 잔여 (실측 기반)
+
+trivial `fn main(){exit(42)}` 를 **실제 runtime.o** 와 링크하면 (real
+runtime.c → `clang -c rt.o`, 506 KB) 다음이 미해소 (현재 exit 138):
+
+- **reloc 타입 확장**: 현재 BRANCH26 (3751건) 만 패치. 실제 runtime.o 는
+  PAGE21 (3027) + PAGEOFF12 (4574) [ADRP/ADD 데이터 접근] + GOTLDP/
+  GOTLDPOFF (335×2) + ADDEND (387) 필요.
+- **multi-section 레이아웃**: linker 가 `__text` 만 merge. runtime.o 는
+  `__const`/`__cstring`/`__data`/`__bss`/`__literal8/16`/`__mod_init_func`
+  보유 → `__DATA`/`__TEXT` 세그먼트로 배치 필요 (현재 drop → 데이터 접근
+  fault).
+- **dyld import binding**: runtime.o 가 libm `_acos` 등 161개 undefined
+  extern 참조 → chained-fixups import 테이블 + GOT 채우기 필요. (RUNTIME
+  step 2-4 가 이들을 inline svc / hexa-native 로 제거하면 이 항목 소멸 —
+  Phase H 와 step 1-4 가 여기서 만난다.)
+
+요약: **BRANCH26-only / single-`__text` 케이스는 hexa-native link 완성·
+RUN 검증**. full runtime 링크 = PAGE21/PAGEOFF12/GOT reloc + multi-section
++ dyld import 의 3개 축이 잔여 (각각 다음 increment).
+
 ## Domain map (Phase 0 → 3 + post)
 
 ```
