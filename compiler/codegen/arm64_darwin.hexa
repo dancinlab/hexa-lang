@@ -1509,6 +1509,42 @@ fn _emit_bool_box(buf: [LInstr], why: string) -> [LInstr] {
 // runtime_core.c's own libm wrappers (rt_sin/rt_exp/…), NOT from a codegen
 // box site — there is nothing to inline here. No `fmov x1, dN` site exists.
 
+// HEXA_BACKEND flip · chunk A step 3 — str box status (RESIDUAL/NONE).
+//
+// AUDIT (2026-05-26): the symmetric question to int/bool/float — does this
+// backend ever emit `bl _hexa_str` as a boxing-constructor call site? — has
+// a clean negative answer. `hexa_str(const char* s)` is the C runtime str
+// constructor (runtime.c:1346, returns `{.tag=TAG_STR=3, .s=s}` as a HexaVal
+// x0:x1 pair), and it is NEVER called from this backend's emit. Two reasons:
+//   • string LITERALS are already inlined in `_hv_load` const_str (above):
+//     movz lo #3 (TAG_STR) + adrp/add the `.LCstrN` interned-pool address
+//     into hi — a full repr-pack, no constructor call. No env-gate, default
+//     ON (this was the authored shape from day 0). See the `if o.kind ==
+//     "const_str"` branch at the head of `_hv_load`.
+//   • str-returning builtins (`hexa_to_string`, `hexa_str_concat`,
+//     `hexa_str_substring`, `hexa_str_split`, `hexa_str_chars`,
+//     `hexa_str_replace`, `hexa_str_join`, `hexa_input`, `hexa_args`, …)
+//     return a complete HexaVal in x0:x1 DIRECTLY; `_builtin_ret_box` emits
+//     only "int"/"bool", never a "str" box. No `mov x1, x0 + movz x0, #3`
+//     post-call repr-pack site exists.
+// Verified by symbol-grep on the native-backend `--emit=asm` output of a
+// string-heavy probe (let s = "..." + concat + to_string(int/bool/float) +
+// println · exit(42)): 0 `bl _hexa_str` (constructor) instructions emitted;
+// only `bl _hexa_println` / `bl _hexa_to_string` / `bl _hexa_add_slow`,
+// none of which is a str-constructor box. The `_hexa_str` symbol seen in
+// the LEGACY C-transpile path (codegen_c2's emitted `.c`) does NOT carry
+// over to this backend's emit.
+//
+// DYNAMIC-alloc strings (heap-allocated runtime concatenation, intern-table
+// growth) remain a runtime.c concern — those are NOT 2-instr inline-able
+// at the codegen ABI surface and belong to a deeper chunk (intern table /
+// arena port). They are not "boxing" sites in the int/bool sense.
+//
+// Conclusion: like float, there is nothing to inline for str at this site
+// — no env-gate / helper / step-3 PR shape. The chunk-A repr-constructor
+// inlining series (int #1258 + bool #1270 + float documented above + str
+// documented here) is COMPLETE at the codegen-emit boundary.
+
 // Cycle h20: extra params try_buf_bytes (total fn jmp_buf region size)
 // and try_slot_idx (this statement's slot index in 0..try_count).
 // try_slot_idx is meaningful only for STMT_TRY_SETJMP / STMT_TRY_POP;
