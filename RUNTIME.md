@@ -586,6 +586,42 @@ primitives at the bottom (large; likely a closed-negative on the repr
 circularity) — otherwise the C core IS the honest bootstrap floor. This is the
 terminal state, not a failure: the portable layer reached its physical limit.
 
+### 2026-05-26 — 🛸 MILESTONE: value-transform layer hexa-native COMPLETE (11 fns) — incremental lane exhausted, inflection to native-asm `.s` floor
+
+Go-model RUNTIME 골 재확정 (2026-05-26, user): **zero `.c` · `.s` floor STAYS
+(svc·_start·setjmp/longjmp irreducible) · step-4 acceptance = NO `cc` step**.
+(literal "전부 hexa" 가 아님 — repr/arena/GC 는 `.s` 로, Go 1.5 model 그대로.)
+
+**이번 세션 완료 — value-transform 연산자/변환 레이어 11 함수 hexa-native:**
+
+| op | PR | escape |
+|----|----|----|
+| `−` `×` | #1217 #1219 | typed-helper return-boxing |
+| `÷` `%` | #1224 | `__raw_idiv/imod/fmod` (int-divide 순환) |
+| `+` | #1226 | `__raw_add_f` + `hexa_str_concat` direct |
+| `< > <= >=` | #1231 | `__raw_cmp3`(비음수 code) + `__raw_code_is` |
+| `to_int` `to_bool` | #1237 #1243 | `__raw_d2i` · truthy-if |
+
+전부 mini arm64 검증: build 0 · smoke 42 · **ext=1 (zero-libm 유지)** ·
+byte-identity (aprime_cc 내부사용 ≡ C, fixpoint-safe).
+
+**확립한 재사용 방법론** (메모리 `reference_new_codegen_intrinsic_4_surface`):
+새 `__` intrinsic = 4-surface(codegen emit · `_is_builtin_name` · runtime_core.c
+브리지 · `compiler/check/bind.hexa` resolver) · 음수 리터럴 금지(→`hexa_sub`→
+rt_sub→rt_eq→cmp 무한재귀) · code 판정은 hexa `==` 금지(rt_eq_int 가 cmp 로
+구현 → mutual recursion)→C 브리지 · alias(`str_concat`)✗→실제 C 함수명 직접.
+
+**인플렉션 — incremental `.hexa` 포팅 lane 소진**: 남은 runtime 함수는 byte/
+data-structure/repr floor 라 C 브리지로 옮기면 `.c`→`.c` relocate(zero-`.c`
+미진척). literal Go-model closure 의 **단일 경로 = native-asm backend
+production-flip**: `self/codegen/runtime_arm64.hexa` (rt_arena_init/alloc/reset/
+release · rt_exit · rt_memcpy/strlen/memcmp_neon 가 ARM64 asm emit) 가 prototype
+으로 **존재하나 production-wired 아님**. 이를 wire 해 `runtime.c`/`runtime_core.c`
+의 C arena/GC/repr 를 `.s` 로 대체 = RFC 063/064 self-hosting backend + HEXA_BACKEND
+flip = step-4 (자평 400-800 cycle, 빌드 아키텍처 변경, 가장 깊은 tier). 다음 작업
+= 이 native-asm flip 의 현 완성도 조사 → arena_init 등 단일 floor primitive 부터
+native-emit 교체 + fixpoint 검증 점진 wiring.
+
 ### 2026-05-26 — `.c none` feasibility roadmap (arithmetic core DE-RISKED portable — refines the floor note above)
 
 User goal `.c none closure` = runtime.c (13.6K L) + runtime_core.c (7.9K L) →
