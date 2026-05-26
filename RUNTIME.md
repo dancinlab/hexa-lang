@@ -305,6 +305,94 @@ chained-fixups import 테이블. 이 둘이 닫히면 runtime.o (libm/libSystem
 함수 import) 까지 hexa-native link 가능 → RUNTIME 의 extern-removal 과
 정확히 만나는 지점.
 
+### 넷째 increment (2026-05-26 · 🛸 emit-side reloc — `macho_obj_wrap_v2` 2-symbol .o + PAGE21/PAGEOFF12 RUN)
+
+지금까지 phase-H 의 세 increment 는 **링커(`tool/hexa_ld.hexa`)** 의
+파싱/적용 측을 점진적으로 확장해 왔다 (BRANCH26 → PAGE21/PAGEOFF12 →
+multi-section/ADDEND). 그러나 hexa-native **emit-side** 인
+`self/codegen/macho.hexa::macho_obj_wrap` 은 단일-심볼 + reloff=0/nreloc=0
+의 `__text`-only `.o` 만 생성했다 — PR #1297 의 rt_exit PoC 는 통과했지만
+arena 가족(`rt_arena_init/alloc/reset/release`) 처럼 공유 `_arena_state`
+슬롯을 참조하는 state-relative 프리미티브는 emit 측에서 reloc 레코드를
+못 생성해 막혀있었다.
+
+이 increment 는 `macho_obj_wrap_v2(code, main_offset, state_bytes,
+reloc_offs, reloc_kinds)` 를 **순수 additive** 로 추가한다. v1 은 byte-
+untouched (`git diff` deletion = 0). v2 의 변화:
+
+- **2-symbol 출력**: `_hexa_main` (in `__text`, `n_sect=1`) + `_arena_state`
+  (in `__const`, `n_sect=2`).
+- **2-section 레이아웃**: `LC_SEGMENT_64` 안에 `__text` + `__const` 두 개
+  의 `section_64` (nsects=2, segment_cmd_size = 72 + 80×2 = 232). `__const`
+  의 `addr` = `code_size` (intra-segment offset), `align`=3 (log2(8)).
+- **relocation table emit**: `__text.reloff` / `nreloc` 채워서 N 개의
+  8-byte `relocation_info` 레코드 작성. 각 레코드 = `r_address` (text-
+  rel offset) + bitfield (`r_symbolnum=1`(_arena_state), `r_length=2`,
+  `r_extern=1`, `r_type=kind`).
+- **ld64 invariant 2 개 인코딩**:
+  (i) defined symbol 의 `nlist_64.n_value` = `section.addr + intra-section
+      offset` (단순 intra-section offset 아님). 위반 시 ld64 는 "address
+      isn't in its designated section" 으로 거부.
+  (ii) `r_pcrel` 은 `ARM64_RELOC_PAGE21` (adrp, kind=3) 에서만 1, `ARM64_
+       RELOC_PAGEOFF12` (add unscaled, kind=4) 에서는 0. 위반 시 "relocation
+       in '<sym>' is not supported".
+
+**측정** (mac arm64 + ssh mini, 2026-05-26):
+
+PoC = `test/native_build/poc_arena_reloc_emit.hexa` (inlined emitter,
+#1297 패턴). 16-byte `_hexa_main` (`adrp x9` + `add x9,x9` + `ldr x0,[x9]`
++ `ret`) + 24-byte state slot (first 8 bytes = 42). 2 reloc records:
+
+```
+$ otool -rv /tmp/poc_arena_reloc.o
+Relocation information (__TEXT,__text) 2 entries
+address  pcrel length extern type    scattered symbolnum/value
+00000000 True  long   True   PAGE21  False     _arena_state
+00000004 False long   True   PAGOF12 False     _arena_state
+
+$ nm /tmp/poc_arena_reloc.o
+0000000000000010 S _arena_state
+0000000000000000 T _hexa_main
+```
+
+clang/ld64 (mini) 링크 → 결과 binary `otool -tv`:
+```
+_hexa_main:
+0000000100000378  adrp  x9, 0 ; 0x100000000
+000000010000037c  add   x9, x9, #0x3b8
+0000000100000380  ldr   x0, [x9]
+0000000100000384  ret
+```
+
+`nm /tmp/poc_arena_run | grep arena_state` → `00000001000003b8 S _arena_state`.
+즉 `adrp(0x100000000) + add(0x3b8) = 0x1000003b8` 이 정확히 `_arena_state`
+의 최종 VM 주소. `ldr x0, [x9]` 가 prefilled state[0]=42 를 로드 →
+프로세스 exit rc = **42**. 🟢 PASS.
+
+verdict: `.verdicts/macho-obj-wrap-v2-arena-reloc/F-PHASEH-EMIT-RELOC.txt`.
+
+**no-regression**: v1 (`macho_obj_wrap`) byte-untouched (`git diff
+origin/main..HEAD -- self/codegen/macho.hexa` 의 deletion = 0). PR #1297
+의 rt_exit PoC 와 기본 `tool/build_aprime.sh` 는 v2 미참조 → 영향 없음.
+
+**잔여** (정밀, 다음 inc 으로): HEXA_BACKEND 프로덕션-와이어 (rt_arena_*
+를 하나의 `.o` 로 묶어 `clang ... runtime.c` 를 대체) 는 두 surface 추가
+필요:
+- (A) **다중 fn `__text` emit**: 한 MH_OBJECT 에 rt_arena_init/alloc/
+  reset/release 4 fn 의 바이트를 함께 패키징하고 4+ 개 `_arena_*` 심볼을
+  exporting. 오늘 `macho_obj_wrap_v2` 는 정확히 1 개 (`_hexa_main`) 만
+  export. PR #1297 잔여 #1 (N-symbol strtab/nlist 확장 ~30 LOC) 과 동일.
+- (B) **ADR → ADRP+ADD widening at SOURCE**: 오늘 `rt_arena_*` 의 placeholder
+  는 4-byte `adr x9, #0` (`0x10000009`) 단일 명령. emit/link 측은 모두
+  ADRP+ADD (PAGE21/PAGEOFF12) 를 가정하므로 placeholder 를 2-instruction
+  (8 byte) 페어로 widen 해야 한다:
+    `adrp x9, _arena_state@PAGE`     (placeholder `0x90000009`)
+    `add  x9, x9, _arena_state@PAGEOFF` (placeholder `0x91000129`)
+  6 사이트 × 4 byte = +24 byte (4 fn 누적). `test_runtime_arm64` 의 expected
+  사이즈(ainit 68→76 · aalloc 44→48 · areset 16→20 · arel 60→68) 갱신
+  필요. 명백히 분리된 surface 라서 honest residual 정책에 따라 **이번
+  PR 에 묶지 않음**.
+
 ## Domain map (Phase 0 → 3 + post)
 
 ```
