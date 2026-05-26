@@ -1045,7 +1045,17 @@ fn test_neon_string_ops() {
 // ── rt_arena_init ────────────────────────────────────────────
 // arena_init(x0=size_mb) — mmap(size_mb << 20) anonymous RW region.
 // Stores base/ptr/end into the shared arena_state.
-// 17 instructions, 68 bytes.
+// 18 instructions, 72 bytes.
+//
+// macOS svc #0x80 (mmap) CLOBBERS the syscall-arg registers on return
+// (x0 = base, x1 = 0). The size (x1 = size_mb << 20) must therefore be
+// preserved across the svc into a register the kernel does NOT touch —
+// empirically x6..x15 all survive the macOS mmap svc (verified by a
+// standalone svc probe). We save the size into x6 BEFORE the syscall and
+// use x6 (not the clobbered x1) in the post-svc `add x10, x0, x6`
+// (end = base + size). Computing `end` from the stale x1 yielded
+// end == base → zero-capacity arena → every arena_alloc failed its bound
+// check and returned NULL.
 
 fn rt_arena_init() {
     let mut c = []
@@ -1064,6 +1074,11 @@ fn rt_arena_init() {
     c.push(172)
     c.push(108)
     c.push(211)
+    // mov x6, x1  (save size; svc clobbers x1)  0xAA0103E6
+    c.push(230)
+    c.push(3)
+    c.push(1)
+    c.push(170)
     // mov x0, #0  (addr=NULL)        0xD2800000
     c.push(0)
     c.push(0)
@@ -1114,10 +1129,10 @@ fn rt_arena_init() {
     c.push(5)
     c.push(0)
     c.push(249)
-    // add x10, x0, x1    (x10 = base + size)        0x8B01000A
+    // add x10, x0, x6    (x10 = base + saved size)   0x8B06000A
     c.push(10)
     c.push(0)
-    c.push(1)
+    c.push(6)
     c.push(139)
     // str x10, [x9, #16] (state.end = base+size)    0xF900092A
     c.push(42)
@@ -1356,7 +1371,7 @@ fn test_runtime_arm64() {
     if len(pint) != 184 { println("  FAIL: rt_print_int expected 184, got " + to_string(len(pint))); ok = false }
     if len(alloc_bytes) != 48 { println("  FAIL: rt_alloc expected 48, got " + to_string(len(alloc_bytes))); ok = false }
     if len(slen) != 44 { println("  FAIL: rt_str_len expected 44, got " + to_string(len(slen))); ok = false }
-    if len(ainit) != 68 { println("  FAIL: rt_arena_init expected 68, got " + to_string(len(ainit))); ok = false }
+    if len(ainit) != 72 { println("  FAIL: rt_arena_init expected 72, got " + to_string(len(ainit))); ok = false }
     if len(aalloc) != 44 { println("  FAIL: rt_arena_alloc expected 44, got " + to_string(len(aalloc))); ok = false }
     if len(areset) != 16 { println("  FAIL: rt_arena_reset expected 16, got " + to_string(len(areset))); ok = false }
     if len(arel) != 60 { println("  FAIL: rt_arena_release expected 60, got " + to_string(len(arel))); ok = false }
