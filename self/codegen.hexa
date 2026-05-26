@@ -10049,10 +10049,7 @@ fn _is_builtin_name(name) {
     if name == "__raw_add_f" { return true }
     if name == "hexa_str_concat" { return true }
     if name == "__raw_cmp3" { return true }
-    if name == "__raw_lt_f" { return true }
-    if name == "__raw_gt_f" { return true }
-    if name == "__raw_le_f" { return true }
-    if name == "__raw_ge_f" { return true }
+    if name == "__raw_code_is" { return true }
     if name == "__arr_set_cap" { return true }
     if name == "__fd_write_bytes" { return true }
     if name == "dict_keys" { return true }

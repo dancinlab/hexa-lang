@@ -7828,15 +7828,20 @@ static inline void _hx_cmp_guard(HexaVal a, HexaVal b, const char* op) {
     }
 }
 
-// RUNTIME.md Step 4 .c-none — comparison family (cmp_lt/gt/le/ge). The two
-// bridges below expose the IRREDUCIBLE leaf ops that need tag introspection
-// (enum-pair ordinal · hxlcl_strcmp · __hx_to_double); the hexa rt_cmp_*
-// (stdlib/runtime/numeric.hexa) own the dispatch + per-operator + the NaN-correct
-// native float compare. __raw_cmp3 returns a code: -3 incomparable (rt_cmp throws)
-// · -2 float/valstruct (rt_cmp does native float cmp via __raw_to_double) · -1 a<b
-// · 0 a==b · 1 a>b — for enum / string / int (all NaN-free integer ordering).
-// (A single three-way cmp can't carry float NaN-unordered, so float stays per-op
-// in hexa.) Bridges are always-defined static inline (unused-stripped standalone).
+// RUNTIME.md Step 4 .c-none — comparison family (cmp_lt/gt/le/ge). Two bridges
+// expose the irreducible leaf ops (enum-pair ordinal · hxlcl_strcmp · float-coerce
+// compare needing tag introspection); the hexa rt_cmp_* (numeric.hexa) own only
+// the per-operator selection + throw.
+//
+// __raw_cmp3 returns an ordering code: -3 incomparable (rt_cmp throws) · -1 a<b ·
+// 0 a==b · 1 a>b · 2 unordered (float NaN → all comparisons false). Float/valstruct
+// is folded in HERE (native double compare, NaN-aware) — a 3-way code with the `2`
+// sentinel carries NaN-unordered, so float need not stay per-op in hexa.
+//
+// CRITICAL — rt_cmp must NOT test this code with hexa `==`: `c == k` lowers to
+// hexa_eq → rt_eq → rt_eq_int (`a <= b && a >= b`) → hexa_cmp_le → rt_cmp_le →
+// MUTUAL RECURSION (stack overflow). __raw_code_is does the int-equality test in C,
+// breaking the rt_cmp→rt_eq edge (rt_eq→rt_cmp still resolves: rt_cmp_le → code_is).
 static inline HexaVal __raw_cmp3(HexaVal a, HexaVal b) {
     int64_t ia, ib;
     if (_hexa_enum_pair_idx(a, b, &ia, &ib)) return hexa_int(ia < ib ? -1 : (ia > ib ? 1 : 0));
@@ -7844,21 +7849,18 @@ static inline HexaVal __raw_cmp3(HexaVal a, HexaVal b) {
         int _c = hxlcl_strcmp(HX_STR(a), HX_STR(b));
         return hexa_int(_c < 0 ? -1 : (_c > 0 ? 1 : 0));
     }
-    if (HX_IS_FLOAT(a) || HX_IS_FLOAT(b) || HX_IS_VALSTRUCT(a) || HX_IS_VALSTRUCT(b)) return hexa_int(-2);
+    if (HX_IS_FLOAT(a) || HX_IS_FLOAT(b) || HX_IS_VALSTRUCT(a) || HX_IS_VALSTRUCT(b)) {
+        double _x = __hx_to_double(a), _y = __hx_to_double(b);
+        if (_x < _y) return hexa_int(-1);
+        if (_x > _y) return hexa_int(1);
+        if (_x == _y) return hexa_int(0);
+        return hexa_int(2); // NaN-unordered → every comparison false
+    }
     if (!_hx_int_slot_ordered(a) || !_hx_int_slot_ordered(b)) return hexa_int(-3);
-    int64_t _x = HX_INT(a), _y = HX_INT(b);
-    return hexa_int(_x < _y ? -1 : (_x > _y ? 1 : 0));
+    int64_t _xi = HX_INT(a), _yi = HX_INT(b);
+    return hexa_int(_xi < _yi ? -1 : (_xi > _yi ? 1 : 0));
 }
-// Per-operator float compare bridges. MUST be C (not hexa typed-float helpers):
-// in the flattened compiler the helper param names (x/y) collide with int-typed
-// `let`s in other modules, so _is_known_float_name bails (ambiguous) and the hexa
-// `x <= y` lowers to hexa_cmp_le → rt_cmp_le → infinite recursion (stack overflow
-// observed in rt_cmp_le prologue). C bridges sidestep all known-float dependence.
-// NaN-correct (native double compare). __hx_to_double coerces float/valstruct.
-static inline HexaVal __raw_lt_f(HexaVal a, HexaVal b) { return hexa_bool(__hx_to_double(a) <  __hx_to_double(b)); }
-static inline HexaVal __raw_gt_f(HexaVal a, HexaVal b) { return hexa_bool(__hx_to_double(a) >  __hx_to_double(b)); }
-static inline HexaVal __raw_le_f(HexaVal a, HexaVal b) { return hexa_bool(__hx_to_double(a) <= __hx_to_double(b)); }
-static inline HexaVal __raw_ge_f(HexaVal a, HexaVal b) { return hexa_bool(__hx_to_double(a) >= __hx_to_double(b)); }
+static inline HexaVal __raw_code_is(HexaVal v, HexaVal k) { return hexa_bool(HX_INT(v) == HX_INT(k)); }
 #ifdef HEXA_HAS_HEXA_RT_STDLIB
 extern HexaVal rt_cmp_lt(HexaVal a, HexaVal b);
 extern HexaVal rt_cmp_gt(HexaVal a, HexaVal b);
