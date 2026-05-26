@@ -1,0 +1,14 @@
+A clean, minimalist, publication-quality scientific line chart on a pure white
+background, the aesthetic of a Nature or arXiv figure. The horizontal axis is
+labeled "n" with integer ticks from 1 to 50. The vertical axis is labeled
+"D(n) = sigma(n) phi(n) - n tau(n)" on a signed symmetric-log scale, so both
+large positive values and a single small negative value are visible. A single
+thin blue curve connects the integer points; it is jagged and rises high for
+most n, but crosses the horizontal D = 0 baseline at exactly two points: n = 1
+and n = 6. Each of these two zeros is marked with a small filled green circle
+sitting exactly on the zero baseline, with a short label "D=0". The point n = 2
+dips just below the zero line and is marked with a small open circle labeled
+"D = -1 (only negative)". A faint horizontal dashed line marks D = 0 across the
+whole width. Title at top: "omega-zero-density: D(n) = 0 exactly at n in {1, 6}".
+Monochrome blue curve, green zero markers, thin clean lines, generous white
+space, no 3D, no gradients, no clutter, no legend box.
