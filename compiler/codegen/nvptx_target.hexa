@@ -1418,7 +1418,7 @@ fn _nvptx_lower_stmt(buf: [LInstr], s: Stmt, kinds: [PReg], shared_idx_off: [i64
                         return out
                     }
                     out.push(_nvptx_instr("//", [],
-                        "RFC 055 §13 - exp f64 honest stub (no PTX f64 ex2; polynomial deferred): " + s.op))
+                        "RFC 055 S13 - exp f64 honest stub (no PTX f64 ex2; polynomial deferred): " + s.op))
                     return out
                 }
                 // Single-instruction EXACT / APPROX ops.
@@ -1435,7 +1435,7 @@ fn _nvptx_lower_stmt(buf: [LInstr], s: Stmt, kinds: [PReg], shared_idx_off: [i64
                 }
                 // rsqrt at f64 — no native mnemonic; honest stub.
                 out.push(_nvptx_instr("//", [],
-                    "RFC 055 §13 - rsqrt f64 honest stub (rsqrt.approx is f32-only; 1.0/sqrt.rn.f64 deferred): " + s.op))
+                    "RFC 055 S13 - rsqrt f64 honest stub (rsqrt.approx is f32-only; 1.0/sqrt.rn.f64 deferred): " + s.op))
                 return out
             }
         }
