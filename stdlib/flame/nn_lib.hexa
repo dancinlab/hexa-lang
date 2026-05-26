@@ -788,3 +788,72 @@ pub fn nn_ffn_bf16_fwd(x: int, W1: int, W2: int, Y_out: int,
     return forge_dispatch_ffn_fp64_via_bf16(x, W1, W2, Y_out, M, D, FD)
 }
 
+// ─── Full-position tied LM head + cross-entropy (INBOX #2 P1①) ──────────
+// The decoder forward (decoder_lib::nn_decoder_fwd) projects ONLY the last
+// position (logits[V] = head · zT, where zT = RMSNorm of Xout[(T-1)·d]),
+// and nn_decoder_ce_loss reads that single V-wide row. The anima
+// ConsciousDecoderV3 training stack supervises EVERY position (next-token
+// LM over the whole sequence), so the loss must average CE over all T
+// positions. These two helpers add the full-position surface as a minimal
+// functional layer over the SAME tied head + stable-softmax CE used at the
+// last position — keeping the per-position math byte-identical so a tiny
+// hand oracle gates correctness.
+
+// Full-position tied LM head forward.
+//   Z         [T·d]   per-position hidden vectors (post final RMSNorm·gF)
+//   temb      [V·d]   tied token-embedding / head weight
+//   logits_out[T·V]   caller-allocated; logits_out[t·V + k] = Σ_j temb[k·d+j]·Z[t·d+j]
+// Per row t this is identical to nn_lm_head_fwd on Z[t·d .. t·d+d], so each
+// row is byte-eq to the existing last-position head.
+pub fn nn_lm_head_fwd_allpos(temb: int, Z: int, logits_out: int,
+                             T: int, V: int, d: int) {
+    let mut t = 0
+    while t < T {
+        let mut k = 0
+        while k < V {
+            let mut acc = 0.0
+            let mut j = 0
+            while j < d {
+                acc = acc + farr_get(temb, k * d + j) * farr_get(Z, t * d + j)
+                j = j + 1
+            }
+            let _ = farr_set(logits_out, t * V + k, acc)
+            k = k + 1
+        }
+        t = t + 1
+    }
+}
+
+// Full-position mean cross-entropy.
+//   logits  [T·V]   per-position logit rows (from nn_lm_head_fwd_allpos)
+//   targets [T]     targets[t] = target token id (0..V-1) for position t
+//   returns (1/T) Σ_t  -ln( softmax(logits[t·V .. t·V+V])[targets[t]] )
+// Each per-position term reuses the stable-softmax (subtract row max) +
+// dt_exp/dt_ln + the pt_safe floor of nn_decoder_ce_loss verbatim, so a
+// single position (T=1) reduces exactly to the existing last-position CE.
+pub fn nn_ce_loss_allpos(logits: int, targets: int, T: int, V: int) -> float {
+    let mut total = 0.0
+    let mut t = 0
+    while t < T {
+        let base = t * V
+        let mut mx = farr_get(logits, base)
+        let mut i = 1
+        while i < V {
+            if farr_get(logits, base + i) > mx { mx = farr_get(logits, base + i) }
+            i = i + 1
+        }
+        let mut tot = 0.0
+        let mut i2 = 0
+        while i2 < V {
+            tot = tot + dt_exp(farr_get(logits, base + i2) - mx)
+            i2 = i2 + 1
+        }
+        let tgt = to_int(farr_get(targets, t))
+        let p_t = dt_exp(farr_get(logits, base + tgt) - mx) / tot
+        let pt_safe = if p_t < 0.000001 { 0.000001 } else { p_t }
+        total = total + (0.0 - dt_ln(pt_safe))
+        t = t + 1
+    }
+    return total / to_float(T)
+}
+
