@@ -1787,7 +1787,12 @@ fn _nvptx_parse_i64(s: string) -> i64 {
     while i < n {
         let c = s[i]
         if c < "0" || c > "9" { return 0 }
-        let d: i64 = (c.code() - 48) as i64
+        // NOTE: `c.code()` is the natural form, but legacy codegen_c2 doesn't
+        // lower bare `.code()` on a single-char string yet (PR-C piece 6 — only
+        // `char_code_at(i)`/`byte_at(i)` are registered in self/codegen.hexa
+        // L4326-4334). Use `char_code_at(0)` to extract the byte from the
+        // 1-char slice so the standalone CLI build (legacy codegen) can lower.
+        let d: i64 = (c.char_code_at(0) - 48) as i64
         acc = acc * 10 + d
         i = i + 1
     }
