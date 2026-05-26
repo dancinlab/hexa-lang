@@ -2,6 +2,12 @@
 
 Append-only history sister of `INBOX.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
+## 2026-05-26T18:00Z — 🔧 forge farr32 codegen→clang smoke (INBOX #4 제안② CLOSE)
+
+- [x] **`tool/forge_farr32_codegen_smoke.hexa` + CI 와이어** — V=151643 forge fire 가 Linux x86_64 빌드를 farr32 bare-emit(#1187: `hexa_farr32_*` 미선언 implicit-int call, Mac 묵인·Linux clang 거부)로 깨뜨림. dev+CI 전부 Mac 이라 영영 안 잡힘. smoke 가 farr32 전 emit(zeros/set/get/matmul/matmul_NT_a/_NT_b/free → 21 `hexa_farr32_*` call) 행사 → `hexa build --c-only` → `clang -fsyntax-only -Werror=implicit-function-declaration`. GPU·link·run 0. `bootstrap.yml` 3 job(특히 Linux 2개 = runtime.h `#else` 브랜치 실컴파일) 에 step 추가, non-blocking.
+- [x] **검증(로컬 Mac)**: transpile OK(21 farr32 call) · `clang -fsyntax-only -Werror=implicit-function-declaration` exit 0(harmless `/*`-in-comment 경고 2건만). YAML safe_load OK. Linux `#else` 브랜치 커버는 CI Linux job 이 제공(Mac 로컬 미검증분).
+- [ ] **#4 잔여**: 제안③ `hexa check --compile`(parse-lint 에 codegen→clang 추가)은 별건 — 본 smoke 가 forge-특화 갭은 커버. 제안① Linux 빌드 게이트는 기존 bootstrap linux 매트릭스로 이미 부분 커버.
+
 ## 2026-05-26T17:40Z — 🧪 stdlib *_test.hexa CI 게이트 (#5① CI coverage gap CLOSE)
 
 - [x] **`stdlib_selftest_aggregate --ci-gate` 모드 + CI 와이어** — 기존 aggregator 는 207 `*_test.hexa` 를 발견하지만 다수가 외부 API(pubmed/arxiv/websocket/qrng…) 의존 → offline CI strict 게이트 불가. opt-in `// @ci_gate` 마커 도입: `--ci-gate` 는 마킹된 순수·network-free·deterministic 테스트만 실행 + strict(non-PASS 시 exit 1). 4건 마킹(pod_registry_guard·ssh_config·early_life_check·reconcile, 전부 no-`use` 단일파일·로컬 4/4 PASS). `bootstrap.yml` 3 job(macos·linux-x64·linux-arm64) smoke 뒤 step 추가(non-blocking: required-check 없음). + `run_one` 의 하드코딩 Mac 경로 `/Users/ghost/.hx/bin/hexa` → `$HEXA_BIN`/PATH `hexa`(Linux runner 부재 버그) 수정.
