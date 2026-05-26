@@ -2,6 +2,12 @@
 
 Append-only history sister of `INBOX.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
+## 2026-05-26T17:40Z — 🧪 stdlib *_test.hexa CI 게이트 (#5① CI coverage gap CLOSE)
+
+- [x] **`stdlib_selftest_aggregate --ci-gate` 모드 + CI 와이어** — 기존 aggregator 는 207 `*_test.hexa` 를 발견하지만 다수가 외부 API(pubmed/arxiv/websocket/qrng…) 의존 → offline CI strict 게이트 불가. opt-in `// @ci_gate` 마커 도입: `--ci-gate` 는 마킹된 순수·network-free·deterministic 테스트만 실행 + strict(non-PASS 시 exit 1). 4건 마킹(pod_registry_guard·ssh_config·early_life_check·reconcile, 전부 no-`use` 단일파일·로컬 4/4 PASS). `bootstrap.yml` 3 job(macos·linux-x64·linux-arm64) smoke 뒤 step 추가(non-blocking: required-check 없음). + `run_one` 의 하드코딩 Mac 경로 `/Users/ghost/.hx/bin/hexa` → `$HEXA_BIN`/PATH `hexa`(Linux runner 부재 버그) 수정.
+- [x] **검증**: aggregator transpile-clean · 로컬 `--ci-gate` → `found=4 pass=4 fail=0` exit 0. YAML safe_load OK.
+- [ ] **#5 잔여**: ② 단일파일 `hexa build <f>` import flatten 부재(docs 명시 후보) · ③ builtin-first 규칙(docs/RFC). 게이트 subset 은 새 순수 테스트에 `// @ci_gate` 추가로 점증.
+
 ## 2026-05-26T17:15Z — 🔑 cloud #1155 zero-flag CLOSE — rent/adopt → ~/.ssh/config 자동주입
 
 - [x] **`rent`/`adopt` 가 vast key 를 `~/.ssh/config` 에 자동 주입** — `vast_ssh_config_autoinject(iid)` 가 bare-IP endpoint 해소 후 marker-scoped Host 블록(`# >>> hexa-cloud vast <ip> >>>` … `<<<`) 작성: `IdentityFile`(=$HEXA_VAST_IDENTITY 또는 `~/.ssh/id_vast_anima`)+IdentitiesOnly+StrictHostKeyChecking no+UserKnownHostsFile /dev/null. 이후 bare `hexa cloud run root@<ip> --port <p>`(또는 raw ssh)가 `--identity` 없이 vast key 제시. **NO Port in block**(--port 호출자 제어, 同IP 타 서비스 hijack 방지) · marker-scoped(유저 hand-config 보존, 재-rent 멱등) · key 부재 시 graceful no-op.
