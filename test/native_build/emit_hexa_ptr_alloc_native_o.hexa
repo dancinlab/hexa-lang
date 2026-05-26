@@ -17,41 +17,50 @@
 //
 // CALLER ABI (aprime_cc emit, HexaVal struct ≤16 B by value):
 //   x0 = HexaVal.tag       (= TAG_INT = 0 when caller is `hexa_ptr_alloc(int)`)
-//   x1 = HexaVal.payload   (= the byte-count to allocate)
+//   x1 = HexaVal.payload   (= the byte-count N to allocate)
 //
-// PRIMITIVE ABI (rt_alloc per self/codegen/runtime_arm64.hexa L468):
-//   x0 = size (raw int)
-//   svc #0x80 with x16=197 (SYS_mmap) → x0 = mmap'd ptr
+// PRIMITIVE ABI (rt_alloc per self/codegen/runtime_arm64.hexa, post-2026-05-26
+// header refactor — pair-safe alloc/free): x0=N → mmap(N+16) → store N at
+// addr[0..8] → return user_ptr = addr + 16.
+//   x0 = N (raw int, original user size)
+//   internal: x1 = N+16, mmap'd → x0; *(size_t*)x0 = N; x0 += 16
+//   svc #0x80 with x16=197 (SYS_mmap)
+//   returns user-facing ptr in x0 (= header_addr + 16)
 //
 // RETURN ABI (HexaVal struct ≤16 B by value):
 //   x0 = TAG_INT = 0
-//   x1 = ptr (HexaVal.payload — caller treats as int64 by `HX_INT(v)`)
+//   x1 = user_ptr (HexaVal.payload — caller treats as int64 by `HX_INT(v)`)
 //
-// ADAPTER BODY (60 bytes total):
+// ADAPTER BODY (80 bytes total):
 //   ── input prefix (4 B) ──
-//   mov x0, x1                       // HexaVal.payload (size) → x0
-//   ── rt_alloc body minus its final epilogue (40 B) ──
-//   stp x29, x30, [sp, #-16]!        // (rt_alloc prologue — first 8 B)
-//   mov x29, sp                      // (rt_alloc prologue cont.)
-//   mov x1, x0                       // size → x1 (mmap arg2)
-//   mov x0, #0                       // addr = NULL  (mmap arg1)
-//   mov x2, #3                       // PROT_RW      (mmap arg3)
-//   mov x3, #0x1002                  // MAP_ANON|MAP_PRIVATE (mmap arg4)
-//   movn x4, #0                      // fd = -1      (mmap arg5)
-//   mov x5, #0                       // offset = 0   (mmap arg6)
+//   mov x0, x1                       // HexaVal.payload (N) → x0
+//   ── rt_alloc body minus its final epilogue (60 B) ──
+//   stp x29, x30, [sp, #-16]!
+//   mov x29, sp
+//   stp x19, x20, [sp, #-16]!        // save callee-saved
+//   mov x19, x0                      // x19 = N (preserved across svc)
+//   add x1, x0, #16                  // x1 = N+16 (mmap size)
+//   mov x0, #0                       // addr = NULL
+//   mov x2, #3                       // PROT_RW
+//   mov x3, #0x1002                  // MAP_ANON|MAP_PRIVATE
+//   movn x4, #0                      // fd = -1
+//   mov x5, #0                       // offset = 0
 //   mov x16, #197                    // SYS_mmap
-//   svc #0x80                        // x0 = mmap'd ptr
+//   svc #0x80                        // x0 = mmap'd addr
+//   str x19, [x0]                    // header_addr[0..8] = N
+//   add x0, x0, #16                  // x0 = user_ptr = addr + 16
+//   ldp x19, x20, [sp], #16          // restore callee-saved
 //   ── HexaVal-return postfix (8 B) ──
-//   mov x1, x0                       // ptr → HexaVal.payload (x1)
+//   mov x1, x0                       // user_ptr → HexaVal.payload (x1)
 //   mov x0, #0                       // tag = TAG_INT = 0
 //   ── epilogue (8 B — restored from rt_alloc's tail) ──
 //   ldp x29, x30, [sp], #16
 //   ret
 //
 // Note: rt_alloc's own epilogue (ldp+ret, 8 B) is STRIPPED — we inject our
-// HexaVal-return postfix between the svc and the epilogue. Total adapter
-// = 4 (prefix) + 40 (rt_alloc body sans epilogue) + 8 (return postfix)
-// + 8 (epilogue) = 60 bytes.
+// HexaVal-return postfix between the inner ldp x19/x20 and the outer ldp
+// x29/x30. Total adapter = 4 (prefix) + 60 (rt_alloc body sans outer
+// epilogue) + 8 (return postfix) + 8 (epilogue) = 80 bytes.
 //
 // ── HONESTY ──
 //
@@ -64,16 +73,14 @@
 //     byte-identical to the pre-cycle baseline).
 //   - g5 verbatim — verify smoke script pastes raw rc + stdout.
 //
-// SEMANTIC RESIDUAL (documented, not a blocker for the override path):
-//   - Original C `hexa_ptr_alloc` uses `calloc(1, n)` (libc heap, zero-init).
-//   - Override uses `mmap(NULL, n, RW, ANON|PRIV, -1, 0)` (kernel page, zero-init).
-//   - BOTH return a zero-init byte buffer, BUT the pairing fn `hexa_ptr_free`
-//     calls libc `free()` on the pointer. mmap'd pages CANNOT be free()'d
-//     without UB (allocator-pair mismatch — would corrupt libc heap).
-//   - Implication: the env-gate is SAFE for tiny programs that allocate via
-//     `hexa_ptr_alloc` but DO NOT call `hexa_ptr_free` on the result. A full
-//     default-on flip would require co-overriding `_hexa_ptr_free` with
-//     `munmap`, which is a follow-up.
+// PAIR-SAFETY (closes #1326 residual (B), 2026-05-26):
+//   - The override now allocates with a 16-B size header. The companion
+//     `_hexa_ptr_free` override (test/native_build/emit_hexa_ptr_free_native_o.hexa)
+//     recovers the header and munmaps with the correct size.
+//   - Default-flip safe when BOTH env gates are on (alloc + free).
+//   - alloc-only (HEXA_NATIVE_RT_PTR_ALLOC=1 alone): still UB if hexa_ptr_free
+//     is called (libc free() on mmap'd ptr corrupts heap). Document as
+//     opt-in unsafe (no behavior change vs pre-refactor in this mode).
 //
 // SELF-CONTAINED: same module-loader rationale as emit_hexa_exit_native_o.hexa
 // (the v2 wrapper is inlined byte-for-byte). The deliberate diffs vs the exit
@@ -82,8 +89,10 @@
 // `_hexa_exit` (10 B + NUL = 11 B) — strtab payload + size shift accordingly.
 
 // ═══════════════════════════════════════════════════════════════════
-// Adapter body — HexaVal-ABI prefix + rt_alloc body + HexaVal-return postfix
-// (rt_alloc bytes verbatim from self/codegen/runtime_arm64.hexa L468-530)
+// Adapter body — HexaVal-ABI prefix + rt_alloc body (header pattern)
+// + HexaVal-return postfix.
+// rt_alloc bytes verbatim from self/codegen/runtime_arm64.hexa
+// (post-2026-05-26 header refactor — pair-safe with rt_free).
 // ═══════════════════════════════════════════════════════════════════
 fn hexa_ptr_alloc_adapter_bytes() -> [int] {
     let mut c = []
@@ -92,13 +101,17 @@ fn hexa_ptr_alloc_adapter_bytes() -> [int] {
     // mov x0, x1   (= orr x0, xzr, x1)   0xAA0103E0  → e0 03 01 aa LE
     c.push(0xe0); c.push(0x03); c.push(0x01); c.push(0xaa)
 
-    // ── rt_alloc body minus epilogue (40 bytes, 10 instructions) ──
+    // ── rt_alloc body minus outer epilogue (60 bytes, 15 instructions) ──
     // stp x29, x30, [sp, #-16]!          0xA9BF7BFD
     c.push(253); c.push(123); c.push(191); c.push(169)
     // mov x29, sp                         0x910003FD
     c.push(253); c.push(3); c.push(0); c.push(145)
-    // mov x1, x0  (size -> x1)           0xAA0003E1
-    c.push(225); c.push(3); c.push(0); c.push(170)
+    // stp x19, x20, [sp, #-16]!          0xA9BF53F3
+    c.push(243); c.push(83); c.push(191); c.push(169)
+    // mov x19, x0   (save N)             0xAA0003F3
+    c.push(243); c.push(3); c.push(0); c.push(170)
+    // add x1, x0, #16  (N+16 → x1)      0x91004001
+    c.push(1); c.push(64); c.push(0); c.push(145)
     // mov x0, #0  (addr=NULL)            0xD2800000
     c.push(0); c.push(0); c.push(128); c.push(210)
     // mov x2, #3  (PROT_RW)              0xD2800062
@@ -113,7 +126,13 @@ fn hexa_ptr_alloc_adapter_bytes() -> [int] {
     c.push(176); c.push(24); c.push(128); c.push(210)
     // svc #0x80                          0xD4001001
     c.push(1); c.push(16); c.push(0); c.push(212)
-    // (rt_alloc's own ldp/ret epilogue STRIPPED — we inject HexaVal-return below)
+    // str x19, [x0]   (header=N)         0xF9000013
+    c.push(19); c.push(0); c.push(0); c.push(249)
+    // add x0, x0, #16  (ptr += 16)       0x91004000
+    c.push(0); c.push(64); c.push(0); c.push(145)
+    // ldp x19, x20, [sp], #16            0xA8C153F3
+    c.push(243); c.push(83); c.push(193); c.push(168)
+    // (rt_alloc's outer ldp/ret epilogue STRIPPED — HexaVal-return below)
 
     // ── HexaVal-return postfix (8 bytes) ──
     // mov x1, x0  (ptr -> HexaVal.payload)  0xAA0003E1 → e1 03 00 aa
@@ -277,14 +296,14 @@ fn macho_obj_wrap_hexa_ptr_alloc(code: [int], main_offset: int) -> [int] {
 // Driver
 // ═══════════════════════════════════════════════════════════════════
 fn emit_hexa_ptr_alloc_native_o() {
-    println("[wire] HEXA_BACKEND flip · 아홉째 increment — _hexa_ptr_alloc native override")
+    println("[wire] HEXA_BACKEND flip · 열한째 increment refresh — _hexa_ptr_alloc native override (header pattern, pair-safe with _hexa_ptr_free)")
 
     let code = hexa_ptr_alloc_adapter_bytes()
-    if len(code) != 60 {
-        println("FAIL: adapter expected 60 bytes (4 prefix + 40 rt_alloc-body + 8 ret-postfix + 8 epilogue), got " + to_string(len(code)))
+    if len(code) != 80 {
+        println("FAIL: adapter expected 80 bytes (4 prefix + 60 rt_alloc-body + 8 ret-postfix + 8 epilogue), got " + to_string(len(code)))
         return
     }
-    println("  adapter bytes  : " + to_string(len(code)) + " (60 expected — 4 prefix + 40 mmap + 8 ret-postfix + 8 epilogue)")
+    println("  adapter bytes  : " + to_string(len(code)) + " (80 expected — 4 prefix + 60 mmap+header + 8 ret-postfix + 8 epilogue)")
 
     // mov x0, x1 (e0 03 01 aa) sanity at offset 0
     if code[0] != 0xe0 || code[1] != 0x03 || code[2] != 0x01 || code[3] != 0xaa {
@@ -293,22 +312,36 @@ fn emit_hexa_ptr_alloc_native_o() {
     }
     println("  ABI prefix     : e0 03 01 aa (mov x0, x1) OK")
 
-    // svc trailer at offset 40 (1, 16, 0, 212 = 0xD4001001 LE — last instruction of rt_alloc body)
-    if code[40] != 1 || code[41] != 16 || code[42] != 0 || code[43] != 212 {
-        println("FAIL: SVC at offset 40 mismatch (rt_alloc body)")
+    // add x1, x0, #16 at offset 20 (4 prefix + 16 outer/inner-frame; encoding 01 40 00 91)
+    if code[20] != 1 || code[21] != 64 || code[22] != 0 || code[23] != 145 {
+        println("FAIL: add x1, x0, #16 (header math) at offset 20 mismatch")
+        return
+    }
+    println("  hdr add x1     : 01 40 00 91 (add x1, x0, #16) OK")
+
+    // svc trailer at offset 48 (1, 16, 0, 212 = 0xD4001001 LE — mmap call)
+    if code[48] != 1 || code[49] != 16 || code[50] != 0 || code[51] != 212 {
+        println("FAIL: SVC at offset 48 mismatch (rt_alloc mmap body)")
         return
     }
     println("  SVC mid-body   : 01 10 00 d4 (svc #0x80, mmap call) OK")
 
-    // mov x1, x0 (e1 03 00 aa) at offset 44 (HexaVal ret postfix)
-    if code[44] != 0xe1 || code[45] != 0x03 || code[46] != 0x00 || code[47] != 0xaa {
+    // str x19, [x0] at offset 52 (encoding 13 00 00 f9)
+    if code[52] != 19 || code[53] != 0 || code[54] != 0 || code[55] != 249 {
+        println("FAIL: str x19, [x0] (header write) at offset 52 mismatch")
+        return
+    }
+    println("  hdr str x19    : 13 00 00 f9 (store N at header) OK")
+
+    // mov x1, x0 (e1 03 00 aa) at offset 64 (HexaVal ret postfix)
+    if code[64] != 0xe1 || code[65] != 0x03 || code[66] != 0x00 || code[67] != 0xaa {
         println("FAIL: mov x1, x0 ret-postfix mismatch")
         return
     }
     println("  ret-postfix    : e1 03 00 aa + 00 00 80 d2 (mov x1,x0; mov x0,#0) OK")
 
-    // ret at offset 56-59 (c0 03 5f d6)
-    if code[56] != 192 || code[57] != 3 || code[58] != 95 || code[59] != 214 {
+    // ret at offset 76-79 (c0 03 5f d6)
+    if code[76] != 192 || code[77] != 3 || code[78] != 95 || code[79] != 214 {
         println("FAIL: RET trailer mismatch")
         return
     }
