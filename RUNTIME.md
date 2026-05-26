@@ -1213,6 +1213,160 @@ vs calloc 의 heap addr (`0x102ad9640`, 비-aligned) → 런타임 분기도 확
   으로 `_hexa_exit + _hexa_ptr_alloc + ...` 를 한 `.o` 에 묶어 `HEXA_NATIVE_RT_ALL=1`
   단일 게이트로 수렴. emit driver 통합 (현재는 primitive 당 1 driver).
 
+### 열번째 increment (2026-05-26 · 🛸 3rd primitive wire — hexa-emit `_hexa_ptr_offset` override, **12-B pure-arith adapter** — series 의 가장 작은 adapter)
+
+아홉째 increment (`_hexa_ptr_alloc` 60-B HexaVal-ABI adapter, #1326) 위에서
+**세 번째 primitive 횡축 확장**. 같은 weak-symbol override 형판으로
+`runtime.c::hexa_ptr_offset` 을 hexa-emit `_hexa_ptr_offset` 으로 supersede
+— `_hexa_exit` (#1321 · noreturn / 단순 입력) → `_hexa_ptr_alloc` (#1326 ·
+양방향 HexaVal ABI + svc) 다음의 자연스러운 다음 칸으로 **순수 산술 leaf
+fn** 을 선택. svc 도, allocator-pair 결합도, recursion 도 없이 두 HexaVal
+struct (4 reg) 를 받아 한 HexaVal struct (2 reg) 를 돌려주는 가장 깨끗한
+ABI 경계.
+
+**ABI 분석 (audit)**:
+
+| axis            | `_hexa_exit` (#1321)  | `_hexa_ptr_alloc` (#1326)             | `_hexa_ptr_offset` (본 increment)              |
+|-----------------|-----------------------|---------------------------------------|------------------------------------------------|
+| C-side wrapper  | `hexa_exit(HexaVal)` (`noreturn`) | `hexa_ptr_alloc(HexaVal) → HexaVal` | `hexa_ptr_offset(HexaVal, HexaVal) → HexaVal` |
+| primitive       | `rt_exit` (svc x16=1) | `rt_alloc` (svc x16=197 mmap)         | **(none — 합성 leaf fn)**                       |
+| 입력 adapt      | `mov x0, x1` (4 B)    | `mov x0, x1` (4 B)                    | `add x1, x1, x3` (4 B — 직접 산술)             |
+| 출력 adapt      | (없음)                | `mov x1, x0; mov x0, #0` (8 B)        | `movz x0, #0` (4 B — tag 만 reset)             |
+| epilogue        | (없음)                | `ldp x29, x30, [sp], #16; ret` (8 B)  | `ret` (4 B — leaf fn, 스택 frame 없음)         |
+| 전체 adapter 길이 | 20 B                  | **60 B**                              | **12 B (= 3 instr)**                           |
+| svc             | 1 (exit)              | 1 (mmap)                              | **0**                                          |
+| allocator-pair  | (해당 없음)            | mmap vs libc free 불일치 ⚠           | (해당 없음)                                     |
+
+핵심 통찰 — **leaf fn 의 prologue-less 패턴**: 함수가 callee-save 레지스터를
+건드리지 않고 다른 호출도 안 하면 ARM64 AAPCS 는 `stp x29, x30, [sp, #-16]!`
++ `ldp` 짝을 생략 가능하다 (link reg `x30` 그대로 보존). 본 adapter 는 3
+명령으로 12 B — `_hexa_exit` 의 20 B 보다도 짧다. 또한 **primitive 가
+runtime_arm64.hexa 에 없어도** 본 형판은 잘 동작 (raw ARM64 instruction
+byte 만 emit) — runtime_arm64 의존도 0.
+
+**3-요소 wire (#1321/#1326 레시피 그대로)**:
+
+1. `self/runtime.c::hexa_ptr_offset` 에 `__attribute__((weak))` 부착. C-runtime
+   body 는 unchanged (`(ptr.i + off.i)` w/ tag-check) — linker 가 strong 동명
+   심볼이 link 입력에 있을 때 그것을 우선하게 한다.
+2. `test/native_build/emit_hexa_ptr_offset_native_o.hexa` — strong
+   `_hexa_ptr_offset` 를 export 하는 12-B `__text` + `_hexa_ptr_offset\0`
+   17-B strtab + `obj_wrap_v` 278 B `.o` 를 emit. 인프라는 `_hexa_ptr_alloc`
+   emit driver 의 wrapper 재사용 (심볼명 + strtab 크기만 차이).
+3. `self/main.hexa` cmd_build (HEXA_BACKEND=native 경로) — env
+   `HEXA_NATIVE_RT_PTR_OFFSET=1` 일 때 emit driver 를 `hexa run` 으로 호출
+   → 생성된 `/tmp/hexa_ptr_offset_native.o` 를 clang link 입력에 추가
+   (`__nrt_native_o` 변수에 누적 → `_hexa_exit` / `_hexa_ptr_alloc` override
+   와 **3-way 합산 가능**, 셋 동시 enable 시 모두 link 입력). env unset =
+   기존 link 명령 byte-eq (no-regression).
+
+**g5 verbatim — wire smoke (Mac arm64 `ssh mini` offload)**:
+
+```
+$ # emit
+$ hexa run test/native_build/emit_hexa_ptr_offset_native_o.hexa
+[wire] HEXA_BACKEND flip · 열번째 increment — _hexa_ptr_offset native override
+  adapter bytes  : 12 (12 expected — add x1,x1,x3; movz x0,#0; ret)
+  add x1,x1,x3   : 21 00 03 8b OK
+  movz x0,#0     : 00 00 80 d2 OK
+  RET trailer    : c0 03 5f d6 OK
+  obj_wrap size  : 278 bytes total
+  MH_MAGIC_64    : cf fa ed fe OK
+  filetype       : 1 (MH_OBJECT) OK
+  wrote          : /tmp/hexa_ptr_offset_native.o
+[wire] EMIT OK — link via cmd_build native path with HEXA_NATIVE_RT_PTR_OFFSET=1
+
+$ # disasm 확인
+$ otool -tv /tmp/hexa_ptr_offset_native.o
+(__TEXT,__text) section
+_hexa_ptr_offset:
+0000000000000000   add x1, x1, x3
+0000000000000004   mov x0, #0x0
+0000000000000008   ret
+
+$ nm /tmp/hexa_ptr_offset_native.o
+0000000000000000 T _hexa_ptr_offset    # strong external — ld64 picks this over weak C
+
+$ # env-OFF link — 7 instr C body (full HX_IS_INT tag-check chain)
+$ clang -O2 smoke_stub_full.c -o smoke_off && ./smoke_off
+tag=0 val=0x1040
+mistyped: tag=0 val=0x40              # ← C tag-check zeroed bad-tagged ptr
+happy OK
+$ otool -tv smoke_off | sed -n '/_hexa_ptr_offset:/,/_main:/p'
+_hexa_ptr_offset:
+0000000100000460   cmp     x0, #0x0
+0000000100000464   csel    x8, x1, xzr, eq
+0000000100000468   cmp     x2, #0x0
+000000010000046c   csel    x9, x3, xzr, eq
+0000000100000470   add     x1, x9, x8
+0000000100000474   mov     x0, #0x0
+0000000100000478   ret
+
+$ # env-ON link — 3 instr hexa-emit body
+$ clang -O2 smoke_stub_full.c hexa_ptr_offset_native.o -o smoke_on && ./smoke_on
+tag=0 val=0x1040
+mistyped: tag=0 val=0x1040            # ← override drops tag-check (documented residual)
+happy OK
+$ otool -tv smoke_on | sed -n '/_hexa_ptr_offset:/,/_main:/p'
+_hexa_ptr_offset:
+00000001000004fc   add     x1, x1, x3
+0000000100000500   mov     x0, #0x0
+0000000100000504   ret
+```
+
+7-instr → 3-instr body switch 가 otool 에서 선명. happy-path (TAG_INT 두
+인자) 출력 byte-identical — `tag=0 val=0x1040 OK`.
+
+**no-regression (#1321 + #1326 wire 보존, 3-way compose)**:
+
+```
+$ # 모든 3 override 동시 enable + 동시 link → 셋 다 발사 PASS
+$ clang -O2 compose_all3.c hexa_exit_native.o hexa_ptr_alloc_native.o \
+        hexa_ptr_offset_native.o -o compose_all_on
+$ ./compose_all_on
+alloc=0x10073c000 offset=0x10073c100 delta=0x100   # ← page-aligned (mmap) + pure-arith offset
+rc=42                                               # ← raw svc exit
+
+$ # env-OFF (모두 weak C 본문 활성)
+$ clang -O2 compose_all3.c -o compose_all_off && ./compose_all_off
+alloc=0x1012c9b90 offset=0x1012c9c90 delta=0x100   # ← heap (calloc) addr
+rc=42
+```
+
+- `nm` 에서 세 심볼 모두 strong external `T` 로 노출 (weak 셋 → strong 셋,
+  link 충돌 없음).
+- env unset = 세 weak C 본문 모두 활성 (`bl _calloc` + `bl _exit` + C-stub
+  add+csel). 기본 build_aprime.sh 경로는 `HEXA_NATIVE_RT_*` 미설정 → 세
+  patch 모두 진입 안 함 → byte-eq.
+- 페이지 정렬 fingerprint (`alloc` 의 last 12 bits = 0) + delta 정합
+  (`offset - alloc = 0x100`) 으로 **두 override 가 같은 binary 에서 합쳐
+  발사** 했음 확정.
+
+**잔여 (다음 increment 후보)**:
+
+- (A) **production-effect verify** — 본 increment 의 #1324-pattern 후속:
+  hexa_cli_driver 를 `HEXA_NATIVE_RT_PTR_OFFSET=1` 환경에서 재빌드 → otool
+  diff 로 production 의 `_hexa_ptr_offset` body switch 가 baked in 됨을
+  실측. 본 PR 은 합성 smoke 까지; production rebuild 는 후속 PR (재빌드
+  비용 > 본 산술 primitive 의 hot-path 비중, ROI 검토 후).
+- (B) **mistyped-tag 분기 검토** — 본 override 는 tag-check 를 drop. 모든
+  live 호출이 TAG_INT 라는 가정이 codegen invariant 인지 정합성 검증 필요
+  (transpiled compiler 의 1 호출 위치 + 미래 호출 위치). codegen IR 에
+  TAG_INT 보장 assertion 을 추가하면 mistyped 분기는 dead — drop 이 안전.
+- (C) **`hexa_deref` / `hexa_ptr_read` / `hexa_ptr_write` 같은 family**
+  — `hexa_ptr_offset` 와 같은 family 의 ptr 산술/접근 fn 들. memcpy 호출이
+  필요 (`hxlcl_memcpy`) 한 read/write 는 한 단계 복잡; `hexa_deref` 는
+  pointer chase + load — 5-6 instr 정도, 차다음 후보.
+- (D) **`HEXA_OVERRIDABLE` macro** — primitive 가 3 개 이상 wire 됨 (본
+  increment 으로 정확히 3). runtime.c 의 weak 부착 패턴이 반복; 다음
+  increment 부터 macro 통합 검토 (`__attribute__((weak))` + 주석 보일러
+  플레이트 축소).
+- (E) **단일 multi-sym `.o`** — `macho_obj_wrap_v3` (다섯째 increment) 으로
+  `_hexa_exit + _hexa_ptr_alloc + _hexa_ptr_offset + ...` 를 한 `.o` 에 묶어
+  `HEXA_NATIVE_RT_ALL=1` 단일 게이트로 수렴. 현재는 primitive 당 1 driver,
+  3 개 enable 시 3 개 .o append — 합치면 link 명령 line 단축 + emit cost
+  amortize.
+
 ## Domain map (Phase 0 → 3 + post)
 
 ```
