@@ -887,7 +887,14 @@ fn main() {
             exit(2)
         }
         argv = _with_env(env_kvs, argv)
-        let r = cloud_fire_opts(host, ssh_opts, argv, log_path)
+        // Auto-gen canonical /tmp/cloud-<unix_ts>.log when --log omitted, so
+        // the caller does not have to invent the path. cloud_nohup_opts then
+        // does the actual dispatch (no cloud_fire_opts shim needed in cloud.hexa).
+        let mut effective_log = log_path
+        if effective_log == "" {
+            effective_log = "/tmp/cloud-" + str(timestamp()) + ".log"
+        }
+        let r = cloud_nohup_opts(host, ssh_opts, argv, effective_log)
         if len(r.stdout_) > 0 {
             println(r.stdout_)
         }

@@ -404,28 +404,6 @@ fn cloud_nohup(host: str, argv: [str], logfile: str) -> CloudResult {
     return cloud_nohup_opts(host, [], argv, logfile)
 }
 
-// cloud_fire_opts — atomic "fire and Monitor" wrapper around cloud_nohup_opts.
-// When `logfile` is empty, auto-generates a canonical remote path
-// `/tmp/cloud-<unix_ts>.log` so the caller does not have to invent one (and
-// does not have to thread that path back into a separate `cloud tail` call —
-// the CLI emits __MONITOR_HANDLE__= JSON with the path filled in).
-// Two callers may collide on the same unix_ts under heavy fan-out; pass
-// `--log <unique>` explicitly when running batched dispatch.
-// Returns the same CloudResult shape as cloud_nohup_opts (.logfile field
-// always populated).
-fn cloud_fire_opts(host: str, ssh_opts: [str], argv: [str], logfile: str) -> CloudResult {
-    let mut log = logfile
-    if log == "" {
-        log = "/tmp/cloud-" + str(timestamp()) + ".log"
-    }
-    return cloud_nohup_opts(host, ssh_opts, argv, log)
-}
-
-// cloud_fire — cloud_fire_opts with no extra ssh flags and auto-logfile.
-fn cloud_fire(host: str, argv: [str]) -> CloudResult {
-    return cloud_fire_opts(host, [], argv, "")
-}
-
 // cloud_poll_opts — return 1 if remote process `pid` is still alive on
 // `host` (ssh with extra `ssh_opts`), else 0. `kill -0` probes the
 // process without signalling it.
