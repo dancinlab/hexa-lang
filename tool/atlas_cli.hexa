@@ -403,12 +403,84 @@ fn _recompute_register(fn_name: string, n: int) -> int {
     if fn_name == "euler_totient" || fn_name == "euler_phi" || fn_name == "phi" { return euler_phi(n) }
     if fn_name == "mobius" || fn_name == "mu" { return mobius(n) }
     if fn_name == "divisor_count" || fn_name == "tau" { return len(divisors(n)) }
-    if fn_name == "sigma_star" { return sigma_star(n) }   // Σ_{d||n} d — unitary divisor sum (INBOX #6 · mirror verify_cli)
     if fn_name == "sigma_3" { return sigma_k(n, 3) }   // Σ_{d|n} d³ — A001158 (INBOX #5 · mirror verify_cli · g0 sigma_k reuse)
-    if fn_name == "omega_big" || fn_name == "big_omega" { return omega_big(n) }   // Ω(n) w/ multiplicity — A001222 (INBOX #7 · mirror verify_cli)
-    if fn_name == "liouville" { return liouville_int(n) }   // λ(n)=(−1)^Ω(n) +1/−1 — A008836 (INBOX #7 · mirror verify_cli)
-    if fn_name == "liouville_summatory" { return liouville_summatory(n) }   // L(n)=Σλ(k) — A002819 (INBOX #7 · mirror verify_cli)
-    if fn_name == "pisano_period" { return pisano_period(n) }   // π(n) Fibonacci period mod n — A001175 (INBOX #8 · mirror verify_cli)
+    // sigma_star / omega_big / liouville / liouville_summatory / pisano_period —
+    // INLINED (not delegated to congruence_chain_engine) so the module flattener
+    // pulls each body into THIS compile unit alongside the sigma_k/divisors arms.
+    // The prior `return sigma_star(n)` delegation form built only stub-extern
+    // refs (`hexa_call1(sigma_star, n)` undeclared): these single-use callees
+    // were never traced reachable through the new arms, so clang failed. Same
+    // closure as the inlined `mertens` arm below + congruence_chain's `sopfr`
+    // note. Bodies are verbatim ports of congruence_chain_engine.hexa.
+    if fn_name == "sigma_star" {   // Σ_{d||n} d — unitary divisor sum (INBOX #6 · A034448)
+        if n <= 0 { return 0 }
+        let ds = divisors(n)
+        let mut s = 0
+        let mut i = 0
+        while i < len(ds) {
+            let d = ds[i]
+            let mut a = d
+            let mut b = n / d
+            while b != 0 { let t = a % b; a = b; b = t }
+            if a == 1 { s = s + d }
+            i = i + 1
+        }
+        return s
+    }
+    if fn_name == "omega_big" || fn_name == "big_omega" {   // Ω(n) w/ multiplicity — A001222 (INBOX #7)
+        let mut count = 0
+        let mut x = n
+        let mut d = 2
+        while d * d <= x {
+            while x % d == 0 { count = count + 1; x = x / d }
+            d = d + 1
+        }
+        if x > 1 { count = count + 1 }
+        return count
+    }
+    if fn_name == "liouville" {   // λ(n)=(−1)^Ω(n) +1/−1 — A008836 (INBOX #7)
+        let mut count = 0
+        let mut x = n
+        let mut d = 2
+        while d * d <= x {
+            while x % d == 0 { count = count + 1; x = x / d }
+            d = d + 1
+        }
+        if x > 1 { count = count + 1 }
+        if count % 2 == 0 { return 1 }
+        return -1
+    }
+    if fn_name == "liouville_summatory" {   // L(n)=Σλ(k) — A002819 (INBOX #7)
+        let mut sum = 0
+        let mut k = 1
+        while k <= n {
+            let mut count = 0
+            let mut x = k
+            let mut d = 2
+            while d * d <= x {
+                while x % d == 0 { count = count + 1; x = x / d }
+                d = d + 1
+            }
+            if x > 1 { count = count + 1 }
+            if count % 2 == 0 { sum = sum + 1 } else { sum = sum - 1 }
+            k = k + 1
+        }
+        return sum
+    }
+    if fn_name == "pisano_period" {   // π(n) Fibonacci period mod n — A001175 (INBOX #8)
+        if n <= 1 { return 1 }
+        let mut a = 0
+        let mut b = 1
+        let mut period = 0
+        while true {
+            let t = (a + b) % n
+            a = b
+            b = t
+            period = period + 1
+            if a == 0 && b == 1 { return period }
+        }
+        return period
+    }
     if fn_name == "is_perfect" {
         if sigma_k(n, 1) == 2 * n { return 1 }
         return 0
