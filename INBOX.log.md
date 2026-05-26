@@ -1,5 +1,37 @@
 # INBOX — log
 
+## 2026-05-27T03:50Z — RTSC /gap full audit 발견 2 upstream-fix 후보
+
+demiurge RTSC `/gap full` 8-family sweep + top-3 priority fan-out (METHOD/STRATEGY/PROTOCOL) 중 발견. directly-fix-while-completing-atlas-absorb 후속 — atlas fold(h3as·labeh8)는 이미 완료(memory `reference_hexa_toolchain_rebuild`), 새 gap만 INBOX 등록.
+
+### Gap 1 — `hexa cloud nohup` 의 conda/micromamba env 비활성
+
+**증상**: demiurge agent `ab94f11664a475116` (labeh8 interp ablation dispatch) 가 `nohup bash -c 'pw.x ...'` 형태로 pool ubu-1에 발사 시 `pw.x: command not found` — micromamba env가 nohup'd 자식 셸에 inherit 안 됨. agent 75 tool uses 후 종료(env error trace), 진짜 작업 0 진척.
+
+**제안 fix**: `stdlib/cloud/cloud_cli.hexa` nohup verb이 `--conda-env <name>` 또는 `--source <init.sh>` 플래그 받아 `eval "$(micromamba shell hook -s bash)" && micromamba activate <name>` 자동 prefix. 또는 envrc-style: `~/.hexa/cloud/host-env.sh` 가 있으면 자동 source.
+
+**severity**: medium — pool free dispatch의 silent class-1 실패. raw `pool on host 'micromamba activate qe && cmd'` 우회 가능하지만 hexa cloud canonical 정책(g8)과 충돌.
+
+- [ ] **`hexa cloud nohup --conda-env qe`** 또는 동등 플래그 — micromamba/conda env 자동 활성 (stdlib/cloud/cloud_cli.hexa)
+- [ ] 또는 host-side `~/.hexa/cloud/env.sh` 자동 source (config 기반)
+- [ ] usage banner + help에 환경 활성 시점 명시
+
+### Gap 2 — `stdlib/rtsc/elph_harvest.hexa` SSOT promotion (g61)
+
+**증상**: demiurge RTSC 캠페인에서 `harvest_v2.py/.hexa` 가 per-candidate clone (labeh8/, mg2irh6/, li2cuh6/, h3br_pscan/, h3cl_interp_ablation/ 각각 별도 사본). 동일 로직(σ-plateau · per-q λ · ω_log Allen-weighted · Allen-Dynes Tc) ~150 LOC가 5+ 위치에 복제. /gap F6 duplicated-helper finding.
+
+**부분 진척**: PR #286 (METHOD agent) 가 `decks/labeh8/harvest_v2.hexa` 를 canonical SSOT로 작성. 그러나 stdlib promotion 미완.
+
+**제안 fix**: g61 stdlib promote — `stdlib/rtsc/elph_harvest.hexa` 로 이동, demiurge 측에 thin shim `import stdlib/rtsc/elph_harvest`.
+
+**severity**: low — campaign는 이미 SSOT 위치 식별. g61 stdlib promotion만 남음.
+
+- [ ] **`stdlib/rtsc/elph_harvest.hexa`** — demiurge `decks/labeh8/harvest_v2.hexa` 를 hexa-lang stdlib으로 이동
+- [ ] demiurge 측 shim: `decks/*/harvest_v2.hexa` → `use stdlib/rtsc/elph_harvest` thin wrapper
+- [ ] (선택) atlas register harvest atoms — σ-plateau · ω_log_Allen_weighted · ω_log_per_q
+
+**cross-ref**: demiurge PRs #286 (METHOD validity gate · h3cl ablation in-flight) · #284 (PROTOCOL discipline 4-doc) · #289 (h3br F-N6-4 PASSED) · g61 stdlib SSOT · feedback `feedback_demiurge_assets_simulation_mandatory`.
+
 Append-only history sister of `INBOX.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
 ## 2026-05-27T04:50Z — Lie-group dimension verify primitives 부재 — `dim_su_n` · `dim_so_n` · `dim_e8` (F25 PHYSICS NOVEL boundary blocker)
