@@ -1,0 +1,6 @@
+=== E32 : hexa verify --expr aliquot 12 16 ===
+verify --expr aliquot(12)=16
+  calc   = 16  == expected 16
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+  absorb = ⚠ atlas register did NOT confirm fold; invocation:
+           hexa atlas register --from-verify aliquot 12 16

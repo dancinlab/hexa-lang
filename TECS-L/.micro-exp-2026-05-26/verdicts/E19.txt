@@ -1,0 +1,6 @@
+=== E19 : hexa verify --expr sigma 496 992 ===
+verify --expr sigma(496)=992
+  calc   = 992  == expected 992
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+  absorb = ⚠ atlas register did NOT confirm fold; invocation:
+           hexa atlas register --from-verify sigma 496 992
