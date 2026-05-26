@@ -1,0 +1,143 @@
+#!hexa strict
+// stdlib/aura/n4_cer_draft.hexa — `aura + N4` Clinical Evaluation
+// Report (CER) draft per MDCG 2020-13 (hexa-native).
+//
+// CONTEXT: EU MDR 2017/745 requires Clinical Evaluation per Article 61
+// + Annex XIV. MDCG 2020-13 = current guidance (template). This file
+// emits the CER section structure for AURA-100 Class IIa wearable BCI.
+//
+// Honesty (g3 · @D d1):
+//   * absorbed=false PERMANENTLY — draft outline, NOT clinical evaluation.
+//
+// Sentinels:
+//   __HEXA_AURA_N4_CER_DRAFT__ PASS
+//   AURA_N4_CER_DRAFT_OK gate=GATE_OPEN absorbed=false
+
+let VERSION       = "0.1.0"
+let MODULE        = "aura-n4-cer-draft"
+let GEOMETRY_ID   = "aura_n4_cer_draft_v1"
+let RECORD_KIND   = "aura_n4_cer_draft_record"
+
+fn _scope_purpose_block() -> [str] {
+    return [
+        "device_under_evaluation: AURA-100 post-aural wearable BCI · Class IIa",
+        "intended_use: alpha-band biofeedback + sleep-stage estimation (home-healthcare adult)",
+        "evaluation_purpose: demonstrate clinical safety + performance per EU MDR Annex I",
+        "evaluation_route: equivalence + literature review (no de-novo clinical investigation)",
+        "evaluator_qualifications: independent clinical expert + reviewer + PI (per MDCG 2020-1)",
+        "evaluation_plan: per Annex XIV Part A · Plan + Conduct + Report",
+    ]
+}
+
+fn _equivalence_block() -> [str] {
+    return [
+        "equivalent_device: InteraXon Muse S (CE-marked + 510(k)) · post-aural EEG headband",
+        "equivalence_clinical: same indication (alpha biofeedback + sleep tracking)",
+        "equivalence_technical: same EEG modality · BLE radio · battery-powered wearable",
+        "equivalence_biological: same skin-contact biocompatibility (ISO 10993-1 panel)",
+        "differences_addressed: form factor (post-aural clip vs headband) + channel density",
+        "rationale: differences do not raise different safety/performance concerns",
+    ]
+}
+
+fn _literature_review_block() -> [str] {
+    return [
+        "search_databases: PubMed + Embase + Cochrane + ClinicalTrials.gov + Cochrane Library",
+        "search_strategy: PICO framework + Boolean + MeSH/EmTree terms",
+        "scope: wearable EEG + alpha biofeedback + sleep-stage estimation · 2015-2026",
+        "inclusion_criteria: peer-reviewed + sample size + relevant population + outcome reported",
+        "appraisal_method: Oxford CEBM evidence levels OR GRADE",
+        "key_findings_target: alpha biofeedback safety/efficacy + EEG-based sleep tracking",
+    ]
+}
+
+fn _risk_benefit_block() -> [str] {
+    return [
+        "benefit_estimation: wellness improvement + sleep tracking utility (quantified per study)",
+        "risk_estimation: skin irritation (low · biocompat panel pass) + battery (low) + EMC (low)",
+        "risk_benefit_ratio: favorable for intended adult home-healthcare wellness use",
+        "ALARP_demonstration: As Low As Reasonably Practicable per ISO 14971",
+        "side_effects_documented: per ISO 14971:2019 + IMDRF guidance",
+        "contraindications_documented: per Class IIa labeling + IFU",
+    ]
+}
+
+fn _pmcf_plan_block() -> [str] {
+    return [
+        "PMCF_required: yes (per MDR Article 84 + Annex XIV Part B)",
+        "PMCF_objectives: confirm safety + performance + emergent risk identification",
+        "PMCF_methodology: prospective post-market user survey + complaint analysis",
+        "PMCF_sample_size: 100-500 users (statistical power for adverse event detection)",
+        "PMCF_timeline: ongoing · annual PMCF report + 2-year PSUR cycle",
+        "PMCF_outputs: real-world data → feedback to risk management + CER updates",
+    ]
+}
+
+fn _conclusion_block() -> [str] {
+    return [
+        "GSPR_compliance: device meets Annex I requirements (subject to verification)",
+        "clinical_safety: established by equivalence + literature review",
+        "clinical_performance: aligns with intended use + IFU claims",
+        "ongoing_evaluation: PMCF + PSUR + vigilance reporting",
+        "CER_validity: 2 years (Class IIa standard · annual review)",
+        "reviewer_signatures: clinical expert + medical reviewer + manufacturer rep",
+    ]
+}
+
+fn _scope_caveats() -> [str] {
+    return [
+        "N4 CER draft is a STRUCTURE outline, NOT a completed clinical evaluation.",
+        "Actual CER requires: literature search execution + expert reviewer + signed report.",
+        "Equivalence path assumes Muse S as equivalent - to be confirmed by clinical expert.",
+        "PMCF requires real users + complaint tracking infrastructure post-launch.",
+        "absorbed=false PERMANENTLY (g3) - draft outline, NEVER a signed CER.",
+    ]
+}
+
+fn _emit_block(label: str, lines: [str]) {
+    print("# [" + label + "]")
+    let n = lines.len()
+    let mut i = 0
+    while i < n {
+        print("#   - " + lines[i])
+        i = i + 1
+    }
+    print("#")
+}
+
+fn _emit_header() {
+    print("# AURA N4 - Clinical Evaluation Report (CER) draft per MDCG 2020-13")
+    print("# device_target = AURA-100 Class IIa post-aural wearable BCI")
+    print("# version = " + VERSION)
+    print("# ringfence: structure outline - NOT a signed CER")
+    print("#")
+    _emit_block("scope_purpose",       _scope_purpose_block())
+    _emit_block("equivalence",         _equivalence_block())
+    _emit_block("literature_review",   _literature_review_block())
+    _emit_block("risk_benefit",        _risk_benefit_block())
+    _emit_block("pmcf_plan",           _pmcf_plan_block())
+    _emit_block("conclusion",          _conclusion_block())
+}
+
+fn _emit_caveats() {
+    let c = _scope_caveats()
+    let n = c.len()
+    let mut i = 0
+    while i < n {
+        print("# scope_caveat: " + c[i])
+        i = i + 1
+    }
+}
+
+fn main() {
+    _emit_header()
+    _emit_caveats()
+
+    print("AURA_N4_CER_DRAFT_OK record_kind=" + RECORD_KIND
+        + " geometry_id=" + GEOMETRY_ID
+        + " gate=GATE_OPEN absorbed=false"
+        + " version=" + VERSION
+        + " mdcg=2020-13 cer_validity=2y")
+
+    print("__HEXA_AURA_N4_CER_DRAFT__ PASS")
+}
