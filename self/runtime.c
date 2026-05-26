@@ -3022,7 +3022,7 @@ __attribute__((weak)) HexaVal hexa_ptr_free(HexaVal ptr, HexaVal size) {
     return hexa_void();
 }
 
-HexaVal hexa_ptr_write(HexaVal ptr, HexaVal offset, HexaVal val) {
+__attribute__((weak)) HexaVal hexa_ptr_write(HexaVal ptr, HexaVal offset, HexaVal val) {
     uint64_t p = HX_IS_INT(ptr) ? HX_INT_U(ptr) : 0;
     int64_t off = HX_IS_INT(offset) ? HX_INT(offset) : 0;
     if (p == 0) return hexa_void();
