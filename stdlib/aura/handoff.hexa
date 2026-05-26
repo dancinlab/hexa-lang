@@ -106,6 +106,60 @@ fn _qms_risk_block() -> [str] {
     ]
 }
 
+// ─── D7 substance: illustrative regulatory submission content ────────
+
+fn _fda_510k_substance_block() -> [str] {
+    return [
+        "submission_type: 510(k) Premarket Notification - Traditional (not Special/Abbreviated)",
+        "intended_use_statement: AURA-100 continuous post-aural EEG monitoring + alpha-band biofeedback for adult home-healthcare wellness use",
+        "predicate_device: InteraXon Muse S Athena (general wellness EEG headband)",
+        "secondary_predicate: Beacon Biosignals Dreem 3 (sleep EEG headband)",
+        "technological_comparison: post-aural form factor (NEW) · channel count (16 vs 4) · SoC (nRF5340 vs nRF52)",
+        "performance_data: EMC test report (A3) + biocompat panel (ISO 10993-1) + bench testing per FDA EEG guidance",
+        "software_documentation: IEC 62304 Class B (moderate-LOC) + 21 CFR Part 11 audit trail",
+        "submission_package: eSTAR template · expected review: 90 day standard 510(k) clock",
+    ]
+}
+
+fn _eu_mdr_substance_block() -> [str] {
+    return [
+        "regulatory_route: MDR 2017/745 Class IIa Annex IX (QMS + TD audit)",
+        "GSPR_compliance: Annex I checklist with rationale per requirement",
+        "technical_documentation: Annex II (general TD) + Annex III (PMS TD)",
+        "notified_body_engagement: BSI Group (NB 0086) OR TUV SUD (NB 0123) candidates",
+        "ISO_13485_certification: pre-MDR QMS audit required",
+        "UDI_strategy: UDI-DI per GS1 issuing agency + UDI-PI variable (batch/expiry)",
+        "EUDAMED_registration: device + UDI + clinical investigation modules",
+        "CE_marking_post_audit: NB issues EC certificate + DoC (Declaration of Conformity)",
+    ]
+}
+
+fn _bt_sig_substance_block() -> [str] {
+    return [
+        "qualification_type: End Product Listing (EPL) + Component sub-system reuse from Nordic nRF5340",
+        "TCRL_tests: PHY, LL, HCI (subset), GAP, GATT, SMP per Bluetooth SIG TCRL",
+        "BQTF_engagement: Element Materials Technology OR Sporton International candidates",
+        "Declaration_ID: assigned post-declaration submission ($8K BT SIG fee)",
+        "QDID: Qualified Design ID assigned upon successful BQTF report acceptance",
+        "launch_studio_listing: device + tradename + qualified products listing",
+        "EUT_setup: AURA-100 in production firmware build + radiated/conducted RF chamber",
+        "expected_test_duration: 4-8 weeks (TCRL category dependent)",
+    ]
+}
+
+fn _emc_substance_block() -> [str] {
+    return [
+        "standard: IEC 60601-1-2 Ed.4.1 home-healthcare professional level",
+        "testhouse_candidates: UL Solutions, TUV Rheinland, SGS, Intertek (ISO/IEC 17025 accredited)",
+        "emission_tests: CISPR 11 Group 1 Class B (conducted + radiated)",
+        "immunity_tests: ESD ±8/15kV + radiated RF 3-80 V/m + conducted RF 3-10 V + PFMF 30 A/m + proximity-field 9-28 V/m",
+        "essential_performance: BLE link maintained + EEG streaming continued under stress",
+        "test_report: full IEC 60601-1-2 compliance report + risk-analysis input",
+        "estimated_cost: $25-50K (depending on testhouse + iteration count)",
+        "estimated_duration: 2-4 weeks per cycle (typical 1-2 cycles to pass)",
+    ]
+}
+
 fn _scope_caveats() -> [str] {
     return [
         "FDA 510(k) Class II submission dossier skeleton + EU MDR conformity-assessment template - TEMPLATE bundle.",
@@ -139,6 +193,12 @@ fn _emit_header() {
     _emit_block("emc_testhouse",  _emc_testhouse_block())
     _emit_block("bt_sig",         _bt_sig_block())
     _emit_block("qms_risk",       _qms_risk_block())
+
+    // ─── D7 substantive blocks (illustrative regulatory submission content) ──
+    _emit_block("fda_510k_substance",  _fda_510k_substance_block())
+    _emit_block("eu_mdr_substance",    _eu_mdr_substance_block())
+    _emit_block("bt_sig_substance",    _bt_sig_substance_block())
+    _emit_block("emc_substance",       _emc_substance_block())
 }
 
 fn _emit_caveats() {
