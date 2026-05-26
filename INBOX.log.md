@@ -2,6 +2,11 @@
 
 Append-only history sister of `INBOX.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
+## 2026-05-26T16:55Z — 🔑 cloud `--identity <key>` — vast publickey 거부 우회 (#1155 explicit-flag)
+
+- [x] **`--identity <path>` 플래그** — `_ssh_opts_cli` 가 `-i <path> -o IdentitiesOnly=yes` emit. hexa cloud ssh 가 Mac 기본 `~/.ssh/id_ed25519`(vast 미등록) 만 제시 → `Permission denied (publickey)` → raw-ssh 우회(cloud-guard 밖)로 내몰리던 것을, `hexa cloud run/exec/nohup/poll/tail/copy-* … --identity ~/.ssh/id_vast_anima` 로 vast 등록키 제시. `_ssh_opts_cli` 공유라 모든 verb 적용. 6/6 standalone PASS(-i·IdentitiesOnly·--port 조합·-- 정지·dangling 무크래시). help+version(0.3.1→0.3.2). dft-run `_dft_ssh_opts` 와 동일 패턴.
+- [ ] **#1155 잔여(zero-flag)**: rent/adopt 시 pod IP:port → `~/.ssh/config` IdentityFile Host 블록 자동 주입 OR vast pod 자동감지 → 기본 vast key. 별도 follow-up(현재는 명시 `--identity` 필요).
+
 ## 2026-05-26T16:30Z — 🔌 cloud registry 오염 FIX (#1229 B) → reconcile GHOST 오판 해소 (#1229 A)
 
 - [x] **#1229 B — registry argv-조각/host 오염 차단** — `cloud run`/`cloud nohup` 가 `pod_registry_record(host, prog, …)` 로 ssh 목적지(`root@<ip>`·proxy host)+명령조각(`echo`/`bash`/`/root/run.sh`)을 "pod" 로 적재하던 것을 제거(둘 다 host 연산이지 pod-lifecycle 이벤트 아님; pod 추적은 rent/adopt 가 numeric id 로 함). + sink 가드 `_pod_id_looks_valid` 추가 — `@`/`/`/`.`/공백/leading-`-` 토큰(ssh dest·host·IP·path·flag)을 `pod_registry_record` 가 거부(eprintln + drop). 11/11 standalone PASS (transpile→clang→run).
