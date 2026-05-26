@@ -455,16 +455,81 @@ endpoint) + BL-extern → stub redirect 모두 hexa-native 로 생성.
   cstring") + 셋째(multi-section, "ms ok" exit7) PoC 셋 모두 새 linker 로
   PASS. 기본 `tool/build_aprime.sh` 는 `hexa_ld` 미참조 (grep -c=0) → 영향 없음.
 - **잔여 (다음 chunk-B inc 후보)**:
-  - **GOT_LOAD_PAGE21/PAGEOFF12 reloc** (data import — libm `_acos` 의
-    함수 포인터 변수 등). 현재는 BRANCH26 (코드 함수 호출) 만 dyld bind;
-    data symbol bind 는 별개 path. real `runtime.o` (161 undefined extern)
-    링크는 이 path 가 마저 닫혀야 함.
+  - **GOT_LOAD_PAGE21/PAGEOFF12 reloc** (data import — libc `_environ`
+    같은 외부 데이터 심볼). ✅ **다섯째 increment 에서 CLOSED — 아래 참조.**
   - **multi-dylib ordinal mapping**. 현재는 libSystem.B.dylib (ordinal 1)
     고정. libm/libc++ 등 추가 dylib 는 `LC_LOAD_DYLIB` 추가 + ordinal
     테이블 + import packed의 `lib_ordinal` 필드 동적화 필요.
   - **lazy-bind (선택)**. 현재 path 는 모두 **non-lazy bind via __got**
     (load 시 전부 resolve). clang 도 modern macOS 에서는 비슷한 선택이라
     실용적으로는 충분.
+
+### 다섯째 increment (2026-05-27 · 🛸 dyld DATA import — GOT_LOAD_PAGE21/PAGEOFF12 → `__got` slot, no `__stubs`)
+
+넷째 increment 가 **함수** 임포트 (`bl _write` → BRANCH26 → `__stubs` →
+`__got` → dyld bind) 를 닫았다면, 다섯째는 **데이터** 임포트 (`adrp x9,
+_environ@GOTPAGE` + `ldr x9,[x9, _environ@GOTPAGEOFF]` → `__got` 슬롯 →
+dyld bind) 를 닫는다. 핵심 차이: 데이터 임포트는 점프 트램폴린이 필요
+없으므로 `__stubs` 엔트리를 **emit 하지 않는다** — 사용자 코드가 `__got`
+슬롯을 직접 deref 한다.
+
+- **`has_imports` vs `has_stubs` 분리**: 종전 `has_imports = nimports > 0`
+  하나로 `__stubs` 와 `__got` 둘 다 조건부 emit 했다. 이제 `nfunc = len(
+  import_names@BRANCH26-only)` 를 별도로 캡처해서 `has_stubs = nfunc > 0`
+  로 `__stubs` 만 게이트. `__got` 는 여전히 `has_imports` (function + data
+  합산) 로 게이트.
+- **데이터 임포트 수집 패스**: 모든 obj 의 reloc 을 스캔해서 `kind 5/6`
+  (`ARM64_RELOC_GOT_LOAD_PAGE21/PAGEOFF12`) 가 내부 심볼 (`def_names` hit)
+  로 해소되지 않으면 — 즉 외부 데이터 임포트면 — `import_names` 에 append.
+  함수 임포트 (BRANCH26) 가 먼저 들어가서 `[0, nfunc)` 를 차지하고, 그
+  뒤에 데이터 임포트가 `[nfunc, nimports)` 에 들어간다.
+- **patch loop 확장**: 기존 `kind 3/4` (PAGE21/PAGEOFF12 internal) 패치
+  옆에 `kind 5/6` (GOT_LOAD) 브랜치를 추가. 타겟 주소 = `got_section_addr +
+  8 * got_idx` (where `got_idx = import_names.indexOf(sym_name)`). PAGEOFF12
+  은 항상 LDR x (8-byte 로드) 이므로 scale=3 고정 → `imm12 = (slot_addr &
+  0xfff) >> 3`.
+- **chained_fixups imports 테이블**: 변경 없음 — 이미 `nimports` 전체를
+  순회하므로 데이터 임포트도 자동 포함. dyld 가 슬롯 종류와 무관하게
+  `DYLD_CHAINED_PTR_64_OFFSET` bind 로 동작.
+
+- **측정 (arm64-Mac mini, 2026-05-27)**: object A (`a_main.c`, naked
+  `_start` 가 `adrp+ldr _environ@GOT* / ldr x10,[x9] / svc exit(0)`). `clang
+  -c` = INPUT-only. LINK 에 `clang`/`ld`/`as` 없음:
+
+  ```
+  $ hexa run tool/hexa_ld.hexa -o exe a_main.o --lc-main __start
+  $ ./exe
+  $ echo $?
+  0
+  $ nm -u exe
+  _environ
+  $ otool -tv exe                    # adrp x9 page → 0x100004000 (= __got)
+  0000000100000328  adrp x9, 0x100004000
+  000000010000032c  ldr  x9, [x9]    # imm12=0 (__got@page-start)
+  0000000100000330  ldr  x10, [x9]   # deref bound _environ ptr → no segfault
+  $ otool -l exe | grep -A4 __got
+    sectname __got
+     segname __DATA
+        addr 0x0000000100004000
+        size 0x0000000000000008    # 1 slot = 8B, nimports=1
+  ```
+
+  `__stubs` 섹션은 emit 되지 **않는다** (`nfunc=0`). `LC_DYLD_CHAINED_
+  FIXUPS` 의 imports table 에는 `_environ` 한 엔트리만 (lib_ordinal=1 =
+  libSystem). dyld 가 load 시 `__got[0]` 의 chain endpoint 를 따라
+  `_environ@libSystem.B.dylib` 의 실주소 (libc 내 `char **environ`) 로
+  bind → `ldr x9,[x9]` 가 그 주소 로드 → `ldr x10,[x9]` 가 deref 성공 →
+  raw `svc #0x80` SYS_exit(0). 🟢 PASS.
+
+- **PoC**: `tool/test/hexa_ld_dyld_data/a_main.c`.
+- **no-regression**: 첫(BRANCH26, exit42) + 둘째(PAGE21+__const, "hi from
+  cstring") + 셋째(multi-section, "ms ok" exit7) + 넷째(dyld_write, "hi")
+  PoC 넷 모두 새 linker 로 PASS.
+
+- **잔여 (다음 chunk-B inc 후보)**:
+  - **multi-dylib ordinal mapping** (위와 동일 — libSystem 외 dylib).
+  - **lazy-bind 옵션화** (현재는 모두 non-lazy via `__got`).
+  - **scattered relocation** + **TLV thread-locals**.
 
 ### 넷째 increment (2026-05-26 · 🛸 emit-side reloc — `macho_obj_wrap_v2` 2-symbol .o + PAGE21/PAGEOFF12 RUN)
 
