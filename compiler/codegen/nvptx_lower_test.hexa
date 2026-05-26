@@ -1208,6 +1208,7 @@ fn main() {
     let ok_fp8a  = _test_f8_e4m3_load_store()
     let ok_fp8b  = _test_f8_e5m2_load_store()
     let ok_i64c  = _test_to_i64_and_int_cmp()
+    let ok_mwc   = _test_mixed_width_cmp()
     let ok_mm    = _test_matmul_emit()
     let ok_mta   = _test_matmul_NT_a_emit()
     let ok_mtb   = _test_matmul_NT_b_emit()
@@ -1219,8 +1220,8 @@ fn main() {
 
     println("")
     println("══════════════════════════════════════════════")
-    if ok_br && ok_cls && ok_setp && ok_intr && ok_ls && ok_part && ok_barr && ok_atom && ok_shuf && ok_shuff64 && ok_shufm64 && ok_unr && ok_unrn && ok_wmma && ok_mp && ok_fctN && ok_pp && ok_fw && ok_sd && ok_me && ok_np && ok_os && ok_df && ok_bm && ok_wie && ok_gkw && ok_fls && ok_fp8a && ok_fp8b && ok_i64c && ok_mm && ok_mta && ok_mtb && ok_tma && ok_tmae && ok_mf32 && ok_mf64 && ok_minh {
-        println("PASS: RFC 055 + RFC 067 + RFC 068 P1/P2/P3/P4-codegen + RFC 068 §3 fp8 scaffold + RFC 069 + RFC 071 P3+/P5+ + N71-B FP64 warp-shuffle (+u64 mask narrow) + RFC 067 N202 TMA scaffold + RFC 067 N206 TMA matmul emit + RFC 055 §13 math intrinsics (sqrt/max/min/exp/abs/rsqrt) — 38/38 cases (incl. matmul + matmul_NT_a + matmul_NT_b + FP64 warp-shuffle composition + TMA codegen scaffold + TMA matmul emit + math f32/f64/inherit)")
+    if ok_br && ok_cls && ok_setp && ok_intr && ok_ls && ok_part && ok_barr && ok_atom && ok_shuf && ok_shuff64 && ok_shufm64 && ok_unr && ok_unrn && ok_wmma && ok_mp && ok_fctN && ok_pp && ok_fw && ok_sd && ok_me && ok_np && ok_os && ok_df && ok_bm && ok_wie && ok_gkw && ok_fls && ok_fp8a && ok_fp8b && ok_i64c && ok_mwc && ok_mm && ok_mta && ok_mtb && ok_tma && ok_tmae && ok_mf32 && ok_mf64 && ok_minh {
+        println("PASS: RFC 055 + RFC 067 + RFC 068 P1/P2/P3/P4-codegen + RFC 068 §3 fp8 scaffold + RFC 069 + RFC 071 P3+/P5+ + N71-B FP64 warp-shuffle (+u64 mask narrow) + N73 mixed-width int setp (u32<u64 widen) + RFC 067 N202 TMA scaffold + RFC 067 N206 TMA matmul emit + RFC 055 §13 math intrinsics (sqrt/max/min/exp/abs/rsqrt) — 39/39 cases (incl. matmul + matmul_NT_a + matmul_NT_b + FP64 warp-shuffle composition + mixed-width cmp widen + TMA codegen scaffold + TMA matmul emit + math f32/f64/inherit)")
     } else {
         println("FAIL: RFC 055 smoke not satisfied.")
         if !ok_br   { println("      STMT_BR FAILED") }
@@ -1253,6 +1254,7 @@ fn main() {
         if !ok_fp8a { println("      RFC 068 §3 fp8 e4m3 scaffold FAILED") }
         if !ok_fp8b { println("      RFC 068 §3 fp8 e5m2 scaffold FAILED") }
         if !ok_i64c { println("      RFC 071 P3+ to_i64 + int cmp + br_cond FAILED") }
+        if !ok_mwc  { println("      N73 mixed-width int setp (u32<u64 widen) FAILED") }
         if !ok_mm   { println("      RFC 071 P5+ matmul codegen FAILED") }
         if !ok_mta  { println("      RFC 071 P5+ matmul_NT_a codegen FAILED") }
         if !ok_mtb  { println("      RFC 071 P5+ matmul_NT_b codegen FAILED") }
@@ -1263,7 +1265,7 @@ fn main() {
         if !ok_minh { println("      RFC 055 §13 math operand-kind inheritance FAILED") }
     }
     println("══════════════════════════════════════════════")
-    if !(ok_br && ok_cls && ok_setp && ok_intr && ok_ls && ok_part && ok_barr && ok_atom && ok_shuf && ok_shuff64 && ok_shufm64 && ok_unr && ok_unrn && ok_wmma && ok_mp && ok_fctN && ok_pp && ok_fw && ok_sd && ok_me && ok_np && ok_os && ok_df && ok_bm && ok_wie && ok_gkw && ok_fls && ok_fp8a && ok_fp8b && ok_i64c && ok_mm && ok_mta && ok_mtb && ok_tma && ok_tmae && ok_mf32 && ok_mf64 && ok_minh) { exit(1) }
+    if !(ok_br && ok_cls && ok_setp && ok_intr && ok_ls && ok_part && ok_barr && ok_atom && ok_shuf && ok_shuff64 && ok_shufm64 && ok_unr && ok_unrn && ok_wmma && ok_mp && ok_fctN && ok_pp && ok_fw && ok_sd && ok_me && ok_np && ok_os && ok_df && ok_bm && ok_wie && ok_gkw && ok_fls && ok_fp8a && ok_fp8b && ok_i64c && ok_mwc && ok_mm && ok_mta && ok_mtb && ok_tma && ok_tmae && ok_mf32 && ok_mf64 && ok_minh) { exit(1) }
 }
 
 // ── Case 9 — 055-P4 gpu_warp_shuffle(v, lane) intrinsic ───────────────
@@ -3623,6 +3625,104 @@ fn _test_to_i64_and_int_cmp() -> bool {
     } else {
         println("  ok: no `unsupported binop: lt|<` marker (gap 2 closed)")
     }
+    return ok
+}
+
+// ── Case 28b — N73 mixed-width int setp (u32 thread-id < u64 param) ──
+//
+// The REAL ubu-2 source-to-silicon blocker for F-RFC071-E2E-NUMERIC-EQ.
+// The canonical vec-add bounds-check is `if i < n { ... }` where `i` is
+// the raw 32-bit thread index (`gpu_thread_id_x()+gpu_block_id_x()*
+// gpu_block_dim_x()`, all u32 arithmetic → u32 bank `%r`) and `n` is a
+// kernel param of type i64 (Pass-0 classifies it U64 → `%rd`). NO
+// `to_i64` widen sits between the index and the compare.
+//
+// Pre-fix: `_nvptx_cmp_operand_type_suffix` used first-non-default-wins.
+// Operand 0 (`i`, u32) returned `.s32` and the function short-circuited
+// WITHOUT inspecting `n` (u64). Emit was `setp.lt.s32 %p, %r, %rd` — the
+// u64 operand `%rd` mismatches the `.s32` suffix and ptxas REJECTS it:
+//   `error : Arguments mismatch for instruction 'setp'`.
+//
+// Post-fix (N73): widest-int-wins → `.s64`, AND the narrow u32 operand
+// is sign-extended into `%cmpw_<dst>` (`cvt.s64.s32`) BEFORE the setp, so
+// both setp operands are 64-bit. This case is the regression guard.
+//
+// Fixture (a KERNEL so Pass-0 classifies the i64 param via type_id=1):
+//   block 0:
+//     i = gpu_thread_id_x()        // STMT_CALL → U32 %r0
+//     p = i < n                    // STMT_BINOP "<" → pred; MIXED u32/u64
+//     br_cond p -> block 1, else block 2
+//   block 1: return ; block 2: return
+//   param n: i64 (type_id=1 → U64 %rd<id> via Pass 0)
+
+fn _local_i64(id: i64, name: string) -> Local {
+    return Local { id: id, arena_id: 1, type_id: 1, name_hint: name, precision: "" }
+}
+
+fn _build_case_mixed_width_cmp() -> MModule {
+    let i_idx = _local(0, "i")        // STMT_CALL gpu_thread_id_x → U32 %r0
+    let p     = _local(1, "p")        // STMT_BINOP "<" → pred %p1 (MIXED)
+    let n_p   = _local_i64(2, "n")    // KERNEL param i64 (type_id=1) → U64 %rd2
+
+    // block 0
+    let mut s0 = []
+    s0.push(_stmt_call(i_idx, "gpu_thread_id_x"))
+    s0.push(_stmt_binop(p, "<", _op_local(i_idx.id), _op_local(n_p.id)))
+    s0.push(_stmt_br_cond(_op_local(p.id), 1, 2))
+    // block 1 / block 2: return
+    let mut s1 = []
+    s1.push(_stmt_return())
+    let mut s2 = []
+    s2.push(_stmt_return())
+
+    let mut blocks = []
+    blocks.push(_block(0, s0))
+    blocks.push(_block(1, s1))
+    blocks.push(_block(2, s2))
+
+    let mut params = []
+    params.push(n_p)
+    let mut locals = []
+    locals.push(i_idx); locals.push(p); locals.push(n_p)
+
+    let mf = MFunc {
+        name: "mixed_width_cmp_smoke",
+        params: params,
+        return_local: _miss_local(),
+        locals: locals,
+        blocks: blocks,
+        entry_block: 0,
+        arena_root: 1,
+        def_line: 0,
+        gpu_kind: GPU_KIND_KERNEL
+    }
+    let mut fns = []
+    fns.push(mf)
+    return MModule { file: "case_mixed_width_cmp.hexa", funcs: fns, globals: [] }
+}
+
+fn _test_mixed_width_cmp() -> bool {
+    let mut ok = true
+    let mod_in = _build_case_mixed_width_cmp()
+    let ptx = codegen_emit_ptx_sm80(mod_in)
+
+    println("")
+    println("── emitted PTX (N73 mixed-width u32<u64 int cmp, sm_80) ──")
+    println(ptx)
+
+    // The compare dst is .pred; the i64 param n classifies U64 via Pass 0,
+    // the thread index i is U32. Widest-int-wins picks `.s64`.
+    ok = _check(ok, ptx, ".reg .pred %p1",        "cmp dst classified .pred (%p1)")
+    ok = _check(ok, ptx, ".reg .u64 %cmpw_1",     "mixed-width widen scratch declared (.reg .u64 %cmpw_1)")
+
+    // The load-bearing fix: the narrow u32 operand (%r0) is sign-extended
+    // into %cmpw_1 BEFORE the setp, and the setp suffix is `.s64`.
+    ok = _check(ok, ptx, "cvt.s64.s32 %cmpw_1, %r0", "u32 lhs widened to s64 (cvt.s64.s32)")
+    ok = _check(ok, ptx, "setp.lt.s64 %p1, %cmpw_1", "setp.lt.s64 over widened lhs + u64 rhs")
+
+    // Negative guard — the BUGGY `setp.lt.s32` over the u64 operand must
+    // NOT appear (that's the exact ptxas-rejected emit this fix removes).
+    ok = _check_not(ok, ptx, "setp.lt.s32 %p1", "no buggy setp.lt.s32 over mixed-width cmp")
     return ok
 }
 
