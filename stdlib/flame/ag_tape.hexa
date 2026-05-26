@@ -70,6 +70,9 @@ pub fn ag_k_rmsnorm_mh() -> int { return 12 } // per-pos RMSNorm [T·d]
                                               // (dt_sqrt — decoder path)
 pub fn ag_k_attn_dt() -> int { return 13 }    // GQA attn, dt_sqrt scale
                                               // + dt_exp softmax (decoder)
+pub fn ag_k_lmhead_allpos() -> int { return 14 } // full-position tied LM head
+                                              // [Z:T·d, temb:V·d → logits:T·V]
+                                              // (RFC 059 §4 P1②-a)
 
 // ── tape geometry (node v3) ─────────────────────────────────────────────
 // header v2: [0]=op count, [1]=final-input-grad (legacy/chain path),
@@ -567,6 +570,73 @@ pub fn ag_lmhead(tape: int, temb: int, zT: int, V: int, d: int) -> int {
     let _ = _ag_push(tape, ag_k_lmhead(), temb, zT, logits, 0 - 1,
                      0 - 1, 0 - 1, 0 - 1, 0 - 1, V, d, 0, 0)
     return logits
+}
+
+// ── full-position tied LM head (RFC 059 §4, P1②-a) ──────────────────────
+// "Zero new math": records the all-position head as ONE tape node whose
+// reverse arm replays nn_lm_head_bwd per row over all T positions. The
+// per-row math is byte-identical to the existing single-position ag_lmhead
+// (T=1 reduces exactly to that node — F-RFC059B-ALLPOS-T1-BYTEEQ).
+//
+//   temb [V·d]   tied token-embedding / head weight (shared across all t)
+//   Z    [T·d]   per-position hidden vectors (post final RMSNorm·gF)
+//   → logits [T·V]   logits[t·V + k] = Σ_j temb[k·d+j]·Z[t·d+j]
+//
+// node layout: ids[temb, Z, logits], dims[T, V, d] (slots 9,10,11).
+pub fn ag_lmhead_allpos(tape: int, temb: int, Z: int,
+                        T: int, V: int, d: int) -> int {
+    let logits = t_zeros(T * V)
+    nn_lm_head_fwd_allpos(temb, Z, logits, T, V, d)   // P1① fwd reuse (#1481)
+    let _ = _ag_push(tape, ag_k_lmhead_allpos(), temb, Z, logits, 0 - 1,
+                     0 - 1, 0 - 1, 0 - 1, 0 - 1, T, V, d, 0)
+    return logits
+}
+
+// CE seed helper (loss → tape) for the full-position head (RFC 059 §4.2).
+// Computes the full-position mean-CE loss (reusing nn_ce_loss_allpos) AND
+// the per-row seed dl[t·V+k] = (softmax(logits[t])[k] − [k==targets[t]]) / T
+// = ∂L/∂logits, then injects it into the registry via ag_seed_grad so the
+// reverse walk propagates it. The softmax recompute mirrors nn_ce_loss_allpos
+// (stable row-max + dt_exp) so the seed is consistent with the returned loss.
+//   logits_tid [T·V]   the ag_lmhead_allpos output tid
+//   targets    [T]     gold next-token id per position
+//   returns the scalar mean-CE loss.
+pub fn ag_ce_seed_allpos(tape: int, logits_tid: int, targets: int,
+                         T: int, V: int) -> float {
+    let dl = t_zeros(T * V)
+    let inv_t = 1.0 / to_float(T)
+    let mut t = 0
+    while t < T {
+        let base = t * V
+        // stable softmax: row max
+        let mut mx = t_get(logits_tid, base)
+        let mut i = 1
+        while i < V {
+            if t_get(logits_tid, base + i) > mx { mx = t_get(logits_tid, base + i) }
+            i = i + 1
+        }
+        // sum of exp
+        let mut tot = 0.0
+        let mut i2 = 0
+        while i2 < V {
+            tot = tot + dt_exp(t_get(logits_tid, base + i2) - mx)
+            i2 = i2 + 1
+        }
+        let tgt = to_int(t_get(targets, t))
+        // seed: (softmax − onehot) / T
+        let mut k = 0
+        while k < V {
+            let sm = dt_exp(t_get(logits_tid, base + k) - mx) / tot
+            let mut g = sm
+            if k == tgt { g = sm - 1.0 }
+            t_set(dl, base + k, g * inv_t)
+            k = k + 1
+        }
+        t = t + 1
+    }
+    ag_seed_grad(tape, logits_tid, dl)
+    t_free(dl)
+    return nn_ce_loss_allpos(logits_tid, targets, T, V)
 }
 
 // GPU-resident large-vocab lm-head cross-entropy loss + seed grad
@@ -1081,6 +1151,54 @@ pub fn ag_backward_reg(tape: int, out_tid: int, seed: int) {
             _ag_reg_acc(tape, zT, dzT, d)
             t_free(dtemb)
             t_free(dzT)
+        } else if kind == ag_k_lmhead_allpos() {
+            // RFC 059 §4.3 — full-position head reverse. "Zero new math":
+            // replay nn_lm_head_bwd per row t. dtemb ACCUMULATES across all
+            // T (nn_lm_head_bwd does `dtemb += dl⊗zT`); dZ is filled row by
+            // row (nn_lm_head_bwd OVERWRITES dzT_out, so we extract a per-row
+            // hidden slice, get a fresh per-row dzT, then scatter it back).
+            let temb = _ag_get(tape, op, 1)
+            let Z = _ag_get(tape, op, 2)
+            let lg = _ag_get(tape, op, 3)
+            let T = _ag_get(tape, op, 9)
+            let V = _ag_get(tape, op, 10)
+            let d = _ag_get(tape, op, 11)
+            let og = _ag_reg_grad(tape, lg, T * V)
+            let dtemb = t_zeros(V * d)        // accumulates over all rows
+            let dZ = t_zeros(T * d)           // hidden grad → chain to prev op
+            let z_row = t_zeros(d)
+            let og_row = t_zeros(V)
+            let dz_row = t_zeros(d)
+            let mut t = 0
+            while t < T {
+                // extract row-t hidden + upstream-grad slices
+                let mut j = 0
+                while j < d {
+                    t_set(z_row, j, t_get(Z, t * d + j))
+                    j = j + 1
+                }
+                let mut k = 0
+                while k < V {
+                    t_set(og_row, k, t_get(og, t * V + k))
+                    k = k + 1
+                }
+                // dtemb += dl[t]⊗z[t] (accumulate) ; dz_row = Σ_k dl[t,k]·temb[k]
+                nn_lm_head_bwd(temb, z_row, og_row, dtemb, dz_row, V, d)
+                // scatter dz_row back into dZ[t·d : t·d+d]
+                let mut j2 = 0
+                while j2 < d {
+                    t_set(dZ, t * d + j2, t_get(dz_row, j2))
+                    j2 = j2 + 1
+                }
+                t = t + 1
+            }
+            _ag_reg_acc(tape, temb, dtemb, V * d)   // tied-weight accumulate
+            _ag_reg_acc(tape, Z, dZ, T * d)         // hidden grad → next op
+            t_free(dtemb)
+            t_free(dZ)
+            t_free(z_row)
+            t_free(og_row)
+            t_free(dz_row)
         } else if kind == ag_k_swiglu() {
             let r = _ag_get(tape, op, 1)
             let Wg = _ag_get(tape, op, 2)
@@ -1448,6 +1566,8 @@ pub fn ag_t_free_state(tape: int) {
             t_free(_ag_get(tape, op, 4))   // q_out
         } else if kind == ag_k_lmhead() {
             t_free(_ag_get(tape, op, 3))   // logits
+        } else if kind == ag_k_lmhead_allpos() {
+            t_free(_ag_get(tape, op, 3))   // logits [T·V]
         } else if kind == ag_k_swiglu() {
             t_free(_ag_get(tape, op, 5))   // a
             t_free(_ag_get(tape, op, 6))   // b
