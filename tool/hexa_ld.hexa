@@ -1192,7 +1192,7 @@ fn link_macho_arm64(objs: [ParsedObj], out_path: string, entry: string, _is_stat
     _w_u64(out, text_filesize)                       // filesize
     _w_u32(out, MACHO_LD_VM_PROT_RX)
     _w_u32(out, MACHO_LD_VM_PROT_RX)
-    _w_u32(out, text_nsects)                          // nsects (__text [+ __const])
+    _w_u32(out, text_nsects)                          // nsects (__text [+ __const][+ __cstring])
     _w_u32(out, 0)                                   // flags
     // section_64 __text
     _w_name_fixed(out, "__text", 16)
@@ -1205,41 +1205,101 @@ fn link_macho_arm64(objs: [ParsedObj], out_path: string, entry: string, _is_stat
     _w_u32(out, 0)                                   // nreloc
     _w_u32(out, MACHO_LD_S_REG)
     _w_u32(out, 0); _w_u32(out, 0); _w_u32(out, 0)   // reserved1/2/3
-    // section_64 __const (merged __cstring/__const data) — only when
-    // an object carried such a section. Flags = S_REGULAR (0x0): plain
-    // read-only data. Lives in __TEXT (RX) — read-only const is safe to
-    // map executable for this minimal case (no writes, no relocs into it).
-    if has_data {
+    // section_64 __const — plain read-only data (S_REGULAR). Lives in
+    // __TEXT (RX): read-only const is safe to map executable.
+    if has_const {
         _w_name_fixed(out, "__const", 16)
         _w_name_fixed(out, "__TEXT", 16)
-        _w_u64(out, data_section_addr)               // addr
-        _w_u64(out, data_size)                       // byte count
-        _w_u32(out, data_fileoff)
+        _w_u64(out, const_section_addr)
+        _w_u64(out, const_size)
+        _w_u32(out, const_fileoff)
         _w_u32(out, 4)                               // align log2(16)
-        _w_u32(out, 0)                               // reloff
-        _w_u32(out, 0)                               // nreloc
+        _w_u32(out, 0)
+        _w_u32(out, 0)
         _w_u32(out, 0)                               // flags = S_REGULAR
         _w_u32(out, 0); _w_u32(out, 0); _w_u32(out, 0)
+    }
+    // section_64 __cstring — C string literals. flags = S_CSTRING_LITERALS
+    // (0x02). Lives in __TEXT.
+    if has_cstring {
+        _w_name_fixed(out, "__cstring", 16)
+        _w_name_fixed(out, "__TEXT", 16)
+        _w_u64(out, cstring_section_addr)
+        _w_u64(out, cstring_size)
+        _w_u32(out, cstring_fileoff)
+        _w_u32(out, 0)                               // align log2(1)
+        _w_u32(out, 0)
+        _w_u32(out, 0)
+        _w_u32(out, 0x02)                            // S_CSTRING_LITERALS
+        _w_u32(out, 0); _w_u32(out, 0); _w_u32(out, 0)
+    }
+
+    // ── LC_SEGMENT_64 __DATA (RW: __data [+ __bss]) ──────────────────
+    if has_data_seg {
+        _w_u32(out, MACHO_LD_LC_SEGMENT_64)
+        _w_u32(out, lc_data_size)
+        _w_name_fixed(out, "__DATA", 16)
+        _w_u64(out, data_seg_vmaddr)
+        _w_u64(out, data_seg_vmsize)                 // vmsize INCLUDES bss
+        _w_u64(out, data_seg_fileoff)
+        _w_u64(out, data_seg_filesize)               // filesize EXCLUDES bss
+        _w_u32(out, MACHO_LD_VM_PROT_RW)
+        _w_u32(out, MACHO_LD_VM_PROT_RW)
+        _w_u32(out, data_nsects)
+        _w_u32(out, 0)                               // flags
+        // section_64 __data (file-backed init'd globals)
+        if has_data {
+            _w_name_fixed(out, "__data", 16)
+            _w_name_fixed(out, "__DATA", 16)
+            _w_u64(out, data_section_addr)
+            _w_u64(out, data_size)
+            _w_u32(out, data_fileoff)
+            _w_u32(out, 3)                           // align log2(8)
+            _w_u32(out, 0)
+            _w_u32(out, 0)
+            _w_u32(out, 0)                           // flags = S_REGULAR
+            _w_u32(out, 0); _w_u32(out, 0); _w_u32(out, 0)
+        }
+        // section_64 __bss (S_ZEROFILL = 1; size set, offset MUST be 0).
+        if has_bss {
+            _w_name_fixed(out, "__bss", 16)
+            _w_name_fixed(out, "__DATA", 16)
+            _w_u64(out, bss_section_addr)
+            _w_u64(out, bss_size)                    // virtual size
+            _w_u32(out, 0)                           // offset = 0 (zerofill)
+            _w_u32(out, 3)                           // align log2(8)
+            _w_u32(out, 0)
+            _w_u32(out, 0)
+            _w_u32(out, 1)                           // flags = S_ZEROFILL
+            _w_u32(out, 0); _w_u32(out, 0); _w_u32(out, 0)
+        }
     }
 
     // ── LC_SEGMENT_64 __LINKEDIT (read-only segment) ──
     //
-    // __LINKEDIT sits AFTER __TEXT in the file. fileoff = text_filesize.
-    // Cycle 7 layout (extends cycle 4-6 with chained_fixups + exports_trie):
-    //
-    //   chained_fixups   48 B    (28 header + 16 starts_in_image + 4 pad)
-    //   exports_trie      8 B    (2 actual + 6 pad)
+    // __LINKEDIT sits AFTER __DATA (or __TEXT if no __DATA) in the file,
+    // at the next page boundary.
+    //   chained_fixups   56 B
+    //   exports_trie      8 B
     //   symtab          16*nsyms
     //   strtab          strsize + strpad
     //   codesig_blob   1024 B reserved (1 KB for ad-hoc CMS)
     //
     // ld64 ordering convention; macOS Sonoma loader rejects out-of-order.
-    let linkedit_fileoff = text_filesize
-    // chained_fixups data:
-    //   28 B header + 4 B pad (8-aligning starts_in_image) +
-    //   16 B starts_in_image (seg_count=3 + 3 zero offsets) + 8 B trailing
-    //   pad to 8-byte align → 56 B (matches clang's empty fixups layout).
-    let chained_fixups_size = 56
+    let mut linkedit_after = text_filesize
+    if has_data_seg { linkedit_after = data_seg_fileoff + data_seg_filesize }
+    let linkedit_fileoff = linkedit_after
+    // chained_fixups data (empty fixups — no imports, no rebases):
+    //   28 B header + 4 B pad (8-align) = 32 B, then dyld_chained_starts_
+    //   in_image = u32 seg_count + seg_count×u32 seg_info_offset (all 0),
+    //   then pad to 8-byte align. seg_count MUST match the number of
+    //   LC_SEGMENT_64 we emit (PAGEZERO + TEXT [+ DATA] + LINKEDIT).
+    let mut fixups_seg_count = 3                       // PAGEZERO + TEXT + LINKEDIT
+    if has_data_seg { fixups_seg_count = 4 }
+    let starts_in_image_size = 4 + 4 * fixups_seg_count
+    let mut chained_fixups_size = 32 + starts_in_image_size
+    let cfrem = chained_fixups_size & 7
+    if cfrem != 0 { chained_fixups_size = chained_fixups_size + (8 - cfrem) }
     let exports_trie_size   = 8
     let chained_fixups_off  = linkedit_fileoff
     let exports_trie_off    = chained_fixups_off + chained_fixups_size
@@ -1255,7 +1315,9 @@ fn link_macho_arm64(objs: [ParsedObj], out_path: string, entry: string, _is_stat
     let lrem = linkedit_filesize & (page - 1)
     let mut linkedit_vmsize = linkedit_filesize
     if lrem != 0 { linkedit_vmsize = linkedit_filesize + (page - lrem) }
-    let linkedit_vmaddr = 0x100000000 + text_filesize
+    // __LINKEDIT vmaddr = after __DATA's vm region (or __TEXT if none).
+    let mut linkedit_vmaddr = 0x100000000 + text_filesize
+    if has_data_seg { linkedit_vmaddr = data_seg_vmaddr + data_seg_vmsize }
     _w_u32(out, MACHO_LD_LC_SEGMENT_64)
     _w_u32(out, lc_linkedit_size)
     _w_name_fixed(out, "__LINKEDIT", 16)
@@ -1359,45 +1421,63 @@ fn link_macho_arm64(objs: [ParsedObj], out_path: string, entry: string, _is_stat
     _w_u32(out, codesig_fileoff)
     _w_u32(out, codesig_reserve)
 
-    // ── __text payload (concatenated, relocated text bytes) ──
+    // ── __TEXT payload: __text, then __const (16-aligned), then
+    //    __cstring (16-aligned). Each section's file offset was computed
+    //    above (const_fileoff / cstring_fileoff); emit the alignment pads
+    //    by walking the running file position so bytes land exactly there.
     let mut bi = 0
     while bi < text_size { out.push(text_bytes[bi] & 0xff); bi = bi + 1 }
-
-    // Phase-H inc2: __const data section payload, after a 16-byte
-    // alignment gap (data_pad) following __text.
-    if has_data {
-        _w_zero_n(out, data_pad)
-        let mut dbi = 0
-        while dbi < data_size { out.push(data_bytes[dbi] & 0xff); dbi = dbi + 1 }
+    let mut fpos = text_fileoff + text_size       // running file position
+    if has_const {
+        _w_zero_n(out, const_fileoff - fpos)
+        let mut ci2 = 0
+        while ci2 < const_size { out.push(slot1_bytes[ci2] & 0xff); ci2 = ci2 + 1 }
+        fpos = const_fileoff + const_size
+    }
+    if has_cstring {
+        _w_zero_n(out, cstring_fileoff - fpos)
+        let mut si2 = 0
+        while si2 < cstring_size { out.push(slot2_bytes[si2] & 0xff); si2 = si2 + 1 }
+        fpos = cstring_fileoff + cstring_size
     }
 
-    // Pad the __TEXT segment file region up to its page-aligned end
-    // so `filesize` matches actual bytes. dyld's load-from-file logic
-    // requires this — short files trigger "past end of file" loader
-    // errors at runtime.
-    let cur_end = text_fileoff + text_size + data_pad + data_size
-    if text_filesize > cur_end {
-        _w_zero_n(out, text_filesize - cur_end)
+    // Pad the __TEXT segment file region up to its page-aligned end.
+    if text_filesize > fpos {
+        _w_zero_n(out, text_filesize - fpos)
     }
 
-    // ── __LINKEDIT payload — cycle 7 prefix: chained_fixups + exports_trie ──
+    // ── __DATA payload: __data bytes (bss has NO file bytes), padded
+    //    to the segment's page-aligned filesize. ──
+    if has_data_seg {
+        let mut ddi = 0
+        while ddi < data_size { out.push(slot3_bytes[ddi] & 0xff); ddi = ddi + 1 }
+        let data_written = data_size
+        if data_seg_filesize > data_written {
+            _w_zero_n(out, data_seg_filesize - data_written)
+        }
+    }
+
+    // ── __LINKEDIT payload — chained_fixups + exports_trie ──
     //
     // dyld_chained_fixups_header (28 bytes) + 4-byte pad to 8-align
-    // starts_in_image. Matches clang's empty-fixups layout exactly.
+    // starts_in_image. imports/symbols offsets point just past the
+    // starts_in_image table (empty — no imports, no symbols).
+    let imports_off_in_fixups = 32 + starts_in_image_size
     _w_u32(out, 0)                                 // fixups_version
     _w_u32(out, 32)                                // starts_offset (8-aligned after header+pad)
-    _w_u32(out, 48)                                // imports_offset
-    _w_u32(out, 48)                                // symbols_offset (no imports/symbols)
+    _w_u32(out, imports_off_in_fixups)             // imports_offset
+    _w_u32(out, imports_off_in_fixups)             // symbols_offset (no imports/symbols)
     _w_u32(out, 0)                                 // imports_count
     _w_u32(out, 1)                                 // imports_format = DYLD_CHAINED_IMPORT
     _w_u32(out, 0)                                 // symbols_format = uncompressed
     _w_zero_n(out, 4)                              // 4-byte pad to 8-align (offset 28 → 32)
     // dyld_chained_starts_in_image @ offset 32:
-    _w_u32(out, 3)                                 // seg_count = PAGEZERO + TEXT + LINKEDIT
-    _w_u32(out, 0)                                 // seg_info_offset[0] = 0 (no fixups)
-    _w_u32(out, 0)                                 // seg_info_offset[1]
-    _w_u32(out, 0)                                 // seg_info_offset[2]
-    _w_zero_n(out, 8)                              // 8-byte trailing pad to 56 total
+    _w_u32(out, fixups_seg_count)                  // seg_count
+    let mut fsc = 0
+    while fsc < fixups_seg_count { _w_u32(out, 0); fsc = fsc + 1 }   // seg_info_offset[i] = 0
+    // trailing pad to chained_fixups_size (8-aligned).
+    let cf_written = 32 + 4 + 4 * fixups_seg_count
+    if chained_fixups_size > cf_written { _w_zero_n(out, chained_fixups_size - cf_written) }
 
     // dyld_exports_trie (2 bytes minimum: terminal=0, child_count=0)
     // + 6 bytes pad → 8 bytes total.
@@ -1418,12 +1498,18 @@ fn link_macho_arm64(objs: [ParsedObj], out_path: string, entry: string, _is_stat
         let nty   = nlist_type[ni]
         let nse   = nlist_sect[ni]
         let mut nv = nlist_value[ni]
-        if nse == 2 {
-            // Data symbol (OUTPUT __const) — base = data_section_addr.
-            nv = data_section_addr + nv
-        } else if nse != 0 {
-            // __text symbol — absolute VM address = text base + offset.
+        // nse holds the OUTPUT 1-based section index; map it to that
+        // section's base VM addr and add the slot-relative offset.
+        if nse == osect_text && nse != 0 {
             nv = text_section_addr + nv
+        } else if nse == osect_const && osect_const != 0 {
+            nv = const_section_addr + nv
+        } else if nse == osect_cstring && osect_cstring != 0 {
+            nv = cstring_section_addr + nv
+        } else if nse == osect_data && osect_data != 0 {
+            nv = data_section_addr + nv
+        } else if nse == osect_bss && osect_bss != 0 {
+            nv = bss_section_addr + nv
         }
         _w_u32(out, strx)
         out.push(nty & 0xff)
