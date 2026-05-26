@@ -645,6 +645,38 @@ terminal state, not a failure: the portable layer reached its physical limit.
 ③wire-plan 확보. round-2 = floor 교체 wiring (repr inline → hexa runtime 임베드 →
 runtime.c 링크 제거 → hexa-native 링커). step-4 의 deepest serial tier (self-build risk).
 
+### 2026-05-26 — 🛸 chunk A step 1+2: repr-pack 생성자 inline emit (`hexa_int` · `hexa_bool`) — `bl` 제거
+
+위 wire-plan 의 *smallest-first* (repr 생성자 inline emit → `bl _hexa_*` 제거) 실착수.
+codegen (`compiler/codegen/arm64_darwin.hexa`) 이 box site 에서 C 생성자 `bl` 대신
+2-instruction x0:x1 repr-pack 를 직접 emit. HexaVal = `{tag@x0, payload@x1}` (16B
+register-pair), 그래서 box = `mov x1, x0` (payload→x1) + `movz x0, #<TAG>`:
+
+| 생성자 | TAG | inline emit | box sites | gate |
+|--------|-----|-------------|-----------|------|
+| `hexa_int` (step 1, #1258) | 0 | `mov x1,x0; movz x0,#0` | `index_of` · ret-box `int` (len 등) | `HEXA_INLINE_INT_BOX=1` |
+| `hexa_bool` (step 2, 이 PR) | 2 | `mov x1,x0; movz x0,#2` | `!=`/`ne` · `has_key` · ret-box `bool` (contains/starts_with/ends_with) · `unop !` | `HEXA_INLINE_BOOL_BOX=1` |
+
+두 gate 모두 `self/main.hexa` cmd_build 의 `HEXA_BACKEND=native` 경로에서만 ON
+(`__ncmd` prefix). **default `--emit=asm` (build_aprime.sh stage-5 fixpoint smoke 포함)
+은 env 미설정 → 기존 `bl _hexa_int`/`bl _hexa_bool` byte-identical 유지** (fixpoint-safe).
+
+**`hexa_float` = RESIDUAL/NONE** — inline 대상 box site 가 **없음**. float 리터럴은
+이미 `_hv_load` const_float 에서 full repr-pack (`movz x0,#1` TAG_FLOAT + `.LCfltN`
+pool 의 8-byte IEEE-754 를 `ldr x1,[x14]`) 으로 inline 됨. float-returning builtin
+(`float`/`to_float`→`hexa_to_float`) 은 완전한 HexaVal 을 x0:x1 로 직접 반환
+(`_builtin_ret_box` 는 `int`/`bool` 만 emit, `float` box 없음). `.s` 의 `_hexa_float`
+심볼은 runtime_core.c 내부 libm wrapper (rt_sin/rt_exp/…) 에서 발생 — codegen box
+site 아님. 따라서 inline 할 `fmov x1, dN` site 가 존재하지 않음 (정직한 닫힘).
+
+**검증 (mini arm64, 이 branch 의 hexa_cc.c→hexat→aprime_cc rebuild):**
+- `.s` grep — bool PoC: `contains` DEFAULT `bl _hexa_bool`=1 / INLINE=0 · `!=`+`!`
+  DEFAULT=2 / INLINE=0 · float PoC: DEFAULT `bl _hexa_float`=0 / INLINE=0 (이미 inline).
+- native≡C — `contains`(true→exit 7) 7≡7 · `!=`+`!`(exit 9) 9≡9 · `!=` true-arm
+  (exit 33) 33≡33 · float literal (exit 0) 0≡0. 전부 exit+stdout byte-identical.
+- no-regression — build_aprime.sh stage-5 default smoke `exit(6*7)==42` PASS ·
+  #1258 `hexa_int` inline `len()` DEFAULT `bl _hexa_int`=1 / INLINE=0, 9≡9 PASS.
+
 ### 2026-05-26 — 🛸 MILESTONE: value-transform layer hexa-native COMPLETE (11 fns) — incremental lane exhausted, inflection to native-asm `.s` floor
 
 Go-model RUNTIME 골 재확정 (2026-05-26, user): **zero `.c` · `.s` floor STAYS
