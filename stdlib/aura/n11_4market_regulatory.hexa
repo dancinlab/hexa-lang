@@ -1,0 +1,138 @@
+#!hexa strict
+// stdlib/aura/n11_4market_regulatory.hexa — `aura + N11`
+// 4 추가 regulatory markets runbook (Korea KC · Japan PMDA · China
+// NMPA · Brazil ANVISA · hexa-native).
+//
+// CONTEXT: A1 FDA 510(k) + A2 EU MDR covered 2 markets. N11 extends
+// to 4 additional priority markets for AURA-100 global launch.
+//
+// Honesty (g3 · @D d1):
+//   * absorbed=false PERMANENTLY — runbook, NOT cleared in any market.
+//
+// Sentinels:
+//   __HEXA_AURA_N11_4MARKET_REGULATORY__ PASS
+//   AURA_N11_4MARKET_REGULATORY_OK gate=GATE_OPEN absorbed=false
+
+let VERSION       = "0.1.0"
+let MODULE        = "aura-n11-4market-regulatory"
+let GEOMETRY_ID   = "aura_n11_4market_regulatory_v1"
+let RECORD_KIND   = "aura_n11_4market_regulatory_record"
+
+fn _korea_kc_block() -> [str] {
+    return [
+        "authority: MFDS (Ministry of Food and Drug Safety · 식약처)",
+        "device_class: II (medium risk · 한국 의료기기 분류)",
+        "framework: 의료기기법 (Medical Devices Act) + KGMP (한국 GMP)",
+        "submission: KGMP 적합인정심사 + 품목허가 (manufacturing permit + product approval)",
+        "KGMP_audit: MFDS audit OR MDSAP route (single audit · 한국 포함)",
+        "labeling_language: Korean (Hangul) mandatory",
+        "radio_cert: KCC Type Registration (Bluetooth 추가)",
+        "timeline: 6-12 months · fee ~$5-15K",
+    ]
+}
+
+fn _japan_pmda_block() -> [str] {
+    return [
+        "authority: PMDA (Pharmaceuticals and Medical Devices Agency)",
+        "device_class: II (Class II · controlled medical device)",
+        "framework: PMD Act (Pharmaceutical and Medical Device Act) + QMS Ordinance MHLW 169",
+        "submission: 認証 (certification by Registered Certification Body) OR 承認 (PMDA approval)",
+        "QMS_audit: MHLW QMS Ordinance audit OR MDSAP route",
+        "labeling_language: Japanese mandatory",
+        "radio_cert: MIC Type Approval (Bluetooth 추가)",
+        "timeline: 6-9 months Class II 認証 route · fee ~$10-25K",
+    ]
+}
+
+fn _china_nmpa_block() -> [str] {
+    return [
+        "authority: NMPA (National Medical Products Administration · 国家药品监督管理局)",
+        "device_class: II (Class II · 第二类医疗器械)",
+        "framework: 医疗器械监督管理条例 + GB标准 + YY/T 行业标准",
+        "submission: 注册申请 (Registration) at Provincial level (Class II 省级注册)",
+        "QMS_audit: 体系考核 (system audit · NMPA-licensed inspector)",
+        "labeling_language: Simplified Chinese mandatory",
+        "radio_cert: SRRC (State Radio Regulation Commission · Bluetooth)",
+        "timeline: 12-18 months · fee ~$15-40K (consulting 비용 큰 영역)",
+    ]
+}
+
+fn _brazil_anvisa_block() -> [str] {
+    return [
+        "authority: ANVISA (Agência Nacional de Vigilância Sanitária)",
+        "device_class: II (Class II · risco médio)",
+        "framework: RDC 751/2022 + Lei 6360/1976 + RDC 16/2013 (BPF · 브라질 GMP)",
+        "submission: registration via SAGEM portal · GMP audit",
+        "QMS_audit: ANVISA BPF inspection OR MDSAP route",
+        "labeling_language: Portuguese (Brazilian) mandatory",
+        "radio_cert: ANATEL Homologation (Bluetooth)",
+        "timeline: 12-18 months · fee ~$5-15K · ANATEL 별도",
+    ]
+}
+
+fn _common_strategy_block() -> [str] {
+    return [
+        "MDSAP_leverage: Medical Device Single Audit Program covers FDA + Health Canada + Japan + TGA + ANVISA",
+        "harmonized_standards: IEC 60601 family + ISO 13485 + ISO 14971 + ISO 10993 globally accepted",
+        "labeling_strategy: per-market translation + local IFU + market-specific warnings",
+        "agent_in_country: local authorized representative (regulatory agent) required in CN/JP/BR",
+        "post_market: local vigilance reporting per each authority",
+        "priority_sequence: FDA → EU → KR/JP (similar requirements) → CN → BR (longest timeline)",
+    ]
+}
+
+fn _scope_caveats() -> [str] {
+    return [
+        "N11 4-market regulatory runbook is a DRAFT framework, NOT cleared in any market.",
+        "Each market requires: local regulatory agent + paid submission + audit cycles.",
+        "Total cost estimate: $35-95K + consulting per-market (variable).",
+        "absorbed=false PERMANENTLY (g3) - runbook, NEVER a global-cleared device.",
+    ]
+}
+
+fn _emit_block(label: str, lines: [str]) {
+    print("# [" + label + "]")
+    let n = lines.len()
+    let mut i = 0
+    while i < n {
+        print("#   - " + lines[i])
+        i = i + 1
+    }
+    print("#")
+}
+
+fn _emit_header() {
+    print("# AURA N11 - 4 추가 regulatory markets runbook (KR · JP · CN · BR)")
+    print("# device_target = AURA-100 global launch beyond US+EU")
+    print("# version = " + VERSION)
+    print("# ringfence: runbook - NOT cleared in any market")
+    print("#")
+    _emit_block("korea_kc_mfds",   _korea_kc_block())
+    _emit_block("japan_pmda",      _japan_pmda_block())
+    _emit_block("china_nmpa",      _china_nmpa_block())
+    _emit_block("brazil_anvisa",   _brazil_anvisa_block())
+    _emit_block("common_strategy", _common_strategy_block())
+}
+
+fn _emit_caveats() {
+    let c = _scope_caveats()
+    let n = c.len()
+    let mut i = 0
+    while i < n {
+        print("# scope_caveat: " + c[i])
+        i = i + 1
+    }
+}
+
+fn main() {
+    _emit_header()
+    _emit_caveats()
+
+    print("AURA_N11_4MARKET_REGULATORY_OK record_kind=" + RECORD_KIND
+        + " geometry_id=" + GEOMETRY_ID
+        + " gate=GATE_OPEN absorbed=false"
+        + " version=" + VERSION
+        + " markets=KR+JP+CN+BR mdsap_leverage=true")
+
+    print("__HEXA_AURA_N11_4MARKET_REGULATORY__ PASS")
+}
