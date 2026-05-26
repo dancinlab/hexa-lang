@@ -2,9 +2,9 @@
 
 | 축 | 값 |
 |---|---|
-| 상태 | DRAFT (next-cycle, blocked on bootstrap pipeline diagnostic) |
+| 상태 | DRAFT (next-cycle, deeper root-cause traced 2026-05-27) |
 | 발견 | 2026-05-27 PR #1334 (to_int .hexa source landed without hexa_cc.c regen) |
-| 차단 issue | `hexa cc --regen` produces hexa_cc.c.new with 2 errors |
+| 진단 | `cmd_regen_cc` subprocess `exec` chain truncates `/tmp/_cg.c` to 259-byte stub |
 
 ## 발견 상세
 
@@ -38,6 +38,71 @@ note: did you mean '_codegen_c2_init'?
 ### 광범위 divergence
 
 current `hexa_cc.c` vs `.new` 의 diff: parser_sl slot 100+ renumbered (parser.hexa의 PR #1313 "shared" annotation 추가 등 누적). 단순 to_int change 패치가 아닌 broad regen baseline reset 필요.
+
+## 2026-05-27 추가 진단 — exec-context cg.c 절단
+
+위의 Error 1/2는 **표면적 증상**이고, 실제 root cause는 더 깊다:
+
+### 재현
+| 단계 | 호출 방식 | `/tmp/_cg.c` 크기 |
+|---|---|---|
+| direct shell | `HEXA_VAL_ARENA=0 hexa_v2 codegen.hexa /tmp/_cg.c` | **940036 B** (정상, 381× `codegen_full`) |
+| serial 4× shell | lexer + parser + tc + codegen (manual sequence) | **940036 B** (정상) |
+| `hexa cc --regen` (cmd_regen_cc) | `regen_one_module` exec chain | **259 B** (skeleton only, `int main()` shell) |
+
+동일 binary, 동일 args, 동일 env. **유일한 차이**: cmd_regen_cc가 hexa runtime `exec()` (subprocess wrapper) 통해 호출. shell 직접 호출은 정상.
+
+### 영향
+
+`/tmp/_cg.c` 가 259 B skeleton이므로:
+- merged `hexa_cc.c.new` 에 `codegen_full` 정의 부재 (lexer/parser/tc만 머지됨, ~11659 lines, 전체 ~43000 예상 대비 27% 짜리)
+- 부착된 main wrapper (heredoc)이 `codegen_full(ast)` 호출 → undefined function → compile fail
+- (이전에 보고된 `codegen_c2_full` 는 stale wrapper text였고 source는 이미 `codegen_full` 로 rename 완료)
+
+### Hypothesis들
+
+1. **stdout buffer block**: `2>&1` redirect + `exec` reads stdout fully; child가 940KB stdout 쓰면 OS pipe buffer (64KB Linux default) 막힘 → SIGPIPE → 조기 종료. 그러나 hexa_v2는 stdout에 `OK: <path>` 1줄만 쓰고 .c 파일은 별도 fd로 씀 → 이론적으로 무관.
+2. **inherited fd leak**: 부모 hexa가 큰 메모리/fd state를 inherit 시키고 child가 시작 직후 OOM/EBADF.
+3. **race on /tmp/_cg.c**: 부모가 4번 같은 path 재사용; ext4 + open(O_TRUNC) 직후 child fork 시 race.
+4. **arena size**: HEXA_VAL_ARENA=0 가 inherit 되지만 child의 자체 transpile arena가 부모 RSS와 경쟁; 큰 codegen.hexa는 더 큰 arena 필요.
+
+### 단일 PR 우회 (sed-fix) 실패
+
+sed로 `.new`의 `codegen_c2_full` → `codegen_full` 으로 치환 후 clang 시도 → `codegen_full` undeclared. 즉 함수 정의가 아예 없음 (위 root cause 확인). 표면 sed로는 해결 불가.
+
+### 권장 우회 경로 (단일 cycle 가능)
+
+1. **manual merge bypass** — `cmd_regen_cc` 우회 + 직접 shell sequence:
+   - `tool/regen_cc_manual.sh` 스크립트: 4× `hexa_v2 <module>.hexa /tmp/_<m>.c` 순차 실행 → manual cat + dedup + main wrapper
+   - 결과 .new를 `hexa cc.c` 로 promote
+   - 이후 `--regen` 자체 fix는 별도 PR (root cause 4 hypotheses 중 하나 좁히기)
+2. **runtime exec rework** — 위의 hypothesis 1-4 조사 + `exec()` 구현 (self/runtime.c의 hexa_exec / exec_capture) 패치
+
+### 최소-fix path (1 PR)
+
+`tool/regen_cc_manual.sh` 작성:
+```bash
+#!/bin/sh
+H="/Users/ghost/core/hexa-lang"  # adjust per host
+V2="$H/self/native/hexa_v2"
+HEXA_VAL_ARENA=0 "$V2" "$H/self/lexer.hexa" /tmp/_lexer.c
+HEXA_VAL_ARENA=0 "$V2" "$H/self/parser.hexa" /tmp/_parser.c
+HEXA_VAL_ARENA=0 "$V2" "$H/self/type_checker.hexa" /tmp/_tc.c
+HEXA_VAL_ARENA=0 "$V2" "$H/self/codegen.hexa" /tmp/_cg.c
+# Merge: awk-strip individual mains, dedup #includes, append common main.
+# (the awk logic lives in main.hexa::merge_modules_awk — port to shell here)
+```
+
+이걸로 4× cg.c 940KB 보장 → merge 정상 → clang OK → `.new` byte-eq vs current `hexa_cc.c` + to_int delta only.
+
+## 우선순위
+
+| 우선 | 항목 | scope |
+|---|---|---|
+| P0 | tool/regen_cc_manual.sh shell bypass 작성 + 1회 fixpoint | 1 PR |
+| P1 | exec-context cg.c 절단 root cause 좁히기 (hypothesis 1-4) | 1-2 PR |
+| P2 | hexa runtime `exec()` 패치 (P1 결과 의존) | 1-2 PR |
+| P3 | `cmd_regen_cc` re-enable + CI 게이트 | 1 PR |
 
 ## 권장 복구 path
 
