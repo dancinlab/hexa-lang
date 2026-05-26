@@ -408,6 +408,249 @@ fn macho_obj_wrap_v2(code: [int], main_offset: int, state_bytes: [int],
     return out
 }
 
+// ───────────────────────────────────────────────────────────────
+// macho_obj_wrap_v3 — MH_OBJECT carrying N text symbols + optional __const + relocs.
+// ───────────────────────────────────────────────────────────────
+// HEXA_BACKEND flip chunk-B, phase-H emit-side — PR #1297 residual #1:
+// generalize v2 to export N text symbols in one .o (vs hard-coded
+// single `_hexa_main`). This is THE prerequisite for bundling
+// `rt_arena_init/alloc/reset/release` (4 primitives, all callable from
+// linked downstream code) into a single linkable .o.
+//
+// Arguments:
+//   code              — __text bytes (concatenation of all primitives).
+//   sym_name_bytes    — N+M arrays, each a NUL-terminated symbol-name
+//                       byte sequence. The first N entries are text
+//                       symbols, the last M entries are data symbols
+//                       (M = 1 if state_bytes non-empty, else 0).
+//   sym_offsets       — N+M intra-section offsets (text: relative to
+//                       __text start; data: relative to __const start).
+//   sym_sections      — N+M parallel array of n_sect (1=__text, 2=__const).
+//   state_bytes       — __const payload. Empty list ⇒ NO __const section
+//                       and the .o has exactly 1 section (__text).
+//   reloc_offs        — text-relative byte offsets where reloc records
+//                       apply (1 per adrp / add instruction word).
+//   reloc_kinds       — ARM64_RELOC_* kinds (3=PAGE21, 4=PAGEOFF12).
+//   reloc_symnums     — symbol index each reloc record references
+//                       (0-based into sym_name_bytes); typically points
+//                       at the data symbol but the API is general.
+//
+// Compatibility:
+//   v1 (single _hexa_main, text only)        — retained, unchanged.
+//   v2 (_hexa_main + _arena_state, 2 relocs) — retained, unchanged.
+//   v3 (N text symbols + optional __const + relocs) — ADDITIVE.
+//
+// ld64 invariants honored:
+//   - strtab[0] = NUL (canonical n_strx=0 means empty name).
+//   - Per-symbol n_strx = offset within strtab.
+//   - n_value = section.addr + intra-section offset. For relocatable
+//     .o, section addr = 0 for __text, code_size for __const (matches
+//     v2's "address isn't in its designated section" guard).
+//   - PAGE21 (kind=3) is pcrel=1; PAGEOFF12 (kind=4) is pcrel=0.
+//   - n_type = N_SECT | N_EXT (0x0f) for every external defined symbol.
+//   - Section order in load command must match the n_sect indices.
+fn macho_obj_wrap_v3(code: [int],
+                     sym_name_bytes: [[int]],
+                     sym_offsets: [int],
+                     sym_sections: [int],
+                     state_bytes: [int],
+                     reloc_offs: [int],
+                     reloc_kinds: [int],
+                     reloc_symnums: [int]) -> [int] {
+    let mut out = []
+    let code_size  = len(code)
+    let state_size = len(state_bytes)
+    let nreloc     = len(reloc_offs)
+    let nsyms      = len(sym_name_bytes)
+
+    // ── Compute strtab layout: "\0<name0>\0<name1>\0..." ────────────
+    // Each sym_name_bytes[i] already INCLUDES the trailing NUL, so the
+    // strx for sym[i] is 1 + sum(len(sym_name_bytes[0..i])).
+    let mut sym_strx: [int] = []
+    let mut strtab_size = 1                  // leading NUL
+    let mut si = 0
+    while si < nsyms {
+        sym_strx.push(strtab_size)
+        strtab_size = strtab_size + len(sym_name_bytes[si])
+        si = si + 1
+    }
+
+    // ── Layout: sections, segments, file offsets ────────────────────
+    // __text is always present; __const only when state_size > 0.
+    let mut nsects = 1
+    if state_size > 0 { nsects = 2 }
+
+    let segment_cmd_size = 72 + 80 * nsects
+    let symtab_cmd_size = 24
+    let build_version_cmd_size = 24
+    let sizeofcmds = segment_cmd_size + symtab_cmd_size + build_version_cmd_size
+
+    let header_size = 32
+    let code_offset = align_to(header_size + sizeofcmds, 8)
+
+    let mut const_offset = code_offset + code_size
+    if state_size > 0 {
+        const_offset = align_to(code_offset + code_size, 8)
+    }
+    let data_end = const_offset + state_size
+
+    let reloc_offset = align_to(data_end, 4)
+    let reloc_size   = 8 * nreloc
+    let symtab_offset = reloc_offset + reloc_size
+    let nlist_size = 16
+    let strtab_offset = symtab_offset + nlist_size * nsyms
+    let total_end = strtab_offset + strtab_size
+
+    // ── Mach-O header (32 bytes) ────────────────────────────────────
+    out = push_u32_le(out, mh_magic_64())
+    out = push_u32_le(out, cpu_type_arm64())
+    out = push_u32_le(out, cpu_subtype_all())
+    out = push_u32_le(out, mh_object())
+    out = push_u32_le(out, 3)                  // ncmds (SEG + SYMTAB + BUILD_VERSION)
+    out = push_u32_le(out, sizeofcmds)
+    out = push_u32_le(out, 0)                  // flags
+    out = push_u32_le(out, 0)                  // reserved
+
+    // ── LC_SEGMENT_64 (1 segment, nsects sections) ──────────────────
+    out = push_u32_le(out, lc_segment_64())
+    out = push_u32_le(out, segment_cmd_size)
+    let mut i0 = 0
+    while i0 < 16 { out.push(0); i0 = i0 + 1 }   // segname (16 NUL)
+    out = push_u64_le(out, 0)                  // vmaddr
+    out = push_u64_le(out, total_end - code_offset)  // vmsize
+    out = push_u64_le(out, code_offset)        // fileoff
+    out = push_u64_le(out, total_end - code_offset)  // filesize
+    out = push_u32_le(out, 7)                  // maxprot
+    out = push_u32_le(out, 7)                  // initprot
+    out = push_u32_le(out, nsects)             // nsects
+    out = push_u32_le(out, 0)                  // flags
+
+    // ── section_64 __text (80 bytes) ────────────────────────────────
+    out.push(95).push(95).push(116).push(101).push(120).push(116)
+    let mut j0 = 0
+    while j0 < 10 { out.push(0); j0 = j0 + 1 }
+    out.push(95).push(95).push(84).push(69).push(88).push(84)
+    j0 = 0
+    while j0 < 10 { out.push(0); j0 = j0 + 1 }
+    out = push_u64_le(out, 0)                  // addr (relocatable: 0)
+    out = push_u64_le(out, code_size)          // size
+    out = push_u32_le(out, code_offset)        // offset
+    out = push_u32_le(out, 2)                  // align = log2(4)
+    out = push_u32_le(out, reloc_offset)       // reloff
+    out = push_u32_le(out, nreloc)             // nreloc
+    out = push_u32_le(out, s_attr_pure_instructions() + s_attr_some_instructions())
+    out = push_u32_le(out, 0)                  // reserved1
+    out = push_u32_le(out, 0)                  // reserved2
+    out = push_u32_le(out, 0)                  // reserved3
+
+    // ── section_64 __const (80 bytes) — only if state_size > 0 ──────
+    if state_size > 0 {
+        // sectname "__const" + padding
+        out.push(95).push(95).push(99).push(111).push(110).push(115).push(116)
+        let mut j1 = 0
+        while j1 < 9 { out.push(0); j1 = j1 + 1 }
+        // segname "__TEXT" + padding
+        out.push(95).push(95).push(84).push(69).push(88).push(84)
+        j1 = 0
+        while j1 < 10 { out.push(0); j1 = j1 + 1 }
+        out = push_u64_le(out, code_size)      // addr (offset within seg)
+        out = push_u64_le(out, state_size)     // size
+        out = push_u32_le(out, const_offset)   // offset
+        out = push_u32_le(out, 3)              // align = log2(8)
+        out = push_u32_le(out, 0)              // reloff (no relocs INTO __const)
+        out = push_u32_le(out, 0)              // nreloc
+        out = push_u32_le(out, 0)              // flags = S_REGULAR
+        out = push_u32_le(out, 0)
+        out = push_u32_le(out, 0)
+        out = push_u32_le(out, 0)
+    }
+
+    // ── LC_SYMTAB (24 bytes) ────────────────────────────────────────
+    out = push_u32_le(out, lc_symtab())
+    out = push_u32_le(out, symtab_cmd_size)
+    out = push_u32_le(out, symtab_offset)
+    out = push_u32_le(out, nsyms)
+    out = push_u32_le(out, strtab_offset)
+    out = push_u32_le(out, strtab_size)
+
+    // ── LC_BUILD_VERSION (24 bytes) ─────────────────────────────────
+    out = push_u32_le(out, lc_build_version())
+    out = push_u32_le(out, build_version_cmd_size)
+    out = push_u32_le(out, 1)                  // platform = MACOS
+    out = push_u32_le(out, 0x000E0000)         // minos = 14.0
+    out = push_u32_le(out, 0x000E0000)         // sdk = 14.0
+    out = push_u32_le(out, 0)                  // ntools
+
+    // ── Pad to code_offset, then __text payload ─────────────────────
+    while len(out) < code_offset { out.push(0) }
+    let mut k0 = 0
+    while k0 < len(code) { out.push(code[k0]); k0 = k0 + 1 }
+
+    // ── Pad to const_offset, then __const payload (if any) ──────────
+    if state_size > 0 {
+        while len(out) < const_offset { out.push(0) }
+        let mut sb = 0
+        while sb < state_size { out.push(state_bytes[sb]); sb = sb + 1 }
+    }
+
+    // ── Pad to reloc_offset, then relocation table ──────────────────
+    while len(out) < reloc_offset { out.push(0) }
+    let mut ri = 0
+    while ri < nreloc {
+        let r_off     = reloc_offs[ri]
+        let r_kind    = reloc_kinds[ri]
+        let r_symnum  = reloc_symnums[ri]
+        out = push_u32_le(out, r_off)
+        // PAGE21 (kind=3) is pcrel=1; PAGEOFF12 (kind=4) is pcrel=0
+        // (matches v2 invariant — ld64 rejects PAGEOFF12+pcrel=1).
+        let mut r_pcrel = 0
+        if r_kind == 3 { r_pcrel = 1 }
+        let r_length = 2                       // 4-byte slot
+        let r_extern = 1                       // symbol-based reloc
+        let bits = (r_symnum % 0x1000000)
+                 + (r_pcrel * 0x1000000)
+                 + (r_length * 0x2000000)
+                 + (r_extern * 0x8000000)
+                 + ((r_kind % 16) * 0x10000000)
+        out = push_u32_le(out, bits)
+        ri = ri + 1
+    }
+
+    // ── Pad to symtab_offset, then nlist_64 × nsyms ─────────────────
+    while len(out) < symtab_offset { out.push(0) }
+    let mut sj = 0
+    while sj < nsyms {
+        let s_strx    = sym_strx[sj]
+        let s_offset  = sym_offsets[sj]
+        let s_section = sym_sections[sj]
+        // n_value for __text sym (sect=1) = section.addr (0) + offset.
+        // n_value for __const sym (sect=2) = section.addr (code_size) + offset.
+        let mut n_value = s_offset
+        if s_section == 2 { n_value = code_size + s_offset }
+        out = push_u32_le(out, s_strx)            // n_strx
+        out.push(n_sect() + n_ext())              // n_type = N_SECT | N_EXT
+        out.push(s_section)                       // n_sect
+        out = push_u16_le(out, 0)                 // n_desc
+        out = push_u64_le(out, n_value)           // n_value
+        sj = sj + 1
+    }
+
+    // ── String table: "\0<name0>\0<name1>\0..." ─────────────────────
+    out.push(0)                                // leading NUL
+    let mut sk = 0
+    while sk < nsyms {
+        let nb = sym_name_bytes[sk]
+        let mut nbi = 0
+        while nbi < len(nb) {
+            out.push(nb[nbi])
+            nbi = nbi + 1
+        }
+        sk = sk + 1
+    }
+
+    return out
+}
+
 // Push N zero bytes.
 fn push_zeros(buf: [int], n: int) -> [int] {
     let mut b = buf
