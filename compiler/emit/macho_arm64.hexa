@@ -7,12 +7,26 @@
 // objects (`MH_OBJECT`, cputype `CPU_TYPE_ARM64`, cpusubtype
 // `CPU_SUBTYPE_ARM64_ALL`) directly from `LModule`.
 //
-// STATUS: SCAFFOLD — types + entry points + RFC markers only. The
-// actual encoding tables (arm64 instruction syntax -> 32-bit word)
-// and Mach-O load-command serialization land in the P0
-// implementation cycles. This file is NOT yet imported by
-// `compiler/main.hexa` — wiring follows after the encoding table is
-// populated and F-P0-OBJEQ passes on the corpus.
+// STATUS: IMPLEMENTED (P0 in progress). Encoding table
+// (`encode_arm64_insn`), Mach-O serializer (`serialize`), and LIR
+// walker (`pack_lir`) are live and imported by `compiler/main.hexa`
+// (the `--emit=obj` + `--backend=native` + `arm64-apple-darwin` path
+// at main.hexa:882 writes the `.o` via `pack_lir` + `serialize`).
+//
+// F-P0-OBJEQ status (verified 2026-05-26, arm64 macOS):
+//   - {trivial, fib, while/if} corpus: `__text` bytes BYTE-EQ vs
+//     `clang -c`; reloc table count + address + kind + ordering
+//     (descending-address) BYTE-EQ; natively-emitted `.o` links +
+//     runs to the correct exit code (42 / 13 / 30).
+//   - Residual to FULL object byte-eq: reloc `r_symbolnum` indices
+//     still differ because the symbol-table layout omits clang's
+//     local block labels (`__L*_bb*`), `ltmp*`, and the `__HEXA,
+//     __cap` / `__HEXA,__abi` section symbols — a symbol-table-
+//     layout increment, separate from the encoding/reloc work here.
+//   - Not yet handled (separate increment): string/global refs that
+//     lower to `adrp sym@PAGE` + `add sym@PAGEOFF` + a `__cstring`
+//     section with PAGE21/PAGEOFF12 relocations (the encoder returns
+//     0 for `adrp` and mis-parses the `@PAGEOFF` label as an imm).
 //
 // Falsifier (from RFC 063 § P0): `F-P0-OBJEQ` — byte-eq vs
 // `clang -c -arch arm64 T.s -o T.ref.o` on {trivial, fib, while, if,
@@ -1309,6 +1323,16 @@ pub fn pack_lir(lm: LModule) -> MachoArm64Obj {
     // placeholder undef nlist entry appended (section=0/NO_SECT,
     // kind=0x00/N_UNDF, is_external=1/N_EXT), then the reloc points
     // at it. This is the libc/runtime path (`_exit`, `_hexa_*` etc.).
+    // Extern-target reloc records are collected here during the forward
+    // pass (which must run forward so N_UNDF symbols are appended in
+    // first-seen order), then flushed to `obj.relocs` in DESCENDING
+    // address order below — matching `clang -c`, whose `__text`
+    // relocation table is emitted high-address-first (verified by
+    // `otool -rv`: clang lists 0xcc, 0xb0, … 0x1c; a naive ascending
+    // emit would reverse that and break F-P0-OBJEQ byte-eq on the
+    // relocation entries even when every (address, symbol) pair matches).
+    let reloc_offs: [Int] = []
+    let reloc_idxs: [Int] = []
     let np = len(pending_offsets)
     let mut pi = 0
     while pi < np {
@@ -1348,20 +1372,21 @@ pub fn pack_lir(lm: LModule) -> MachoArm64Obj {
             })
             idx = len(obj.symbols) - 1
         }
-        obj.relocs.push(Arm64Reloc {
-            offset:  off,
-            sym_idx: idx,
-            kind:    MACHO_ARM64_RELOC_BRANCH26,
-            pcrel:   1,
-            length:  2,
-        })
-        // Intra-module pre-patch: when the target is a *defined*
-        // symbol in this .o (section != 0), clang patches the BL's
-        // imm26 with the PC-rel delta even though it also emits the
-        // relocation record. The linker then re-validates rather than
-        // having to compute the offset from scratch. Mirror that so
-        // F-P0-OBJEQ byte-eq holds on intra-module calls (recursion,
-        // helper fns).
+        // Intra-module call to a *defined* symbol in this `.o`
+        // (sym.section != 0): the target offset is already known, so the
+        // BL's imm26 is resolved at emit time (pre-patch below) and NO
+        // relocation record is emitted. This mirrors `clang -c`, which
+        // assembles same-section BL branches to a final PC-rel delta and
+        // leaves the `__text` relocation table empty for them — verified
+        // by `otool -rv` on a `.globl _foo` / `bl _foo` pair (zero reloc
+        // entries) and on the fib corpus (recursive `bl _fib` produces no
+        // reloc in clang's output). Emitting a reloc here would inflate
+        // our reloc count over clang's and break F-P0-OBJEQ byte-eq on
+        // any program with intra-module calls (recursion, helper fns).
+        //
+        // Undefined / extern targets (sym.section == 0 — libc / runtime,
+        // e.g. `_hexa_exit`) keep the BRANCH26 reloc: the linker resolves
+        // them, so the imm26 stays 0 and the reloc carries the symbol.
         let sym = obj.symbols[idx]
         if sym.section != 0 {
             let delta = (sym.value - off) / 4
@@ -1372,8 +1397,29 @@ pub fn pack_lir(lm: LModule) -> MachoArm64Obj {
             let cur = w0 | (w1 << 8) | (w2 << 16) | (w3 << 24)
             let patched = (cur & 0xfc000000) | (delta & 0x03ffffff)
             _patch_word_le(obj.text, off, patched)
+        } else {
+            // Defer the reloc record; flushed descending after the pass.
+            reloc_offs.push(off)
+            reloc_idxs.push(idx)
         }
         pi = pi + 1
+    }
+
+    // Flush collected extern relocs in descending address order to match
+    // clang's `__text` relocation-table ordering. The deferred lists are
+    // in ascending first-seen (== ascending address) order, so iterate
+    // them backwards.
+    let nr = len(reloc_offs)
+    let mut ri = nr - 1
+    while ri >= 0 {
+        obj.relocs.push(Arm64Reloc {
+            offset:  reloc_offs[ri],
+            sym_idx: reloc_idxs[ri],
+            kind:    MACHO_ARM64_RELOC_BRANCH26,
+            pcrel:   1,
+            length:  2,
+        })
+        ri = ri - 1
     }
     return obj
 }
