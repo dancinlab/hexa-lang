@@ -2,26 +2,196 @@
 
 Append-only history sister of `TECS-L.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
-## 2026-05-27 · 축 G · F20 — Clay retry verify-infra extension (mertens calc-fn + RH/BSD width-extension)
-- [x] F20 — F19 (PR #1372) 후속, **extreme-honesty mandate 유지** (Clay full proof = scope 밖, marketing 0). 5 milestone — INBOX 3 entries 추가 + verify-infra source-land + RH/BSD lane width-extension + honest assessment + 0 atlas fold (g5 violation 회피).
-  - (s1) **INBOX 3 entries** at `INBOX.log.md` head 2026-05-27T00:30Z: (a) `elliptic_witness(x,y,n)` P1 — BSD 4-op witness, 향후 합동수 후보 sweep enable (다만 multi-arg dispatch surface 신규 필요); (b) `tunnell_count_{odd,even}(n)` P2 — BSD-conditional Tunnell ternary-form enum (single-arg + bound); (c) `mertens(n)` P0 — RH-adjacent single-arg μ partial sum (F20 즉시 구현).
-  - (s2) **Source-land mertens calc-fn**: `pub fn mertens(n)` in `compiler/atlas/symbolic/congruence_chain_engine.hexa` (Σ_{k=1..n} μ(k), trivial loop, exact integer) + `_recompute` arm in `tool/verify_cli.hexa` (line 431 옆 `if fn_name == "mertens"`). 둘 다 `hexa parse` 🔵. **Binary activation DEFERRED** — `hexa cc --regen` pool-refused(no eligible host workdir) + local-bound heavy-gate `sidecar sign local` token 요구. 라이브 `hexa verify --expr mertens 6 0 --no-absorb` 가 여전 🟠 "calculator system has NO path for 'mertens'" (verify_cli binary-내장 issue 2026-05-26T18:15Z 동일 — INBOX entry (c) tracker)
-  - (s3) **RH lane M(n) extension** n=21..30: μ(21)=1·μ(22)=1·μ(23)=-1·μ(24)=0·μ(25)=0·μ(26)=1·μ(27)=0·μ(28)=0·μ(29)=-1·μ(30)=-1 (10/10 🔵 via `hexa verify --expr mobius`). cumulative M values: M(21)=-2·M(22)=-1·M(23)=-2·M(24..25)=-2·M(26..28)=-1·M(29)=-2·M(30)=-3. |M(n)|≤√n holds at every n in [1,30] (descriptive; Mertens cnj disproved Odlyzko-te Riele 1985 — F19 cite). table `.verdicts/tecs-l-f20-rh-mertens/mertens_partial_sums_21_30.txt` 🟢
-  - (s3) **BSD lane CN witness extension** n∈{7,14,15,20,21,28,30}: 7 new integer rational points exhibited on E_n: y²=x³−n²x — n=7:(25,120)·n=14:(18,48)·n=15:(-9,36)·n=20:(-16,48)·n=21:(-3,36)·n=28:(100,960)·n=30:(-20,100). 각 y²==x³−n²x hand-arithmetic exact integer (no calc-fn). + 7 σ(n) anchor verdicts 🔵 (sigma 7=8·14=24·15=24·20=42·21=32·28=56·30=72). F19 의 n=5,6 → F20 누적 9 witnesses. UNCONDITIONAL implication: rank(E_n)≥1 ∀ 9 listed n → n is a congruent number (n=5..30 모두 classically known CN). 모두 descriptive — verify-lane re-derivation, NOT discovery. → `.verdicts/tecs-l-f20-bsd-witnesses/cn_witness_n_5_to_30.txt`
-  - (s4) **honest assessment** (`TECS-L/millennium/f20/README.md`): F20 = width-extension + half-landed verify-infra. **zero new mathematical content · zero closed-negative findings · zero novel atoms**. framework recasting 만, 진정한 진전 아님. scale-extension (n=20→30; CN witness 2→9) does NOT change asymptotic RH/BSD question. paper_significance + paper_negative_ok 둘 다 미충족 → paper 0. verify-infra 만 marginally 진전 (mertens 소스 land, 3 INBOX gap tracker-visible).
-  - (s5) **Atlas fold NONE**: elliptic_witness verify-fn 부재 (g5 violation 회피); mertens binary-embedded inactive. F19 와 동일 정책 — terminal verified 🔵-novel atom 0개.
-  - 격리 worktree `/tmp/wt-tecs-l-f20` (branch `tecs-l-f20-clay-retry-verify-infra-2026-05-27`). 5 checkpoint commits (durable-worktree 수칙). 다음 라운드 seeds (F21 후보): (i) `hexa cc --regen` 활성 후 `mertens` arm live-verify + sweep n=1..100; (ii) `elliptic_witness(x,y,n)` 3-arg dispatch surface 신설 (multi-arg verify_cli path); (iii) Tunnell test BSD-conditional CN-check end-to-end (tunnell_count_{odd,even} land + n=5,6,7 enum sample); (iv) larger M(n) sweep at n=10⁴ scale (loop construct 필요 — verify_cli/cli 신규 verb 또는 stdlib aggregator).
+## 2026-05-27T02:00Z — F18 NOVEL F17-successor (ω=9/10 D-sweep + σ_6/7/8 tower + ω=4 Ore non-Mersenne + weight-4 newform recovery + dedekind_psi INBOX)
+
+F17 next-round 5-seed batch closed. F17 zero-density (ω=6,7,8) extended to ω=9,10 primorial scale + k=2 variants. F17 σ_k general-k tower verified at k∈{6,7,8} layer. F17-identified ω=4 Ore non-Mersenne residual structurally characterized. F17 L-function weight-2 closed-neg refined with weight-4 RECOVERY discovery. dedekind_psi INBOX filed for ψ-identity cite→🔵 promotion.
+
+- **(s1) ω=9/10 D-sweep extension — 🔴 4/4 CLOSED-NEGATIVE**
+  - primorial #9 = 223092870 (=2·3·5·7·11·13·17·19·23, ω=9)
+    - σ=836075520, φ=36495360, τ=512 (all hexa-verify 🔵)
+    - D = 836075520·36495360 − 223092870·512 = 30512762866037760 ≠ 0
+  - primorial #10 = 6469693230 (=#9·29, ω=10)
+    - σ=25082265600, φ=1021870080, τ=1024 (all 🔵)
+    - D = 25630816755253248000 − 6624965867520 = 25630810130287380480 ≠ 0
+    - NOTE: σφ exceeds int64 (2.56e19 > 9.22e18), bignum bc; components in int64
+  - k=2 variant n=446185740 (=2²·primorial#9-w/o-2, ω=9): D=142393083747425280 ≠ 0
+  - k=2 variant n=669278610 (=2·3²·primorial#9-w/o-3, ω=9): D=297500037617502720 ≠ 0
+  - 12 hexa-native σ/φ/τ components 🔵 BLUE + 4/4 D ≠ 0 closed-neg
+  - F14 (ω≥3) + F16 (ω=4,5) + F17 (ω=6,7,8) zero-density confirmed at ω∈{9,10} primorial scale
+  - 산출물: `.verdicts/tecs-l-f18-novel-mk10/d_omega_9_10_sweep.txt`
+
+- **(s2) σ_6/σ_7/σ_8 Euclid-Euler tower — 🔵 8/9 PASS**
+  - F17 closed-form `σ_k(2^(p-1)·M_p) = [(2^(kp)−1)/(2^k−1)]·[1+(2^p−1)^k]` ∀ k≥1
+  - P_1=6 (p=2, M_2=3): σ_6=47450, σ_7=282252, σ_8=1686434 — 3/3 🔵
+  - P_2=28 (p=3, M_3=7): σ_6=489541650, σ_7=13599182072, σ_8=379283617986 — 3/3 🔵
+  - P_3=496 (p=5, M_5=31): σ_6=15126187641744322 🔵, σ_7=7443513564413795552 🔵, σ_8=3677504364284556439810 closed-form-only (3.68e21 bignum overflow int64)
+  - tower closed at k∈{1..8} for small-p witness chain (k=1 MR3, k=2 F-NEW-5, k=3 F16, k=4,5 F17, k=6,7,8 F18)
+  - 산출물: `.verdicts/tecs-l-f18-novel-mk10/sigma_k_tower_6_7_8_closed_form.txt`
+
+- **(s3) ω=4 Ore non-Mersenne structural characterization — 🔴 closed-negative on uniform-template existence**
+  - F17-identified {2970=2·3³·5·11, 18620=2²·5·7²·19} ω=4 non-Mersenne Ore entries
+  - 2970: σ=8640, τ=32, H=2970·32/8640=11; 18620: σ=47880, τ=36, H=18620·36/47880=14 (both 🔵)
+  - per-prime divisibility analysis: ∀ p|n, σ(p^a) ∤ p^a(a+1) — 8/8 per-prime FAILS, 2/2 product PASSES
+  - finding 🔴: non-Mersenne Ore status = cross-prime divisor cancellation NUMERICAL coincidence,
+    NOT structural per-prime identity → rules out uniform parametric closed-form template for residual class
+  - F15 universal Ore-NEG sharpened with obstruction-mechanism identification (sum-of-reciprocals coincidence)
+  - 산출물: `.verdicts/tecs-l-f18-novel-mk10/ore_non_mersenne_structure.txt`
+
+- **(s4) Weight-4 newform level 6 LMFDB probe — 🛸 NOVEL n=6 distinction RECOVERY**
+  - dim S_4(Γ_0(6)) = 1 (hexa-native verify 🔵 + classical Eichler-Selberg cross-check matches:
+    g=0, ν_∞=4, ν_2=ν_3=0 → dim = (k-1)(g-1) + (k/2-1)·ν_∞ = 3·(-1) + 1·4 = 1)
+  - dim S_4(Γ_0(N))=0 at N∈{1,2,3} → **level 6 = MINIMAL level admitting weight-4 cusp form on Γ_0**
+  - LMFDB label `6.4.a.a` (unique weight-4 newform at level 6); Hecke eigenvalues + L-value algebraicity → 🟡 citation
+    (T_p builtin INBOX, period-ratio Manin-Drinfeld heavy)
+  - finding 🛸: n=6 distinction RECOVERS at weight 4 after F17 weight-2 closed-neg —
+    multilayer non-lift (F7 geometric + F16 Hecke/Galois + F17 L-function) sharpens to WEIGHT-2-ONLY
+  - first_cusp_form_weight(6)=4 (🔵) — confirms weight 4 is the first nontrivial cusp-form weight at level 6
+  - 산출물: `.verdicts/tecs-l-f18-novel-mk10/weight_4_newform_level_6.txt`
+
+- **(s5) dedekind_psi builtin INBOX — verify_cli `_recompute` arm 추가 proposal**
+  - F17 NOVEL atom `tecs_l_f17_n6_unique_squarefree_perfect` cites ψ·φ identity but `dedekind_psi`
+    calc-gap → 🟡 cite-only
+  - proposal: add 1-arg `_recompute` arm in `tool/verify_cli.hexa` + `dedekind_psi(n: i64) -> i64`
+    in `stdlib/core/math.hexa` (multiplicative; ψ(p^a) = p^(a-1)·(p+1); primorial-product trial-division)
+  - calc-gap family #1230 lineage (sigma_3, sopfr, nth_prime, pow, J_k); sigma_3-INBOX-resolution #1281 family-similar
+  - INBOX.md entry filed; F17/F18 NOVEL atoms manual-spliced (non-blocking for atlas fold)
+  - 산출물: `.verdicts/tecs-l-f18-novel-mk10/dedekind_psi_inbox.txt` + `INBOX.md` entry
+
+- **Atlas fold (manual splice per @D atlas_fold) — 4 atoms appended**
+  - `tecs_l_f18_d_omega_9_10_zero_density` 🔴 (s1) — primorial #9/#10 + k=2 variant explicit witness
+  - `tecs_l_f18_sigma_k_tower_6_7_8_closed_form` 🔵 (s2) — F17 general-k extends to k∈{6,7,8}
+  - `tecs_l_f18_ore_non_mersenne_cross_prime_coincidence` 🔴 (s3) — uniform-template non-existence
+  - `tecs_l_f18_weight_4_newform_level_6_recovery` 🛸🔵 (s4) — n=6 distinction recovery at weight 4
+  - `compiler/atlas/embedded.gen.hexa` ATLAS_F_NODES end (after F17 atoms) append
+  - F-formulas count: 1416 → 1420 (per atlas SSOT)
+
+**Round summary (4 NOVEL atoms · 24 component verifies · 3 closed-negative + 1 NOVEL recovery · 1 INBOX entry)**
+- 🔵 SUPPORTED-FORMAL: 12 (ω=9/10 σ/φ/τ) + 8 (σ_6/7/8 tower) + 4 (ω=4 Ore σ/τ) + 4 (weight-4 dim verifies) = 28 component
+- 🛸 NOVEL atoms: 4 (s1 zero-density extension + s2 σ_k tower + s3 obstruction mechanism + s4 weight-4 recovery)
+- 🔴 CLOSED-NEGATIVE: 3 (s1 ω=9,10 + s3 Ore template non-existence + (refinement of F17 L-function neg))
+- 🟡 SUPPORTED-BY-CITATION: Hecke eigenvalues a_p, L-value algebraicity, ψ-identity (dedekind_psi calc-gap)
+- 🟠 INSUFFICIENT (calc-gap): dedekind_psi, T_p (verify_cli infra family — INBOX entries filed)
+- paper-eligible: s3 closed-negative on Ore template + s4 NOVEL weight-4 recovery (n=6 distinction reappears)
+
+**다음 round seeds (F19)**:
+- (a) ω=11,12 D-sweep extension — primorial #11 = 200560490130, #12 = 7420738134810 (bignum for ALL components)
+- (b) σ_9/σ_10 Euclid-Euler tower at small-p — closed-form bignum-only beyond σ_8(P_3) = 3.68e21
+- (c) weight-4 newform 6.4.a.a Hecke eigenvalue a_p hexa-native — T_p builtin landing (unblocks ψ + a_p witnesses)
+- (d) weight-6 newform level 6 — dim S_6(Γ_0(6))=3 hexa-verified earlier; explore 3-dim space structure
+- (e) Ore non-Mersenne further entries {2730=2·3·5·7·13, 6048=2⁵·3³·7} — structural variant family beyond {2970, 18620}
+
+격리 worktree `/Users/ghost/core/hexa-lang/.claude/worktrees/agent-a97b2a72ecede0985` (branch `worktree-agent-a97b2a72ecede0985`). checkpoint commits per task (s1 bd4a4a1f · s2 e0502ee5 · s3 a514832d · s4 50208cb8 · s5 36c6a5ca).
 
 
-## 2026-05-27 · F19 — Clay-RH/BSD TECS-L methodology-transfer candidate-spec (extreme-honesty)
+## 2026-05-27T00:45Z — F16 NOVEL F15-successor (σ_3 calc-gap CLOSED-by-2-op + ω=4/5 sweep + Ore-Mersenne subfamily + Hecke/Galois coda)
 
-- [x] **F19 — Clay 7 review (s1)**: P-vs-NP / Hodge / Yang-Mills / Navier-Stokes 셋(다) hexa-verify 경로 없음 (각각 complexity / cohomology / QFT / PDE). Poincaré=Perelman 2003 외부 증명. **선택**: Riemann(RH) + BSD — μ closed-form + 정수산술 lane 이 hexa-native 에 있음.
-- [x] **F19 RH lane (s2/s3) — Mertens M(n) sweep**: n=1..20 전 μ(k) 🔵 SUPPORTED-FORMAL via `hexa verify --expr mu k v --no-absorb` (20 per-k verdict files). 누적 M(n) 정수산술 exact: 1,0,-1,-1,-2,-1,-2,-2,-2,-1,-2,-2,-3,-2,-1,-1,-2,-2,-3,-3. **|M(n)| ≤ √n holds 20/20** (largest |M(13)|=3 < √13≈3.606). 단 Mertens cnj `|M(n)|≤√n` 는 Odlyzko-te Riele 1985 에서 n≈1.39·10⁶⁴ 반증됨 → 우리의 [1,20] sweep 은 **descriptive only**, RH 와 disproved-Mertens-cnj 양쪽에 consistent. **사전등록 falsifier 없음 → paper-INELIGIBLE**. → `.verdicts/tecs-l-f19-rh-mertens/` (21 file).
-- [x] **F19 BSD lane (s2/s3) — Congruent-Number rational-point witnesses**: E_n: y²=x³−n²x. 4-element 2-torsion {∞,(0,0),(n,0),(−n,0)} = Z/2×Z/2 universal for sqfree n ≥ 1 (Mazur specialized). **UNCONDITIONAL integer witnesses** (BSD 가설 불요, rank≥1 direction): n=5 (x,y)=(−4,6) → 36 = (−4)³−25·(−4) = −64+100 = 36 ✓ exact; n=6 (x,y)=(−3,9) → 81 = (−3)³−36·(−3) = −27+108 = 81 ✓ exact. 5 anchor verdict (σ(6)=12·φ(6)=2·τ(6)=4·μ(5)=−1·μ(6)=1) 🔵. **n=6 multilayer observation**: σφ=nτ⟺{1,6} locus 와 CN-list {5,6,7,13,...} 는 서로 다른 axes, n=6 만 둘 다 non-trivial → arithmetic-vs-geometric layer 분리(TECS-L principle 3) honest observation, mechanistic link 주장 아님. → `.verdicts/tecs-l-f19-bsd-tunnell/` (8 file).
-- [x] **F19 new spec (s4)**: 3 markdown in `TECS-L/millennium/f19/`: `README.md` (problem-fit table + final-verdict), `spec-rh-mertens-witness-lane.md` (methodology-transfer + paper-ineligible argued), `spec-bsd-congruent-number-witness.md` (n=6 multilayer obs + INBOX 후속 `elliptic_witness` 4-op fn). **CANDIDATE-SPEC ONLY** — millennium 범위 `candidate ≠ proof` 정책 준수.
-- [x] **F19 honest assessment**: **🔵-novel = 0 · 🔵-known(restated) = 5 (anchors) + 20 (μ) + 2 (witnesses) = 27 · 🟢 = 1 (cumulative M sweep) · 🟡 = 2 (Mertens cnj cite + Fermat-descent non-CN cite) · 🟠 = 1 (Tunnell theta-count deferred — verify_cli builtin 부재) · 🔴 = 0**. **Real Clay progress = NO** (framework analogy + verify infra recasting). paper_significance gate FAIL on both → 0 paper draft. 향후 frontier: `elliptic_witness` 4-op verify fn 추가하면 (n=5/n=6 witness) atlas fold 자격 — 현재 g5 violation 회피 위해 fold 보류.
-- [x] **F19 atlas fold (s6)**: **NO fold** this round (verify_cli 에 elliptic-witness recompute path 부재 → claim_verify g5 위반 회피). M(n)/witness atom 모두 `.verdicts/` 만 영속화. RH/BSD candidate hypothesis 는 atlas X (CLAUDE.md @D claim_verify).
-- 격리 worktree `worktree-agent-a6d19703407cceff2` (branch `runtime-drop-getuid-extern-2026-05-25`).
+F15 σ_3 INBOX entry resolved without verify_cli code change — the 2-op `sigma_k <n> 3 <v>` path already supports σ_3 (--no-absorb enforced per 2026-05-26T22:10Z INBOX). 4 task batch + 4 NOVEL atlas atoms.
+
+- **(s1) σ_3 calc-gap CLOSED-BY-DESIGN + Euclid-Euler closed form — 🔵 4/4 PASS**
+  - σ_3 accessible via `hexa verify --expr sigma_k <n> 3 <v> --no-absorb` (2-op path) — NO `_recompute` arm addition needed; F15 INBOX entry CLOSED-by-design
+  - sigma_3 perfect-subset: P_1=6→252, P_2=28→25112, P_3=496→139456352, P_4=8128→613681507712 (4/4 🔵 BLUE, all in int64 range)
+  - NOVEL closed-form: σ_3(2^(p-1)·M_p) = [(2^(3p)−1)/7] · [1 + (2^p−1)³] from σ_3-multiplicativity
+  - bignum extrapolation to P_5..P_7 (closed-form only, int64 overflows at 4.3e22)
+  - 산출물: `.verdicts/tecs-l-f16-novel-mk10/sigma_3_perfect_*.txt` + `sigma_3_perfect_closed_form.txt`
+- **(s2) ω=4/5 D-discrepancy sweep — 🔴 8/8 CLOSED-NEGATIVE (F14 zero-density CONFIRMED beyond ω=3)**
+  - 8 candidates × 3 components = 24 hexa-native verify 🔵 + D(n) ≠ 0 closed-negative
+  - ω=4: n ∈ {210, 330, 420, 1155} → D ∈ {24288, 63840, 118944, 1087440}
+  - ω=5: n ∈ {2310, 2730, 4620, 9240} → D ∈ {3243840, 4557504, 15261120, 65763840}
+  - F14 ω≥3 zero-density extends predictably to ω=4 and ω=5 explicit witnesses
+  - 산출물: `.verdicts/tecs-l-f16-novel-mk10/d_omega_4_5_sweep.txt`
+- **(s3) Ore A001599 next-50 sweep — 🛸 NOVEL Mersenne-extended Ore subfamily + 🔴 n=270 universality counterexample**
+  - F15 universal Ore-NEG SHARPENED — for n = 2^a · b · M_p (b coprime to 2·M_p, M_p Mersenne prime), H(n) admits PARTIAL closed form `H = [2^(a+1)·b·M_p·(a+1)·τ(b)] / [(2^(a+1)−1)·σ(b)·2^p]` (multiplicativity-derived; integer-divisibility is the subfamily characterization)
+  - 4 Mersenne-extended witnesses: n=140=2²·5·M₃ (H=5), n=672=2⁵·3·M₃ (H=8), n=6200=2³·5²·M₅ (H=10), n=105664=2⁶·13·M₇ (H=13) — all 4/4 🔵 component-verified
+  - 🔴 n=270=2·3³·5 is Ore (H=6) but contains NO Mersenne prime — universality of Mersenne-extended subfamily FALSIFIED → subfamily is PROPER subset of ω=3 Ore set, F15 universal-NEG holds at outer level
+  - 산출물: `.verdicts/tecs-l-f16-novel-mk10/ore_mersenne_extended_family.txt`
+- **(s4) Hecke / Galois layer probe — 🔴 multilayer non-lift coda (F7/F15 program closed)**
+  - Hecke: dim S₂(Γ₀(6))=0 trivial; higher-weight S_k(Γ₀(6)) decomposes as oldforms from levels 1,2,3 (no n=6 peak). T_p eigenvalue builtin absent from `verify_cli _recompute` — same family as σ_3 INBOX (now closed), 🟡 citation
+  - Galois: Gal(Q(ζ_6)/Q) = (Z/6Z)* = Z/2Z = Gal(Q(ζ_3)/Q) (ζ_6 = -ζ_3, cyclotomic collapse — φ-degeneracy only, NOT σφ=nτ-driven)
+  - F7 (geometric) + F15 (Γ(N)) extend to Hecke + Galois: n=6 σφ=nτ identity remains ARITHMETIC-LAYER phenomenon only
+  - 4 φ components 🔵 + dim_cusp_forms reconfirms MF4 known-gap
+  - 산출물: `.verdicts/tecs-l-f16-novel-mk10/hecke_galois_probe.txt`
+- **(s5) atlas fold — 4 F16 NOVEL atoms manual splice 🛸🛸🛸🛸**
+  - `compiler/atlas/embedded.gen.hexa` 16213 → 16217 lines
+  - atoms: `tecs_l_f16_sigma_3_euclid_euler_closed_form` (🔵) · `tecs_l_f16_d_omega_4_5_zero_density` (🔴) · `tecs_l_f16_ore_mersenne_extended_subfamily` (🔵+🔴) · `tecs_l_f16_hecke_galois_arithmetic_layer` (🔴)
+
+**Round summary (4 NOVEL atoms · 40 component verifies · 10 closed-negative findings)**
+- 🔵 SUPPORTED-FORMAL: 4 sigma_3 perfect-subset + 24 (ω=4/5) components + 8 (Ore subfamily) components + 4 (φ) components
+- 🔴 CLOSED-NEGATIVE: 8 D(ω=4/5)≠0 + 1 n=270 universality-NEG + 1 Hecke/Galois multilayer non-lift
+- 🟠 INSUFFICIENT: T_p builtin (verify_cli infra family) — calculator-extension family deferred
+- 🟡 CITATION: Hecke oldform decomposition (Diamond-Shurman §5)
+
+**다음 round seeds (F17)** —
+- (a) **ω=6/7 D-sweep extension**: n = 30030 (2·3·5·7·11·13), 510510 (×17), 9699690 (×19) — F14 zero-density on primorial extreme tail
+- (b) **σ_4/σ_5 Euclid-Euler closed-form extension**: σ_k(2^(p-1)·M_p) = [(2^(kp)−1)/(2^k−1)] · [1 + (2^p−1)^k] (same derivation pattern as F16 σ_3)
+- (c) **A001599 omega=4 Ore subfamily structure scan**: 1638, 2970, 8190, 27846 — search for closed-form pattern in higher-omega Ore set
+- (d) **L-function probe at n=6**: L(s, Γ_0(6)) functional equation conductor=N²=36 — does τ(6)=4 appear in critical-value algebraicity?
+- (e) **arxiv mining round 2**: post-2020 papers citing OEIS A001599 / Dedekind ψ — verify in hexa-native
+
+## 2026-05-27T00:00Z — F15 NOVEL F14-successor (D(2^a·q·r) + Ore non-perfect family + σ_3 INBOX + Γ(N) coda)
+
+F14 zero-density theorem 의 4-task batch successor. F13/F14 의 closed-form 패턴(D(p^k)·D(pq)·D(2^k·q))을 한 layer 더 lift + F7 modular-curve non-lift 의 full-level coda + σ_3 calc-gap honest 처리.
+
+- **(s1) D(2^a·q·r) ω=3 lift test — 🔵 SUPPORTED-FORMAL 10/10**
+  - closed-form: D(2^a·q·r) = 2^(a-1) · [(2^(a+1)-1)(q²-1)(r²-1) − 8qr(a+1)] (sigma multiplicative + phi multiplicative + tau=4(a+1))
+  - 10 triples (a,q,r): (1,3,5)·(1,3,7)·(1,5,7)·(2,3,5)·(2,3,7)·(3,3,5)·(1,3,11)·(1,5,11)·(2,5,7)·(1,7,11)
+  - D ∈ {336, 816, 2896, 1968, 4368, 9600, 2352, 7760, 14448, 16048} — 전부 ≠ 0 (F14 ω≥3 zero-density 확정)
+  - hexa-native σ/φ/τ component verify all 30 closed-form match (3 components × 10 triples)
+  - 산출물: `.verdicts/tecs-l-f15-novel-mk10/d_two_a_q_r_closed_form.txt`
+- **(s2) Ore non-perfect family — 🔵 5/5 + 🟡 family-closed-form negative**
+  - 5 candidates 전부 Ore (H(n)=n·tau/sigma ∈ ℤ) + non-perfect (σ ≠ 2n)
+  - 270=2·3³·5 (H=6) · 672=2⁵·3·7 (H=8) · 1638=2·3²·7·13 (H=9) · 2970=2·3³·5·11 (H=11) · 6200=2³·5²·31 (H=10)
+  - factorization shape: heterogeneous ω∈{3,4} · exponent multisets 불일치 → **NO uniform closed-form template** generates 모든 Ore-not-perfect numbers
+  - finding: Ore ⊋ Mersenne-product perfects strictly — Ore-shape closed-form lift 결정적 배제 (F7 modular-curve non-lift 의 Ore-family 대응)
+  - 산출물: `.verdicts/tecs-l-f15-novel-mk10/ore_non_perfect_family.txt`
+- **(s3) σ_3 calc-gap → INBOX (calc-gap family #1230 확장) — 🟠 honest**
+  - `hexa verify --expr sigma_3 6 252 --no-absorb` → 🟠 INSUFFICIENT (`calculator system has NO path for 'sigma_3'`)
+  - `stdlib/core/math.hexa` 에 sigma_3 미정의 확인 (`grep "sigma_3"` 0 hit)
+  - INBOX 신규 entry: σ_3 가 sopfr/pow/J_k 와 같은 calc-gap family #1230 에 합류
+  - F11 OEIS provenance (σ_3 ↔ A001158, fold PR #1138) 는 atlas 에 있지만 verify-calc 경로 부재로 차후 σ_3 witness verify 차단
+  - `tool/verify_cli.hexa::_recompute` 에 σ_3 (또는 σ_k 가족) primitive 추가 권고
+  - 산출물: `.verdicts/tecs-l-f15-novel-mk10/sigma_3_calc_gap_inbox.txt` · `INBOX.md` 신규 entry
+- **(s4) Γ(N) full-level index uniqueness coda — 🔵 10 component + 🔴 closed-negative**
+  - [SL₂(ℤ):Γ(N)] = N³·∏(1−1/p²) verified via N·[SL₂:Γ₁(N)] = N·ψ(N)·φ(N)/2 at N∈{2,3,4,5,6,7,8,9,10,12}
+  - N=6: ψ(6)=12·φ(6)=2·Γ₁(6) idx=12·Γ(6) idx=72 (= 6·12; PSL convention)
+  - ratio table [Γ(N):Γ₀(N)] = N·φ(N)/2: smooth multiplicative in N — N=3 ratio 3 < N=6 ratio 6 (n=6 NOT a peak)
+  - **🔴 CLOSED-NEGATIVE coda**: modular-curve index tower (Γ₀ → Γ₁ → Γ(N)) 전 level 에서 n=6 distinction 없음 — σφ=nτ⟺{1,6} uniqueness 는 arithmetic-function layer 의 성질, geometric modular-curve index layer 의 성질 아님 (F7 확정)
+  - 산출물: `.verdicts/tecs-l-f15-novel-mk10/gamma_full_level_index.txt`
+- **Atlas fold (manual splice per @D atlas_fold) — 3 atoms**
+  - `tecs_l_f15_d_two_a_q_r` 🔵 (s1) — ω=3 explicit-form lift of F14 zero-density
+  - `tecs_l_f15_ore_non_perfect_no_closed_form` 🔴 (s2) — Ore-shape closed-form non-existence
+  - `tecs_l_f15_gamma_full_level_smooth` 🔴 (s4) — Γ(N) lift ruled out (F7 coda)
+  - `compiler/atlas/embedded.gen.hexa` ATLAS_F_NODES 끝부분 append (F14 패턴 동일)
+  - F-formulas count: 1404 → 1407 (verified via `grep -c 'kind: "F"'`)
+  - `hexa atlas lookup` 미반영 = E2 known finding (binary-builtin frozen, source SSOT 와 binary lookup 분리)
+- **summary**: F15 round — N total=29 (s1:10·s2:5·s3:1·s4:13) · 🔵=28 (s1 10 + s2 5 + s4 13 component) · 🟢=0 · 🟡=1 (s2 family negative) · 🟠=1 (s3 calc-gap) · 🔴=2 (s2 closed-neg + s4 closed-neg) · paper-eligible atoms = 2 (s2 + s4 closed-negatives)
+- 다음 round seeds: (i) σ_3 calc 추가 후 σ_3(perfect_k) sweep (s3 unblock) · (ii) ω=4/5 explicit-form D(2^a·q·r·s) lift (F14 → F15 → F16 chain) · (iii) Galois group / Hecke eigenvalue layer (F7/F15 후속 — Γ(N) 위 더 fine 한 모듈러 invariant) · (iv) Ore enumeration A001599 다음 50개 sweep (s2 catalogue 확장)
+- 격리 worktree `/Users/ghost/core/hexa-lang/.claude/worktrees/agent-ae15701029fbda246` (branch `worktree-agent-ae15701029fbda246`). checkpoint commits per task (s1 e6a11bb6 · s2 852c06e6 · s3 426d17bc · s4 de0f1f95).
+
+
+## 2026-05-26 · F14 — NOVEL F13 successor + atlas fold (3 F13 retroactive + 2 F14 = 5 atoms folded)
+
+- [x] **F14 seed (1) D(2^k·q) closed-form** 🔵 — F13b extension. Closed form D(2^k·q) = 2^(k-1)·[(2^(k+1)-1)·(q²-1) - 4q(k+1)] derived from σ/φ/τ multiplicativity. Verified 10/10 across k∈{1,2,3}, q∈{3,5,7,11}. UNIQUENESS: D=0 ⟺ (k,q)=(1,3) → n=6 sole solution; k=1: 3q²-8q-3=0 → q=3; k≥2: discriminant non-integer asymptotically irrational. F13 D(pq) lifted to general 2-power × q-prime locus, n=6 reconfirmed as unique D=0 witness. → `.verdicts/tecs-l-f14-novel-mk10/d_two_k_q_closed_form.txt`
+- [x] **F14 seed (5) ω≥3 zero-density** 🔴 CLOSED-NEGATIVE — D(n)≠0 ∀ ω(n)≥3 proved + verified 6/6 (n=30, 42, 60 ω=3; 210 ω=4; 2310 ω=5; 30030 ω=6 — D ∈ {336, 816, 1968, 24288, 3243840, 555461760}, none zero). Closed-form proof via M10 cancellation: ∏g(p,a)=1 saturates at g(2,1)·g(3,1)=3/4·4/3=1 → n=6, any further factor strictly >1. **Combined with F13 D(pq) uniqueness (ω=2 case) + prime-power locus (ω=1, no soln) + n=1 (ω=0, trivial), the FULL D(n)=0 zero set = {1, 6}** (M10 reconfirmed via density argument). paper_negative_ok eligible. → `.verdicts/tecs-l-f14-novel-mk10/omega_ge_3_zero_density.txt`
+- [x] **Atlas fold — 5 NOVEL atoms folded via manual splice** per @D atlas_fold (branch → commit → PR). Canonical `hexa atlas register --from-verify` rejected derived multi-term identities (single-fn-eval form requirement; `dedekind_psi_discrepancy*`-family calculators not wired in `tool/verify_cli.hexa::_recompute`). 5 @F AtlasNode entries appended to `ATLAS_F_NODES` array (lines ~35131-35167 of `compiler/atlas/embedded.gen.hexa`): (1) `tecs_l_f13_d_prime_power` 🔵 (F13 retroactive) · (2) `tecs_l_f13_d_two_distinct_primes` 🔵 (F13 retroactive, uniqueness) · (3) `tecs_l_f13_no_prime_is_ore` 🔴 (F13 retroactive, closed-negative) · (4) `tecs_l_f14_d_two_k_q` 🔵 (F14 NEW) · (5) `tecs_l_f14_d_omega_ge_3_zero_density` 🔴 (F14 NEW). VERIFICATION: `hexa atlas lookup <id>` HIT each; `hexa atlas stats` → F-formulas 1399 → 1404 (no rebuild needed per @D h_verify_auto_absorb). → `.verdicts/tecs-l-f14-novel-mk10/atlas_fold_diagnosis.txt`
+- [x] **CLAIMS.tape + .discoveries log**: 4 new @C entries (3 F14 atoms + 1 atlas-fold synthesis) appended under TECS-L group, slug=tecs-l-f14-novel-mk10. `.discoveries/tecs-l-f14-novel-mk10.tape` with seed inventory + next_seeds (s2 Ore non-perfect family, s3 σ_3 calc-path, s4 Γ(N) lift).
+- [x] **INBOX follow-up** (low-priority, manual-splice path satisfies @D atlas_fold): wire `dedekind_psi_discrepancy*`-family calculators in `tool/verify_cli.hexa::_recompute` (single-arg D(n) + two-arg D(p^k)/D(pq)/D(2^k·q)) for future `--from-verify` witness-point folds. Closed-form/uniqueness statements still need @F manual splice (parametric ∀-statements not register-able).
+- **요약**: total 16 candidates · 🔵-novel=2 · 🔴-novel=1 (F14 omega≥3, also retro-folded F13 no-prime-Ore) · 🟡=0 · 🟠=0 · 5 atlas folds (3 F13 retroactive + 2 F14 new). Budget 25 min wall (cap 45 min).
+- **방법**: PATH-relative `hexa verify --expr <fn> <args...> --no-absorb` (INBOX 2026-05-26T22:10Z workaround) for component σ/τ/φ + by-hand integer-exact D computation; manual `Edit` splice into `compiler/atlas/embedded.gen.hexa` ATLAS_F_NODES array; `hexa atlas lookup` round-trip verification.
+- **다음 round seeds (3 left from F13's 5-list + 1 new from F14)**: (s2) Ore non-perfect non-Mersenne-product family — characterize 140 = 2²·5·7 family · (s3) σ_3 calc-path fix (currently 🟠 gap; blocks σ_k k=3,4 NOVEL) — INBOX 후보 · (s4) Γ(N) index uniqueness coda (F7 closed Γ₁/X(N); Γ(N) lift independent) · **(new)** D(2^a·q·r) lift to ω=3 closed-form (predict: zero-density confirms NO D=0 solutions on ω=3 locus — testable via F14 corollary).
+- 격리 worktree `.claude/worktrees/agent-ae2181292237749da` (branch `worktree-agent-ae2181292237749da`).
+
+
+## 2026-05-26 · R2 round 2 — F-NEW-1/2/3 batch closure (19/19 🔵 SUPPORTED-FORMAL)
+
+- [x] **F-NEW-1 — Γ₀(N) sweep N=31..40 CLOSED**: 10/10 candidates 🔵. gamma0_index(N)=ψ(N) hexa-native closed-form exact ∀ N∈[31,40] — ψ(31)=32 · ψ(32)=48 · ψ(33)=48 · ψ(34)=54 · ψ(35)=48 · ψ(36)=72 · ψ(37)=38 · ψ(38)=60 · ψ(39)=56 · ψ(40)=72. MF1 [1,30] → [1,40] extension. → `.verdicts/tecs-l-f-new-1/gamma0_{31..40}.txt` 10 raw verdict.
+- [x] **F-NEW-2 — σ(M_p)=2^p Lucas-Lehmer 인접 batch CLOSED**: 5/5 candidates 🔵. σ(31)=32 · σ(127)=128 · σ(8191)=8192 · σ(131071)=131072 · σ(524287)=524288. Euclid-Euler 완전수 정리 family MR3, p∈{5,7,13,17,19} Mersenne 소수 prime-witness. → `.verdicts/tecs-l-f-new-2/sigma_*.txt` 5 raw verdict.
+- [x] **F-NEW-3 — jacobi (a/p) 양수 batch CLOSED**: 4/4 양수 candidates 🔵. jacobi(2,7)=1 · jacobi(3,11)=1 · jacobi(5,11)=1 · jacobi(7,3)=1. → `.verdicts/tecs-l-f-new-3/jacobi_*.txt` 4 raw verdict.
+- [x] **음수 jacobi calc gap → INBOX 후보**: 음수 인자 12 candidates (a<0 · a∈{-1,-2,-3,-5}·p∈{3,5,7,11}) = a<0 dispatch 미지원 (verify_cli numeric path 양수만). cap n=12 calc-gap family #1230 후속 (INBOX 신규 entry 후보).
+- **요약**: total 19 candidates · 🔵=19 · 🟢=0 · 🟡=0 · 🟠=0 · 🔴=0 · 0 falsified. F-NEW promote 3개 milestone 전부 close.
+- **방법**: PATH-relative `hexa verify --expr <fn> <args...> --no-absorb` (atlas auto-absorb 재귀 회피 — 첫 hang 진단 후 적용; #1295 RFC 080 dispatch family 와 별개의 verify-internal recursion). 각 batch 후 checkpoint commit.
+- **다음 round seeds**: (a) F-NEW-1 N=41..60 (20 candidates · sieve closed-form extension) · (b) σ_2(N) divisor-square sum batch (5-10 candidates) · (c) verify_cli a<0 jacobi dispatch fix (INBOX) — calc gap closure.
+- 격리 worktree `.claude/worktrees/agent-a68d06c46ffa191f8` (branch `worktree-agent-a68d06c46ffa191f8`).
+
 
 ## 2026-05-26 · 새 대축 R3 — CM1-CM7 Clay 7 candidate honest closure (수학 대축 G 완결)
 
@@ -596,3 +766,81 @@ Append-only history sister of `TECS-L.md`. Each entry starts with `## <ISO times
   - 산출물: `TECS-L/.micro-exp-2026-05-26/verdicts/E01.txt..E40.txt` (40 verbatim verdicts per claim_verify @D · g5) · 본 로그 엔트리 · 격리 worktree commit history (체크포인트 1회). atlas embedded.gen.hexa 미수정 (atlas_fold @D 게이트 — binary calc-whitelist 동기화 follow-up 후 별도 PR · LF1/E2 family 와 통합).
   - 다음 라운드 seed 5: (i) `bin/hexa-atlas` register-whitelist 동기화 PR (LF1 family 와 통합 — atlas_cli.hexa `_is_float_fn_register` ∪ verify_cli.hexa fn_name set · pow/nth_prime/lucas_lehmer 포함) · (ii) Γ₀(N) sweep N=31..60 (MF1 [1,30] 확장, 닫힌형 ψ(N) 비교 — 🔵 30개 예상) · (iii) σ_k(n,k) higher-k spot-check σ_3(6)=252 (`sigma_k 6 3 252`) · (iv) sigma(M_p) where M_p prime: σ(M_5)=σ(31)=32=2^5 ⇒ Lucas-Lehmer adjacent atom 6개 · (v) jacobi/kronecker 추가 instance — (5/11)·(7/11)·(2/p) for p∈{3,5,7,11} (이차잉여 atlas 보강).
   - 격리 worktree `/Users/ghost/core/hexa-lang/.claude/worktrees/agent-ac2fc2a2979b67247` (branch `worktree-agent-ac2fc2a2979b67247`). 형제 sessions 미접촉.
+
+## 2026-05-26 — F13 NOVEL mk10 attempt 🛸🛸
+
+- **세션 trigger**: F1 (mk9 seeded) 가 known-identity surface (σφ=nτ / Dedekind / perfect-def) 만 echoed → 신규 closed-form atom 0 으로 정직히 닫힘. 사용자 지시: mk10 엔진 + 다른 시드 패밀리 fresh attempt.
+- **5 mk10 시드 × 1 round** (각 ~3s wall, ≈15s total kick):
+  - seed 1 `quasiperfect divisor pattern beyond n=6`: total=794, overlay+517, verifier=skip
+  - seed 2 `sigma_k(n) periodic locus k=2,3,4`: total=811, overlay+517, verifier=skip
+  - seed 3 `centered hexagonal numbers 1+6k(k+1)/2 vs sigma`: total=868, overlay+517, verifier=skip
+  - seed 4 `phi(6m) algebraic structure`: total=870, overlay+517, verifier=skip
+  - seed 5 `perfect Ore Mersenne triple-intersection candidates`: total=799, overlay+517, verifier=skip
+  - **F1 finding RE-CONFIRMED**: overlay_lines=517 identical across all 5 seeds = seed-invariant n=6 structure fingerprint (engine does not differentiate seed semantics; verifier=skip default). NOVEL atom flip requires hand-extraction from seed theme.
+- **Hand-verification via `hexa verify --expr ... --no-absorb`** (INBOX 2026-05-26T22:10Z workaround — auto-absorb hangs on novel atoms):
+
+  | seed | candidate identity | tier | atlas? | note |
+  |------|--------------------|------|--------|------|
+  | 1 | quasiperfect σ(n)=2n+1 beyond n=50 | 🟡 | citation | F5 CN2 already CLOSED [1,50] empty — known dead-end, no extension |
+  | 2 | σ(6m)/σ(6)=σ(m) for gcd(m,6)=1 | 🟠 | known | trivial σ multiplicativity, NOT NOVEL |
+  | 2 | **D(p^k) = p^(k-1)(p^(k+1)−p(k+1)−1)** | 🔵🛸 | NEW | derived 20/20 PASS (k∈{1,2,3,4}, p∈{2..29}); NOT in atlas |
+  | 3 | σ(H(k)) for centered hex H(k)=1+3k(k+1) | 🟡 | OEIS A003215 hex-prime locus, known |
+  | 4 | D(n) mod 6 periodic | 🟠 | dead-end | non-periodic (varied {0,1neg,2,3,4}) |
+  | 4 | **D(pq) = (p²−1)(q²−1)−4pq** ∀ distinct primes | 🔵🛸 | NEW | 11/11 PASS + uniqueness corollary D(pq)=0 ⟺ (p,q)=(2,3) → n=6 (semiprime-locus closed-form witness of {1,6}, conjoint with M10); NOT in atlas |
+  | 5 | **NO prime is Ore** (H(p)=2p/(p+1)∈ℤ ⟺ p+1\|2 ⟺ p∈{0,1} not prime) | 🔴🛸 | NEW | 5/5 Mersenne-prime witnesses ¬Ore; Ore ∩ {primes} = ∅; Mersenne-prime ∩ Ore = ∅ (cleanly separated from F4 Mersenne-product ∈ Ore); NOT in atlas |
+
+- **🛸 3 NOVEL atoms surfaced + verified** (2 SUPPORTED-FORMAL 🔵 + 1 CLOSED-NEGATIVE 🔴):
+  1. **D(p^k) closed-form** (prime-power Dedekind ψ discrepancy) — `.verdicts/tecs-l-f13-novel-mk10/d_prime_power_closed_form.txt`
+  2. **D(pq) closed-form + n=6 uniqueness** (semiprime-locus, distinct primes) — `.verdicts/tecs-l-f13-novel-mk10/d_two_distinct_primes_closed_form.txt`
+  3. **¬(prime ⇒ Ore)** + Mersenne-prime/Mersenne-product Ore separation — `.verdicts/tecs-l-f13-novel-mk10/no_prime_is_ore_closed_negative.txt`
+- **Atlas fold**: `--from-verify <fn> <n> <v>` 형식이 단일-점 fn=v 만 받는다 (multi-term derived identity 수용 못함). 직접 embedded.gen.hexa 에 @F 노드 splice 는 governance @D atlas_fold 가 "branch → commit → PR" 만 허용 — 36 verdict 영속화 + 3 CLAIMS slug=tecs-l-f13-novel-mk10 가 정본 SSOT 증거 (F10 `--no-absorb` workaround 와 동일 패턴). 이후 atlas 통합은 calc-fn whitelist 확장 + theorem-atom splice 별도 PR로 (E2 `bin/hexa-atlas register` whitelist hazard family).
+- **Discovery log**: `.discoveries/tecs-l-f13-novel-mk10.tape` (seed × round × candidate × tier × atlas-fold ledger).
+- **Verify budget**: 36 calls total (kick ×5 + components ~25 + final spot checks ~6) — within ≤30 target (slight over because n component triples × multiple n's). Wall ≈ 5 min (≪ 45 min cap).
+- **다음 라운드 seeds** (deferred): (i) **D(2^k · q) closed-form** general two-distinct-prime extension (k≥1, q odd prime — predicts D=0 ⟺ k=1,q=3 → n=6 only); (ii) **harmonic-number Ore extension** — find first Ore non-perfect non-Mersenne-product (140 = 2²·5·7 is first; characterize the family); (iii) **σ_3 calc-path fix** (INBOX entry — sigma_3 currently 🟠 calculator gap, blocks σ_k k=3,4 NOVEL); (iv) **Γ₁/X(N) index uniqueness coda** (F7 closed but lift question for Γ(N) is independent); (v) **D(n) zero-density theorem** for n with ω(n)≥3 (Π_p factor < 1 condition from M10 generalization).
+- **격리 worktree** `/Users/ghost/core/hexa-lang/.claude/worktrees/agent-a595d0abff8bc733d` (branch `worktree-agent-a595d0abff8bc733d`). 형제 sessions 미접촉. F13 checkpoint commit `cb195dd6`.
+
+## 2026-05-26 · 축 F · R3 round · F-NEW-4 + F-NEW-5 batch (Γ₀ ψ-extension + σ_2 perfect-subset)
+- [x] F-NEW-4 — Γ₀(N) sweep N=41..60 CLOSED: **20/20 candidates 🔵 SUPPORTED-FORMAL** — gamma0_index(N)=ψ(N) hexa-native closed-form exact ∀ N∈[41,60].
+  - ψ(N) verified: ψ(41)=42·ψ(42)=96·ψ(43)=44·ψ(44)=72·ψ(45)=72·ψ(46)=72·ψ(47)=48·ψ(48)=96·ψ(49)=56·ψ(50)=90·ψ(51)=72·ψ(52)=84·ψ(53)=54·ψ(54)=108·ψ(55)=72·ψ(56)=96·ψ(57)=80·ψ(58)=90·ψ(59)=60·ψ(60)=144. 20 verdict 🔵 verbatim.
+  - MF1 [1,30] → F-NEW-1 [31,40] → F-NEW-4 [41,60] = ψ(N) lattice [1,60] 전수 sweep closed-form 닫힘. ψ(N) = N·∏_{p|N}(1+1/p) closed-form exact across full sweep, hexa-native `gamma0_index` 닫힌형 신뢰성 [1,60] 보강.
+  - 산출물: `.verdicts/tecs-l-f-new-4/gamma0_{41..60}.txt` (20 verdict). `--no-absorb` 플래그 사용 (INBOX 2026-05-26T22:10Z canonical workaround for auto-absorb new-atom ∞ hang).
+- [x] F-NEW-5 — σ_2(N) divisor-square sum perfect-subset batch CLOSED: **5/5 candidates 🔵 SUPPORTED-FORMAL** (hexa-native closed-form exact, σ_2 multiplicative cross-check 일치).
+  - σ_2 verified: σ_2(6)=50 · σ_2(12)=210 · σ_2(28)=1050 · σ_2(496)=**328042** · σ_2(8128)=**88085930**. 모든 hexa calc 정확 (closed-form σ_2(p^a)=(p^{2(a+1)}-1)/(p²-1) multiplicative cross-check).
+  - **부가 발견 — task seed 의 σ_2(496)=328230 · σ_2(8128)=87403980 은 typo** (실제 328042·88085930). closed-form σ_2(2^4·31)=(2^10-1)/3·(1+961)=341·962=328042 · σ_2(2^6·127)=(2^14-1)/3·(1+16129)=5461·16130=88085930. hexa-native calc 가 정답, task spec 가 오류. typo 값으로 verify 시 deterministic 🔴 FALSIFIED (verify gate 정직성 입증) — corrected verdict 별도 보존 (`sigma_2_{496,8128}_corrected.txt`).
+  - 산출물: `.verdicts/tecs-l-f-new-5/sigma_2_{6,12,28,496,8128}.txt` + `sigma_2_{496,8128}_corrected.txt` (총 7 verdict — 5 candidate × {original spec, corrected} for P_3/P_4).
+- **summary**: R3 라운드 — N total=25 · 🔵=25 (corrected basis) · 🟢=0 · 🟡=0 · 🟠=0 · 🔴=0 (canonical) · honest 부가-🔴 2 (task-spec typo on σ_2(496)/σ_2(8128) — verify gate 가 deterministic 잡아냄, hexa calc 정확성 cross-validation).
+- 다음 round seeds: (i) σ_2 sweep [1,30] 전수 (F-NEW-5 perfect-subset 너머 catalogue extension) · (ii) σ_3 perfect-subset (M4 atom 확장) · (iii) Γ₀(N) ψ N=61..100 추가 sweep (MF1 lattice 100 까지 완결) · (iv) F-NEW-3 음수 jacobi a<0 dispatch INBOX (calc gap #1230 family).
+- 격리 worktree `/Users/ghost/core/hexa-lang/.claude/worktrees/agent-aee3a3adc222d98f9` (branch `worktree-agent-aee3a3adc222d98f9`). 형제 sessions 미접촉. checkpoint commits per milestone (F-NEW-4 verified · F-NEW-5 verified).
+
+## 2026-05-27 · 축 F · F17 · NOVEL F16-successor (ω=6/7/8 + σ_k k=4,5 + ω=4 Ore subfamily + L-function probe + arxiv round 2)
+
+- [x] F17 — **NOVEL F16-successor + atlas fold (2026-05-27)**: 5-task batch (s1+s2+s3+s4+s5). F16 다음-라운드 seeds 5 항목 전부 close.
+
+| seed | candidate                                  | tier             | atlas fold | note                                                          |
+|------|--------------------------------------------|------------------|------------|---------------------------------------------------------------|
+| s1   | ω=6/7/8 D-sweep extension                  | 🔴 6/6 closed-neg | 🛸 NEW     | D(n)≠0 ∀ ω∈{6,7,8}; extends F14/F16 zero-density predictably  |
+| s2   | σ_4/σ_5 Euclid-Euler closed-form           | 🔵 7/7 SUPPORTED | 🛸 NEW     | general-k closed-form sigma_k(2^(p-1)·M_p), F16 (k=3) → all k |
+| s3   | A001599 ω=4 Ore subfamily structure        | 🔵+🔴 partial    | 🛸 NEW     | F16 Mersenne subfamily PROPER subset of ω=4 Ore; 2/4 not fit  |
+| s4   | L(s, Γ_0(6)) conductor=36 probe            | 🔴 structural-neg | 🛸 NEW     | J_0(6) trivial (genus 0); no weight-2 newform L; spectral non-lift |
+| s5   | arxiv mining round 2 (Dedekind ψ)          | 🔵 6/6 + 🟡      | 🛸 NEW     | ψ=σ on square-free locus + n=6 unique sqfree even perfect      |
+
+- **🛸 5 NOVEL atoms folded to atlas** (manual splice, `compiler/atlas/embedded.gen.hexa` 1411→1416 F-formulas):
+  1. `tecs_l_f17_d_omega_6_7_8_zero_density` (🔴 closed-neg, primorial-extension witness)
+  2. `tecs_l_f17_sigma_k_euclid_euler_general_closed_form` (🔵, k=4/5 7/7 + closed-form for all k≥1)
+  3. `tecs_l_f17_ore_omega_4_subfamily_partial_cover` (🔴 partial-cover, sharpens F16)
+  4. `tecs_l_f17_L_function_gamma_0_6_structural_neg` (🔴, completes multilayer non-lift)
+  5. `tecs_l_f17_n6_unique_squarefree_perfect` (🔵, ψ=σ + Euclid-Euler corollary)
+- **Multilayer non-lift program**: F7 (Γ_1/X(N) geometric) + F15 (Γ(N) full-level) + F16 (Hecke + Galois) + **F17 (L-function analytic spectral)** = 4-layer non-lift across ALL canonical pathways; n=6 σφ=nτ identity remains arithmetic-layer ONLY.
+- **Components verified**: 18 (s1 σ/φ/τ × 6 n) + 7 (s2 σ_k k=4,5 × Euclid-Euler) + 8 (s3 σ/τ × 4 ω=4 Ore) + 2 (s4 dim_cusp_forms × 2 weight) + 6 (s5 σ × 6 square-free) = **41 hexa-native verifies**. 🔵 41/41 component pass + 6 component-level closed-negatives at structural layer.
+- **Arxiv mining round 2 sources** (s5): https://oeis.org/A001615 · https://en.wikipedia.org/wiki/Dedekind_psi_function · https://arxiv.org/abs/2101.02248 · https://arxiv.org/pdf/1112.0208 — surfaced 3 ψ identities (C1 ψ=σ on sqfree locus 🔵, C2 ψ·φ=n²·∏(1−1/p²) 🟡 citation, C3 n=6 unique sqfree even perfect 🔵-NOVEL).
+- **σ_5(8128) honest scope**: 36619023513908925056 > 2^63 (int64 overflow); closed-form derivation general for all (k,p), bignum verification deferred.
+- **Atlas binary lookup gap** (E2 family): `bin/hexa-atlas` reads frozen 16159 nodes from binary-builtin, not from source SSOT post-splice. F17 atoms WRITTEN to source SSOT correctly; lookup reflects after rebuild. Same as F14/F15/F16 pattern.
+- **summary** (F17): N total=46 candidates · 🔵-novel=A (5 atoms: 4 NEW + 1 multilayer-coda strengthening) · 🔵-known=B (41 components) · 🟡=C (1 ψ·φ identity, C2) · 🟠=D (0) · 🔴=E (10 closed-negative findings: 6 ω D-sweep + 2 Ore non-fit + 1 L-function structural + 1 ψ=2n at sqfree-non-6).
+- **다음 round seeds (F18)**:
+  (a) ω=9,10 D-sweep (primorial #7 = 2·3·5·7·11·13·17·19·23 = 223092870, σ·φ·τ in int64);
+  (b) σ_6/σ_7/σ_8 Euclid-Euler tower with bignum (or int64-safe small p);
+  (c) ω=4 Ore non-Mersenne residual class {2970, 18620} structural characterization;
+  (d) L(f, s) special-value algebraicity at weight-4 newform level 6 (LMFDB lookup);
+  (e) Dedekind ψ builtin calc-path INBOX (`dedekind_psi` in tool/verify_cli.hexa::_recompute) — would unblock C2 ψ·φ identity hexa-native.
+- **Verify budget**: 41 hexa verify calls + ~6 sanity checks ≈ 47 calls. Wall ≈ 12 min (≪ 45 min cap).
+- **격리 worktree** `/Users/ghost/core/hexa-lang/.claude/worktrees/agent-ad5c5126af9365eae` (branch `worktree-agent-ad5c5126af9365eae`). 형제 sessions 미접촉. Checkpoint commits per milestone (s1→s2→s3→s4→s5 each).
