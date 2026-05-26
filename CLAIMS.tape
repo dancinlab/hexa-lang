@@ -3090,3 +3090,60 @@
   raw    = ".verdicts/tecs-l-f15-novel-mk10/"
   src    = "TECS-L F15 · manual splice into compiler/atlas/embedded.gen.hexa after tecs_l_f14_d_omega_ge_3_zero_density"
   status = "🔵 ATLAS-FOLDED — 3/3 atoms source-level present (binary lookup unrefreshed per E2)"
+
+# =========================================================================
+# TECS-L — paper-omega-zero-density (slug · group=TECS-L · paper-track · INBOX #10 1/3)
+# F14–F18 unification flagship: the GLOBAL ω-zero-density theorem.
+#
+#   D(n) = σ(n)·φ(n) − n·τ(n) = 0    ⟺    n ∈ {1, 6}      (all n)
+#
+# Falsifier F-OMEGA-ZERO-DENSITY (pre-registered, .verdicts/.../FALSIFIER.md):
+#   ∃ n∉{1,6} with D(n)=0  ⟹  FALSIFIED.  Survives.
+# Each σ,φ,τ recomputed closed-form (🔵); D = exact integer combination.
+# Anchors (zero locus):
+#   n=1 : σφ = 1·1 = 1,  nτ = 1·1 = 1  → D=0  ✓
+#   n=6 : σφ = 12·2 = 24, nτ = 6·4 = 24 → D=0  ✓
+# Falsifier sweep (ω-stratified, every n∉{1,6} → D≠0):
+#   n=2,7,8,12,28,30,60,210,2310,30030 → D=-1,34,28,40,504,336,1968,24288,
+#   3243840,555461760 — all ≠0. n=28 (2nd perfect) DOES NOT zero.
+# Global tail closed by closed-form: ∏_{p^a‖n} g(p,a)=1, g=(p^{a+1}−1)/(p(a+1)),
+#   only sub-unity factor g(2,1)=3/4 cancelled uniquely by g(3,1)=4/3 → n=6.
+# Paper: PAPER/tecs-l-omega-zero-density/main.pdf (10p + fal.ai fig01).
+
+# — anchors: D(n)=0 zero locus —
+@C ozd_anchor_n1_sigma := "sigma(1) = 1 (D-anchor, D(1)=σφ−nτ=0)" :: formula [slug=paper-omega-zero-density group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr sigma 1 1"
+  raw    = ".verdicts/paper-omega-zero-density/sweep_verdicts.txt"
+  src    = "TECS-L F14–F18 ω-zero-density unification · stdlib/core/math sigma"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal · paper-eligible."
+
+@C ozd_anchor_n6_sigma := "sigma(6) = 12 (D-anchor, D(6)=12·2−6·4=0)" :: formula [slug=paper-omega-zero-density group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr sigma 6 12"
+  raw    = ".verdicts/paper-omega-zero-density/sweep_verdicts.txt"
+  src    = "TECS-L F14–F18 ω-zero-density unification · stdlib/core/math sigma"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal · paper-eligible."
+
+# — falsifier sweep: every n∉{1,6} → D≠0 (closed negatives) —
+@C ozd_sweep_n28 := "D(28) = 56·12 − 28·6 = 504 ≠ 0 (2nd perfect number is NOT a D-zero — falsifier survives)" :: formula [slug=paper-omega-zero-density group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr sigma 28 56 ; --expr phi 28 12 ; --expr tau 28 6"
+  raw    = ".verdicts/paper-omega-zero-density/raw_verify_extra.txt"
+  src    = "TECS-L ω-zero-density falsifier · the classic n=28 discriminator"
+  status = "🔵 SUPPORTED-FORMAL (factors) → D=504≠0 closed-negative. terminal · paper-eligible."
+
+@C ozd_sweep_n30030 := "D(30030) = 96768·5760 − 30030·64 = 555461760 ≠ 0 (ω=6 primorial 2#…13#)" :: formula [slug=paper-omega-zero-density group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr sigma 30030 96768 ; --expr phi 30030 5760 ; --expr tau 30030 64"
+  raw    = ".verdicts/paper-omega-zero-density/raw_verify_extra.txt"
+  src    = "TECS-L ω-zero-density falsifier · primorial ω-stratification (ω=6)"
+  status = "🔵 SUPPORTED-FORMAL (factors) → D=555461760≠0 closed-negative. terminal · paper-eligible."
+
+# — global theorem (closed-form closer) —
+@C ozd_theorem := "D(n)=σ(n)φ(n)−nτ(n)=0 ⟺ n∈{1,6}, all n: ∏ g(p,a)=1 reduction, g(2,1)=3/4 cancelled uniquely by g(3,1)=4/3 → n=6; ω≥3 ⟹ ∏g>1" :: synthesis [slug=paper-omega-zero-density group=TECS-L]
+  method = "proof"
+  cmd    = "see .verdicts/paper-omega-zero-density/CLOSED_FORM.md (g(p,a)-product argument)"
+  raw    = ".verdicts/paper-omega-zero-density/CLOSED_FORM.md"
+  src    = "TECS-L F14–F18 unification · multiplicative reduction + factor-sign lemma"
+  status = "🔵 SUPPORTED-FORMAL — closed-form proof closes infinite tail beyond machine sweep. terminal."
