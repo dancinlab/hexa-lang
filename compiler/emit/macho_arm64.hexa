@@ -83,6 +83,20 @@ let MACHO_ARM64_RELOC_BRANCH26   = 2
 let MACHO_ARM64_RELOC_PAGE21     = 3
 let MACHO_ARM64_RELOC_PAGEOFF12  = 4
 
+// nlist `n_type` bits (`<mach-o/nlist.h>`).
+let MACHO_N_UNDF = 0x00   // undefined (extern reference)
+let MACHO_N_SECT = 0x0e   // defined in a section
+let MACHO_N_EXT  = 0x01   // external (globally visible)
+let MACHO_N_PEXT = 0x10   // private extern (`.private_extern` / `.hidden`)
+
+// LC_BUILD_VERSION platform id (`<mach-o/loader.h>`).
+let MACHO_PLATFORM_MACOS = 1
+// minos packed as XXXX.YY.ZZ in 0xXXXXYYZZ. clang on macOS 26 stamps
+// minos 26.0.0 -> 0x001a0000. (26 == 0x1a.) The native emitter mirrors
+// the host clang's stamp so `--backend=native` objects carry the same
+// LC_BUILD_VERSION clang's `-c` does (verified by `otool -l`).
+let MACHO_BUILD_MINOS_26 = 0x001a0000
+
 
 // ─────────────────────────────────────────────────────────────────
 // Builder state — the in-progress Mach-O object as buffers
@@ -115,10 +129,29 @@ struct Arm64Reloc {
 
 struct MachoSymbol {
     name_offset: i64,   // index into strtab[]
-    section:     i64,   // 0 = undefined extern, 1 = __text, ...
-    value:       i64,   // address (within __text for defined syms)
+    section:     i64,   // 0 = undefined extern, 1 = __text, 2 = __cap, 3 = __abi
+    value:       i64,   // address (within its section for defined syms)
     kind:        i64,   // N_SECT (defined) / N_UNDF (extern) / ...
     is_external: i64,   // N_EXT flag
+    is_pext:     i64,   // N_PEXT (.private_extern / .hidden) — non-entry fns
+}
+
+// The 12-byte `__HEXA,__abi` ABI stamp (RFC 070 §G7-D.B2): a 4-byte LE
+// runtime_version (1) + 8-byte LE nanbox_layout_hash (0). Mirrors
+// `compiler/emit/asm.hexa::_abi_stamp_hex` — same bytes the `.s` path
+// emits via `.byte`, here packed directly. Held as a fixed constant so
+// the `__abi` section content is byte-stable across the `.s` and native
+// emit paths (`asm.hexa` HEXA_RUNTIME_VERSION=1, HEXA_NANBOX_LAYOUT_HASH=0).
+fn _hexa_abi_stamp_bytes() -> [Int] {
+    return [0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]
+}
+
+// Entry symbols keep default (public) visibility; everything else is
+// `.private_extern` (N_PEXT). Mirrors `asm.hexa::_is_entry_symbol`.
+fn _is_entry_symbol_name(name: string) -> bool {
+    if name == "main"   { return true }
+    if name == "_start" { return true }
+    return false
 }
 
 // ─────────────────────────────────────────────────────────────────
@@ -638,6 +671,28 @@ fn _emit_section_64(out: [Int],
     _u32_le(out, 0)            // reserved3
 }
 
+// Emit `LC_BUILD_VERSION` (24 bytes, ntools=0). Per `<mach-o/loader.h>`:
+//
+//     struct build_version_command {
+//         uint32_t cmd;        // LC_BUILD_VERSION (0x32)
+//         uint32_t cmdsize;    // 24 + 8*ntools (== 24 here, ntools=0)
+//         uint32_t platform;   // PLATFORM_MACOS (1)
+//         uint32_t minos;      // X.Y.Z packed nibble-wise: 0xXXXXYYZZ
+//         uint32_t sdk;        // 0 (n/a — clang emits 0 for `-c` w/o -isysroot)
+//         uint32_t ntools;     // 0
+//     };
+//
+// clang -c on darwin-arm64 always emits this LC; matching it is required
+// for full-object parity (it sits between LC_SEGMENT_64 and LC_SYMTAB).
+fn _emit_build_version_cmd(out: [Int], platform: Int, minos: Int) {
+    _u32_le(out, MACHO_LC_BUILD_VERSION)
+    _u32_le(out, 24)
+    _u32_le(out, platform)
+    _u32_le(out, minos)
+    _u32_le(out, 0)            // sdk — n/a
+    _u32_le(out, 0)            // ntools
+}
+
 // Emit `LC_SYMTAB` (24 bytes). Per `<mach-o/loader.h>`:
 //
 //     struct symtab_command {
@@ -678,18 +733,22 @@ fn _emit_symtab_cmd(out: [Int],
 //         uint32_t locreloff;    uint32_t nlocrel;
 //     };
 //
-// Cycle 3: `nextdefsym` reports our defined external symbols (functions).
-// The other 17 fields stay zero — no locals, no undef, no indirect, no
-// table-of-contents (TOC is a dynamic-library construct).
-fn _emit_dysymtab_cmd(out: [Int], nextdefsym: Int) {
+// Symtab partition contract (clang -c parity): the nlist array is laid
+// out as [ nlocalsym locals | nextdefsym defined-externs | nundefsym
+// undefs ], in that order. DYSYMTAB records the index+count of each run.
+// (was: only nextdefsym; pre-symtab-layout the table had no locals/undefs.)
+fn _emit_dysymtab_cmd(out: [Int],
+                      nlocalsym: Int,
+                      iextdefsym: Int, nextdefsym: Int,
+                      iundefsym: Int, nundefsym: Int) {
     _u32_le(out, MACHO_LC_DYSYMTAB)
     _u32_le(out, 80)
-    _u32_le(out, 0)          // ilocalsym
-    _u32_le(out, 0)          // nlocalsym
-    _u32_le(out, 0)          // iextdefsym (defined externs start at index 0)
-    _u32_le(out, nextdefsym) // nextdefsym
-    _u32_le(out, nextdefsym) // iundefsym (immediately after defined externs)
-    _u32_le(out, 0)          // nundefsym
+    _u32_le(out, 0)            // ilocalsym (locals start at index 0)
+    _u32_le(out, nlocalsym)    // nlocalsym
+    _u32_le(out, iextdefsym)   // iextdefsym (== nlocalsym)
+    _u32_le(out, nextdefsym)   // nextdefsym
+    _u32_le(out, iundefsym)    // iundefsym (== nlocalsym + nextdefsym)
+    _u32_le(out, nundefsym)    // nundefsym
     // Remaining 12 u32 fields all zero — no TOC, modtab, indirect refs,
     // or external/local relocation tables in MH_OBJECT.
     let mut i = 0
@@ -773,72 +832,103 @@ fn serialize(obj: MachoArm64Obj) -> [Int] {
     if trem != 0 { text_pad = 4 - trem }
     let text_size_aligned = text_len + text_pad
 
-    let ncmds = 3                  // LC_SEGMENT_64 + LC_SYMTAB + LC_DYSYMTAB
-    let sizeofcmds = 152 + 24 + 80 // 256
-    let data_off = 32 + sizeofcmds // 288
-    let reloff   = data_off + text_size_aligned
+    // ── Empty-input corner case (1-section, 3-LC, 288 B) ─────────
+    // An `.o` with zero code bytes carries no `__HEXA` metadata
+    // sections and no symbols (clang's empty-`.s` output). Keep the
+    // legacy compact layout so `emit_empty` / `run_F_P0_OBJEQ_HEADER`
+    // stay byte-stable.
+    if text_len == 0 {
+        let e_sizeofcmds = 152 + 24 + 80   // seg(1 sect) + symtab + dysymtab
+        let e_data_off = 32 + e_sizeofcmds // 288
+        _emit_mach_header(out, 3, e_sizeofcmds, 0)
+        _emit_seg64_cmd(out, "", 0, 0, e_data_off, 0, 1)
+        _emit_section_64(out, "__text", "__TEXT", 0, 0, e_data_off, 0, 0, 0, 0x80000000)
+        _emit_symtab_cmd(out, e_data_off, 0, e_data_off, 0)
+        _emit_dysymtab_cmd(out, 0, 0, 0, 0, 0)
+        return out
+    }
+
+    // ── Full layout (clang -c parity): 3 sections + LC_BUILD_VERSION ─
+    //
+    // Sections, in clang's emission order:
+    //   1 __text   (__TEXT) — code; align 2^2; flags PURE|SOME_INSTRUCTIONS
+    //   2 __cap    (__HEXA) — capability manifest; size 0; align 2^0
+    //   3 __abi    (__HEXA) — 12-byte ABI stamp; align 2^0
+    // The two `__HEXA` sections are 1-byte-aligned and follow __text in
+    // file order (cap is empty so cap.offset == abi.offset). Both share
+    // the post-__text addr (vmaddr is contiguous: cap.addr == abi.addr ==
+    // text_size_aligned, cap.size == 0).  Mirrors `asm.hexa`'s
+    // `_emit_meta_section` output assembled by clang.
+    let abi = _hexa_abi_stamp_bytes()
+    let abi_len = len(abi)
+    let meta_addr = text_size_aligned          // __cap / __abi vmaddr
+    let nsects = 3
+    let sizeofcmds = (72 + 80 * nsects) + 24 + 24 + 80  // seg + buildver + symtab + dysymtab
+    let data_off = 32 + sizeofcmds
+    // __cap (size 0) and __abi (12 B) sit immediately after __text; both
+    // are 1-byte aligned so no inter-section padding.
+    let meta_off = data_off + text_size_aligned   // == __cap.offset == __abi.offset
+    let reloff   = meta_off + abi_len
     let symoff   = reloff + 8 * nreloc
     let stroff   = symoff + 16 * nsyms
 
-    // Mirror clang's empty-input corner case: an `.o` with zero code
-    // bytes has SUBSECTIONS_VIA_SYMBOLS unset (no symbols to split
-    // around). With actual code we set 0x2000 like clang does.
-    let mut mh_flags = 0x2000
-    if text_len == 0 { mh_flags = 0 }
-
-    _emit_mach_header(out, ncmds, sizeofcmds, mh_flags)
-
-    // Single segment, single __text section. Empty `segname` per
-    // Mach-O convention for `MH_OBJECT` (the one segment is unnamed).
-    _emit_seg64_cmd(out, "",
-                    0, text_size_aligned,
-                    data_off, text_size_aligned,
-                    1)
-
-    // arm64 instruction align is 4 bytes (log2=2); for an empty
-    // __text clang emits align=0 (log2 of 1 byte). Mirror that.
-    let mut sect_align = 2
-    if text_len == 0 { sect_align = 0 }
-
-    // section flags: S_ATTR_PURE_INSTRUCTIONS (0x80000000), plus
-    // S_ATTR_SOME_INSTRUCTIONS (0x00000400) only when there actually
-    // are instructions. Clang's empty-input output omits the SOME bit.
-    let mut sect_flags = 0x80000400
-    if text_len == 0 { sect_flags = 0x80000000 }
-
-    // reloff = 0 when there are no relocations (clang convention);
-    // otherwise the post-text offset.
-    let mut sect_reloff = reloff
-    if nreloc == 0 { sect_reloff = 0 }
-
-    _emit_section_64(out, "__text", "__TEXT",
-                     0, text_size_aligned,
-                     data_off, sect_align,
-                     sect_reloff, nreloc,
-                     sect_flags)
-
-    _emit_symtab_cmd(out, symoff, nsyms, stroff, strsize)
-    // Defined-extern count: every symbol in `obj.symbols` with the
-    // N_EXT bit set is a defined external (function). Cycle 3 emits
-    // function names as external defined symbols; future locals would
-    // need their own counter (nlocalsym).
-    let mut nextdefsym = 0
+    // Partition the symbol table into [locals | extdefs | undefs] runs and
+    // count each (clang's nlist is laid out + DYSYMTAB-indexed this way).
+    let mut nlocal = 0
+    let mut nextdef = 0
+    let mut nundef = 0
     let mut sx = 0
     while sx < nsyms {
-        if obj.symbols[sx].is_external != 0 { nextdefsym = nextdefsym + 1 }
+        let s = obj.symbols[sx]
+        if s.is_external == 0 {
+            nlocal = nlocal + 1
+        } else if s.section == 0 {
+            nundef = nundef + 1
+        } else {
+            nextdef = nextdef + 1
+        }
         sx = sx + 1
     }
-    _emit_dysymtab_cmd(out, nextdefsym)
+
+    _emit_mach_header(out, 4, sizeofcmds, 0x2000)  // MH_SUBSECTIONS_VIA_SYMBOLS
+
+    let vmsize = meta_addr + abi_len
+    _emit_seg64_cmd(out, "", 0, vmsize, data_off, vmsize, nsects)
+
+    // __text — code section.
+    _emit_section_64(out, "__text", "__TEXT",
+                     0, text_size_aligned,
+                     data_off, 2,
+                     reloff, nreloc,
+                     0x80000400)
+    // __cap — empty capability manifest header (size 0, align 1, no reloc).
+    _emit_section_64(out, "__cap", "__HEXA",
+                     meta_addr, 0,
+                     meta_off, 0,
+                     0, 0,
+                     0x00000000)
+    // __abi — 12-byte ABI stamp (align 1, no reloc).
+    _emit_section_64(out, "__abi", "__HEXA",
+                     meta_addr, abi_len,
+                     meta_off, 0,
+                     0, 0,
+                     0x00000000)
+
+    _emit_build_version_cmd(out, MACHO_PLATFORM_MACOS, MACHO_BUILD_MINOS_26)
+    _emit_symtab_cmd(out, symoff, nsyms, stroff, strsize)
+    _emit_dysymtab_cmd(out, nlocal, nlocal, nextdef, nlocal + nextdef, nundef)
 
     // __text bytes + 4-byte alignment pad
     let mut i = 0
     while i < text_len { out.push(obj.text[i] & 0xff); i = i + 1 }
     _zero_n(out, text_pad)
 
-    // Relocations: emit one `relocation_info` per Arm64Reloc.
-    // r_extern is always 1 in cycle 4 (we only emit symbol-based relocs,
-    // never section-based). Future cycles will lift this when local
-    // section-rel patches enter the mix.
+    // __cap is empty (no bytes). __abi: the 12-byte stamp.
+    let mut ai = 0
+    while ai < abi_len { out.push(abi[ai] & 0xff); ai = ai + 1 }
+
+    // Relocations: emit one `relocation_info` per Arm64Reloc. r_extern is
+    // 1 — all our relocs are symbol-based BRANCH26 to undefined externs.
     let mut ri = 0
     while ri < nreloc {
         let rl = obj.relocs[ri]
@@ -846,13 +936,14 @@ fn serialize(obj: MachoArm64Obj) -> [Int] {
         ri = ri + 1
     }
 
-    // Symbol records: emit one nlist_64 per `MachoSymbol`. Cycle 3 —
-    // n_type = MachoSymbol.kind | is_external (N_EXT 0x01).
+    // Symbol records (nlist_64), in [locals | extdefs | undefs] order.
+    // n_type = kind | N_EXT (if external) | N_PEXT (if .private_extern).
     let mut si = 0
     while si < nsyms {
         let s = obj.symbols[si]
         let mut n_type = s.kind
-        if s.is_external != 0 { n_type = n_type | 0x01 }
+        if s.is_external != 0 { n_type = n_type | MACHO_N_EXT }
+        if s.is_pext != 0     { n_type = n_type | MACHO_N_PEXT }
         _emit_nlist64(out, s.name_offset, n_type, s.section, s.value)
         si = si + 1
     }
@@ -1065,6 +1156,30 @@ fn _lookup_label(state: PackFnState, name: string) -> Int {
     return -1
 }
 
+// True if `name` already appears in `xs`. Linear scan — `xs` is the
+// short per-module block-label reference-order list.
+fn _str_in(xs: [string], name: string) -> bool {
+    let n = len(xs)
+    let mut i = 0
+    while i < n {
+        if xs[i] == name { return true }
+        i = i + 1
+    }
+    return false
+}
+
+// Look up a label's __text offset in the parallel name/offset arrays.
+// Returns -1 if absent.
+fn _blabel_offset_of(names: [string], offsets: [Int], name: string) -> Int {
+    let n = len(names)
+    let mut i = 0
+    while i < n {
+        if names[i] == name { return offsets[i] }
+        i = i + 1
+    }
+    return -1
+}
+
 // Append a 4-byte little-endian instruction word to the running text
 // buffer. Used by every encoded instruction path in `_pack_fn`.
 fn _push_word_le(out: [Int], word: Int) {
@@ -1115,8 +1230,20 @@ fn _darwin_mangle(name: string) -> string {
 //   targets the intra-fn label table does not resolve. pack_lir's
 //   post-walk pass turns each pair into an Arm64Reloc record (by
 //   looking up `name` in obj.symbols).
+// Out-params (symtab layout):
+//   blabel_names[] / blabel_offsets[] — every intra-fn `label` op's
+//     mangled name + __text byte offset, in DEFINITION order. pack_lir
+//     turns these into local N_SECT symbols.
+//   blabel_reforder[] — the SAME label names, but in FIRST-BRANCH-
+//     REFERENCE order (the order each label is first used as a branch
+//     target). clang/LLVM-MC orders block-label local symbols this way;
+//     pack_lir uses it (with the entry label first) to match clang's
+//     local-symbol ordering so `r_symbolnum` lines up. The entry block
+//     (first-defined) is prepended by pack_lir.
 fn _pack_fn(out_text: [Int],
             pending_offsets: [Int], pending_names: [string],
+            blabel_names: [string], blabel_offsets: [Int],
+            blabel_reforder: [string],
             f: LFunc) {
     let st = PackFnState {
         text:           out_text,
@@ -1135,6 +1262,11 @@ fn _pack_fn(out_text: [Int],
             if len(name) == 0 && len(ins.args) > 0 { name = ins.args[0].label }
             st.label_names.push(name)
             st.label_offsets.push(len(out_text))
+            // Export the label (mangled) + its __text offset for the
+            // symbol-table pass. arm64_darwin label names already carry
+            // the darwin `_` / `__L…` form, so emit verbatim.
+            blabel_names.push(name)
+            blabel_offsets.push(len(out_text))
             i = i + 1
             continue
         }
@@ -1202,6 +1334,13 @@ fn _pack_fn(out_text: [Int],
             pending_names.push(target)
             bi = bi + 1
             continue
+        }
+        // Intra-fn label resolved here → this is its first branch
+        // reference if not already recorded. Collect in reference order
+        // (deduped) so pack_lir can order the local block-label symbols
+        // the way clang/LLVM-MC does.
+        if !_str_in(blabel_reforder, target) {
+            blabel_reforder.push(target)
         }
         let delta = (toff - off) / 4    // PC-rel instruction-count
         // Reconstruct the existing word bits.
@@ -1288,107 +1427,167 @@ pub fn pack_lir(lm: LModule) -> MachoArm64Obj {
         strtab:     [],
         dwarf_line: [],
     }
-    // Mach-O string table starts with a NUL byte at index 0 so unused
-    // `n_strx` slots can point to the empty string. `clang -c` produces
-    // strtabs that begin with `\0` for the same reason.
-    obj.strtab.push(0)
 
-    // Cycle 4: collect cross-fn / extern branch targets as we walk.
-    // pack_lir resolves them after the symbol table is fully built.
-    let pending_offsets: [Int]    = []
-    let pending_names:   [string] = []
+    // ── Pass 1: walk every LFunc → text bytes + collect symbol inputs ──
+    //
+    // We defer ALL symbol-table construction until the walk is done so
+    // the table can be laid out in clang/LLVM-MC's order (locals, then
+    // defined-externs, then undefs) — required for `r_symbolnum` parity.
+    let pending_offsets: [Int]    = []   // __text offset of each extern BL
+    let pending_names:   [string] = []   // target name per extern BL
+    let blabel_names:    [string] = []   // every block label (def order)
+    let blabel_offsets:  [Int]    = []   // its __text offset
+    let blabel_reforder: [string] = []   // labels in first-branch-ref order
+    let fn_names:        [string] = []   // mangled fn symbol names
+    let fn_values:       [Int]    = []   // fn start offset in __text
+    let fn_is_entry:     [Int]    = []   // 1 if main/_start (no N_PEXT)
 
     let nf = len(lm.funcs)
     let mut i = 0
     while i < nf {
         let f = lm.funcs[i]
-        // Symbol value = current __text length BEFORE we pack this fn.
-        let fn_start = len(obj.text)
-        let mangled = _darwin_mangle(f.name)
-        let strx = _push_cstr(obj.strtab, mangled)
-        obj.symbols.push(MachoSymbol {
-            name_offset: strx,
-            section:     1,
-            value:       fn_start,
-            kind:        0x0e,
-            is_external: 1,
-        })
-        _pack_fn(obj.text, pending_offsets, pending_names, f)
+        fn_names.push(_darwin_mangle(f.name))
+        fn_values.push(len(obj.text))
+        if _is_entry_symbol_name(f.name) { fn_is_entry.push(1) } else { fn_is_entry.push(0) }
+        _pack_fn(obj.text, pending_offsets, pending_names,
+                 blabel_names, blabel_offsets, blabel_reforder, f)
         i = i + 1
     }
 
-    // Post-walk: resolve each pending branch target's mangled name to
-    // a symbol index and emit the Arm64Reloc record. Cycle 5 adds
-    // N_UNDF support — targets not already in `obj.symbols` get a
-    // placeholder undef nlist entry appended (section=0/NO_SECT,
-    // kind=0x00/N_UNDF, is_external=1/N_EXT), then the reloc points
-    // at it. This is the libc/runtime path (`_exit`, `_hexa_*` etc.).
-    // Extern-target reloc records are collected here during the forward
-    // pass (which must run forward so N_UNDF symbols are appended in
-    // first-seen order), then flushed to `obj.relocs` in DESCENDING
-    // address order below — matching `clang -c`, whose `__text`
-    // relocation table is emitted high-address-first (verified by
-    // `otool -rv`: clang lists 0xcc, 0xb0, … 0x1c; a naive ascending
-    // emit would reverse that and break F-P0-OBJEQ byte-eq on the
-    // relocation entries even when every (address, symbol) pair matches).
-    let reloc_offs: [Int] = []
-    let reloc_idxs: [Int] = []
-    let np = len(pending_offsets)
+    let text_len = len(obj.text)
+    let mut text_pad = 0
+    let trem = text_len & 3
+    if trem != 0 { text_pad = 4 - trem }
+    let meta_addr = text_len + text_pad     // __cap / __abi vmaddr (== abi value)
+
+    // ── Pass 2: partition extern BL targets into intra-module-defined
+    // (pre-patch, no reloc) vs undefined (sorted, get a reloc). ──
+    //
+    // Defined intra-module callees: BL imm26 resolved at emit time, NO
+    // reloc (matches clang). Undefined externs (libc/runtime _hexa_*):
+    // imm26 stays 0, a BRANCH26 reloc carries the symbol — and clang
+    // emits the undef symbols ALPHABETICALLY, so we sort them and the
+    // reloc `r_symbolnum` references that sorted slot.
+    let undef_names: [string] = []
     let mut pi = 0
+    let np = len(pending_offsets)
     while pi < np {
-        let off  = pending_offsets[pi]
-        // arm64_darwin LIR stores branch target labels as the raw
-        // hexa name (`fib`, `hexa_exit`, …); `_fmt_label` prepends the
-        // darwin `_` only on `.s` emission. We need the mangled form
-        // both for `_find_sym_by_name` (against the darwin-mangled
-        // defined symbols pack_lir already pushed) AND for any new
-        // N_UNDF entry's strtab name (so `nm`/the linker see the same
-        // canonical `_xxx` form clang produces).
-        //
-        // Pre-mangled names (those that already start with `_` — e.g.
-        // an inner intra-module emit that bypassed `_fmt_label`) pass
-        // through unchanged.
         let raw = pending_names[pi]
         let mut name = raw
-        if len(raw) > 0 && raw.substring(0, 1) != "_" {
-            name = _darwin_mangle(raw)
+        if len(raw) > 0 && raw.substring(0, 1) != "_" { name = _darwin_mangle(raw) }
+        // Defined intra-module target? (one of this module's fns)
+        if _str_in(fn_names, name) {
+            pi = pi + 1
+            continue
         }
-        let mut idx = _find_sym_by_name(obj.symbols, obj.strtab, name)
-        if idx < 0 {
-            // Push an N_UNDF undef extern symbol entry. The Mach-O
-            // convention is "defined externs first, undefs after";
-            // we don't separate them physically here — the linker
-            // tolerates intermixing as long as iundefsym lies past
-            // all the defs in dysymtab. (Cycle 5 keeps it simple by
-            // letting the order match the order they appear; cycle 6
-            // can split if a corpus test fails on it.)
-            let strx = _push_cstr(obj.strtab, name)
-            obj.symbols.push(MachoSymbol {
-                name_offset: strx,
-                section:     0,     // NO_SECT — undefined
-                value:       0,     // (linker fills in)
-                kind:        0x00,  // N_UNDF
-                is_external: 1,     // N_EXT
-            })
-            idx = len(obj.symbols) - 1
-        }
-        // Intra-module call to a *defined* symbol in this `.o`
-        // (sym.section != 0): the target offset is already known, so the
-        // BL's imm26 is resolved at emit time (pre-patch below) and NO
-        // relocation record is emitted. This mirrors `clang -c`, which
-        // assembles same-section BL branches to a final PC-rel delta and
-        // leaves the `__text` relocation table empty for them — verified
-        // by `otool -rv` on a `.globl _foo` / `bl _foo` pair (zero reloc
-        // entries) and on the fib corpus (recursive `bl _fib` produces no
-        // reloc in clang's output). Emitting a reloc here would inflate
-        // our reloc count over clang's and break F-P0-OBJEQ byte-eq on
-        // any program with intra-module calls (recursion, helper fns).
-        //
-        // Undefined / extern targets (sym.section == 0 — libc / runtime,
-        // e.g. `_hexa_exit`) keep the BRANCH26 reloc: the linker resolves
-        // them, so the imm26 stays 0 and the reloc carries the symbol.
+        if !_str_in(undef_names, name) { undef_names.push(name) }
+        pi = pi + 1
+    }
+    _sort_strings(undef_names)   // alphabetical — matches clang's undef order
+
+    // ── Pass 3: build the symbol table in clang's order ──
+    //
+    //   LOCALS (n_type N_SECT, no N_EXT):
+    //     ltmp0                 (__text, value 0)        — section-start temp
+    //     <block labels>        (__text)  in first-ref order, entry-first
+    //     ltmp1                 (__cap,  value meta_addr)
+    //     _hexa_cap_manifest    (__cap,  value meta_addr)
+    //     ltmp2                 (__abi,  value meta_addr)
+    //     _hexa_abi_stamp       (__abi,  value meta_addr)
+    //   EXTDEFS (N_SECT|N_EXT [|N_PEXT for non-entry]):
+    //     each fn, in address order
+    //   UNDEFS (N_UNDF|N_EXT), alphabetical:
+    //     each runtime/libc target
+    //
+    // Our own strtab is built name-by-name in this symbol order. (clang's
+    // strtab BYTE-order differs — it uses MCStringTableBuilder's suffix-
+    // merge sort — so `n_strx` values won't match clang byte-for-byte;
+    // see the file-header residual note. The symbol IDENTITIES, ORDER,
+    // n_type/n_sect/n_value, and `r_symbolnum` indices DO match.)
+    obj.strtab.push(0)   // index-0 NUL
+
+    // ltmp0 (__text section-start temp).
+    _push_local_sym(obj, "ltmp0", 1, 0)
+
+    // Block labels: entry (first-defined) first, then first-ref order.
+    let ordered_labels: [string] = []
+    if len(blabel_names) > 0 {
+        ordered_labels.push(blabel_names[0])   // entry block (bb0)
+    }
+    let mut li = 0
+    while li < len(blabel_reforder) {
+        let nm = blabel_reforder[li]
+        if !_str_in(ordered_labels, nm) { ordered_labels.push(nm) }
+        li = li + 1
+    }
+    // Any defined-but-never-branched labels: append in definition order
+    // (defensive — keeps every label represented).
+    li = 0
+    while li < len(blabel_names) {
+        let nm = blabel_names[li]
+        if !_str_in(ordered_labels, nm) { ordered_labels.push(nm) }
+        li = li + 1
+    }
+    li = 0
+    while li < len(ordered_labels) {
+        let nm  = ordered_labels[li]
+        let voff = _blabel_offset_of(blabel_names, blabel_offsets, nm)
+        _push_local_sym(obj, nm, 1, voff)
+        li = li + 1
+    }
+
+    // __HEXA section local symbols (cap then abi; ltmpN temp precedes
+    // the named label in each, matching clang's per-section temp).
+    _push_local_sym(obj, "ltmp1",              2, meta_addr)
+    _push_local_sym(obj, "_hexa_cap_manifest", 2, meta_addr)
+    _push_local_sym(obj, "ltmp2",              3, meta_addr)
+    _push_local_sym(obj, "_hexa_abi_stamp",    3, meta_addr)
+
+    // Defined externs (functions) — address order, N_PEXT for non-entry.
+    let mut fi = 0
+    while fi < len(fn_names) {
+        let strx = _push_cstr(obj.strtab, fn_names[fi])
+        let mut pext = 1
+        if fn_is_entry[fi] != 0 { pext = 0 }
+        obj.symbols.push(MachoSymbol {
+            name_offset: strx,
+            section:     1,
+            value:       fn_values[fi],
+            kind:        MACHO_N_SECT,
+            is_external: 1,
+            is_pext:     pext,
+        })
+        fi = fi + 1
+    }
+
+    // Undefined externs — alphabetical (sorted above).
+    let mut ui = 0
+    while ui < len(undef_names) {
+        let strx = _push_cstr(obj.strtab, undef_names[ui])
+        obj.symbols.push(MachoSymbol {
+            name_offset: strx,
+            section:     0,
+            value:       0,
+            kind:        MACHO_N_UNDF,
+            is_external: 1,
+            is_pext:     0,
+        })
+        ui = ui + 1
+    }
+
+    // ── Pass 4: resolve branches; emit relocs (descending address) ──
+    let reloc_offs: [Int] = []
+    let reloc_idxs: [Int] = []
+    pi = 0
+    while pi < np {
+        let off = pending_offsets[pi]
+        let raw = pending_names[pi]
+        let mut name = raw
+        if len(raw) > 0 && raw.substring(0, 1) != "_" { name = _darwin_mangle(raw) }
+        let idx = _find_sym_by_name(obj.symbols, obj.strtab, name)
         let sym = obj.symbols[idx]
         if sym.section != 0 {
+            // Intra-module defined callee: pre-patch imm26, no reloc.
             let delta = (sym.value - off) / 4
             let w0 = obj.text[off + 0]
             let w1 = obj.text[off + 1]
@@ -1398,17 +1597,13 @@ pub fn pack_lir(lm: LModule) -> MachoArm64Obj {
             let patched = (cur & 0xfc000000) | (delta & 0x03ffffff)
             _patch_word_le(obj.text, off, patched)
         } else {
-            // Defer the reloc record; flushed descending after the pass.
             reloc_offs.push(off)
             reloc_idxs.push(idx)
         }
         pi = pi + 1
     }
-
-    // Flush collected extern relocs in descending address order to match
-    // clang's `__text` relocation-table ordering. The deferred lists are
-    // in ascending first-seen (== ascending address) order, so iterate
-    // them backwards.
+    // Flush extern relocs in DESCENDING address order (clang's __text
+    // relocation table is emitted high-address-first).
     let nr = len(reloc_offs)
     let mut ri = nr - 1
     while ri >= 0 {
@@ -1422,6 +1617,39 @@ pub fn pack_lir(lm: LModule) -> MachoArm64Obj {
         ri = ri - 1
     }
     return obj
+}
+
+// Push one local (N_SECT, non-external) symbol with its name interned
+// into `obj.strtab`. Used for ltmp* temps, block labels, and the
+// `__HEXA` section symbols.
+fn _push_local_sym(obj: MachoArm64Obj, name: string, section: Int, value: Int) {
+    let strx = _push_cstr(obj.strtab, name)
+    obj.symbols.push(MachoSymbol {
+        name_offset: strx,
+        section:     section,
+        value:       value,
+        kind:        MACHO_N_SECT,
+        is_external: 0,
+        is_pext:     0,
+    })
+}
+
+// In-place ASCII ascending sort (insertion sort — the undef list is
+// short: one entry per distinct runtime/libc call). Matches clang's
+// alphabetical undef-symbol ordering.
+fn _sort_strings(xs: [string]) {
+    let n = len(xs)
+    let mut i = 1
+    while i < n {
+        let key = xs[i]
+        let mut j = i - 1
+        while j >= 0 && xs[j] > key {
+            xs[j + 1] = xs[j]
+            j = j - 1
+        }
+        xs[j + 1] = key
+        i = i + 1
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────
