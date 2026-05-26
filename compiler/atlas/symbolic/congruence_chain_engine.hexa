@@ -194,6 +194,67 @@ pub fn sigma_star(n: int) -> int {
     return s
 }
 
+// omega_big(n) = Ω(n) — number of prime factors WITH multiplicity (A001222).
+// Ω(p^a)=a, additive; Ω(1)=0. Trial division to √x; residual x>1 = final prime.
+// Mirrors stdlib/core/math.hexa::omega_big so atlas_cli (no stdlib/core/math
+// use on the register path) has a reachable recompute. Backs liouville_int.
+pub fn omega_big(n: int) -> int {
+    let mut count = 0
+    let mut x = n
+    let mut d = 2
+    while d * d <= x {
+        while x % d == 0 {
+            count = count + 1
+            x = x / d
+        }
+        d = d + 1
+    }
+    if x > 1 { count = count + 1 }
+    return count
+}
+
+// liouville_int(n) = λ(n) = (−1)^Ω(n) — Liouville function (A008836), +1/−1.
+// Completely multiplicative; λ(p^a)=(−1)^a, λ(1)=1. λ(6)=1, λ(8)=−1. The _int
+// suffix avoids a name clash with stdlib/core/math::liouville in verify_cli
+// (which `use`s both modules); SIGN is preserved (verify `--expr` accepts
+// negative expected values — cf. cyclotron_cool_bexponent 0 -2 → 🔵).
+pub fn liouville_int(n: int) -> int {
+    if omega_big(n) % 2 == 0 { return 1 }
+    return -1
+}
+
+// liouville_summatory(n) = L(n) = Σ_{k=1}^{n} λ(k) (A002819). L(2)=0, L(6)=0.
+// Polya conjecture (L(n)≤0 ∀n>1) FALSIFIED at n=906150257 (Tanaka 1980;
+// Haselgrove 1958, Lehman 1960) — a classical closed-negative (NOT recomputed
+// here: the giant sum is the math limit, recorded as citation, not hexa run).
+pub fn liouville_summatory(n: int) -> int {
+    let mut sum = 0
+    let mut k = 1
+    while k <= n {
+        sum = sum + liouville_int(k)
+        k = k + 1
+    }
+    return sum
+}
+
+// pisano_period(n) = π(n) — period of the Fibonacci sequence mod n (A001175).
+// Iterate (a,b)=(0,1)→(b,(a+b) mod n) until the pair returns to (0,1).
+// π(2)=3, π(3)=8, π(6)=lcm(3,8)=24, π(10)=60. Integer-exact, no big-int.
+pub fn pisano_period(n: int) -> int {
+    if n <= 1 { return 1 }
+    let mut a = 0
+    let mut b = 1
+    let mut period = 0
+    while true {
+        let t = (a + b) % n
+        a = b
+        b = t
+        period = period + 1
+        if a == 0 && b == 1 { return period }
+    }
+    return period
+}
+
 // sopfr(n) → sum of prime factors with multiplicity (OEIS A001414).
 // Trial division up to √x; the residual x>1 is the final prime factor.
 // sopfr(1)=0 (empty product), sopfr(prime p)=p. Mirrors the integer-exact
