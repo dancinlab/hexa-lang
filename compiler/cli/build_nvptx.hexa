@@ -257,13 +257,20 @@
 //   filter in `_nvptx_codegen` consumes.
 // `compiler/atlas/static_index.hexa` — `static_atlas()` → `AtlasIndex`,
 //   the lookup table `lower(module, atlas)` requires for P/C/L/E refs.
-import "../ir/mir.hexa"
-import "../codegen/nvptx_target.hexa"
-import "../lex/lexer.hexa"
-import "../parse/parser.hexa"
-import "../lower/ast_to_hir.hexa"
-import "../lower/hir_to_mir.hexa"
-import "../atlas/static_index.hexa"
+// Project-root `use` form (NOT absolute-path `import "../…"`) so the
+// module_loader dedups canonically: `import "../atlas/static_index.hexa"`
+// loaded atlas/parser+merger once via the absolute path AND again via
+// static_index's internal `use "compiler/atlas/…"` chain → duplicate
+// EdgeInfo/AtlasIndex struct defs → C redefinition (clang fail). The
+// `use` form keys on the canonical module path so both resolve to one
+// load (same fix RFC 071 P3 probe4 applied to self/main.hexa::AtlasNode).
+use "compiler/ir/mir"
+use "compiler/codegen/nvptx_target"
+use "compiler/lex/lexer"
+use "compiler/parse/parser"
+use "compiler/lower/ast_to_hir"
+use "compiler/lower/hir_to_mir"
+use "compiler/atlas/static_index"
 
 // ── P2.1 hand-MIR vec-add fixture ───────────────────────────────────
 //
