@@ -2,6 +2,12 @@
 
 Append-only history sister of `INBOX.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
+## 2026-05-26T17:15Z — 🔑 cloud #1155 zero-flag CLOSE — rent/adopt → ~/.ssh/config 자동주입
+
+- [x] **`rent`/`adopt` 가 vast key 를 `~/.ssh/config` 에 자동 주입** — `vast_ssh_config_autoinject(iid)` 가 bare-IP endpoint 해소 후 marker-scoped Host 블록(`# >>> hexa-cloud vast <ip> >>>` … `<<<`) 작성: `IdentityFile`(=$HEXA_VAST_IDENTITY 또는 `~/.ssh/id_vast_anima`)+IdentitiesOnly+StrictHostKeyChecking no+UserKnownHostsFile /dev/null. 이후 bare `hexa cloud run root@<ip> --port <p>`(또는 raw ssh)가 `--identity` 없이 vast key 제시. **NO Port in block**(--port 호출자 제어, 同IP 타 서비스 hijack 방지) · marker-scoped(유저 hand-config 보존, 재-rent 멱등) · key 부재 시 graceful no-op.
+- [x] **검증**: `vast_ssh_config_splice`/`_block` 순수 12/12 PASS(empty·user-보존·멱등 재splice·2-IP 공존·no-Port). transpile-clean. `ssh_config_test.hexa` 영구 가드. cloud 0.3.2→0.3.3.
+- [x] **#1155 CLOSED** = 명시 `--identity`(#1266) + zero-flag(本). I/O(`ensure`/`autoinject`)+rent/adopt wiring 은 vastai+live pod 필요로 미실행이나 검증된 순수 splice 의 thin wrapper.
+
 ## 2026-05-26T16:55Z — 🔑 cloud `--identity <key>` — vast publickey 거부 우회 (#1155 explicit-flag)
 
 - [x] **`--identity <path>` 플래그** — `_ssh_opts_cli` 가 `-i <path> -o IdentitiesOnly=yes` emit. hexa cloud ssh 가 Mac 기본 `~/.ssh/id_ed25519`(vast 미등록) 만 제시 → `Permission denied (publickey)` → raw-ssh 우회(cloud-guard 밖)로 내몰리던 것을, `hexa cloud run/exec/nohup/poll/tail/copy-* … --identity ~/.ssh/id_vast_anima` 로 vast 등록키 제시. `_ssh_opts_cli` 공유라 모든 verb 적용. 6/6 standalone PASS(-i·IdentitiesOnly·--port 조합·-- 정지·dangling 무크래시). help+version(0.3.1→0.3.2). dft-run `_dft_ssh_opts` 와 동일 패턴.
