@@ -1,0 +1,116 @@
+// RFC 055 055-P0 - hexa-native NVPTX emit | target=nvptx64-nvidia-cuda-sm80
+.version 7.0
+.target sm_80
+.address_size 64
+
+.visible .entry sweep_pred (
+    .param .u64 sweep_pred_param_0,
+    .param .u64 sweep_pred_param_1,
+    .param .u64 sweep_pred_param_2
+)
+{
+    .shared .align 8 .b8 _hexa_sh_sweep_pred[2048];
+    .reg .u64 %rd2;
+    .reg .u64 %sh3;
+    .reg .f64 %fd4;
+    .reg .f64 %fd5;
+    .reg .u32 %r6;
+    .reg .u64 %rd7;
+    .reg .u64 %rd8;
+    .reg .pred %p9;
+    .reg .u64 %rd11;
+    .reg .f64 %fd13;
+    .reg .f64 %fd15;
+    .reg .u64 %rd16;
+    .reg .pred %p17;
+    .reg .pred %p18;
+    .reg .pred %p29;
+    .reg .f64 %fd22;
+    .reg .u64 %rd23;
+    .reg .u64 %rd24;
+    .reg .f64 %fd25;
+    .reg .f64 %fd26;
+    .reg .f64 %fd27;
+    .reg .u64 %rd28;
+    .reg .u64 %rd31;
+    .reg .u64 %rd32;
+    .reg .f64 %fd33;
+    .reg .u64 %rd0;
+    .reg .u64 %rd1;
+    .reg .u64 %rd_idxa_13;
+    .reg .u64 %rd_idxa_22;
+    .reg .u64 %rd_idxa_25;
+    .reg .u64 %rd_idxa_33;
+    .reg .u64 %rd_idxs_addr;
+    .reg .u64 %rd_idx_off_11_8;
+$L_0:
+    ld.param.u64 %rd0, [sweep_pred_param_0];  // load kernel param 0 into reg
+    ld.param.u64 %rd1, [sweep_pred_param_1];  // load kernel param 1 into reg
+    ld.param.u64 %rd2, [sweep_pred_param_2];  // load kernel param 2 into reg
+    mov.u64 %sh3, _hexa_sh_sweep_pred + 0;  // init @shared base = _hexa_sh_sweep_pred + 0
+    mov.f64 %sh3, 0;  // assign
+    mov.f64 %fd5, %fd4;  // assign
+    mov.u32 %r6, %tid.x;  // gpu_thread_id_x()
+    cvt.s64.s32 %rd7, %r6;  // to_i64 (s32 to s64)
+    mov.u64 %rd8, %rd7;  // assign
+    setp.lt.s64 %p9, %rd8, %rd2;  // cmp <
+    @%p9 bra $L_1;  // br_cond true -> $L_1
+    bra $L_2;  // br_cond false -> $L_2
+$L_1:
+    mov.b64 %rd11, %rd8;  // to_i64 (widen no-op)
+    mul.lo.s64 %rd_idx_off_11_8, %rd11, 8;  // shared idx byte off = idx * 8
+    add.s64 %rd_idxa_13, %rd_idx_off_11_8, %rd0;  // index addr = shared_off + base
+    ld.global.f64 %fd13, [%rd_idxa_13];  // ld base[idx] (f64)
+    add.s64 %rd_idxs_addr, %rd_idx_off_11_8, %sh3;  // index_set addr = shared_off + base
+    st.shared.f64 [%rd_idxs_addr], %fd13;  // st base[idx] = val .shared (f64)
+    bra $L_3;  // br -> $L_3
+$L_2:
+    add.s64 %rd_idxs_addr, %rd_idx_off_11_8, %sh3;  // index_set addr = shared_off + base
+    st.shared.f64 [%rd_idxs_addr], 0.0;  // st base[idx] = val .shared (f64)
+    bra $L_3;  // br -> $L_3
+$L_3:
+    bar.sync 0;  // gpu_barrier()
+    mov.u64 %rd16, 128;  // assign
+    bra $L_4;  // br -> $L_4
+$L_4:
+    setp.gt.s64 %p17, %rd16, 0;  // cmp >
+    @%p17 bra $L_5;  // br_cond true -> $L_5
+    bra $L_6;  // br_cond false -> $L_6
+$L_5:
+    setp.lt.s64 %p18, %rd8, %rd16;  // cmp <
+    @%p18 bra $L_7;  // br_cond true -> $L_7
+    bra $L_8;  // br_cond false -> $L_8
+$L_6:
+    setp.eq.s64 %p29, %rd8, 0;  // cmp ==
+    @%p29 bra $L_9;  // br_cond true -> $L_9
+    bra $L_10;  // br_cond false -> $L_10
+$L_7:
+    add.s64 %rd_idxa_22, %rd_idx_off_11_8, %sh3;  // index addr = shared_off + base
+    ld.shared.f64 %fd22, [%rd_idxa_22];  // ld base[idx] .shared (f64)
+    add.s64 %rd23, %rd8, %rd16;  // binop +
+    mov.b64 %rd24, %rd23;  // to_i64 (widen no-op)
+    mul.lo.s64 %rd_idxa_25, %rd24, 8;  // index byte off = idx * 8
+    add.s64 %rd_idxa_25, %rd_idxa_25, %sh3;  // index addr = base + off
+    ld.shared.f64 %fd25, [%rd_idxa_25];  // ld base[idx] .shared (f64)
+    add.f64 %fd26, %fd22, %fd25;  // binop +
+    add.s64 %rd_idxs_addr, %rd_idx_off_11_8, %sh3;  // index_set addr = shared_off + base
+    st.shared.f64 [%rd_idxs_addr], %fd26;  // st base[idx] = val .shared (f64)
+    bra $L_8;  // br -> $L_8
+$L_8:
+    bar.sync 0;  // gpu_barrier()
+    div.s64 %rd28, %rd16, 2;  // binop /
+    mov.u64 %rd16, %rd28;  // assign
+    bra $L_4;  // br -> $L_4
+$L_9:
+    mov.b64 %rd31, 0;  // to_i64(imm)
+    mov.b64 %rd32, 0;  // to_i64(imm)
+    mul.lo.s64 %rd_idxa_33, %rd32, 8;  // index byte off = idx * 8
+    add.s64 %rd_idxa_33, %rd_idxa_33, %sh3;  // index addr = base + off
+    ld.shared.f64 %fd33, [%rd_idxa_33];  // ld base[idx] .shared (f64)
+    mul.lo.s64 %rd_idxs_addr, %rd31, 8;  // index_set byte off = idx * 8
+    add.s64 %rd_idxs_addr, %rd_idxs_addr, %rd1;  // index_set addr = base + off
+    st.global.f64 [%rd_idxs_addr], %fd33;  // st base[idx] = val (f64)
+    bra $L_10;  // br -> $L_10
+$L_10:
+    ret;  // return
+}
