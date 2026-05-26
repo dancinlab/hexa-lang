@@ -2,6 +2,16 @@
 
 Append-only history sister of `INBOX.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
+## 2026-05-26T19:50Z — Pepin–Lehmer (or 일반 결정형 primality) stdlib 부재 — F6 large-perfect 탐색 게이트 (v2)
+
+> TECS-L F2 /gap 42-lens sweep 결과 R5 seed shortlist Rank 3 (F6 D(n)=σφ−nτ beyond 10^8) 차단 발견. Lucas-Lehmer (Mersenne 전용, MR4) 만 stdlib 에 있고 일반 n primality 결정형 (Pepin / Pocklington / AKS / deterministic Miller-Rabin) 부재 → primorial#7·8589869056·33550336 너머 D(n) corroboration 이 primality 게이트에서 멈춤.
+
+- [ ] **`stdlib/number/primality.hexa` 일반 결정형 부재** — Lucas-Lehmer 외 일반 n primality 결정형 (Pepin 등) 없음. F6 D(n) sweep beyond 10^8 (Ochoa-Rao P_6 너머) 가 이 인프라 의존.
+- 참고: **PR #1310 (`feat(stdlib/core/math): deterministic Miller-Rabin is_prime_det for full i64 range`, 2026-05-26 머지)** 가 F6 의 large-n primality 게이트를 부분 해소 가능 — i64 범위 내 결정형. Pepin 은 Fermat number 전용; 일반 stdlib 진입은 `is_prime_det` 가 충분할 수도. F6 sweep 재시도 → #1310 reuse 확인 필요.
+- 후속 = #1230(sopfr/pow) · #1281(verify_cli binary-내장) 패밀리와 동급의 stdlib calc 확장 후보. F2 보고서 (R5 seed Rank 3) 인용.
+- 우선순위: 🟠 deferred frontier — M10 corroboration 만 영향, TECS-L 코어 닫힘 비차단. v2 = #1298 conflict 후 re-add (parallel-session merges).
+- proposed-by: agent (TECS-L F2 /gap 42-lens sweep, R5 seed 도출, 2026-05-26)
+
 ## 2026-05-26T19:30Z — `hexa loop --allow-llm` subprocess dispatch hang (C1 LLM 실호출 차단, RFC 080 활성 게이트)
 
 > TECS-L 범용 첫 cycle C1 fire (LLM budget 무제한 + cooldown reset 작동) 시도 중 발견. fire #5~#9 누적 진단: cooldown 해소 / DFS seeds 활성(42 candidate dispatch) 까지는 진전했으나, `--allow-llm` 명시 시 hexa loop 가 subprocess (claude -p) spawn 단계에서 hang.
