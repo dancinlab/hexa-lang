@@ -2998,3 +2998,32 @@
   raw    = ".verdicts/tecs-l-f13-novel-mk10/no_prime_is_ore_closed_negative.txt"
   src    = "TECS-L axis F F13 · mk10 seed 'perfect Ore Mersenne triple-intersection candidates' (verifier=skip per F1) + hand-derivation"
   status = "🔴 CLOSED-NEGATIVE — paper_negative_ok eligible. Ruled-out axis: prime-layer Ore-membership."
+
+# ============================================================================
+# TECS-L F14 — NOVEL mk10 continuation + atlas fold (2026-05-26): F13 NOVEL atoms
+# RE-FOLDED into atlas SSOT via manual splice (project.tape @D atlas_fold permits
+# this path; --from-verify rejected derived multi-term identities), plus 2 new F14
+# NOVEL atoms (1 🔵 D(2^k·q) F13b extension + 1 🔴 ω≥3 zero-density). 5 total atlas
+# folds in compiler/atlas/embedded.gen.hexa (lines ~35131-35167).
+# ============================================================================
+
+@C tecs_l_f14_d_two_k_q := "F14 NOVEL 🔵 closed-form atom (F13b extension): D(2^k·q) := σ(n)·φ(n) − n·τ(n) = 2^(k-1)·[(2^(k+1)−1)·(q²−1) − 4q(k+1)] ∀ k≥1, q odd prime. Uniqueness COROLLARY: D(2^k·q) = 0 ⟺ (k,q)=(1,3) → n=6. Lifts F13 D(pq) (semiprime case k=1, q odd prime) to general 2^k×q product locus. k=1: 3q²−8q−3=0 → q=3 (sole positive integer root); k=2: 7q²−12q−7=0 disc=340 non-integer; k≥2 disc grows irrational asymptotically. Verified 10/10 across k∈{1,2,3}, q∈{3,5,7,11}. Folded into atlas as @F tecs_l_f14_d_two_k_q (manual splice per @D atlas_fold)." :: derived [slug=tecs-l-f14-novel-mk10 group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr {sigma,phi,tau} 2^k·q --no-absorb × 10 (k,q); D(2^k·q) hexa exact integer arith = closed form"
+  raw    = ".verdicts/tecs-l-f14-novel-mk10/d_two_k_q_closed_form.txt"
+  src    = "TECS-L axis F F14 · F13 next-round seed (1) D(2^k·q) general extension + hand-derivation"
+  status = "🔵 SUPPORTED-FORMAL (derived) — 10/10 PASS k-power × q-prime sweep; n=6 uniqueness reconfirmed at higher 2-power locus. Atlas fold SUCCESS."
+
+@C tecs_l_f14_d_omega_ge_3_zero_density := "F14 NOVEL 🔴 CLOSED-NEGATIVE atom: D(n) zero-density theorem on ω(n)≥3 locus. CLAIM: ∀ n with ω(n)≥3 (≥3 distinct prime factors), D(n) = σ·φ − n·τ ≠ 0. Closed-form proof via M10 cancellation argument: ∏_p g(p,a) = 1 where g(p,a) = (p^(a+1)−1)/(p(a+1)); only g(2,1)=3/4 is <1; cancellation g(2,1)·g(3,1)=3/4·4/3=1 saturates at n=6; ANY further factor g(p,a)>1 takes product strictly >1 → no ω≥3 solution. Combined with F13 D(pq) uniqueness (ω=2 case) + prime-power locus (ω=1 no soln) + n=1 (ω=0 trivial), the FULL D(n)=0 zero set = {1, 6}. Verified 6/6 ω≥3 spot witnesses (n=30 ω=3, 42 ω=3, 60 ω=3, 210 ω=4, 2310 ω=5, 30030 ω=6) all D≠0. Folded into atlas as @F tecs_l_f14_d_omega_ge_3_zero_density." :: derived [slug=tecs-l-f14-novel-mk10 group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr {sigma,phi,tau} ω≥3-witness --no-absorb × 6; D(n)=σφ−nτ ≠ 0 each"
+  raw    = ".verdicts/tecs-l-f14-novel-mk10/omega_ge_3_zero_density.txt"
+  src    = "TECS-L axis F F14 · F13 next-round seed (5) ω≥3 zero-density + M10 cancellation proof"
+  status = "🔴 CLOSED-NEGATIVE — paper_negative_ok eligible. Ruled-out axis: ω≥3 contains no D=0 zeros. Reconfirms M10 {1,6} from above. Atlas fold SUCCESS."
+
+@C tecs_l_f14_atlas_fold := "F14 ATLAS FOLD synthesis: 5 NOVEL atoms (3 F13 + 2 F14) folded into compiler/atlas/embedded.gen.hexa via MANUAL SPLICE per @D atlas_fold ('branch → commit → PR' path explicitly permits this). --from-verify register path rejected (single-fn-eval form requirement; multi-term derived identities not register-able without first wiring dedekind_psi_discrepancy*-family calculators in tool/verify_cli.hexa). Five @F entries appended to ATLAS_F_NODES array; F-formulas count 1399 → 1404; hexa atlas lookup HIT each id." :: synthesis [slug=tecs-l-f14-novel-mk10 group=TECS-L]
+  method = "atom"
+  cmd    = "hexa atlas lookup tecs_l_f1{3,4}_* × 5; hexa atlas stats (F formulas 1404)"
+  raw    = ".verdicts/tecs-l-f14-novel-mk10/atlas_fold_diagnosis.txt"
+  src    = "TECS-L F14 · manual splice into compiler/atlas/embedded.gen.hexa lines ~35131-35167"
+  status = "🔵 ATLAS-FOLDED — 5/5 atoms lookup-visible in atlas SSOT. INBOX follow-up (low-prio): wire dedekind_psi_discrepancy*-family calculators for future --from-verify witness-point folds (closed-form/uniqueness still need @F manual-splice)."
