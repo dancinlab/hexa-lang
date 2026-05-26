@@ -412,6 +412,45 @@ fn _recompute_register(fn_name: string, n: int) -> int {
     if fn_name == "gamma0_genus"   { return gamma0_genus(n) }
     if fn_name == "isotropy_lcm"   { return isotropy_lcm(n) }
     if fn_name == "first_cusp_form_weight" { return first_cusp_form_weight(n) }
+    // ── TECS-L F21 mirror (verify_cli.hexa::_recompute · INBOX 3) ─────────
+    // mertens / tunnell_count_odd / tunnell_count_even — verbatim ports.
+    if fn_name == "mertens" {
+        let mut s = 0
+        let mut k = 1
+        while k <= n {
+            s = s + mobius(k)
+            k = k + 1
+        }
+        return s
+    }
+    if fn_name == "tunnell_count_odd" || fn_name == "tunnell_count_even" {
+        if n < 0 { return 0 }
+        let z_coef = if fn_name == "tunnell_count_odd" { 32 } else { 8 }
+        let mut bound = 0
+        while (bound + 1) * (bound + 1) <= n { bound = bound + 1 }
+        bound = bound + 1
+        let mut cnt = 0
+        let mut x = 0 - bound
+        while x <= bound {
+            let tx = 2 * x * x
+            if tx <= n {
+                let mut y = 0 - bound
+                while y <= bound {
+                    let txy = tx + y * y
+                    if txy <= n {
+                        let mut z = 0 - bound
+                        while z <= bound {
+                            if txy + z_coef * z * z == n { cnt = cnt + 1 }
+                            z = z + 1
+                        }
+                    }
+                    y = y + 1
+                }
+            }
+            x = x + 1
+        }
+        return cnt
+    }
     return _NOCALC_REGISTER
 }
 
@@ -436,6 +475,13 @@ fn _recompute3_register(fn_name: string, a: int, b: int, c: int) -> int {
     if fn_name == "tknn_chern" {
         // TKNN/Diophantine closed-form. Mirror _tknn_chern from verify_cli.
         return _tknn_chern_register(a, b, c)
+    }
+    // TECS-L F21 — BSD congruent-number witness mirror. y² == x³ − n²·x.
+    if fn_name == "elliptic_witness" {
+        let lhs = b * b
+        let rhs = a * a * a - c * c * a
+        if lhs == rhs { return 1 }
+        return 0
     }
     return _NOCALC_REGISTER
 }
