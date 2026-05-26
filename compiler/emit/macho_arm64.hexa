@@ -25,20 +25,22 @@
 //     iundefsym 7 / nundefsym 2) is IDENTICAL. Sections (__text,
 //     __HEXA,__cap, __HEXA,__abi) + load commands (LC_SEGMENT_64,
 //     LC_BUILD_VERSION, LC_SYMTAB, LC_DYSYMTAB) IDENTICAL.
-//   - Whole-`.o` size gap vs the CWD-independent clang object
-//     (`.s` with `.file`/`.loc` stripped): closed from baseline
-//     367 / 459 / 466 B  ->  HEAD 1 / 1 / 5 B (trivial / fib / while).
+//   - Whole-`.o` byte-eq vs the CWD-independent clang object
+//     (`.s` with `.file`/`.loc` stripped): byte-diff == 0 for
+//     {trivial, fib, while, if} (ours 800 / 1248 / 1096 / 1064 B ==
+//     clang). The strtab interning residual below is now CLOSED.
 //
-// RESIDUAL to FULL byte-eq (the next substantial increment — both
-// verified non-derivable from outside LLVM-MC):
-//   (1) STRTAB-INTERNING ORDER. clang's strtab is built by
-//       MCStringTableBuilder's suffix-merge sort, so the byte order
-//       of the names differs from our symbol-order interning. That
-//       shifts every `n_strx` (name_offset) and the `strsize` field
-//       (±1..5 B). The symbol IDENTITIES, ORDER, n_type/n_sect/
-//       n_value, and DYSYMTAB indices all already match — ONLY the
-//       per-name string offsets diverge. Matching this requires
-//       reproducing MCStringTableBuilder's suffix-merge interning.
+// CLOSED (2026-05-26): STRTAB-INTERNING ORDER. clang's strtab is
+//   built by MCStringTableBuilder's suffix-merge interning, which we
+//   now reproduce in `_build_merged_strtab`: unique names sorted by
+//   REVERSED bytes DESCENDING, a string that is a suffix of its
+//   predecessor tail-merges (reuses the predecessor's trailing bytes +
+//   NUL), and the table is padded so the file ends on an 8-byte
+//   boundary. Every `n_strx` (name_offset) + the `strsize` field now
+//   match clang byte-for-byte (verified against Apple clang 21.0.0).
+//
+// RESIDUAL to FULL byte-eq vs the *default* clang object (out of
+// scope — non-portable):
 //   (2) DWARF `__debug_line` / `__debug_line_str`. The default
 //       `clang -c` object carries these (from `.file`/`.loc`) and
 //       `__debug_line_str` EMBEDS the absolute build CWD — so the
