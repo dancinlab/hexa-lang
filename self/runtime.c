@@ -5310,7 +5310,7 @@ int64_t hexa_float_to_int(double f) {
 HexaVal hexa_math_tanh(HexaVal x) { return hexa_float(tanh(HX_FLOAT(x))); }
 HexaVal hexa_math_tan(HexaVal x)  { return hexa_float(tan(HX_FLOAT(x))); }
 HexaVal hexa_math_abs(HexaVal x)  { return hexa_float(fabs(HX_FLOAT(x))); }
-HexaVal hexa_math_sqrt(HexaVal x) { return hexa_float(sqrt(HX_FLOAT(x))); }
+__attribute__((weak)) HexaVal hexa_math_sqrt(HexaVal x) { return hexa_float(sqrt(HX_FLOAT(x))); }
 #else
 extern HexaVal rt_tanh(HexaVal x);
 extern HexaVal rt_tan(HexaVal x);
@@ -5319,7 +5319,7 @@ extern HexaVal rt_sqrt(HexaVal v);
 HexaVal hexa_math_tanh(HexaVal x) { return rt_tanh(hexa_float(HX_FLOAT(x))); }
 HexaVal hexa_math_tan(HexaVal x)  { return rt_tan(hexa_float(HX_FLOAT(x))); }
 HexaVal hexa_math_abs(HexaVal x)  { return rt_abs_float(hexa_float(HX_FLOAT(x))); }
-HexaVal hexa_math_sqrt(HexaVal x) { return rt_sqrt(hexa_float(HX_FLOAT(x))); }
+__attribute__((weak)) HexaVal hexa_math_sqrt(HexaVal x) { return rt_sqrt(hexa_float(HX_FLOAT(x))); }
 #endif
 HexaVal hexa_math_sin(HexaVal x)  { return hexa_float(hxlcl_sin(HX_FLOAT(x))); }
 HexaVal hexa_math_cos(HexaVal x)  { return hexa_float(hxlcl_cos(HX_FLOAT(x))); }
