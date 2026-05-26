@@ -953,6 +953,157 @@ _hexa_exit:
   를 일괄 부착하는 macro 도입 (`HEXA_OVERRIDABLE`). primitive 단위 wire
   가 확장될수록 individual edit 대신 macro 1 곳 정의.
 
+### 아홉째 increment (2026-05-26 · 🛸 2nd primitive wire — hexa-emit `_hexa_ptr_alloc` override via `rt_alloc` primitive, 60-B HexaVal-ABI adapter)
+
+일곱째 increment (FIRST PROBE — `_hexa_exit`, #1321) + 여덟째 increment
+(production-effect verify — rebuild driver + env-on otool body switch
+proven, #1324) 위에서, **횡축 확장 잔여 (B)** 를 한 단계 진전. 같은
+weak-symbol override 형판으로 `runtime.c::hexa_ptr_alloc` 을 hexa-emit
+`_hexa_ptr_alloc` 로 superseed — 첫 PROBE 가 `noreturn` (단순 입력 adapt)
+이었다면, 본 increment 는 **HexaVal struct-in + HexaVal struct-out** 의
+**완전 양방향 ABI adapter** 를 처음 wire.
+
+**ABI 분석 (audit)**:
+
+| axis            | `_hexa_exit` (#1321)               | `_hexa_ptr_alloc` (본 increment)         |
+|-----------------|------------------------------------|------------------------------------------|
+| C-side wrapper  | `hexa_exit(HexaVal)` (`noreturn`)  | `hexa_ptr_alloc(HexaVal)` → `HexaVal`    |
+| primitive       | `rt_exit` (16 B, svc #0x80 / x16=1) | `rt_alloc` (48 B, svc #0x80 / x16=197 mmap) |
+| 입력 adapt      | `mov x0, x1` (4 B, payload→x0)     | `mov x0, x1` (4 B, payload→x0)           |
+| 출력 adapt      | (없음 — svc 가 프로세스 종료)        | `mov x1, x0; mov x0, #0` (8 B, ptr→HexaVal) |
+| epilogue        | (없음 — exit 안 돌아옴)             | `ldp x29, x30, [sp], #16; ret` (8 B)     |
+| 전체 adapter 길이 | 20 B (= 4 prefix + 16 rt_exit)    | **60 B** (= 4 + 40 + 8 + 8)              |
+
+핵심 통찰 — **return-ABI 가 새 차원**: `noreturn` primitive 는 svc 가
+프로세스를 종료하므로 후처리 불필요. **값 반환** primitive 는 svc 결과
+(`x0` = mmap'd ptr) 를 HexaVal 형식 (`x0=tag=0, x1=payload=ptr`) 으로
+재포장해야 하므로 `mov x1, x0; mov x0, #0` 2 개 명령 prefix 가 epilogue
+앞에 끼어든다. 또한 `rt_alloc` 자체의 `ldp/ret` epilogue 는 **strip** 후
+adapter 가 자체 epilogue 를 다시 emit (8 B) — primitive 의 byte 시퀀스를
+중간에 끊어 사이에 ABI postfix 를 끼우는 첫 사례.
+
+**3-요소 wire (#1321 레시피 그대로)**:
+
+1. `self/runtime.c::hexa_ptr_alloc` 에 `__attribute__((weak))` 부착. C-runtime
+   body 는 unchanged (`calloc(1, n)`) — linker 가 strong 동명 심볼이 link
+   입력에 있을 때 그것을 우선하게 한다.
+2. `test/native_build/emit_hexa_ptr_alloc_native_o.hexa` — strong
+   `_hexa_ptr_alloc` 를 export 하는 60-B `__text` + `_hexa_ptr_alloc\0`
+   16-B strtab + `obj_wrap_v` 325 B `.o` 를 emit. 인프라는 `_hexa_exit`
+   emit driver 의 v2 wrapper 재사용 (심볼명 + strtab 크기만 차이).
+3. `self/main.hexa` cmd_build (HEXA_BACKEND=native 경로 L2708) — env
+   `HEXA_NATIVE_RT_PTR_ALLOC=1` 일 때 emit driver 를 `hexa run` 으로
+   호출 → 생성된 `/tmp/hexa_ptr_alloc_native.o` 를 clang link 의 입력에
+   추가 (`__nrt_native_o` 변수에 누적 → `_hexa_exit` override 와 **합산
+   가능**, 동시 enable 시 두 `.o` 모두 link 입력). env unset = 기존 link
+   명령 byte-eq (no-regression).
+
+**g5 verbatim — wire smoke (Mac arm64 `ssh mini` offload)**:
+
+```
+$ # emit
+$ hexa run test/native_build/emit_hexa_ptr_alloc_native_o.hexa
+[wire] HEXA_BACKEND flip · 아홉째 increment — _hexa_ptr_alloc native override
+  adapter bytes  : 60 (60 expected — 4 prefix + 40 mmap + 8 ret-postfix + 8 epilogue)
+  ABI prefix     : e0 03 01 aa (mov x0, x1) OK
+  SVC mid-body   : 01 10 00 d4 (svc #0x80, mmap call) OK
+  ret-postfix    : e1 03 00 aa + 00 00 80 d2 (mov x1,x0; mov x0,#0) OK
+  RET trailer    : c0 03 5f d6 OK
+  obj_wrap size  : 325 bytes total
+  MH_MAGIC_64    : cf fa ed fe OK
+  filetype       : 1 (MH_OBJECT) OK
+  wrote          : /tmp/hexa_ptr_alloc_native.o
+[wire] EMIT OK — link via cmd_build native path with HEXA_NATIVE_RT_PTR_ALLOC=1
+
+$ # link OFF — C calloc body
+$ clang -O2 test_ptr_alloc.c runtime_stub.c -o test_off && ./test_off
+OK: ptr=0x102ad9640 byte0=0
+rc=42
+
+$ # link ON — hexa-emit body
+$ clang -O2 hexa_ptr_alloc_native.o test_ptr_alloc.c runtime_stub.c -o test_on && ./test_on
+OK: ptr=0x102604000 byte0=0
+rc=42
+
+$ # PROOF — env-ON binary's _hexa_ptr_alloc body (15 instr = full adapter)
+$ otool -tv test_on | sed -n '/_hexa_ptr_alloc:/,/_main:/p'
+_hexa_ptr_alloc:
+0000000100000460	mov	x0, x1
+0000000100000464	stp	x29, x30, [sp, #-0x10]!
+0000000100000468	mov	x29, sp
+000000010000046c	mov	x1, x0
+0000000100000470	mov	x0, #0x0
+0000000100000474	mov	x2, #0x3
+0000000100000478	mov	x3, #0x1002
+000000010000047c	mov	x4, #-0x1
+0000000100000480	mov	x5, #0x0
+0000000100000484	mov	x16, #0xc5
+0000000100000488	svc	#0x80
+000000010000048c	mov	x1, x0
+0000000100000490	mov	x0, #0x0
+0000000100000494	ldp	x29, x30, [sp], #0x10
+0000000100000498	ret
+
+$ # CONTRAST — env-OFF binary's _hexa_ptr_alloc body (calloc + heap addr)
+$ otool -tv test_off | sed -n '/_hexa_ptr_alloc:/,/_main:/p'
+_hexa_ptr_alloc:
+0000000100000504	cmp	w0, #0x0
+0000000100000508	csel	x1, x1, xzr, eq
+000000010000050c	cmp	x1, #0x1
+0000000100000510	b.lt	0x100000534
+0000000100000514	stp	x29, x30, [sp, #-0x10]!
+0000000100000518	mov	x29, sp
+000000010000051c	mov	w0, #0x1
+0000000100000520	bl	0x100000540 ; symbol stub for: _calloc
+0000000100000524	mov	x1, x0
+0000000100000528	mov	x0, #0x0
+000000010000052c	ldp	x29, x30, [sp], #0x10
+0000000100000530	ret
+```
+
+mmap fingerprint (`mov x16, #0xc5; svc #0x80`) 가 env-ON 에서 선명 →
+**ld64 가 weak C 심볼을 hexa-emit strong 으로 교체** 했다. ptr 도
+page-aligned (`0x102604000`, last 12 bits = 0 — mmap 의 4 KiB 페이지 그릇)
+vs calloc 의 heap addr (`0x102ad9640`, 비-aligned) → 런타임 분기도 확인.
+
+**no-regression (#1321 wire 보존)**:
+
+- 두 override 동시 enable + 동시 link → 둘 다 발사 PASS:
+  ```
+  $ clang -O2 hexa_exit_native.o hexa_ptr_alloc_native.o test_both.c rt_stub.c -o test_both
+  $ ./test_both
+  alloc ok ptr=0x100c54000          # ← _hexa_ptr_alloc override 발사 (mmap)
+  rc=42                              # ← _hexa_exit override 발사 (svc x16=1)
+  ```
+- `nm` 출력에서 두 심볼 모두 strong external `T` 로 노출 (weak 가 strong
+  으로 cleanly 교체됨, link 충돌 없음).
+- env unset = 두 weak C 본문 모두 활성 (`bl _calloc` + `bl _exit`).
+  기본 build_aprime.sh 경로는 `HEXA_NATIVE_RT_*` 미설정 → patch 진입 안
+  함 → byte-eq.
+
+**잔여 (다음 increment 후보)**:
+
+- (A) **production-effect verify** — 본 increment 의 #1324-pattern 후속:
+  hexa_cli_driver 를 `HEXA_NATIVE_RT_PTR_ALLOC=1` 환경에서 재빌드 → otool
+  diff 로 production 의 `_hexa_ptr_alloc` body switch 가 baked in 됨을
+  실측. 본 PR 은 형판 + 합성 smoke 까지; production rebuild 는 후속 PR.
+- (B) **allocator-pair 동조** — `_hexa_ptr_alloc` 을 mmap 로 override 하면
+  `hexa_ptr_free` (libc `free()`) 와 짝이 안 맞는다 (libc heap 손상 위험).
+  default-on 으로 flip 하려면 `_hexa_ptr_free` 도 동시에 `munmap` 으로
+  override 필요. 본 increment 는 env-gate (opt-in) 으로 안전 유지.
+- (C) **다음 primitive 후보** — 본 increment 의 형판으로 wire 가능:
+  - `_hexa_clock()` ← `rt_clock_gettime` (입력 없음, HexaVal 단일 return)
+  - `_hexa_sleep(HexaVal)` ← `rt_nanosleep` (`noreturn` 류 — 단일 입력,
+    void return — 가장 단순)
+  - `_hexa_random()` ← `rt_getrandom` (출력 8 B HexaVal)
+  - `_hexa_str_len(HexaVal)` ← `rt_str_len` 또는 `rt_strlen_neon`
+    (HexaStr → ptr 추출 + int64 return — 가장 복잡, unbox 필요)
+- (D) **`HEXA_OVERRIDABLE` macro** — primitive 가 3 개 이상 wire 되면
+  `runtime.c` 의 weak 부착 패턴이 반복. macro 통합으로 patch surface 축소.
+- (E) **단일 multi-sym `.o`** — `macho_obj_wrap_v3` (다섯째 increment)
+  으로 `_hexa_exit + _hexa_ptr_alloc + ...` 를 한 `.o` 에 묶어 `HEXA_NATIVE_RT_ALL=1`
+  단일 게이트로 수렴. emit driver 통합 (현재는 primitive 당 1 driver).
+
 ## Domain map (Phase 0 → 3 + post)
 
 ```
