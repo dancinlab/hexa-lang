@@ -73,6 +73,10 @@ pub fn ag_k_attn_dt() -> int { return 13 }    // GQA attn, dt_sqrt scale
 pub fn ag_k_lmhead_allpos() -> int { return 14 } // full-position tied LM head
                                               // [Z:T·d, temb:V·d → logits:T·V]
                                               // (RFC 059 §4 P1②-a)
+pub fn ag_k_purefield() -> int { return 15 }  // PureFieldFFN: out = E_A(x) − E_G(x),
+                                              // each E = Linear→GELU→Linear
+                                              // (RFC 059 §3 P1②-b — new math:
+                                              //  exact erf-GELU primitive)
 
 // ── tape geometry (node v3) ─────────────────────────────────────────────
 // header v2: [0]=op count, [1]=final-input-grad (legacy/chain path),
@@ -781,6 +785,34 @@ pub fn ag_swiglu(tape: int, r: int, Wg: int, Wu: int, Wd: int,
     return o
 }
 
+// ── PureFieldFFN (RFC 059 §3, P1②-b — the only NEW-math op) ─────────────
+// out = E_A(x) − E_G(x), each E = Linear_in → GELU → Linear_out (exact
+// erf-GELU). Records ONE tape node; the reverse arm runs two (linear→gelu→
+// linear) vjp chains with d_out distributed +1 to E_A and −1 to E_G, and
+// accumulates dx (shared input) + each expert's dW_in/dW_out. New GELU
+// primitive (nn_gelu_bwd) is the genuinely-new math; the Linear vjp reuses
+// the same closed algebra as nn_linear_bwd (inlined per-expert in nn_lib).
+//
+// node layout (node v3 — all slots float-encoded):
+//   ids : [x, Wa_in, Wa_out, Wg_in, Wg_out, out, gA, aA]   (slots 1..8)
+//   dims: [d, h, gG, aG]                                    (slots 9..12)
+// gA/aA/gG/aG are the per-expert fwd caches (pre/post GELU, h-len each),
+// owned by the tape (freed in ag_t_free_state).
+//   x [d]  Wa_in/Wg_in [d·h]  Wa_out/Wg_out [h·d]  →  out [d]
+pub fn ag_purefield(tape: int, x: int, Wa_in: int, Wa_out: int,
+                    Wg_in: int, Wg_out: int, d: int, h: int) -> int {
+    let out = t_zeros(d)
+    let gA = t_zeros(h)
+    let aA = t_zeros(h)
+    let gG = t_zeros(h)
+    let aG = t_zeros(h)
+    nn_purefield_fwd(x, Wa_in, Wa_out, Wg_in, Wg_out,
+                     out, gA, aA, gG, aG, d, h)
+    let _ = _ag_push(tape, ag_k_purefield(), x, Wa_in, Wa_out, Wg_in, Wg_out,
+                     out, gA, aA, d, h, gG, aG)
+    return out
+}
+
 // X = Embedding(idsf, table) ; idsf[T] (float-encoded token ids),
 // table[V·d] → X[T·d]. Input layer: bwd scatters dX into dtable
 // (param); no chain-out (ids has no gradient). tape owns X.
@@ -1288,6 +1320,43 @@ pub fn ag_backward_reg(tape: int, out_tid: int, seed: int) {
             t_free(z_row)
             t_free(og_row)
             t_free(dz_row)
+        } else if kind == ag_k_purefield() {
+            // RFC 059 §3 — PureFieldFFN reverse. out = E_A(x) − E_G(x);
+            // nn_purefield_bwd runs the two (linear→gelu→linear) vjp chains
+            // (d_out +1 to E_A, −1 to E_G), accumulating dx (shared input)
+            // and writing each expert's own dW_in/dW_out. The GELU vjp uses
+            // the exact erf-GELU' = Φ(g)+g·φ(g) (matches the fwd primitive).
+            let x = _ag_get(tape, op, 1)
+            let Wa_in = _ag_get(tape, op, 2)
+            let Wa_out = _ag_get(tape, op, 3)
+            let Wg_in = _ag_get(tape, op, 4)
+            let Wg_out = _ag_get(tape, op, 5)
+            let outid = _ag_get(tape, op, 6)
+            let gA = _ag_get(tape, op, 7)
+            let aA = _ag_get(tape, op, 8)
+            let d = _ag_get(tape, op, 9)
+            let h = _ag_get(tape, op, 10)
+            let gG = _ag_get(tape, op, 11)
+            let aG = _ag_get(tape, op, 12)
+            let og = _ag_reg_grad(tape, outid, d)
+            let dx = t_zeros(d)
+            let dWa_in = t_zeros(d * h)
+            let dWa_out = t_zeros(h * d)
+            let dWg_in = t_zeros(d * h)
+            let dWg_out = t_zeros(h * d)
+            nn_purefield_bwd(x, Wa_in, Wa_out, Wg_in, Wg_out,
+                             gA, aA, gG, aG, og,
+                             dx, dWa_in, dWa_out, dWg_in, dWg_out, d, h)
+            _ag_reg_acc(tape, x, dx, d)               // shared input grad
+            _ag_reg_acc(tape, Wa_in, dWa_in, d * h)
+            _ag_reg_acc(tape, Wa_out, dWa_out, h * d)
+            _ag_reg_acc(tape, Wg_in, dWg_in, d * h)
+            _ag_reg_acc(tape, Wg_out, dWg_out, h * d)
+            t_free(dx)
+            t_free(dWa_in)
+            t_free(dWa_out)
+            t_free(dWg_in)
+            t_free(dWg_out)
         } else if kind == ag_k_swiglu() {
             let r = _ag_get(tape, op, 1)
             let Wg = _ag_get(tape, op, 2)
@@ -1657,6 +1726,12 @@ pub fn ag_t_free_state(tape: int) {
             t_free(_ag_get(tape, op, 3))   // logits
         } else if kind == ag_k_lmhead_allpos() {
             t_free(_ag_get(tape, op, 3))   // logits [T·V]
+        } else if kind == ag_k_purefield() {
+            t_free(_ag_get(tape, op, 6))   // out [d]
+            t_free(_ag_get(tape, op, 7))   // gA  [h]
+            t_free(_ag_get(tape, op, 8))   // aA  [h]
+            t_free(_ag_get(tape, op, 11))  // gG  [h]
+            t_free(_ag_get(tape, op, 12))  // aG  [h]
         } else if kind == ag_k_swiglu() {
             t_free(_ag_get(tape, op, 5))   // a
             t_free(_ag_get(tape, op, 6))   // b

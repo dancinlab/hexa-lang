@@ -857,3 +857,176 @@ pub fn nn_ce_loss_allpos(logits: int, targets: int, T: int, V: int) -> float {
     return total / to_float(T)
 }
 
+// ─── GELU + PureFieldFFN (RFC 059 §3, P1②-b) ───────────────────────────
+// EXACT (erf-based) GELU — the gradient is matched to THIS forward, not a
+// tanh approximation, so the central-diff grad-check stays consistent
+// (flame float-eval byte-eq hazard / RFC 059 §3 GELU' = Φ(g)+g·φ(g)):
+//   GELU(x)  = x · Φ(x) ,  Φ(x) = 0.5·(1 + erf(x/√2))   (normal CDF)
+//   GELU'(x) = Φ(x) + x · φ(x) ,  φ(x) = exp(−x²/2)/√(2π)  (normal pdf)
+// Both `erf` and `exp` are libm codegen builtins (self/codegen.hexa) —
+// IEEE-correct, no hand-rolled Taylor (CLAUDE.md stdlib_trig_libm).
+fn _nn_inv_sqrt2() -> float { return 0.70710678118654752440 }  // 1/√2
+fn _nn_inv_sqrt2pi() -> float { return 0.39894228040143267794 } // 1/√(2π)
+
+fn _nn_normal_cdf(x: float) -> float {
+    return 0.5 * (1.0 + erf(x * _nn_inv_sqrt2()))
+}
+fn _nn_normal_pdf(x: float) -> float {
+    return _nn_inv_sqrt2pi() * exp(0.0 - 0.5 * x * x)
+}
+fn _nn_gelu(x: float) -> float {
+    return x * _nn_normal_cdf(x)
+}
+fn _nn_gelu_grad(x: float) -> float {
+    return _nn_normal_cdf(x) + x * _nn_normal_pdf(x)
+}
+
+// Elementwise GELU: a_out[i] = GELU(g[i]) over h elements.
+pub fn nn_gelu_fwd(g: int, a_out: int, h: int) {
+    let mut i = 0
+    while i < h {
+        let _ = farr_set(a_out, i, _nn_gelu(farr_get(g, i)))
+        i = i + 1
+    }
+}
+
+// Elementwise GELU backward: dg[i] = da[i] · GELU'(g[i]). `g` is the
+// PRE-activation (saved from forward). Caller allocates dg_out (h-len).
+pub fn nn_gelu_bwd(g: int, da: int, dg_out: int, h: int) {
+    let mut i = 0
+    while i < h {
+        let _ = farr_set(dg_out, i, farr_get(da, i) * _nn_gelu_grad(farr_get(g, i)))
+        i = i + 1
+    }
+}
+
+// One PureField expert: E(x) = Linear_out( GELU( Linear_in(x) ) ).
+//   x [d]  W_in [d·h]  W_out [h·d]  →  e_out [d]
+// Saves the per-expert fwd cache (g = pre-GELU [h], aa = post-GELU [h]) for
+// the backward. Caller allocates e_out [d], g_out [h], aa_out [h].
+//   (no bias — MVP matches ag_linear's zero-bias matmul path.)
+pub fn nn_pf_expert_fwd(x: int, W_in: int, W_out: int,
+                        e_out: int, g_out: int, aa_out: int,
+                        d: int, h: int) {
+    // g = x · W_in : [1·d]·[d·h] → [1·h]
+    let g_prod = farr_matmul(x, 1, d, W_in, h)
+    let mut k = 0
+    while k < h {
+        let _ = farr_set(g_out, k, farr_get(g_prod, k))
+        k = k + 1
+    }
+    let _ = farr_free(g_prod)
+    // aa = GELU(g)
+    nn_gelu_fwd(g_out, aa_out, h)
+    // e = aa · W_out : [1·h]·[h·d] → [1·d]
+    let e_prod = farr_matmul(aa_out, 1, h, W_out, d)
+    let mut j = 0
+    while j < d {
+        let _ = farr_set(e_out, j, farr_get(e_prod, j))
+        j = j + 1
+    }
+    let _ = farr_free(e_prod)
+}
+
+// PureFieldFFN forward: out = E_A(x) − E_G(x). Two experts share the input
+// x; the difference is the field "tension" projection input.
+//   x [d]  Wa_in/Wg_in [d·h]  Wa_out/Wg_out [h·d]  →  out [d]
+// Caches: gA/aA (expert-A pre/post GELU), gG/aG (expert-G). Caller allocates
+// out [d], gA/aA/gG/aG [h] each.
+pub fn nn_purefield_fwd(x: int, Wa_in: int, Wa_out: int,
+                        Wg_in: int, Wg_out: int,
+                        out: int, gA: int, aA: int, gG: int, aG: int,
+                        d: int, h: int) {
+    let eA = farr_zeros(d)
+    let eG = farr_zeros(d)
+    nn_pf_expert_fwd(x, Wa_in, Wa_out, eA, gA, aA, d, h)
+    nn_pf_expert_fwd(x, Wg_in, Wg_out, eG, gG, aG, d, h)
+    let mut j = 0
+    while j < d {
+        let _ = farr_set(out, j, farr_get(eA, j) - farr_get(eG, j))
+        j = j + 1
+    }
+    let _ = farr_free(eA)
+    let _ = farr_free(eG)
+}
+
+// One PureField expert backward (vjp of Linear_in → GELU → Linear_out).
+//   de [d]  : upstream grad w.r.t. this expert's output e
+//   sign    : +1.0 for E_A, −1.0 for E_G (chain from out = E_A − E_G)
+//   accumulates into dx_out [d] (shared across both experts → +=)
+//   writes  dW_in_out [d·h], dW_out_out [h·d] (this expert's own params)
+//   x, g, aa : saved fwd state (x input, g pre-GELU, aa post-GELU)
+pub fn nn_pf_expert_bwd(x: int, W_in: int, W_out: int, g: int, aa: int,
+                        de: int, sign: float,
+                        dx_out: int, dW_in_out: int, dW_out_out: int,
+                        d: int, h: int) {
+    // sde[j] = sign · de[j]  (apply the E_A/E_G sign once up front)
+    let sde = farr_zeros(d)
+    let mut j0 = 0
+    while j0 < d {
+        let _ = farr_set(sde, j0, sign * farr_get(de, j0))
+        j0 = j0 + 1
+    }
+    // Linear_out vjp: e = aa · W_out.  daa[k] = Σ_j sde[j]·W_out[k·d+j] ;
+    //                                  dW_out[k·d+j] = aa[k]·sde[j].
+    let daa = farr_zeros(h)
+    let mut k = 0
+    while k < h {
+        let mut acc = 0.0
+        let mut j = 0
+        while j < d {
+            acc = acc + farr_get(sde, j) * farr_get(W_out, k * d + j)
+            let _ = farr_set(dW_out_out, k * d + j, farr_get(aa, k) * farr_get(sde, j))
+            j = j + 1
+        }
+        let _ = farr_set(daa, k, acc)
+        k = k + 1
+    }
+    // GELU vjp: dg[k] = daa[k]·GELU'(g[k])
+    let dg = farr_zeros(h)
+    nn_gelu_bwd(g, daa, dg, h)
+    // Linear_in vjp: g = x · W_in.  dW_in[i·h+k] = x[i]·dg[k] ;
+    //                                dx[i] += Σ_k W_in[i·h+k]·dg[k].
+    let mut i = 0
+    while i < d {
+        let mut acc2 = 0.0
+        let mut k2 = 0
+        while k2 < h {
+            acc2 = acc2 + farr_get(W_in, i * h + k2) * farr_get(dg, k2)
+            let _ = farr_set(dW_in_out, i * h + k2, farr_get(x, i) * farr_get(dg, k2))
+            k2 = k2 + 1
+        }
+        let _ = farr_set(dx_out, i, farr_get(dx_out, i) + acc2)   // accumulate (shared x)
+        i = i + 1
+    }
+    let _ = farr_free(sde)
+    let _ = farr_free(daa)
+    let _ = farr_free(dg)
+}
+
+// PureFieldFFN backward: out = E_A(x) − E_G(x).
+//   dout [d] : upstream grad w.r.t. out
+//   → dx [d] = E_A bwd (sign +1) + E_G bwd (sign −1), accumulated
+//   → dWa_in/dWa_out (expert-A params), dWg_in/dWg_out (expert-G params)
+// Caller allocates dx_out [d] (ZEROED — accumulated), dWa_in/dWg_in [d·h],
+// dWa_out/dWg_out [h·d].
+pub fn nn_purefield_bwd(x: int, Wa_in: int, Wa_out: int,
+                        Wg_in: int, Wg_out: int,
+                        gA: int, aA: int, gG: int, aG: int, dout: int,
+                        dx_out: int, dWa_in_out: int, dWa_out_out: int,
+                        dWg_in_out: int, dWg_out_out: int,
+                        d: int, h: int) {
+    // zero dx (accumulated by both experts)
+    let mut z = 0
+    while z < d {
+        let _ = farr_set(dx_out, z, 0.0)
+        z = z + 1
+    }
+    // E_A: out += E_A  →  sign +1
+    nn_pf_expert_bwd(x, Wa_in, Wa_out, gA, aA, dout, 1.0,
+                     dx_out, dWa_in_out, dWa_out_out, d, h)
+    // E_G: out −= E_G  →  sign −1
+    nn_pf_expert_bwd(x, Wg_in, Wg_out, gG, aG, dout, 0.0 - 1.0,
+                     dx_out, dWg_in_out, dWg_out_out, d, h)
+}
+
