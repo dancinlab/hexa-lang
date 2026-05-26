@@ -953,6 +953,115 @@ _hexa_exit:
   를 일괄 부착하는 macro 도입 (`HEXA_OVERRIDABLE`). primitive 단위 wire
   가 확장될수록 individual edit 대신 macro 1 곳 정의.
 
+### 여덟째 increment (2026-05-26 · 🛸 production-effect verify — rebuild hexa_cli_driver, env-gate fires e2e in *new* driver, otool body 검증)
+
+일곱째 increment 는 env-gate 패치를 `self/main.hexa` 에 land 했지만, 그
+효과는 **재빌드된 `hexa.real`/`hexa_cli_driver` 안에서만** 활성된다.
+배포된 production binary (`~/.hx/bin/hexa.real` mtime May 23 · `build/aprime_cc`
+mtime May 25) 는 #1321 이전 vintage 라 `HEXA_NATIVE_RT_EXIT` 문자열조차
+없다 (`strings | grep -c HEXA_NATIVE_RT_EXIT` = 0 in both). 본 increment
+는 그 잠재된 wire 가 *실제로* 새 driver 에서 발화함을 증명한다.
+
+**3-stage verify** (전 stage 가 worktree-isolated — production binary 무손):
+
+1. **rebuild** — `LOCAL_BUILD=1 hexa-run tool/build_hexa_cli.hexa` 로
+   `self/main.hexa` (env-gate 포함) 를 새 `build/hexa_cli_driver`
+   (1902384 B) 로 컴파일. 빌드 smoke (3 단계 — `--version` / `parse` /
+   `build round-trip`) 전부 OK. 새 driver 의 `strings | grep
+   HEXA_NATIVE_RT_EXIT` = 4 hits → patch baked in.
+2. **isolated deploy** — 새 driver 를 `/tmp/h7_verify/hexa_new` 로 복사
+   (production `~/.hx/bin/hexa.real` 미손; deploy 결정은 사용자 몫).
+   기존 aprime_cc 도 동 위치에 stage (worktree `build/aprime_cc`).
+3. **e2e wire fire** — `HEXA_BACKEND=native HEXA_NATIVE_RT_EXIT=1
+   /tmp/h7_verify/hexa_new build smoke.hexa` 로 `smoke_exit_42` 빌드 →
+   driver 가 emit driver 를 `hexa run` 으로 호출 → `/tmp/hexa_exit_native.o`
+   가 clang link 입력 *맨 앞* 에 prepend (확인된 clang 명령에 `'/tmp/hexa_exit_native.o'`
+   가 `.s` 보다 먼저).
+
+**g5 verbatim — new-driver e2e**:
+
+```
+$ strings build/hexa_cli_driver | grep HEXA_NATIVE_RT_EXIT | wc -l
+4
+
+$ # env-OFF baseline
+$ HEXA_APRIME_CC=/tmp/h7_verify/aprime_cc HEXA_MAC_BUILD_OK=1 \
+  HEXA_BACKEND=native /tmp/h7_verify/hexa_new build \
+  /tmp/h7_verify/smoke.hexa -o /tmp/h7_verify/smoke_base
+  [native 2/2] clang -O2 ... 'build/artifacts/smoke_base2.s' \
+               '<self>/runtime.c' -o '/tmp/.../smoke_base.tmp.NNN' ...
+  (no `[native rt]` log line — gate skipped)
+OK: built /tmp/h7_verify/smoke_base (native backend)
+$ /tmp/h7_verify/smoke_base ; echo rc=$?
+rc=42
+
+$ # env-ON override
+$ HEXA_APRIME_CC=/tmp/h7_verify/aprime_cc HEXA_NATIVE_RT_EXIT=1 \
+  HEXA_MAC_BUILD_OK=1 HEXA_BACKEND=native /tmp/h7_verify/hexa_new build \
+  /tmp/h7_verify/smoke.hexa -o /tmp/h7_verify/smoke_ovr
+  [native rt] HEXA_NATIVE_RT_EXIT=1 — appending /tmp/hexa_exit_native.o \
+              (overrides weak hexa_exit in runtime.c)
+  [native 2/2] clang -O2 ... '/tmp/hexa_exit_native.o' \
+               'build/artifacts/smoke_ovr.s' '<self>/runtime.c' \
+               -o '/tmp/.../smoke_ovr.tmp.NNN' ...
+OK: built /tmp/h7_verify/smoke_ovr (native backend)
+$ /tmp/h7_verify/smoke_ovr ; echo rc=$?
+rc=42
+
+$ # otool _hexa_exit body — PROOF
+$ otool -tv -p _hexa_exit /tmp/h7_verify/smoke_base
+_hexa_exit:
+  stp x29, x30, [sp, #-0x10]!
+  mov x29, sp
+  fmov d0, x1
+  fcvtzs w8, d0
+  cmp w0, #0x1
+  csel w8, w8, wzr, eq
+  cmp w0, #0x0
+  csel w0, w1, w8, eq
+  bl  _hxlcl_exit                    ; ← C body (9 instr · HexaVal-pair decode)
+
+$ otool -tv -p _hexa_exit /tmp/h7_verify/smoke_ovr
+_hexa_exit:
+  mov x0, x1                          ; ← hexa-emit override (5 instr)
+  stp x29, x30, [sp, #-0x10]!
+  mov x29, sp
+  mov x16, #0x1                       ; SYS_exit
+  svc #0x80                           ; direct kernel trap
+```
+
+**production-effect — 한 줄 요약**: rebuild → env-gate fires → emit
+driver invoked → `/tmp/hexa_exit_native.o` prepended to clang link →
+final exe `_hexa_exit` body = hexa-emit 5-instr (svc #0x80) NOT C
+9-instr (bl _hxlcl_exit) · rc=42 in both modes (correctness preserved).
+
+**no-regression**:
+
+- env-OFF clang 명령이 default 와 byte-identical (prepend 자리만 비어있음,
+  no flag pollution, no `[native rt]` 로그).
+- 4 predecessor PoCs (`poc_rt_exit_obj_emit` #1311 · `poc_arena_bundle_emit`
+  #1316 · `poc_multi_sym_emit` #1302 · `emit_hexa_exit_native_o` #1321)
+  모두 `[poc] EMIT OK` / `[wire] EMIT OK` PASS.
+- 기본 `tool/build_hexa_cli.hexa` smoke (3-step) — `--version` `parse`
+  `build round-trip` 모두 OK.
+
+**잔여 (다음 increment 후보)**:
+
+- (A) production deploy — `/tmp/h7_verify/hexa_new` → `~/.hx/bin/hexa.real`
+  교체 (사용자-driven). 새 driver 가 production hexa.real 로 활성되면
+  `HEXA_NATIVE_RT_EXIT=1` 환경변수 하나로 모든 사용자 빌드가 hexa-emit
+  override 를 link 한다. backup = `hexa.real.bak-2026-05-26-pre-h8`.
+- (B) primitive 횡축 — 일곱째의 잔여 (B) 와 동일 — `rt_print_int` →
+  `rt_print_str` → `rt_println` 순차 wire. 각 primitive 마다 emit driver
+  1 + weak runtime.c 짝 + env-gate `HEXA_NATIVE_RT_<NAME>=1`.
+- (C) 단일 multi-sym override `.o` — 일곱째의 잔여 (C) 와 동일 — N
+  primitive 를 `macho_obj_wrap_v3` 로 한 `.o` 에 묶고 env 매트릭스를
+  `HEXA_NATIVE_RT_ALL=1` 단일 게이트로 수렴.
+- (D) opt-in 디폴트 → opt-out — env-gate 의 default 가 ON 으로 뒤집히면
+  `HEXA_BACKEND=native` build 가 hexa-emit override 를 자동 link. 그
+  단계가 phase-H 의 종착 — `runtime.c::hexa_exit` (C) body 가 dead code
+  화 (link 시 weak 가 항상 strong 으로 가려짐).
+
 ## Domain map (Phase 0 → 3 + post)
 
 ```
