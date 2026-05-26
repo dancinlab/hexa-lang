@@ -2,6 +2,14 @@
 
 Append-only history sister of `INBOX.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
+## 2026-05-26T09:10Z — 🔌 cloud_cli rent 필터 버그 2건 (reliability2 오타 + cpu_ram GB/MB · show-instance None crash) · from demiurge RTSC (#1229 후속)
+
+> #1229(cloud 개선 4건) 후속 — vast pod preempt 재provision 중 추가 발견한 cloud_cli/provisioning 구체 버그 2건.
+
+- [ ] **(1) `cloud_cli.hexa rent` offer-필터 2-오류** — ⓐ search 쿼리에 `reliability2>=0.95` 를 prepend(오타: `reliability` 가 맞음) → vastai 가 미지의 필드 거부 → offer 0건 반환(rent 실패). ⓑ `cpu_ram` 필터를 MB 로 넘기는데 vastai 는 **GB** 단위 → 의도와 다른 임계. 두 오류 다 빈/잘못된 offer-set 유발. fix: `reliability` 로 정정 + cpu_ram 을 GB 로.
+- [ ] **(2) `vastai show instance <id>` crash (start_date None)** — 단일 인스턴스 조회가 `start_date` None 일 때 크래시(특히 막 생성된 pod). cloud_cli/스크립트가 직접연결 정보 뽑을 때 이걸 호출하면 실패 → **우회: `vastai show instances` (복수) list 에서 파싱** (이번 세션 검증). cloud_cli 의 instance-info 추출을 list-기반으로 바꾸거나 None-guard.
+- [ ] **참고 (이미 #1229)**: reconcile GHOST 오판 · registry argv-조각 오염 · cloud_cli concurrent-wipe · prebuilt-binary+base64 견고전송. + #1155 vast 등록 identity 미제시(raw ssh identity 우회). 본 2건은 그 위 rent/show 레이어.
+
 ## 2026-05-26T09:00Z — verify_cli calc-fn gap 3종 처방 (TECS-L 새 대축 next-layer · #1204 RESOLVED 후 노출)
 
 > #1204(_Generic worktree-rebuild)는 #1198/#1213(`build_hexa_module_loader.sh`)로 RESOLVED 확인 (worktree `sigma 6 12 → 🔵`). 그 RESOLVED **후** main-tree verify 로 드러난 **next-layer 3종** (rebuild 막힘 아닌 whitelist/등록/deployed-stale layer). F9 패턴 (calc-fn gap → fix at source). 처방 포함 → RUNTIME 세션 안전 실행 권장 (직접 재설치는 동작 중 deployed verify 깰 위험).
