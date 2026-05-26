@@ -2489,11 +2489,15 @@ fn _nvptx_classify_locals(mfn: MFunc) -> [PReg] {
                 let nh = lloc.name_hint
                 let nh_chars = nh.chars()
                 let nh_n = len(nh_chars)
+                // Find LAST `:` (robust to any prefix that already
+                // contains `:` from upstream lowering — the suffix
+                // `<N>` is integer-only, so the LAST colon cleanly
+                // delimits it).
                 let mut colon_at = -1
-                let mut ni = 0
-                while ni < nh_n {
+                let mut ni = nh_n - 1
+                while ni >= 0 {
                     if nh_chars[ni] == ':' { colon_at = ni; break }
-                    ni = ni + 1
+                    ni = ni - 1
                 }
                 if colon_at >= 0 && colon_at + 1 < nh_n {
                     let count_str = nh.substring(colon_at + 1, nh_n)
