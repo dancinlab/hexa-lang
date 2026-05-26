@@ -1,0 +1,13 @@
+=== compile runtime.c to .o (both ways: with weak + without) ===
+weak rt.o:   508624
+noweak rt.o:   508624
+byte-eq? NO
+
+=== nm on hexa_exit symbol — weak vs strong flag ===
+with weak attribute:
+00000000000264a0 T _hexa_exit
+without (strong):
+00000000000264a0 T _hexa_exit
+
+=== Functional: smoke binary linked with weak runtime.c (no override) ===
+rc=42
