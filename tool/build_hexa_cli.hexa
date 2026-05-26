@@ -186,11 +186,52 @@ fn _deploy_one(driver_out: string, dst: string, uname: string) {
 // never copied it to these targets, so a post-pull deployed hexa stayed
 // stale (PRE-M3b) and broke. This copies the fresh driver to all four
 // targets so the gap can never recur. Opt-in (--install) — never auto-runs.
+// INBOX 3 binary activation fix (2026-05-27, #1281/#1283 family): the
+// shipped install was missing self/runtime.o, the cached object hexa
+// cc --regen links against. cmd_cc() has a lazy stale-check that
+// compiles runtime.o on first invocation, but a fresh-install user
+// invoking `hexa verify` (which runs verify_cli via `hexa run`)
+// hits the deployed driver's link step BEFORE cmd_cc gets a chance,
+// failing with `runtime.o missing`. Build it as part of --install
+// so the deploy is self-sufficient.
+fn _install_runtime_o(repo_root: string, uname: string) {
+    let rt_c = repo_root + "/self/runtime.c"
+    let rt_o = repo_root + "/self/runtime.o"
+    if !file_exists(rt_c) {
+        eprintln("  warn: " + rt_c + " missing — skipped runtime.o pre-build")
+        return
+    }
+    // Stale check — skip if .o newer than .c (same logic as cmd_cc).
+    let stale = exec("[ " + _shq(rt_o) + " -nt " + _shq(rt_c) + " ] && printf cached || printf stale").trim()
+    if stale == "cached" {
+        println("  [rt.o] cached (" + rt_o + ")")
+        return
+    }
+    let mut cmd = ""
+    if uname == "Linux" {
+        cmd = "clang -O2 -D_GNU_SOURCE -c " + _shq(rt_c) + " -o " + _shq(rt_o) + " 2>&1"
+    } else {
+        cmd = "clang -O2 -c " + _shq(rt_c) + " -o " + _shq(rt_o) + " 2>&1"
+    }
+    println("  [rt.o] " + cmd)
+    let r = exec(cmd)
+    if !file_exists(rt_o) {
+        eprintln("  error: runtime.o build failed:")
+        eprintln(r)
+        return
+    }
+    println("  [rt.o] OK (" + rt_o + ")")
+}
+
 fn _install_driver(repo_root: string, uname: string) {
     let driver_out = repo_root + "/build/hexa_cli_driver"
     _must_exist(driver_out, "driver (build first)")
     println("")
     println("=== INSTALL (deploy to shim targets) ===")
+    // INBOX 3 #1281/#1283: ensure self/runtime.o is present so
+    // ~/.hx/bin/self/runtime.o (via symlink) resolves on first
+    // `hexa cc --regen` / `hexa verify` invocation.
+    _install_runtime_o(repo_root, uname)
     // main-worktree: hxv2 (shim-preferred) + hexa.real (fallback)
     _deploy_one(driver_out, repo_root + "/hxv2",      uname)
     _deploy_one(driver_out, repo_root + "/hexa.real", uname)
