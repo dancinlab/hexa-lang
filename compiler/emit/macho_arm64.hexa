@@ -847,7 +847,7 @@ fn serialize(obj: MachoArm64Obj) -> [Int] {
     let text_len = len(obj.text)
     let nreloc   = len(obj.relocs)
     let nsyms    = len(obj.symbols)
-    let strsize  = len(obj.strtab)
+    let strsize_nat = len(obj.strtab)   // natural (unpadded) merged size
 
     // __text is 4-byte aligned (arm64 instructions are 4 bytes each).
     let mut text_pad = 0
@@ -901,6 +901,14 @@ fn serialize(obj: MachoArm64Obj) -> [Int] {
     let reloff   = data_end + reloc_pad
     let symoff   = reloff + 8 * nreloc
     let stroff   = symoff + 16 * nsyms
+
+    // LLVM/MCStringTableBuilder pads the string table so the file ends
+    // on an 8-byte boundary (`(stroff + strsize) % 8 == 0`). Verified
+    // against clang: trivial 103->104, fib 207->208, while 195->200.
+    let mut str_pad = 0
+    let srem = (stroff + strsize_nat) & 7
+    if srem != 0 { str_pad = 8 - srem }
+    let strsize = strsize_nat + str_pad
 
     // Partition the symbol table into [locals | extdefs | undefs] runs and
     // count each (clang's nlist is laid out + DYSYMTAB-indexed this way).
@@ -985,9 +993,10 @@ fn serialize(obj: MachoArm64Obj) -> [Int] {
         si = si + 1
     }
 
-    // String table bytes (verbatim).
+    // String table bytes (verbatim) + 8-byte file-end alignment pad.
     let mut ki = 0
-    while ki < strsize { out.push(obj.strtab[ki] & 0xff); ki = ki + 1 }
+    while ki < strsize_nat { out.push(obj.strtab[ki] & 0xff); ki = ki + 1 }
+    _zero_n(out, str_pad)
 
     return out
 }
@@ -1250,6 +1259,139 @@ fn _push_cstr(out: [Int], s: string) -> Int {
     }
     out.push(0)
     return off
+}
+
+// ── MCStringTableBuilder suffix-merge string interning ──────────────
+//
+// clang/LLVM builds the Mach-O string table via `MCStringTableBuilder`
+// (StringTableBuilder.cpp::finalizeStringTable). Names are NOT laid out
+// in symbol order; instead:
+//
+//   1. A leading NUL occupies index 0 (the empty string).
+//   2. The unique names are sorted by their bytes read RIGHT-TO-LEFT
+//      (reversed-string lexicographic), DESCENDING. This groups every
+//      string that shares a common suffix adjacently, longest-tail
+//      first.
+//   3. SUFFIX MERGE: when a string is a suffix of its immediate
+//      predecessor in that order, it does NOT get its own bytes — its
+//      offset is the predecessor's offset shifted by the length
+//      difference (it reuses the predecessor's trailing bytes, NUL and
+//      all). Otherwise it appends `<name>\0` and takes the new offset.
+//
+// `_macho_string_offset_of(names, name)` returns the merged offset of
+// `name`; `_build_merged_strtab(out, names)` fills `out` with the
+// merged byte buffer (NATURAL size — the trailing 8-byte file-end pad
+// is applied later in `serialize`, which is the only place that knows
+// `stroff`). Verified byte-for-byte against Apple clang 21.0.0 on the
+// {trivial, fib, while} F-P0-OBJEQ corpus (every n_strx + the natural
+// strsize match exactly).
+//
+// Reversed-string comparison: returns true if reverse(a) > reverse(b),
+// i.e. `a` sorts BEFORE `b` in the descending-reversed order.
+fn _rev_str_gt(a: string, b: string) -> bool {
+    let la = len(a)
+    let lb = len(b)
+    let mut ia = la - 1
+    let mut ib = lb - 1
+    while ia >= 0 && ib >= 0 {
+        let ca = char_code(a, ia) & 0xff
+        let cb = char_code(b, ib) & 0xff
+        if ca != cb { return ca > cb }
+        ia = ia - 1
+        ib = ib - 1
+    }
+    // One is a suffix of the other (shared all overlapping bytes).
+    // The LONGER string sorts first (descending) so its suffix can
+    // tail-merge into it.
+    return la > lb
+}
+
+// In-place insertion sort of `xs` by `_rev_str_gt` (descending reversed
+// string). Stable enough for the short symbol-name lists here.
+fn _sort_rev_desc(xs: [string]) {
+    let n = len(xs)
+    let mut i = 1
+    while i < n {
+        let key = xs[i]
+        let mut j = i - 1
+        while j >= 0 && _rev_str_gt(key, xs[j]) {
+            xs[j + 1] = xs[j]
+            j = j - 1
+        }
+        xs[j + 1] = key
+        i = i + 1
+    }
+}
+
+// True iff `suf` is a (proper-or-equal) suffix of `s`.
+fn _ends_with(s: string, suf: string) -> bool {
+    let ls = len(s)
+    let lf = len(suf)
+    if lf > ls { return false }
+    let mut k = 0
+    while k < lf {
+        if (char_code(s, ls - lf + k) & 0xff) != (char_code(suf, k) & 0xff) {
+            return false
+        }
+        k = k + 1
+    }
+    return true
+}
+
+// Build the suffix-merged string table for `names` into `out` (starting
+// with the index-0 NUL) and return a parallel `[Int]` of each input
+// `names[i]`'s merged offset, in the SAME order as `names`.
+fn _build_merged_strtab(out: [Int], names: [string]) -> [Int] {
+    // Unique names, first-seen order preserved (only used to drive the
+    // sort; the returned offsets map back to the original `names`).
+    let uniq: [string] = []
+    let mut i = 0
+    while i < len(names) {
+        if !_str_in(uniq, names[i]) { uniq.push(names[i]) }
+        i = i + 1
+    }
+    _sort_rev_desc(uniq)
+
+    // Index-0 NUL (empty string).
+    out.push(0)
+
+    // Assign a merged offset to each unique name, tail-merging suffixes.
+    let uniq_off: [Int] = []
+    let mut u = 0
+    while u < len(uniq) {
+        let s = uniq[u]
+        if u > 0 && _ends_with(uniq[u - 1], s) {
+            // `s` is a suffix of its predecessor: reuse the tail.
+            let prev_off = uniq_off[u - 1]
+            uniq_off.push(prev_off + (len(uniq[u - 1]) - len(s)))
+        } else {
+            uniq_off.push(len(out))
+            let mut c = 0
+            while c < len(s) { out.push(char_code(s, c) & 0xff); c = c + 1 }
+            out.push(0)
+        }
+        u = u + 1
+    }
+
+    // Map each input name (in original order) to its unique offset.
+    let result: [Int] = []
+    i = 0
+    while i < len(names) {
+        let idx = _index_of_str(uniq, names[i])
+        result.push(uniq_off[idx])
+        i = i + 1
+    }
+    return result
+}
+
+// Index of `name` in `xs` (-1 if absent).
+fn _index_of_str(xs: [string], name: string) -> Int {
+    let mut i = 0
+    while i < len(xs) {
+        if xs[i] == name { return i }
+        i = i + 1
+    }
+    return -1
 }
 
 // Darwin Mach-O symbol-name convention: every C/hexa symbol carries
@@ -1552,15 +1694,19 @@ pub fn pack_lir(lm: LModule) -> MachoArm64Obj {
     //   UNDEFS (N_UNDF|N_EXT), alphabetical:
     //     each runtime/libc target
     //
-    // Our own strtab is built name-by-name in this symbol order. (clang's
-    // strtab BYTE-order differs — it uses MCStringTableBuilder's suffix-
-    // merge sort — so `n_strx` values won't match clang byte-for-byte;
-    // see the file-header residual note. The symbol IDENTITIES, ORDER,
-    // n_type/n_sect/n_value, and `r_symbolnum` indices DO match.)
-    obj.strtab.push(0)   // index-0 NUL
+    // strtab is NOT built name-by-name in symbol order any more: we
+    // collect every symbol's name into `sym_names` (parallel to
+    // `obj.symbols`) with a placeholder `name_offset`, then after the
+    // table is complete run `_build_merged_strtab` — clang/LLVM's
+    // MCStringTableBuilder suffix-merge interning — to lay out the
+    // bytes and assign each `n_strx` to its merged offset. This makes
+    // the strtab byte-order + every `n_strx` + the natural `strsize`
+    // byte-identical to clang (the symbol IDENTITIES, ORDER, n_type/
+    // n_sect/n_value, and `r_symbolnum` indices already matched).
+    let sym_names: [string] = []
 
     // ltmp0 (__text section-start temp).
-    _push_local_sym(obj, "ltmp0", 1, 0)
+    _push_local_sym(obj, sym_names, "ltmp0", 1, 0)
 
     // Block labels: entry (first-defined) first, then first-ref order.
     let ordered_labels: [string] = []
@@ -1589,25 +1735,25 @@ pub fn pack_lir(lm: LModule) -> MachoArm64Obj {
         // path applies via `_fmt_label` (prepend `_`): LIR stores
         // `_L<hash>_<fn>_bb<n>`, the symbol is `__L<hash>…`. The raw
         // form (`nm`) is kept only for offset/reference lookup above.
-        _push_local_sym(obj, _darwin_mangle_label(nm), 1, voff)
+        _push_local_sym(obj, sym_names, _darwin_mangle_label(nm), 1, voff)
         li = li + 1
     }
 
     // __HEXA section local symbols (cap then abi; ltmpN temp precedes
     // the named label in each, matching clang's per-section temp).
-    _push_local_sym(obj, "ltmp1",              2, meta_addr)
-    _push_local_sym(obj, "_hexa_cap_manifest", 2, meta_addr)
-    _push_local_sym(obj, "ltmp2",              3, meta_addr)
-    _push_local_sym(obj, "_hexa_abi_stamp",    3, meta_addr)
+    _push_local_sym(obj, sym_names, "ltmp1",              2, meta_addr)
+    _push_local_sym(obj, sym_names, "_hexa_cap_manifest", 2, meta_addr)
+    _push_local_sym(obj, sym_names, "ltmp2",              3, meta_addr)
+    _push_local_sym(obj, sym_names, "_hexa_abi_stamp",    3, meta_addr)
 
     // Defined externs (functions) — address order, N_PEXT for non-entry.
     let mut fi = 0
     while fi < len(fn_names) {
-        let strx = _push_cstr(obj.strtab, fn_names[fi])
         let mut pext = 1
         if fn_is_entry[fi] != 0 { pext = 0 }
+        sym_names.push(fn_names[fi])
         obj.symbols.push(MachoSymbol {
-            name_offset: strx,
+            name_offset: -1,
             section:     1,
             value:       fn_values[fi],
             kind:        MACHO_N_SECT,
@@ -1620,9 +1766,9 @@ pub fn pack_lir(lm: LModule) -> MachoArm64Obj {
     // Undefined externs — alphabetical (sorted above).
     let mut ui = 0
     while ui < len(undef_names) {
-        let strx = _push_cstr(obj.strtab, undef_names[ui])
+        sym_names.push(undef_names[ui])
         obj.symbols.push(MachoSymbol {
-            name_offset: strx,
+            name_offset: -1,
             section:     0,
             value:       0,
             kind:        MACHO_N_UNDF,
@@ -1630,6 +1776,28 @@ pub fn pack_lir(lm: LModule) -> MachoArm64Obj {
             is_pext:     0,
         })
         ui = ui + 1
+    }
+
+    // ── Pass 3b: MCStringTableBuilder suffix-merge interning ──
+    //
+    // All symbol records are placed; lay out the merged string table
+    // and back-patch every `name_offset` to its merged offset (clang
+    // byte-order). `obj.strtab` is left at its NATURAL size — the
+    // trailing 8-byte file-end pad is applied in `serialize`, the only
+    // place that knows `stroff`.
+    let merged_offs = _build_merged_strtab(obj.strtab, sym_names)
+    let mut mi = 0
+    while mi < len(obj.symbols) {
+        let s = obj.symbols[mi]
+        obj.symbols[mi] = MachoSymbol {
+            name_offset: merged_offs[mi],
+            section:     s.section,
+            value:       s.value,
+            kind:        s.kind,
+            is_external: s.is_external,
+            is_pext:     s.is_pext,
+        }
+        mi = mi + 1
     }
 
     // ── Pass 4: resolve branches; emit relocs (descending address) ──
@@ -1676,13 +1844,14 @@ pub fn pack_lir(lm: LModule) -> MachoArm64Obj {
     return obj
 }
 
-// Push one local (N_SECT, non-external) symbol with its name interned
-// into `obj.strtab`. Used for ltmp* temps, block labels, and the
-// `__HEXA` section symbols.
-fn _push_local_sym(obj: MachoArm64Obj, name: string, section: Int, value: Int) {
-    let strx = _push_cstr(obj.strtab, name)
+// Push one local (N_SECT, non-external) symbol. The name is appended
+// to `sym_names` (parallel to `obj.symbols`); `name_offset` is a
+// placeholder (-1) back-patched after `_build_merged_strtab`. Used for
+// ltmp* temps, block labels, and the `__HEXA` section symbols.
+fn _push_local_sym(obj: MachoArm64Obj, sym_names: [string], name: string, section: Int, value: Int) {
+    sym_names.push(name)
     obj.symbols.push(MachoSymbol {
-        name_offset: strx,
+        name_offset: -1,
         section:     section,
         value:       value,
         kind:        MACHO_N_SECT,
