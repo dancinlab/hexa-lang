@@ -127,6 +127,24 @@ pub fn mobius(n: int) -> int {
     return -1
 }
 
+// Mertens function M(n) = Σ_{k=1..n} μ(k) (OEIS A002321).
+// Riemann hypothesis adjacency: |M(n)| < c·√n for some c equivalent to RH;
+// Mertens conjecture |M(n)|<√n was DISPROVED (Odlyzko-te Riele 1985) — so we
+// store M(n) as a descriptive ground value, NOT a conjectural inequality.
+// Trivial loop summation; pure integer arithmetic. M(1)=1, M(2)=0, M(3)=-1,
+// M(4)=-1, M(5)=-2 ... (sign drift around 0). For n<=0 we return 0 (empty sum).
+// TECS-L F20 — INBOX entry 3 (mertens·single-arg verify-fn) of the Clay-RH lane.
+pub fn mertens(n: int) -> int {
+    if n <= 0 { return 0 }
+    let mut s = 0
+    let mut k = 1
+    while k <= n {
+        s = s + mobius(k)
+        k = k + 1
+    }
+    return s
+}
+
 // σ_k(n) = Σ_{d|n} d^k
 pub fn sigma_k(n: int, k: int) -> int {
     if n <= 0 { return 0 }
