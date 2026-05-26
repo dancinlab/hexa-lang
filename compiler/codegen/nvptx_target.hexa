@@ -1054,6 +1054,21 @@ fn _nvptx_lower_stmt(buf: [LInstr], s: Stmt, kinds: [PReg], shared_idx_off: [i64
             out.push(_nvptx_instr("//", [], "RFC 071 P4+ - skipped STMT_ASSIGN with miss-local dst (op=" + s.op + ")"))
             return out
         }
+        // PR-C piece 6 — SHARED-bank dst default-init skip.
+        // A bare `@shared let sm: [f64; N]` lowers (via hir_to_mir) into
+        // a default-init STMT_ASSIGN whose dst is the SHARED-bank Local
+        // (`Local.space == "shared"`). The prologue in `_nvptx_lower_func`
+        // already initialises that `%sh<id>` reg with
+        //   mov.u64 %sh<id>, _hexa_sh_<fn> + <offset>;
+        // emitting a second `mov.f64 %sh<id>, 0;` here (the dst_kind
+        // fall-through path) clobbers the runtime shared address — ptxas
+        // rejects `mov.f64` into a `.reg .u64` reg ("Arguments mismatch
+        // for instruction 'mov'"), surfaced by F-GPU-SWEEP-SHARED-REDUCE-
+        // NUMERIC #1320. The safe lowering is to skip the redundant emit.
+        if _nvptx_lookup_kind_for_local(kinds, s.dst.id) == NVPTX_RKIND_SHARED {
+            out.push(_nvptx_instr("//", [], "PR-C piece 6 - skipped default-init STMT_ASSIGN for SHARED-bank dst (op=" + s.op + ", id=" + to_string(s.dst.id) + ")"))
+            return out
+        }
         if len(s.args) >= 1 {
             // 055-P3b kind-aware — destination reg picks .f64 / .u32 /
             // .u64 / .pred from the classifier; operand text likewise
