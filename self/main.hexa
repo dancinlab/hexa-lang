@@ -2737,6 +2737,35 @@ fn cmd_build(src, out, c_only, target, shared) {
                 println("  [native rt] WARN: HEXA_NATIVE_RT_PTR_ALLOC=1 but emit driver not at " + __npa_drv)
             }
         }
+        // HEXA_BACKEND flip · 열번째 increment — hexa-native `_hexa_ptr_offset`
+        // override (parallel to HEXA_NATIVE_RT_PTR_ALLOC, horizontal expansion
+        // of the #1321/#1326 weak-symbol recipe). Emit a hexa-native .o for
+        // `_hexa_ptr_offset` (test/native_build/emit_hexa_ptr_offset_native_o.hexa)
+        // and append it to the clang link when HEXA_NATIVE_RT_PTR_OFFSET=1.
+        // The C-side `hexa_ptr_offset` in runtime.c is `__attribute__((weak))`,
+        // so ld64 picks the hexa-emit strong symbol when this .o is linked.
+        // Adapter is 12 B pure arithmetic — no syscall, no allocator-pair
+        // coupling, smallest in the series. ENV unset = no behavior change.
+        if env("HEXA_NATIVE_RT_PTR_OFFSET") == "1" {
+            let __npo_drv = __nself + "/../test/native_build/emit_hexa_ptr_offset_native_o.hexa"
+            let __npo_chk = exec("test -f '" + __npo_drv + "' && printf yes || printf no")
+            if __npo_chk == "yes" {
+                let __npo_hx = env("HEXA_LANG_INTERP")
+                let mut __npo_hx_cmd = "hexa"
+                if len(__npo_hx) > 0 { __npo_hx_cmd = __npo_hx }
+                let __npo_emit_out = exec("'" + __npo_hx_cmd + "' run '" + __npo_drv + "' 2>&1")
+                if len(__npo_emit_out) > 0 { println("    [rt-emit] " + __npo_emit_out) }
+                let __npo_o_chk = exec("test -f /tmp/hexa_ptr_offset_native.o && printf yes || printf no")
+                if __npo_o_chk == "yes" {
+                    __nrt_native_o = __nrt_native_o + "'/tmp/hexa_ptr_offset_native.o' "
+                    println("  [native rt] HEXA_NATIVE_RT_PTR_OFFSET=1 — appending /tmp/hexa_ptr_offset_native.o (overrides weak hexa_ptr_offset in runtime.c)")
+                } else {
+                    println("  [native rt] WARN: HEXA_NATIVE_RT_PTR_OFFSET=1 but emit driver produced no .o — falling back to C hexa_ptr_offset")
+                }
+            } else {
+                println("  [native rt] WARN: HEXA_NATIVE_RT_PTR_OFFSET=1 but emit driver not at " + __npo_drv)
+            }
+        }
         let __ntmp = exec("printf '%s.tmp.%s' '" + out + "' \"$$\"")
         let __nlink = "clang -O2 " + __nshared_link + os_clang_cflags() + "-Wno-trigraphs -fbracket-depth=4096 -I '" + __nself + "' " + __nrt_native_o + "'" + __nasm + "' '" + __nrtc + "' -o '" + __ntmp + "'" + os_clang_ldflags() + " 2>&1"
         println("  [native 2/2] " + __nlink)

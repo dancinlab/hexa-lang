@@ -3024,7 +3024,20 @@ HexaVal hexa_ptr_read(HexaVal ptr, HexaVal offset) {
     return hexa_int(v);
 }
 
-HexaVal hexa_ptr_offset(HexaVal ptr, HexaVal offset) {
+/* HEXA_BACKEND flip · chunk-B phase-H 열번째 increment (2026-05-26):
+ * Marked `__attribute__((weak))` so a hexa-emit `_hexa_ptr_offset` strong
+ * symbol (emitted by test/native_build/emit_hexa_ptr_offset_native_o.hexa,
+ * appended to the cmd_build native-path clang link when
+ * HEXA_NATIVE_RT_PTR_OFFSET=1) cleanly overrides this C definition under
+ * Mach-O ld64. Default (env unset) = strong-only, no behavior change.
+ * The hexa-emit override is a pure-arithmetic adapter — no syscall, no
+ * allocator-pair coupling. Adapter ABI:
+ *   in : x0=ptr.tag, x1=ptr.val, x2=off.tag, x3=off.val
+ *   out: x0=TAG_INT=0, x1=ptr.val + off.val
+ * RESIDUAL — drops tag-checks; callers must pass TAG_INT for both args
+ * (which all transpiled-codegen callsites do — ptr arithmetic always
+ * uses int-tagged ptrs). See RUNTIME.md phase-H 열번째 increment. */
+__attribute__((weak)) HexaVal hexa_ptr_offset(HexaVal ptr, HexaVal offset) {
     uint64_t p = HX_IS_INT(ptr) ? HX_INT_U(ptr) : 0;
     int64_t off = HX_IS_INT(offset) ? HX_INT(offset) : 0;
     return hexa_int((int64_t)(p + (uint64_t)off));
