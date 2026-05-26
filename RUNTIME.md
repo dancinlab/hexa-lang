@@ -554,6 +554,106 @@ origin/main..HEAD -- self/codegen/macho.hexa` 의 deletion = 0). PR #1297
   필요. 명백히 분리된 surface 라서 honest residual 정책에 따라 **이번
   PR 에 묶지 않음**.
 
+### 다섯째 emit-side increment (2026-05-26 · 🛸 `macho_obj_wrap_v3` — N text 심볼 + optional `__const` · PR #1297 잔여 #1 CLOSED)
+
+PR #1297 잔여 #1 (위 "잔여 (A)") 의 30 LOC 확장을 실측-증명한 emit-side
+증분. v1 (`macho_obj_wrap`) 은 1 text 심볼 (`_hexa_main`) 고정, v2
+(`macho_obj_wrap_v2`) 는 1 text + 1 data (`_arena_state`) 고정 — 둘 다
+한 `.o` 에 **여러** text 심볼을 export 못 했다. 이게 `runtime_arm64.hexa`
+의 11 byte-emit 프리미티브 (`rt_exit`/`rt_alloc`/`rt_arena_*` 등) 를 하나의
+링킹 가능한 `.o` 로 묶는 production-wire 의 정확한 구조적 차단막이었다.
+
+`macho_obj_wrap_v3` 는 **순수 additive** (v1/v2 byte-untouched · deletion=0).
+시그니처:
+
+```hexa
+fn macho_obj_wrap_v3(code: [int],
+                    sym_name_bytes: [[int]],     // NUL-terminated 바이트 배열들
+                    sym_offsets:    [int],       // intra-section offset
+                    sym_sections:   [int],       // 1=__text, 2=__const
+                    state_bytes:    [int],       // [] ⇒ 1-section만 (no __const)
+                    reloc_offs:     [int],
+                    reloc_kinds:    [int],
+                    reloc_symnums:  [int]) -> [int]
+```
+
+핵심 일반화:
+- **strtab/symtab 가변 길이**: `sym_strx[i]` 를 strtab 누적 길이로 계산해
+  `nlist_64.n_strx` 에 채워넣음 (v1/v2 의 하드코딩 `1`, `12` 폐기).
+- **section count 가변**: `state_bytes` 가 비면 `nsects=1` (no __const),
+  채우면 `nsects=2`. `segment_cmd_size = 72 + 80*nsects`.
+- **reloc symnum 가변**: v2 는 hardcode `r_symbolnum=1` (가정: 두 번째
+  심볼이 `_arena_state`). v3 은 호출자가 `reloc_symnums[]` 로 명시.
+- **ld64 invariant 유지**: PAGE21(=3) → `r_pcrel=1`, PAGEOFF12(=4) → 0.
+  `n_value = section.addr + offset` (__text addr=0, __const addr=code_size).
+
+**측정** (mac arm64, ssh mini, 2026-05-26):
+
+PoC = `test/native_build/poc_multi_sym_emit.hexa`. 한 `.o` 안에:
+- `_rt_exit`   @ offset  0 — 16 byte (`runtime_arm64.hexa` 의 그 바이트)
+- `_rt_alloc`  @ offset 16 — 48 byte (동상)
+- `_hexa_main` @ offset 64 — 16 byte (intra-text `bl rt_alloc` + `bl rt_exit(42)`)
+
+```
+$ otool -l /tmp/poc_multi_sym.o | head -33
+poc_multi_sym.o:
+Load command 0
+      cmd LC_SEGMENT_64
+  cmdsize 152
+   nsects 1
+Section
+  sectname __text
+      size 0x0000000000000050   # 80 bytes (concat)
+   reloff 312
+   nreloc 0
+Load command 1
+     cmd LC_SYMTAB
+   nsyms 3                      # ← v3 가 N=3 emit
+  stroff 360
+ strsize 31                      # ← "\0_rt_exit\0_rt_alloc\0_hexa_main\0"
+
+$ nm /tmp/poc_multi_sym.o
+0000000000000040 T _hexa_main
+0000000000000010 T _rt_alloc
+0000000000000000 T _rt_exit
+
+$ clang -arch arm64 caller.c poc_multi_sym.o -o poc_multi_sym
+$ ./poc_multi_sym; echo $?
+42
+```
+
+링크 후 exe `nm` 에서 3 심볼 모두 final VM 주소 보유:
+```
+000000010000038c T _hexa_main
+0000000100000328 T _main
+000000010000035c T _rt_alloc
+000000010000034c T _rt_exit
+```
+
+closure 정확 → C caller가 `_hexa_main` 호출 → intra-text `bl _rt_alloc`
+PC-relative 점프 후 ret → `bl _rt_exit` 가 x0=42 로 SYS_exit → process
+exit code = **42**. 🟢 PASS.
+
+verdict: `.verdicts/macho-multi-symbol/poc_multi_sym.txt` (verbatim).
+
+**no-regression**:
+- v1 PoC (`poc_rt_exit_obj_emit.hexa` PR #1297) — re-run mini → 동일 출력.
+- v2 PoC (`poc_arena_reloc_emit.hexa` PR #1302) — re-run mini → 동일 출력.
+- v1/v2 함수 body byte-untouched (`git diff` 의 deletion = 0).
+
+**잔여 (다음 inc 으로)**:
+- (A) v2 의 surface 를 v3 위에 thin-shim 화 — v2 caller `poc_arena_reloc_emit.hexa`
+  를 v3-with-state-bytes 로 reroute 하면 v2 fn body 삭제 가능 (DRY · 잔여
+  cleanup, 기능 차이 0).
+- (B) 위 "잔여 (B)" (`adr` → `adrp+add` placeholder widening) 는 emit-side
+  *내용*이 아니라 `runtime_arm64.hexa` 의 instruction 시퀀스 변경이라
+  v3 와 독립된 surface — 이 PR 범위 밖.
+- (C) production-wire: 빌드 파이프라인이 `runtime_arm64.hexa::rt_*()` 결과를
+  concat 해 `macho_obj_wrap_v3` 에 넘기고 결과 `.o` 를 `clang ... runtime.c`
+  대신 클럼파일 inputs 에 넣어 link → `HEXA_BACKEND=hexa` 의 *전형*
+  artifact 완성. 본 PoC 가 그 형판 (캘러 = clang shim, 차후 = hexa-native
+  exec-wrap).
+
 ## Domain map (Phase 0 → 3 + post)
 
 ```
