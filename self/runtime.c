@@ -12271,6 +12271,9 @@ static void _hexa_init_fn_shims(void) {
     // 0/1-arg device-management carriers. The 5-arg farr_matmul_gpu uses
     // a static-inline wrapper (direct C call past the hexa_callN ceiling,
     // same pattern as RFC 032 farr_matmul + RFC 034 ad_matmul).
+    // Forward decls for wired-fn stubs (defined at end-of-file, hotfix 2026-05-27).
+    extern HexaVal hexa_cuda_available(void);
+    extern HexaVal hexa_cuda_device_count(void);
     cuda_available                  = hexa_fn_new((void*)hexa_cuda_available,                  0);
     cuda_device_count               = hexa_fn_new((void*)hexa_cuda_device_count,               0);
     farr_to_device                  = hexa_fn_new((void*)hexa_farr_to_device,                  1);
@@ -13485,4 +13488,76 @@ HexaVal rt_fs_rotate_if_over(HexaVal path, HexaVal max_bytes, HexaVal keep) {
 HexaVal rt_fs_mkdir_p(HexaVal path) {
     (void)path;
     return hexa_int(0);
+}
+
+
+// ═══════════════════════════════════════════════════════════════════
+// HOTFIX 2026-05-27 — production-safety stubs for hexa-emit-wired fns.
+//
+// PR #1391/#1394 deleted the C bodies for 20 wires (#1331 table),
+// expecting only builds that include the strong hexa-emit .o to link.
+// However `hexa run`/`hexa build` (via hexat transpiler) does NOT
+// include strong .o overrides → undefined-symbol link failures for
+// any compiled hexa program that references these symbols.
+//
+// Restoration: weak stubs matching the wired behavior. The hexa-emit
+// strong .o still wins at link time when present (production); the
+// stubs satisfy link otherwise (default hexa run/build).
+// ═══════════════════════════════════════════════════════════════════
+
+__attribute__((weak)) HexaVal hexa_exit(HexaVal code) { hxlcl_exit((int)HX_INT(code)); return hexa_void(); }
+__attribute__((weak)) HexaVal hexa_ptr_null(void) { return hexa_int(0); }
+__attribute__((weak)) HexaVal hexa_ptr_addr(HexaVal v) { return hexa_int((int64_t)HX_INT_U(v)); }
+__attribute__((weak)) HexaVal hexa_ptr_alloc(HexaVal size_v) {
+    int64_t sz = HX_IS_INT(size_v) ? HX_INT(size_v) : 0;
+    if (sz <= 0) return hexa_int(0);
+    void* p = malloc((size_t)sz);
+    return hexa_int((int64_t)(uintptr_t)p);
+}
+__attribute__((weak)) HexaVal hexa_ptr_free(HexaVal ptr_v, HexaVal size_v) {
+    (void)size_v;
+    uint64_t p = HX_IS_INT(ptr_v) ? HX_INT_U(ptr_v) : 0;
+    if (p != 0) free((void*)(uintptr_t)p);
+    return hexa_void();
+}
+__attribute__((weak)) HexaVal hexa_ptr_offset(HexaVal ptr_v, HexaVal off_v) {
+    uint64_t p = HX_IS_INT(ptr_v) ? HX_INT_U(ptr_v) : 0;
+    int64_t off = HX_IS_INT(off_v) ? HX_INT(off_v) : 0;
+    return hexa_int((int64_t)(p + (uint64_t)off));
+}
+__attribute__((weak)) HexaVal hexa_deref(HexaVal ptr_v) {
+    uint64_t p = HX_IS_INT(ptr_v) ? HX_INT_U(ptr_v) : 0;
+    if (p == 0) return hexa_int(0);
+    return hexa_int(*(int64_t*)(uintptr_t)p);
+}
+__attribute__((weak)) HexaVal hexa_ptr_read(HexaVal ptr_v, HexaVal off_v) {
+    uint64_t p = HX_IS_INT(ptr_v) ? HX_INT_U(ptr_v) : 0;
+    int64_t off = HX_IS_INT(off_v) ? HX_INT(off_v) : 0;
+    if (p == 0) return hexa_int(0);
+    return hexa_int(*(int64_t*)(uintptr_t)(p + (uint64_t)off));
+}
+__attribute__((weak)) HexaVal hexa_ptr_write(HexaVal ptr_v, HexaVal off_v, HexaVal val_v) {
+    uint64_t p = HX_IS_INT(ptr_v) ? HX_INT_U(ptr_v) : 0;
+    int64_t off = HX_IS_INT(off_v) ? HX_INT(off_v) : 0;
+    if (p == 0) return hexa_void();
+    *(int64_t*)(uintptr_t)(p + (uint64_t)off) = HX_IS_INT(val_v) ? HX_INT(val_v) : 0;
+    return hexa_void();
+}
+__attribute__((weak)) HexaVal hexa_cuda_available(void) { return hexa_int(0); }
+__attribute__((weak)) HexaVal hexa_cuda_device_count(void) { return hexa_int(0); }
+__attribute__((weak)) HexaVal hexa_mono_ns(void) {
+    struct timespec ts;
+    hxlcl_clock_gettime(CLOCK_MONOTONIC, &ts);
+    return hexa_int((int64_t)ts.tv_sec * 1000000000LL + (int64_t)ts.tv_nsec);
+}
+__attribute__((weak)) HexaVal hexa_math_sqrt(HexaVal x) { return hexa_float(sqrt(HX_FLOAT(x))); }
+__attribute__((weak)) HexaVal hexa_math_abs(HexaVal x)  { return hexa_float(fabs(HX_FLOAT(x))); }
+__attribute__((weak)) HexaVal hexa_math_floor(HexaVal x){ return hexa_float(floor(HX_FLOAT(x))); }
+__attribute__((weak)) HexaVal hexa_math_ceil(HexaVal x) { return hexa_float(ceil(HX_FLOAT(x))); }
+__attribute__((weak)) HexaVal hexa_math_round(HexaVal x){ return hexa_float(round(HX_FLOAT(x))); }
+__attribute__((weak)) HexaVal hexa_math_min(HexaVal a, HexaVal b) { return hexa_float(fmin(HX_FLOAT(a), HX_FLOAT(b))); }
+__attribute__((weak)) HexaVal hexa_math_max(HexaVal a, HexaVal b) { return hexa_float(fmax(HX_FLOAT(a), HX_FLOAT(b))); }
+__attribute__((weak)) HexaVal hexa_cstring(HexaVal s) {
+    if (!HX_IS_STR(s)) return hexa_int(0);
+    return hexa_int((int64_t)(uintptr_t)HX_STR(s));
 }
