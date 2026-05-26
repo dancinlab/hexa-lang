@@ -189,6 +189,58 @@ fn _r_cstr(buf: [Int], base: Int, strx: Int) -> string {
     return out
 }
 
+// Phase-H inc3: read one section's relocation table into ParsedReloc[].
+// Handles ARM64_RELOC_ADDEND (kind 1): the addend reloc is a PREFIX
+// pair — its r_symbolnum holds a 24-bit signed addend that applies to
+// the NEXT reloc's target. We fold it into the following reloc's
+// `addend` field and DROP the standalone addend reloc, so the link pass
+// sees a single reloc per fix-up with its addend already attached.
+fn _read_sect_relocs(buf: [Int], reloff: Int, nreloc: Int,
+                     symoff: Int, stroff: Int) -> [ParsedReloc] {
+    let mut out: [ParsedReloc] = []
+    let mut pending_addend = 0
+    let mut have_addend = false
+    let mut ri = 0
+    while ri < nreloc {
+        let r_off       = reloff + 8 * ri
+        let r_address   = _r_u32(buf, r_off)
+        let bits        = _r_u32(buf, r_off + 4)
+        let r_symbolnum = bits & 0xffffff
+        let r_pcrel     = (bits >> 24) & 0x1
+        let r_length    = (bits >> 25) & 0x3
+        let r_extern    = (bits >> 27) & 0x1
+        let r_type      = (bits >> 28) & 0xf
+        if r_type == 1 {                              // ARM64_RELOC_ADDEND
+            // r_symbolnum is a 24-bit value = the addend. Sign-extend
+            // from bit 23.
+            let mut a = r_symbolnum
+            if (a & 0x800000) != 0 { a = a - 0x1000000 }
+            pending_addend = a
+            have_addend = true
+            ri = ri + 1
+            continue
+        }
+        let mut sym_name = ""
+        if r_extern != 0 {
+            let entry_off = symoff + 16 * r_symbolnum
+            let strx = _r_u32(buf, entry_off)
+            sym_name = _r_cstr(buf, stroff, strx)
+        }
+        let mut this_addend = 0
+        if have_addend { this_addend = pending_addend; have_addend = false; pending_addend = 0 }
+        out.push(ParsedReloc {
+            offset:   r_address,
+            sym_name: sym_name,
+            kind:     r_type,
+            pcrel:    r_pcrel,
+            length:   r_length,
+            addend:   this_addend,
+        })
+        ri = ri + 1
+    }
+    return out
+}
+
 // Parse a Mach-O 64-bit arm64 object file into ParsedObj. Mirrors
 // the inverse of `compiler/emit/macho_arm64.hexa::serialize`.
 //
@@ -237,6 +289,20 @@ pub fn parse_macho_obj(path: string) -> ParsedObj {
     // sections globally, not per-segment).
     let mut sect_counter   = 0
 
+    // Phase-H inc3: capture EVERY section. We accumulate per-section
+    // metadata in parallel arrays during the LC pass (the section_64
+    // header carries reloff/nreloc, but we read the actual reloc records
+    // AFTER the LC pass so symoff/stroff are known for extern names).
+    let mut sect_names:    [string] = []
+    let mut sect_segs:     [string] = []
+    let mut sect_addrs:    [Int] = []
+    let mut sect_aligns:   [Int] = []
+    let mut sect_types:    [Int] = []     // flags & 0xff
+    let mut sect_offs:     [Int] = []     // file offset (0 for zerofill)
+    let mut sect_sizes:    [Int] = []     // byte size (virtual for bss)
+    let mut sect_reloffs:  [Int] = []
+    let mut sect_nrelocs:  [Int] = []
+
     let mut lc_off = 32
     let mut ci = 0
     while ci < ncmds {
@@ -249,12 +315,30 @@ pub fn parse_macho_obj(path: string) -> ParsedObj {
             while s < nsects {
                 sect_counter = sect_counter + 1
                 let sectname = _r_name16(buf, sect_off)
+                let segname  = _r_name16(buf, sect_off + 16)
+                let s_addr   = _r_u64(buf, sect_off + 32)
+                let s_size   = _r_u64(buf, sect_off + 40)
+                let s_off    = _r_u32(buf, sect_off + 48)
+                let s_align  = _r_u32(buf, sect_off + 52)
+                let s_reloff = _r_u32(buf, sect_off + 56)
+                let s_nreloc = _r_u32(buf, sect_off + 60)
+                let s_flags  = _r_u32(buf, sect_off + 64)
+                let s_type   = s_flags & 0xff
+                sect_names.push(sectname)
+                sect_segs.push(segname)
+                sect_addrs.push(s_addr)
+                sect_aligns.push(s_align)
+                sect_types.push(s_type)
+                sect_offs.push(s_off)
+                sect_sizes.push(s_size)
+                sect_reloffs.push(s_reloff)
+                sect_nrelocs.push(s_nreloc)
                 if sectname == "__text" {
                     text_sect_idx = sect_counter
-                    text_size   = _r_u64(buf, sect_off + 40)
-                    text_offset = _r_u32(buf, sect_off + 48)
-                    text_reloff = _r_u32(buf, sect_off + 56)
-                    text_nreloc = _r_u32(buf, sect_off + 60)
+                    text_size   = s_size
+                    text_offset = s_off
+                    text_reloff = s_reloff
+                    text_nreloc = s_nreloc
                 }
                 // Capture the FIRST read-only data section that holds
                 // string / const bytes referenced via PAGE21/PAGEOFF12.
@@ -262,8 +346,8 @@ pub fn parse_macho_obj(path: string) -> ParsedObj {
                 // bare string literal in __cstring — handle both.
                 if (sectname == "__cstring" || sectname == "__const") && data_sect_idx == 0 {
                     data_sect_idx = sect_counter
-                    data_size     = _r_u64(buf, sect_off + 40)
-                    data_offset   = _r_u32(buf, sect_off + 48)
+                    data_size     = s_size
+                    data_offset   = s_off
                 }
                 sect_off = sect_off + 80
                 s = s + 1
@@ -308,31 +392,40 @@ pub fn parse_macho_obj(path: string) -> ParsedObj {
         si = si + 1
     }
 
-    let mut relocs: [ParsedReloc] = []
-    let mut ri = 0
-    while ri < text_nreloc {
-        let r_off       = text_reloff + 8 * ri
-        let r_address   = _r_u32(buf, r_off)
-        let bits        = _r_u32(buf, r_off + 4)
-        let r_symbolnum = bits & 0xffffff
-        let r_pcrel     = (bits >> 24) & 0x1
-        let r_length    = (bits >> 25) & 0x3
-        let r_extern    = (bits >> 27) & 0x1
-        let r_type      = (bits >> 28) & 0xf
-        let mut sym_name = ""
-        if r_extern != 0 {
-            let entry_off = symoff + 16 * r_symbolnum
-            let strx = _r_u32(buf, entry_off)
-            sym_name = _r_cstr(buf, stroff, strx)
+    // __text relocs (with ADDEND folding) via the shared helper.
+    let relocs = _read_sect_relocs(buf, text_reloff, text_nreloc, symoff, stroff)
+
+    // Phase-H inc3: build the full `sects` list (every section), reading
+    // each section's bytes (or marking zerofill/bss) + its own relocs.
+    let mut sects: [ParsedSect] = []
+    let mut sx = 0
+    while sx < len(sect_names) {
+        let s_type = sect_types[sx]
+        let s_size = sect_sizes[sx]
+        let s_off  = sect_offs[sx]
+        // S_ZEROFILL (1) / S_GB_ZEROFILL (0xc) → no file bytes (bss).
+        let is_zfill = (s_type == 1) || (s_type == 0xc)
+        let mut sbytes: [Int] = []
+        let mut zfill = 0
+        if is_zfill {
+            zfill = s_size
+        } else {
+            let mut bi2 = 0
+            while bi2 < s_size { sbytes.push(buf[s_off + bi2] & 0xff); bi2 = bi2 + 1 }
         }
-        relocs.push(ParsedReloc {
-            offset:   r_address,
-            sym_name: sym_name,
-            kind:     r_type,
-            pcrel:    r_pcrel,
-            length:   r_length,
+        let srelocs = _read_sect_relocs(buf, sect_reloffs[sx], sect_nrelocs[sx], symoff, stroff)
+        sects.push(ParsedSect {
+            sectname:  sect_names[sx],
+            segname:   sect_segs[sx],
+            index:     sx + 1,            // 1-based n_sect
+            addr:      sect_addrs[sx],
+            align:     sect_aligns[sx],
+            sect_type: s_type,
+            bytes:     sbytes,
+            zfill_size: zfill,
+            relocs:    srelocs,
         })
-        ri = ri + 1
+        sx = sx + 1
     }
 
     return ParsedObj {
@@ -340,6 +433,7 @@ pub fn parse_macho_obj(path: string) -> ParsedObj {
         text:          text,
         data:          data,
         data_sect_idx: data_sect_idx,
+        sects:         sects,
         defined:       defined,
         extern_refs:   extern_refs,
         relocs:        relocs,
