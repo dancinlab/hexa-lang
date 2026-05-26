@@ -944,12 +944,13 @@ fn link_macho_arm64(objs: [ParsedObj], out_path: string, entry: string, _is_stat
     // Load-command sizes pre-computed so the header can record
     // ncmds + sizeofcmds correctly.
     let lc_pagezero_size = 72
-    // __TEXT segment carries __text plus (phase-H inc2) optionally one
-    // merged data section (__const) when an object referenced a string /
-    // const via PAGE21/PAGEOFF12. Each section_64 = 80 bytes.
-    let mut text_nsects  = 1
-    if has_data { text_nsects = 2 }
+    // __TEXT segment carries __text + (inc3) optionally __const + __cstring.
+    // __DATA segment (inc3) carries __data + (optionally) __bss. Each
+    // segment header = 72 B, each section_64 = 80 B. (text_nsects /
+    // data_nsects / has_data_seg were computed above from the slots.)
     let lc_text_size     = 72 + 80 * text_nsects     // segment + N sections
+    let mut lc_data_size = 0
+    if has_data_seg { lc_data_size = 72 + 80 * data_nsects }
     let lc_linkedit_size = 72                        // segment, 0 sections
     let lc_main_size     = 24
     let lc_symtab_size   = 24
@@ -993,15 +994,16 @@ fn link_macho_arm64(objs: [ParsedObj], out_path: string, entry: string, _is_stat
     let lc_uuid_size           = 24          // cmd+cmdsize+16-byte UUID
     let lc_source_version_size = 16          // cmd+cmdsize+8-byte version
 
-    // LC count = 14
-    //   PAGEZERO + __TEXT + __LINKEDIT
+    // LC count = 14 base (+ 1 when a __DATA segment is present)
+    //   PAGEZERO + __TEXT [+ __DATA] + __LINKEDIT
     //   + DYLD_CHAINED_FIXUPS + DYLD_EXPORTS_TRIE
     //   + DYLINKER + DYLIB
     //   + UUID + BUILD_VERSION + SOURCE_VERSION
     //   + MAIN + SYMTAB + DYSYMTAB
     //   + CODE_SIGNATURE
-    let ncmds = 14
-    let sizeofcmds = lc_pagezero_size + lc_text_size + lc_linkedit_size
+    let mut ncmds = 14
+    if has_data_seg { ncmds = ncmds + 1 }
+    let sizeofcmds = lc_pagezero_size + lc_text_size + lc_data_size + lc_linkedit_size
                    + lc_chained_fixups_size + lc_exports_trie_size
                    + lc_dyld_size + lc_lib_size
                    + lc_uuid_size + lc_buildver_size + lc_source_version_size
@@ -1038,35 +1040,69 @@ fn link_macho_arm64(objs: [ParsedObj], out_path: string, entry: string, _is_stat
     _w_u32(out, 0)                                   // nsects
     _w_u32(out, 0)                                   // flags
 
-    // ── LC_SEGMENT_64 __TEXT (1 or 2 sections: __text [+ __const]) ──
+    // ── Phase-H inc3: FULL FILE / VM LAYOUT ─────────────────────────
     let header_size = 32
-    let text_fileoff = header_size + sizeofcmds      // start of __text bytes
-    // Phase-H inc2: the merged data section follows __text (with a
-    // 16-byte alignment gap) within the __TEXT segment's file region.
-    let data_fileoff      = text_fileoff + text_size + data_pad
-    let data_section_addr = 0x100000000 + data_fileoff
-    let text_section_addr = 0x100000000 + text_fileoff
-    // __TEXT segment file extent now spans __text + pad + data.
-    let text_seg_content_end = text_fileoff + text_size + data_pad + data_size
-    // __TEXT segment file extent — page-align upward so dyld is happy.
-    let mut text_filesize = text_seg_content_end
     let page = 0x4000
-    let rem = text_filesize & (page - 1)
-    if rem != 0 { text_filesize = text_filesize + (page - rem) }
+    let VM_BASE = 0x100000000
 
-    // ── Phase-H inc2: resolve PAGE21 (adrp) + PAGEOFF12 (add/ldr) ──
+    // __TEXT segment file region begins at offset 0 (it spans the header
+    // + LCs too). __text bytes start right after the LCs.
+    let text_fileoff = header_size + sizeofcmds      // file off of __text bytes
+    let text_section_addr = VM_BASE + text_fileoff
+
+    // __const follows __text, 16-aligned within the segment.
+    let const_pad = (16 - ((text_fileoff + text_size) & 15)) & 15
+    let const_fileoff      = text_fileoff + text_size + const_pad
+    let const_section_addr = VM_BASE + const_fileoff
+    // __cstring follows __const, 16-aligned.
+    let cstring_pad = (16 - ((const_fileoff + const_size) & 15)) & 15
+    let cstring_fileoff      = const_fileoff + const_size + cstring_pad
+    let cstring_section_addr = VM_BASE + cstring_fileoff
+
+    // __TEXT segment content end (last file-backed byte of the segment).
+    let text_seg_content_end = cstring_fileoff + cstring_size
+    // __TEXT segment file extent — page-align upward.
+    let mut text_filesize = text_seg_content_end
+    let trem = text_filesize & (page - 1)
+    if trem != 0 { text_filesize = text_filesize + (page - trem) }
+    let text_vmsize = text_filesize
+
+    // ── __DATA segment — page-aligned after __TEXT ──────────────────
+    // fileoff = text_filesize (page boundary). __data is file-backed;
+    // __bss is zero-fill (vmsize only, NOT in the file). __DATA.filesize
+    // covers __data; __DATA.vmsize covers __data + __bss (page-aligned).
+    let data_seg_fileoff = text_filesize
+    let data_seg_vmaddr  = VM_BASE + text_filesize
+    // __data section at the very start of __DATA's file region.
+    let data_fileoff      = data_seg_fileoff
+    let data_section_addr = data_seg_vmaddr
+    // __bss directly follows __data in VM (16-aligned), no file bytes.
+    let bss_vmoff_pad = (16 - (data_size & 15)) & 15
+    let bss_section_addr = data_section_addr + data_size + bss_vmoff_pad
+    // __DATA file extent = just __data (bss has no file bytes).
+    let mut data_seg_filesize = data_size
+    let drem = data_seg_filesize & (page - 1)
+    if drem != 0 { data_seg_filesize = data_seg_filesize + (page - drem) }
+    // __DATA vm extent = __data + bss pad + bss, page-aligned.
+    let mut data_seg_vmsize = data_size + bss_vmoff_pad + bss_size
+    let dvrem = data_seg_vmsize & (page - 1)
+    if dvrem != 0 { data_seg_vmsize = data_seg_vmsize + (page - dvrem) }
+    if data_seg_vmsize < data_seg_filesize { data_seg_vmsize = data_seg_filesize }
+
+    // ── Phase-H inc3: resolve PAGE21 (adrp) + PAGEOFF12 (add/ldr) ──
     //
-    // These reference a data symbol's ABSOLUTE VM address, so they can
-    // only be patched now that text_section_addr / data_section_addr are
-    // known. PC-relative BRANCH26 was already patched above.
+    // A symbol's ABSOLUTE VM address depends on its output slot's base
+    // addr (now known): __text→text_section_addr, __const→const_*,
+    // __cstring→cstring_*, __data→data_*, __bss→bss_section_addr. The
+    // reloc's `addend` (from a folded ARM64_RELOC_ADDEND prefix) is added
+    // to the target address before encoding.
     //
-    //   PAGE21  (adrp): imm = (target_page - pc_page) >> 12, where
-    //     *_page = addr & ~0xfff. Encoded into adrp as immlo=bits[1:0]
-    //     at instruction bits[30:29] and immhi=bits[20:2] at bits[23:5].
-    //   PAGEOFF12 (add / ldr lo12): imm = target & 0xfff. For ADD (no
-    //     shift) the 12-bit imm sits at bits[21:10] unscaled. For an
-    //     LDR/STR the imm must be scaled by the access size; clang emits
-    //     `add` for &symbol so the unscaled ADD path is the minimal case.
+    //   PAGE21  (adrp): imm = (target_page - pc_page) >> 12.
+    //   PAGEOFF12 (add / ldr): low 12 bits of target. For ADD (op bits =
+    //     0b100100010 at [31:23] roughly) the imm is UNSCALED at [21:10].
+    //     For an LDR/STR (load/store, top byte 0x39/0xb9/0xf9/0x3d/...)
+    //     the imm12 is SCALED by the access size: imm = (target&0xfff)>>scale,
+    //     where scale = (instr>>30)&0x3 for the integer/scaled-imm forms.
     let mut pro = 0
     while pro < len(objs) {
         let pobj = objs[pro]
@@ -1076,28 +1112,25 @@ fn link_macho_arm64(objs: [ParsedObj], out_path: string, entry: string, _is_stat
             let pr = pobj.relocs[pri]
             if pr.kind == 3 || pr.kind == 4 {
                 let patch_off = pbase + pr.offset
-                // Resolve target → absolute VM address. Look in the data
-                // symbol table first, then the text symbol table.
+                // Resolve target → absolute VM address via the unified
+                // dsym table (slot → base addr), then add the reloc addend.
                 let mut tgt_addr = -1
                 let mut dk = 0
                 while dk < len(dsym_names) {
                     if dsym_names[dk] == pr.sym_name {
-                        tgt_addr = data_section_addr + dsym_offsets[dk]
+                        let slot = dsym_slot[dk]
+                        let off  = dsym_offset[dk]
+                        if slot == SLOT_TEXT         { tgt_addr = text_section_addr + off }
+                        else if slot == SLOT_CONST   { tgt_addr = const_section_addr + off }
+                        else if slot == SLOT_CSTRING { tgt_addr = cstring_section_addr + off }
+                        else if slot == SLOT_DATA    { tgt_addr = data_section_addr + off }
+                        else if slot == SLOT_BSS     { tgt_addr = bss_section_addr + off }
                         break
                     }
                     dk = dk + 1
                 }
-                if tgt_addr < 0 {
-                    let mut tk = 0
-                    while tk < len(def_names) {
-                        if def_names[tk] == pr.sym_name {
-                            tgt_addr = text_section_addr + def_offsets[tk]
-                            break
-                        }
-                        tk = tk + 1
-                    }
-                }
                 if tgt_addr >= 0 {
+                    tgt_addr = tgt_addr + pr.addend
                     let w0 = text_bytes[patch_off + 0]
                     let w1 = text_bytes[patch_off + 1]
                     let w2 = text_bytes[patch_off + 2]
@@ -1112,15 +1145,32 @@ fn link_macho_arm64(objs: [ParsedObj], out_path: string, entry: string, _is_stat
                         let page_imm = (tgt_page - pc_page) / 0x1000
                         let immlo = page_imm & 0x3
                         let immhi = (page_imm >> 2) & 0x7ffff
-                        // Clear the existing immlo (bits30:29) + immhi
-                        // (bits23:5), then set ours.
                         let cleared = cur & 0x9f00001f
                         patched = cleared | (immlo << 29) | (immhi << 5)
                     } else {
-                        // PAGEOFF12 — add (unscaled 12-bit imm @ bits21:10).
-                        let off12 = tgt_addr & 0xfff
+                        // PAGEOFF12. Distinguish ADD (unscaled) from an
+                        // LDR/STR (scaled by access size). The load/store
+                        // unsigned-imm12 family has bits[29:28]==0b11 AND
+                        // bit27==1 AND bit26 may be 0/1 (V); the ADD imm12
+                        // family is data-processing (bit28==1, bits[25:24]
+                        // distinguish). Simplest robust test: ADD-immediate
+                        // opcode has bits[31:24] in {0x91 (add x), 0x11
+                        // (add w)} for the &sym case clang emits. Anything
+                        // else of kind 4 we treat as a scaled load/store.
+                        let top8 = (cur >> 24) & 0xff
+                        let off12_raw = tgt_addr & 0xfff
+                        let mut imm12 = off12_raw
+                        if top8 == 0x91 || top8 == 0x11 {
+                            // ADD immediate — UNSCALED 12-bit imm @ [21:10].
+                            imm12 = off12_raw
+                        } else {
+                            // LDR/STR unsigned-offset — SCALED by size =
+                            // (instr>>30)&0x3 (0=byte,1=half,2=word,3=dword).
+                            let scale = (cur >> 30) & 0x3
+                            imm12 = off12_raw >> scale
+                        }
                         let cleared = cur & 0xffc003ff
-                        patched = cleared | (off12 << 10)
+                        patched = cleared | ((imm12 & 0xfff) << 10)
                     }
                     text_bytes[patch_off + 0] = patched & 0xff
                     text_bytes[patch_off + 1] = (patched >> 8) & 0xff
