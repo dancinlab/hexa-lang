@@ -2,6 +2,18 @@
 
 Append-only history sister of `INBOX.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
+## 2026-05-26T09:45Z — 💡 RFC: `hexa cloud dft-run <deck-dir>` — DFT el-ph pod 발사를 canonical 레시피로 (손-롤 실수 제거) · from demiurge RTSC
+
+> RTSC 캠페인(vast pod 다수) 운용서 **매 dispatch 손-롤이 반복 실수의 원천**임이 드러남. transport/lifecycle 버그(#1155/#1229/#1239) 위에, "deck → 발사 → 수확" 상위 레시피 층을 `hexa cloud` 서브커맨드로 흡수하면 실수 0. demiurge-side SSOT 레시피 = `demiurge/exports/sweep/DFT_POD_DISPATCH_RECIPE.md` (이 RFC의 구현 사양).
+
+- [ ] **제안 — `hexa cloud dft-run <deck-dir>`** (또는 stdlib `cloud/dft_dispatch`): deck 디렉터리(relax.in·ph.in·pseudo/) 받아 rent→provision→chain→monitor→harvest 를 가드와 함께 1-커맨드로. 손-롤 시 반복된 실수 4종을 코드로 강제:
+  - **rent 가드**: `--direct` 강제(누락 시 proxy-only 포트=bare-IP unreachable + proxy는 cloud-guard 차단 = running인데 완전 도달불가 — mgb2h가 이걸로 시간 소모) · `reliability>0.97 verified=true`(저가 interruptible은 ~13h preempt — ysbh6 #1 유실) · provision 前 `echo REACHABLE` TCP 사전검증(실패 시 destroy+다른 offer).
+  - **transport 가드**: IP/port 는 `show instances --raw` ground-truth서만(단건 `show instance`는 start_date=None crash #1239; 수기 typo 위험). #1155 fix 후엔 vast 등록키 자동.
+  - **chain 가드**: robust relax→scf 파서 내장(`Begin final coordinates`서 `CELL_PARAMETERS (alat=X)`→×X·0.52917720859 angstrom, ATOMIC_POSITIONS crystal as-is) — 손-파서 금지(mg2pth6·mgb2h 둘 다 "No ATOMIC_POSITIONS" FATAL 재현) · `-np=physcores`(lscpu Core×Socket, not nproc; 14코어 -np26 → load246 thrash) · `--allow-run-as-root`(OpenMPI5 root 차단) · `recover=.true.` + `timeout` + `setsid`.
+  - **monitor 가드**: registry numeric-id only(#1229 argv-조각 오염) · 안정성 빠른판정(허수모드<-5 한 q라도 → 즉시 unstable, 전 BZ 대기 불요) · 완료/실패 시 비대화 destroy(orphan 방지).
+- [ ] **선결**: #1155(vast 등록키)·#1229(reconcile/registry/wipe/transport)·#1239(rent reliability2/show-instance crash) — 이 transport/lifecycle 층이 먼저 안정돼야 dft-run 상위 레시피가 견고. 그 전엔 demiurge RECIPE.md 가 수기-가드 SSOT.
+- [ ] **범위 노트**: QE 특화(pw.x/ph.x el-ph)지만, 일반 `cloud job-run <chain-spec>` 으로 추상화 가능(chain = 사용자 deck+단계 manifest). g61 stdlib SSOT 후보.
+
 ## 2026-05-26T09:30Z — 🐛 verify_cli 빌드/출력 2건 (UFO V2 lattice fold #1244 중 발견 · from demiurge UFO)
 
 - [ ] **`sopfr` stdlib-fn 미선언 codegen** — verify_cli L431 `return sopfr(n)` (stdlib/core/math.hexa `pub fn sopfr`) 가 생성 C 에서 `undeclared identifier 'sopfr'` → verify_cli 전체 빌드 실패. bessel/gamma `_Generic` 류와 동일 stdlib-pub-fn 네이밍 갭의 신규 인스턴스 (origin/main 2c8f17b7→72090b86 사이 추가; #1222 시점엔 없어 빌드됨). build/hexa_v2 codegen-fixed 본으로도 미해소.
