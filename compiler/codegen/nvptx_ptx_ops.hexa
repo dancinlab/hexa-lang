@@ -76,6 +76,17 @@ pub let PTX_OP_ST_GLOBAL_F32: string  = "st.global.f32"
 // (kernel-arg packing, addr alignment) is a follow-on cycle.
 pub let PTX_OP_LD_GLOBAL_F8: string   = "ld.global.b8"
 pub let PTX_OP_ST_GLOBAL_F8: string   = "st.global.b8"
+// PR-A (GPU sweep #1284) — integer global ld/st mnemonics. PTX ISA 8.7
+// §8.7 accepts `.u64` / `.u32` / `.s64` / `.s32` as ld/st type tags
+// (the type semantics for ld/st are signedness-agnostic; `.u`/`.s` are
+// interchangeable for the storage operation, the consuming opcode picks
+// the interpretation). Using the unsigned forms matches the existing
+// param-load mnemonic `ld.param.u64` and the address-arith mnemonic
+// `cvt.u64.u32`. `[i64]` array element loads/stores route through these.
+pub let PTX_OP_LD_GLOBAL_U64: string  = "ld.global.u64"
+pub let PTX_OP_ST_GLOBAL_U64: string  = "st.global.u64"
+pub let PTX_OP_LD_GLOBAL_U32: string  = "ld.global.u32"
+pub let PTX_OP_ST_GLOBAL_U32: string  = "st.global.u32"
 pub let PTX_OP_LD_SHARED_F64: string  = "ld.shared.f64"
 pub let PTX_OP_ST_SHARED_F64: string  = "st.shared.f64"
 pub let PTX_OP_LD_PARAM_U64: string   = "ld.param.u64"

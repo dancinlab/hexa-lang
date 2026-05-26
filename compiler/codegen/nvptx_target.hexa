@@ -406,6 +406,11 @@ fn _nvptx_ld_mnem_for_kind(kind: string) -> string {
     // selected by the consuming opcode, not the ld/st itself).
     if kind == NVPTX_RKIND_F8_E4M3 { return PTX_OP_LD_GLOBAL_F8 }
     if kind == NVPTX_RKIND_F8_E5M2 { return PTX_OP_LD_GLOBAL_F8 }
+    // PR-A (GPU sweep #1284) — integer banks. [i64] / [i32] arrays
+    // route through ld.global.u64 / ld.global.u32, not the F64 default
+    // (which silently rounded large integers to f64-mantissa precision).
+    if kind == NVPTX_RKIND_U64 { return PTX_OP_LD_GLOBAL_U64 }
+    if kind == NVPTX_RKIND_U32 { return PTX_OP_LD_GLOBAL_U32 }
     return PTX_OP_LD_GLOBAL_F64
 }
 
@@ -417,6 +422,9 @@ fn _nvptx_st_mnem_for_kind(kind: string) -> string {
     // RFC 068 §3 fp8 scaffold — `.b8` storage for both e4m3 and e5m2.
     if kind == NVPTX_RKIND_F8_E4M3 { return PTX_OP_ST_GLOBAL_F8 }
     if kind == NVPTX_RKIND_F8_E5M2 { return PTX_OP_ST_GLOBAL_F8 }
+    // PR-A (GPU sweep #1284) — integer banks. [i64] / [i32] arrays.
+    if kind == NVPTX_RKIND_U64 { return PTX_OP_ST_GLOBAL_U64 }
+    if kind == NVPTX_RKIND_U32 { return PTX_OP_ST_GLOBAL_U32 }
     return PTX_OP_ST_GLOBAL_F64
 }
 
