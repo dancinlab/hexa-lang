@@ -1675,12 +1675,8 @@ HexaVal rt_isalpha(HexaVal c) {
 extern HexaVal rt_isalnum(HexaVal c);
 extern HexaVal rt_isalpha(HexaVal c);
 #endif
-static int hxlcl_isalnum(int c) {
-    return hexa_truthy(rt_isalnum(hexa_int((int64_t)c))) ? 1 : 0;
-}
-static int hxlcl_isalpha(int c) {
-    return hexa_truthy(rt_isalpha(hexa_int((int64_t)c))) ? 1 : 0;
-}
+static int hxlcl_isalnum(int c) { return hexa_truthy(rt_isalnum(hexa_int((int64_t)c))) ? 1 : 0; }
+static int hxlcl_isalpha(int c) { return hexa_truthy(rt_isalpha(hexa_int((int64_t)c))) ? 1 : 0; }
 
 // RUNTIME.md step-2 cycle 5 — hxlcl_atof DEFINITION (forward-declared in the
 // early helper zone ~L294). Under HEXA_HAS_HEXA_RT_STDLIB delegate to the
@@ -1825,9 +1821,7 @@ extern HexaVal rt_log(HexaVal x);
 extern HexaVal rt_cos(HexaVal x);
 extern HexaVal rt_sin(HexaVal x);
 #endif
-static double hxlcl_fmod(double x, double y) {
-    return HX_FLOAT(rt_fmod(hexa_float(x), hexa_float(y)));
-}
+static double hxlcl_fmod(double x, double y) { return HX_FLOAT(rt_fmod(hexa_float(x), hexa_float(y))); }
 static double hxlcl_exp(double x) { return HX_FLOAT(rt_exp(hexa_float(x))); }
 static double hxlcl_log(double x) { return HX_FLOAT(rt_log(hexa_float(x))); }
 static double hxlcl_cos(double x) { return HX_FLOAT(rt_cos(hexa_float(x))); }
@@ -3186,9 +3180,7 @@ HexaVal hexa_clock(void) {
     return hexa_float((double)ts.tv_sec + (double)ts.tv_nsec/1e9);
 }
 
-HexaVal hexa_random(void) {
-    return hexa_float(rand() / (double)RAND_MAX);
-}
+HexaVal hexa_random(void) { return hexa_float(rand() / (double)RAND_MAX); }
 
 HexaVal hexa_char_code(HexaVal s, HexaVal idx);
 // Bootstrap shim (same rationale as `join` above): SSOT modules use
@@ -5207,9 +5199,7 @@ HexaVal hexa_math_atan(HexaVal x) { return rt_atan(hexa_float(HX_FLOAT(x))); }
 HexaVal hexa_math_atan2(HexaVal y, HexaVal x) { return hexa_float(atan2(HX_FLOAT(y), HX_FLOAT(x))); }
 #else
 extern HexaVal rt_atan2(HexaVal y, HexaVal x);
-HexaVal hexa_math_atan2(HexaVal y, HexaVal x) {
-    return rt_atan2(hexa_float(HX_FLOAT(y)), hexa_float(HX_FLOAT(x)));
-}
+HexaVal hexa_math_atan2(HexaVal y, HexaVal x) { return rt_atan2(hexa_float(HX_FLOAT(y)), hexa_float(HX_FLOAT(x))); }
 #endif
 HexaVal hexa_math_log(HexaVal x)  { return hexa_float(hxlcl_log(HX_FLOAT(x))); }
 HexaVal hexa_math_exp(HexaVal x)  { return hexa_float(hxlcl_exp(HX_FLOAT(x))); }
@@ -5228,9 +5218,7 @@ extern HexaVal rt_round(HexaVal v);
 HexaVal hexa_math_pow(HexaVal b, HexaVal e) { return hexa_float(pow(HX_FLOAT(b), HX_FLOAT(e))); }
 #else
 extern HexaVal rt_pow_float(HexaVal b, HexaVal e);
-HexaVal hexa_math_pow(HexaVal b, HexaVal e) {
-    return rt_pow_float(hexa_float(HX_FLOAT(b)), hexa_float(HX_FLOAT(e)));
-}
+HexaVal hexa_math_pow(HexaVal b, HexaVal e) { return rt_pow_float(hexa_float(HX_FLOAT(b)), hexa_float(HX_FLOAT(e))); }
 #endif
 // 2026-05-20 (blocker-3 fmod-shim): direct libm fmod() exposed as `fmod(x, y)`
 // from hexa user code. Distinct from `%` which routes through hexa_mod
@@ -5244,9 +5232,7 @@ HexaVal hexa_math_pow(HexaVal b, HexaVal e) {
 HexaVal hexa_math_fmod(HexaVal a, HexaVal b) { return hexa_float(hxlcl_fmod(HX_FLOAT(a), HX_FLOAT(b))); }
 #else
 extern HexaVal rt_fmod(HexaVal x, HexaVal y);
-HexaVal hexa_math_fmod(HexaVal a, HexaVal b) {
-    return rt_fmod(hexa_float(HX_FLOAT(a)), hexa_float(HX_FLOAT(b)));
-}
+HexaVal hexa_math_fmod(HexaVal a, HexaVal b) { return rt_fmod(hexa_float(HX_FLOAT(a)), hexa_float(HX_FLOAT(b))); }
 #endif
 #ifndef HEXA_HAS_HEXA_RT_STDLIB
 #else
@@ -10744,9 +10730,7 @@ HexaVal hexa_exec_capture(HexaVal cmd) {
 // multiplexed reader (no channel merge, no deadlock — PR #423). New callers
 // that want exit-code AND separate stderr use this name; the 2-tuple
 // `exec_with_status` keeps r[1]==exit_code for every existing caller.
-HexaVal hexa_exec_with_status3(HexaVal cmd) {
-    return hexa_exec_capture(cmd);
-}
+HexaVal hexa_exec_with_status3(HexaVal cmd) { return hexa_exec_capture(cmd); }
 
 HexaVal rt_delete_file(HexaVal path) {
     if (!HX_IS_STR(path) || !HX_STR(path)) return hexa_void();
@@ -10909,9 +10893,7 @@ HexaVal hexa_byte_len(HexaVal v) {
 // Thin alias over hexa_map_keys (which is already the canonical C symbol for
 // HX_MAP key iteration). Kept as a distinct builtin so .hexa sources can
 // use the more familiar `dict_keys(d)` spelling (tokenizer_bpe.hexa etc.).
-HexaVal hexa_dict_keys(HexaVal m) {
-    return hexa_map_keys(m);
-}
+HexaVal hexa_dict_keys(HexaVal m) { return hexa_map_keys(m); }
 
 // Step 5 #4 (2026-05-22): __fd_write_bytes(fd, s) — POSIX write(2) thin shim.
 // Companion to the codegen.hexa inline-emit handler. The SSOT codegen
@@ -11379,9 +11361,7 @@ HexaVal hexa_utc_compact_now(void) {
 extern HexaVal rt_to_bool(HexaVal v);
 HexaVal hexa_to_bool(HexaVal v) { return rt_to_bool(v); }
 #else
-HexaVal hexa_to_bool(HexaVal v) {
-    return hexa_bool(hexa_truthy(v) ? 1 : 0);
-}
+HexaVal hexa_to_bool(HexaVal v) { return hexa_bool(hexa_truthy(v) ? 1 : 0); }
 #endif
 
 // http_get(url): popen("curl -s <url>") → TAG_STR body. Keeps the
@@ -12874,9 +12854,7 @@ HexaVal hexa_exec_stream_async_impl(HexaVal cmd) {
     _hexa_stream_slots[slot].stdin_fd = -1;     // exec_stream_async path is read-only
     return hexa_int((int64_t)slot);
 }
-HexaVal hexa_exec_stream_async(HexaVal cmd) {
-    return hexa_exec_stream_async_impl(cmd);
-}
+HexaVal hexa_exec_stream_async(HexaVal cmd) { return hexa_exec_stream_async_impl(cmd); }
 
 /* v1.2 (KI-5 RESOLVED, 2026-05-01) — per-call [done_int, line_str] protocol.
  *
@@ -12988,9 +12966,7 @@ HexaVal hexa_exec_stream_poll_impl(HexaVal handle) {
     hexa_array_push(out, hexa_str(""));
     return out;
 }
-HexaVal hexa_exec_stream_poll(HexaVal handle) {
-    return hexa_exec_stream_poll_impl(handle);
-}
+HexaVal hexa_exec_stream_poll(HexaVal handle) { return hexa_exec_stream_poll_impl(handle); }
 
 HexaVal hexa_exec_stream_close_impl(HexaVal handle) {
     _hexa_stream_slots_ensure_init();
@@ -13035,9 +13011,7 @@ HexaVal hexa_exec_stream_close_impl(HexaVal handle) {
     /* Note: s->buf 보존 (재사용 위해 free 안 함; 다음 spawn 시 재초기화). */
     return hexa_int((int64_t)proper_rc);
 }
-HexaVal hexa_exec_stream_close(HexaVal handle) {
-    return hexa_exec_stream_close_impl(handle);
-}
+HexaVal hexa_exec_stream_close(HexaVal handle) { return hexa_exec_stream_close_impl(handle); }
 
 // exec_stream_kill(handle) -> int (2026-05-11, wilson tool-core ESC-cancel) --
 // Promptly terminate the streaming child *process group*: SIGTERM, a short
@@ -13098,24 +13072,14 @@ HexaVal hexa_exec_stream_kill_impl(HexaVal handle) {
     else proper_rc = -1;
     return hexa_int((int64_t)proper_rc);
 }
-HexaVal hexa_exec_stream_kill(HexaVal handle) {
-    return hexa_exec_stream_kill_impl(handle);
-}
+HexaVal hexa_exec_stream_kill(HexaVal handle) { return hexa_exec_stream_kill_impl(handle); }
 
 // codegen이 raw symbol `exec_stream_*` 도 emit (hexa_call1 indirect 패턴) —
 // non-prefixed alias 함수도 추가 (hexa_ prefix 미사용 form).
-HexaVal exec_stream_async(HexaVal cmd) {
-    return hexa_exec_stream_async_impl(cmd);
-}
-HexaVal exec_stream_poll(HexaVal handle) {
-    return hexa_exec_stream_poll_impl(handle);
-}
-HexaVal exec_stream_close(HexaVal handle) {
-    return hexa_exec_stream_close_impl(handle);
-}
-HexaVal exec_stream_kill(HexaVal handle) {
-    return hexa_exec_stream_kill_impl(handle);
-}
+HexaVal exec_stream_async(HexaVal cmd) { return hexa_exec_stream_async_impl(cmd); }
+HexaVal exec_stream_poll(HexaVal handle) { return hexa_exec_stream_poll_impl(handle); }
+HexaVal exec_stream_close(HexaVal handle) { return hexa_exec_stream_close_impl(handle); }
+HexaVal exec_stream_kill(HexaVal handle) { return hexa_exec_stream_kill_impl(handle); }
 
 // ── bidi-stdio primitives (2026-05-13, wilson MCP enabler) ──
 // hexa_exec_stream_open / _write / _close_stdin extend the existing read-only
