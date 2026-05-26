@@ -28,6 +28,9 @@ fn _cloud_help() {
     println("  cloud exec      <host> [conn] -- <shell-cmd>           run shell command via ssh (DEFAULT SHELL PARSES IT)")
     println("  cloud nohup     <host> <logfile> [conn] [--env K=V] [--early-life-check N] -- <argv...>   background argv, print remote pid")
     println("                                                         --early-life-check N: after launch, sleep N s + poll once; exit 3 if pid already DIED (silent class-1 launch failure)")
+    println("                                                         on success also prints `__MONITOR_HANDLE__={host,pid,log,tail_cmd}` JSON one-liner (grep '^__MONITOR_HANDLE__=' to extract; Monitor bridge)")
+    println("  cloud fire      <host> [--log <path>] [conn] [--env K=V] [--early-life-check N] -- <argv...>   atomic nohup + auto-log + Monitor handle")
+    println("                                                         like nohup but logfile is OPTIONAL — defaults to /tmp/cloud-<unix_ts>.log on the remote when --log omitted, so caller does not have to invent + thread the path")
     println("  cloud poll      <host> <pid> [conn]                    exit 0 if remote pid alive, else 1")
     println("  cloud tail      <host> <logfile> [conn] [--grep RE] [--until RE]   live-stream a remote log (Monitor bridge)")
     println("                                                         tail -F | sed -u: print --grep lines, print+quit on --until (default: JOB DONE|crash); follows forever if --until ''")
@@ -205,6 +208,24 @@ fn _max_wall_cli(av: [str], start: int) -> int {
 }
 
 // _early_life_cli — scan av[start..] (up to a "--" separator) for the
+// _log_path_cli — scan av[start..] (up to a "--" separator) for `--log <path>`
+// and return the path; "" means no --log was given (cloud_fire then
+// auto-generates /tmp/cloud-<unix_ts>.log). Mirrors _early_life_cli's
+// pre-separator scan.
+fn _log_path_cli(av: [str], start: int) -> str {
+    let mut i = start
+    while i < len(av) {
+        let t = av[i]
+        if t == "--" { return "" }
+        if t == "--log" {
+            if i + 1 < len(av) { return av[i + 1] }
+            return ""
+        }
+        i = i + 1
+    }
+    return ""
+}
+
 // `--early-life-check <sec>` nohup-verb flag and return the window in
 // seconds; 0 means it was not given (check disabled). Stops at "--" so an
 // `--early-life-check` token inside the remote argv is never consumed.
@@ -661,7 +682,7 @@ fn main() {
     while i < len(av) {
         let t = av[i]
         if si < 0 {
-            if t == "rent" || t == "up" || t == "down" || t == "destroy" || t == "list" || t == "status" || t == "preflight" || t == "watchdog" || t == "run" || t == "exec" || t == "nohup" || t == "poll" || t == "tail" || t == "watch" || t == "ssh-port" || t == "copy-to" || t == "copy-from" || t == "orphans" || t == "reconcile" || t == "adopt" || t == "forget" || t == "dft-run" || t == "help" || t == "--help" || t == "-h" || t == "version" || t == "--version" || t == "-v" {
+            if t == "rent" || t == "up" || t == "down" || t == "destroy" || t == "list" || t == "status" || t == "preflight" || t == "watchdog" || t == "run" || t == "exec" || t == "nohup" || t == "fire" || t == "poll" || t == "tail" || t == "watch" || t == "ssh-port" || t == "copy-to" || t == "copy-from" || t == "orphans" || t == "reconcile" || t == "adopt" || t == "forget" || t == "dft-run" || t == "help" || t == "--help" || t == "-h" || t == "version" || t == "--version" || t == "-v" {
                 si = i
                 sub = t
             }
@@ -831,6 +852,48 @@ fn main() {
         // pid + logfile + ready-to-run tail_cmd without parsing the human
         // [cloud] message. Mirrors the existing __CLOUD_PID__= marker pattern.
         // Emitted only on a successful dispatch with a known logfile path.
+        if r.ok == 1 && len(r.logfile) > 0 {
+            println("__MONITOR_HANDLE__={"
+                + "\"host\":" + _mh_json_str(host)
+                + ",\"pid\":" + str(r.pid)
+                + ",\"log\":" + _mh_json_str(r.logfile)
+                + ",\"tail_cmd\":" + _mh_json_str("hexa cloud tail " + host + " " + r.logfile)
+                + "}")
+        }
+        if r.ok == 1 {
+            let rc = _cloud_early_life_check(host, ssh_opts, r.pid, early_life)
+            exit(rc)
+        }
+        exit(1)
+    }
+    if sub == "fire" {
+        // Atomic "fire and Monitor" — like nohup but the logfile is OPTIONAL
+        // (auto-generated /tmp/cloud-<unix_ts>.log when --log omitted). Same
+        // __MONITOR_HANDLE__= JSON line so a harness picks up host/pid/log/
+        // tail_cmd from one verb call. The whole point: the caller no longer
+        // has to invent a logfile path AND thread it through to `cloud tail`.
+        if si + 1 >= len(av) {
+            println("[cloud] fire: usage — cloud fire <host> [--log <path>] [--port N] [--insecure] [--early-life-check N] [--env K=V] -- <argv...>")
+            exit(2)
+        }
+        let host = av[si + 1]
+        let ssh_opts = _ssh_opts_cli(av, si + 2)
+        let env_kvs = _env_args_cli(av, si + 2)
+        let early_life = _early_life_cli(av, si + 2)
+        let log_path = _log_path_cli(av, si + 2)
+        let mut argv = _collect_after(av, si + 2)
+        if len(argv) == 0 {
+            println("[cloud] fire: empty argv — usage: cloud fire <host> [--log <path>] [--port N] [--insecure] [--early-life-check N] [--env K=V] -- <argv...>")
+            exit(2)
+        }
+        argv = _with_env(env_kvs, argv)
+        let r = cloud_fire_opts(host, ssh_opts, argv, log_path)
+        if len(r.stdout_) > 0 {
+            println(r.stdout_)
+        }
+        println("[cloud] " + r.message)
+        // Same __MONITOR_HANDLE__= line as cloud nohup (PR1) so callers parse
+        // a single shape across both verbs.
         if r.ok == 1 && len(r.logfile) > 0 {
             println("__MONITOR_HANDLE__={"
                 + "\"host\":" + _mh_json_str(host)
