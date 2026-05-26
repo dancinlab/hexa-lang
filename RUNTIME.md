@@ -255,6 +255,93 @@ hexa-native 로 교체 (assemble = `clang -c` 는 별도 chunk).
   (`RUN_RC=0` · `EXIT42_RC=42`). 기본 `build_aprime.sh` 는 `hexa_ld`
   미참조 → 영향 없음 (`grep -c hexa_ld tool/build_aprime.sh = 0`).
 
+### 넷째 increment (2026-05-26 · 🛸 chunk B/A 가교 — `runtime_arm64.hexa::rt_exit` → hexa-native `.o` → 실제 exit(42))
+
+앞의 세 increment 는 모두 **`clang -c` 가 만든 input `.o`** 를 링크했다.
+이 increment 는 한 발 앞당겨, **emit 측을 hexa-native 로 교체**한 첫 사례를
+연다 — `self/codegen/runtime_arm64.hexa::rt_exit` (16 B asm-bytes, `#1252` 의
+arena-svc-clobber 직후 검증된 그 정확한 floor) 와
+`self/codegen/macho.hexa::macho_obj_wrap` 만으로 **`MH_OBJECT` `.o` 를 한 발도
+clang 없이** 생성한다. 즉 chunk A (runtime.c → hexa-emit) 의 한 primitive 가
+chunk B (link) 의 입력으로 실제 흐른다 — 두 chunk 의 첫 가교.
+
+- **scope**: 한 primitive (`rt_exit`, 가장 단순한 16 B · 0 reloc). PoC 4 단계
+  pipeline:
+  1. `rt_exit_bytes()` (`runtime_arm64.hexa` L36-60 의 byte-identical 인라인) →
+     `[253,123,191,169, 253,3,0,145, 48,0,128,210, 1,16,0,212]` (4 ARM64 instr).
+  2. `macho_obj_wrap_v(code, 0)` (`macho.hexa` L34-136 의 byte-identical 인라인) →
+     276 B Mach-O `MH_OBJECT`, sym `_hexa_main` @ offset 0.
+  3. `write_bytes("/tmp/poc_rt_exit.o", obj)` → 디스크.
+  4. (downstream) `clang caller.c poc_rt_exit.o -o run` — 링크 측에서만 clang
+     사용 (f1/f2 — emit 측에는 0).
+- **인라인 사유**: `use "self/codegen/..."` 직접 import 가 빌드 호스트의
+  `build/hexa_module_loader` 부재 (memory `reference_hexa_module_loader_env_2026_05_20`)
+  로 `Undefined symbols for architecture arm64` → 인라인 (SSOT 와 char-identical,
+  divergence 0 — divergence 시 곧바로 SVC trailer/MH_MAGIC sanity check 실패).
+
+- **측정 (ssh mini, arm64-Mac, 2026-05-26)**:
+
+  ```
+  $ /tmp/poc_rt_exit_emit
+  [poc] chunk B/A bridge — hexa-native .o emit for rt_exit
+    rt_exit bytes  : 16 (16 expected)
+    SVC trailer    : 01 10 00 d4 (svc #0x80) OK
+    obj_wrap size  : 276 bytes total
+    MH_MAGIC_64    : cf fa ed fe OK
+    filetype       : 1 (MH_OBJECT) OK
+    wrote          : /tmp/poc_rt_exit.o
+
+  $ file /tmp/poc_rt_exit.o
+  /tmp/poc_rt_exit.o: Mach-O 64-bit object arm64
+
+  $ otool -tv /tmp/poc_rt_exit.o
+  (__TEXT,__text) section
+  _hexa_main:
+  0000000000000000  stp  x29, x30, [sp, #-0x10]!
+  0000000000000004  mov  x29, sp
+  0000000000000008  mov  x16, #0x1
+  000000000000000c  svc  #0x80
+
+  $ nm /tmp/poc_rt_exit.o
+  0000000000000000 T _hexa_main
+
+  $ clang -arch arm64 -o /tmp/poc_rt_exit_run \
+      test/native_build/poc_rt_exit_caller.c /tmp/poc_rt_exit.o
+  $ /tmp/poc_rt_exit_run ; echo rc=$?
+  rc=42
+  ```
+
+  → C 측 `int main(){ hexa_main(42); }` 가 x0=42 로 hexa-emitted bytes 에
+  점프 → `mov x16,#1` + `svc #0x80` → 커널 `SYS_exit(42)` → 셸이 `rc=42`
+  관측. rt_exit prologue (`stp x29,x30 / mov x29,sp`) 는 x0 를 건드리지
+  않아 caller 의 인자가 그대로 보존됨이 silicon-level 로 입증. 🟢 PASS.
+  verdict: `.verdicts/runtime-arm64-poc-rt-exit/F-PHASEH-CHUNKB-BRIDGE.txt`.
+
+- **no-regression**: PoC 변경분은 `test/native_build/` 아래 **새 파일 3 개만**
+  (additive 354 LOC) — `poc_rt_exit_obj_emit.hexa` · `poc_rt_exit_caller.c` ·
+  `poc_rt_exit_drive.hexa`. `self/` · `stdlib/` · `compiler/` · `codegen/` ·
+  `tool/build_aprime.sh` 모두 무수정 — 기존 native backend 경로 (clang
+  assemble+link) 영향 0 (`git diff HEAD~3..HEAD -- self/ stdlib/ compiler/ tool/
+  = empty`).
+
+- **남는 잔재 (다음 inc 후보)**:
+  - rt_print_str / rt_print_int 등 **단일 export 심볼 fixity** — `macho_obj_wrap`
+    이 `_hexa_main` 한 심볼 hard-code. 여러 primitive 를 한 `.o` 에 같이 묶으려면
+    nlist `nsyms`/strtab 다중 심볼 emit 으로 확장 필요 (작업량: ~30 LOC,
+    `macho_obj_wrap` 의 strtab 빌더 변경).
+  - **rt_alloc / rt_arena_init** 처럼 `adr x9,#0` 패치슬롯 (state ptr) 이 필요한
+    primitive 는 동일 `.o` 안에 `__data` 섹션 + ARM64_RELOC_PAGE21/PAGEOFF12
+    self-relocation 을 emit 해야 함. 셋째 increment 에서 link 측은 이미 PAGE21/
+    PAGEOFF12 + `__data`/`__bss` 풀 라우팅 ✅ — emit 측에서 reloc record 를
+    `__text` 다음에 쓰면 충분. PoC 한 단계 위 (`hexa_ld` 양쪽 모두 hexa-native).
+  - production-wire (self/main.hexa L2552-2706 의 native backend) 는 본 PoC 직후
+    의 별도 inc — 현재 `clang -O2 user.s runtime.c` 의 `runtime.c` 자리를
+    이 chunk B/A 가교가 만든 `rt.o` 로 교체. 단 primitive set 이 `print_*`/
+    `alloc`/`arena_*` 까지 확장된 후가 의미 있음 (`rt_exit` 만으로는
+    transpile 된 user.s 가 `_hexa_println` 등 다른 심볼을 못 만나서 link fail).
+    즉 본 inc 는 **체인의 첫 링크 (link feasibility 증명)**, production-wire 는
+    primitive-set 완성 후 자연스러운 마지막 한 줄.
+
 ### 🔴 핵심 발견 — macOS 는 fully-static (no-dyld) 를 RUN 못함
 
 당초 목표는 `LC_UNIXTHREAD` + dyld 없는 **fully-static** Mach-O 였으나,
