@@ -1,0 +1,9 @@
+verify --expr phi(6)=2
+  calc   = 2  == expected 2
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+  absorb = · already in atlas — idempotent skip (default · @D g69)
+---
+verify --expr sigma_k(6,1)=12
+  calc   = 12  == expected 12
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+  absorb = · already in atlas — idempotent skip (default · @D g69)
