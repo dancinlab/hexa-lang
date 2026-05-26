@@ -3069,7 +3069,7 @@ __attribute__((weak)) HexaVal hexa_ptr_offset(HexaVal ptr, HexaVal offset) {
     return hexa_int((int64_t)(p + (uint64_t)off));
 }
 
-HexaVal hexa_deref(HexaVal ptr) {
+__attribute__((weak)) HexaVal hexa_deref(HexaVal ptr) {
     uint64_t p = HX_IS_INT(ptr) ? HX_INT_U(ptr) : 0;
     if (p == 0) return hexa_int(0);
     int64_t v;
