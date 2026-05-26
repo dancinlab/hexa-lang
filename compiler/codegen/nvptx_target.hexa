@@ -1190,6 +1190,48 @@ fn _nvptx_lower_stmt(buf: [LInstr], s: Stmt, kinds: [PReg], shared_idx_off: [i64
     // emits the body. Non-intrinsic STMT_CALLs remain a stub (a real
     // call ABI is 055-P3c-territory).
     if s.kind == STMT_CALL {
+        // RFC 055 §5 multi-block global thread index. PTX has no single
+        // sreg for "blockIdx * blockDim + threadIdx", so the call expands
+        // to a 5-instr composition using one .u32 scratch reg (declared
+        // in Pass 7). Per-axis: x/y/z. The classifier put the dst in U32.
+        //   mov.u32 %r_gtid_<id>, %ctaid.<a>;
+        //   mov.u32 %dst,         %ntid.<a>;
+        //   mul.lo.u32 %dst, %r_gtid_<id>, %dst;
+        //   mov.u32 %r_gtid_<id>, %tid.<a>;
+        //   add.u32 %dst, %dst, %r_gtid_<id>;
+        let is_gtid_x = s.op == "gpu_global_thread_id_x"
+        let is_gtid_y = s.op == "gpu_global_thread_id_y"
+        let is_gtid_z = s.op == "gpu_global_thread_id_z"
+        if is_gtid_x || is_gtid_y || is_gtid_z {
+            let mut axis = ".x"
+            if is_gtid_y { axis = ".y" }
+            if is_gtid_z { axis = ".z" }
+            let dst_reg = _nvptx_lookup_reg_for_local(kinds, s.dst.id)
+            let sc_reg  = _nvptx_reg_gtid(s.dst.id)
+            let mut g1 = []
+            g1.push(_nvptx_op(sc_reg))
+            g1.push(_nvptx_op(PTX_SREG_CTAID + axis))
+            out.push(_nvptx_instr(PTX_OP_MOV_U32, g1, "gpu_global_thread_id" + axis + "(): blockIdx"))
+            let mut g2 = []
+            g2.push(_nvptx_op(dst_reg))
+            g2.push(_nvptx_op(PTX_SREG_NTID + axis))
+            out.push(_nvptx_instr(PTX_OP_MOV_U32, g2, "gpu_global_thread_id" + axis + "(): blockDim"))
+            let mut g3 = []
+            g3.push(_nvptx_op(dst_reg))
+            g3.push(_nvptx_op(sc_reg))
+            g3.push(_nvptx_op(dst_reg))
+            out.push(_nvptx_instr("mul.lo.u32", g3, "gpu_global_thread_id" + axis + "(): blockIdx*blockDim"))
+            let mut g4 = []
+            g4.push(_nvptx_op(sc_reg))
+            g4.push(_nvptx_op(PTX_SREG_TID + axis))
+            out.push(_nvptx_instr(PTX_OP_MOV_U32, g4, "gpu_global_thread_id" + axis + "(): threadIdx"))
+            let mut g5 = []
+            g5.push(_nvptx_op(dst_reg))
+            g5.push(_nvptx_op(dst_reg))
+            g5.push(_nvptx_op(sc_reg))
+            out.push(_nvptx_instr("add.u32", g5, "gpu_global_thread_id" + axis + "(): += threadIdx"))
+            return out
+        }
         let sreg = _nvptx_gpu_intrinsic_sreg(s.op)
         if len(sreg) > 0 {
             let mut a = []
@@ -2154,6 +2196,12 @@ fn _nvptx_classify_local_for_stmt(s: Stmt) -> string {
         if s.op == "gpu_grid_dim_x" { return NVPTX_RKIND_U32 }
         if s.op == "gpu_grid_dim_y" { return NVPTX_RKIND_U32 }
         if s.op == "gpu_grid_dim_z" { return NVPTX_RKIND_U32 }
+        // RFC 055 §5 multi-block global thread index. Expands to
+        //   blockIdx.<a> * blockDim.<a> + threadIdx.<a>
+        // (5-instr emit at STMT_CALL site, scratch reg in Pass 7).
+        if s.op == "gpu_global_thread_id_x" { return NVPTX_RKIND_U32 }
+        if s.op == "gpu_global_thread_id_y" { return NVPTX_RKIND_U32 }
+        if s.op == "gpu_global_thread_id_z" { return NVPTX_RKIND_U32 }
         // RFC 055 §12 P4+ — gpu_warp_shuffle returns a 32-bit register.
         if s.op == "gpu_warp_shuffle" { return NVPTX_RKIND_U32 }
         // RFC 071 P4+ — gpu_warp_shuffle_xor mirrors the 32-bit dst bank
@@ -2793,6 +2841,30 @@ fn _nvptx_classify_locals(mfn: MFunc) -> [PReg] {
             se = se + 1
         }
         be = be + 1
+    }
+    // RFC 055 §5 — Pass 7: gpu_global_thread_id_<axis> scratch-reg declaration.
+    // PTX `mul.lo.u32` + `add.u32` operate on register operands, not on
+    // sregs directly, so the 3-component composition
+    //   blockIdx.<a> * blockDim.<a> + threadIdx.<a>
+    // needs one .u32 scratch reg per call site to stage the two operand
+    // movs (mul.lo intermediate + final add carry). Gated on call dst
+    // classifying as U32 (matches the recognizer above). Pattern mirrors
+    // the Pass 5 `%cmpw_<id>` mixed-width cmp scratch.
+    let mut gb = 0
+    while gb < len(mfn.blocks) {
+        let blkg = mfn.blocks[gb]
+        let mut sg = 0
+        while sg < len(blkg.stmts) {
+            let s = blkg.stmts[sg]
+            if s.kind == STMT_CALL && s.dst.id >= 0 {
+                let is_gtid = s.op == "gpu_global_thread_id_x" || s.op == "gpu_global_thread_id_y" || s.op == "gpu_global_thread_id_z"
+                if is_gtid {
+                    regs.push(PReg { name: _nvptx_reg_gtid(s.dst.id), kind: NVPTX_RKIND_U32, frag_role: "", frag_dtype: "", frag_layout: "" })
+                }
+            }
+            sg = sg + 1
+        }
+        gb = gb + 1
     }
     return regs
 }
@@ -3941,6 +4013,18 @@ fn _nvptx_reg_expf64_k(id: i64) -> string {
 }
 fn _nvptx_reg_expf64_b(id: i64) -> string {
     return "%rd_exp_b_" + to_string(id)
+}
+
+// RFC 055 §5 multi-block global thread index — per-call scratch reg.
+//
+// `gpu_global_thread_id_<axis>()` lowers to a 5-instr composition
+// (`blockIdx * blockDim + threadIdx`). PTX `mul.lo.u32`/`add.u32` need
+// register operands, so each call site needs one `.reg .u32` scratch
+// to stage the intermediate sreg moves. Keyed on dst.id so concurrent
+// calls in one function never clobber each other. Declared in
+// `_nvptx_classify_locals` Pass 7; consumed at the STMT_CALL emit site.
+fn _nvptx_reg_gtid(id: i64) -> string {
+    return "%r_gtid_" + to_string(id)
 }
 
 // RFC 055 §12 P4+ — mixed-precision reg-name helpers (SCAFFOLD).
