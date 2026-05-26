@@ -10046,6 +10046,8 @@ fn _is_builtin_name(name) {
     if name == "__raw_idiv" { return true }
     if name == "__raw_imod" { return true }
     if name == "__raw_fmod" { return true }
+    if name == "__raw_add_f" { return true }
+    if name == "hexa_str_concat" { return true }
     if name == "__arr_set_cap" { return true }
     if name == "__fd_write_bytes" { return true }
     if name == "dict_keys" { return true }

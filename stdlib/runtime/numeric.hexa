@@ -1588,3 +1588,55 @@ pub fn rt_mod(a: HexaVal, b: HexaVal) -> HexaVal {
     return __raw_fmod(af, bf)
 }
 
+// rt_add_slow — hexa-source port of runtime_core.c hexa_add_slow (arith core
+// op 5). The int+int hot path stays in the C `hexa_add` MACRO (ROI-37); this is
+// the slow path. Semantics match the C body bit-for-bit:
+//   bool→int coerce · int/int → int · either-float → float (both __hx_to_double,
+//   string→0.0) · array+array → concat · else → to_string + str_concat.
+// No operator-circularity: `+` on known-int is native (no hexa_add), the string
+// branch uses the str_concat builtin (→ hexa_str_concat, NOT `+`), the float
+// branch uses the __raw_add_f escape (mirrors the C float branch incl bool
+// coercion + __hx_to_double), and the array loop's `i + 1` int+int re-enters the
+// hexa_add MACRO whose runtime int+int fast path resolves inline (no recursion).
+pub fn rt_add_int(a: int, b: int) -> int { return a + b }
+
+pub fn rt_add_slow(a: HexaVal, b: HexaVal) -> HexaVal {
+    let ta = type_of(a)
+    let tb = type_of(b)
+    let mut ai: int = 0
+    let mut a_kind = 2   // 0=int(incl bool), 1=float, 2=other
+    if ta == "int" { ai = a as int; a_kind = 0 }
+    else if ta == "bool" { if a as bool { ai = 1 } else { ai = 0 } a_kind = 0 }
+    else if ta == "float" { a_kind = 1 }
+    let mut bi: int = 0
+    let mut b_kind = 2
+    if tb == "int" { bi = b as int; b_kind = 0 }
+    else if tb == "bool" { if b as bool { bi = 1 } else { bi = 0 } b_kind = 0 }
+    else if tb == "float" { b_kind = 1 }
+    // int + int (incl bool-coerced) → int
+    if a_kind == 0 && b_kind == 0 {
+        return rt_add_int(ai, bi)
+    }
+    // either operand float → float; __raw_add_f bool-coerces + __hx_to_double's
+    // both (string→0.0), matching the C `HX_IS_FLOAT(a)||HX_IS_FLOAT(b)` branch.
+    if a_kind == 1 || b_kind == 1 {
+        return __raw_add_f(a, b)
+    }
+    // array + array → concat (NOT `+` — that would re-enter hexa_add)
+    if ta == "array" && tb == "array" {
+        let mut out = []
+        let mut i = 0
+        let na = len(a)
+        while i < na { out = push(out, a[i]); i = i + 1 }
+        let mut j = 0
+        let nb = len(b)
+        while j < nb { out = push(out, b[j]); j = j + 1 }
+        return out
+    }
+    // else → to_string + hexa_str_concat. Calls the real C fn hexa_str_concat
+    // directly (NOT the `str_concat` builtin alias — a pre-mapping bootstrap
+    // emits it bare/undefined; NOT `+` — that re-enters hexa_add). hexa_str_concat
+    // resolves via the runtime symbol (registered in bind.hexa + _is_builtin_name).
+    return hexa_str_concat(to_string(a), to_string(b))
+}
+
