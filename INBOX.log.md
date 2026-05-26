@@ -2,6 +2,33 @@
 
 Append-only history sister of `INBOX.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
+## 2026-05-27T01:00Z — `mertens(n)` builtin verify-fn 부재 (RH-adjacent descriptive sweep · F19 후속)
+
+> TECS-L F19 (Clay attempt, PR #1372) honest negative 후속. Mertens partial sum M(n) = Σ μ(k) for k=1..n 을 `hexa verify --expr mertens n V` 단일 호출로 게이트 못함. 현재는 N 개 μ(k) call 후 외부 sum.
+
+- [ ] **`stdlib/number/mertens.hexa` 또는 verify_cli `_recompute` arm 부재** — `mu(n)` 은 builtin (canonical OEIS A008683), 그러나 `mertens(n) = Σ_{k=1}^n μ(k)` 는 verify-fn 없음. RH adjacent (Mertens conjecture |M(n)|≤√n 가 1985 Odlyzko-te Riele 에 disproved 됐으나 RH 와 동치인 약식 형태는 still open).
+- 우선순위: 🟠 deferred (Clay direct 진전 X, descriptive sweep 만). single-arg single-return → `_recompute` arm 추가 가능 (stdlib `mu` reuse).
+- 추가 시: F20 Clay retry attempt 가 직접 verify gate 가능.
+- proposed-by: agent (TECS-L F19 Clay attempt → honest INBOX 도출, 2026-05-27)
+
+## 2026-05-27T01:00Z — `elliptic_witness(x, y, n)` 4-op verify-fn 부재 (BSD congruent-number lane · F19 후속)
+
+> TECS-L F19 (Clay attempt, PR #1372) honest negative 후속. BSD elliptic curve E_n: y² = x³ − n²·x 의 rational point witness 를 `hexa verify --expr elliptic_witness x y n V` 단일 호출로 게이트 못함. 현재는 component (x³, n²x, y²) 산술 외부 조립.
+
+- [ ] **`tool/verify_cli.hexa::_recompute4` 또는 4-op arm 부재** — `elliptic_witness(x, y, n)` = (y² == x³ − n²·x) bool 반환 (1 if witness, 0 if not). congruent-number rank≥1 unconditional 증거 (Tunnell 우회). F19 의 (−4,6)∈E_5, (−3,9)∈E_6 같은 classical witness 가 atlas-fold 가능해짐.
+- 우선순위: 🟠 deferred (Clay direct 진전 X, BSD lane infra). 4-op verify-fn signature 자체가 verify_cli 의 기존 `<fn> <a> <b> <v>` (3-op) 너머. arm 확장 필요.
+- 추가 시: F20+ Clay retry 의 elliptic_witness sweep 이 직접 verify gate + atlas fold.
+- proposed-by: agent (TECS-L F19 Clay attempt → honest INBOX 도출, 2026-05-27)
+
+## 2026-05-27T01:00Z — `tunnell_count_odd(n)` / `tunnell_count_even(n)` ternary-form-enum verify-fn 부재 (BSD CN-check end-to-end · F19 후속)
+
+> TECS-L F19 (Clay attempt, PR #1372) honest negative 후속. Tunnell theorem (1983) 은 conditional-on-BSD congruent-number test: n square-free, n odd → CN ⟺ #{(x,y,z): n=2x²+y²+32z²} = #{(x,y,z): n=2x²+y²+8z²}; n even (n=2m, m odd) → 유사. 현재 verify_cli 에 ternary-form enum primitive 부재.
+
+- [ ] **`tunnell_count_odd(n)` / `tunnell_count_even(n)` 부재** — ternary quadratic form representation count. F19 가 n=5,6,7 CN-check 끝까지 못함, classical witness (1,3,4,5 등) cite 만.
+- 우선순위: 🟠 deferred (BSD conditional). 알고리즘 = bounded enum (cap |x|,|y|,|z| ≤ √(n/2)). single-arg single-return → `_recompute` arm 가능.
+- 추가 시: F20+ Tunnell-mediated BSD CN-check end-to-end 가 `hexa verify` gate.
+- proposed-by: agent (TECS-L F19 Clay attempt → honest INBOX 도출, 2026-05-27)
+
 ## 2026-05-26T22:10Z — `hexa verify` auto-absorb ∞ recursive fork hang + `--no-absorb` canonical workaround (cycle 3 stall root-cause)
 
 > TECS-L F-NEW retry agent 가 19/19 🔵 PASS 동시에 발견. 직전 cycle 3 의 "verify cache race" 진단 = misdiagnosis; 진짜 root cause = **auto-absorb 가 atlas register fork → 또 verify recurse → ∞**.
