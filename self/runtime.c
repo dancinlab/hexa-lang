@@ -8795,7 +8795,7 @@ extern int  _hx_cuda_farr_unpin_device(int64_t farr_id);
 // cuda_available() -> int. 1 if a CUDA device + toolkit are detected at
 // runtime, else 0. Coherent with cuda_device_count(): one implies the
 // other > 0.
-HexaVal hexa_cuda_available(void) {
+__attribute__((weak)) HexaVal hexa_cuda_available(void) {
 #ifdef HEXA_CUDA
     /* RFC 040 Phase A real impl (2026-05-16): probe via runtime_cuda.c TU. */
     return hexa_int(_hx_cuda_runtime_available());
