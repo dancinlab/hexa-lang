@@ -647,6 +647,7 @@ fn _nvptx_is_math_intrinsic(op: string) -> bool {
     if op == "min"      { return true }
     if op == "exp"      { return true }
     if op == "log"      { return true }
+    if op == "sin"      { return true }
     if op == "abs"      { return true }
     return false
 }
@@ -656,7 +657,7 @@ fn _nvptx_is_math_intrinsic(op: string) -> bool {
 // for a non-math op (caller should not have routed it here).
 fn _nvptx_math_arity(op: string) -> i64 {
     if op == "max" || op == "min" { return 2 }
-    if op == "sqrt" || op == "rsqrt" || op == "rsqrt_rn" || op == "exp" || op == "log" || op == "abs" { return 1 }
+    if op == "sqrt" || op == "rsqrt" || op == "rsqrt_rn" || op == "exp" || op == "log" || op == "sin" || op == "abs" { return 1 }
     return 0
 }
 
@@ -2079,6 +2080,118 @@ fn _nvptx_lower_stmt(buf: [LInstr], s: Stmt, kinds: [PReg], shared_idx_off: [i64
                     out.push(_nvptx_instr(PTX_OP_FMA_RN_F64, l15, "log f64: dst = kf*ln2 + log(m)"))
                     return out
                 }
+                // sin f64 — argument range-reduction + odd-Taylor polynomial.
+                //
+                //   n  = round(x / π)                 (cvt.rni — nearest int)
+                //   r  = x - n·π                      (Cody-Waite 2-part π)
+                //   sin(x) = (-1)^n · r·P(r²)
+                //   P(z) = 1 - z/6 + z²/120 - z³/5040 + z⁴/362880  (z = r²)
+                //   sign = 1 - 2·(n & 1)              (branch-free (-1)^n)
+                //
+                // Accuracy: with r ∈ [-π/2, π/2] the 5-term truncation
+                // |r^11/11!| < 7e-6; each fma round ≤ 0.5 ulp × 4 ≈ 2 ulp.
+                // The 2-part Cody-Waite π keeps reduction accurate for
+                // moderate |n|; very large |x| (|n| ≳ 2^20) needs the full
+                // Payne-Hanek reduction (follow-up, mirror of exp's path).
+                //
+                // Scratch regs (sin Pass, keyed on dst.id): nf · r · r2 · p
+                // · s (.f64) + ni (.u64 for the parity test).
+                if s.op == "sin" && dst_kind == NVPTX_RKIND_F64 {
+                    let x_reg  = _nvptx_operand_text_kinds(s.args[0], kinds)
+                    let nf_reg = _nvptx_reg_sinf64_nf(s.dst.id)
+                    let ni_reg = _nvptx_reg_sinf64_ni(s.dst.id)
+                    let r_reg  = _nvptx_reg_sinf64_r(s.dst.id)
+                    let r2_reg = _nvptx_reg_sinf64_r2(s.dst.id)
+                    let p_reg  = _nvptx_reg_sinf64_p(s.dst.id)
+                    let sg_reg = _nvptx_reg_sinf64_s(s.dst.id)
+                    // step 1: nf = round(x / π)
+                    let mut s1 = []
+                    s1.push(_nvptx_op(nf_reg))
+                    s1.push(_nvptx_op(x_reg))
+                    s1.push(_nvptx_op(PTX_INV_PI_HEXF64))
+                    out.push(_nvptx_instr(PTX_OP_MUL_F64, s1, "sin f64: x / π"))
+                    let mut s2 = []
+                    s2.push(_nvptx_op(nf_reg))
+                    s2.push(_nvptx_op(nf_reg))
+                    out.push(_nvptx_instr("cvt.rni.f64.f64", s2, "sin f64: n = round(x/π)"))
+                    // step 2: ni = (s64) n   (parity)
+                    let mut s3 = []
+                    s3.push(_nvptx_op(ni_reg))
+                    s3.push(_nvptx_op(nf_reg))
+                    out.push(_nvptx_instr("cvt.rzi.s64.f64", s3, "sin f64: ni = (s64) n"))
+                    // step 3: nf = -n, then Cody-Waite r = x - n·π (2-part)
+                    let mut s4 = []
+                    s4.push(_nvptx_op(nf_reg))
+                    s4.push(_nvptx_op(nf_reg))
+                    out.push(_nvptx_instr("neg.f64", s4, "sin f64: -n"))
+                    let mut s5 = []
+                    s5.push(_nvptx_op(r_reg))
+                    s5.push(_nvptx_op(nf_reg))
+                    s5.push(_nvptx_op(PTX_PI_HI_HEXF64))
+                    s5.push(_nvptx_op(x_reg))
+                    out.push(_nvptx_instr(PTX_OP_FMA_RN_F64, s5, "sin f64: r = x - n·π_hi"))
+                    let mut s6 = []
+                    s6.push(_nvptx_op(r_reg))
+                    s6.push(_nvptx_op(nf_reg))
+                    s6.push(_nvptx_op(PTX_PI_LO_HEXF64))
+                    s6.push(_nvptx_op(r_reg))
+                    out.push(_nvptx_instr(PTX_OP_FMA_RN_F64, s6, "sin f64: r -= n·π_lo"))
+                    // step 4: r² = r * r
+                    let mut s7 = []
+                    s7.push(_nvptx_op(r2_reg))
+                    s7.push(_nvptx_op(r_reg))
+                    s7.push(_nvptx_op(r_reg))
+                    out.push(_nvptx_instr(PTX_OP_MUL_F64, s7, "sin f64: r² = r·r"))
+                    // step 5: Horner P(z=r²) = C0 + z(C1 + z(C2 + z(C3 + z·C4)))
+                    let mut sh0 = []
+                    sh0.push(_nvptx_op(p_reg))
+                    sh0.push(_nvptx_op(PTX_SINF64_C4_HEXF64))
+                    out.push(_nvptx_instr("mov.f64", sh0, "sin f64 Horner: p = C4 (1/362880)"))
+                    let mut shc: [string] = []
+                    shc.push(PTX_SINF64_C3_HEXF64)
+                    shc.push(PTX_SINF64_C2_HEXF64)
+                    shc.push(PTX_SINF64_C1_HEXF64)
+                    shc.push(PTX_SINF64_C0_HEXF64)
+                    let mut shi = 0
+                    while shi < len(shc) {
+                        let mut shf = []
+                        shf.push(_nvptx_op(p_reg))
+                        shf.push(_nvptx_op(r2_reg))
+                        shf.push(_nvptx_op(p_reg))
+                        shf.push(_nvptx_op(shc[shi]))
+                        out.push(_nvptx_instr(PTX_OP_FMA_RN_F64, shf, "sin f64 Horner step"))
+                        shi = shi + 1
+                    }
+                    // step 6: sin_r = r · P(r²)
+                    let mut s8 = []
+                    s8.push(_nvptx_op(p_reg))
+                    s8.push(_nvptx_op(r_reg))
+                    s8.push(_nvptx_op(p_reg))
+                    out.push(_nvptx_instr(PTX_OP_MUL_F64, s8, "sin f64: r · P(r²) = sin(r)"))
+                    // step 7: sign = 1 - 2·(n & 1)  (branch-free (-1)^n)
+                    let mut s9 = []
+                    s9.push(_nvptx_op(ni_reg))
+                    s9.push(_nvptx_op(ni_reg))
+                    s9.push(_nvptx_op("1"))
+                    out.push(_nvptx_instr("and.b64", s9, "sin f64: parity = n & 1"))
+                    let mut s10 = []
+                    s10.push(_nvptx_op(sg_reg))
+                    s10.push(_nvptx_op(ni_reg))
+                    out.push(_nvptx_instr("cvt.rn.f64.s64", s10, "sin f64: parity as f64 (0 or 1)"))
+                    let mut s11 = []
+                    s11.push(_nvptx_op(sg_reg))
+                    s11.push(_nvptx_op(sg_reg))
+                    s11.push(_nvptx_op(PTX_F64_NEG_TWO_HEXF64))
+                    s11.push(_nvptx_op(PTX_SINF64_C0_HEXF64))
+                    out.push(_nvptx_instr(PTX_OP_FMA_RN_F64, s11, "sin f64: sign = 1 - 2·parity"))
+                    // step 8: dst = sign · sin(r)
+                    let mut s12 = []
+                    s12.push(_nvptx_op(dst_reg))
+                    s12.push(_nvptx_op(p_reg))
+                    s12.push(_nvptx_op(sg_reg))
+                    out.push(_nvptx_instr(PTX_OP_MUL_F64, s12, "sin f64: dst = (-1)^n · sin(r)"))
+                    return out
+                }
                 // Fall-through honest stub for any other unmatched op/kind
                 // combination (e.g. a future intrinsic that lands in
                 // _nvptx_is_math_intrinsic before its codegen arm).
@@ -3279,6 +3392,17 @@ fn _nvptx_classify_locals(mfn: MFunc) -> [PReg] {
                     regs.push(PReg { name: _nvptx_reg_logf64_k(s.dst.id),  kind: NVPTX_RKIND_U64, frag_role: "", frag_dtype: "", frag_layout: "" })
                 }
             }
+            if s.kind == STMT_CALL && s.op == "sin" && s.dst.id >= 0 {
+                let dks = _nvptx_lookup_kind_for_local(regs, s.dst.id)
+                if dks == NVPTX_RKIND_F64 {
+                    regs.push(PReg { name: _nvptx_reg_sinf64_nf(s.dst.id), kind: NVPTX_RKIND_F64, frag_role: "", frag_dtype: "", frag_layout: "" })
+                    regs.push(PReg { name: _nvptx_reg_sinf64_r(s.dst.id),  kind: NVPTX_RKIND_F64, frag_role: "", frag_dtype: "", frag_layout: "" })
+                    regs.push(PReg { name: _nvptx_reg_sinf64_r2(s.dst.id), kind: NVPTX_RKIND_F64, frag_role: "", frag_dtype: "", frag_layout: "" })
+                    regs.push(PReg { name: _nvptx_reg_sinf64_p(s.dst.id),  kind: NVPTX_RKIND_F64, frag_role: "", frag_dtype: "", frag_layout: "" })
+                    regs.push(PReg { name: _nvptx_reg_sinf64_s(s.dst.id),  kind: NVPTX_RKIND_F64, frag_role: "", frag_dtype: "", frag_layout: "" })
+                    regs.push(PReg { name: _nvptx_reg_sinf64_ni(s.dst.id), kind: NVPTX_RKIND_U64, frag_role: "", frag_dtype: "", frag_layout: "" })
+                }
+            }
             sl = sl + 1
         }
         lb = lb + 1
@@ -4459,6 +4583,28 @@ fn _nvptx_reg_logf64_b(id: i64) -> string {
 }
 fn _nvptx_reg_logf64_k(id: i64) -> string {
     return "%rd_log_k_" + to_string(id)
+}
+
+// sin f64 polynomial scratch (RFC 055 §13 trig family) — declared in
+// `_nvptx_classify_locals` sin Pass; consumed at the `s.op == "sin"`
+// emit site. nf · r · r2 · p · s (.f64) + ni (.u64 parity).
+fn _nvptx_reg_sinf64_nf(id: i64) -> string {
+    return "%fd_sin_nf_" + to_string(id)
+}
+fn _nvptx_reg_sinf64_r(id: i64) -> string {
+    return "%fd_sin_r_" + to_string(id)
+}
+fn _nvptx_reg_sinf64_r2(id: i64) -> string {
+    return "%fd_sin_r2_" + to_string(id)
+}
+fn _nvptx_reg_sinf64_p(id: i64) -> string {
+    return "%fd_sin_p_" + to_string(id)
+}
+fn _nvptx_reg_sinf64_s(id: i64) -> string {
+    return "%fd_sin_s_" + to_string(id)
+}
+fn _nvptx_reg_sinf64_ni(id: i64) -> string {
+    return "%rd_sin_ni_" + to_string(id)
 }
 
 // RFC 055 §5 multi-block global thread index — per-call scratch reg.
