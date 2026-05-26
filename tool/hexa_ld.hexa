@@ -1,5 +1,10 @@
 // tool/hexa_ld.hexa
 //
+// Phase-H inc3 (#1283 cont.) — extend single-`__const` layout to FULL
+// MULTI-SECTION: __TEXT (__text, __const, __cstring) + a separate
+// __DATA segment (__data, __bss) with per-section vmaddrs, bss
+// vmsize>filesize, PAGEOFF12 LDR-scale, ARM64_RELOC_ADDEND.
+//
 // S7-P1 SCAFFOLD — Native Mach-O arm64 linker.
 //
 // RFC 063 § P1. Replaces the `ld` / `ld64` fork in `aprime_cc
@@ -42,21 +47,48 @@ fn show_usage() {
 // Parsed Mach-O object representation
 // ─────────────────────────────────────────────────────────────────
 
+// Phase-H inc3: a single parsed Mach-O section captured from a `.o`.
+// We capture EVERY section (not just one read-only one) so the linker
+// can lay out a full multi-section image: __TEXT(__text,__const,
+// __cstring) + __DATA(__data,__bss). Each section carries its own byte
+// vector (single-level array inside a struct — safe, mirrors the old
+// ParsedObj.text/data fields).
+struct ParsedSect {
+    sectname: string,       // e.g. "__text", "__const", "__data", "__bss"
+    segname:  string,       // e.g. "__TEXT", "__DATA"
+    // 1-based Mach-O section index (running counter across all
+    // LC_SEGMENT_64 sections in emit order; what nlist_64.n_sect refs).
+    index:    i64,
+    addr:     i64,          // section addr in the .o (== section-relative 0 base)
+    align:    i64,          // log2 alignment from section_64.align
+    sect_type: i64,         // section_64.flags & 0xff (S_ZEROFILL = 1 = bss)
+    // Section bytes. For a S_ZEROFILL (bss) section there are NO file
+    // bytes in the .o — `bytes` is empty and `zfill_size` carries the
+    // virtual byte count.
+    bytes:    [u8],
+    zfill_size: i64,        // virtual size for bss (0 for file-backed sections)
+    // Per-section relocations (offset is section-relative). Captured so
+    // the linker can patch relocs originating in ANY section, not just
+    // __text. (A __const initialized pointer would carry UNSIGNED relocs
+    // — those are deferred to the GOT/dyld increment, but text relocs in
+    // __text are the common case and are patched in input order.)
+    relocs:   [ParsedReloc],
+}
+
 struct ParsedObj {
     path:     string,
-    // __text section bytes from the .o (will be concatenated into
-    // the output executable's __text section, with relocations
-    // adjusted to the new base offset).
+    // __text section bytes from the .o (kept for back-compat / entry
+    // resolution; ALSO present as a ParsedSect in `sects`).
     text:     [u8],
-    // Phase-H inc2: a single DATA section captured from the .o —
-    // `__cstring` or `__const` (the section that holds string / read-
-    // only constants referenced via adrp/add PAGE21+PAGEOFF12). We
-    // capture exactly one such section per object for the minimal case
-    // (the 2-object string test). `data_sect_idx` is the 1-based
-    // Mach-O section index of that section so we can map a defined
-    // symbol's `n_sect` to it; 0 = this object carries no data section.
+    // Phase-H inc2 legacy single-data fields (kept so older callers /
+    // tests still compile). `data` = first read-only data section bytes,
+    // `data_sect_idx` = its 1-based index. inc3 supersedes these with the
+    // full `sects` list but leaves them populated for the minimal path.
     data:          [u8],
     data_sect_idx: i64,
+    // Phase-H inc3: ALL sections captured from this object, in emit
+    // order (so `index` is the 1-based n_sect a symbol references).
+    sects:    [ParsedSect],
     // Symbols this object DEFINES (visible to other objects).
     defined:  [LinkSym],
     // Symbols this object REFERENCES but does not define (resolved
@@ -92,6 +124,12 @@ struct ParsedReloc {
     kind:    i64,       // ARM64_RELOC_* (mirrors macho_arm64.hexa)
     pcrel:   i64,
     length:  i64,
+    // Phase-H inc3: ARM64_RELOC_ADDEND (kind 1) is a scattered-pair
+    // prefix reloc — it carries a 24-bit signed addend in r_symbolnum
+    // that applies to the NEXT reloc's target. We fold that addend
+    // INTO this following reloc's `addend` field at parse time so the
+    // link pass sees a single reloc with its addend already attached.
+    addend:  i64,
 }
 
 // ─────────────────────────────────────────────────────────────────
@@ -151,6 +189,58 @@ fn _r_cstr(buf: [Int], base: Int, strx: Int) -> string {
     return out
 }
 
+// Phase-H inc3: read one section's relocation table into ParsedReloc[].
+// Handles ARM64_RELOC_ADDEND (kind 1): the addend reloc is a PREFIX
+// pair — its r_symbolnum holds a 24-bit signed addend that applies to
+// the NEXT reloc's target. We fold it into the following reloc's
+// `addend` field and DROP the standalone addend reloc, so the link pass
+// sees a single reloc per fix-up with its addend already attached.
+fn _read_sect_relocs(buf: [Int], reloff: Int, nreloc: Int,
+                     symoff: Int, stroff: Int) -> [ParsedReloc] {
+    let mut out: [ParsedReloc] = []
+    let mut pending_addend = 0
+    let mut have_addend = false
+    let mut ri = 0
+    while ri < nreloc {
+        let r_off       = reloff + 8 * ri
+        let r_address   = _r_u32(buf, r_off)
+        let bits        = _r_u32(buf, r_off + 4)
+        let r_symbolnum = bits & 0xffffff
+        let r_pcrel     = (bits >> 24) & 0x1
+        let r_length    = (bits >> 25) & 0x3
+        let r_extern    = (bits >> 27) & 0x1
+        let r_type      = (bits >> 28) & 0xf
+        if r_type == 1 {                              // ARM64_RELOC_ADDEND
+            // r_symbolnum is a 24-bit value = the addend. Sign-extend
+            // from bit 23.
+            let mut a = r_symbolnum
+            if (a & 0x800000) != 0 { a = a - 0x1000000 }
+            pending_addend = a
+            have_addend = true
+            ri = ri + 1
+            continue
+        }
+        let mut sym_name = ""
+        if r_extern != 0 {
+            let entry_off = symoff + 16 * r_symbolnum
+            let strx = _r_u32(buf, entry_off)
+            sym_name = _r_cstr(buf, stroff, strx)
+        }
+        let mut this_addend = 0
+        if have_addend { this_addend = pending_addend; have_addend = false; pending_addend = 0 }
+        out.push(ParsedReloc {
+            offset:   r_address,
+            sym_name: sym_name,
+            kind:     r_type,
+            pcrel:    r_pcrel,
+            length:   r_length,
+            addend:   this_addend,
+        })
+        ri = ri + 1
+    }
+    return out
+}
+
 // Parse a Mach-O 64-bit arm64 object file into ParsedObj. Mirrors
 // the inverse of `compiler/emit/macho_arm64.hexa::serialize`.
 //
@@ -199,6 +289,20 @@ pub fn parse_macho_obj(path: string) -> ParsedObj {
     // sections globally, not per-segment).
     let mut sect_counter   = 0
 
+    // Phase-H inc3: capture EVERY section. We accumulate per-section
+    // metadata in parallel arrays during the LC pass (the section_64
+    // header carries reloff/nreloc, but we read the actual reloc records
+    // AFTER the LC pass so symoff/stroff are known for extern names).
+    let mut sect_names:    [string] = []
+    let mut sect_segs:     [string] = []
+    let mut sect_addrs:    [Int] = []
+    let mut sect_aligns:   [Int] = []
+    let mut sect_types:    [Int] = []     // flags & 0xff
+    let mut sect_offs:     [Int] = []     // file offset (0 for zerofill)
+    let mut sect_sizes:    [Int] = []     // byte size (virtual for bss)
+    let mut sect_reloffs:  [Int] = []
+    let mut sect_nrelocs:  [Int] = []
+
     let mut lc_off = 32
     let mut ci = 0
     while ci < ncmds {
@@ -211,12 +315,30 @@ pub fn parse_macho_obj(path: string) -> ParsedObj {
             while s < nsects {
                 sect_counter = sect_counter + 1
                 let sectname = _r_name16(buf, sect_off)
+                let segname  = _r_name16(buf, sect_off + 16)
+                let s_addr   = _r_u64(buf, sect_off + 32)
+                let s_size   = _r_u64(buf, sect_off + 40)
+                let s_off    = _r_u32(buf, sect_off + 48)
+                let s_align  = _r_u32(buf, sect_off + 52)
+                let s_reloff = _r_u32(buf, sect_off + 56)
+                let s_nreloc = _r_u32(buf, sect_off + 60)
+                let s_flags  = _r_u32(buf, sect_off + 64)
+                let s_type   = s_flags & 0xff
+                sect_names.push(sectname)
+                sect_segs.push(segname)
+                sect_addrs.push(s_addr)
+                sect_aligns.push(s_align)
+                sect_types.push(s_type)
+                sect_offs.push(s_off)
+                sect_sizes.push(s_size)
+                sect_reloffs.push(s_reloff)
+                sect_nrelocs.push(s_nreloc)
                 if sectname == "__text" {
                     text_sect_idx = sect_counter
-                    text_size   = _r_u64(buf, sect_off + 40)
-                    text_offset = _r_u32(buf, sect_off + 48)
-                    text_reloff = _r_u32(buf, sect_off + 56)
-                    text_nreloc = _r_u32(buf, sect_off + 60)
+                    text_size   = s_size
+                    text_offset = s_off
+                    text_reloff = s_reloff
+                    text_nreloc = s_nreloc
                 }
                 // Capture the FIRST read-only data section that holds
                 // string / const bytes referenced via PAGE21/PAGEOFF12.
@@ -224,8 +346,8 @@ pub fn parse_macho_obj(path: string) -> ParsedObj {
                 // bare string literal in __cstring — handle both.
                 if (sectname == "__cstring" || sectname == "__const") && data_sect_idx == 0 {
                     data_sect_idx = sect_counter
-                    data_size     = _r_u64(buf, sect_off + 40)
-                    data_offset   = _r_u32(buf, sect_off + 48)
+                    data_size     = s_size
+                    data_offset   = s_off
                 }
                 sect_off = sect_off + 80
                 s = s + 1
@@ -270,31 +392,40 @@ pub fn parse_macho_obj(path: string) -> ParsedObj {
         si = si + 1
     }
 
-    let mut relocs: [ParsedReloc] = []
-    let mut ri = 0
-    while ri < text_nreloc {
-        let r_off       = text_reloff + 8 * ri
-        let r_address   = _r_u32(buf, r_off)
-        let bits        = _r_u32(buf, r_off + 4)
-        let r_symbolnum = bits & 0xffffff
-        let r_pcrel     = (bits >> 24) & 0x1
-        let r_length    = (bits >> 25) & 0x3
-        let r_extern    = (bits >> 27) & 0x1
-        let r_type      = (bits >> 28) & 0xf
-        let mut sym_name = ""
-        if r_extern != 0 {
-            let entry_off = symoff + 16 * r_symbolnum
-            let strx = _r_u32(buf, entry_off)
-            sym_name = _r_cstr(buf, stroff, strx)
+    // __text relocs (with ADDEND folding) via the shared helper.
+    let relocs = _read_sect_relocs(buf, text_reloff, text_nreloc, symoff, stroff)
+
+    // Phase-H inc3: build the full `sects` list (every section), reading
+    // each section's bytes (or marking zerofill/bss) + its own relocs.
+    let mut sects: [ParsedSect] = []
+    let mut sx = 0
+    while sx < len(sect_names) {
+        let s_type = sect_types[sx]
+        let s_size = sect_sizes[sx]
+        let s_off  = sect_offs[sx]
+        // S_ZEROFILL (1) / S_GB_ZEROFILL (0xc) → no file bytes (bss).
+        let is_zfill = (s_type == 1) || (s_type == 0xc)
+        let mut sbytes: [Int] = []
+        let mut zfill = 0
+        if is_zfill {
+            zfill = s_size
+        } else {
+            let mut bi2 = 0
+            while bi2 < s_size { sbytes.push(buf[s_off + bi2] & 0xff); bi2 = bi2 + 1 }
         }
-        relocs.push(ParsedReloc {
-            offset:   r_address,
-            sym_name: sym_name,
-            kind:     r_type,
-            pcrel:    r_pcrel,
-            length:   r_length,
+        let srelocs = _read_sect_relocs(buf, sect_reloffs[sx], sect_nrelocs[sx], symoff, stroff)
+        sects.push(ParsedSect {
+            sectname:  sect_names[sx],
+            segname:   sect_segs[sx],
+            index:     sx + 1,            // 1-based n_sect
+            addr:      sect_addrs[sx],
+            align:     sect_aligns[sx],
+            sect_type: s_type,
+            bytes:     sbytes,
+            zfill_size: zfill,
+            relocs:    srelocs,
         })
-        ri = ri + 1
+        sx = sx + 1
     }
 
     return ParsedObj {
@@ -302,6 +433,7 @@ pub fn parse_macho_obj(path: string) -> ParsedObj {
         text:          text,
         data:          data,
         data_sect_idx: data_sect_idx,
+        sects:         sects,
         defined:       defined,
         extern_refs:   extern_refs,
         relocs:        relocs,
@@ -447,73 +579,178 @@ fn _w_pstr_align4(out: [Int], s: string) -> Int {
 fn link_macho_arm64(objs: [ParsedObj], out_path: string, entry: string, _is_static: i64) -> Int {
     let out: [Int] = []
 
-    // Concat text from all input objects in input order + collect a
-    // global symbol → final-text-offset map so cycle 8's inter-module
-    // BL reloc fix-up can resolve cross-obj calls. Per-obj base offset
-    // is the running `len(text_bytes)` before that obj's text is
-    // appended.
-    let mut text_bytes: [Int] = []
+    // ── Phase-H inc3: FULL MULTI-SECTION LAYOUT ─────────────────────
+    //
+    // Output section model (fixed 5 slots — clang's canonical order):
+    //   slot 0  __TEXT,__text     (RX, file-backed)
+    //   slot 1  __TEXT,__const    (RX, file-backed, read-only const)
+    //   slot 2  __TEXT,__cstring  (RX, file-backed, C strings)
+    //   slot 3  __DATA,__data     (RW, file-backed, init'd globals)
+    //   slot 4  __DATA,__bss      (RW, zero-fill — vmsize only, no bytes)
+    //
+    // Each input section maps to one slot by (sectname). For every input
+    // obj we concatenate its slot bytes (with the slot's running 16-byte
+    // alignment) and record the per-(obj, input-section-index) base
+    // offset INTO that slot so reloc fix-up + symbol routing can compute
+    // a final offset. A defined symbol routes by its `n_sect`: we look up
+    // which slot that input section landed in and add (slot_base_of_obj +
+    // sym.offset).
+    let SLOT_TEXT    = 0
+    let SLOT_CONST   = 1
+    let SLOT_CSTRING = 2
+    let SLOT_DATA    = 3
+    let SLOT_BSS     = 4
+    let N_SLOTS      = 5
+
+    // Per-slot accumulated bytes (slot 4 / __bss has none — only a size).
+    let slot0_bytes: [Int] = []
+    let slot1_bytes: [Int] = []
+    let slot2_bytes: [Int] = []
+    let slot3_bytes: [Int] = []
+    let mut slot4_size = 0                            // __bss virtual size
+
+    // Per-obj, per-slot base offset within the slot. Stored as a flat
+    // array indexed [oi * N_SLOTS + slot]. -1 = this obj contributed
+    // nothing to that slot (so a symbol shouldn't route there).
+    let mut obj_slot_base: [Int] = []
+    // Map an input (obj, n_sect) → output slot id. Flat: we rebuild per
+    // obj during the symbol pass from obj.sects.
+
+    // entry symbol resolution (must be a __text symbol).
     let mut entry_off_in_text: Int = 0
     let mut entry_found = false
-    // Global defined-symbol resolution table (parallel arrays). Used by
-    // the BRANCH26 reloc pass — __text symbols only (their final value
-    // is the merged-text offset).
-    let mut def_names:    [string] = []
-    let mut def_offsets:  [Int]    = []
-    // Per-obj base offset into the merged __text (used during reloc pass
-    // to locate the calling instruction's final position).
-    let mut obj_bases: [Int] = []
 
-    // Phase-H inc2: merged DATA section (__cstring/__const), laid out
-    // AFTER the merged __text within the __TEXT segment. Per-obj data
-    // base = running len(data_bytes) before that obj's data is appended.
-    let mut data_bytes: [Int] = []
-    let mut obj_data_bases: [Int] = []
-    // Data-symbol resolution table — name → offset within merged data.
-    // Final VM address is computed once the data section's file offset is
-    // known (data_section_addr + this offset).
-    let mut dsym_names:   [string] = []
-    let mut dsym_offsets: [Int]    = []
+    // Global defined-symbol resolution table (parallel arrays). `dsym_slot`
+    // records which output slot the symbol lives in; `dsym_offset` its
+    // offset within that slot. Final VM addr = slot_vmaddr + offset.
+    let mut dsym_names:  [string] = []
+    let mut dsym_slot:   [Int]    = []
+    let mut dsym_offset: [Int]    = []
 
+    // Helper-free inline: route a sectname to a slot id (-1 = unknown,
+    // dropped). __bss / __common → SLOT_BSS.
     let mut oi = 0
     while oi < len(objs) {
         let obj = objs[oi]
-        let base = len(text_bytes)
-        obj_bases.push(base)
-        let data_base = len(data_bytes)
-        obj_data_bases.push(data_base)
-        // Register defined symbols globally, routed by section: a symbol
-        // in this obj's data section goes to the data-symbol table; all
-        // others are treated as __text symbols.
+        // Per-obj slot base BEFORE appending this obj's contributions.
+        let mut base0 = len(slot0_bytes)
+        let mut base1 = len(slot1_bytes)
+        let mut base2 = len(slot2_bytes)
+        let mut base3 = len(slot3_bytes)
+        let mut base4 = slot4_size
+        // 16-byte align each slot's per-obj start so cross-obj symbols
+        // keep their intra-section alignment.
+        let p0 = (16 - (base0 & 15)) & 15
+        let mut z0 = 0
+        while z0 < p0 { slot0_bytes.push(0); z0 = z0 + 1 }
+        base0 = len(slot0_bytes)
+        let p1 = (16 - (base1 & 15)) & 15
+        let mut z1 = 0
+        while z1 < p1 { slot1_bytes.push(0); z1 = z1 + 1 }
+        base1 = len(slot1_bytes)
+        let p2 = (16 - (base2 & 15)) & 15
+        let mut z2 = 0
+        while z2 < p2 { slot2_bytes.push(0); z2 = z2 + 1 }
+        base2 = len(slot2_bytes)
+        let p3 = (16 - (base3 & 15)) & 15
+        let mut z3 = 0
+        while z3 < p3 { slot3_bytes.push(0); z3 = z3 + 1 }
+        base3 = len(slot3_bytes)
+        let p4 = (16 - (base4 & 15)) & 15
+        base4 = base4 + p4
+        slot4_size = base4
+        obj_slot_base.push(base0)
+        obj_slot_base.push(base1)
+        obj_slot_base.push(base2)
+        obj_slot_base.push(base3)
+        obj_slot_base.push(base4)
+
+        // Append this obj's section bytes into the matching slot.
+        let mut sxx = 0
+        while sxx < len(obj.sects) {
+            let sc = obj.sects[sxx]
+            if sc.sectname == "__text" {
+                let mut k = 0
+                while k < len(sc.bytes) { slot0_bytes.push(sc.bytes[k] & 0xff); k = k + 1 }
+            } else if sc.sectname == "__const" {
+                let mut k = 0
+                while k < len(sc.bytes) { slot1_bytes.push(sc.bytes[k] & 0xff); k = k + 1 }
+            } else if sc.sectname == "__cstring" {
+                let mut k = 0
+                while k < len(sc.bytes) { slot2_bytes.push(sc.bytes[k] & 0xff); k = k + 1 }
+            } else if sc.sectname == "__data" {
+                let mut k = 0
+                while k < len(sc.bytes) { slot3_bytes.push(sc.bytes[k] & 0xff); k = k + 1 }
+            } else if sc.sectname == "__bss" || sc.sectname == "__common" {
+                slot4_size = slot4_size + sc.zfill_size
+            }
+            sxx = sxx + 1
+        }
+
+        // Route defined symbols → slot + offset. A symbol's n_value is
+        // its ADDRESS in the .o (sections in a relocatable .o are laid
+        // out sequentially with nonzero addrs), so the SECTION-RELATIVE
+        // offset = n_value - section.addr. We must subtract the input
+        // section's addr before adding the merged slot base.
         let mut di = 0
         while di < len(obj.defined) {
             let d = obj.defined[di]
-            if obj.data_sect_idx != 0 && d.sect == obj.data_sect_idx {
+            // Find the input section with this n_sect index.
+            let mut slot = -1
+            let mut soff_base = 0
+            let mut sec_addr = 0
+            let mut sj = 0
+            while sj < len(obj.sects) {
+                let sc = obj.sects[sj]
+                if sc.index == d.sect {
+                    sec_addr = sc.addr
+                    if sc.sectname == "__text"        { slot = SLOT_TEXT;    soff_base = base0 }
+                    else if sc.sectname == "__const"  { slot = SLOT_CONST;   soff_base = base1 }
+                    else if sc.sectname == "__cstring"{ slot = SLOT_CSTRING; soff_base = base2 }
+                    else if sc.sectname == "__data"   { slot = SLOT_DATA;    soff_base = base3 }
+                    else if sc.sectname == "__bss" || sc.sectname == "__common" { slot = SLOT_BSS; soff_base = base4 }
+                    break
+                }
+                sj = sj + 1
+            }
+            if slot >= 0 {
+                let rel_off = d.offset - sec_addr
                 dsym_names.push(d.name)
-                dsym_offsets.push(data_base + d.offset)
-            } else {
-                def_names.push(d.name)
-                def_offsets.push(base + d.offset)
-                if !entry_found && d.name == entry {
-                    entry_off_in_text = base + d.offset
+                dsym_slot.push(slot)
+                dsym_offset.push(soff_base + rel_off)
+                if slot == SLOT_TEXT && !entry_found && d.name == entry {
+                    entry_off_in_text = soff_base + rel_off
                     entry_found = true
                 }
             }
             di = di + 1
         }
-        // Append this obj's text bytes.
-        let mut ti = 0
-        while ti < len(obj.text) {
-            text_bytes.push(obj.text[ti] & 0xff)
-            ti = ti + 1
-        }
-        // Append this obj's data bytes (merged into one data section).
-        let mut dti = 0
-        while dti < len(obj.data) {
-            data_bytes.push(obj.data[dti] & 0xff)
-            dti = dti + 1
-        }
         oi = oi + 1
+    }
+
+    // ── Compatibility aliases so the downstream reloc + symtab passes
+    // (still written in the inc2 vocabulary) keep working. text_bytes
+    // IS slot0; def_names/def_offsets is the __text-symbol view of the
+    // unified table; data_bytes is slot1 (__const) for the legacy single-
+    // data path's symtab section index. obj_bases[oi] = this obj's __text
+    // slot base = obj_slot_base[oi*N_SLOTS + SLOT_TEXT].
+    let text_bytes = slot0_bytes
+    let mut def_names:   [string] = []
+    let mut def_offsets: [Int]    = []
+    let mut obj_bases:   [Int]    = []
+    let mut ob2 = 0
+    while ob2 < len(objs) {
+        obj_bases.push(obj_slot_base[ob2 * N_SLOTS + SLOT_TEXT])
+        ob2 = ob2 + 1
+    }
+    // Build the __text-only resolution table from the unified dsym table.
+    let mut du = 0
+    while du < len(dsym_names) {
+        if dsym_slot[du] == SLOT_TEXT {
+            def_names.push(dsym_names[du])
+            def_offsets.push(dsym_offset[du])
+        }
+        du = du + 1
     }
 
     // Cycle 8 — inter-module BL reloc fix-up. For each obj's reloc
@@ -564,19 +801,25 @@ fn link_macho_arm64(objs: [ParsedObj], out_path: string, entry: string, _is_stat
 
     let text_size = len(text_bytes)
 
-    // Phase-H inc2: merged DATA section size + whether we emit a second
-    // section in __TEXT. Lay the data section AFTER __text within the
-    // __TEXT segment, 16-byte aligned (clang aligns __const to 16). The
-    // data section's in-file offset / VM address is computed below once
-    // text_fileoff is known (it depends on sizeofcmds, which itself
-    // depends on whether this 2nd section exists).
-    let data_size = len(data_bytes)
-    let has_data  = data_size > 0
-    // 16-byte alignment gap inserted between __text and the data section.
-    let data_align = 16
-    let mut data_pad = 0
-    let drm = text_size & (data_align - 1)
-    if has_data && drm != 0 { data_pad = data_align - drm }
+    // ── Phase-H inc3: per-slot sizes + which sections are present ─────
+    let const_size   = len(slot1_bytes)
+    let cstring_size = len(slot2_bytes)
+    let data_size    = len(slot3_bytes)
+    let bss_size     = slot4_size
+    let has_const   = const_size   > 0
+    let has_cstring = cstring_size > 0
+    let has_data    = data_size    > 0
+    let has_bss     = bss_size     > 0
+    // __TEXT carries __text + (optionally) __const + __cstring.
+    let mut text_nsects = 1
+    if has_const   { text_nsects = text_nsects + 1 }
+    if has_cstring { text_nsects = text_nsects + 1 }
+    // __DATA carries __data + (optionally) __bss. Emit __DATA only if it
+    // has at least one section.
+    let mut data_nsects = 0
+    if has_data { data_nsects = data_nsects + 1 }
+    if has_bss  { data_nsects = data_nsects + 1 }
+    let has_data_seg = data_nsects > 0
 
     // ── Cycle 4: build symbol table + string table from inputs ────
     //
@@ -599,14 +842,27 @@ fn link_macho_arm64(objs: [ParsedObj], out_path: string, entry: string, _is_stat
 
     let mut nextdefsym: Int = 0
 
-    // Pass A — defined externals (scope==0) from each input obj. The
-    // per-obj `defined.offset` is section-relative; we already
-    // concatenated text by recording the running `len(text_bytes)`
-    // so each sym's final value = (text_section.addr) + running base
-    // + sym.offset. Cycle 3's `entry_off_in_text` used the same
-    // accumulation.
-    let mut text_base_acc = 0
-    let mut data_base_acc = 0
+    // ── OUTPUT 1-based section indices (emit order) ──────────────────
+    // __text always section 1. Then __const, __cstring (if present),
+    // then __data, __bss (if present). These are the n_sect values the
+    // symtab + section_64 emission must agree on.
+    let osect_text = 1
+    let mut nx = 1
+    let mut osect_const   = 0
+    let mut osect_cstring = 0
+    let mut osect_data    = 0
+    let mut osect_bss     = 0
+    if has_const   { nx = nx + 1; osect_const   = nx }
+    if has_cstring { nx = nx + 1; osect_cstring = nx }
+    if has_data    { nx = nx + 1; osect_data    = nx }
+    if has_bss     { nx = nx + 1; osect_bss     = nx }
+    // Map a slot id → output 1-based section index.
+    // (used in the symtab pass + the nlist VM-addr fix-up below)
+
+    // Pass A — defined externals (scope==0). We route each via the
+    // UNIFIED dsym table (slot + offset) built during layout. We store
+    // the OUTPUT section index in nlist_sect and the slot-relative offset
+    // in nlist_value; the 2nd pass below makes it an absolute VM addr.
     let mut oa = 0
     while oa < len(objs) {
         let obj = objs[oa]
@@ -614,35 +870,34 @@ fn link_macho_arm64(objs: [ParsedObj], out_path: string, entry: string, _is_stat
         while di < len(obj.defined) {
             let d = obj.defined[di]
             if d.scope == 0 {
-                let strx = len(strtab)
-                let nn = len(d.name)
-                let mut k = 0
-                while k < nn { strtab.push(char_code(d.name, k) & 0xff); k = k + 1 }
-                strtab.push(0)
-                nlist_strx.push(strx)
-                // n_type = N_SECT (0x0e) | N_EXT (0x01)
-                nlist_type.push(0x0e | 0x01)
-                // Phase-H inc2: route the n_sect / n_value by section. A
-                // data symbol (in the captured __cstring/__const) lands
-                // in OUTPUT section index 2; n_value carries its merged-
-                // data offset (made absolute in the 2nd pass below using
-                // data_section_addr). __text symbols stay section 1.
-                if obj.data_sect_idx != 0 && d.sect == obj.data_sect_idx {
-                    nlist_sect.push(2)              // OUTPUT __const section idx
-                    // Encode as a NEGATIVE-tagged value would be fragile;
-                    // instead we record (data_base + offset) and flag via
-                    // section idx 2 in the 2nd pass.
-                    nlist_value.push(data_base_acc + d.offset)
-                } else {
-                    nlist_sect.push(1)              // 1-based section idx: __text
-                    nlist_value.push(text_base_acc + d.offset)
+                // Find this symbol in the unified dsym table (by name).
+                let mut u = -1
+                let mut uk = 0
+                while uk < len(dsym_names) {
+                    if dsym_names[uk] == d.name { u = uk; break }
+                    uk = uk + 1
                 }
-                nextdefsym = nextdefsym + 1
+                if u >= 0 {
+                    let slot = dsym_slot[u]
+                    let mut osec = osect_text
+                    if slot == SLOT_CONST   { osec = osect_const }
+                    else if slot == SLOT_CSTRING { osec = osect_cstring }
+                    else if slot == SLOT_DATA    { osec = osect_data }
+                    else if slot == SLOT_BSS     { osec = osect_bss }
+                    let strx = len(strtab)
+                    let nn = len(d.name)
+                    let mut k = 0
+                    while k < nn { strtab.push(char_code(d.name, k) & 0xff); k = k + 1 }
+                    strtab.push(0)
+                    nlist_strx.push(strx)
+                    nlist_type.push(0x0e | 0x01)       // N_SECT | N_EXT
+                    nlist_sect.push(osec)
+                    nlist_value.push(dsym_offset[u])   // slot-relative; →abs below
+                    nextdefsym = nextdefsym + 1
+                }
             }
             di = di + 1
         }
-        text_base_acc = text_base_acc + len(obj.text)
-        data_base_acc = data_base_acc + len(obj.data)
         oa = oa + 1
     }
     // Pass B — undefined externals (extern_refs from each obj).
@@ -696,12 +951,13 @@ fn link_macho_arm64(objs: [ParsedObj], out_path: string, entry: string, _is_stat
     // Load-command sizes pre-computed so the header can record
     // ncmds + sizeofcmds correctly.
     let lc_pagezero_size = 72
-    // __TEXT segment carries __text plus (phase-H inc2) optionally one
-    // merged data section (__const) when an object referenced a string /
-    // const via PAGE21/PAGEOFF12. Each section_64 = 80 bytes.
-    let mut text_nsects  = 1
-    if has_data { text_nsects = 2 }
+    // __TEXT segment carries __text + (inc3) optionally __const + __cstring.
+    // __DATA segment (inc3) carries __data + (optionally) __bss. Each
+    // segment header = 72 B, each section_64 = 80 B. (text_nsects /
+    // data_nsects / has_data_seg were computed above from the slots.)
     let lc_text_size     = 72 + 80 * text_nsects     // segment + N sections
+    let mut lc_data_size = 0
+    if has_data_seg { lc_data_size = 72 + 80 * data_nsects }
     let lc_linkedit_size = 72                        // segment, 0 sections
     let lc_main_size     = 24
     let lc_symtab_size   = 24
@@ -745,15 +1001,16 @@ fn link_macho_arm64(objs: [ParsedObj], out_path: string, entry: string, _is_stat
     let lc_uuid_size           = 24          // cmd+cmdsize+16-byte UUID
     let lc_source_version_size = 16          // cmd+cmdsize+8-byte version
 
-    // LC count = 14
-    //   PAGEZERO + __TEXT + __LINKEDIT
+    // LC count = 14 base (+ 1 when a __DATA segment is present)
+    //   PAGEZERO + __TEXT [+ __DATA] + __LINKEDIT
     //   + DYLD_CHAINED_FIXUPS + DYLD_EXPORTS_TRIE
     //   + DYLINKER + DYLIB
     //   + UUID + BUILD_VERSION + SOURCE_VERSION
     //   + MAIN + SYMTAB + DYSYMTAB
     //   + CODE_SIGNATURE
-    let ncmds = 14
-    let sizeofcmds = lc_pagezero_size + lc_text_size + lc_linkedit_size
+    let mut ncmds = 14
+    if has_data_seg { ncmds = ncmds + 1 }
+    let sizeofcmds = lc_pagezero_size + lc_text_size + lc_data_size + lc_linkedit_size
                    + lc_chained_fixups_size + lc_exports_trie_size
                    + lc_dyld_size + lc_lib_size
                    + lc_uuid_size + lc_buildver_size + lc_source_version_size
@@ -790,35 +1047,69 @@ fn link_macho_arm64(objs: [ParsedObj], out_path: string, entry: string, _is_stat
     _w_u32(out, 0)                                   // nsects
     _w_u32(out, 0)                                   // flags
 
-    // ── LC_SEGMENT_64 __TEXT (1 or 2 sections: __text [+ __const]) ──
+    // ── Phase-H inc3: FULL FILE / VM LAYOUT ─────────────────────────
     let header_size = 32
-    let text_fileoff = header_size + sizeofcmds      // start of __text bytes
-    // Phase-H inc2: the merged data section follows __text (with a
-    // 16-byte alignment gap) within the __TEXT segment's file region.
-    let data_fileoff      = text_fileoff + text_size + data_pad
-    let data_section_addr = 0x100000000 + data_fileoff
-    let text_section_addr = 0x100000000 + text_fileoff
-    // __TEXT segment file extent now spans __text + pad + data.
-    let text_seg_content_end = text_fileoff + text_size + data_pad + data_size
-    // __TEXT segment file extent — page-align upward so dyld is happy.
-    let mut text_filesize = text_seg_content_end
     let page = 0x4000
-    let rem = text_filesize & (page - 1)
-    if rem != 0 { text_filesize = text_filesize + (page - rem) }
+    let VM_BASE = 0x100000000
 
-    // ── Phase-H inc2: resolve PAGE21 (adrp) + PAGEOFF12 (add/ldr) ──
+    // __TEXT segment file region begins at offset 0 (it spans the header
+    // + LCs too). __text bytes start right after the LCs.
+    let text_fileoff = header_size + sizeofcmds      // file off of __text bytes
+    let text_section_addr = VM_BASE + text_fileoff
+
+    // __const follows __text, 16-aligned within the segment.
+    let const_pad = (16 - ((text_fileoff + text_size) & 15)) & 15
+    let const_fileoff      = text_fileoff + text_size + const_pad
+    let const_section_addr = VM_BASE + const_fileoff
+    // __cstring follows __const, 16-aligned.
+    let cstring_pad = (16 - ((const_fileoff + const_size) & 15)) & 15
+    let cstring_fileoff      = const_fileoff + const_size + cstring_pad
+    let cstring_section_addr = VM_BASE + cstring_fileoff
+
+    // __TEXT segment content end (last file-backed byte of the segment).
+    let text_seg_content_end = cstring_fileoff + cstring_size
+    // __TEXT segment file extent — page-align upward.
+    let mut text_filesize = text_seg_content_end
+    let trem = text_filesize & (page - 1)
+    if trem != 0 { text_filesize = text_filesize + (page - trem) }
+    let text_vmsize = text_filesize
+
+    // ── __DATA segment — page-aligned after __TEXT ──────────────────
+    // fileoff = text_filesize (page boundary). __data is file-backed;
+    // __bss is zero-fill (vmsize only, NOT in the file). __DATA.filesize
+    // covers __data; __DATA.vmsize covers __data + __bss (page-aligned).
+    let data_seg_fileoff = text_filesize
+    let data_seg_vmaddr  = VM_BASE + text_filesize
+    // __data section at the very start of __DATA's file region.
+    let data_fileoff      = data_seg_fileoff
+    let data_section_addr = data_seg_vmaddr
+    // __bss directly follows __data in VM (16-aligned), no file bytes.
+    let bss_vmoff_pad = (16 - (data_size & 15)) & 15
+    let bss_section_addr = data_section_addr + data_size + bss_vmoff_pad
+    // __DATA file extent = just __data (bss has no file bytes).
+    let mut data_seg_filesize = data_size
+    let drem = data_seg_filesize & (page - 1)
+    if drem != 0 { data_seg_filesize = data_seg_filesize + (page - drem) }
+    // __DATA vm extent = __data + bss pad + bss, page-aligned.
+    let mut data_seg_vmsize = data_size + bss_vmoff_pad + bss_size
+    let dvrem = data_seg_vmsize & (page - 1)
+    if dvrem != 0 { data_seg_vmsize = data_seg_vmsize + (page - dvrem) }
+    if data_seg_vmsize < data_seg_filesize { data_seg_vmsize = data_seg_filesize }
+
+    // ── Phase-H inc3: resolve PAGE21 (adrp) + PAGEOFF12 (add/ldr) ──
     //
-    // These reference a data symbol's ABSOLUTE VM address, so they can
-    // only be patched now that text_section_addr / data_section_addr are
-    // known. PC-relative BRANCH26 was already patched above.
+    // A symbol's ABSOLUTE VM address depends on its output slot's base
+    // addr (now known): __text→text_section_addr, __const→const_*,
+    // __cstring→cstring_*, __data→data_*, __bss→bss_section_addr. The
+    // reloc's `addend` (from a folded ARM64_RELOC_ADDEND prefix) is added
+    // to the target address before encoding.
     //
-    //   PAGE21  (adrp): imm = (target_page - pc_page) >> 12, where
-    //     *_page = addr & ~0xfff. Encoded into adrp as immlo=bits[1:0]
-    //     at instruction bits[30:29] and immhi=bits[20:2] at bits[23:5].
-    //   PAGEOFF12 (add / ldr lo12): imm = target & 0xfff. For ADD (no
-    //     shift) the 12-bit imm sits at bits[21:10] unscaled. For an
-    //     LDR/STR the imm must be scaled by the access size; clang emits
-    //     `add` for &symbol so the unscaled ADD path is the minimal case.
+    //   PAGE21  (adrp): imm = (target_page - pc_page) >> 12.
+    //   PAGEOFF12 (add / ldr): low 12 bits of target. For ADD (op bits =
+    //     0b100100010 at [31:23] roughly) the imm is UNSCALED at [21:10].
+    //     For an LDR/STR (load/store, top byte 0x39/0xb9/0xf9/0x3d/...)
+    //     the imm12 is SCALED by the access size: imm = (target&0xfff)>>scale,
+    //     where scale = (instr>>30)&0x3 for the integer/scaled-imm forms.
     let mut pro = 0
     while pro < len(objs) {
         let pobj = objs[pro]
@@ -828,28 +1119,25 @@ fn link_macho_arm64(objs: [ParsedObj], out_path: string, entry: string, _is_stat
             let pr = pobj.relocs[pri]
             if pr.kind == 3 || pr.kind == 4 {
                 let patch_off = pbase + pr.offset
-                // Resolve target → absolute VM address. Look in the data
-                // symbol table first, then the text symbol table.
+                // Resolve target → absolute VM address via the unified
+                // dsym table (slot → base addr), then add the reloc addend.
                 let mut tgt_addr = -1
                 let mut dk = 0
                 while dk < len(dsym_names) {
                     if dsym_names[dk] == pr.sym_name {
-                        tgt_addr = data_section_addr + dsym_offsets[dk]
+                        let slot = dsym_slot[dk]
+                        let off  = dsym_offset[dk]
+                        if slot == SLOT_TEXT         { tgt_addr = text_section_addr + off }
+                        else if slot == SLOT_CONST   { tgt_addr = const_section_addr + off }
+                        else if slot == SLOT_CSTRING { tgt_addr = cstring_section_addr + off }
+                        else if slot == SLOT_DATA    { tgt_addr = data_section_addr + off }
+                        else if slot == SLOT_BSS     { tgt_addr = bss_section_addr + off }
                         break
                     }
                     dk = dk + 1
                 }
-                if tgt_addr < 0 {
-                    let mut tk = 0
-                    while tk < len(def_names) {
-                        if def_names[tk] == pr.sym_name {
-                            tgt_addr = text_section_addr + def_offsets[tk]
-                            break
-                        }
-                        tk = tk + 1
-                    }
-                }
                 if tgt_addr >= 0 {
+                    tgt_addr = tgt_addr + pr.addend
                     let w0 = text_bytes[patch_off + 0]
                     let w1 = text_bytes[patch_off + 1]
                     let w2 = text_bytes[patch_off + 2]
@@ -864,15 +1152,32 @@ fn link_macho_arm64(objs: [ParsedObj], out_path: string, entry: string, _is_stat
                         let page_imm = (tgt_page - pc_page) / 0x1000
                         let immlo = page_imm & 0x3
                         let immhi = (page_imm >> 2) & 0x7ffff
-                        // Clear the existing immlo (bits30:29) + immhi
-                        // (bits23:5), then set ours.
                         let cleared = cur & 0x9f00001f
                         patched = cleared | (immlo << 29) | (immhi << 5)
                     } else {
-                        // PAGEOFF12 — add (unscaled 12-bit imm @ bits21:10).
-                        let off12 = tgt_addr & 0xfff
+                        // PAGEOFF12. Distinguish ADD (unscaled) from an
+                        // LDR/STR (scaled by access size). The load/store
+                        // unsigned-imm12 family has bits[29:28]==0b11 AND
+                        // bit27==1 AND bit26 may be 0/1 (V); the ADD imm12
+                        // family is data-processing (bit28==1, bits[25:24]
+                        // distinguish). Simplest robust test: ADD-immediate
+                        // opcode has bits[31:24] in {0x91 (add x), 0x11
+                        // (add w)} for the &sym case clang emits. Anything
+                        // else of kind 4 we treat as a scaled load/store.
+                        let top8 = (cur >> 24) & 0xff
+                        let off12_raw = tgt_addr & 0xfff
+                        let mut imm12 = off12_raw
+                        if top8 == 0x91 || top8 == 0x11 {
+                            // ADD immediate — UNSCALED 12-bit imm @ [21:10].
+                            imm12 = off12_raw
+                        } else {
+                            // LDR/STR unsigned-offset — SCALED by size =
+                            // (instr>>30)&0x3 (0=byte,1=half,2=word,3=dword).
+                            let scale = (cur >> 30) & 0x3
+                            imm12 = off12_raw >> scale
+                        }
                         let cleared = cur & 0xffc003ff
-                        patched = cleared | (off12 << 10)
+                        patched = cleared | ((imm12 & 0xfff) << 10)
                     }
                     text_bytes[patch_off + 0] = patched & 0xff
                     text_bytes[patch_off + 1] = (patched >> 8) & 0xff
@@ -894,7 +1199,7 @@ fn link_macho_arm64(objs: [ParsedObj], out_path: string, entry: string, _is_stat
     _w_u64(out, text_filesize)                       // filesize
     _w_u32(out, MACHO_LD_VM_PROT_RX)
     _w_u32(out, MACHO_LD_VM_PROT_RX)
-    _w_u32(out, text_nsects)                          // nsects (__text [+ __const])
+    _w_u32(out, text_nsects)                          // nsects (__text [+ __const][+ __cstring])
     _w_u32(out, 0)                                   // flags
     // section_64 __text
     _w_name_fixed(out, "__text", 16)
@@ -907,41 +1212,101 @@ fn link_macho_arm64(objs: [ParsedObj], out_path: string, entry: string, _is_stat
     _w_u32(out, 0)                                   // nreloc
     _w_u32(out, MACHO_LD_S_REG)
     _w_u32(out, 0); _w_u32(out, 0); _w_u32(out, 0)   // reserved1/2/3
-    // section_64 __const (merged __cstring/__const data) — only when
-    // an object carried such a section. Flags = S_REGULAR (0x0): plain
-    // read-only data. Lives in __TEXT (RX) — read-only const is safe to
-    // map executable for this minimal case (no writes, no relocs into it).
-    if has_data {
+    // section_64 __const — plain read-only data (S_REGULAR). Lives in
+    // __TEXT (RX): read-only const is safe to map executable.
+    if has_const {
         _w_name_fixed(out, "__const", 16)
         _w_name_fixed(out, "__TEXT", 16)
-        _w_u64(out, data_section_addr)               // addr
-        _w_u64(out, data_size)                       // byte count
-        _w_u32(out, data_fileoff)
+        _w_u64(out, const_section_addr)
+        _w_u64(out, const_size)
+        _w_u32(out, const_fileoff)
         _w_u32(out, 4)                               // align log2(16)
-        _w_u32(out, 0)                               // reloff
-        _w_u32(out, 0)                               // nreloc
+        _w_u32(out, 0)
+        _w_u32(out, 0)
         _w_u32(out, 0)                               // flags = S_REGULAR
         _w_u32(out, 0); _w_u32(out, 0); _w_u32(out, 0)
+    }
+    // section_64 __cstring — C string literals. flags = S_CSTRING_LITERALS
+    // (0x02). Lives in __TEXT.
+    if has_cstring {
+        _w_name_fixed(out, "__cstring", 16)
+        _w_name_fixed(out, "__TEXT", 16)
+        _w_u64(out, cstring_section_addr)
+        _w_u64(out, cstring_size)
+        _w_u32(out, cstring_fileoff)
+        _w_u32(out, 0)                               // align log2(1)
+        _w_u32(out, 0)
+        _w_u32(out, 0)
+        _w_u32(out, 0x02)                            // S_CSTRING_LITERALS
+        _w_u32(out, 0); _w_u32(out, 0); _w_u32(out, 0)
+    }
+
+    // ── LC_SEGMENT_64 __DATA (RW: __data [+ __bss]) ──────────────────
+    if has_data_seg {
+        _w_u32(out, MACHO_LD_LC_SEGMENT_64)
+        _w_u32(out, lc_data_size)
+        _w_name_fixed(out, "__DATA", 16)
+        _w_u64(out, data_seg_vmaddr)
+        _w_u64(out, data_seg_vmsize)                 // vmsize INCLUDES bss
+        _w_u64(out, data_seg_fileoff)
+        _w_u64(out, data_seg_filesize)               // filesize EXCLUDES bss
+        _w_u32(out, MACHO_LD_VM_PROT_RW)
+        _w_u32(out, MACHO_LD_VM_PROT_RW)
+        _w_u32(out, data_nsects)
+        _w_u32(out, 0)                               // flags
+        // section_64 __data (file-backed init'd globals)
+        if has_data {
+            _w_name_fixed(out, "__data", 16)
+            _w_name_fixed(out, "__DATA", 16)
+            _w_u64(out, data_section_addr)
+            _w_u64(out, data_size)
+            _w_u32(out, data_fileoff)
+            _w_u32(out, 3)                           // align log2(8)
+            _w_u32(out, 0)
+            _w_u32(out, 0)
+            _w_u32(out, 0)                           // flags = S_REGULAR
+            _w_u32(out, 0); _w_u32(out, 0); _w_u32(out, 0)
+        }
+        // section_64 __bss (S_ZEROFILL = 1; size set, offset MUST be 0).
+        if has_bss {
+            _w_name_fixed(out, "__bss", 16)
+            _w_name_fixed(out, "__DATA", 16)
+            _w_u64(out, bss_section_addr)
+            _w_u64(out, bss_size)                    // virtual size
+            _w_u32(out, 0)                           // offset = 0 (zerofill)
+            _w_u32(out, 3)                           // align log2(8)
+            _w_u32(out, 0)
+            _w_u32(out, 0)
+            _w_u32(out, 1)                           // flags = S_ZEROFILL
+            _w_u32(out, 0); _w_u32(out, 0); _w_u32(out, 0)
+        }
     }
 
     // ── LC_SEGMENT_64 __LINKEDIT (read-only segment) ──
     //
-    // __LINKEDIT sits AFTER __TEXT in the file. fileoff = text_filesize.
-    // Cycle 7 layout (extends cycle 4-6 with chained_fixups + exports_trie):
-    //
-    //   chained_fixups   48 B    (28 header + 16 starts_in_image + 4 pad)
-    //   exports_trie      8 B    (2 actual + 6 pad)
+    // __LINKEDIT sits AFTER __DATA (or __TEXT if no __DATA) in the file,
+    // at the next page boundary.
+    //   chained_fixups   56 B
+    //   exports_trie      8 B
     //   symtab          16*nsyms
     //   strtab          strsize + strpad
     //   codesig_blob   1024 B reserved (1 KB for ad-hoc CMS)
     //
     // ld64 ordering convention; macOS Sonoma loader rejects out-of-order.
-    let linkedit_fileoff = text_filesize
-    // chained_fixups data:
-    //   28 B header + 4 B pad (8-aligning starts_in_image) +
-    //   16 B starts_in_image (seg_count=3 + 3 zero offsets) + 8 B trailing
-    //   pad to 8-byte align → 56 B (matches clang's empty fixups layout).
-    let chained_fixups_size = 56
+    let mut linkedit_after = text_filesize
+    if has_data_seg { linkedit_after = data_seg_fileoff + data_seg_filesize }
+    let linkedit_fileoff = linkedit_after
+    // chained_fixups data (empty fixups — no imports, no rebases):
+    //   28 B header + 4 B pad (8-align) = 32 B, then dyld_chained_starts_
+    //   in_image = u32 seg_count + seg_count×u32 seg_info_offset (all 0),
+    //   then pad to 8-byte align. seg_count MUST match the number of
+    //   LC_SEGMENT_64 we emit (PAGEZERO + TEXT [+ DATA] + LINKEDIT).
+    let mut fixups_seg_count = 3                       // PAGEZERO + TEXT + LINKEDIT
+    if has_data_seg { fixups_seg_count = 4 }
+    let starts_in_image_size = 4 + 4 * fixups_seg_count
+    let mut chained_fixups_size = 32 + starts_in_image_size
+    let cfrem = chained_fixups_size & 7
+    if cfrem != 0 { chained_fixups_size = chained_fixups_size + (8 - cfrem) }
     let exports_trie_size   = 8
     let chained_fixups_off  = linkedit_fileoff
     let exports_trie_off    = chained_fixups_off + chained_fixups_size
@@ -957,7 +1322,9 @@ fn link_macho_arm64(objs: [ParsedObj], out_path: string, entry: string, _is_stat
     let lrem = linkedit_filesize & (page - 1)
     let mut linkedit_vmsize = linkedit_filesize
     if lrem != 0 { linkedit_vmsize = linkedit_filesize + (page - lrem) }
-    let linkedit_vmaddr = 0x100000000 + text_filesize
+    // __LINKEDIT vmaddr = after __DATA's vm region (or __TEXT if none).
+    let mut linkedit_vmaddr = 0x100000000 + text_filesize
+    if has_data_seg { linkedit_vmaddr = data_seg_vmaddr + data_seg_vmsize }
     _w_u32(out, MACHO_LD_LC_SEGMENT_64)
     _w_u32(out, lc_linkedit_size)
     _w_name_fixed(out, "__LINKEDIT", 16)
@@ -1061,45 +1428,63 @@ fn link_macho_arm64(objs: [ParsedObj], out_path: string, entry: string, _is_stat
     _w_u32(out, codesig_fileoff)
     _w_u32(out, codesig_reserve)
 
-    // ── __text payload (concatenated, relocated text bytes) ──
+    // ── __TEXT payload: __text, then __const (16-aligned), then
+    //    __cstring (16-aligned). Each section's file offset was computed
+    //    above (const_fileoff / cstring_fileoff); emit the alignment pads
+    //    by walking the running file position so bytes land exactly there.
     let mut bi = 0
     while bi < text_size { out.push(text_bytes[bi] & 0xff); bi = bi + 1 }
-
-    // Phase-H inc2: __const data section payload, after a 16-byte
-    // alignment gap (data_pad) following __text.
-    if has_data {
-        _w_zero_n(out, data_pad)
-        let mut dbi = 0
-        while dbi < data_size { out.push(data_bytes[dbi] & 0xff); dbi = dbi + 1 }
+    let mut fpos = text_fileoff + text_size       // running file position
+    if has_const {
+        _w_zero_n(out, const_fileoff - fpos)
+        let mut ci2 = 0
+        while ci2 < const_size { out.push(slot1_bytes[ci2] & 0xff); ci2 = ci2 + 1 }
+        fpos = const_fileoff + const_size
+    }
+    if has_cstring {
+        _w_zero_n(out, cstring_fileoff - fpos)
+        let mut si2 = 0
+        while si2 < cstring_size { out.push(slot2_bytes[si2] & 0xff); si2 = si2 + 1 }
+        fpos = cstring_fileoff + cstring_size
     }
 
-    // Pad the __TEXT segment file region up to its page-aligned end
-    // so `filesize` matches actual bytes. dyld's load-from-file logic
-    // requires this — short files trigger "past end of file" loader
-    // errors at runtime.
-    let cur_end = text_fileoff + text_size + data_pad + data_size
-    if text_filesize > cur_end {
-        _w_zero_n(out, text_filesize - cur_end)
+    // Pad the __TEXT segment file region up to its page-aligned end.
+    if text_filesize > fpos {
+        _w_zero_n(out, text_filesize - fpos)
     }
 
-    // ── __LINKEDIT payload — cycle 7 prefix: chained_fixups + exports_trie ──
+    // ── __DATA payload: __data bytes (bss has NO file bytes), padded
+    //    to the segment's page-aligned filesize. ──
+    if has_data_seg {
+        let mut ddi = 0
+        while ddi < data_size { out.push(slot3_bytes[ddi] & 0xff); ddi = ddi + 1 }
+        let data_written = data_size
+        if data_seg_filesize > data_written {
+            _w_zero_n(out, data_seg_filesize - data_written)
+        }
+    }
+
+    // ── __LINKEDIT payload — chained_fixups + exports_trie ──
     //
     // dyld_chained_fixups_header (28 bytes) + 4-byte pad to 8-align
-    // starts_in_image. Matches clang's empty-fixups layout exactly.
+    // starts_in_image. imports/symbols offsets point just past the
+    // starts_in_image table (empty — no imports, no symbols).
+    let imports_off_in_fixups = 32 + starts_in_image_size
     _w_u32(out, 0)                                 // fixups_version
     _w_u32(out, 32)                                // starts_offset (8-aligned after header+pad)
-    _w_u32(out, 48)                                // imports_offset
-    _w_u32(out, 48)                                // symbols_offset (no imports/symbols)
+    _w_u32(out, imports_off_in_fixups)             // imports_offset
+    _w_u32(out, imports_off_in_fixups)             // symbols_offset (no imports/symbols)
     _w_u32(out, 0)                                 // imports_count
     _w_u32(out, 1)                                 // imports_format = DYLD_CHAINED_IMPORT
     _w_u32(out, 0)                                 // symbols_format = uncompressed
     _w_zero_n(out, 4)                              // 4-byte pad to 8-align (offset 28 → 32)
     // dyld_chained_starts_in_image @ offset 32:
-    _w_u32(out, 3)                                 // seg_count = PAGEZERO + TEXT + LINKEDIT
-    _w_u32(out, 0)                                 // seg_info_offset[0] = 0 (no fixups)
-    _w_u32(out, 0)                                 // seg_info_offset[1]
-    _w_u32(out, 0)                                 // seg_info_offset[2]
-    _w_zero_n(out, 8)                              // 8-byte trailing pad to 56 total
+    _w_u32(out, fixups_seg_count)                  // seg_count
+    let mut fsc = 0
+    while fsc < fixups_seg_count { _w_u32(out, 0); fsc = fsc + 1 }   // seg_info_offset[i] = 0
+    // trailing pad to chained_fixups_size (8-aligned).
+    let cf_written = 32 + 4 + 4 * fixups_seg_count
+    if chained_fixups_size > cf_written { _w_zero_n(out, chained_fixups_size - cf_written) }
 
     // dyld_exports_trie (2 bytes minimum: terminal=0, child_count=0)
     // + 6 bytes pad → 8 bytes total.
@@ -1120,12 +1505,18 @@ fn link_macho_arm64(objs: [ParsedObj], out_path: string, entry: string, _is_stat
         let nty   = nlist_type[ni]
         let nse   = nlist_sect[ni]
         let mut nv = nlist_value[ni]
-        if nse == 2 {
-            // Data symbol (OUTPUT __const) — base = data_section_addr.
-            nv = data_section_addr + nv
-        } else if nse != 0 {
-            // __text symbol — absolute VM address = text base + offset.
+        // nse holds the OUTPUT 1-based section index; map it to that
+        // section's base VM addr and add the slot-relative offset.
+        if nse == osect_text && nse != 0 {
             nv = text_section_addr + nv
+        } else if nse == osect_const && osect_const != 0 {
+            nv = const_section_addr + nv
+        } else if nse == osect_cstring && osect_cstring != 0 {
+            nv = cstring_section_addr + nv
+        } else if nse == osect_data && osect_data != 0 {
+            nv = data_section_addr + nv
+        } else if nse == osect_bss && osect_bss != 0 {
+            nv = bss_section_addr + nv
         }
         _w_u32(out, strx)
         out.push(nty & 0xff)
