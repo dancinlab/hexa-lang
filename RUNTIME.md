@@ -623,6 +623,23 @@ repr floor remains." NOT blocked at arithmetic (de-risked). Campaign continues
 per-op, fixpoint-verified, event-driven — number-parse family (atof #1201 ·
 atoll/atoi #1205) was the warm-up; arithmetic core is next.
 
+### 2026-05-26 — `.c none` comparison family LANDED (cmp_lt/gt/le/ge · #1231)
+
+arith(5/5) 다음 frontier — 비교 4-op (`hexa_cmp_lt/gt/le/ge` → hexa `rt_cmp_*`,
+runtime_core.c two-mode). 2 브리지로 irreducible leaf 만 C 유지: `__raw_cmp3`
+(enum-ordinal · hxlcl_strcmp · float/valstruct native — **비음수** code 0=lt·
+1=eq·2=gt·3=NaN·4=incomparable) + `__raw_code_is`(C int-eq, code 판정). 검증:
+build 0 · smoke 42 · ext=1 (zero-libm) · correctness(int/string/float/mixed) ·
+byte-identity 232L (aprime_cc 내부 cmp ≡ C, fixpoint-safe).
+
+**하드 디버그 — rt_cmp_le 무한재귀 (4겹, lldb + 생성-C 직독)**. 진짜 근본:
+hexa-source 의 **음수 리터럴**(`-1`,`-3`)이 codegen 에서 `hexa_sub(0,N)` 런타임
+뺄셈으로 emit → rt_sub → `type_of=="int"`(hexa_eq) → rt_eq → string-eq
+(`a<=b && a>=b`, 등호를 cmp 로 구현!) → hexa_cmp_le → rt_cmp_le → ∞. **교훈**:
+hexa-source 런타임 함수는 음수 리터럴 금지 + code 판정은 hexa `==`(→rt_eq→cmp)
+아닌 C 브리지로. arith 가 무사했던 건 code 를 0/1/2 비음수로 썼기 때문(우연).
+(메모리 `reference_new_codegen_intrinsic_4_surface`.)
+
 ### 2026-05-26 — `.c none` arithmetic core 5/5 LANDED (`+` add · #1226) — arith lane EXHAUSTED
 
 `+` (`hexa_add_slow` → `rt_add_slow`, #1226) 랜딩으로 산술 코어 5/5 완주:
