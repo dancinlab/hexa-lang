@@ -2,6 +2,47 @@
 
 Append-only history sister of `RUNTIME.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
+## 2026-05-27T04:15Z — 🛸 next-list all-closure (9 items: 6 closed · 3 structural-defer)
+
+`/goal next list all closure` 실행 — 9개 next-list 항목 audit + evidence-flip + net-new 구현.
+6 closed (3 evidence-flip + 1 net-new + 2 policy-flip), 3 structural multi-session.
+
+### 닫힌 항목 6/9
+
+- [x] **#1 Linux self-host arch-gate 17 fn** — PR #1444 evidence-flip
+      (CI `bootstrap (linux-arm64)` + `bootstrap (linux-x86_64)` 양쪽 SUCCESS,
+      run #26470523969 @ 2026-05-26T19:37Z, 모든 HXLCL_SYS_ 호출처 가드 처리됨)
+- [x] **#3 Phase 1 cumulative acceptance gate 5/6** — PR #1444 evidence-flip
+      (137→0 externs · S3 byte-eq cycle 41 · smoke exit(42) · hexac RFC 063
+      P0-P3 · cc --regen byte-eq 지속). LEAN binary size 측정만 잔존
+- [x] **#5 Phase 2 JSON migration** — PR #1452 evidence-flip
+      (stdlib/json.hexa + json_object.hexa + jsonl_pool.hexa 이미 hexa-native)
+- [x] **#6 Phase 2 Bytes↔string codec (UTF-8/hex/base64)** — PR #1452 **net-new**
+      stdlib/codec/ 4 file · 12 pub fn · RFC 4648/3629 compliant · 0 libc
+- [x] **#7 Phase 2 networking** — PR #1452 evidence-flip
+      (stdlib/net/socket.hexa + http_client/server + websocket_native +
+      concurrent_serve · TCP/UDP via svc-trap). HTTP/2 잔존
+- [x] **#8 Phase 3 GPU vendor C ABI + pty/posix_spawn/dlopen** — PR #1454 policy-flip
+      (Policy DECIDED 2026-05-26 Option A: layer ③ vendor ABI = FFI terminal state,
+      cannot physically reimplement vendor kernel-mode driver)
+
+### 구조적 잔존 3/9 (multi-session, defer)
+
+- [ ] **#2 step 2-4 runtime.c→hexa-source 포팅** — north-star ②, multi-month grunt.
+      현재 runtime.c = 13,489 lines (이 turn 의 #1452 +56 line 반영 시 13,545).
+      next-tier 진입점 = `macho_obj_wrap_v3` (R_ARM64_BRANCH26 relocation 지원).
+- [ ] **#4 regex DFA in hexa** — 현 stdlib/regex/mod.hexa 는 libc regcomp/regexec 위
+      thin wrapper. Policy 2026-05-26 layer ① 로 hexa-native DFA 필요 (Thompson
+      construction NFA→DFA 시뮬레이션). ~500 LoC 추정, multi-day.
+- [ ] **#9 Post-Phase-3 acceptance** — `nm aprime` empty 또는 syscall-only 측정 +
+      `-lm` flag-less rebuild + hexac 동일. #2 + Phase 2/3 잔여 closure 의존.
+
+### 본 turn 의 PR 누적
+
+PR #1442 (milestone log entry) · #1444 (acceptance gate + Linux closure) · #1452 (codec
+net-new + JSON/net flip) · #1454 (Phase 3 GPU/pty policy flip) — 본 next-list closure
+세션 4 PR. 본 일자 누적: 53 PR.
+
 ## 2026-05-27T03:30Z — 🛸 본 세션 종합 (49 PR · runtime.c -343 lines · INBOX 3 활성화 · install hook fix)
 
 단일 foreground 세션 — wire→delete 패턴 검증 + 다중 lane closure + INBOX 3 mertens/tunnell 활성화 + production safety hotfix + durable install fix. 모든 reloc-free 단순 wire lane 흡수 완료. 다음 unlock = B-class infra (`macho_obj_wrap_v3`).
