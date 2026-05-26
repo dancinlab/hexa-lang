@@ -31,6 +31,7 @@ fn _cloud_help() {
     println("  cloud poll      <host> <pid> [conn]                    exit 0 if remote pid alive, else 1")
     println("  cloud tail      <host> <logfile> [conn] [--grep RE] [--until RE]   live-stream a remote log (Monitor bridge)")
     println("                                                         tail -F | sed -u: print --grep lines, print+quit on --until (default: JOB DONE|crash); follows forever if --until ''")
+    println("                                                         exit 0 = --until matched (clean end · JOB DONE/OOMKilled/Traceback/…) · 255 = ssh transport drop · other = log truncated mid-stream (sed/tail pipe failed)")
     println("  cloud watch     <host> <pid> [conn] [--interval N] [--max-wait S] [--then-down <id> [--provider P]]")
     println("                                                         loop poll until pid dies (exit 0) / max-wait (124); optional teardown")
     println("  cloud ssh-port  <id> [--provider P]                    print live ssh host:port of a pod (vast|runpod)")

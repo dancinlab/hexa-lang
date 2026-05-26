@@ -447,6 +447,20 @@ fn cloud_poll(host: str, pid: int) -> int {
 // forwards each line live with zero buffering. `grep_re` / `until_re` are
 // sed ERE addresses — a literal `/` in a pattern must be backslash-escaped
 // (markers like "JOB DONE|Traceback" need no escaping).
+//
+// Exit-code contract (callers — Monitor / micro-exp / wrapping skill):
+//   0   — `until_re` matched: clean end (JOB DONE / OOMKilled / Traceback / …
+//         per the caller-supplied terminal pattern). The pipe closed because
+//         sed printed-and-quit, so ssh returned 0 cleanly.
+//   255 — ssh transport drop: the local ssh exited 255 (host vanished, key
+//         changed mid-stream, kernel TCP reset, ServerAliveCountMax tripped).
+//         The pod may be alive + billing but unreachable — verify before retry.
+//   other non-zero — sed/tail pipeline failed mid-stream (logfile removed
+//         remotely, mawk surfaced after all, disk full, …). Treat the stream
+//         as truncated; the job may still be running.
+// Callers distinguish "real success" from "stream broke before terminal
+// marker" by combining exit code with captured tail stdout — a 0 exit with
+// `JOB DONE` in the body is the only unambiguous SUCCESS signal.
 fn cloud_tail_cmd_opts(host: str, ssh_opts: [str], logfile: str, grep_re: str, until_re: str) -> str {
     // Terminal-first sed program: `/until/{p;q}` precedes the filter so a
     // terminal line both surfaces and stops the stream. The whole program is
