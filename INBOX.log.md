@@ -2,6 +2,16 @@
 
 Append-only history sister of `INBOX.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
+## 2026-05-26T08:40Z — 🔌 hexa cloud 개선 4건 (reconcile GHOST 오판 · registry 오염 · cloud_cli 재발-wipe · prebuilt-binary 전송) · from demiurge RTSC
+
+> RTSC 캠페인(8 vast pod) 운용 중 발견한 `hexa cloud` 개선점 묶음. #967(heavy-word route)·#989(lifecycle verb)·#1155(vast ssh 키)와 별개 신규 4건.
+
+- [ ] **(A) `hexa cloud reconcile` 가 살아있는 vast 인스턴스를 전부 GHOST 로 오판** — vast `running` pod 들이 reconcile 에서 GHOST(registry엔 있고 provider엔 없음)로 표기 → orphan 탐지 신뢰불가. ground-truth 는 `vastai show instances` 로 별도 확인해야 했음. provider-list 파서 또는 id 매칭 점검 필요.
+- [ ] **(B) registry 오염 — raw-ssh 목적지 + post-`--` argv 조각이 "pod" 로 적재** — `~/.hexa-cloud/pods.jsonl` 에 `root@<ip>`·`ssh1.vast.ai`·명령조각(label `echo`·`tail`·`bash`·`/root/h3as/run.sh`·`--help`·`--insecure`)이 pod 엔트리로 들어가 reconcile 출력 35행 junk. pod-id 추출이 잘못된 토큰을 잡음 → append 시 numeric instance-id 만 기록하도록 가드.
+- [ ] **(C) `stdlib/cloud/cloud_cli.hexa` 재발성 concurrent-wipe** — 동시 에이전트 환경서 cloud_cli.hexa 가 생성 C 코드로 clobber → `hexa cloud` 빌드 깨짐(이번 세션 1회, git restore 복구). recurring-wipe 클래스 → 생성물이 소스 덮지 않도록 경로/가드.
+- [ ] **(D) 견고 전송 후보 — prebuilt `hexa-cloud` 바이너리 + base64 페이로드** — JIT-빌드 `hexa cloud` 래퍼가 (C)wipe + argv newline/quoting 에 취약. 별도 세션이 prebuilt `~/.hx/bin/hexa-cloud` 직접호출 + base64 페이로드로 양쪽 우회해 안정동작 확인. canonical 전송을 prebuilt-binary + base64 로 승격 검토.
+- [ ] **(참고) #1155 미해소** — vast pod 도달은 여전히 `raw ssh -i ~/.ssh/id_vast_anima -o IdentitiesOnly=yes <bareIP>` 만 작동(`hexa cloud` 가 vast 등록키 미제시). (A)(B)(D)와 함께 vast 전송 스택 전반 점검 권고.
+
 ## 2026-05-26T08:00Z — 🐛 verify_cli 빌드-해소 4건 (UFO atom fold #1222 중 발견 · from demiurge UFO)
 
 > demiurge UFO 4-atom fold(`#1222` 머지)를 mini 에서 진행하며 verify_cli 빌드를 살리는 과정에서 확인. codegen `_Generic`/bessel 증상 자체는 ↓06:30Z · ✅07:40Z(#1198) 에 등재됨 — 본 엔트리는 그와 별개의 **빌드-해소(resolution) 갭 4건**. 모두 워크어라운드로 #1222 는 랜딩 완료.
