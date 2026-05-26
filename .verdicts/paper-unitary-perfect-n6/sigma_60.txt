@@ -1,0 +1,4 @@
+verify --expr sigma(60)=168
+  calc   = 168  == expected 168
+  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
+  absorb = · already in atlas — idempotent skip (default · @D g69)

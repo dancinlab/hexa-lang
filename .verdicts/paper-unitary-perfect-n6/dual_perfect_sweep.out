@@ -1,0 +1,56 @@
+F-DUAL-PERFECT-N6 — finite-exhaustive verification (range [1,10000])
+====================================================================
+
+METHOD NOTE
+-----------
+The intended O(N^2) hexa-native sweep driver (dual_perfect_sweep_inline.hexa)
+could not be RUN to completion: the deployed standalone toolchain (hexat
+2026-05-27) miscompiles the loop-counter mutation `n = n + 1` inside a
+`while` body (the increment does not persist -> infinite loop printing the
+same iterate). Minimal repro: a 3-line `while n<=3 { println(str(n)); n=n+1 }`
+prints "loop 1" forever. This is a codegen bug in the standalone build path,
+INDEPENDENT of the number-theory logic; bin/hexa-verify (built from
+verify_cli.hexa via the canonical sub-binary recipe) computes sigma/sigma_star
+CORRECTLY and is the g5 SSOT used below.
+
+Rather than a sweep, we close the range with a STRONGER finite-exhaustive
+argument that needs no loop:
+
+  dual-perfect(n)  :=  sigma(n)=2n  AND  sigma_star(n)=2n
+  dual-perfect(n)  =>  ordinary-perfect(n)            (since it requires sigma(n)=2n)
+
+So the dual-perfect set in [1,N] is a SUBSET of the ordinary-perfect set in
+[1,N]. By the Euclid-Euler theorem every even perfect number has the form
+2^(p-1)(2^p - 1) with 2^p - 1 a Mersenne prime, and no odd perfect number
+<= 10^1500 exists (so none <= 10000). The Mersenne exponents give:
+  p=2 -> 6,  p=3 -> 28,  p=5 -> 496,  p=7 -> 8128,  p=13 -> 33550336 (>10000).
+Hence the ORDINARY-PERFECT set in [1,10000] is EXACTLY {6, 28, 496, 8128}
+(complete, classical).
+
+It therefore suffices to test sigma_star on those 4 candidates (and, for the
+divergence table, the small unitary-perfect numbers 60 and 90):
+
+  n      sigma(n)   =2n?           sigma_star(n)  =2n?           dual?
+  -----  ---------  -------------  -------------  -------------  -----
+  6      12         YES (=12)      12             YES (=12)      YES  <-- DUAL
+  28     56         YES (=56)      40             NO  (!=56)     no
+  496    992        YES (=992)     544            NO  (!=992)    no
+  8128   16256      YES (=16256)   8320           NO  (!=16256)  no
+  60     168        NO  (!=120)    120            YES (=120)     no
+  90     234        NO  (!=180)    180            YES (=180)     no
+
+Every value above is a 🔵 SUPPORTED-FORMAL verdict from `hexa verify --expr`
+(verbatim files: sigma_6.txt, sigma_star_6.txt, sigma_28.txt, sigma_star_28.txt,
+sigma_496.txt, sigma_star_496.txt, sigma_8128.txt, sigma_star_8128.txt,
+sigma_60.txt, sigma_star_60.txt, sigma_90.txt, sigma_star_90.txt).
+
+ordinary-perfect count in [1,10000] = 4   {6, 28, 496, 8128}
+unitary-perfect  members tested      = {6, 60, 90}  (6,60,90 are the unitary-
+                                       perfect numbers below 100)
+DUAL-PERFECT     count in [1,10000] = 1   {6}
+
+RESULT: F-DUAL-PERFECT-N6 NOT falsified — n=6 is the UNIQUE simultaneous
+ordinary-AND-unitary perfect number in [1,10000]. The two perfection sequences
+share exactly the anchor n=6 and DIVERGE at their next terms (ordinary 28 is
+not unitary; unitary 60 is not ordinary). Closed-negative: no second
+coincidence exists in the tested range.

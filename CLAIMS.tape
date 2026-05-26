@@ -3147,3 +3147,89 @@
   raw    = ".verdicts/paper-omega-zero-density/CLOSED_FORM.md"
   src    = "TECS-L F14–F18 unification · multiplicative reduction + factor-sign lemma"
   status = "🔵 SUPPORTED-FORMAL — closed-form proof closes infinite tail beyond machine sweep. terminal."
+
+# =========================================================================
+# TECS-L — paper-unitary-perfect-n6 (slug · group=TECS-L · paper-track · INBOX #10 2/3)
+# Unitary-perfect singleton: n=6 is the UNIQUE simultaneous ordinary+unitary
+# perfect number in [1,10^4], and the two perfection sequences diverge after 6.
+#
+#   ordinary-perfect : σ(n)  = 2n   (A000396: 6,28,496,8128,…)
+#   unitary-perfect  : σ*(n) = 2n   (A002827: 6,60,90,87360,…)
+#   dual-perfect     : both at once.
+#
+# Falsifier F-DUAL-PERFECT-N6 (pre-registered, .verdicts/.../FALSIFIER.md):
+#   ∃ n≠6 in [1,10^4] dual-perfect  ⟹  FALSIFIED.  Survives.
+# Closure = finite EXHAUSTION (not a sweep): dual-perfect ⊆ ordinary-perfect,
+# and by Euclid–Euler the ordinary-perfect numbers ≤10^4 = {6,28,496,8128}.
+# Recompute σ* on each → only n=6 is unitary. Divergence at next terms:
+#   28 ordinary but σ*(28)=40≠56 (not unitary); 60 unitary but σ(60)=168≠120.
+# Mechanism: 6=2·3 squarefree ⟹ σ=σ*; every even perfect >6 carries 2^(p-1),
+#   p-1≥2, where σ*(2^a)=1+2^a < σ(2^a) ⟹ unitarily deficient.
+# Paper: PAPER/tecs-l-unitary-perfect-n6-dual/main.pdf (10p + fal.ai fig01).
+
+# — anchor: n=6 dual-perfect (σ=σ*=2·6) —
+@C up6_anchor_sigma := "sigma(6) = 12 = 2·6 (ordinary-perfect anchor)" :: formula [slug=paper-unitary-perfect-n6 group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr sigma 6 12"
+  raw    = ".verdicts/paper-unitary-perfect-n6/sigma_6.txt"
+  src    = "TECS-L n=6 minimality · stdlib/core/math sigma"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal · paper-eligible."
+
+@C up6_anchor_sigma_star := "sigma_star(6) = 12 = 2·6 (unitary-perfect anchor; 6 = smallest unitary-perfect)" :: formula [slug=paper-unitary-perfect-n6 group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr sigma_star 6 12"
+  raw    = ".verdicts/paper-unitary-perfect-n6/sigma_star_6.txt"
+  src    = "TECS-L n=6 minimality · stdlib/core/math sigma_star (Σ_{d‖n} d, gcd(d,n/d)=1)"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal · paper-eligible."
+
+# — ordinary side, divergence: 28/496/8128 ordinary-perfect but NOT unitary —
+@C up6_28_sigma := "sigma(28) = 56 = 2·28 (2nd ordinary-perfect)" :: formula [slug=paper-unitary-perfect-n6 group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr sigma 28 56"
+  raw    = ".verdicts/paper-unitary-perfect-n6/sigma_28.txt"
+  src    = "TECS-L n=6 minimality · ordinary-perfect list member"
+  status = "🔵 SUPPORTED-FORMAL — REAL verdict persisted verbatim. terminal · paper-eligible."
+
+@C up6_28_sigma_star := "sigma_star(28) = 40 ≠ 56 (28 = 2²·7 is NOT unitary-perfect — divergence)" :: formula [slug=paper-unitary-perfect-n6 group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr sigma_star 28 40"
+  raw    = ".verdicts/paper-unitary-perfect-n6/sigma_star_28.txt"
+  src    = "TECS-L n=6 minimality · the ordinary→unitary divergence discriminator"
+  status = "🔵 SUPPORTED-FORMAL → 40≠56 closed-negative (not unitary). terminal · paper-eligible."
+
+@C up6_496_sigma_star := "sigma_star(496) = 544 ≠ 992 (496 = 2⁴·31 ordinary-perfect, NOT unitary)" :: formula [slug=paper-unitary-perfect-n6 group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr sigma 496 992 ; --expr sigma_star 496 544"
+  raw    = ".verdicts/paper-unitary-perfect-n6/sigma_star_496.txt"
+  src    = "TECS-L n=6 minimality · ordinary-perfect candidate exhaustion"
+  status = "🔵 SUPPORTED-FORMAL → 544≠992 closed-negative (not unitary). terminal · paper-eligible."
+
+@C up6_8128_sigma_star := "sigma_star(8128) = 8320 ≠ 16256 (8128 = 2⁶·127 ordinary-perfect, NOT unitary)" :: formula [slug=paper-unitary-perfect-n6 group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr sigma 8128 16256 ; --expr sigma_star 8128 8320"
+  raw    = ".verdicts/paper-unitary-perfect-n6/sigma_star_8128.txt"
+  src    = "TECS-L n=6 minimality · ordinary-perfect candidate exhaustion (4th/4)"
+  status = "🔵 SUPPORTED-FORMAL → 8320≠16256 closed-negative (not unitary). terminal · paper-eligible."
+
+# — unitary side, reverse divergence: 60/90 unitary-perfect but NOT ordinary —
+@C up6_60_diverge := "sigma_star(60) = 120 = 2·60 (unitary-perfect) but sigma(60) = 168 ≠ 120 (NOT ordinary)" :: formula [slug=paper-unitary-perfect-n6 group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr sigma_star 60 120 ; --expr sigma 60 168"
+  raw    = ".verdicts/paper-unitary-perfect-n6/sigma_star_60.txt"
+  src    = "TECS-L n=6 minimality · 2nd unitary-perfect, reverse non-inclusion"
+  status = "🔵 SUPPORTED-FORMAL → unitary yes, ordinary no. terminal · paper-eligible."
+
+@C up6_90_diverge := "sigma_star(90) = 180 = 2·90 (unitary-perfect) but sigma(90) = 234 ≠ 180 (NOT ordinary)" :: formula [slug=paper-unitary-perfect-n6 group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr sigma_star 90 180 ; --expr sigma 90 234"
+  raw    = ".verdicts/paper-unitary-perfect-n6/sigma_star_90.txt"
+  src    = "TECS-L n=6 minimality · 3rd unitary-perfect, reverse non-inclusion"
+  status = "🔵 SUPPORTED-FORMAL → unitary yes, ordinary no. terminal · paper-eligible."
+
+# — singleton theorem (finite exhaustion closer) —
+@C up6_theorem := "Unique dual-perfect in [1,10^4] is n=6: dual ⊆ ordinary, Euclid–Euler gives ordinary≤10^4={6,28,496,8128}, only 6 unitary; sequences diverge (28 ord-only, 60 uni-only)" :: synthesis [slug=paper-unitary-perfect-n6 group=TECS-L]
+  method = "exhaustion"
+  cmd    = "see .verdicts/paper-unitary-perfect-n6/dual_perfect_sweep.out (finite-exhaustive note)"
+  raw    = ".verdicts/paper-unitary-perfect-n6/dual_perfect_sweep.out"
+  src    = "TECS-L n=6 minimality · containment lemma + complete ordinary-perfect candidate list"
+  status = "🔵 SUPPORTED-FORMAL — finite exhaustion over provably complete 4-element list. terminal."
