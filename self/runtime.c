@@ -3041,7 +3041,7 @@ HexaVal hexa_ptr_write(HexaVal ptr, HexaVal offset, HexaVal val) {
  * (included at end of this file). hexa_ptr_read (untyped 64-bit) kept here
  * as general-purpose. */
 
-HexaVal hexa_ptr_read(HexaVal ptr, HexaVal offset) {
+__attribute__((weak)) HexaVal hexa_ptr_read(HexaVal ptr, HexaVal offset) {
     uint64_t p = HX_IS_INT(ptr) ? HX_INT_U(ptr) : 0;
     int64_t off = HX_IS_INT(offset) ? HX_INT(offset) : 0;
     if (p == 0) return hexa_int(0);
