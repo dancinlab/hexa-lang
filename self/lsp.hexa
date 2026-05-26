@@ -745,6 +745,12 @@ fn run_lsp() {
     // Content-Length framing per LSP spec.
     let mut running = true
     while running {
+        // 2026-05-26: parent-death guard — exit if orphaned (ppid → 1 means parent
+        // died, we got reparented to launchd/init). Catches the LSP-leak pattern
+        // where stdin pipe stays open after parent SIGKILL → loop survives across
+        // any read return. Partial fix (won't break a currently-blocked readline);
+        // a non-blocking-I/O refactor is the complete fix (follow-up).
+        if term_getppid() == 1 { running = false } else {
         // Read Content-Length header
         let header = readline()
         if header == "" {
@@ -821,6 +827,7 @@ fn run_lsp() {
                 }
             }
         }
+        }  // end ppid-guard else (2026-05-26 leak fix)
     }
 }
 
