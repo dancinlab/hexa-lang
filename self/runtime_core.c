@@ -7849,7 +7849,16 @@ static inline HexaVal __raw_cmp3(HexaVal a, HexaVal b) {
     int64_t _x = HX_INT(a), _y = HX_INT(b);
     return hexa_int(_x < _y ? -1 : (_x > _y ? 1 : 0));
 }
-static inline HexaVal __raw_to_double(HexaVal v) { return hexa_float(__hx_to_double(v)); }
+// Per-operator float compare bridges. MUST be C (not hexa typed-float helpers):
+// in the flattened compiler the helper param names (x/y) collide with int-typed
+// `let`s in other modules, so _is_known_float_name bails (ambiguous) and the hexa
+// `x <= y` lowers to hexa_cmp_le → rt_cmp_le → infinite recursion (stack overflow
+// observed in rt_cmp_le prologue). C bridges sidestep all known-float dependence.
+// NaN-correct (native double compare). __hx_to_double coerces float/valstruct.
+static inline HexaVal __raw_lt_f(HexaVal a, HexaVal b) { return hexa_bool(__hx_to_double(a) <  __hx_to_double(b)); }
+static inline HexaVal __raw_gt_f(HexaVal a, HexaVal b) { return hexa_bool(__hx_to_double(a) >  __hx_to_double(b)); }
+static inline HexaVal __raw_le_f(HexaVal a, HexaVal b) { return hexa_bool(__hx_to_double(a) <= __hx_to_double(b)); }
+static inline HexaVal __raw_ge_f(HexaVal a, HexaVal b) { return hexa_bool(__hx_to_double(a) >= __hx_to_double(b)); }
 #ifdef HEXA_HAS_HEXA_RT_STDLIB
 extern HexaVal rt_cmp_lt(HexaVal a, HexaVal b);
 extern HexaVal rt_cmp_gt(HexaVal a, HexaVal b);

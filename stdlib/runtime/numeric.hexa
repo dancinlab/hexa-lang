@@ -1643,38 +1643,34 @@ pub fn rt_add_slow(a: HexaVal, b: HexaVal) -> HexaVal {
 // rt_cmp_* — hexa-source port of runtime_core.c hexa_cmp_lt/gt/le/ge (Step 4
 // .c-none). __raw_cmp3 (bridge) returns the integer-ordering code for the
 // enum/string/int leaf cases (-3 incomparable · -2 float/valstruct · -1/0/1);
-// the per-operator NaN-correct float compare stays native here via typed-float
-// helpers (typed params = known-float → native HX_FLOAT cmp, no hexa_cmp re-entry).
-// Result tests use only `==` / `||` (hexa_eq) — never `<`/`<=` on the code (that
-// would re-enter hexa_cmp_* and recurse). Throw message uses type names (vs the C
-// tag numbers) — same choice as the rt_add/rt_div non-numeric throws.
-fn _cmp_lt_f(x: float, y: float) -> bool { return x < y }
-fn _cmp_gt_f(x: float, y: float) -> bool { return x > y }
-fn _cmp_le_f(x: float, y: float) -> bool { return x <= y }
-fn _cmp_ge_f(x: float, y: float) -> bool { return x >= y }
-
+// the per-operator NaN-correct float compare goes through C bridges __raw_*_f
+// (NOT hexa typed-float helpers — their x/y params collide with int `let`s in the
+// flattened compiler → _is_known_float bails → hexa `x<=y` re-enters hexa_cmp_le →
+// infinite recursion). Result tests use only `==` / `||` (hexa_eq) — never `<`/`<=`
+// on the code (that would re-enter hexa_cmp_*). Throw message uses type names (vs
+// the C tag numbers) — same choice as the rt_add/rt_div non-numeric throws.
 pub fn rt_cmp_lt(a: HexaVal, b: HexaVal) -> bool {
     let c = __raw_cmp3(a, b)
     if c == -3 { throw "cannot compare " + type_of(a) + " with " + type_of(b) + " (operator <)" }
-    if c == -2 { return _cmp_lt_f(__raw_to_double(a), __raw_to_double(b)) }
+    if c == -2 { return __raw_lt_f(a, b) }
     return c == -1
 }
 pub fn rt_cmp_gt(a: HexaVal, b: HexaVal) -> bool {
     let c = __raw_cmp3(a, b)
     if c == -3 { throw "cannot compare " + type_of(a) + " with " + type_of(b) + " (operator >)" }
-    if c == -2 { return _cmp_gt_f(__raw_to_double(a), __raw_to_double(b)) }
+    if c == -2 { return __raw_gt_f(a, b) }
     return c == 1
 }
 pub fn rt_cmp_le(a: HexaVal, b: HexaVal) -> bool {
     let c = __raw_cmp3(a, b)
     if c == -3 { throw "cannot compare " + type_of(a) + " with " + type_of(b) + " (operator <=)" }
-    if c == -2 { return _cmp_le_f(__raw_to_double(a), __raw_to_double(b)) }
+    if c == -2 { return __raw_le_f(a, b) }
     return c == -1 || c == 0
 }
 pub fn rt_cmp_ge(a: HexaVal, b: HexaVal) -> bool {
     let c = __raw_cmp3(a, b)
     if c == -3 { throw "cannot compare " + type_of(a) + " with " + type_of(b) + " (operator >=)" }
-    if c == -2 { return _cmp_ge_f(__raw_to_double(a), __raw_to_double(b)) }
+    if c == -2 { return __raw_ge_f(a, b) }
     return c == 1 || c == 0
 }
 
