@@ -414,7 +414,18 @@ fn parse_type() -> TypeRef {
             // negative N would surface as a downstream type error).
             if check_kind(TokenKind::Number) {
                 let n_tok = advance()
-                array_name = "Array:" + n_tok.text
+                // RFC 085 non-f64 elem extension (2026-05-27): include the
+                // element type name in the encoding so downstream Pass 0.5
+                // can compute byte size correctly for f32/i64/i32 (not just
+                // the hardcoded f64=8 B path). Format:
+                //   "Array:<elem>:<N>"   when inner.name is non-empty
+                //   "Array:<N>"          backward-compat fallback (elem
+                //                        unknown; Pass 0.5 defaults to f64)
+                if len(inner.name) > 0 {
+                    array_name = "Array:" + inner.name + ":" + n_tok.text
+                } else {
+                    array_name = "Array:" + n_tok.text
+                }
             }
             // Else: malformed `[T; <non-int>]` — silently fall back to
             // bare Array (the prior eat-RBracket-and-pray behavior).

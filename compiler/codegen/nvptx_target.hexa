@@ -2503,12 +2503,33 @@ fn _nvptx_classify_locals(mfn: MFunc) -> [PReg] {
                     let count_str = nh.substring(colon_at + 1, nh_n)
                     let count_n = to_int(count_str)
                     if count_n > 0 {
-                        // 8 bytes per f64 element. Other element widths
-                        // need a Type → elem_size lookup; deferred to a
-                        // follow-up that threads HIR Type through to
-                        // Local.type_id (today f64 covers every shipped
-                        // @shared kernel in tool/ and stdlib/).
-                        sz = count_n * 8
+                        // RFC 085 non-f64 elem extension — find the
+                        // PENULTIMATE `:` and read the elem-name between
+                        // it and the last `:`. Pattern:
+                        //   "<name>:<elem>:<N>" → elem in nh[m+1..colon_at]
+                        //   "<name>:<N>"         → no penultimate colon,
+                        //                          elem defaults to f64
+                        // elem_size lookup:
+                        //   f64 / i64 → 8 B
+                        //   f32 / i32 → 4 B
+                        //   bool      → 1 B
+                        //   else      → 8 B (conservative default)
+                        let mut elem_size = 8
+                        let mut mi = colon_at - 1
+                        let mut prev_colon = -1
+                        while mi >= 0 {
+                            if nh_chars[mi] == ':' { prev_colon = mi; break }
+                            mi = mi - 1
+                        }
+                        if prev_colon >= 0 && prev_colon + 1 < colon_at {
+                            let elem_str = nh.substring(prev_colon + 1, colon_at)
+                            if elem_str == "f64" { elem_size = 8 }
+                            else if elem_str == "i64" { elem_size = 8 }
+                            else if elem_str == "f32" { elem_size = 4 }
+                            else if elem_str == "i32" { elem_size = 4 }
+                            else if elem_str == "bool" { elem_size = 1 }
+                        }
+                        sz = count_n * elem_size
                     }
                 }
                 regs.push(PReg {
