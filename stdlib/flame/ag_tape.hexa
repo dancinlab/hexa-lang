@@ -733,6 +733,41 @@ pub fn ag_cross_psi_seed(tape: int, a_tid: int, b_tid: int,
     return loss
 }
 
+// ── tension_proj / L_route reduction seed (RFC 059 §3, P1②-b) ───────────
+// Per-layer tension penalty on a purefield (or any activation) output:
+//   t = mean(out²) = (1/N)·Σ_i out[i]²   ;   L_route = λ · t²
+// Like cross/L_ψ this is a loss-LAYER seed (not a tape node): it injects
+// ∂L_route/∂out into the registry via ag_seed_grad on out_tid, so the
+// purefield (or upstream) reverse arm picks it up and propagates to x/params.
+//   ∂L_route/∂out[i] = λ·2·t·∂t/∂out[i] = λ·2·t·(2·out[i]/N) = (4·λ·t/N)·out[i]
+//   out_tid : activation farr tid (length N)
+//   lambda  : L_route weight
+//   N       : out length (= t_len(out_tid)); explicit for clarity
+//   returns the scalar L_route = λ·t².
+pub fn ag_tension_route_seed(tape: int, out_tid: int,
+                             lambda: float, N: int) -> float {
+    let mut ss = 0.0
+    let mut i = 0
+    while i < N {
+        let oi = t_get(out_tid, i)
+        ss = ss + oi * oi
+        i = i + 1
+    }
+    let inv_n = 1.0 / to_float(N)
+    let t = ss * inv_n
+    let loss = lambda * t * t
+    let coef = 4.0 * lambda * t * inv_n     // = ∂L_route/∂out[i] / out[i]
+    let seed = t_zeros(N)
+    let mut k = 0
+    while k < N {
+        t_set(seed, k, coef * t_get(out_tid, k))
+        k = k + 1
+    }
+    ag_seed_grad(tape, out_tid, seed)
+    t_free(seed)
+    return loss
+}
+
 // o = SwiGLU(r) ; r[d] Wg/Wu[h·d] Wd[d·h] → o[d]. tape owns a/b/s/o.
 pub fn ag_swiglu(tape: int, r: int, Wg: int, Wu: int, Wd: int,
                  d: int, h: int) -> int {
