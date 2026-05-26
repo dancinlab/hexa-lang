@@ -1239,19 +1239,51 @@ fn _struct_named_type(struct_name: string) -> Type {
 }
 
 // `let` text decoder (mirrors bind.hexa _let_name) — strips "mut:" prefix.
+//
+// RFC 085 Step B (2026-05-27): also strips the optional `|<type-name>`
+// suffix added by parse_let_expr for `let sm: T` syntax. The type text
+// (e.g. "Array:256" for `[f64; 256]`) is accessible via the sibling
+// `_hir_let_type_text` helper. Bare let without `: T` keeps the legacy
+// shape, so this remains backward-compatible with all existing callers.
 fn _hir_let_name(t: string) -> string {
     let chars = t.chars()
     let n = len(chars)
+    let mut start = 0
     if n >= 4 && chars[0] == 'm' && chars[1] == 'u' && chars[2] == 't' && chars[3] == ':' {
-        let mut out = ""
-        let mut i = 4
-        while i < n {
-            out = out + to_string(chars[i])
-            i = i + 1
-        }
-        return out
+        start = 4
     }
-    return t
+    let mut out = ""
+    let mut i = start
+    while i < n {
+        if chars[i] == '|' { break }
+        out = out + to_string(chars[i])
+        i = i + 1
+    }
+    return out
+}
+
+// RFC 085 Step B — let type-annotation text extractor. Returns the
+// substring after `|` in the let-expr text (the TypeRef name like
+// "Array:256" for `let sm: [f64; 256]`), or "" when no `|` separator
+// is present (bare `let x = ...`). Consumed by `hir_to_mir.hexa`'s
+// @shared lowering to thread the count through to MIR Local.name_hint.
+fn _hir_let_type_text(t: string) -> string {
+    let chars = t.chars()
+    let n = len(chars)
+    let mut i = 0
+    while i < n {
+        if chars[i] == '|' {
+            let mut out = ""
+            let mut j = i + 1
+            while j < n {
+                out = out + to_string(chars[j])
+                j = j + 1
+            }
+            return out
+        }
+        i = i + 1
+    }
+    return ""
 }
 
 // ── Atlas binding resolver ───────────────────────────────────

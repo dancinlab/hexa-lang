@@ -1500,12 +1500,16 @@ fn parse_let_expr(anns: [Annotation]) -> Expr {
     advance()
     let is_mut = eat(TokenKind::KwMut)
     let name_tok = expect(TokenKind::Ident)
-    // optional `: Type` (we encode it in text as "name:Type" — skip a real
-    // ascription struct until A2 since LetExpr is rarely produced inside
-    // function bodies; module-level `let` items are handled in parse_item.
+    // optional `: Type` — RFC 085 Step B: capture the type's name (notably
+    // `Array:<N>` for sized arrays from `[T; N]` syntax) and encode it into
+    // `text` as `<let-name>|<type-name>`. Downstream consumers (`_hir_let_name`
+    // / `_hir_let_type_text` / nvptx classify_locals Pass 0.5) split on `|`.
+    // Bare let (no `: T`) keeps the legacy `text = "<name>"` shape.
+    let mut type_text = ""
     if check_kind(TokenKind::Colon) {
         advance()
-        parse_type()
+        let ty = parse_type()
+        type_text = ty.name
     }
     let mut kids = []
     if check_kind(TokenKind::Eq) {
@@ -1514,6 +1518,7 @@ fn parse_let_expr(anns: [Annotation]) -> Expr {
     }
     let mut text = name_tok.text
     if is_mut { text = "mut:" + name_tok.text }
+    if len(type_text) > 0 { text = text + "|" + type_text }
     return Expr {
         kind: ExprKind::Let,
         span: kw.span,

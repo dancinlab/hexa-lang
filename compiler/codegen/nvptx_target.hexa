@@ -2476,18 +2476,37 @@ fn _nvptx_classify_locals(mfn: MFunc) -> [PReg] {
                 k = k + 1
             }
             if !dup {
-                // RFC 085 Step A landed in parser (TypeRef.name = "Array:<N>"
-                // for `[T;N]` syntax). Step B/C/D — thread that count
-                // through ast_to_hir → hir_to_mir → MIR Local.element_count
-                // → here — is a follow-up cycle (each schema add is a ~85-
-                // literal ripple across compiler/{parse,ir,lower}). Until
-                // then the 2048 B default holds; it matches `[f64; 256]`
-                // exactly (the F-GPU-SWEEP-SHARED-REDUCE-NUMERIC shape in
-                // PR #1323), so today's @shared kernels keep working.
-                // Non-256 element counts silently undersize/oversize until
-                // the threading lands — kernel authors should stick to 256
-                // f64 or equivalent (2048 B total) for now.
-                let sz = _nvptx_shared_default_bytes
+                // RFC 085 Step D — decode the size from the Local's
+                // name_hint suffix (`<name>:<N>` shape, set by
+                // hir_to_mir.hexa when the source-level `@shared let sm:
+                // [T; N]` carries an Array type annotation; Step A landed
+                // the parser capture, Step B/C threaded it through). For
+                // f64 the byte size is N * 8. If the suffix is missing or
+                // malformed, fall back to the 2048 B default (matches
+                // `[f64; 256]` exactly, so pre-RFC-085 kernels keep their
+                // existing emit byte-for-byte).
+                let mut sz = _nvptx_shared_default_bytes
+                let nh = lloc.name_hint
+                let nh_chars = nh.chars()
+                let nh_n = len(nh_chars)
+                let mut colon_at = -1
+                let mut ni = 0
+                while ni < nh_n {
+                    if nh_chars[ni] == ':' { colon_at = ni; break }
+                    ni = ni + 1
+                }
+                if colon_at >= 0 && colon_at + 1 < nh_n {
+                    let count_str = nh.substring(colon_at + 1, nh_n)
+                    let count_n = to_int(count_str)
+                    if count_n > 0 {
+                        // 8 bytes per f64 element. Other element widths
+                        // need a Type → elem_size lookup; deferred to a
+                        // follow-up that threads HIR Type through to
+                        // Local.type_id (today f64 covers every shipped
+                        // @shared kernel in tool/ and stdlib/).
+                        sz = count_n * 8
+                    }
+                }
                 regs.push(PReg {
                     name: _nvptx_reg_shared(lloc.id),
                     kind: NVPTX_RKIND_SHARED,

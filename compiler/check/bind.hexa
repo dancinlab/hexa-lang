@@ -641,19 +641,25 @@ fn _emit_hx2004(enum_name: string, variant_name: string, expected: i64, actual: 
 // parse_let_expr stashes the binding name in `text`, prefixed with
 // "mut:" if it was declared mutable. Strip the prefix for binding.
 
+// RFC 085 Step B (2026-05-27): also strips the optional `|<type-name>`
+// suffix added by parse_let_expr for `let sm: T` syntax. Mirror of
+// ast_to_hir._hir_let_name — same logic so bind / hir layers see the
+// same effective let-name string.
 fn _bind_let_name(t: string) -> string {
     let chars = t.chars()
     let n = len(chars)
+    let mut start = 0
     if n >= 4 && chars[0] == 'm' && chars[1] == 'u' && chars[2] == 't' && chars[3] == ':' {
-        let mut out = ""
-        let mut i = 4
-        while i < n {
-            out = out + to_string(chars[i])
-            i = i + 1
-        }
-        return out
+        start = 4
     }
-    return t
+    let mut out = ""
+    let mut i = start
+    while i < n {
+        if chars[i] == '|' { break }
+        out = out + to_string(chars[i])
+        i = i + 1
+    }
+    return out
 }
 
 // EnumPath text encodes "Enum::Variant"; we only need the "Enum" prefix to
