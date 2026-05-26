@@ -96,6 +96,104 @@ pub fn lucas_lehmer(p) -> bool {
     s == 0
 }
 
+// Modular arithmetic helpers for deterministic Miller–Rabin primality
+// (`is_prime_det` below). Pure-i64; mul_mod uses Russian-peasant
+// doubling so a*b ≡ a*b (mod n) never materializes as a full i64×i64
+// product (which would overflow for n > 2^32).
+
+fn _add_mod(a, b, n) -> int {
+    // 0 ≤ a < n, 0 ≤ b < n, n < 2^62. Avoids i64 overflow even when
+    // a + b would exceed 2^63 − 1, by computing the gap n − b first.
+    if a >= n - b { return a - (n - b) }
+    return a + b
+}
+
+pub fn mul_mod(a, b, n) -> int {
+    if n == 1 { return 0 }
+    let res = 0
+    let x = a % n
+    if x < 0 { x = x + n }
+    let y = b % n
+    if y < 0 { y = y + n }
+    while y > 0 {
+        if y % 2 == 1 { res = _add_mod(res, x, n) }
+        x = _add_mod(x, x, n)
+        y = y / 2
+    }
+    res
+}
+
+pub fn pow_mod(base, exp, n) -> int {
+    if n == 1 { return 0 }
+    let res = 1
+    let b = base % n
+    if b < 0 { b = b + n }
+    let e = exp
+    while e > 0 {
+        if e % 2 == 1 { res = mul_mod(res, b, n) }
+        b = mul_mod(b, b, n)
+        e = e / 2
+    }
+    res
+}
+
+// Miller–Rabin "composite witness" check for a single base `a`.
+// Pre: n is odd, n > 2, and n − 1 = 2^r · d with d odd.
+// Returns true iff `a` proves n composite (strong-pseudoprime witness);
+// false if a is non-witness (n is probably prime by a).
+fn _mr_is_composite_witness(a, n, d, r) -> bool {
+    let x = pow_mod(a, d, n)
+    if x == 1 || x == n - 1 { return false }
+    let i = 1
+    while i < r {
+        x = mul_mod(x, x, n)
+        if x == n - 1 { return false }
+        i = i + 1
+    }
+    true
+}
+
+// is_prime_det(n) — deterministic primality for ALL n in i64 range.
+//
+// Uses the 12-witness Miller–Rabin set {2,3,5,7,11,13,17,19,23,29,31,37},
+// which deterministically decides primality for every n < 3.317·10^24
+// — far above the i64 ceiling (2^63 − 1 ≈ 9.22·10^18). Composite n
+// always has at least one witness in this set; i64 cannot reach the
+// next pseudoprime barrier (3.317·10^24).
+//
+// Cost: O(12 · log n · (log n)²) bit-ops, vs the trial-division
+// `is_prime` above which is O(√n) — det-MR wins decisively for
+// n > ~10^8 (√10^8 = 10^4 iters; det-MR ~80·log²n ≈ 6000 mul_mod ops).
+//
+// Closes F6 D(n) = σφ − nτ sweep gate beyond 10^8 (the primality
+// frontier called out in INBOX `stdlib/number/primality.hexa 일반
+// 결정형 부재` — TECS-L F2 /gap R5 seed Rank 3, 2026-05-26). The
+// trial-division `is_prime` above remains the default for small n so
+// existing callers avoid mul_mod overhead at toy sizes.
+pub fn is_prime_det(n) -> bool {
+    if n < 2 { return false }
+    if n == 2 || n == 3 { return true }
+    if n % 2 == 0 { return false }
+
+    // factor n − 1 = 2^r · d with d odd
+    let d = n - 1
+    let r = 0
+    while d % 2 == 0 {
+        d = d / 2
+        r = r + 1
+    }
+
+    let witnesses = [2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37]
+    let i = 0
+    while i < 12 {
+        let a = witnesses[i]
+        if a >= n { return true }
+        if _mr_is_composite_witness(a, n, d, r) { return false }
+        i = i + 1
+    }
+    true
+}
+
 // n=6 number theory
 pub fn sigma(n) -> int {
     let sum = 0
