@@ -649,6 +649,7 @@ fn _nvptx_is_math_intrinsic(op: string) -> bool {
     if op == "log"      { return true }
     if op == "sin"      { return true }
     if op == "cos"      { return true }
+    if op == "tan"      { return true }
     if op == "abs"      { return true }
     return false
 }
@@ -658,7 +659,7 @@ fn _nvptx_is_math_intrinsic(op: string) -> bool {
 // for a non-math op (caller should not have routed it here).
 fn _nvptx_math_arity(op: string) -> i64 {
     if op == "max" || op == "min" { return 2 }
-    if op == "sqrt" || op == "rsqrt" || op == "rsqrt_rn" || op == "exp" || op == "log" || op == "sin" || op == "cos" || op == "abs" { return 1 }
+    if op == "sqrt" || op == "rsqrt" || op == "rsqrt_rn" || op == "exp" || op == "log" || op == "sin" || op == "cos" || op == "tan" || op == "abs" { return 1 }
     return 0
 }
 
@@ -2301,6 +2302,117 @@ fn _nvptx_lower_stmt(buf: [LInstr], s: Stmt, kinds: [PReg], shared_idx_off: [i64
                     out.push(_nvptx_instr(PTX_OP_MUL_F64, c12, "cos f64: dst = (-1)^n · cos(r)"))
                     return out
                 }
+                // tan f64 — tan(x) = sin(x)/cos(x). Both factors share the
+                // SAME range-reduced r and the SAME (-1)^n sign, so the sign
+                // CANCELS in the quotient: tan(x) = sin(r)/cos(r) = tan(r).
+                // No parity reg needed — just both polynomials + one divide.
+                //
+                //   n  = round(x / π)                 (cvt.rni — nearest int)
+                //   r  = x - n·π                      (Cody-Waite 2-part π)
+                //   sin(r) = r · P(r²)   [sin coeffs]
+                //   cos(r) = Q(r²)       [cos coeffs]
+                //   tan(x) = sin(r) / cos(r)
+                //
+                // Accuracy inherits sin/cos (~2 ulp each) plus one div.rn.f64
+                // (≤ 0.5 ulp). The quotient is ill-conditioned only near the
+                // poles x ≈ (k+½)π where cos(r) → 0 — inherent to tan, not a
+                // codegen artifact.
+                //
+                // Scratch regs (tan Pass, keyed on dst.id): nf · r · r2 · sp
+                // (sin accum) · cp (cos accum) — all .f64; no parity reg.
+                if s.op == "tan" && dst_kind == NVPTX_RKIND_F64 {
+                    let x_reg  = _nvptx_operand_text_kinds(s.args[0], kinds)
+                    let nf_reg = _nvptx_reg_tanf64_nf(s.dst.id)
+                    let r_reg  = _nvptx_reg_tanf64_r(s.dst.id)
+                    let r2_reg = _nvptx_reg_tanf64_r2(s.dst.id)
+                    let sp_reg = _nvptx_reg_tanf64_sp(s.dst.id)
+                    let cp_reg = _nvptx_reg_tanf64_cp(s.dst.id)
+                    // step 1: nf = round(x / π)
+                    let mut t1 = []
+                    t1.push(_nvptx_op(nf_reg))
+                    t1.push(_nvptx_op(x_reg))
+                    t1.push(_nvptx_op(PTX_INV_PI_HEXF64))
+                    out.push(_nvptx_instr(PTX_OP_MUL_F64, t1, "tan f64: x / π"))
+                    let mut t2 = []
+                    t2.push(_nvptx_op(nf_reg))
+                    t2.push(_nvptx_op(nf_reg))
+                    out.push(_nvptx_instr("cvt.rni.f64.f64", t2, "tan f64: n = round(x/π)"))
+                    // step 2: nf = -n, then Cody-Waite r = x - n·π (2-part)
+                    let mut t3 = []
+                    t3.push(_nvptx_op(nf_reg))
+                    t3.push(_nvptx_op(nf_reg))
+                    out.push(_nvptx_instr("neg.f64", t3, "tan f64: -n (no parity — sign cancels)"))
+                    let mut t4 = []
+                    t4.push(_nvptx_op(r_reg))
+                    t4.push(_nvptx_op(nf_reg))
+                    t4.push(_nvptx_op(PTX_PI_HI_HEXF64))
+                    t4.push(_nvptx_op(x_reg))
+                    out.push(_nvptx_instr(PTX_OP_FMA_RN_F64, t4, "tan f64: r = x - n·π_hi"))
+                    let mut t5 = []
+                    t5.push(_nvptx_op(r_reg))
+                    t5.push(_nvptx_op(nf_reg))
+                    t5.push(_nvptx_op(PTX_PI_LO_HEXF64))
+                    t5.push(_nvptx_op(r_reg))
+                    out.push(_nvptx_instr(PTX_OP_FMA_RN_F64, t5, "tan f64: r -= n·π_lo"))
+                    // step 3: r² = r · r
+                    let mut t6 = []
+                    t6.push(_nvptx_op(r2_reg))
+                    t6.push(_nvptx_op(r_reg))
+                    t6.push(_nvptx_op(r_reg))
+                    out.push(_nvptx_instr(PTX_OP_MUL_F64, t6, "tan f64: r² = r·r"))
+                    // step 4: sin(r) = r · P(r²)   [sin Horner coeffs]
+                    let mut ts0 = []
+                    ts0.push(_nvptx_op(sp_reg))
+                    ts0.push(_nvptx_op(PTX_SINF64_C4_HEXF64))
+                    out.push(_nvptx_instr("mov.f64", ts0, "tan f64 sin Horner: sp = C4"))
+                    let mut tsc: [string] = []
+                    tsc.push(PTX_SINF64_C3_HEXF64)
+                    tsc.push(PTX_SINF64_C2_HEXF64)
+                    tsc.push(PTX_SINF64_C1_HEXF64)
+                    tsc.push(PTX_SINF64_C0_HEXF64)
+                    let mut tsi = 0
+                    while tsi < len(tsc) {
+                        let mut tsf = []
+                        tsf.push(_nvptx_op(sp_reg))
+                        tsf.push(_nvptx_op(r2_reg))
+                        tsf.push(_nvptx_op(sp_reg))
+                        tsf.push(_nvptx_op(tsc[tsi]))
+                        out.push(_nvptx_instr(PTX_OP_FMA_RN_F64, tsf, "tan f64 sin Horner step"))
+                        tsi = tsi + 1
+                    }
+                    let mut t7 = []
+                    t7.push(_nvptx_op(sp_reg))
+                    t7.push(_nvptx_op(r_reg))
+                    t7.push(_nvptx_op(sp_reg))
+                    out.push(_nvptx_instr(PTX_OP_MUL_F64, t7, "tan f64: sin(r) = r · P(r²)"))
+                    // step 5: cos(r) = Q(r²)   [cos Horner coeffs, no r-mult]
+                    let mut tc0 = []
+                    tc0.push(_nvptx_op(cp_reg))
+                    tc0.push(_nvptx_op(PTX_COSF64_C4_HEXF64))
+                    out.push(_nvptx_instr("mov.f64", tc0, "tan f64 cos Horner: cp = D4"))
+                    let mut tcc: [string] = []
+                    tcc.push(PTX_COSF64_C3_HEXF64)
+                    tcc.push(PTX_COSF64_C2_HEXF64)
+                    tcc.push(PTX_COSF64_C1_HEXF64)
+                    tcc.push(PTX_COSF64_C0_HEXF64)
+                    let mut tci = 0
+                    while tci < len(tcc) {
+                        let mut tcf = []
+                        tcf.push(_nvptx_op(cp_reg))
+                        tcf.push(_nvptx_op(r2_reg))
+                        tcf.push(_nvptx_op(cp_reg))
+                        tcf.push(_nvptx_op(tcc[tci]))
+                        out.push(_nvptx_instr(PTX_OP_FMA_RN_F64, tcf, "tan f64 cos Horner step"))
+                        tci = tci + 1
+                    }
+                    // step 6: tan(x) = sin(r) / cos(r)
+                    let mut t8 = []
+                    t8.push(_nvptx_op(dst_reg))
+                    t8.push(_nvptx_op(sp_reg))
+                    t8.push(_nvptx_op(cp_reg))
+                    out.push(_nvptx_instr("div.rn.f64", t8, "tan f64: dst = sin(r) / cos(r)"))
+                    return out
+                }
                 // Fall-through honest stub for any other unmatched op/kind
                 // combination (e.g. a future intrinsic that lands in
                 // _nvptx_is_math_intrinsic before its codegen arm).
@@ -3521,6 +3633,16 @@ fn _nvptx_classify_locals(mfn: MFunc) -> [PReg] {
                     regs.push(PReg { name: _nvptx_reg_cosf64_p(s.dst.id),  kind: NVPTX_RKIND_F64, frag_role: "", frag_dtype: "", frag_layout: "" })
                     regs.push(PReg { name: _nvptx_reg_cosf64_s(s.dst.id),  kind: NVPTX_RKIND_F64, frag_role: "", frag_dtype: "", frag_layout: "" })
                     regs.push(PReg { name: _nvptx_reg_cosf64_ni(s.dst.id), kind: NVPTX_RKIND_U64, frag_role: "", frag_dtype: "", frag_layout: "" })
+                }
+            }
+            if s.kind == STMT_CALL && s.op == "tan" && s.dst.id >= 0 {
+                let dkt = _nvptx_lookup_kind_for_local(regs, s.dst.id)
+                if dkt == NVPTX_RKIND_F64 {
+                    regs.push(PReg { name: _nvptx_reg_tanf64_nf(s.dst.id), kind: NVPTX_RKIND_F64, frag_role: "", frag_dtype: "", frag_layout: "" })
+                    regs.push(PReg { name: _nvptx_reg_tanf64_r(s.dst.id),  kind: NVPTX_RKIND_F64, frag_role: "", frag_dtype: "", frag_layout: "" })
+                    regs.push(PReg { name: _nvptx_reg_tanf64_r2(s.dst.id), kind: NVPTX_RKIND_F64, frag_role: "", frag_dtype: "", frag_layout: "" })
+                    regs.push(PReg { name: _nvptx_reg_tanf64_sp(s.dst.id), kind: NVPTX_RKIND_F64, frag_role: "", frag_dtype: "", frag_layout: "" })
+                    regs.push(PReg { name: _nvptx_reg_tanf64_cp(s.dst.id), kind: NVPTX_RKIND_F64, frag_role: "", frag_dtype: "", frag_layout: "" })
                 }
             }
             sl = sl + 1
@@ -4747,6 +4869,26 @@ fn _nvptx_reg_cosf64_s(id: i64) -> string {
 }
 fn _nvptx_reg_cosf64_ni(id: i64) -> string {
     return "%rd_cos_ni_" + to_string(id)
+}
+
+// tan f64 scratch (RFC 055 §13 trig family) — declared in
+// `_nvptx_classify_locals` tan Pass; consumed at the `s.op == "tan"`
+// emit site. nf · r · r2 · sp (sin accum) · cp (cos accum) — all .f64;
+// no parity reg (the (-1)^n sign cancels in sin(r)/cos(r)).
+fn _nvptx_reg_tanf64_nf(id: i64) -> string {
+    return "%fd_tan_nf_" + to_string(id)
+}
+fn _nvptx_reg_tanf64_r(id: i64) -> string {
+    return "%fd_tan_r_" + to_string(id)
+}
+fn _nvptx_reg_tanf64_r2(id: i64) -> string {
+    return "%fd_tan_r2_" + to_string(id)
+}
+fn _nvptx_reg_tanf64_sp(id: i64) -> string {
+    return "%fd_tan_sp_" + to_string(id)
+}
+fn _nvptx_reg_tanf64_cp(id: i64) -> string {
+    return "%fd_tan_cp_" + to_string(id)
 }
 
 // RFC 055 §5 multi-block global thread index — per-call scratch reg.
