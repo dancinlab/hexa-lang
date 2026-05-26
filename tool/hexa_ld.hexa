@@ -47,21 +47,48 @@ fn show_usage() {
 // Parsed Mach-O object representation
 // ─────────────────────────────────────────────────────────────────
 
+// Phase-H inc3: a single parsed Mach-O section captured from a `.o`.
+// We capture EVERY section (not just one read-only one) so the linker
+// can lay out a full multi-section image: __TEXT(__text,__const,
+// __cstring) + __DATA(__data,__bss). Each section carries its own byte
+// vector (single-level array inside a struct — safe, mirrors the old
+// ParsedObj.text/data fields).
+struct ParsedSect {
+    sectname: string,       // e.g. "__text", "__const", "__data", "__bss"
+    segname:  string,       // e.g. "__TEXT", "__DATA"
+    // 1-based Mach-O section index (running counter across all
+    // LC_SEGMENT_64 sections in emit order; what nlist_64.n_sect refs).
+    index:    i64,
+    addr:     i64,          // section addr in the .o (== section-relative 0 base)
+    align:    i64,          // log2 alignment from section_64.align
+    sect_type: i64,         // section_64.flags & 0xff (S_ZEROFILL = 1 = bss)
+    // Section bytes. For a S_ZEROFILL (bss) section there are NO file
+    // bytes in the .o — `bytes` is empty and `zfill_size` carries the
+    // virtual byte count.
+    bytes:    [u8],
+    zfill_size: i64,        // virtual size for bss (0 for file-backed sections)
+    // Per-section relocations (offset is section-relative). Captured so
+    // the linker can patch relocs originating in ANY section, not just
+    // __text. (A __const initialized pointer would carry UNSIGNED relocs
+    // — those are deferred to the GOT/dyld increment, but text relocs in
+    // __text are the common case and are patched in input order.)
+    relocs:   [ParsedReloc],
+}
+
 struct ParsedObj {
     path:     string,
-    // __text section bytes from the .o (will be concatenated into
-    // the output executable's __text section, with relocations
-    // adjusted to the new base offset).
+    // __text section bytes from the .o (kept for back-compat / entry
+    // resolution; ALSO present as a ParsedSect in `sects`).
     text:     [u8],
-    // Phase-H inc2: a single DATA section captured from the .o —
-    // `__cstring` or `__const` (the section that holds string / read-
-    // only constants referenced via adrp/add PAGE21+PAGEOFF12). We
-    // capture exactly one such section per object for the minimal case
-    // (the 2-object string test). `data_sect_idx` is the 1-based
-    // Mach-O section index of that section so we can map a defined
-    // symbol's `n_sect` to it; 0 = this object carries no data section.
+    // Phase-H inc2 legacy single-data fields (kept so older callers /
+    // tests still compile). `data` = first read-only data section bytes,
+    // `data_sect_idx` = its 1-based index. inc3 supersedes these with the
+    // full `sects` list but leaves them populated for the minimal path.
     data:          [u8],
     data_sect_idx: i64,
+    // Phase-H inc3: ALL sections captured from this object, in emit
+    // order (so `index` is the 1-based n_sect a symbol references).
+    sects:    [ParsedSect],
     // Symbols this object DEFINES (visible to other objects).
     defined:  [LinkSym],
     // Symbols this object REFERENCES but does not define (resolved
@@ -97,6 +124,12 @@ struct ParsedReloc {
     kind:    i64,       // ARM64_RELOC_* (mirrors macho_arm64.hexa)
     pcrel:   i64,
     length:  i64,
+    // Phase-H inc3: ARM64_RELOC_ADDEND (kind 1) is a scattered-pair
+    // prefix reloc — it carries a 24-bit signed addend in r_symbolnum
+    // that applies to the NEXT reloc's target. We fold that addend
+    // INTO this following reloc's `addend` field at parse time so the
+    // link pass sees a single reloc with its addend already attached.
+    addend:  i64,
 }
 
 // ─────────────────────────────────────────────────────────────────
