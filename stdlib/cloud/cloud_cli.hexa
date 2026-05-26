@@ -433,6 +433,13 @@ fn _cloud_rent_vast(av: [str], start: int) -> int {
         return 1
     }
     println("[cloud] rent vast: READY " + ssh.host + ":" + ssh.port + " (root@" + ssh.host + " -p " + ssh.port + ")")
+    // #1155 zero-flag: write the bare-IP Host block → ~/.ssh/config so a later
+    // `cloud run root@<ip>` (or raw ssh) presents the vast key with no
+    // --identity. No-op when no vast key is available (graceful).
+    let _injected = vast_ssh_config_autoinject(inst.instance_id)
+    if len(_injected) > 0 {
+        println("[cloud] rent vast: ~/.ssh/config Host " + _injected + " → vast identity (auto · zero-flag ssh; #1155)")
+    }
     println("instance_id=" + inst.instance_id)
     println("host=" + ssh.host)
     println("port=" + ssh.port)
@@ -647,7 +654,7 @@ fn main() {
         return
     }
     if sub == "version" || sub == "--version" || sub == "-v" {
-        println("hexa cloud 0.3.2 — --identity <key> for run/exec/nohup/copy (#1155 vast publickey) · [0.3.1: registry sink guard #1229 · 0.3.0: dft-run #1249]")
+        println("hexa cloud 0.3.3 — rent/adopt auto-inject vast key → ~/.ssh/config (#1155 zero-flag) · [0.3.2: --identity flag · 0.3.1: registry guard #1229 · 0.3.0: dft-run]")
         return
     }
     if sub == "rent" || sub == "up" {
@@ -939,6 +946,12 @@ fn main() {
         let ok = pod_registry_adopt(pod_id, purpose)
         if ok == 1 {
             println("[cloud] adopted " + pod_id + " (label=" + purpose + ", status=running)")
+            // #1155 zero-flag: if this is a vast instance, write its bare-IP
+            // Host block → ~/.ssh/config (no-op for runpod / no vast key).
+            let _inj = vast_ssh_config_autoinject(pod_id)
+            if len(_inj) > 0 {
+                println("[cloud] adopt: ~/.ssh/config Host " + _inj + " → vast identity (auto; #1155)")
+            }
             exit(0)
         }
         println("[cloud] adopt: empty pod_id")
