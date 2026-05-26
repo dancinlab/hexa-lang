@@ -1,0 +1,154 @@
+#!hexa strict
+// stdlib/aura/n14_paper_scaffold.hexa — `aura + N14` arXiv-style paper
+// scaffold for AURA-100 post-aural wearable BCI design (hexa-native).
+//
+// CONTEXT: 22 LANDED 마일스톤 + 14 next-list 진행 후 결과를 학술
+// 형태로 정리한 paper scaffold. arXiv preprint format · open access.
+//
+// Honesty (g3 · @D d1):
+//   * absorbed=false PERMANENTLY — scaffold, NOT submitted paper.
+//
+// Sentinels:
+//   __HEXA_AURA_N14_PAPER_SCAFFOLD__ PASS
+//   AURA_N14_PAPER_SCAFFOLD_OK gate=GATE_OPEN absorbed=false
+
+let VERSION       = "0.1.0"
+let MODULE        = "aura-n14-paper-scaffold"
+let GEOMETRY_ID   = "aura_n14_paper_scaffold_v1"
+let RECORD_KIND   = "aura_n14_paper_scaffold_record"
+
+fn _metadata_block() -> [str] {
+    return [
+        "title: AURA-100: An Open Reference Design for Post-Aural Wearable Brain-Computer Interfaces",
+        "subtitle: 7-Verb Pipeline + g3-Honest Regulatory Scaffolding",
+        "venue_target: arXiv (cs.HC + eess.SP) + IEEE TBME OR J. NeuroEng. Rehabil.",
+        "license: CC-BY 4.0 (preprint + author-archived OSI)",
+        "ORCID: per-author (placeholder)",
+        "preregistration: OSF.io project (placeholder)",
+        "code_release: hexa-lang stdlib/aura (this repo)",
+    ]
+}
+
+fn _abstract_block() -> [str] {
+    return [
+        "context: wearable EEG-based BCI ecosystem fragmented · open-source acquisition lags",
+        "approach: end-to-end open reference design + 7-verb pipeline (specify→handoff)",
+        "key_contributions:",
+        "  1. open hexa-native reference design for post-aural wearable BCI",
+        "  2. honest regulatory dossier scaffolding (FDA 510(k) + EU MDR + IEC 60601-1-2 + BT SIG)",
+        "  3. cross-vendor SoC + LSL bridge proposal (Nordic + ESP32-C6 alt + OpenBCI)",
+        "  4. honest-gap declaration for MRI-safety (Sim4Life monopoly + brk path)",
+        "results: 22 milestone artifacts · ~2,200 LOC hexa-native · 31 PRs",
+        "limitations: TEMPLATE/ILLUSTRATIVE substance · accredited-lab closure pending",
+    ]
+}
+
+fn _sections_block() -> [str] {
+    return [
+        "section_1_intro: wearable BCI landscape + open-vs-proprietary gap",
+        "section_2_design: 7-verb pipeline (V1-V7 producer) + architectural choices",
+        "section_3_substance: D1-D7 illustrative dossier (with g3 ringfence)",
+        "section_4_brk_paths: G1 MRI-safety + G2 acquisition + G3 SoC diversity",
+        "section_5_regulatory: A1-A4 submission-ready packages + readiness analysis",
+        "section_6_g3_honest: scope_caveat methodology + absorbed=false rationale",
+        "section_7_results: 22 LANDED + next-list 15 · LOC + PR metrics",
+        "section_8_discussion: open ecosystem implications + Sim4Life monopoly + RISC-V medical",
+        "section_9_limitations: TEMPLATE substance + paid-gate dependencies",
+        "section_10_conclusion: hexa-native design as honest scaffolding pattern",
+    ]
+}
+
+fn _figures_block() -> [str] {
+    return [
+        "fig_1: AURA-100 system architecture (mastoid clip + AFE + radio + battery)",
+        "fig_2: 7-verb pipeline DAG (V0-V7 cells · cellrun dispatcher)",
+        "fig_3: D-G-A milestone landscape (22-milestone trajectory · LANDED states)",
+        "fig_4: openEMS antenna sim S11 sweep (BLE 2.4 GHz · D4/D6 illustrative)",
+        "fig_5: openEMS SAR estimate (ITIS Duke phantom · D4/D6 illustrative)",
+        "fig_6: MNE alpha-band parity (Sleep-EDF 8.4e-07 · V0 G33 absorbed)",
+        "fig_7: G1-G3 brk path timeline (3-5y · stages + cost estimates)",
+        "fig_8: cross-vendor SoC comparison (Nordic vs ESP32-C6 · power profile)",
+    ]
+}
+
+fn _figure_generation_block() -> [str] {
+    return [
+        "fig_tool: fal.ai (canonical AURA-100 cover art) + matplotlib (data plots)",
+        "fal_invocation: hexa cli imagine (per /imagine skill)",
+        "matplotlib_path: stdlib/aura/_paper_figs.hexa (post-N14 future)",
+        "data_source: V0 G33 record + D4 expected values + G-path tables",
+        "publication_size: square_hd cover (2K×2K) + landscape figs (1920×1080)",
+        "open_license: CC-BY 4.0 figures · attribution to AURA project",
+    ]
+}
+
+fn _related_work_block() -> [str] {
+    return [
+        "Muse S Athena (InteraXon · 510(k) cleared consumer EEG)",
+        "Dreem 3 (Beacon Biosignals · 510(k) sleep EEG)",
+        "OpenBCI (Cyton/Ganglion · open hardware · pre-FDA-clearance)",
+        "MNE-Python · EEGLAB · BCI2000 · LSL (open analysis ecosystem)",
+        "Sim4Life (ZMT/IT'IS · FDA-MDDT MRI-safety · proprietary)",
+        "openEMS · MEEP (open FDTD · pre-MDDT-acceptance)",
+        "Bluetooth SIG · Nordic Semi · Espressif (radio ecosystem)",
+        "IEC 60601 + ISO 14971 + ISO 10993 (regulatory consensus standards)",
+    ]
+}
+
+fn _scope_caveats() -> [str] {
+    return [
+        "N14 paper scaffold is an OUTLINE, NOT a submitted paper.",
+        "Actual submission requires: real wet/dry-lab data + author co-signers + journal selection.",
+        "Some illustrative values (SAR/noise) need real sim runs (N13 + G1 stage_2) for publication.",
+        "preprint allowable on arXiv with ILLUSTRATIVE label · journal review may require executed runs.",
+        "absorbed=false PERMANENTLY (g3) - scaffold, NEVER a peer-reviewed publication.",
+    ]
+}
+
+fn _emit_block(label: str, lines: [str]) {
+    print("# [" + label + "]")
+    let n = lines.len()
+    let mut i = 0
+    while i < n {
+        print("#   - " + lines[i])
+        i = i + 1
+    }
+    print("#")
+}
+
+fn _emit_header() {
+    print("# AURA N14 - arXiv-style paper scaffold for post-aural BCI design")
+    print("# device_target = AURA-100 reference design publication")
+    print("# version = " + VERSION)
+    print("# ringfence: scaffold outline - NOT a submitted paper")
+    print("#")
+    _emit_block("metadata",            _metadata_block())
+    _emit_block("abstract",            _abstract_block())
+    _emit_block("sections",            _sections_block())
+    _emit_block("figures",             _figures_block())
+    _emit_block("figure_generation",   _figure_generation_block())
+    _emit_block("related_work",        _related_work_block())
+}
+
+fn _emit_caveats() {
+    let c = _scope_caveats()
+    let n = c.len()
+    let mut i = 0
+    while i < n {
+        print("# scope_caveat: " + c[i])
+        i = i + 1
+    }
+}
+
+fn main() {
+    _emit_header()
+    _emit_caveats()
+
+    print("AURA_N14_PAPER_SCAFFOLD_OK record_kind=" + RECORD_KIND
+        + " geometry_id=" + GEOMETRY_ID
+        + " gate=GATE_OPEN absorbed=false"
+        + " version=" + VERSION
+        + " venue=arXiv+IEEE_TBME sections=10 figs=8")
+
+    print("__HEXA_AURA_N14_PAPER_SCAFFOLD__ PASS")
+}
