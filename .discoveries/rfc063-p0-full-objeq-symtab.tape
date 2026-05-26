@@ -10,3 +10,8 @@
   finding_4 = "Local symtab order (LLVM-MC): ltmp0(sect-start), entry bb0, then block labels in FIRST-BRANCH-REFERENCE order, then ltmp1+_hexa_cap_manifest(__cap), ltmp2+_hexa_abi_stamp(__abi)"
   finding_5 = "extdef order = address order; undef order = ALPHABETICAL. fib: _fib n_type=0x1f (N_SECT|N_EXT|N_PEXT, .private_extern/.hidden), _main=0x0f (plain global)"
   finding_6 = "DYSYMTAB: nlocalsym/iextdefsym/nextdefsym/iundefsym/nundefsym all populated (was: only nextdefsym)"
+
+  # HARD RESIDUALS to FULL byte-eq (verified non-derivable):
+  residual_1 = "strtab BYTE ORDER = LLVM-MC MCContext symbol-interning order (parse-order + internal temp-symbol shuffle: bb3,ltmp2,bb2,ltmp1,bb1,ltmp0,bb0). NOT derivable outside LLVM. -> name_offset values diverge."
+  residual_2 = "DWARF __debug_line_str embeds absolute build CWD -> not host-portable."
+  verdict = "🟠->scoped: FULL byte-eq NOT reachable (2 LLVM-MC-internal fields). REACHABLE closure = symtab LAYOUT/ORDER parity (r_symbolnum aligns) + __HEXA sections + LC_BUILD_VERSION. Implement that; document the 2 residuals."
