@@ -1670,3 +1670,15 @@ pub fn rt_cmp_ge(a: HexaVal, b: HexaVal) -> bool {
     return __raw_code_is(c, 2) || __raw_code_is(c, 1)
 }
 
+// rt_to_int — hexa-source port of runtime_core.c hexa_to_int (Step 4 .c-none).
+//   int → passthrough · string → hexa_str_parse_int (real C fn, direct call) ·
+//   float/other → __raw_d2i bridge ((int64_t)__hx_to_double — float→int truncate,
+//   == the C `(int64_t)HX_FLOAT(v)` for floats since __hx_to_double(float)==HX_FLOAT).
+// No negative literals; `t == "..."` is string-eq (hexa_eq → rt_eq → safe, no cmp loop).
+pub fn rt_to_int(v: HexaVal) -> HexaVal {
+    let t = type_of(v)
+    if t == "int" { return v }
+    if t == "string" { return hexa_str_parse_int(v) }
+    return __raw_d2i(v)
+}
+

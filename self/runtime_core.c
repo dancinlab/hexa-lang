@@ -7194,6 +7194,15 @@ HexaVal hexa_to_float(HexaVal v) {
 #endif
 
 // to_int: coerce any scalar to int (truncate toward zero for floats)
+// RUNTIME.md Step 4 .c-none: hexa_to_int delegates to hexa-source rt_to_int
+// (numeric.hexa) under HEXA_HAS_HEXA_RT_STDLIB. __raw_d2i is the float→int truncate
+// escape (the C `(int64_t)HX_FLOAT` cast can't be expressed in hexa source). #else C
+// body kept bit-for-bit.
+static inline HexaVal __raw_d2i(HexaVal v) { return hexa_int((int64_t)__hx_to_double(v)); }
+#ifdef HEXA_HAS_HEXA_RT_STDLIB
+extern HexaVal rt_to_int(HexaVal v);
+HexaVal hexa_to_int(HexaVal v) { return rt_to_int(v); }
+#else
 HexaVal hexa_to_int(HexaVal v) {
     if (HX_IS_INT(v)) return v;
     if (HX_IS_FLOAT(v)) return hexa_int((int64_t)HX_FLOAT(v));
@@ -7201,6 +7210,7 @@ HexaVal hexa_to_int(HexaVal v) {
     if (HX_IS_STR(v)) return hexa_str_parse_int(v);
     return hexa_int((int64_t)__hx_to_double(v));
 }
+#endif
 
 // ── String format ────────────────────────────────────
 
