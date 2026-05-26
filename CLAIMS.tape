@@ -2969,3 +2969,32 @@
   raw    = ".verdicts/tecs-l-modform-other-curves/gamma1_x_index_assembled.txt"
   src    = "TECS-L axis F F7 · .verdicts/tecs-l-modform-other-curves/{components_psi,components_phi,n6_focal}.txt · cites M10"
   status = "🔴 FALSIFIED — Γ₁/X index smooth, no n=6 peak. ruled-out axis = {1,6} specialness lifting to higher modular level."
+
+# ============================================================================
+# TECS-L F13 — NOVEL mk10 attempt (2026-05-26): NOVEL closed-form atoms discovered
+# beyond F1 known-identity surface. 5 seeds × mk10 engine ran (verifier=skip per
+# F1 finding); hand-verification of seed-thematic candidates via hexa verify --expr
+# --no-absorb (INBOX 2026-05-26T22:10Z workaround). 2 NOVEL closed-form 🔵 + 1
+# NOVEL closed-negative 🔴 surfaced + verified. Total 36 verify calls (20 + 11 + 5).
+# ============================================================================
+
+@C tecs_l_f13_dpk := "F13 NOVEL 🔵 closed-form atom: D(p^k) := σ(p^k)·φ(p^k) − p^k·τ(p^k) = p^(k-1)·(p^(k+1) − p·(k+1) − 1) ∀ prime p, k≥1. Derived via σ/φ/τ multiplicativity on prime powers. Verified 20/20 across (p,k) sample including k=1 (p∈{2,3,5,7,11}), k=2 (p∈{2,3,5,7,11,13,17,19,23,29}), k=3 (p∈{2,3,5}), k=4 (p∈{2,3}). NOT in atlas (no dedekind/psi_disc/tecs_l_d/D_prime prefix hit on embedded.gen.hexa 16159 nodes). NOVEL derived identity surfacing Dedekind ψ discrepancy structure on prime-power locus." :: derived [slug=tecs-l-f13-novel-mk10 group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr {sigma,phi,tau} p^k --no-absorb × 20 (p,k); D(p^k) hexa exact integer arithmetic = closed form p^(k-1)(p^(k+1)−p(k+1)−1)"
+  raw    = ".verdicts/tecs-l-f13-novel-mk10/d_prime_power_closed_form.txt"
+  src    = "TECS-L axis F F13 · mk10 seed 'sigma_k(n) periodic locus k=2,3,4' (verifier=skip per F1) + hand-derivation"
+  status = "🔵 SUPPORTED-FORMAL (derived) — 20/20 PASS prime-power sweep; closed-form holds incl. p=2."
+
+@C tecs_l_f13_dpq := "F13 NOVEL 🔵 closed-form atom: D(pq) := σ(pq)·φ(pq) − pq·τ(pq) = (p²−1)(q²−1) − 4pq ∀ distinct primes p≠q. Uniqueness COROLLARY (NEW): D(pq)=0 ⟺ (p,q)=(2,3) → n=6. Within the two-distinct-prime locus, n=6 is the UNIQUE D=0 witness (solve 3(q²−1)=8q at p=2 → q=3 sole positive root). Closed-form witness of {1,6} on the semiprime locus, conjoined with M10. Verified 11/11 sample (2,3),(2,5),(3,5),(2,7),(3,7),(5,7),(2,11),(3,11),(5,11),(7,11),(11,13). NOT in atlas." :: derived [slug=tecs-l-f13-novel-mk10 group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr {sigma,phi,tau} pq --no-absorb × 11 (p,q); D(pq) = (p²−1)(q²−1)−4pq exact"
+  raw    = ".verdicts/tecs-l-f13-novel-mk10/d_two_distinct_primes_closed_form.txt"
+  src    = "TECS-L axis F F13 · mk10 seed 'phi(6m) algebraic structure' (verifier=skip per F1) + hand-derivation"
+  status = "🔵 SUPPORTED-FORMAL (derived) — 11/11 PASS distinct-prime sweep; n=6 uniqueness via quadratic root analysis."
+
+@C tecs_l_f13_no_prime_ore := "F13 NOVEL 🔴 CLOSED-NEGATIVE atom: no prime is an Ore (harmonic-divisor) number. Closed-form proof: H(p)=p·τ(p)/σ(p)=2p/(p+1)∈ℤ ⟺ (p+1)|2 ⟺ p∈{0,1} (neither prime). ∴ Ore ∩ {primes} = ∅. Verified 5/5 Mersenne-prime witnesses M_2=3, M_3=7, M_5=31, M_7=127, M_13=8191 (all ¬Ore: n·τ mod σ ∈ {2,6,30,126,8190}). COROLLARY: Mersenne-prime ∩ Ore = ∅; cleanly separates the prime building block (M_p ∉ Ore) from the composite product (P_k = 2^(p-1)·M_p ∈ Ore, F4). Triple intersection Perfect ∩ Ore ∩ Mersenne-product = Perfect; the prime-layer slice is empty. NOT in atlas." :: derived [slug=tecs-l-f13-novel-mk10 group=TECS-L]
+  method = "expr"
+  cmd    = "hexa verify --expr {sigma,tau} M_p --no-absorb × 5; n·τ mod σ ≠ 0 → ¬Ore"
+  raw    = ".verdicts/tecs-l-f13-novel-mk10/no_prime_is_ore_closed_negative.txt"
+  src    = "TECS-L axis F F13 · mk10 seed 'perfect Ore Mersenne triple-intersection candidates' (verifier=skip per F1) + hand-derivation"
+  status = "🔴 CLOSED-NEGATIVE — paper_negative_ok eligible. Ruled-out axis: prime-layer Ore-membership."
