@@ -5995,8 +5995,17 @@ fn gen2_expr(node) {
                 // hxa-20260423-013: TAG_STR path now goes through
                 // hexa_str_parse_int (throws on invalid) instead of bare
                 // atoll (silent-0). Keeps full int64 range via strtoll.
+                //
+                // 2026-05-27 ROOT-FIX — single-eval statement-expression.
+                // The prior `(HX_IS_STR(a) ? hexa_str_parse_int(a) : hexa_int(...(a)))`
+                // pasted the arg's C text 3× into the ternary, evaluating
+                // `node.args[0]` three times at C runtime — any side-effecting
+                // subexpression (e.g. `to_int(get_thing())`) fired 3 times.
+                // The dt-embedding regression at flame #1262 traced exactly
+                // here. Statement-expression binds __ha ONCE and reuses it
+                // (mirrors the min/max idiom a few lines below).
                 let a = gen2_expr(node.args[0])
-                return "(HX_IS_STR(" + a + ")?hexa_str_parse_int(" + a + "):hexa_int((int64_t)__hx_to_double(" + a + ")))"
+                return "({ HexaVal __ha = (" + a + "); (HX_IS_STR(__ha) ? hexa_str_parse_int(__ha) : hexa_int((int64_t)__hx_to_double(__ha))); })"
             }
             // min/max — mixed int/float promotion (2026-05-24 FIX).
             // Prior emit cast both args to int64_t, so `min(2, 1.5)` truncated
@@ -6261,8 +6270,13 @@ fn gen2_expr(node) {
                 // hxa-20260423-013: TAG_STR path now goes through
                 // hexa_str_parse_int (throws on invalid) instead of bare
                 // atoll (silent-0). Keeps full int64 range via strtoll.
+                //
+                // 2026-05-27 ROOT-FIX — single-eval (same as to_int above).
+                // Sister site to L5992; see that arm's comment for the full
+                // rationale. Both `int(x)` and `to_int(x)` source-level
+                // names dispatch here.
                 let a = gen2_expr(node.args[0])
-                return "(HX_IS_STR(" + a + ")?hexa_str_parse_int(" + a + "):hexa_int((int64_t)__hx_to_double(" + a + ")))"
+                return "({ HexaVal __ha = (" + a + "); (HX_IS_STR(__ha) ? hexa_str_parse_int(__ha) : hexa_int((int64_t)__hx_to_double(__ha))); })"
             }
             if name == "str" {
                 return "hexa_to_string(" + gen2_expr(node.args[0]) + ")"
