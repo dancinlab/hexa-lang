@@ -11141,6 +11141,22 @@ const char* read_stdin_n_c(int n) {
     return rsn_buf;
 }
 
+// flush_stdout_c(): force any pending stdout to the OS immediately.
+// Plain C ABI for the `extern fn flush_stdout_c() -> int` FFI surface —
+// the write-side counterpart to read_stdin_n_c (#1163) for stdio-protocol
+// servers (LSP/DAP/JSON-RPC) that emit Content-Length-framed messages with
+// NO trailing newline. The interpreter (`hexa run`) writes user `print(...)`
+// output through C stdio (block-buffered on a pipe), so a live editor never
+// sees the `initialize` response until the 4 KB buffer fills or the process
+// exits → deadlock. Calling this after each framed message drains it.
+// `fflush(NULL)` flushes every open stdio stream (no-op for the compiled
+// path, whose hxlcl_write is a raw write(2) syscall with no buffer). Returns 0.
+int flush_stdout_c(void) {
+    fflush(stdout);
+    fflush(NULL);
+    return 0;
+}
+
 // sleep_s(n): sleep n seconds (int or float). Wraps nanosleep for
 // sub-second precision. Returns void.
 HexaVal hexa_sleep_s(HexaVal n) {
