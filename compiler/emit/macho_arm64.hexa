@@ -890,7 +890,11 @@ fn serialize(obj: MachoArm64Obj) -> [Int] {
         sx = sx + 1
     }
 
-    _emit_mach_header(out, 4, sizeofcmds, 0x2000)  // MH_SUBSECTIONS_VIA_SYMBOLS
+    // flags = 0: aprime_cc's `.s` does NOT emit `.subsections_via_symbols`
+    // (the `asm.hexa` emitter omits that directive), so `clang -c` on it
+    // leaves MH_SUBSECTIONS_VIA_SYMBOLS (0x2000) UNSET. Verified by
+    // `xxd -s24 -l4` on the clang reference: flags == 0x00000000.
+    _emit_mach_header(out, 4, sizeofcmds, 0)
 
     let vmsize = meta_addr + abi_len
     _emit_seg64_cmd(out, "", 0, vmsize, data_off, vmsize, nsects)
@@ -1222,6 +1226,22 @@ fn _darwin_mangle(name: string) -> string {
     return "_" + name
 }
 
+// Darwin label mangle, matching `asm.hexa::_fmt_label`: prepend `_`
+// UNCONDITIONALLY (injective — `_L…` → `__L…`) except for directive-
+// like / addressing / reg-list / immediate literals. Block labels from
+// arm64_darwin are `_L<hash>_<fn>_bb<n>`; the assembled symbol is the
+// `_`-prefixed form. (The native path uses raw names for intra-fn
+// branch resolution and the mangled form only for the symbol record.)
+fn _darwin_mangle_label(label: string) -> string {
+    if len(label) == 0 { return label }
+    let first = label.substring(0, 1)
+    if first == "." { return label }
+    if first == "[" { return label }
+    if first == "{" { return label }
+    if first == "#" { return label }
+    return "_" + label
+}
+
 // Walk one LFunc, append its instructions to `out_text`, record any
 // label offsets, and resolve all intra-function branches.
 //
@@ -1532,7 +1552,11 @@ pub fn pack_lir(lm: LModule) -> MachoArm64Obj {
     while li < len(ordered_labels) {
         let nm  = ordered_labels[li]
         let voff = _blabel_offset_of(blabel_names, blabel_offsets, nm)
-        _push_local_sym(obj, nm, 1, voff)
+        // The block-label SYMBOL name carries the darwin mangle the `.s`
+        // path applies via `_fmt_label` (prepend `_`): LIR stores
+        // `_L<hash>_<fn>_bb<n>`, the symbol is `__L<hash>…`. The raw
+        // form (`nm`) is kept only for offset/reference lookup above.
+        _push_local_sym(obj, _darwin_mangle_label(nm), 1, voff)
         li = li + 1
     }
 
