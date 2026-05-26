@@ -4796,3 +4796,88 @@ phase-H 가 default-flip(#1354) 까지 도달했고, 마지막 1개 잔여 = hex
 - 정밀 plan, 한 세션 foreground 추정 ~2-4h 구현 + 검증.
 
 → phase-H 의 사실상 마지막 코드 잔여. 이 후 chunk-B 의 hexa-native object→exe 전 구간이 모든 libSystem-class dylib 까지 cover.
+
+
+## L-trivial-lane-exhausted — 11 wires landed, runtime.c retirement next tier = adapter→hexa-native (2026-05-27)
+
+trivial-constant 어댑터 레인이 11 wire 만에 **고갈**. runtime.c=0 으로 가는 **multi-month grunt 의 첫 phase** 가 닫혔고, 다음 phase 는 구조적으로 다른 인프라가 필요. honest 진보 보고 + 다음 tier spec.
+
+### 누적 wire (11/448 = 2.5%)
+
+| # | symbol | bytes | tier | merge PR |
+|---|--------|------:|------|---------:|
+|  1 | `hexa_exit` | 12 | syscall (svc 0x80) | (early) |
+|  2 | `hexa_ptr_alloc` | 76 | size-headered mmap | (early) |
+|  3 | `hexa_ptr_free` | 24 | munmap with size deref | (early) |
+|  4 | `hexa_ptr_offset` | 16 | ptr+offset add | (early) |
+|  5 | `hexa_ptr_addr` | 12 | tag rewrite (PTR→INT) | (early) |
+|  6 | `hexa_deref` | 12 | ldr+const(TAG_INT) | #1361 |
+|  7 | `hexa_ptr_read` | 12 | ldr-reg+const | #1362 |
+|  8 | `hexa_ptr_write` | 16 | str-reg+TAG_VOID | #1363 |
+|  9 | `hexa_ptr_null` | 12 | constant {0,0} | #1364 |
+| 10 | `hexa_cuda_available` | 12 | constant {0,0} (Mac no-CUDA) | #1368 |
+| 11 | `hexa_cuda_device_count` | 12 | constant {0,0} (Mac no-CUDA) | #1369 |
+
+**결론**: 어댑터 ≤16 B 의 모든 후보가 closed. 12-byte 패턴은 (`movz x0,#TAG · movz x1,#PAYLOAD · ret`) 의 한 형태 (3 instr).
+
+### 왜 trivial-lane 고갈
+
+남은 ~437 fn 의 어댑터를 12-24 B 로 짤 수 없음. 0-arg 후보부터 분석:
+
+| fn | C body | 어댑터 비용 |
+|----|--------|-----------:|
+| `hexa_clock` | `clock_gettime(MONOTONIC)` → float | syscall + struct fields → ~50 B |
+| `hexa_random` | `rand()/RAND_MAX` | libc rand state 의존, hexa-native PRNG 선결 |
+| `hexa_cwd` | `getcwd()` 후 hexa_str alloc | syscall + 동적 alloc |
+| `hexa_tempdir` | env probe + alloc | env table + str copy |
+| `hexa_timestamp` / `hexa_time_ms` / `hexa_now_monotonic_s` / `hexa_mono_ns` | gettimeofday/clock_gettime | syscall + arithmetic |
+| `hexa_term_winsize_rows` / `cols` | ioctl(TIOCGWINSZ) | syscall + struct |
+| `hexa_ad_tape_begin` | realloc 글로벌 테이블 | heap state |
+| `hexa_utc_iso_now` / `hexa_utc_compact_now` | gmtime + sprintf | 멀티 syscall + format |
+| `hexa_read_stdin` | read(0,...) | syscall + alloc + EOF dance |
+
+1-arg+ 도 대부분 동일. tag 검사 + 분기 + alloc 필요.
+
+### Next-tier infra spec — "adapter → hexa-native runtime call"
+
+3 wire 후보 클래스가 viable, 각 별 인프라 add 필요:
+
+**A · libc-free 0-arg syscall**
+```
+hexa_clock / hexa_timestamp / hexa_time_ms / hexa_mono_ns / hexa_now_monotonic_s
+hexa_term_winsize_rows / cols   (ioctl)
+hexa_cwd                         (getcwd)
+hexa_read_stdin                  (read syscall, bounded)
+```
+어댑터 = 30-80 B (svc 0x80 + sp 슬롯 + 결과 변환). 이미 phase-1 의 `rt_exit` (12B svc) 가 패턴 입증. 8개 wire 가능.
+
+**B · hexa-native runtime call**
+```
+hexa_random       → rt_prng_next() (선결: lcg 구현)
+hexa_ad_tape_begin → rt_ad_tape_begin() (선결: 글로벌 vec 의 hexa-native)
+hexa_ptr_alloc 외 alloc 의존 모든 string/array fn → 이미 rt_alloc 있음, 어댑터에서 BL rt_alloc
+```
+어댑터 = 50-150 B (스택 prologue + BL + epilogue). 선결 = .o 파일이 다른 hexa-emit `.o` 의 심볼을 BL 할 수 있도록 hexa_ld 의 cross-object resolve.
+
+**C · 폐기/통합 (architectural)**
+```
+hexa_ad_tape_*       AD tape → autograd subsystem 전체 hexa-native 화 후 한꺼번에
+hexa_extern_call*    FFI → hexa_ld 의 dyld import 가 직접 dispatch (phase-H 완료 후 폐기 가능)
+hexa_struct_*        struct primitives → hexa-native struct ABI 정착 후
+```
+
+### 다음 세션 권장 진입점
+
+(1) **A 클래스 8 wire** 먼저 (각 30-80 B, 산술 / svc 패턴 동일, 1-2시간 sprint 1 wire). 이걸로 11→19 wire.
+
+(2) **B 클래스 인프라 선결** = `hexa_ld` 의 cross-object BL resolve (현재 dyld import 만 BL 가능). 1-2 PR 분량. 그 후 100+ fn 의 어댑터화 unlock.
+
+(3) **runtime.c 의 #ifndef HEXA_HAS_HEXA_RT_STDLIB 들** = stdlib/runtime/*.hexa 의 hexa-source 포팅 surface. 이게 진짜 runtime.c=0 으로 가는 메인 lane. 이미 phase-1 의 sin/cos/atan/etc. 이 패턴 입증 — extend 만 하면 됨 (현재 ~115 fn 포팅됨).
+
+### honest residual
+
+- runtime.c 13769 lines · 448 HexaVal fn · 11 wired
+- @goal "runtime.c=0" 까지 거리: ~437 fn × (어댑터 OR hexa-source 포팅) = multi-month grunt
+- physical 한계 (frontier OPEN per feedback-closure-is-physical-limit): hexa-native runtime 의 모든 OS interaction 이 svc 0x80 으로만 닿고, 그 위 모든 알고리즘은 .hexa source. 이 천장은 가능, time-bounded 아님
+
+→ trivial-lane 닫힘. 다음 phase = (A) 8 syscall-wire + (B) cross-obj BL infra + (C) HEXA_HAS_HEXA_RT_STDLIB 포팅 확장. 본 cycle pause.
