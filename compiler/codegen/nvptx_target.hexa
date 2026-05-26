@@ -1687,9 +1687,40 @@ fn _nvptx_lower_stmt(buf: [LInstr], s: Stmt, kinds: [PReg], shared_idx_off: [i64
                     out.push(_nvptx_instr(mnem, a, "math " + s.op))
                     return out
                 }
-                // rsqrt at f64 — no native mnemonic; honest stub.
+                // RFC 055 §13 — f64 rsqrt(x) = 1.0 / sqrt(x), IEEE-correct.
+                //
+                // PTX has no native `rsqrt.approx.f64` (the approx mnemonic
+                // is f32-only). For f64 the correct lowering is the 2-instr
+                // decomposition through round-to-nearest sqrt + reciprocal:
+                //
+                //   sqrt.rn.f64  %tmp, %x         (IEEE-correct sqrt)
+                //   rcp.rn.f64   %dst, %tmp       (IEEE-correct 1/y)
+                //
+                // Both `sqrt.rn.f64` and `rcp.rn.f64` are round-to-nearest-
+                // even per PTX ISA 8.7 §9.7.3, so the composed value is
+                // within 1 ulp of CPU libm `1.0 / sqrt(x)` (the sqrt round
+                // + the rcp round each cost ≤ 0.5 ulp). The scratch reg is
+                // the existing per-call `%rd_idxa_<id>`-style slot — here
+                // we reuse the dst reg as the sqrt intermediate (single-use,
+                // safe — dst is then overwritten by the rcp).
+                //   ref: PTX ISA 8.7 §9.7.3 sqrt + §9.7.2 rcp.
+                if dst_kind == NVPTX_RKIND_F64 && s.op == "rsqrt" {
+                    let x_reg = _nvptx_operand_text_kinds(s.args[0], kinds)
+                    let mut rs1 = []
+                    rs1.push(_nvptx_op(dst_reg))
+                    rs1.push(_nvptx_op(x_reg))
+                    out.push(_nvptx_instr("sqrt.rn.f64", rs1, "rsqrt f64: dst = sqrt(x)"))
+                    let mut rs2 = []
+                    rs2.push(_nvptx_op(dst_reg))
+                    rs2.push(_nvptx_op(dst_reg))
+                    out.push(_nvptx_instr("rcp.rn.f64", rs2, "rsqrt f64: dst = 1.0 / sqrt(x)"))
+                    return out
+                }
+                // Fall-through honest stub for any other unmatched op/kind
+                // combination (e.g. a future intrinsic that lands in
+                // _nvptx_is_math_intrinsic before its codegen arm).
                 out.push(_nvptx_instr("//", [],
-                    "RFC 055 S13 - rsqrt f64 honest stub (rsqrt.approx is f32-only; 1.0/sqrt.rn.f64 deferred): " + s.op))
+                    "RFC 055 S13 - unmatched math intrinsic (op=" + s.op + ", kind=" + dst_kind + ")"))
                 return out
             }
         }
