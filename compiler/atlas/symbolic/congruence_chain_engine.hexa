@@ -150,6 +150,29 @@ pub fn sigma_k(n: int, k: int) -> int {
     return s
 }
 
+// sopfr(n) → sum of prime factors with multiplicity (OEIS A001414).
+// Trial division up to √x; the residual x>1 is the final prime factor.
+// sopfr(1)=0 (empty product), sopfr(prime p)=p. Mirrors the integer-exact
+// style above (while loops · % · no float) so the module flattener pulls it
+// into tool/verify_cli's compile unit alongside its divisor/phi siblings —
+// closes the verify_cli build-break where `_recompute`'s `return sopfr(n)`
+// (verify_cli.hexa:431) had no reachable definition (sopfr lived only in
+// stdlib/core/math.hexa, which verify_cli does not `use`).
+pub fn sopfr(n: int) -> int {
+    let mut sum = 0
+    let mut x = n
+    let mut d = 2
+    while d * d <= x {
+        while x % d == 0 {
+            sum = sum + d
+            x = x / d
+        }
+        d = d + 1
+    }
+    if x > 1 { sum = sum + x }
+    return sum
+}
+
 // ── combinatorial / prime integer primitives (VERIFY-KIT V7) ────────────
 // Pure-integer closed-forms backing OEIS sequences that the verify CLI had
 // NO recompute path for (A000040 prime×67 etc.). Mirrors the sigma_k/phi
