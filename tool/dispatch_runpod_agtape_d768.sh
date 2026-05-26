@@ -174,7 +174,7 @@ $SSH_CMD "cd $REMOTE_WORK && \
     nvidia-smi --query-gpu=name,memory.used,utilization.gpu --format=csv,noheader > nvidia_smi_pre.csv ; \
     if [ \"\$BLK\" = '0' ]; then \
         rm -f trainer.done trainer.out trainer.err trainer_meta.txt nvidia_smi_during.csv ; \
-        nohup bash -c '(while [ ! -f trainer.done ]; do nvidia-smi --query-gpu=timestamp,utilization.gpu,memory.used --format=csv,noheader >> nvidia_smi_during.csv; sleep 2; done) & SMI=\$!; S=\$(date +%s); timeout ${WALL_BUDGET_SEC} ./trainer > trainer.out 2> trainer.err; R=\$?; E=\$(date +%s); echo trainer_rc=\$R > trainer_meta.txt; echo wall_seconds=\$((E-S)) >> trainer_meta.txt; touch trainer.done' > nohup.out 2>&1 & \
+        nohup bash -c '(while [ ! -f trainer.done ]; do nvidia-smi --query-gpu=timestamp,utilization.gpu,memory.used --format=csv,noheader >> nvidia_smi_during.csv; sleep 2; done) & SMI=\$!; S=\$(date +%s); HEXA_CUDA=1 timeout ${WALL_BUDGET_SEC} ./trainer > trainer.out 2> trainer.err; R=\$?; E=\$(date +%s); echo trainer_rc=\$R > trainer_meta.txt; echo wall_seconds=\$((E-S)) >> trainer_meta.txt; touch trainer.done' > nohup.out 2>&1 & \
         sleep 3 ; echo 'trainer launched detached' ; \
     else echo 'BUILD FAILED' ; echo 'trainer_rc=-1' > trainer_meta.txt ; echo 'wall_seconds=0' >> trainer_meta.txt ; touch trainer.done ; fi ; \
     echo \"SUMMARY BUILD_CUDA_RC=\$BCU BUILD_LINK_RC=\$BLK\"" 2>&1 | tee dispatch.log
