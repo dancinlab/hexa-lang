@@ -2767,7 +2767,7 @@ HexaVal hexa_extern_call_typed(void* fn_ptr, HexaVal* hargs, int nargs, int ret_
 }
 
 // Convenience: cstring <-> HexaVal
-HexaVal hexa_cstring(HexaVal s) {
+__attribute__((weak)) HexaVal hexa_cstring(HexaVal s) {
     if (!HX_IS_STR(s)) return hexa_int(0);
     return hexa_int((int64_t)(uintptr_t)HX_STR(s));
 }

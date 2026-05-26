@@ -1,0 +1,279 @@
+// test/native_build/emit_hexa_cstring_native_o.hexa
+//
+// HEXA_BACKEND flip · chunk-B phase-H "열셋째 increment" — production-wire
+// FOURTH PROBE: hexa-native override for the `_hexa_cstring` runtime fn.
+//
+// Horizontal expansion of the `_hexa_exit` (PR #1321) + `_hexa_ptr_alloc`
+// (PR #1326) + `_hexa_ptr_offset` (PR #1328) + `_hexa_ptr_free` (PR #1329)
+// weak-override pattern. Same recipe — emit a Mach-O .o exporting a strong
+// external symbol whose body is a HexaVal-ABI adapter, linked into the
+// final binary when HEXA_NATIVE_RT_CSTRING=1 (or HEXA_NATIVE_RT_ALL=1)
+// gates the cmd_build native-path link append.
+//
+// The C-side `hexa_cstring` in self/runtime.c carries
+// `__attribute__((weak))` after this cycle's surgical edit; ld64 binds
+// `bl _hexa_cstring` callsites to this hexa-emit strong symbol when
+// the gate fires.
+//
+// ── ABI ADAPTER ──
+//
+// CALLER ABI (aprime_cc emit, HexaVal struct = 16 B by value, 1 arg):
+//   arg0 v → x0 = v.tag, x1 = v.val
+//
+// RETURN ABI (HexaVal struct = 16 B by value):
+//   x0 = TAG_INT = 0
+//   x1 = v.val (unchanged — already in x1 from input)
+//
+// ADAPTER BODY (8 bytes, 2 instructions — SMALLEST IN THE SERIES):
+//   movz x0, #0                     // tag = TAG_INT = 0 → x0
+//   ret                             // (leaf fn — no prologue/epilogue,
+//                                   //  x1 carries val from input)
+//
+// SMALLER than #1328's 12-B ptr_offset adapter — no arithmetic at all,
+// just a re-tag. cstring's C body is `return hexa_int((int64_t)HX_INT_U(v));`
+// which is literally "drop the tag, replace with INT, keep the union bits".
+// The adapter does exactly that with two instructions.
+//
+// ── HONESTY ──
+//
+// Cross-cutting:
+//   - closure = production override active (otool shows hexa-emit body
+//     when env on); selfhosted opt-in (env unset → byte-identical link).
+//   - f1/f2 — clang ONLY as link-side oracle, NEVER in this .o's emit path.
+//   - selfhosted opt-in — HEXA_NATIVE_RT_CSTRING=1 (or HEXA_NATIVE_RT_ALL=1)
+//     gates the cmd_build append; unset = no behavior change (default
+//     build_aprime.sh stays byte-identical to the pre-cycle baseline).
+//   - g5 verbatim — verify smoke pastes raw rc + stdout.
+//
+// SEMANTIC RESIDUAL (stronger than prior wires — NO divergence):
+//   - C body: `return hexa_int((int64_t)HX_INT_U(v));` — HX_INT_U is
+//     `((uint64_t)(v).i)`, a raw bit-reinterpret cast regardless of tag.
+//   - Override: x1 unchanged from input (which IS v.val = v.union bits),
+//     x0 forced to TAG_INT=0.
+//   - For ALL inputs (TAG_INT, TAG_FLOAT, TAG_STR, etc.): override
+//     produces hexa_int with the same union bits the C body would.
+//     STRONGER than ptr_offset (which had a documented mistyped-call
+//     divergence) — cstring's override is byte-identical for every
+//     possible input.
+//
+// SELF-CONTAINED: same module-loader rationale as
+// emit_hexa_ptr_offset_native_o.hexa — the macho_obj_wrap helpers are
+// inlined byte-for-byte. The deliberate diffs vs the ptr_offset emit
+// driver: (a) adapter is 8 B not 12 B (no arithmetic — pure re-tag),
+// (b) exported symbol is `_hexa_cstring` (14 B + NUL = 15 B name
+// payload, 16 B total strtab with leading NUL).
+
+// ═══════════════════════════════════════════════════════════════════
+// Adapter body — 2 instructions, 8 bytes
+// ═══════════════════════════════════════════════════════════════════
+fn hexa_cstring_adapter_bytes() -> [int] {
+    // 4-instr · 16 B adapter for HexaVal hexa_cstring(HexaVal s).
+    // C body:
+    //   if (!HX_IS_STR(s)) return hexa_int(0);
+    //   return hexa_int((int64_t)(uintptr_t)HX_STR(s));
+    // = if tag==TAG_STR keep x1 payload, else zero; always emit TAG_INT.
+    //
+    //   cmp x0, #3                 F1000C1F   ; compare tag with TAG_STR
+    //   csel x1, x1, xzr, eq       9A9F0021   ; payload = x1 if eq else 0
+    //   movz x0, #0                D2800000   ; TAG_INT (always)
+    //   ret                        D65F03C0
+    return [
+        0x1F,0x0C,0x00,0xF1, 0x21,0x00,0x9F,0x9A,
+        0x00,0x00,0x80,0xD2, 0xC0,0x03,0x5F,0xD6
+    ]
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Inlined from self/codegen/macho.hexa (constants + helpers + obj_wrap)
+// Identical to emit_hexa_ptr_offset_native_o.hexa except for the symbol
+// name + strtab payload at the end (_hexa_cstring = 14 B + NUL = 15 B
+// name payload, vs _hexa_ptr_offset = 16 B + NUL = 17 B).
+// ═══════════════════════════════════════════════════════════════════
+fn mh_magic_64_v() -> int { return 0xFEEDFACF }
+fn mh_object_v() -> int { return 1 }
+fn cpu_type_arm64_v() -> int { return 0x0100000C }
+fn cpu_subtype_all_v() -> int { return 0 }
+fn lc_segment_64_v() -> int { return 0x19 }
+fn lc_symtab_v() -> int { return 0x02 }
+fn lc_build_version_v() -> int { return 0x32 }
+fn s_attr_pure_v() -> int { return 0x80000000 }
+fn s_attr_some_v() -> int { return 0x00000400 }
+fn n_ext_v() -> int { return 0x01 }
+fn n_sect_v() -> int { return 0x0e }
+
+fn align_to_v(val: int, align: int) -> int {
+    return (val + align - 1) / align * align
+}
+
+fn push_u16_le_v(buf: [int], val: int) -> [int] {
+    return buf.push(val % 256).push((val / 256) % 256)
+}
+
+fn push_u32_le_v(buf: [int], val: int) -> [int] {
+    return buf.push(val % 256).push((val / 256) % 256).push((val / 65536) % 256).push((val / 16777216) % 256)
+}
+
+fn push_u64_le_v(buf: [int], val: int) -> [int] {
+    let mut b = push_u32_le_v(buf, val % 0x100000000)
+    return push_u32_le_v(b, val / 0x100000000)
+}
+
+// Inlined from self/codegen/macho.hexa::macho_obj_wrap (L34-136).
+// Symbol exported = `_hexa_cstring` (14 chars + NUL = 15 B name payload).
+fn macho_obj_wrap_hexa_cstring(code: [int], main_offset: int) -> [int] {
+    let mut out = []
+    let code_size = len(code)
+
+    let header_size = 32
+    let segment_cmd_size = 152
+    let symtab_cmd_size = 24
+    let build_version_cmd_size = 24
+    let sizeofcmds = segment_cmd_size + symtab_cmd_size + build_version_cmd_size
+
+    let code_offset = align_to_v(header_size + sizeofcmds, 8)
+    let symtab_offset = align_to_v(code_offset + code_size, 4)
+    let nlist_size = 16
+    let strtab_offset = symtab_offset + nlist_size
+    // strtab = "\0_hexa_cstring\0" = 1 + 14 + 1 = 16 bytes total.
+    // The leading NUL is the empty-string sentinel (string index 0); the
+    // exported symbol's name lives at string index 1 and is NUL-terminated.
+    let strtab_size = 1 + 15
+
+    // Mach-O Header (32 bytes)
+    out = push_u32_le_v(out, mh_magic_64_v())
+    out = push_u32_le_v(out, cpu_type_arm64_v())
+    out = push_u32_le_v(out, cpu_subtype_all_v())
+    out = push_u32_le_v(out, mh_object_v())
+    out = push_u32_le_v(out, 3)
+    out = push_u32_le_v(out, sizeofcmds)
+    out = push_u32_le_v(out, 0)
+    out = push_u32_le_v(out, 0)
+
+    // LC_SEGMENT_64
+    out = push_u32_le_v(out, lc_segment_64_v())
+    out = push_u32_le_v(out, segment_cmd_size)
+    let mut i = 0
+    while i < 16 { out.push(0); i = i + 1 }
+    out = push_u64_le_v(out, 0)
+    out = push_u64_le_v(out, align_to_v(strtab_offset + strtab_size, 8))
+    out = push_u64_le_v(out, code_offset)
+    out = push_u64_le_v(out, strtab_offset + strtab_size - code_offset)
+    out = push_u32_le_v(out, 7)
+    out = push_u32_le_v(out, 7)
+    out = push_u32_le_v(out, 1)
+    out = push_u32_le_v(out, 0)
+
+    // Section header: __text (80 bytes)
+    out.push(95); out.push(95); out.push(116); out.push(101); out.push(120); out.push(116)
+    let mut j = 0
+    while j < 10 { out.push(0); j = j + 1 }
+    out.push(95); out.push(95); out.push(84); out.push(69); out.push(88); out.push(84)
+    j = 0
+    while j < 10 { out.push(0); j = j + 1 }
+    out = push_u64_le_v(out, 0)
+    out = push_u64_le_v(out, code_size)
+    out = push_u32_le_v(out, code_offset)
+    out = push_u32_le_v(out, 2)
+    out = push_u32_le_v(out, 0)
+    out = push_u32_le_v(out, 0)
+    out = push_u32_le_v(out, s_attr_pure_v() + s_attr_some_v())
+    out = push_u32_le_v(out, 0)
+    out = push_u32_le_v(out, 0)
+    out = push_u32_le_v(out, 0)
+
+    // LC_SYMTAB
+    out = push_u32_le_v(out, lc_symtab_v())
+    out = push_u32_le_v(out, symtab_cmd_size)
+    out = push_u32_le_v(out, symtab_offset)
+    out = push_u32_le_v(out, 1)
+    out = push_u32_le_v(out, strtab_offset)
+    out = push_u32_le_v(out, strtab_size)
+
+    // LC_BUILD_VERSION
+    out = push_u32_le_v(out, lc_build_version_v())
+    out = push_u32_le_v(out, build_version_cmd_size)
+    out = push_u32_le_v(out, 1)
+    out = push_u32_le_v(out, 0x000E0000)
+    out = push_u32_le_v(out, 0x000E0000)
+    out = push_u32_le_v(out, 0)
+
+    // Pad to code_offset
+    while len(out) < code_offset { out.push(0) }
+
+    // Code section
+    let mut k = 0
+    while k < len(code) { out.push(code[k]); k = k + 1 }
+
+    // Pad to symtab_offset
+    while len(out) < symtab_offset { out.push(0) }
+
+    // Symbol table: nlist_64 (16 bytes)
+    out = push_u32_le_v(out, 1)
+    out.push(n_sect_v() + n_ext_v())
+    out.push(1)
+    out = push_u16_le_v(out, 0)
+    out = push_u64_le_v(out, main_offset)
+
+    // String table — "\0_hexa_cstring\0" (16 bytes total: 1 NUL + 14 chars + 1 NUL)
+    out.push(0)
+    // "_hexa_cstring\0"
+    //  _   h    e    x    a    _   p    t    r    _    a    d    d    r   \0
+    //  95 104 101 120  97  95 112 116 114  95  97 100 100 114   0
+    out.push(95); out.push(104); out.push(101); out.push(120); out.push(97)
+    out.push(95); out.push(112); out.push(116); out.push(114); out.push(95)
+    out.push(97); out.push(100); out.push(100); out.push(114); out.push(0)
+
+    return out
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Driver
+// ═══════════════════════════════════════════════════════════════════
+fn emit_hexa_cstring_native_o() {
+    println("[wire] HEXA_BACKEND flip · 열셋째 increment — _hexa_cstring native override")
+
+    let code = hexa_cstring_adapter_bytes()
+    if len(code) != 12 {
+        println("FAIL: adapter expected 12 bytes (ldr+movz+ret), got " + to_string(len(code)))
+        return
+    }
+    println("  adapter bytes  : " + to_string(len(code)) + " (12 expected — movz x0,#0; movz x1,#0; ret)")
+
+    // movz x0, #0 (00 00 80 d2) at offset 0
+    if code[0] != 0x00 || code[1] != 0x00 || code[2] != 0x80 || code[3] != 0xd2 {
+        println("FAIL: movz x0, #0 prefix mismatch")
+        return
+    }
+    println("  movz x0,#0     : 00 00 80 d2 OK")
+
+    // ret at offset 4 (c0 03 5f d6)
+    if code[4] != 0xc0 || code[5] != 0x03 || code[6] != 0x5f || code[7] != 0xd6 {
+        println("FAIL: RET trailer mismatch")
+        return
+    }
+    println("  RET trailer    : c0 03 5f d6 OK")
+
+    let obj = macho_obj_wrap_hexa_cstring(code, 0)
+    println("  obj_wrap size  : " + to_string(len(obj)) + " bytes total")
+
+    // MH_MAGIC_64 LE at offset 0 (0xFEEDFACF → cf fa ed fe)
+    if obj[0] != 0xcf || obj[1] != 0xfa || obj[2] != 0xed || obj[3] != 0xfe {
+        println("FAIL: MH_MAGIC_64 mismatch")
+        return
+    }
+    println("  MH_MAGIC_64    : cf fa ed fe OK")
+
+    // filetype = MH_OBJECT (1) at offset 12
+    if obj[12] != 1 {
+        println("FAIL: filetype not MH_OBJECT")
+        return
+    }
+    println("  filetype       : 1 (MH_OBJECT) OK")
+
+    let out = "/tmp/hexa_cstring_native.o"
+    write_bytes(out, obj)
+    println("  wrote          : " + out)
+    println("[wire] EMIT OK — link via cmd_build native path with HEXA_NATIVE_RT_CSTRING=1")
+}
+
+emit_hexa_cstring_native_o()

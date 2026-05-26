@@ -2709,7 +2709,8 @@ fn cmd_build(src, out, c_only, target, shared) {
                             "HEXA_NATIVE_RT_MATH_CEIL",
                             "HEXA_NATIVE_RT_MATH_ROUND",
                             "HEXA_NATIVE_RT_MATH_MIN",
-                            "HEXA_NATIVE_RT_MATH_MAX"]
+                            "HEXA_NATIVE_RT_MATH_MAX",
+                            "HEXA_NATIVE_RT_CSTRING"]
         let __nrt_drvs   = [__nself + "/../test/native_build/emit_hexa_exit_native_o.hexa",
                             __nself + "/../test/native_build/emit_hexa_ptr_alloc_native_o.hexa",
                             __nself + "/../test/native_build/emit_hexa_ptr_offset_native_o.hexa",
@@ -2728,7 +2729,8 @@ fn cmd_build(src, out, c_only, target, shared) {
                             __nself + "/../test/native_build/emit_hexa_math_ceil_native_o.hexa",
                             __nself + "/../test/native_build/emit_hexa_math_round_native_o.hexa",
                             __nself + "/../test/native_build/emit_hexa_math_min_native_o.hexa",
-                            __nself + "/../test/native_build/emit_hexa_math_max_native_o.hexa"]
+                            __nself + "/../test/native_build/emit_hexa_math_max_native_o.hexa",
+                            __nself + "/../test/native_build/emit_hexa_cstring_native_o.hexa"]
         let __nrt_outs   = ["/tmp/hexa_exit_native.o",
                             "/tmp/hexa_ptr_alloc_native.o",
                             "/tmp/hexa_ptr_offset_native.o",
@@ -2747,7 +2749,8 @@ fn cmd_build(src, out, c_only, target, shared) {
                             "/tmp/hexa_math_ceil_native.o",
                             "/tmp/hexa_math_round_native.o",
                             "/tmp/hexa_math_min_native.o",
-                            "/tmp/hexa_math_max_native.o"]
+                            "/tmp/hexa_math_max_native.o",
+                            "/tmp/hexa_cstring_native.o"]
         let __nrt_syms   = ["hexa_exit",
                             "hexa_ptr_alloc",
                             "hexa_ptr_offset",
@@ -2766,7 +2769,8 @@ fn cmd_build(src, out, c_only, target, shared) {
                             "hexa_math_ceil",
                             "hexa_math_round",
                             "hexa_math_min",
-                            "hexa_math_max"]
+                            "hexa_math_max",
+                            "hexa_cstring"]
         // L-δ TERMINAL FLIP (2026-05-27): default opt-in → opt-out.
         // All 5 wires (exit · ptr_alloc · ptr_free · ptr_offset · ptr_addr)
         // are env-OFF/ON behavior-equivalent verified (#1297/#1326/#1329/
