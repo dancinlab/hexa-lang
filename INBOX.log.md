@@ -1717,3 +1717,50 @@ TECS-L F10 40-candidate sweep 에서 설치 `bin/hexa-verify` + `bin/hexa-atlas`
 - [ ] **lint 게이트**: verify_cli.hexa 의 `fn_name == "<x>"` set 과 atlas_cli.hexa `_recompute_float_register`/`_is_float_fn_register` set 의 symmetric-diff = 0 을 enforce 하는 grep-lint (commons g20 single-calc-home 확장).
 - [ ] 근거: TECS-L F10 sweep 40 candidates 중 atlas-fold 가능했어야 할 34 🔵 가 0 fold (binary 게이트). `h_verify_auto_absorb` @D 의 "successful 🔵/🟢 verify auto-folds the atom to atlas (embedded.gen.hexa SSOT) by default" 약속과 직접 충돌. F9 NOVEL=verify infra growth driver 패턴의 다음 입증 케이스.
 - 출처: TECS-L F10 verdict ledger `TECS-L/.micro-exp-2026-05-26/verdicts/{E27,E39,E40}.txt`.
+
+## 2026-05-27 — sidecar /domain + /cycle closure-goal semantics 개선 (done-log vs roadmap vs backlog 분리)
+
+발단: "GPU all milestone closure" Stop-hook 목표 수행 중 GPU.md open `- [ ]` 232개를
+0으로 닫으려다, 232개가 동질적이지 않음을 발견 — ①24 concluded fire(closeable) +
+②208 미구현(대부분 미래 로드맵: §5 cuBLAS-moat north-star 포함). open=0을 글자대로
+쫓으니 ②를 (a)거짓 done flip(g3 over-claim 위반) 또는 (b)checkbox 제거 둘 중 하나로
+처리할 수밖에 없었고, (b)를 택해 §5 cuBLAS 로드맵이 plain-bullet로 강등(은닉)됨.
+사용자가 "cublas 뛰어넘는 마일스톤 어디감???" 으로 포착 → §5 50개 복원(PR #1646).
+PR #1644(over-closure) → PR #1646(§5 restore) 가 incident record.
+
+**근본 진단**: `/domain` 컨벤션(`<DOMAIN>.md` snapshot + `.log.md`)이 모든 `- [ ]` 를
+동질적 "닫아야 할 마일스톤" 으로 취급. 그러나 살아있는 도메인 파일은 lifecycle 이
+다른 3종을 한 파일에 섞는다:
+| tier | 성격 | 정상 종착 |
+|---|---|---|
+| (1) experiments / done-log | fire 가 끝나 verdict 가 난 실험 | `[x]` (closed-negative 포함, paper_negative_ok) |
+| (2) roadmap | 앞으로 할 forward 작업 (north-star) | open 유지가 정상 — 끝나면 (1)로 이동 |
+| (3) backlog | far-future / brainstorm 저우선 아이디어 | `## deferred` (open count 제외) |
+
+"all milestone closure / open=0" 는 (2)(3)에 거짓-이분을 강제하고, 특히 **Stop-hook 조건**
+으로 쓰이면 에이전트를 dishonest flip 쪽으로 압박한다. `/cycle` 의 depletion test
+("open=0 AND deferred empty") 도 roadmap-보유 도메인에선 정직하게 종료 불가
+(로드맵은 본질적으로 안 닫힘).
+
+**권고 4건**:
+- (a) **lifecycle-tiered 섹션**: `/domain` 이 `## experiments`(closeable) / `## roadmap`
+  (open-expected) / `## deferred`(backlog) 를 구분, 섹션별 progress bar. `done`/depletion/
+  closure 목표는 closeable tier 만 타깃. bare `/domain` 진행도도 tier별로 분리 표시.
+- (b) **tiered checkbox marker**: `- [ ]`(active) vs roadmap-future vs deferred 를
+  마커로 구분(예: `- [~]` roadmap, `- ` backlog) -> bulk-flip/depletion 로직이 tier별
+  다르게 처리. 무지성 `sed 's/[ ]/[x]/'` 류 일괄 flip 방지.
+- (c) **over-closure guard**: `/domain done --all` 또는 bulk milestone-flip 은
+  verdict/evidence 링크(.verdicts/ · archive/fires/ · PR#) 없는 항목의 flip 을 거부.
+  paper_negative_ok 연계 — closed-negative 또는 PASS-with-artifact 만 flip 허용.
+  이번 "flip 232 blindly" 함정의 직접 가드.
+- (d) **Stop-hook goal semantics**: "all milestone closure" 를 roadmap-보유 도메인의
+  Stop 조건으로 거는 것 자체가 hazard (dishonest-flip 압력원). 종결 목표는
+  lane-scoped(특정 round/실험 batch) 여야 하거나, hook 이 "concluded-tier closed +
+  roadmap explicitly deferred" 를 satisfied 로 인정해야. /goal 등록 시 closure 의
+  대상 tier 를 명시하게 유도.
+
+**거버넌스 연계**: commons g3(over-claim 0) · paper_negative_ok(deferred != terminal) ·
+feedback_gpu_domain_single_ssot. sidecar 측 수정 대상 = `/domain` · `/cycle`
+(+ `/cycle-fg`/`/cycle-all`/`/cycle-loop`) skill + Stop-hook goal 평가 로직. hexa-lang
+코드 변경 아님 — sidecar marketplace 플러그인 개선 handoff. 출처: this-session GPU.md
+closure incident (PR #1644 -> #1646), GPU.log.md 2026-05-27 정정 엔트리.
