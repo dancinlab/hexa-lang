@@ -1,0 +1,287 @@
+// HEXA Standard Library — crypto/tls13_client_session_resume
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// TLS 1.3 client session resumption — pure hexa. Two halves:
+//
+//   1. NewSessionTicket parse (RFC 8446 §4.6.1) → Tls13SessionTicket cache
+//      entry, including the derived PSK secret
+//        psk = HKDF-Expand-Label(resumption_master_secret, "resumption",
+//                                ticket_nonce, 32)
+//      (RFC 8446 §4.6.1 final paragraph).
+//
+//   2. pre_shared_key extension build (RFC 8446 §4.2.11) — skeleton for the
+//      client's resumption ClientHello: one PskIdentity (identity bytes +
+//      obfuscated_ticket_age) + a zero-binder placeholder. The actual binder
+//      MAC is filled in by `tls13_binder` once the transcript-hash through the
+//      partial ClientHello (excluding binders) is known.
+//
+// Frontier (RUNTIME.flip B1.tls13-session-resume): pairs the post-handshake
+// NewSessionTicket parser with the next-session PSK extension producer so
+// the client can complete a 0-RTT / resumption round-trip without touching
+// any existing primitive (additive · 0 edits).
+//
+// Surface (2 fn · 2 struct · 2 const):
+//   let TLS_HS_NEW_SESSION_TICKET: int = 4
+//   let TLS_EXT_PRE_SHARED_KEY:    int = 41   // 0x0029
+//
+//   struct Tls13SessionTicket {
+//       ticket:            [int],   // opaque ticket<1..2^16-1>
+//       ticket_lifetime:   int,     // uint32 (seconds)
+//       ticket_age_add:    int,     // uint32 (random offset, subtract on use)
+//       ticket_nonce:      [int],   // opaque ticket_nonce<0..255>
+//       extensions_bytes:  [int],   // raw Extension<0..2^16-2> bytes (no length)
+//       psk_secret:        [int]    // 32-byte PSK = Expand-Label(rms,"resumption",nonce,32)
+//   }
+//
+//   struct Tls13TicketParsed {
+//       kind:   str,                 // "ok" | "short" | "wrong-hs-type"
+//       ticket: Tls13SessionTicket
+//   }
+//
+//   pub fn tls13_client_parse_new_session_ticket(
+//       hs_msg: [int],
+//       resumption_master_secret: [int]
+//   ) -> Tls13TicketParsed
+//
+//   pub fn tls13_client_build_psk_extension(
+//       identity: [int],
+//       obfuscated_ticket_age: int
+//   ) -> [int]
+//
+// Composition (RFC 8446 §4.2.11):
+//   PskIdentity {
+//       opaque identity<1..2^16-1>;
+//       uint32 obfuscated_ticket_age;
+//   }
+//   OfferedPsks {
+//       PskIdentity identities<7..2^16-1>;
+//       PskBinderEntry binders<33..2^16-1>;
+//   }
+//   pre_shared_key extension_data = OfferedPsks
+//
+// Building blocks (all pre-LANDED):
+//   - tls13_hs_header / tls13_hs_type / tls13_hs_length  (tls13_wire)
+//   - tls13_ext_build                                     (tls13_extensions)
+//   - tls13_expand_label                                  (tls13_keyschedule)
+//
+// Out-of-scope (sibling follow-ups):
+//   - tls13_binder: MAC computation over the partial transcript hash
+//   - obfuscated_ticket_age clock arithmetic (driver-side: age_add + age_ms)
+
+use "stdlib/crypto/tls13_wire"
+use "stdlib/crypto/tls13_extensions"
+use "stdlib/crypto/tls13_keyschedule"
+
+let TLS_HS_NEW_SESSION_TICKET: int = 4
+let TLS_EXT_PRE_SHARED_KEY:    int = 41   // 0x0029
+
+struct Tls13SessionTicket {
+    ticket:            [int],
+    ticket_lifetime:   int,
+    ticket_age_add:    int,
+    ticket_nonce:      [int],
+    extensions_bytes:  [int],
+    psk_secret:        [int]
+}
+
+struct Tls13TicketParsed {
+    kind:   str,
+    ticket: Tls13SessionTicket
+}
+
+@pure
+fn _u16_at(b: [int], o: int) -> int {
+    return ((b[o] & 0xFF) << 8) | (b[o + 1] & 0xFF)
+}
+
+@pure
+fn _u32_at(b: [int], o: int) -> int {
+    return ((b[o] & 0xFF) << 24) | ((b[o + 1] & 0xFF) << 16) | ((b[o + 2] & 0xFF) << 8) | (b[o + 3] & 0xFF)
+}
+
+@pure
+fn _slice(b: [int], o: int, n: int) -> [int] {
+    let mut out: [int] = []
+    let mut i = 0
+    while i < n {
+        out.push(b[o + i])
+        i = i + 1
+    }
+    return out
+}
+
+@pure
+fn _empty_ticket() -> Tls13SessionTicket {
+    let empty: [int] = []
+    return Tls13SessionTicket {
+        ticket:           empty,
+        ticket_lifetime:  0,
+        ticket_age_add:   0,
+        ticket_nonce:     empty,
+        extensions_bytes: empty,
+        psk_secret:       empty
+    }
+}
+
+// Parse a NewSessionTicket handshake message (the full HandshakeMessage
+// including the 4-byte HS header) and derive the resumption PSK.
+//
+// hs_msg layout:
+//   uint8  msg_type    = 4 (new_session_ticket)
+//   uint24 length
+//   uint32 ticket_lifetime
+//   uint32 ticket_age_add
+//   opaque ticket_nonce<0..255>
+//   opaque ticket<1..2^16-1>
+//   Extension extensions<0..2^16-2>
+//
+// kind:
+//   "wrong-hs-type" — msg_type != 4
+//   "short"         — buffer truncated at any field boundary
+//   "ok"            — fully parsed; ticket struct populated + PSK derived
+@pure
+pub fn tls13_client_parse_new_session_ticket(
+    hs_msg: [int],
+    resumption_master_secret: [int]
+) -> Tls13TicketParsed {
+    // Need at least the 4-byte HS header.
+    if len(hs_msg) < 4 {
+        return Tls13TicketParsed { kind: "short", ticket: _empty_ticket() }
+    }
+    let mtype = tls13_hs_type(hs_msg, 0)
+    if mtype != TLS_HS_NEW_SESSION_TICKET {
+        return Tls13TicketParsed { kind: "wrong-hs-type", ticket: _empty_ticket() }
+    }
+    let body_len = tls13_hs_length(hs_msg, 0)
+    if len(hs_msg) < 4 + body_len {
+        return Tls13TicketParsed { kind: "short", ticket: _empty_ticket() }
+    }
+    // Body begins at offset 4. Need 4 (lifetime) + 4 (age_add) + 1 (nonce len).
+    if body_len < 9 {
+        return Tls13TicketParsed { kind: "short", ticket: _empty_ticket() }
+    }
+    let lifetime = _u32_at(hs_msg, 4)
+    let age_add  = _u32_at(hs_msg, 8)
+    let nonce_len = hs_msg[12] & 0xFF
+    if body_len < 9 + nonce_len + 2 {
+        return Tls13TicketParsed { kind: "short", ticket: _empty_ticket() }
+    }
+    let nonce = _slice(hs_msg, 13, nonce_len)
+    let ticket_len_off = 13 + nonce_len
+    let ticket_len = _u16_at(hs_msg, ticket_len_off)
+    let ticket_off = ticket_len_off + 2
+    if body_len < (ticket_off - 4) + ticket_len + 2 {
+        return Tls13TicketParsed { kind: "short", ticket: _empty_ticket() }
+    }
+    let ticket_bytes = _slice(hs_msg, ticket_off, ticket_len)
+    let ext_len_off = ticket_off + ticket_len
+    let ext_len = _u16_at(hs_msg, ext_len_off)
+    let ext_off = ext_len_off + 2
+    if body_len < (ext_off - 4) + ext_len {
+        return Tls13TicketParsed { kind: "short", ticket: _empty_ticket() }
+    }
+    let ext_bytes = _slice(hs_msg, ext_off, ext_len)
+    // PSK = HKDF-Expand-Label(rms, "resumption", ticket_nonce, 32)
+    // "resumption" = 72 65 73 75 6d 70 74 69 6f 6e
+    let label = [0x72, 0x65, 0x73, 0x75, 0x6d, 0x70, 0x74, 0x69, 0x6f, 0x6e]
+    let psk = tls13_expand_label(resumption_master_secret, label, nonce, 32)
+    return Tls13TicketParsed {
+        kind: "ok",
+        ticket: Tls13SessionTicket {
+            ticket:           ticket_bytes,
+            ticket_lifetime:  lifetime,
+            ticket_age_add:   age_add,
+            ticket_nonce:     nonce,
+            extensions_bytes: ext_bytes,
+            psk_secret:       psk
+        }
+    }
+}
+
+// Build a pre_shared_key extension (RFC 8446 §4.2.11) for the resumption
+// ClientHello — one PskIdentity entry + a single zero-filled binder
+// placeholder. The binder MAC is patched in afterwards by tls13_binder once
+// the partial-transcript hash (over CH up to but not including the binders)
+// is known.
+//
+// extension_data = OfferedPsks {
+//     PskIdentity identities<7..2^16-1> {
+//         opaque identity<1..2^16-1>
+//         uint32 obfuscated_ticket_age
+//     }
+//     PskBinderEntry binders<33..2^16-1> {
+//         opaque binder<32..255>          // 32-byte HMAC-SHA256 placeholder here
+//     }
+// }
+@pure
+pub fn tls13_client_build_psk_extension(
+    identity: [int],
+    obfuscated_ticket_age: int
+) -> [int] {
+    // -- PskIdentity (single entry) -----------------------------------------
+    //   uint16 identity_len || identity || uint32 obfuscated_ticket_age
+    let id_len = len(identity)
+    let mut ident_entry: [int] = []
+    ident_entry.push((id_len >> 8) & 0xFF)
+    ident_entry.push(id_len & 0xFF)
+    let mut i = 0
+    while i < id_len {
+        ident_entry.push(identity[i])
+        i = i + 1
+    }
+    ident_entry.push((obfuscated_ticket_age >> 24) & 0xFF)
+    ident_entry.push((obfuscated_ticket_age >> 16) & 0xFF)
+    ident_entry.push((obfuscated_ticket_age >>  8) & 0xFF)
+    ident_entry.push(obfuscated_ticket_age & 0xFF)
+
+    // -- identities<7..2^16-1> vector wrap (2-byte length) ------------------
+    let ident_vec_len = len(ident_entry)
+    let mut identities: [int] = []
+    identities.push((ident_vec_len >> 8) & 0xFF)
+    identities.push(ident_vec_len & 0xFF)
+    let mut j = 0
+    while j < ident_vec_len {
+        identities.push(ident_entry[j])
+        j = j + 1
+    }
+
+    // -- PskBinderEntry (single zero-filled 32-byte placeholder) ------------
+    //   uint8 binder_len = 32 || 32 zero bytes
+    let mut binder_entry: [int] = []
+    binder_entry.push(32)
+    let mut k = 0
+    while k < 32 {
+        binder_entry.push(0)
+        k = k + 1
+    }
+
+    // -- binders<33..2^16-1> vector wrap (2-byte length) --------------------
+    let binder_vec_len = len(binder_entry)
+    let mut binders: [int] = []
+    binders.push((binder_vec_len >> 8) & 0xFF)
+    binders.push(binder_vec_len & 0xFF)
+    let mut m = 0
+    while m < binder_vec_len {
+        binders.push(binder_entry[m])
+        m = m + 1
+    }
+
+    // -- OfferedPsks = identities || binders --------------------------------
+    let mut value: [int] = []
+    let id_block = len(identities)
+    let mut a = 0
+    while a < id_block {
+        value.push(identities[a])
+        a = a + 1
+    }
+    let bd_block = len(binders)
+    let mut c = 0
+    while c < bd_block {
+        value.push(binders[c])
+        c = c + 1
+    }
+
+    return tls13_ext_build(TLS_EXT_PRE_SHARED_KEY, value)
+}
