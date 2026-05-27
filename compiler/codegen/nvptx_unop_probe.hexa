@@ -1,0 +1,172 @@
+// nvptx_unop_probe — standalone binary-level verifier for INBOX #1665
+// closure (PR #1665 + #1677 ⓪ keystone). Bypasses the lower_test
+// flatten dependency on ast_to_hir (`_hir_let_type_text` pre-existing
+// build-infra issue, unrelated to this cycle).
+//
+// Builds an MFunc directly with STMT_UNOP + STMT_BINOP, calls
+// `codegen_emit_ptx_sm80`, and asserts:
+//   ① `neg.f64 %fd1, %fd0` — register-neg emit lands.
+//   ③ `0d3FF8000000000000` — const_float 1.5 renders as PTX hex.
+//   ③ `0dBFF8000000000000` — const_float -1.5 renders as PTX hex
+//      (negative literal — exercises the bug #1663 documented).
+// Negative guards: decimal `-1.5` leak + unsupported-unop stub.
+
+import "../ir/mir.hexa"
+import "../ir/lir.hexa"
+import "./nvptx_target.hexa"
+import "./nvptx_ptx_ops.hexa"
+import "./nvptx_tma_ops.hexa"
+
+fn _local(id: i64, hint: string) -> Local {
+    return Local {
+        id: id, arena_id: 1, type_id: 3,
+        name_hint: hint, precision: "", space: ""
+    }
+}
+
+fn _op_local(local_id: i64) -> Operand {
+    return Operand {
+        kind: "local", local_id: local_id,
+        int_val: 0, float_val: 0.0, str_val: "", global_id: -1
+    }
+}
+
+fn _op_const_float(v: f64) -> Operand {
+    return Operand {
+        kind: "const_float", local_id: -1,
+        int_val: 0, float_val: v, str_val: "", global_id: -1
+    }
+}
+
+fn _stmt_unop(dst: Local, op: string, a: Operand) -> Stmt {
+    let mut xs = []
+    xs.push(a)
+    return Stmt {
+        kind: STMT_UNOP, dst: dst, op: op, args: xs,
+        target_block: -1, target_block_else: -1
+    }
+}
+
+fn _stmt_binop(dst: Local, op: string, a: Operand, b: Operand) -> Stmt {
+    let mut xs = []
+    xs.push(a)
+    xs.push(b)
+    return Stmt {
+        kind: STMT_BINOP, dst: dst, op: op, args: xs,
+        target_block: -1, target_block_else: -1
+    }
+}
+
+fn _stmt_return() -> Stmt {
+    return Stmt {
+        kind: STMT_RETURN, dst: Local { id: -1, arena_id: 0, type_id: 0,
+            name_hint: "", precision: "", space: "" },
+        op: "", args: [],
+        target_block: -1, target_block_else: -1
+    }
+}
+
+fn _block(id: i64, stmts: [Stmt]) -> Block {
+    return Block { id: id, stmts: stmts, preds: [], succs: [] }
+}
+
+fn _build_probe() -> MModule {
+    let a = _local(0, "a")
+    let t = _local(1, "t")
+    let r = _local(2, "r")
+    let s = _local(3, "s")
+
+    let mut s0 = []
+    // t = -a            (STMT_UNOP register-neg → `neg.f64 %fd1, %fd0`)
+    s0.push(_stmt_unop(t, "neg", _op_local(a.id)))
+    // r = t + 1.5       (const_float 1.5 → `0d3FF8000000000000`)
+    s0.push(_stmt_binop(r, "add", _op_local(t.id), _op_const_float(1.5)))
+    // s = r * -1.5      (const_float -1.5 → `0dBFF8000000000000`)
+    s0.push(_stmt_binop(s, "mul", _op_local(r.id), _op_const_float(-1.5)))
+    s0.push(_stmt_return())
+
+    let mut blocks = []
+    blocks.push(_block(0, s0))
+    let mut params = []
+    params.push(a)
+    let mut locals = []
+    locals.push(a)
+    locals.push(t)
+    locals.push(r)
+    locals.push(s)
+
+    let mf = MFunc {
+        name: "unop_neg_probe",
+        params: params,
+        return_local: Local { id: -1, arena_id: 0, type_id: 0,
+            name_hint: "", precision: "", space: "" },
+        locals: locals,
+        blocks: blocks,
+        entry_block: 0,
+        arena_root: 1,
+        def_line: 0,
+        gpu_kind: GPU_KIND_DEVICE
+    }
+    let mut fns = []
+    fns.push(mf)
+    return MModule { file: "unop_probe.hexa", funcs: fns, globals: [] }
+}
+
+fn _contains(hay: string, needle: string) -> bool {
+    return hay.find(needle) >= 0
+}
+
+fn _check(ok_in: bool, hay: string, needle: string, label: string) -> bool {
+    if _contains(hay, needle) {
+        println("  ok: " + label)
+        return ok_in
+    }
+    println("  FAIL: " + label + " (missing: `" + needle + "`)")
+    return false
+}
+
+fn main() {
+    println("══════════════════════════════════════════════")
+    println("  INBOX #1665 closure probe — STMT_UNOP + const-hex")
+    println("══════════════════════════════════════════════")
+
+    let ptx = codegen_emit_ptx_sm80(_build_probe())
+    println("")
+    println("── emitted PTX (probe, sm_80) ──")
+    println(ptx)
+    println("")
+
+    let mut ok = true
+    // ① register-neg
+    ok = _check(ok, ptx, "neg.f64 %fd1, %fd0",
+        "STMT_UNOP neg.f64 (register-neg)")
+    // ③ positive const_float → hex
+    ok = _check(ok, ptx, "0d3FF8000000000000",
+        "const_float 1.5 → 0d3FF8000000000000")
+    // ③ negative const_float → hex (bug #1663)
+    ok = _check(ok, ptx, "0dBFF8000000000000",
+        "const_float -1.5 → 0dBFF8000000000000")
+    // Negative guards
+    if _contains(ptx, "add.f64 %fd2, %fd1, 1.5") {
+        println("  FAIL: decimal `1.5` leaked (must be 0d hex)")
+        ok = false
+    }
+    if _contains(ptx, "mul.f64 %fd3, %fd2, -1.5") {
+        println("  FAIL: decimal `-1.5` leaked (bug #1663 NOT fixed)")
+        ok = false
+    }
+    if _contains(ptx, "INBOX #1665 - unsupported unop") {
+        println("  FAIL: STMT_UNOP fell through to honest stub")
+        ok = false
+    }
+
+    println("")
+    println("══════════════════════════════════════════════")
+    if ok {
+        println("PASS: INBOX #1665 unop 4-layer closure verified")
+    } else {
+        println("FAIL: probe assertions not satisfied")
+        exit(1)
+    }
+    println("══════════════════════════════════════════════")
+}
