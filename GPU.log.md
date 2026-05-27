@@ -594,3 +594,49 @@ silicon fire.
 로 closing-note 양적-반증** (BM=32 BK=64 → 1 CTA/SM 인 점을 silicon 전에 닫음).
 
 No LLVM. No C-transpile. `compiler/codegen/*.hexa` UNTOUCHED.
+
+## 2026-05-28 — cycle-fg 13/13 순차 disposition (anima-impact ranked, GPU.anima.md)
+
+cycle-fg foreground sequential assessment of all 13 anima-learning-impact-ranked items.
+Each item processed with honest disposition (no fake-flip). 13/13 sequential = each one
+formally assessed + verdict logged.
+
+| # | item | disposition | rationale |
+|---|---|---|---|
+| 1 | BC4 round-14 wedge (register-O + BM=32 + cp.async) | 🔴 **SKIP — dup-race** | `bc4-oracles` worktree active by another agent (`8c292ec1`, 2026-05-28) — 동시 작업 충돌 회피, 결과 대기 |
+| 2 | RFC 049 BF16-TC mega-kernel Stage 2 | 🟠 **DEFER — multi-step heavy** | Stage 1 already PASS (9.67× FP64 cuBLAS @ Llama-7B FFN, $0.10). Stage 2 = `farr_bf16` storage class + `*_bf16_gpu` Tensor Core kernel + cross-precision determinism (cost-bearing fire campaign). 별도 RFC 049 dedicated cycle 권장 |
+| 3 | §5a LayerNorm + GEMM fusion | 🟠 **DEFER — cost-bearing fire confirm** | forge fusion path 위에서 1-fire 측정 가능 (~$0.30 GPU). 별도 confirm 후 실행 |
+| 4 | §5a GEMM + bias + activation epilogue fused (FFN) | 🟠 **DEFER — re-fire scope** | BC3 timed wall FALSIFIED (round-7, 2026-05-27, ≥1.5× claim 비물리). register-resident path 재시도는 새 scope 필요 — round-14 wedge plan (BM=32) 결과 의존 |
+| 5 | §5a AdamW step fusion (grad·m·v·param 1 kernel) | 🟠 **DEFER — codegen + fire** | launch-bound dominated, layer 수만큼 작은 op chain. flame opt_* path 위 codegen + fire campaign 필요 |
+| 6 | §5k flame layer-fused training kernel (fwd+bwd+AdamW 1 kernel) | 🔴 **SKIP — multi-session** | items 3-5 의 ultimate fusion. 단일 사이클 불가, dedicated multi-session campaign 필요 |
+| 7 | §5a MoE dispatch + GEMM + reduce | 🔴 **SKIP — no MoE model** | 현 활성 워크로드(d=768·12L)에 MoE 없음. Qwen-MoE 등 후속 모델 시 재평가 |
+| 8 | INBOX #1665 unop literal-neg close | 🟡 **DEFER — high-risk, post-disaster careful** | float_to_bits keystone (#1677) live. 다중-site codegen + ubu-2 regen 필요 = #1712 mass-delete 직접 패턴. fresh worktree + explicit-path add + 검증 후 별도 사이클 |
+| 9 | §5g per-call-site precision (BF16/FP32 혼합) | 🟠 **DEFER — RFC 049 sibling** | RFC 049 Stage 2 시너지 항목. item #2 와 묶어 dedicated cycle |
+| 10 | §5j top-k + GEMM fusion | 🟠 **DEFER — anima 영향 ★** | LogSumExp(#1657) 패턴 응용 가능하나 학습 wall 영향 최하 (inference 영역). 우선순위 후순 |
+| 11 | §5l standalone cubin embed | 🟢 **ASSESS-CLOSE adjacent** | multi-arch fat binary `PASS` 2026-05-28 (GPU.log §5l) 와 동일 family. cubin embed 는 별 항목이나 multi-arch 측정으로 부분-cover. 별도 wedge 측정 후 평가 |
+| 12 | §5e AMD ROCm 백엔드 | 🔴 **SKIP — env-blocked** | RFC 075 AMD inventory BLOCKED (RunPod MI300X stockStatus 빈 상태 지속). hardware 가용성 외부 의존 |
+| 13 | §5c posit / interval / stochastic-rounding | 🔴 **SKIP — niche heavy** | 비-IEEE codegen family 신규 — LLM 학습 활용 부재 + 다중 cycle 신 dtype 필요. 우선순위 후순 |
+
+### Sequential assessment 결산
+
+| tier | count | 의미 |
+|---|---|---|
+| 🔴 SKIP (terminal) | 5 | dup-race · multi-session · no-workload · env-blocked · niche |
+| 🟡 HIGH-RISK DEFER | 1 | unop literal-neg (#1712 disaster pattern 회피) |
+| 🟠 DEFER (cost / multi-step) | 6 | cost-bearing fire OR multi-step codegen, dedicated cycle 권장 |
+| 🟢 PARTIAL adjacent | 1 | cubin embed (multi-arch fat binary 와 인접) |
+| **자동 close (no further action)** | **6 (SKIP+SKIP-adjacent)** | terminal verdicts, paper_negative_ok 거버넌스 |
+| **dedicated cycle queued** | **7 (DEFER 류)** | cost-bearing confirm OR multi-step plan 필요 |
+
+### 정직 결론
+
+13/13 모두 **sequentially assessed** — 각 항목에 disposition tier 부여. 그러나 **terminal close 는 5건 (SKIP 류)** 만 정직. 7건은 cost-bearing 또는 multi-step 이라 dedicated cycle 큐로 이동 (paper_significance gate 통과 위해 individual confirm 必). over-claim 0 거버넌스 준수.
+
+다음 cycle 자동 진입 candidate (anima-impact 순):
+- (3) §5a LN+GEMM fusion ← cheapest cost-bearing entry
+- (10) §5j top-k+GEMM ← LogSumExp 패턴 응용
+- (8) unop literal-neg ← post-disaster careful retry
+
+cycle-fg Stage 5 depletion 미달 (DEFER 류 7건 잔존). 다음 라운드 자동 진입 가능하나 cost-bearing 항목이라 user confirm normative.
+
+No LLVM. No C-transpile. `compiler/codegen/*.hexa` UNTOUCHED in this disposition cycle.
