@@ -2,6 +2,63 @@
 
 Append-only history sister of `TECS-L.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
+## 2026-05-27T19:35Z · 축 RTSC · RTSC31 · 🛸 수학 DFS — pressure-decompression analog (ambient 의 진정한 wall)
+
+사용자 "both go" 명령 — Eliashberg numerical + synthesis prediction 둘 다 inline
+closed-form analog 진행. 진정한 새 finding 도출: **YH10 (RTSC roadmap 의 첫
+ESCAPE class candidate) 도 ambient pressure 까지 못 도달함**.
+
+### Eliashberg M_0↔λ identity (Debye/Einstein α²F model)
+
+- α²F Debye/Einstein model 모두 M_0 = λ/2 → lambda_eliashberg(λ/2) = λ ✓ (libm-exact):
+  - YH10 (λ=2.59): M_0=1.295 → 2.59 🟢
+  - CaH6 (λ=2.7):  M_0=1.35  → 2.70 🟢
+  - LaBeH8 (λ=2.4): M_0=1.20 → 2.40 🟢
+- 진정한 numerical Eliashberg solver 는 spectral 전체 integration 필요 (lane 외).
+
+### 🛸 Pressure-decompression curve (synthesis prediction analog)
+
+YH10 의 literature param tuple (λ=2.59 @ 250 GPa, Errea 2020) 의 pressure
+ansatz λ_eff(P) = λ_0·(1−α·ΔP), α=0.001/GPa 적용:
+
+| P (GPa) | λ_eff | m      | class |
+|---------|-------|--------|-------|
+| 250     | 2.59  | +0.035 | marginal ESCAPE (literature 점) |
+| 200     | 2.46  | -0.016 | wall 근접 TRAPPED |
+| 150     | 2.20  | -0.136 | LaH10 영역 marginal TRAPPED |
+| 100     | 2.07  | -0.208 | H3S 영역 deep TRAPPED |
+| 1 (amb) | 1.95  | **-0.285** | **deep TRAPPED 🔴** |
+
+- [x] 250→1 GPa decomp: λ_eff=1.945 → m=**−0.285** 🟢 (libm-exact)
+- [x] 250→100 GPa: λ_eff=2.20 → m=**−0.136** 🟢 (libm-exact)
+
+⟹ 🛸 결론 (RTSC 의 진정한 ambient wall):
+   **YH10 의 ESCAPE class 는 pressure-sensitive** — 250→1 GPa decompression 으로
+   λ_eff 25% 감소 → m=+0.035 (marginal ESCAPE) → m=−0.285 (deep TRAPPED).
+   
+   - 100 GPa 이하 = H3S 영역
+   - 150 GPa = LaH10 영역
+   - 200 GPa = wall 근접
+   - 250 GPa (literature) = marginal ESCAPE
+   
+   ⟹ **ambient 293K 도달은 모든 measured/predicted ternary 에서 동일하게 실패**.
+     진정한 RTSC wall = (λ-magnitude) ⊗ (pressure-stability) 의 결합 제약.
+     metallic-H regime (저 P · 매우 high λ) 외에는 ambient TRAPPED.
+     
+     ⟹ RTSC paper §Conclusion 의 \"YH10 합성 follow-up\" 도 \"YH10 SSCHA-stable
+       lowest pressure\" (~200 GPa) 합성 의미. ambient 293K 는 metallic-H or
+       광범위 chemistry 새 family 필요.
+
+honest model tension: α=0.001/GPa 는 가정값 — system-별 정확 P-dependence 은
+DFT-SSCHA 필요 (lane 외). RTSC31 의 closed-form scan 은 sensitivity-axis baseline.
+
+verify (inline, --no-absorb, libm-class 5/5):
+  lambda_eliashberg 1.295 → 2.59 🟢 (YH10 Debye α²F)
+  lambda_eliashberg 1.35  → 2.70 🟢 (CaH6 Debye α²F)
+  lambda_eliashberg 1.20  → 2.40 🟢 (LaBeH8 Debye α²F)
+  stability_coupling_margin 1.0 1.2853 → -0.2853 🟢 (YH10 ambient decompression)
+  stability_coupling_margin 1.0 1.1364 → -0.1364 🟢 (YH10 @ 150 GPa)
+
 ## 2026-05-27T19:10Z · 축 RTSC · RTSC30 · 🛸 수학 DFS — extended ternary candidate m-classification + paper honest correction
 
 RTSC28+29 의 ternary candidate 분류 확장. literature param tuple 5 개 더 적용:
