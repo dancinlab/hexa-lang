@@ -1,0 +1,36 @@
+// §5a GEMM+bias+SiLU epilogue 1-kernel wedge (Round 6 cycle-fg)
+//
+// Fused single-kernel:
+//   acc      = Σ_k A[m,k] * B[k,n]      ← GEMM inner-product
+//   z        = acc + bias[n]            ← bias add (epilogue 1)
+//   y[m,n]   = z * sigmoid(z)           ← SiLU/Swish activation (epilogue 2)
+//
+// 1 kernel · 1 launch · 1 HBM read-A·read-B·read-bias · 1 HBM write-y
+// vs PyTorch eager: gemm-launch → bias-launch → silu-launch = 3 launches + 3 HBM RTs
+//
+// Validates: hexa nvptx_emit can fuse GEMM-inner-loop + bias-add + builtin
+// activation (sigmoid) in same kernel scope with correct type resolution.
+//
+// Shape: M=4, N=64, K=128 → 256 threads (single CTA, exact fit).
+
+@gpu_kernel
+fn probe_gemm_bias_silu_f64(
+    A: [f64], B: [f64], bias: [f64], y: [f64],
+    M: i64, N: i64, K: i64
+) {
+    let mut tid: i64 = to_i64(gpu_thread_id_x())
+    let total: i64 = M * N
+    if tid >= total { return }
+    let m: i64 = tid / N
+    let n: i64 = tid % N
+    let mut acc: f64 = 0.0
+    let mut k: i64 = 0
+    while k < K {
+        let a_ik: f64 = A[m * K + k]
+        let b_kj: f64 = B[k * N + n]
+        acc = acc + a_ik * b_kj
+        k = k + 1
+    }
+    let z: f64 = acc + bias[n]
+    y[tid] = z * sigmoid(z)
+}
