@@ -200,7 +200,7 @@ fn _mod_reduce(t: [int], m: [int]) -> [int] {
     let mut acc = _zeros()
     let mut bit = 511
     while bit >= 0 {
-        // shift acc left by 1 bit (across 16 limbs)
+        // shift acc left by 1 bit (across 16 limbs); track the bit shifted out
         let mut carry = 0
         let mut i = 0
         while i < 16 {
@@ -209,12 +209,14 @@ fn _mod_reduce(t: [int], m: [int]) -> [int] {
             carry = (v >> 16) & 1
             i = i + 1
         }
+        let shift_out = carry
         // OR in bit `bit` of t
         let limb = bit >> 4
         let off = bit & 15
         acc[0] = acc[0] | ((t[limb] >> off) & 1)
-        // if acc >= m, subtract
-        if _cmp(acc, m) >= 0 {
+        // True value is (shift_out << 256) | acc; subtract m if that true value >= m,
+        // i.e. shift_out=1 (true >= 2^256 > m) OR cmp(acc, m) >= 0.
+        if shift_out != 0 || _cmp(acc, m) >= 0 {
             let s = _sub16(acc, m)
             i = 0
             while i < 16 { acc[i] = s[i]; i = i + 1 }
