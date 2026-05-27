@@ -351,6 +351,11 @@ fn cg_math_sym(name) {
     // user code writing scientific kernels (Track B solar pilot) wants
     // `fmod(x, y)` as a primitive without going through the dispatch.
     if name == "fmod"       { return "hexa_math_fmod" }
+    // f64<->bits reinterpret primitives (RUNTIME, INBOX 2026-05-27). Real
+    // builtin replacing the nanbox.hexa stub (`return 0`). union-pun in
+    // runtime; returns tagged int (float_to_bits) / float (bits_to_float).
+    if name == "float_to_bits" { return "hexa_float_to_bits" }
+    if name == "bits_to_float" { return "hexa_bits_to_float" }
     return ""
 }
 
@@ -6617,6 +6622,9 @@ fn gen2_expr(node) {
                 if name == "erfc"           { return cg_math_sym("erfc") + "(" + a0 + ")" }
                 if name == "bessel_j0"      { return cg_math_sym("bessel_j0") + "(" + a0 + ")" }
                 if name == "bessel_j1"      { return cg_math_sym("bessel_j1") + "(" + a0 + ")" }
+                // f64<->bits reinterpret (RUNTIME builtin, INBOX 2026-05-27).
+                if name == "float_to_bits"  { return cg_math_sym("float_to_bits") + "(" + a0 + ")" }
+                if name == "bits_to_float"  { return cg_math_sym("bits_to_float") + "(" + a0 + ")" }
                 // G2-SHA256-WRAP 2026-05-06 (.roadmap.stdlib.G2) — runtime hexa_sha256
                 // (FIPS 180-4 reference impl in self/native/exec_argv_sha256.c). Closes
                 // the `exec("shasum")` shell-out path in stdlib/cert/meta2_validator.hexa.
@@ -10017,6 +10025,8 @@ fn _is_builtin_name(name) {
     if name == "sin" { return true }
     if name == "cos" { return true }
     if name == "pow" { return true }
+    if name == "float_to_bits" { return true }
+    if name == "bits_to_float" { return true }
     if name == "to_float" { return true }
     if name == "to_int" { return true }
     if name == "min" { return true }
