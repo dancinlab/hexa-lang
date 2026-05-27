@@ -1,0 +1,61 @@
+// HEXA Standard Library — info/lz_complexity
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// LZ77-style dictionary-size complexity of an integer sequence — normalized
+// distinct-substring count ∈ [0, 1]. Promoted from anima
+// bench/info_measure_triad/bench.hexa (PR #1128 INFO-MEASURE-TRIAD), where it
+// served as the collapse-avoid signal orthogonal to Shannon entropy in the
+// UNIVERSE H_287-290 4-measurer triad (Shannon ⊥ LZ ⊥ TE ⊥ scale-free α).
+//
+// Algorithm (Lempel-Ziv dictionary parse):
+//   Scan left-to-right; at each position i, extend the substring seq[i..j]
+//   until it is not yet in the dictionary; insert it, count += 1, advance i = j.
+//   Distinct-substring count divided by sequence length normalizes to [0, 1].
+//
+//   - constant sequence  (1,1,...,1 ×n)            → count ≈ O(√n)  ≪ all-distinct
+//   - alternating        (a,b,a,b,...×n)           → count small    → low
+//   - all-distinct                                 → count = n      → LZ = 1.0
+// Ordering flat < alternating < distinct is the canonical collapse-vs-diversity
+// signal that motivates this measurer's orthogonality to Shannon entropy.
+//
+// Surface:
+//   pub fn lz_complexity(seq: array) -> float
+//     seq = list of ints. Returns normalized distinct-substring count.
+
+pub fn lz_complexity(seq) -> float {
+    let n = len(seq)
+    if n == 0 {
+        return 0.0
+    }
+    let mut dict = #{}
+    let mut count = 0
+    let mut i = 0
+    while i < n {
+        let mut j = i + 1
+        let mut done = false
+        while !done {
+            // build substring key seq[i..j]
+            let mut sub = ""
+            let mut k = i
+            while k < j {
+                sub = sub + "_" + seq[k]
+                k = k + 1
+            }
+            if !has_key(dict, sub) {
+                dict[sub] = 1
+                count = count + 1
+                done = true
+                i = j
+            } else {
+                j = j + 1
+                if j > n {
+                    done = true
+                    i = n
+                }
+            }
+        }
+    }
+    return (count + 0.0) / (n + 0.0)
+}
