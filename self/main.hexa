@@ -6571,10 +6571,13 @@ if len(av) < 3 {
             cloud_args.push(av[ci])
             ci = ci + 1
         }
-        let cloud_is_help = len(cloud_args) == 0 ||
-            (len(cloud_args) == 1 && (cloud_args[0] == "--help" ||
-                                       cloud_args[0] == "-h" ||
-                                       cloud_args[0] == "help"))
+        // INBOX 2026-05-27 #1666 / #1686 follow-up: only intercept empty
+        // args. `hexa cloud help` / `--help` / `-h` now fall through to
+        // bin/hexa-cloud, whose `_cloud_help` lists the canonical verb set
+        // (resolve / ssh-port / rent / list / preflight / watchdog / fire /
+        // ... beyond the cycle-A 6). The inline empty-args text is kept as
+        // a safety net for when the binary is absent.
+        let cloud_is_help = len(cloud_args) == 0
         if cloud_is_help {
             println("hexa cloud — structured-argv remote dispatch (cycle A)")
             println("")

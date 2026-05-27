@@ -1093,9 +1093,16 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
         // for a literal-only negation. Closes the NVPTX `-1.0e308` / `-1`
         // literal case independently of the per-target STMT_UNOP arm
         // (that arm still handles register-neg `-x`).
+        //
+        // For floats we flip the IEEE-754 sign bit (bit 63) instead of
+        // `0.0 - v`, so `-0.0`, `-NaN`, `-Inf` literals all negate exactly
+        // (sign-of-zero preservation · PR #1686 follow-up). `float_to_bits`
+        // / `bits_to_float` are real 4-surface builtins (PR #1678).
         if e.text == "-" {
             if r.operand.kind == "const_float" {
-                return _value(r.ctx, _const_float_op(0.0 - r.operand.float_val))
+                let bits = float_to_bits(r.operand.float_val)
+                let SIGN_BIT: i64 = 1 << 63
+                return _value(r.ctx, _const_float_op(bits_to_float(bits ^ SIGN_BIT)))
             }
             if r.operand.kind == "const_int" {
                 return _value(r.ctx, _const_int_op(0 - r.operand.int_val))
