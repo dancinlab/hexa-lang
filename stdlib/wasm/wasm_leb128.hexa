@@ -1,0 +1,210 @@
+// HEXA Standard Library — wasm/wasm_leb128
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// LEB128 (Little Endian Base 128) variable-length integer codec, the
+// canonical encoding used by the WebAssembly binary format for section
+// lengths, function/local/global/type indices, and immediate operands
+// (RUNTIME.flip B7.wasm-leb128). This module is the wasm32-target
+// scaffold: a parse-clean, @pure surface that a future
+// `stdlib/wasm/wasm_module.hexa` (section emitter / parser) can build
+// against without dragging in compiler internals.
+//
+// Two encodings are provided:
+//
+//   ULEB128 (unsigned)
+//     while n > 0x7f: emit (n & 0x7f) | 0x80; n >>= 7
+//     emit n & 0x7f
+//
+//   SLEB128 (signed, two's complement)
+//     loop:
+//       byte = n & 0x7f
+//       n >>= 7  (arithmetic shift — sign-extends)
+//       done = (n == 0  && (byte & 0x40) == 0) ||
+//              (n == -1 && (byte & 0x40) != 0)
+//       if not done: byte |= 0x80
+//       emit byte
+//       if done: break
+//
+// Decoders are the inverse, mirroring the spec's continuation-bit
+// streaming form. `wasm_uleb128_decode` / `wasm_sleb128_decode` accept
+// a starting `offset` so callers parsing a contiguous section payload
+// can chain calls without re-slicing the byte array.
+//
+// Reference fixtures (from the WebAssembly spec / Wikipedia examples):
+//
+//   uleb128(0)       = [0]
+//   uleb128(42)      = [42]
+//   uleb128(624485)  = [0xE5, 0x8E, 0x26]
+//   sleb128(0)       = [0]
+//   sleb128(-1)      = [0x7F]
+//   sleb128(-123456) = [0xC0, 0xBB, 0x78]
+//
+// Capability profile: pure — no I/O, no globals, no allocation beyond
+// the returned byte array. Decoders return the decoded integer only;
+// callers that need the post-decode offset can compute it from
+// `wasm_uleb128_size` (encoder-side) or by re-scanning continuation
+// bits (kept out of this scaffold to hold the surface minimal).
+//
+// What this file is NOT:
+//   - it is NOT a full wasm module emitter / parser
+//   - it does NOT validate that an encoded value fits a declared
+//     wasm value-type (i32 / i64 / s32 / s33 / u32) — callers gate
+//     range upstream
+//   - it does NOT enforce the "minimum-length encoding" rule the wasm
+//     validator requires (trailing zero / sign-padding bytes are
+//     produced naturally by the canonical algorithm, but the decoders
+//     accept any well-formed LEB128 input — overlong encodings parse
+//     to the same integer)
+//
+// What this file IS:
+//   - the four canonical encode/decode entry points plus a size
+//     predictor (`wasm_uleb128_size`) for pre-allocating section
+//     length placeholders
+//   - parse-clean, @pure, ready to be cited by a wasm module emitter
+//     when the wasm32 backend lands
+
+// -- ULEB128 encode --
+// For each 7-bit group, set the high (continuation) bit on every byte
+// except the last. `n == 0` short-circuits to a single zero byte —
+// the canonical wasm encoding of the unsigned integer 0.
+
+@pure
+pub fn wasm_uleb128_encode(n: int) -> [int] {
+    let mut bytes: [int] = []
+    let mut v: int = n
+    if v == 0 {
+        bytes = bytes + [0]
+        return bytes
+    }
+    while v > 0x7f {
+        let b: int = (v & 0x7f) | 0x80
+        bytes = bytes + [b]
+        v = v >> 7
+    }
+    bytes = bytes + [v & 0x7f]
+    return bytes
+}
+
+// -- ULEB128 size --
+// Predicts the number of bytes `wasm_uleb128_encode(n)` will emit,
+// without allocating the array — useful for two-pass section emitters
+// that reserve a length-prefix slot before knowing the payload size.
+
+@pure
+pub fn wasm_uleb128_size(n: int) -> int {
+    let mut v: int = n
+    if v == 0 {
+        return 1
+    }
+    let mut count: int = 0
+    while v > 0x7f {
+        v = v >> 7
+        count = count + 1
+    }
+    count = count + 1
+    return count
+}
+
+// -- ULEB128 decode --
+// Read continuation-prefixed 7-bit groups starting at `offset`, low
+// bits first. The high bit on a byte signals "more bytes follow";
+// the first byte with high bit clear is the final group.
+
+@pure
+pub fn wasm_uleb128_decode(bytes: [int], offset: int) -> int {
+    let mut result: int = 0
+    let mut shift: int = 0
+    let mut i: int = offset
+    let n: int = len(bytes)
+    while i < n {
+        let b: int = bytes[i]
+        result = result | ((b & 0x7f) << shift)
+        i = i + 1
+        if (b & 0x80) == 0 {
+            return result
+        }
+        shift = shift + 7
+    }
+    return result
+}
+
+// -- SLEB128 encode --
+// Two's-complement variable-length signed encoding. The terminating
+// byte is the first one whose bit-6 sign matches the (arithmetic-
+// shifted) residual: residual 0 with bit-6 clear, or residual -1 with
+// bit-6 set. `n == 0` and `n == -1` collapse to the single-byte cases
+// [0x00] and [0x7F] respectively.
+
+@pure
+pub fn wasm_sleb128_encode(n: int) -> [int] {
+    let mut bytes: [int] = []
+    let mut v: int = n
+    let mut more: int = 1
+    while more == 1 {
+        let mut b: int = v & 0x7f
+        v = v >> 7
+        let sign_bit: int = b & 0x40
+        let done_pos: int = 0
+        let done_neg: int = 0
+        let cond_pos: int = 0
+        let cond_neg: int = 0
+        if v == 0 {
+            if sign_bit == 0 {
+                more = 0
+            } else {
+                b = b | 0x80
+            }
+        } else {
+            if v == -1 {
+                if sign_bit != 0 {
+                    more = 0
+                } else {
+                    b = b | 0x80
+                }
+            } else {
+                b = b | 0x80
+            }
+        }
+        bytes = bytes + [b]
+    }
+    return bytes
+}
+
+// -- SLEB128 decode --
+// Inverse of `wasm_sleb128_encode`. After the final byte (high bit
+// clear), if the sign bit (bit 6) of that byte is set and the
+// accumulated shift hasn't filled the int width, sign-extend by
+// OR-ing -1 shifted left into the result. We use a safe upper bound
+// (64 shifts) — hexa-lang's `int` is platform-signed, so the
+// sign-extend mask covers any LEB128 encoding within range.
+
+@pure
+pub fn wasm_sleb128_decode(bytes: [int], offset: int) -> int {
+    let mut result: int = 0
+    let mut shift: int = 0
+    let mut i: int = offset
+    let n: int = len(bytes)
+    let mut last_byte: int = 0
+    let mut done: int = 0
+    while i < n {
+        let b: int = bytes[i]
+        last_byte = b
+        result = result | ((b & 0x7f) << shift)
+        i = i + 1
+        shift = shift + 7
+        if (b & 0x80) == 0 {
+            done = 1
+            break
+        }
+    }
+    if done == 1 {
+        if (last_byte & 0x40) != 0 {
+            if shift < 64 {
+                result = result | ((-1) << shift)
+            }
+        }
+    }
+    return result
+}
