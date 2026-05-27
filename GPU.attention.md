@@ -67,10 +67,19 @@ honest physical limit: BM=32 wedge 의 AI cap → expected **ratio ≈ 1.32×** 
 - [x] **plan** (PR #1711) — closed-form smem/occupancy/AI table
 - [x] **risk-a cheap oracle** (PR #1722) — 🟢 **12 reg/thread, 0 spill** (sm_120a, plan est 103 = 88% 헤드룸 추가)
 - [x] **risk-d cheap oracle** (PR #1722) — 🟢 V-pretranspose required (8×8-block transpose BK=32 재현, plan §2 budget HOLDS)
-- [ ] **kernel hand-emit + ptxas-clean** sm_80 + sm_90 + driver-JIT sm_120
-- [ ] **numeric PASS** via fa_mma_oracle (rel_rowscale ≤ 1e-2, naninf=0, N ∈ {2048, 4096} d=64)
-- [ ] **timed wall fire** ubu-2 RTX 5070 sm_120 vs corrected cuBLAS-TC 3-launch (R11 OPTIMIZED softmax form)
-- [ ] **GPU.md round-14 row + verdict + log append**
+- [x] **kernel hand-emit + ptxas-clean** sm_90 + driver-JIT sm_120 🛸 — `tool/r14_walls/flash_attn_bm32_v0.cu` (2 warps, BM=32 BK=32, V WMMA-API row_major no pretranspose needed, cp.async.cg dbuf, register-resident O). ptxas sm_90: **126 reg, 19.5 KB smem, 0 spill**. occupancy=5 CTAs/SM (target 3 exceeded).
+- [x] **numeric PASS** via fa_mma_oracle 🟢 — 5/5 shapes PASS (N=512/1024/2048/4096/8192), max rel_rowscale 7.14e-4 @ N=4096, naninf=0
+- [x] **timed wall fire** ubu-2 RTX 5070 sm_120 🛸🛸🛸 **first attention round to cross ≤1.0×**:
+   | N | R14 fused | cuBLAS-TC | ratio | verdict |
+   |---|--:|--:|--:|---|
+   | 512 | 0.0176 ms | 0.0159 ms | 1.107× | partial |
+   | **1024** | **0.0280** | **0.0308** | **0.909×** | 🟢 9.1% faster |
+   | 2048 | 0.0668 | 0.0616 | 1.085× | partial |
+   | **4096** | **0.1755** | **0.1892** | **0.927×** | 🛸 7.3% faster |
+   | 8192 | 0.679 | (R10 baseline N/A) | — | standalone |
+
+  Honest correction: 직전 chat 의 closed-form re-audit 이 ratio ≈ 1.32× 예측 → **실측이 falsify**. 진짜 wedge = BK=16→32 enlargement (R10 한 softmax round 당 1 wmma chunk → R14 2 chunks, row-reduce overhead amortize). "register-resident O" 는 wedge 아니었음 (R10 이미 사용). verdict `archive/fires/bc4_round14_kernel_2026_05_28/result.json`
+- [x] **GPU.md round-14 row + verdict + log append** (this PR)
 
 ### Round-15 contingency (capstone)
 

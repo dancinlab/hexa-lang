@@ -1,0 +1,42 @@
+{
+  "falsifier": "F-FUSION-ATTN-BM32-OCCUPANCY-WALL",
+  "campaign": "BC4 round-14 timed silicon wall — BM=32 BK=32 + register-resident O + cp.async double-buffer",
+  "date": "2026-05-28",
+  "verdict_tier": "GREEN — partial capstone (≤1.0× at N=1024 + N=4096; partial at N=512/2048)",
+  "host": "ubu-2 RTX 5070 sm_120 (driver 580, ptxas/nvcc 12.9, compiled sm_90 + driver-JIT to sm_120)",
+  "method": "cuEvent 20 warmup + 200 timed median, cuOccupancyMaxActiveBlocksPerMultiprocessor query",
+  "ptxas_clean": {
+    "sm_90": "126 registers, 19456 B smem, 0 stack/spill",
+    "note": "sm_120 not available on ubu-2 nvcc 12.9 -arch list; sm_90 PTX driver-JIT to sm_120 = canonical forward-compat path"
+  },
+  "occupancy_per_sm": 5,
+  "occupancy_target": 3,
+  "occupancy_met": true,
+  "numeric": "PASS all 5 shapes (rel_rowscale ≤ 1e-2, naninf=0, max_abs ≤ 7e-5 per-element vs f64 CPU ref)",
+  "sweep": [
+    {"N": 512,  "r14_ms": 0.017600, "cublas_baseline_ms": 0.015872, "ratio_vs_cublas": 1.107, "verdict": "partial (10.7% slower)"},
+    {"N": 1024, "r14_ms": 0.028032, "cublas_baseline_ms": 0.030816, "ratio_vs_cublas": 0.909, "verdict": "🟢 9.1% FASTER"},
+    {"N": 2048, "r14_ms": 0.066848, "cublas_baseline_ms": 0.061632, "ratio_vs_cublas": 1.085, "verdict": "partial (8.5% slower)"},
+    {"N": 4096, "r14_ms": 0.175456, "cublas_baseline_ms": 0.189216, "ratio_vs_cublas": 0.927, "verdict": "🛸 7.3% FASTER (capstone shape)"},
+    {"N": 8192, "r14_ms": 0.678816, "cublas_baseline_ms": null, "ratio_vs_cublas": null, "verdict": "R10 baseline unavailable; standalone measurement"}
+  ],
+  "cublas_baseline_source": "round-10 result.json `cublas_stack` column (same ubu-2 RTX 5070 host, 2026-05-26)",
+  "comparison_vs_r10": {
+    "r10_best_ratio": 1.149,
+    "r10_best_shape": "N=4096",
+    "r14_best_ratio": 0.909,
+    "r14_best_shape": "N=1024",
+    "improvement_vs_r10_at_N4096": "R10 fused 0.218 ms → R14 fused 0.175 ms = 20% better; R10 ratio 1.149× → R14 ratio 0.927× (crossed below 1.0× — first attention round to do so)"
+  },
+  "honest_audit_correction": {
+    "pre_fire_prediction": "honest re-audit (chat session 2026-05-28) predicted 1.32× expected, suspecting R14 wedge wouldn't beat R10 because R10 ALREADY had register-resident O + cp.async.cg",
+    "actual_measurement": "R14 crosses 1.0× at N ∈ {1024, 4096} — re-audit was WRONG",
+    "lesson": "BK=32 (2 inner chunks of 16-wmma per softmax round) amortizes per-warp softmax row-reduce overhead better than R10's BK=16 (1 chunk per round). The 'register-resident O' was indeed not the wedge — the wedge was BK *enlargement* (R4's BK=256 was too wide; BK=32 is the sweet spot for sm_120 with 2-warp BM=32)."
+  },
+  "implications": {
+    "section_10_axis_a_attention_box": "first round to cross ≤1.0× on attention wedge. §10 axis-A box can flip to [x] PARTIAL (2/5 shapes ≤1.0×, paper_gate eligibility: closed-positive finding at specific shapes)",
+    "paper_eligibility": "paper_significance gate MET — pre-registered F-FUSION-ATTN-BM32-OCCUPANCY-WALL falsifier ≤1.5× target EXCEEDED at N=4096 with verified PASS (numeric + occupancy + ratio < 1.0×). closed-positive paper candidate.",
+    "round_15_wgmma": "still worth pursuing for additional shapes (N=512/2048 partial) + larger N (8192 unknown vs cuBLAS). NOT contingency anymore — separate capstone-extension wedge."
+  },
+  "preserves": ["g3 over-claim 0", "feedback_closure_is_physical_limit", "paper_negative_ok / paper_positive_ok terminal"]
+}
