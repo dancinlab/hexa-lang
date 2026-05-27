@@ -1414,3 +1414,11 @@ CLAIMS.tape entries: `fusion_layerblock_cross_layer_structural` (🔵) +
 - [x] H1 PTX to SASS preview — cubin disassemble helper for low-level debug and perf-tune
 - [x] H2 occupancy calculator — kernel launch grid block tuning helper
 - [x] H3 GPU runtime profiler hooks — start stop kernel timer per-kernel microsecond reporting
+
+## round-4 next-list (2026-05-27) — silicon-불요 ML activation + 차단 해소 lane
+- [ ] F5 tanh f64 ML activation — exp emit 미러, parse-gate 검증, RoPE/transformer activation
+- [ ] F6 sigmoid f64 — 1/(1+exp(-x)) exp 미러, logistic activation
+- [ ] F7 pow f64 — exp(y·log x) 합성, 기존 exp+log emit 재사용
+- [ ] F8 atan f64 polynomial — 역삼각, RFC 055 §13 확장
+- [ ] J1 gpu_sass_diff tool — PTX instruction histogram diff perf oracle, host shell
+- [ ] I1 ubu-2 bootstrap link 영구 fix — cuda fns NULL + hexa_exit stub 정식 패치, E1-E4 unblock
