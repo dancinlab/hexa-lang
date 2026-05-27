@@ -169,13 +169,9 @@ if uname != "Linux" && uname != "Darwin" {
 let cflags = if env("CFLAGS") != "" { env("CFLAGS") } else { default_cflags }
 let ldflags = if env("LDFLAGS") != "" { env("LDFLAGS") } else { default_ldflags }
 
-// Optionally link hxvocoder.c for native FFI shims
-let mut extra_src = ""
-let hxvocoder_c = native_dir + "/hxvocoder.c"
-if file_exists(hxvocoder_c) {
-    extra_src = hxvocoder_c
-    info("linking hxvocoder.c (static FFI shims)")
-}
+// No extra native FFI shim source linked by default (hxvocoder.c removed
+// B9.6f — dead, zero callers; the 1,922x vocoder path is pure-hexa).
+let extra_src = ""
 
 let output_basename = exec("basename " + output).trim()
 info("compile: " + cc + " " + cflags + " -I" + build_dir + " -o " + output_basename + " gen.c " + ldflags)
