@@ -18,3 +18,15 @@ LN+GEMM v2 (to_i64-wrapped) (N=256 M=64, 64 outputs)
   max_abs_err = 0.000e+00  (@j=0, gpu=nan ref=-0.51297917078288602)
   ref_abs_max = 0  → max_rel_err = 0.000e+00
   RESULT: FAIL (n_nan=64)
+LN dump diagnostic (N=256, self-thread dump, NO cross-thread read)
+  n_nan_inf = 256 / 256
+  mean=1.3451 var=1.2861 inv=0.881782 (CPU ref)
+  gpu[0]=nan  ref[0]=0.3909255796169902
+  gpu[1]=nan  ref[1]=0.40836411743573314
+  VERDICT: NaN in LN/sm-roundtrip itself → culprit upstream of Phase-2
+=== v3 (separate sm2 array) ===
+LN+GEMM v2 (to_i64-wrapped) (N=256 M=64, 64 outputs)
+  n_nan_inf = 64 / 64
+  max_abs_err = 0.000e+00  (@j=0, gpu=nan ref=-0.51297917078288602)
+  ref_abs_max = 0  → max_rel_err = 0.000e+00
+  RESULT: FAIL (n_nan=64)
