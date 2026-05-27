@@ -28,7 +28,7 @@ flip 캠페인이 안전 quick-win 을 고갈시킨 뒤 남는 진짜 바닥의 
 |------|------|---------|
 | **F1** perf-floor (hxflash/hxlayer/hxvdsp) | 🔴 **TERMINAL** | 측정 285x ML 회귀 → irreducible perf-floor (`F1-perf-floor.txt`) |
 | **F2** vendor/OS-ABI FFI (19 layer-③) | 🔴 **TERMINAL** | audit #1809 — 순수 로직 0, ABI 경계 (`F2-vendor-ffi.txt`) |
-| **F3** runtime-core (640/548 fn · self-emit 20/640 shadow · **12 ACTIVATED** = memset+11 leaf) | 🟠 **LIVE FRONTIER** | genuinely-portable · Path-A 템플릿 스케일아웃 → reloc-free leaf 12 LIVE-주입 (HEXA_RT_SELFEMIT 가드 · default 0-extern 보존 byte-identical) · 4 SKIP (C 대상 부재) · HARD-phase ~620 fn expert serial |
+| **F3** runtime-core (640/548 fn · self-emit 20/640 shadow · **12 ACTIVATED** = memset+11 leaf · class-A reloc 경로 PROVEN) | 🟠 **LIVE FRONTIER** | genuinely-portable · Path-A 템플릿 스케일아웃 → reloc-free leaf 12 LIVE-주입 (HEXA_RT_SELFEMIT 가드 · default 0-extern 보존 byte-identical) · 4 SKIP (C 대상 부재) · class-A reloc 인프라 COMPLETE+PROVEN (arena adrp+add link+run rc=0 · 실 blocker=per-primitive PORT) · HARD-phase ~620 fn expert serial |
 | **F4** sha256 (exec_argv_sha256.c) | 🟢 **RESOLVED→F3** | runtime.c `#include` 조각 · 포팅 타깃 FIPS-검증 (`F4-sha256.txt`) |
 | **F5** boot-asm (3 `.s`) | 🔴 **TERMINAL** | audit #1810 — vector-table 데이터 섹션, RFC 063/064 gated (`F5-boot-asm.txt`) |
 | **F6** bootstrap seed (hexa_cc.c) | 🔴 **TERMINAL** | irreducible bootstrap FLOOR (B9.8) |
@@ -160,9 +160,11 @@ runtime.c 조각이라 F3 로 fold (mis-split 해소). **F3 만이 진짜 open**
     — easy-leaf phase 가 여기서 종료됨을 정밀 특정. 남은 ~620 primitive 는 **cold-batchable
     아님** (전담 expert + 신규 codegen 인프라 필요). 클래스별 분해 (대략치):
     - **(A) reloc-bound state primitive (~30-50 fn)** — `_arena_state` 류 module-global 을
-      `adrp+add` PAGE21/PAGEOFF12 reloc 으로 참조하는 leaf. 인프라 LANDED (`rt_arena_*` 4-fn ·
-      `tool/hexa_ld.hexa` reloc 방출) 이나 **각 신규 global 마다 reloc 레코드 짝 수동 배선** 필요 —
-      cold fan-out 부적합. 필요 인프라 Z = linker reloc-emit 확장 + per-symbol 배선 검수.
+      `adrp+add` PAGE21/PAGEOFF12 reloc 으로 참조하는 leaf. **reloc 방출/링크/실행 인프라 =
+      COMPLETE + PROVEN** (2026-05-28 조사 — `macho_obj_wrap_v3`/`_v2` reloc 테이블 + `rt_arena_*`
+      adrp+add placeholder + `poc_arena_reloc_caller.c` ld64 link+run rc=0). **실제 blocker =
+      인프라 아님 · per-primitive PORT** (runtime.c reloc-bound composite → self-emittable leaf +
+      그 global emit-side 정의). 상세 = 아래 **CLASS-A INFRA RUNBOOK**. cold fan-out 부적합.
     - **(B) call-bound composite (~60-100 fn)** — `hxlcl_strdup`/`strndup`/`atoll`/`strtoll` 처럼
       다른 runtime fn(`malloc`·`atof`) 을 **call** 하는 비-leaf. 호출 규약(stp/blr/ldp frame +
       ARM64 calling convention) + call-target reloc 필요. 필요 인프라 Z = calling-convention
@@ -343,6 +345,104 @@ runtime.c 조각이라 F3 로 fold (mis-split 해소). **F3 만이 진짜 open**
     - `.c` 카운트는 여전히 안 줄어듦 (runtime.c 가 나머지 primitive 보유) — 활성화는
       default-off OPT-IN 가드라 freestanding 산출물 불변. 다음 = state-bound(reloc 필요)
       leaf 활성화 (Path-A 만으로 부족 · reloc-emit 배선 선행).
+
+  - 🔑 **CLASS-A INFRA RUNBOOK — reloc-bound state primitive frontier
+    (2026-05-28 go/no-go 조사 · 결론 = **reloc 인프라 PROVEN · 실제 blocker 는 per-primitive PORT**)**
+
+    **조사 결과 — reloc 방출 인프라는 이미 COMPLETE 이고 end-to-end PROVEN 이다 (NOT blocker)**:
+    PHASE-BOUNDARY MAP 의 (A) class 가 "각 신규 global 마다 reloc 레코드 짝 수동 배선 필요 ·
+    cold fan-out 부적합" 으로 적혔으나, 실측 결과 **reloc 방출/링크/실행 경로 전체가 LANDED 이고
+    이번 조사에서 실제로 link+run 으로 입증됨**. 정정 사항:
+    - `self/codegen/macho.hexa::macho_obj_wrap_v3` (L470) 는 이미 **완전한 reloc 테이블**을 방출:
+      N text symbol + undefined external(`s_section==0` = N_UNDF) + `__const` data + 3 reloc kind
+      (PAGE21=3 · PAGEOFF12=4 · BRANCH26=2). 자매 `macho_obj_wrap_v3_rw` (L703) 는 R+W `__DATA`.
+      `macho_obj_wrap_v2` (L206) 가 PAGE21/PAGEOFF12 2-reloc 의 첫 형태. `reloff/nreloc` 가
+      section_64 에 채워지고 `relocation_info` 8-B 레코드가 정확히 emit 됨 (L614-642).
+    - `self/codegen/runtime_arm64.hexa::rt_arena_*` (L2237/2348/2419/2455) 4-fn 은 이미 각자
+      `adrp x9, _arena_state@PAGE` + `add x9, x9, _arena_state@PAGEOFF` (PAGE21/PAGEOFF12)
+      placeholder 를 방출 — class-A 의 정의 그 자체 (module-global 을 adrp+add reloc 으로 참조).
+    - `tool/hexa_ld.hexa` (L800+ · PR #1282) 는 PAGE21/PAGEOFF12 immediate patch 를 적용.
+    - **end-to-end 입증 (2026-05-28 · mini arm64 macOS)**: `poc_arena_bundle_emit.hexa` →
+      `/tmp/poc_arena_bundle.o` (863 B · `otool -rv` = 10 PAGE21/PAGEOFF12 records → `_arena_state` ·
+      `nm -u` = **undefined 0개** = 0-extran 보존) → 신규 오라클
+      `test/native_build/poc_arena_reloc_caller.c` 가 ld64 link (exit 0) + **RUN rc=0**.
+      4 reloc-bound arena primitive 가 `_arena_state` 를 정확히 resolve (bump delta=16 ·
+      reset 후 realloc==first · overflow→NULL · release 후 re-init OK). reloc 가 틀렸다면
+      adrp+add 가 stale 주소를 계산해 invariant 가 깨지거나 SIGSEGV — rc=0 = reloc 정확.
+      이는 byte-emit POC 가 입증 못 하던 부분(ld64 가 reloc 를 PATCH 함)을 committed 오라클로 고정.
+
+    **그럼 실제 class-A blocker 는 무엇인가 — PORT, not 인프라**:
+    reloc-FREE leaf 활성화(#1836/#1837)가 쉬웠던 이유 = runtime.c 에 명명된 `hxlcl_<name>`
+    static 함수가 있어 `#ifdef HEXA_RT_SELFEMIT` → extern 가드만 추가하면 self-emit `.o` 가
+    심볼을 대체. class-A 는 이 활성화 슬롯 조건을 **둘 다** 만족하는 runtime.c primitive 가 희소:
+    - (a) reloc-bound (global 을 adrp+add 로 참조) **AND** (b) 명명된 `hxlcl_*` override 슬롯 ·
+      clean leaf (struct ABI/malloc/HexaVal 無).
+    - 실측: runtime.c 의 깨끗한 class-A 후보 `_arena_state`(arena) 는 **runtime.c 에 호출처 0개**
+      (grep — shadow POC 일 뿐 live 미배선). 반대로 runtime.c 에서 global 을 참조하는 명명 함수
+      (`gmtime_r`+`mdays[12]` table L2073 · base64 `_b64_enc` L12067) 는 전부 **class-B/D
+      composite** — `struct tm` 필드 stores · `malloc` · HexaVal 접근 = clean leaf 아님.
+      `hxlcl_errno` (L75) 는 `#define errno hxlcl_errno` 인라인 치환이라 wrapper 함수 슬롯 없음.
+    - 즉 class-A 의 남은 일 = **runtime.c 의 reloc-bound composite 를 self-emittable leaf 로
+      재작성하는 PORT** (그 함수가 참조하는 global 을 self-emit `.o` 가 `__const`/`__DATA` 로
+      정의 + reloc 으로 묶기 + runtime.c 가 그 global 을 double-define 하지 않도록 가드).
+      이건 cold fan-out 부적합 = 함수별 신중 PORT (expert serial).
+
+    **bounded 첫 increment (이번 LANDED)**: arena 는 호출처가 없어 활성화해도 dead-symbol →
+    인위적이므로 force 안 함 (honest). 대신 **class-A reloc 경로를 committed 오라클로 고정** —
+    arena reloc 감사(`test/native_build/arena_reloc_audit.md`)의 "verification PLAN" 을
+    재현 가능한 PASS 로 전환. `poc_arena_reloc_caller.c` 1 파일 + 이 runbook (runtime.c 무변경 ·
+    0-extern 중립 · regen/fixpoint 무위험). 이로써 class-A 가 "needs infra" → **"infra DONE,
+    needs PORT"** 으로 정밀 재분류됨.
+
+    **class-A PORT 단위 레시피 (per-primitive · expert serial)** — 첫 실제 활성화 대상이
+    생기면 (= reloc-bound clean-leaf 슬롯을 가진 runtime.c 함수를 식별/생성하면):
+    1. **runtime.c 가드**: 대상 `hxlcl_<name>` static → `#ifdef HEXA_RT_SELFEMIT extern …`
+       (#1836 memset 템플릿 그대로). ⚠ 그 함수가 참조하는 global(`<sym>`)도 동일 가드 —
+       guard ON 일 때 runtime.c 는 `<sym>` 을 정의하지 않고 `.o` 가 `__DATA`/`__const` 로 정의
+       (double-define = ld64 duplicate symbol). ⚠ runtime.c WIPE-PRONE · regen 후 re-grep.
+    2. **emit 드라이버** `test/native_build/emit_hxlcl_<name>_o.hexa`: rt_<name>() self-emit
+       바이트 (adrp+add placeholder 포함) 를 `macho_obj_wrap_v3` (또는 R+W global 이면
+       `_v3_rw`) 로 감싸 — text symbol `_hxlcl_<name>` + data symbol `_<sym>` + PAGE21/PAGEOFF12
+       reloc 레코드 (reloc_offs/kinds/symnums 배선). `poc_arena_bundle_emit.hexa` 가 정확한
+       템플릿 (5 ADRP+ADD pair · symnum→data idx). reloc-FREE 드라이버(`emit_hxlcl_memset_o.hexa`)는
+       v1 single-symbol 이라 reloc 미지원 → v3 로 전환 필요.
+    3. **빌드 레시피** `tool/build_hexa_cli.hexa` L333 selfemit 블록: 새 leaf 를 `leaves`/`upper`
+       배열에 추가 (이미 12개 reloc-free 가 등록된 동일 루프). reloc `.o` 도 같은 ahead-link 슬롯
+       (`selfemit_objs`) 으로 driver+module_loader 양쪽 링크 — clang 이 reloc `.o` 를 동일 수용
+       (위 입증). global 이 R+W 면 `.o` 가 `__DATA` 정의 = runtime 시작 시 zero-init 필요 여부 확인.
+    4. **dual-build 검증** (#1837 패턴): (a) default(가드 off) — `nm` undefined set =
+       origin/main baseline byte-identical (0-extern 보존) · (b) HEXA_RT_SELFEMIT=1 —
+       `_hxlcl_<name>` = strong `T` · `_<sym>` 정의 1곳뿐 (duplicate 無) · live disasm =
+       adrp+add 가 reloc 으로 patch 된 immediate · LIVE 호출 동작 = libc 오라클 동일.
+    5. **fixpoint 무위험** (emit 드라이버 `use` 0 = `hexa_cc.c` regen 무관 · #1836).
+       ⚠ regen heavy → `pool on mini` (arm64) · ubu 는 arm64 byte-diff 불가.
+
+    **인프라 컴포넌트 — 보유(✓) vs 부족(✗)**:
+    - ✓ ADRP+ADD (PAGE21/PAGEOFF12) 명령 인코딩 — `rt_arena_*` 에 LANDED + placeholder 패턴.
+    - ✓ Mach-O reloc 레코드 (PAGE21/PAGEOFF12/BRANCH26) — `macho_obj_wrap_v3`/`_v2` L614-642.
+    - ✓ symtab + undefined-extern (N_UNDF) + `__const`/`__DATA` data section — v3/v3_rw.
+    - ✓ ld64 link + run-time patch 입증 — `poc_arena_reloc_caller.c` rc=0.
+    - ✓ hexa-native linker reloc patch — `tool/hexa_ld.hexa` PR #1282 (PAGE21/PAGEOFF12).
+    - ✗ (남은 일) per-primitive PORT — runtime.c reloc-bound composite → self-emittable leaf +
+      그 global 의 emit-side 정의 + double-define 가드. **인프라 부족이 아님 = 함수별 재작성 노동.**
+    - ⚠ (class-B 한정 caveat · class-A 무관) BRANCH26 cross-object `bl` 은 ld64 가 LC_DYSYMTAB
+      을 요구할 수 있음 (macho.hexa L452 주석) — 현재 LC_SYMTAB only. class-A 의 PAGE21/PAGEOFF12
+      defined-symbol reloc 은 DYSYMTAB 불필요 (위 link exit 0 = 무문제). DYSYMTAB 은 (B) call-bound
+      선행조건.
+
+    **effort 추정 (class-A 전체 ~30-50 fn)**: 인프라 = **0d (DONE+PROVEN)**. 첫 실제 PORT 단위
+    (reloc-bound clean-leaf 슬롯 식별/생성 + 1-PR 활성화) ≈ **1-2d expert** (대부분 = 대상 함수의
+    self-emit 바이트 작성 + global double-define 가드 검수). 이후 동급 PORT ≈ 0.5-1d/개. 단,
+    runtime.c 의 reloc-bound 함수 대부분이 class-B/D composite 라 **순수 class-A clean-leaf 모수는
+    작음** — 실제로는 (A) 의 다수가 (D) HexaVal-repr 활성화와 함께 풀리는 경향 (repr global +
+    state global 이 얽힘). honest: class-A 의 reloc 인프라는 끝났고, 남은 건 PORT 인데 그 PORT 가
+    대개 (D) 와 결합 → class-A 단독 bounded PR 의 모수는 arena(dead) 외엔 희소.
+
+    **go/no-go 결론**: reloc 인프라는 **PROVEN** (force 불필요). 이번 bounded LANDED =
+    class-A reloc 경로의 committed link+run 오라클 (`poc_arena_reloc_caller.c`). class-A 를
+    "needs reloc infra" → **"infra DONE + PROVEN · 남은 건 per-primitive PORT (대개 D 와 결합)"**
+    으로 정밀 재분류. 다음 expert increment = runtime.c 의 reloc-bound clean-leaf 슬롯을 식별/생성
+    (또는 arena 를 live 배선) 후 위 5-step PORT 레시피로 1-PR 활성화.
 
 ### F4 — sha256 entangled
 
