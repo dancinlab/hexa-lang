@@ -1,5 +1,19 @@
 # INBOX — log
 
+## 2026-05-27T06:30Z — `~/.hx/packages/hexa-lang` install stale @ #1241 (ec1cd33) — atlas/verify arms invisible (TECS-L RTSC3 upstream)
+
+**severity: medium** — live `~/.hx/bin/hexa` 가 dispatch 하는 atlas/verify 소스가 install 패키지 `~/.hx/packages/hexa-lang/tool/{atlas_cli,verify_cli}.hexa` 이며, 이 패키지는 **#1241 (ec1cd33) 에 frozen** (main 은 #1520+). 결과:
+- `hexa atlas register --from-falsify …` → "no discovery arm selected" (falsify/citation/defer/fence 4 arm 부재 — #1503 미반영)
+- `hexa verify --expr allen_dynes_tc 1.135 1254.2 0.10` → 🟠 INSUFFICIENT "no path" (allen_dynes_tc calc-path 부재 — #1517 미반영)
+- `hexa atlas lookup falsified-mg2irh6_ambient_stable` (default embed) → not found (stale embedded.gen.hexa)
+
+**진단**: 코드 버그 아님 — `hx install hexa-lang` 가 #1241 이후 재실행 안 됨 (install-channel sync lag). source SSOT (main) 은 정상. 회피: `HEXA_ATLAS_EMBED=<repo>/compiler/atlas hexa atlas lookup <id>` 로 worktree/main 의 embedded.gen.hexa 직접 읽으면 5 closed-negative 모두 lookup OK (검증 완료). `bin/hexa-atlas` sub-binary 도 부재 (build_hexa_atlas.sh 미실행 · Mac 24GB SIGKILL risk → pool offload 권장).
+
+**제안 fix**: (a) install-channel 재sync (`hx install hexa-lang` @ main HEAD — 별도 release 작업) · (b) `bin/hexa-atlas` rebuild = `tool/build_hexa_atlas.sh` 를 pool ubu/mini offload (Mac local 금지, heavy flat). source-fix 불필요 (이미 main).
+
+- [ ] **install 패키지 #1241→HEAD sync** — atlas/verify arms 활성화
+- [ ] **`bin/hexa-atlas` rebuild (pool offload)** — atlas sub-binary fast-path 복구
+
 ## 2026-05-27 — ✅RESOLVED stdlib/core/hash sha256/hmac compiled-path SIGSEGV (`let`-reassign → `let mut` fix)
 
 **RESOLVED 2026-05-27**: root cause = immutable `let` array with index-write (`let w=[]; w[ci]=…`) + scalar `let`-reassign across the 64-round loop → compiled `hexa run` miscompile/SIGSEGV. Fix = `let mut` + in-place `.push()` (sha256_digest_bytes + hmac_sha256_bytes). Verified: sha256("abc")=ba7816bf… + HMAC + PBKDF2 RFC6070 (120fb6cf…) all PASS on compiled path. Unblocks pbkdf2/HKDF.
