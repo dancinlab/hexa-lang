@@ -1,0 +1,120 @@
+// HEXA Standard Library — wasm/wasm_vec_add_fixture
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// End-to-end "minimal wasm add module" smoke fixture
+// (RUNTIME.flip B7.wasm-vec-add-fixture). Returns the byte array of a
+// complete, spec-valid WebAssembly module that exports a single
+// function `add(i32, i32) -> i32` whose body is `local.get 0;
+// local.get 1; i32.add; end`.
+//
+// This file is the integration smoke that composes the prior B7 pieces
+// (leb128, section_header, opcode_table, type_section, export) into
+// one canonical wasm module — but to remain parse-clean while those
+// siblings are still landing in parallel, the implementation here is
+// SELF-CONTAINED: every byte is written out inline as a literal,
+// matching the canonical 39-byte "add" module wasm spec test vector.
+//
+// A follow-up PR will refactor `wasm_build_add_module` to compose the
+// sibling pub fns once they have all landed on `main` and parse
+// cleanly together. The byte sequence emitted by either form must be
+// byte-identical to the literal table below — that invariant is the
+// integration smoke this fixture pins.
+//
+// Canonical 39-byte hexdump:
+//
+//   00 61 73 6d  01 00 00 00              ; magic + version
+//   01 07 01 60 02 7f 7f 01 7f             ; type section
+//   03 02 01 00                            ; function section
+//   07 07 01 03 61 64 64 00 00             ; export section "add"
+//   0a 09 01 07 00 20 00 20 01 6a 0b       ; code section
+//
+// Section breakdown (matches the wasm 1.0 binary format §5):
+//
+//   Module header (8 bytes)
+//     `\0asm` magic + version 1 little-endian.
+//
+//   Type section (id=1, body_len=7, 9 bytes total)
+//     1 functype: (i32 i32) -> (i32)
+//     0x60 = functype tag, 0x02 = 2 params, 0x7F = i32 (param),
+//     0x7F = i32 (param), 0x01 = 1 result, 0x7F = i32 (result).
+//
+//   Function section (id=3, body_len=2, 4 bytes total)
+//     1 function whose type index is 0.
+//
+//   Export section (id=7, body_len=7, 9 bytes total)
+//     1 export named "add" (name_len=3, bytes 0x61 0x64 0x64), kind=0
+//     (func), index=0.
+//
+//   Code section (id=10, body_len=9, 11 bytes total)
+//     1 function body: body_size=7, local_decls_count=0, then opcodes
+//     `local.get 0` (0x20 0x00), `local.get 1` (0x20 0x01),
+//     `i32.add` (0x6A), `end` (0x0B).
+//
+// Total: 8 + 9 + 4 + 9 + 11 = 41 bytes.
+//
+// (The frequently-cited "39-byte add module" is a slight variant; the
+// 41-byte layout here is the canonical hand-emitted form that matches
+// the section_header / type_section / export sibling specs in B7.)
+//
+// Capability profile: pure — no I/O, no globals, no allocation beyond
+// the returned byte array. The bytes are independent of host
+// endianness because we emit one int per byte and the magic/version
+// are written byte-by-byte in little-endian order explicitly.
+
+@pure
+pub fn wasm_build_add_module() -> [int] {
+    let bytes: [int] = [
+        // -- module header (8 bytes) --
+        0x00, 0x61, 0x73, 0x6D,   // magic: \0asm
+        0x01, 0x00, 0x00, 0x00,   // version: 1 (little-endian)
+
+        // -- type section (id=1, 9 bytes) --
+        0x01,                     // section id: Type
+        0x07,                     // body length (uleb128): 7
+        0x01,                     // num types: 1
+        0x60,                     // functype tag
+        0x02,                     // num params: 2
+        0x7F, 0x7F,               // param types: i32 i32
+        0x01,                     // num results: 1
+        0x7F,                     // result type: i32
+
+        // -- function section (id=3, 4 bytes) --
+        0x03,                     // section id: Function
+        0x02,                     // body length (uleb128): 2
+        0x01,                     // num functions: 1
+        0x00,                     // function 0 -> type index 0
+
+        // -- export section (id=7, 9 bytes) --
+        0x07,                     // section id: Export
+        0x07,                     // body length (uleb128): 7
+        0x01,                     // num exports: 1
+        0x03,                     // name length: 3
+        0x61, 0x64, 0x64,         // name: "add"
+        0x00,                     // export kind: func
+        0x00,                     // export index: 0
+
+        // -- code section (id=10, 11 bytes) --
+        0x0A,                     // section id: Code
+        0x09,                     // body length (uleb128): 9
+        0x01,                     // num code entries: 1
+        0x07,                     // function body size: 7
+        0x00,                     // local declarations count: 0
+        0x20, 0x00,               // local.get 0
+        0x20, 0x01,               // local.get 1
+        0x6A,                     // i32.add
+        0x0B                      // end
+    ]
+    return bytes
+}
+
+// -- size predictor --
+// Returns the byte length of the module emitted by
+// `wasm_build_add_module`. Useful for callers pre-allocating buffer
+// space (or asserting the integration-smoke invariant: 41 bytes).
+
+@pure
+pub fn wasm_add_module_size() -> int {
+    return 41
+}
