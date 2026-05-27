@@ -1,0 +1,95 @@
+// HEXA Standard Library — posix/posix_calling_convention_arm64
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// arm64 (AArch64) syscall calling convention constants — Darwin (XNU) +
+// Linux. This is the convention-table half of the cross-platform inline-svc
+// campaign, sibling of:
+//   stdlib/posix/linux_syscalls.hexa   — syscall NUMBER table (Linux, PR #1738)
+//   stdlib/posix/darwin_syscalls.hexa  — syscall NUMBER table (Darwin, PR #1743)
+//
+// Where those siblings give you the syscall number per `name`, this file
+// gives you the REGISTERS + INSTRUCTION mnemonic the emit pass needs to
+// actually lower a call: argument registers, result register, syscall-number
+// register, and the `svc` trap mnemonic with the per-OS immediate.
+//
+// arm64 syscall ABI (both Darwin and Linux):
+//   - Args 0..7 in x0..x7 (8 register-passed args max — beyond that is stack).
+//   - Result in x0 (Darwin additionally sets the carry flag on error).
+//   - Syscall number in:
+//       * x16  on Darwin (XNU convention)
+//       * x8   on Linux  (AArch64 EABI per asm-generic/unistd.h)
+//   - Trap instruction:
+//       * `svc #0x80`  on Darwin (XNU svc class — 0x80 selects BSD/Mach class)
+//       * `svc #0`     on Linux  (kernel ignores the immediate, convention = 0)
+//
+// References:
+//   Darwin: xnu/osfmk/arm64/sleh.c (svc dispatch) + AAPCS64
+//   Linux:  Documentation/arm64/syscall-vectors.rst + asm-generic/unistd.h
+//   AAPCS64 (Procedure Call Standard for the ARM 64-bit Architecture)
+//
+// Surface:
+//   pub fn posix_cc_arm64_arg_register(idx: int) -> str
+//   pub fn posix_cc_arm64_result_register() -> str
+//   pub fn posix_cc_arm64_syscall_number_register_darwin() -> str
+//   pub fn posix_cc_arm64_syscall_number_register_linux() -> str
+//   pub fn posix_cc_arm64_arg_count() -> int
+//   pub fn posix_cc_arm64_syscall_instruction_darwin() -> str
+//   pub fn posix_cc_arm64_syscall_instruction_linux() -> str
+//
+// All lookups are tiny constant-table dispatches. The convention is fixed by
+// the AAPCS64 + per-OS kernel ABI; these constants are stable across kernel
+// versions (the ABI has never changed since arm64 launch).
+
+@pure
+pub fn posix_cc_arm64_arg_count() -> int {
+    // arm64 passes the first 8 integer args in registers (x0..x7) per AAPCS64.
+    return 8
+}
+
+@pure
+pub fn posix_cc_arm64_arg_register(idx: int) -> str {
+    // Arg `idx` (0-based) lives in register x<idx> for idx ∈ [0, 7].
+    // Out-of-range returns "" — caller must stack-pass beyond 8 args.
+    if idx == 0 { return "x0" }
+    if idx == 1 { return "x1" }
+    if idx == 2 { return "x2" }
+    if idx == 3 { return "x3" }
+    if idx == 4 { return "x4" }
+    if idx == 5 { return "x5" }
+    if idx == 6 { return "x6" }
+    if idx == 7 { return "x7" }
+    return ""
+}
+
+@pure
+pub fn posix_cc_arm64_result_register() -> str {
+    // Syscall return value lands in x0 on both Darwin and Linux.
+    // Darwin additionally sets the carry flag on error (caller checks CF).
+    return "x0"
+}
+
+@pure
+pub fn posix_cc_arm64_syscall_number_register_darwin() -> str {
+    // XNU convention: syscall number in x16 before `svc #0x80`.
+    return "x16"
+}
+
+@pure
+pub fn posix_cc_arm64_syscall_number_register_linux() -> str {
+    // AArch64 EABI: syscall number in x8 before `svc #0`.
+    return "x8"
+}
+
+@pure
+pub fn posix_cc_arm64_syscall_instruction_darwin() -> str {
+    // Darwin/XNU svc trap — immediate 0x80 selects the BSD/Mach class.
+    return "svc #0x80"
+}
+
+@pure
+pub fn posix_cc_arm64_syscall_instruction_linux() -> str {
+    // Linux svc trap — immediate is ignored by the kernel; convention is 0.
+    return "svc #0"
+}
