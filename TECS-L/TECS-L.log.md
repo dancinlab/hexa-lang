@@ -2,6 +2,41 @@
 
 Append-only history sister of `TECS-L.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
+## 2026-05-27T17:54Z · 축 RTSC · RTSC15 · 수학 DFS — Pippard 내재 coherence length ξ₀
+
+BCS 의 intrinsic (clean-limit) coherence length closed-form. ξ₀ = ℏ·v_F / (π·Δ(0)),
+Δ(0) = 1.764·k_B·Tc. RTSC 의 type-II classification baseline. CODATA 2018.
+
+- [x] source 재현: v_F=10⁶ m/s, Tc=10K → ξ₀=**1.3783e-07 m** (138 nm) 🟢 (Δ ≤ 1e-9)
+- [x] H3S realistic: v_F=10⁶ m/s, Tc=203K → ξ₀=**6.79e-09 m** (6.79 nm) 🟢
+       ⟹ H3S 실측 ξ₀ ≈ 1.5-2 nm (Hc2 추정) << 6.79 nm (clean BCS).
+          dirty-limit Pippard ξ_eff = √(ξ₀·ℓ_mean-free) 가 작음 → strong type-II.
+
+⟹ 결론 (RTSC type-II): Pippard ξ₀ 가 Tc 증가 시 1/Tc 로 줄어 strong type-II 가
+   강해짐. H3S (Tc=203) 의 ξ₀ ≈ 7 nm = atomic scale 의 ~70× → mesoscopic
+   coherence. 293K 도달 시 ξ₀ → 6.79·(203/293) ≈ 4.7 nm.
+
+## 2026-05-27T17:52Z · 축 RTSC · RTSC14 · 수학 DFS — Eliashberg λ = 2·M₀ (α²F moment)
+
+Eliashberg 1960 의 electron-phonon coupling λ 와 spectral function α²F 의
+ω⁻¹-weighted first moment M₀ = ∫₀^∞ α²F(ω)/ω dω 의 관계. λ = 2·M₀ (Carbotte
+1990 RMP 62:1027 Eq.2.8). RTSC 의 λ 측정 baseline.
+
+- [x] 정의 재현: M₀=1.0 → λ=2.0 🟢 (Δ ≤ 1e-9)
+- [x] h3cl mapping: λ=1.3 ⟹ M₀=0.65 → λ=1.3 🟢 (Δ=2.2e-16, libm-class)
+
+⟹ 결론 (mapping): h3cl 의 측정 λ=1.3 = α²F 의 ω⁻¹-weighted integral 이 0.65.
+   λ↑ ⟺ M₀↑ ⟺ low-frequency phonon contribution↑ (α²F/ω → high). 즉 binary
+   의 λ 한계 (≲2.5, RTSC9 conclusion) = α²F 의 low-ω peak 강도 한계.
+   metallic hydrogen 의 모든 ω 가 high (H 가벼움) → M₀ 자체는 작아도 ω_log 큼.
+
+verify (inline, --no-absorb):
+  lambda_eliashberg 1.0 → 2.0
+  lambda_eliashberg 0.65 → 1.3
+  pippard_coherence 1e6 10 → 1.3783e-07
+  pippard_coherence 1e6 203 → 6.79e-09
+
+
 ## 2026-05-27T17:48Z · 축 RTSC · RTSC13 · 수학 DFS — BCS universal gap ratio 2Δ(0)/k_B·Tc = 3.5278 + Δ(0)
 
 BCS 1957 의 weak-coupling universal gap ratio (재질 무관). RTSC 의 BCS-vs-strong-
