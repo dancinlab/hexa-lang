@@ -1433,6 +1433,16 @@ CLAIMS.tape entries: `fusion_layerblock_cross_layer_structural` (🔵) +
 - [ ] F3A flame bnb 8-bit quant — int8 weight quant/dequant + GPU kernel
 - [ ] F3B flame cross-attn op + ag_tape backward — encoder-decoder attention autograd
 
+## round-6 next-list (2026-05-27) — AI/ML infra depth
+> 9-family + libm-tight + flame backlog (round-5) 너머 — production ML stack 구성요소.
+- [ ] M1 FlashAttention v3 hexa-native — memory-efficient attention + KV cache (긴 컨텍스트 추론)
+- [ ] M2 LoRA adapter (PEFT) — low-rank fine-tuning, weight delta merge/unmerge
+- [ ] M3 mixed precision (bf16 GEMM + fp8 scaling) — 대형 모델 학습 메모리 효율
+- [ ] M4 autograd JIT — computation graph capture + retrace (dynamic eager mode)
+- [ ] M5 gradient accumulation + FSDP shard — multi-GPU 학습 sharded data parallel
+- [ ] M6 cuBLAS bridge — optimal GEMM 호환 (perf baseline + roofline 측정)
+- [ ] M7 ONNX importer — 외부 모델 import (HuggingFace 호환성)
+
 ## flame V3 port (from INBOX #2 — P1 학습-정확도 코어 COMPLETE, P2/P3 여기로 이관 2026-05-27)
 > P1 코어 landed: full-position CE forward (#1481) + RFC 059 backward design (#1487) + P1②-a/b/c backward impl (#1489/1491/1492), 전부 grad-check 🔵. anima ConsciousDecoderV3 학습-정확도 경로 완결. 아래는 저우선(차단 아님, byte-level fallback 동작) enhancement.
 - [ ] flame-P2a rope base 인자화 — `nn_rope_build_tables` base 10000 하드코딩 → 파라미터화 (Qwen=50000). trivial, parse-gate 검증
