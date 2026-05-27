@@ -431,17 +431,25 @@ fn bpe_decode(tok, ids) {
             token_str = tok.id_to_token[id]
         }
 
-        // Convert BPE chars back to raw bytes
+        // Convert BPE chars back to raw bytes. UTF-8 codepoint-aware: GPT-2
+        // byte-to-unicode glyphs like U+0120 'G' (0xC4 0xA0) are 2+ bytes —
+        // size the slice by the lead byte. Pure ASCII tokens stay clen=1
+        // (zero behavior change for the common path).
         let mut j = 0
         while j < len(token_str) {
-            let c = token_str.slice(j, j + 1)
+            let b0 = char_code(token_str, j)
+            let mut clen = 1
+            if b0 >= 240 { clen = 4 }
+            else if b0 >= 224 { clen = 3 }
+            else if b0 >= 192 { clen = 2 }
+            let c = token_str.slice(j, j + clen)
             let byte_val = bpe_char_to_byte(char_to_byte, c)
             if byte_val >= 0 {
                 text = text + chr(byte_val)
             } else {
                 text = text + c
             }
-            j = j + 1
+            j = j + clen
         }
         i = i + 1
     }
