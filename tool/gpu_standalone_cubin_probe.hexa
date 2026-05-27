@@ -1,0 +1,239 @@
+// tool/gpu_standalone_cubin_probe.hexa — deployment-capability probe.
+//
+// Demonstrates that a hexa-emit kernel can deploy WITHOUT linking
+// libcublas / libcudart — the .cubin is ptxas-compiled AOT, embedded
+// directly into the host binary via xxd, loaded via cuModuleLoadData
+// which lives in libcuda.so.1 (the always-present CUDA driver).
+//
+// Comparison: a cuBLAS-using launcher (e.g.
+// tool/fusion_epilogue_cublas_timed.c) requires `-lcublas -lcudart`
+// and at runtime pulls in libcublas.so.12, libcudart.so.12,
+// libnvJitLink.so.12, etc — ~750 MB of NVIDIA runtime libs.  This
+// probe links `-lcuda` only — a ~5 MB driver shim that ships with
+// every NVIDIA driver install (no separate cuBLAS / cuDNN dep).
+//
+// Output: archive/fires/gpu_standalone_cubin_probe_2026_05_28/
+//           result.json · fire.log · ldd_standalone.txt · ldd_cublas_using.txt
+//
+// Run: hexa run tool/gpu_standalone_cubin_probe.hexa
+//      (executes remote ubu-2 fire under flock; pulls artifacts back)
+//
+// Honest verdict — the path the host C uses is:
+//   cuInit / cuDeviceGet / cuCtxCreate / cuModuleLoadData /
+//   cuModuleGetFunction / cuMemAlloc / cuMemcpyHtoD / cuLaunchKernel /
+//   cuCtxSynchronize / cuMemcpyDtoH / cuMemFree / cuModuleUnload /
+//   cuCtxDestroy / cuGetErrorString.
+// All 14 symbols live in libcuda.so.1.  No cudart, no cublas.
+
+use "stdlib/cloud/cloud"
+
+fn _wstr(p: str, s: str) {
+    // Atomic-ish file write helper.
+    write_file(p, s)
+}
+
+fn main(av: [str]) {
+    let host = "ubu-2"
+    let remote_dir = "/tmp/gpu_standalone_cubin_probe_2026_05_28"
+
+    let repo_root = exec_capture("pwd").stdout_
+    // Trim trailing newline (exec_capture preserves stdout verbatim).
+    let mut rr = repo_root
+    let rn = len(rr)
+    if rn > 0 {
+        if rr.substring(rn - 1, rn) == "\n" {
+            rr = rr.substring(0, rn - 1)
+        }
+    }
+    let fire_dir = rr + "/archive/fires/gpu_standalone_cubin_probe_2026_05_28"
+    let ptx_src = rr + "/archive/fires/nvptx_unop_close_2026_05_27/unop_wrapped.ptx"
+    let host_c = rr + "/tool/gpu_standalone_cubin_host.c"
+    let cublas_c = rr + "/tool/fusion_epilogue_cublas_timed.c"
+
+    // mkdir local fire dir.
+    let _mk = exec_capture("mkdir -p " + fire_dir)
+
+    println("=== gpu-standalone-cubin-probe — " + host + " ===")
+    println("[probe] repo root : " + rr)
+    println("[probe] fire dir  : " + fire_dir)
+    println("[probe] ptx src   : " + ptx_src)
+    println("[probe] host.c    : " + host_c)
+    println("[probe] cublas.c  : " + cublas_c)
+
+    if !file_exists(ptx_src) {
+        eprintln("[probe] FAIL stage=preflight — PTX missing: " + ptx_src)
+        exit(2)
+    }
+    if !file_exists(host_c) {
+        eprintln("[probe] FAIL stage=preflight — host.c missing: " + host_c)
+        exit(2)
+    }
+    if !file_exists(cublas_c) {
+        eprintln("[probe] FAIL stage=preflight — cublas.c missing: " + cublas_c)
+        exit(2)
+    }
+
+    let ssh_opts: [str] = []
+
+    // ── 1) prep remote dir ──────────────────────────────────────────
+    println("[probe] [1/6] ssh " + host + " — prep remote dir")
+    let r1 = cloud_exec_opts(host, ssh_opts,
+        "rm -rf " + remote_dir + " && mkdir -p " + remote_dir)
+    if r1.ok != 1 {
+        eprintln("[probe] FAIL stage=mkdir — " + r1.message)
+        exit(3)
+    }
+
+    // ── 2) upload source artifacts ──────────────────────────────────
+    println("[probe] [2/6] scp source artifacts")
+    let u1 = cloud_copy_to_opts(host, ssh_opts, ptx_src, remote_dir + "/unop_wrapped.ptx")
+    if u1.ok != 1 { eprintln("[probe] FAIL upload ptx — " + u1.message) ; exit(4) }
+    let u2 = cloud_copy_to_opts(host, ssh_opts, host_c, remote_dir + "/gpu_standalone_cubin_host.c")
+    if u2.ok != 1 { eprintln("[probe] FAIL upload host.c — " + u2.message) ; exit(4) }
+    let u3 = cloud_copy_to_opts(host, ssh_opts, cublas_c, remote_dir + "/fusion_epilogue_cublas_timed.c")
+    if u3.ok != 1 { eprintln("[probe] FAIL upload cublas.c — " + u3.message) ; exit(4) }
+
+    // ── 3) remote bash — ptxas, xxd, build, ldd, run, json ──────────
+    // Single shell script piped via ssh.  flock serializes vs other
+    // parallel agents on the shared ubu-2 CUDA device.
+    let remote_script =
+        "set -euo pipefail\n" +
+        "cd " + remote_dir + "\n" +
+        "export PATH=/usr/local/cuda/bin:$PATH\n" +
+        "exec 9>/tmp/.ubu2-cuda.lock\n" +
+        "flock 9\n" +
+        "echo '===== HOST INFO ====='\n" +
+        "uname -a\n" +
+        "nvidia-smi --query-gpu=name,driver_version,compute_cap --format=csv,noheader || true\n" +
+        "which ptxas\n" +
+        "ptxas --version | head -2\n" +
+        "echo\n" +
+        "echo '===== STEP A: ptxas PTX -> cubin (AOT, sm_80) ====='\n" +
+        "ptxas -arch=sm_80 -o unop.cubin unop_wrapped.ptx\n" +
+        "ls -la unop_wrapped.ptx unop.cubin\n" +
+        "PTX_SIZE=$(wc -c < unop_wrapped.ptx)\n" +
+        "CUBIN_SIZE=$(wc -c < unop.cubin)\n" +
+        "echo PTX_SIZE=$PTX_SIZE\n" +
+        "echo CUBIN_SIZE=$CUBIN_SIZE\n" +
+        "echo\n" +
+        "echo '===== STEP B: xxd -i unop.cubin -> unop_cubin_data.h ====='\n" +
+        "xxd -i unop.cubin > unop_cubin_data.h\n" +
+        "sed -i 's/unop_cubin\\[\\]/unop_cubin_data[]/g; s/unop_cubin_len/unop_cubin_data_len/g' unop_cubin_data.h\n" +
+        "head -2 unop_cubin_data.h\n" +
+        "tail -2 unop_cubin_data.h\n" +
+        "echo\n" +
+        "echo '===== STEP C: build standalone host (driver-only link) ====='\n" +
+        "cc -O2 -o gpu_standalone_cubin_host gpu_standalone_cubin_host.c -lcuda\n" +
+        "STANDALONE_BIN_SIZE=$(wc -c < gpu_standalone_cubin_host)\n" +
+        "echo STANDALONE_BIN_SIZE=$STANDALONE_BIN_SIZE\n" +
+        "echo\n" +
+        "echo '===== STEP D: ldd standalone (expected: libcuda + libc + ld-linux only) ====='\n" +
+        "ldd gpu_standalone_cubin_host | tee ldd_standalone.txt\n" +
+        "echo\n" +
+        "echo '===== STEP E: build cuBLAS-using launcher for comparison ====='\n" +
+        "nvcc -O2 -o fusion_cublas_timed fusion_epilogue_cublas_timed.c -lcublas -lcudart\n" +
+        "CUBLAS_BIN_SIZE=$(wc -c < fusion_cublas_timed)\n" +
+        "echo CUBLAS_BIN_SIZE=$CUBLAS_BIN_SIZE\n" +
+        "echo\n" +
+        "echo '===== STEP F: ldd cuBLAS-using launcher (expected: libcublas + libcudart + ...) ====='\n" +
+        "ldd fusion_cublas_timed | tee ldd_cublas_using.txt\n" +
+        "echo\n" +
+        "echo '===== STEP G: RUN standalone host -- numeric round-trip ====='\n" +
+        "set +e\n" +
+        "./gpu_standalone_cubin_host\n" +
+        "RC=$?\n" +
+        "set -e\n" +
+        "echo RUN_RC=$RC\n" +
+        "echo\n" +
+        "echo '===== STEP H: emit machine-readable result.json ====='\n" +
+        "STANDALONE_LIB_COUNT=$(grep -cE '=> /' ldd_standalone.txt || true)\n" +
+        "CUBLAS_LIB_COUNT=$(grep -cE '=> /' ldd_cublas_using.txt || true)\n" +
+        "HAS_LIBCUDART_STANDALONE=$(grep -c libcudart ldd_standalone.txt || true)\n" +
+        "HAS_LIBCUBLAS_STANDALONE=$(grep -c libcublas ldd_standalone.txt || true)\n" +
+        "HAS_LIBCUDA_STANDALONE=$(grep -c 'libcuda\\.so' ldd_standalone.txt || true)\n" +
+        "VERDICT=FAIL\n" +
+        "if [ $RC -eq 0 ] && [ $HAS_LIBCUDART_STANDALONE -eq 0 ] && [ $HAS_LIBCUBLAS_STANDALONE -eq 0 ] && [ $HAS_LIBCUDA_STANDALONE -ge 1 ]; then VERDICT=PASS; fi\n" +
+        "GPU_NAME=$(nvidia-smi --query-gpu=name --format=csv,noheader | head -1)\n" +
+        "DRV=$(nvidia-smi --query-gpu=driver_version --format=csv,noheader | head -1)\n" +
+        "PTXAS_VER=$(ptxas --version | tail -1)\n" +
+        "{\n" +
+        "  echo '{'\n" +
+        "  echo \"  \\\"host\\\": \\\"$(hostname)\\\",\"\n" +
+        "  echo \"  \\\"gpu\\\": \\\"$GPU_NAME\\\",\"\n" +
+        "  echo \"  \\\"driver\\\": \\\"$DRV\\\",\"\n" +
+        "  echo \"  \\\"ptxas\\\": \\\"$PTXAS_VER\\\",\"\n" +
+        "  echo \"  \\\"ptx_size_bytes\\\": $PTX_SIZE,\"\n" +
+        "  echo \"  \\\"cubin_size_bytes\\\": $CUBIN_SIZE,\"\n" +
+        "  echo \"  \\\"standalone_bin_size_bytes\\\": $STANDALONE_BIN_SIZE,\"\n" +
+        "  echo \"  \\\"cublas_bin_size_bytes\\\": $CUBLAS_BIN_SIZE,\"\n" +
+        "  echo \"  \\\"standalone_dyn_lib_count\\\": $STANDALONE_LIB_COUNT,\"\n" +
+        "  echo \"  \\\"cublas_dyn_lib_count\\\": $CUBLAS_LIB_COUNT,\"\n" +
+        "  echo \"  \\\"standalone_has_libcuda\\\": $HAS_LIBCUDA_STANDALONE,\"\n" +
+        "  echo \"  \\\"standalone_has_libcudart\\\": $HAS_LIBCUDART_STANDALONE,\"\n" +
+        "  echo \"  \\\"standalone_has_libcublas\\\": $HAS_LIBCUBLAS_STANDALONE,\"\n" +
+        "  echo \"  \\\"numeric_roundtrip_rc\\\": $RC,\"\n" +
+        "  echo \"  \\\"verdict\\\": \\\"$VERDICT\\\"\"\n" +
+        "  echo '}'\n" +
+        "} > result.json\n" +
+        "cat result.json\n" +
+        "exit $RC\n"
+
+    println("[probe] [3/6] ssh " + host + " — fire (flock-serialized)")
+    // The whole script is one cloud_exec_opts payload; the remote
+    // shell parses '\n's literally.
+    let fire = cloud_exec_opts(host, ssh_opts, remote_script)
+    write_file(fire_dir + "/fire.log", fire.stdout_ + "\n")
+    println(fire.stdout_)
+    if fire.ok != 1 {
+        eprintln("[probe] WARN cloud_exec.ok=0 (exit_code=" + str(fire.exit_code) + ") — see fire.log")
+    }
+
+    // ── 4) pull artifacts ───────────────────────────────────────────
+    println("[probe] [4/6] scp artifacts back")
+    let p1 = cloud_copy_from_opts(host, ssh_opts,
+        remote_dir + "/ldd_standalone.txt", fire_dir + "/ldd_standalone.txt")
+    if p1.ok != 1 { eprintln("[probe] WARN pull ldd_standalone.txt — " + p1.message) }
+    let p2 = cloud_copy_from_opts(host, ssh_opts,
+        remote_dir + "/ldd_cublas_using.txt", fire_dir + "/ldd_cublas_using.txt")
+    if p2.ok != 1 { eprintln("[probe] WARN pull ldd_cublas_using.txt — " + p2.message) }
+    let p3 = cloud_copy_from_opts(host, ssh_opts,
+        remote_dir + "/result.json", fire_dir + "/result.json")
+    if p3.ok != 1 { eprintln("[probe] WARN pull result.json — " + p3.message) }
+    let p4 = cloud_copy_from_opts(host, ssh_opts,
+        remote_dir + "/unop_cubin_data.h", fire_dir + "/unop_cubin_data.h")
+    if p4.ok != 1 { eprintln("[probe] WARN pull unop_cubin_data.h — " + p4.message) }
+
+    // ── 5) summary ──────────────────────────────────────────────────
+    println("")
+    println("[probe] [5/6] summary")
+    if file_exists(fire_dir + "/result.json") {
+        println("----- result.json -----")
+        println(read_file(fire_dir + "/result.json"))
+    }
+    if file_exists(fire_dir + "/ldd_standalone.txt") {
+        println("----- ldd_standalone.txt -----")
+        println(read_file(fire_dir + "/ldd_standalone.txt"))
+    }
+    if file_exists(fire_dir + "/ldd_cublas_using.txt") {
+        println("----- ldd_cublas_using.txt -----")
+        println(read_file(fire_dir + "/ldd_cublas_using.txt"))
+    }
+
+    // ── 6) verdict ──────────────────────────────────────────────────
+    println("")
+    println("[probe] [6/6] verdict")
+    // Parse `"verdict": "PASS"` out of result.json.
+    let mut rc = 1
+    if file_exists(fire_dir + "/result.json") {
+        let body = read_file(fire_dir + "/result.json")
+        if body.index_of("\"verdict\": \"PASS\"") >= 0 {
+            rc = 0
+        }
+    }
+    if rc == 0 {
+        println("[probe] PASS — standalone cubin numeric round-trip + libcuda-only ldd")
+        exit(0)
+    }
+    eprintln("[probe] FAIL — see " + fire_dir + "/result.json")
+    exit(7)
+}
