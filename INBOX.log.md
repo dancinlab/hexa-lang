@@ -1,5 +1,15 @@
 # INBOX — log
 
+## 2026-05-27 — HEXA_CUDA 빌드인데 cuda_available()==0 (weak stub strong-override 부재 → cuBLAS 경로 unreachable)
+
+> **root cause (anima M4b GPU fire smoke 실측)**: H100 pod 에서 `nvcc -DHEXA_CUDA runtime_cuda.c` + `clang -DHEXA_CUDA ... -lcublas -lcuda` 로 빌드+실행 RC=0 성공했으나 `cuda_available()==0` → GPU 미사용(CPU fallback). 원인: `self/runtime.c:13472` 의 `__attribute__((weak)) HexaVal hexa_cuda_available(void){ return hexa_int(0); }` 가 **strong override 없이** 그대로 등록됨(`runtime.c:12203 cuda_available=hexa_fn_new(hexa_cuda_available)`). `runtime_cuda.c:248` 에 실 디바이스 체크 `_hx_cuda_runtime_available()`(cudaGetDeviceCount) 가 있으나, **HEXA_CUDA 하에서 `hexa_cuda_available` 를 `_hx_cuda_runtime_available()` 로 잇는 strong glue 가 self/ 전체에 부재** (grep `HexaVal hexa_cuda_available` non-weak = runtime.h 선언만). 결과: -DHEXA_CUDA 여도 cuda_available 영원히 0.
+
+**영향**: `cuda_available()` gate 로 GPU/CPU dispatch 하는 코드(anima flame_mm.mm = farr_matmul_gpu⇄farr_matmul)가 GPU 에서도 CPU 경로만 탐 → cuBLAS Dgemm engage 안 됨. 정상 GPU fire 불가.
+
+**요청 (택1)**: (a) runtime.c 에 `#ifdef HEXA_CUDA` 강한 `hexa_cuda_available(){ return hexa_int(_hx_cuda_runtime_available()); }` (+ hexa_cuda_device_count 동일) 추가 — weak stub 은 `#else`. (b) 또는 runtime_cuda.c 가 strong `hexa_cuda_available`/`hexa_cuda_device_count` 제공(weak override). 검증: rfc040 gpu smoke `F-RFC040-GPU-AVAIL cuda_available()==1` 가 실 GPU 에서 PASS 해야 함(현재 main 에선 0 반환 의심).
+
+**부수 finding**: anima `CORE/DECODER/flame_mm_smoke.hexa` (origin/main) 가 죽은 `/private/tmp/wt-gpu1/...` worktree-local import 보유(#1100 커밋 잔존) — anima 측 정정 필요(transpile 시 sed 우회). severity: high (cuBLAS 경로 전면 차단).
+
 ## 2026-05-27 — M4b GPU fire 런북 검증 (transpile --c-only → CUDA runtime → Vast.ai · #1659 deadlock 정정)
 
 > **정정**: #1659 는 "RunPod ↔ cloud-guard deadlock"으로 fire 불가처럼 읽히나 **fire 는 achievable**. RunPod resolver 갭은 real(유효)이나 **Vast.ai 직접-IP** 로 우회. anima M4b pilot end-to-end 검증 런북 (ref `tool/dispatch_agtape_d768_fire.sh`):
