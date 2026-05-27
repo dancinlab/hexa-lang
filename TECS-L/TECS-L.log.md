@@ -2,6 +2,41 @@
 
 Append-only history sister of `TECS-L.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
+## 2026-05-27T17:48Z · 축 RTSC · RTSC13 · 수학 DFS — BCS universal gap ratio 2Δ(0)/k_B·Tc = 3.5278 + Δ(0)
+
+BCS 1957 의 weak-coupling universal gap ratio (재질 무관). RTSC 의 BCS-vs-strong-
+coupling 경계 정량의 baseline. closed-form deterministic.
+
+- [x] bcs_gap_ratio (0-arg) → **3.527754** = 2π/e^γ_Euler 🟢 (BCS universal, Δ ≤ 1e-9)
+- [x] bcs_gap_zero(Tc=10K) → **2.4354648e-22 J** 🟢 (source 재현, Δ ≤ 1e-9)
+- [x] bcs_gap_zero(Tc=203K, H3S) → **4.944e-21 J = 30.86 meV** 🟢 (H3S 의 BCS Δ(0))
+
+⟹ 결론: 2Δ(0)/k_B Tc = 3.528 = universal weak-coupling. H3S 실측 ratio ≈ 4.0
+   (>3.528) ⟹ strong-coupling 영역. RTSC closed-form 의 weak-strong 경계 baseline.
+   verify (inline): bcs_gap_ratio → 3.527754; bcs_gap_zero 10 → 2.4355e-22;
+   bcs_gap_zero 203 → 4.944e-21.
+
+## 2026-05-27T17:46Z · 축 RTSC · RTSC12 · 수학 DFS — isotope effect α (BCS=0.5, H3S 실측 0.43 strong-coupling deviation)
+
+RTSC11 (realistic μ*) 의 깊이 확장. BCS isotope-effect exponent α = −ln(Tc₂/Tc₁) /
+ln(M₂/M₁). BCS limit α=0.5; strong-coupling 영역에서 deviation. inline verify.
+
+- [x] BCS limit source (M=1,Tc=1, M=4,Tc=0.5) → **α=0.5** 🟢 (analytical 정확)
+- [x] Allen-Dynes simple h3cl (M=1 Tc=132.8, M=2 Tc=93.9=ω_log/√2 effect) → α=0.500058 🟢
+       ⟹ simple-AD 에서 α=0.5 정확 (BCS 한계; ω_log ∝ 1/√M 만으로 충분)
+- [x] H3S 실측 (H Tc=203K, D Tc=151K @ 155-165 GPa) → α=**0.4269** 🟢 (BCS 0.5 에서 −0.073 deviation)
+       ⟹ realistic deviation = (1) Morel-Anderson μ*(ω_ph) ω 의존성 + (2) strong-coupling f1·f2
+
+⟹ 결론 (isotope signature): α < 0.5 = strong-coupling 영역 signature. H3S 의 0.43
+   는 simple-AD 의 0.5 에서 14.6% deviation — Morel-Anderson + strong-coupling
+   합쳐 발생. RTSC10 (μ* ω_ph 의존성) + RTSC7 (strong-coupling) 의 측정가능 fingerprint.
+
+verify (inline, isotope_exponent <M1> <Tc1> <M2> <Tc2>, --no-absorb):
+  isotope_exponent 1 1 4 0.5     → 0.5      (Δ=0)        🟢
+  isotope_exponent 1 132.8 2 93.9 → 0.500058 (Δ=5.8e-5)   🟢
+  isotope_exponent 1 203 2 151    → 0.426931 (Δ=0.001)    🟢
+
+
 ## 2026-05-27T17:35Z · 축 RTSC · RTSC11 · 수학 DFS — realistic μ*=0.191 (Morel-Anderson hydride) 에서 293K iso-line 재계산
 
 RTSC10 + RTSC5 합성. RTSC10 의 Morel-Anderson μ*(μ_bare=0.3, E_F=10000, ω_ph=1500)
