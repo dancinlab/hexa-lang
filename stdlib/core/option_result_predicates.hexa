@@ -1,0 +1,77 @@
+// HEXA Standard Library — core/option_result_predicates
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Equality + containment predicates on Option / Result. Pure additive surface
+// — sibling of `stdlib/core/option_result.hexa` (the canonical Option/Result
+// enum + helper fns module).
+//
+// Frontier RUNTIME.flip B4.option-to-bool — `opt_eq` / `opt_contains` /
+// `res_eq_ok` family. Lifts the "extract-then-compare" idiom into a single
+// pure predicate (Rust `Option::contains` / `Result::contains_ok` shape).
+//
+// Surface (monomorphic int + str variants — language has no generics yet):
+//   pub fn opt_eq_int(o: Option, value: int) -> bool
+//   pub fn opt_eq_str(o: Option, value: str) -> bool
+//   pub fn opt_contains_int(o: Option, value: int) -> bool   — Rust alias
+//   pub fn opt_contains_str(o: Option, value: str) -> bool   — Rust alias
+//   pub fn res_eq_ok_int(r: Result, value: int) -> bool
+//   pub fn res_eq_ok_str(r: Result, value: str) -> bool
+//
+// Semantics:
+//   opt_eq_int(Some(v), value)  → v == value
+//   opt_eq_int(None,    value)  → false
+//   res_eq_ok_int(Ok(v),  value) → v == value
+//   res_eq_ok_int(Err(_), value) → false
+//
+// `opt_contains_*` are exact aliases for `opt_eq_*` — provided so callers can
+// pick the noun matching their domain (Rust idiom: `Option::contains`).
+
+use "stdlib/core/option_result"
+
+// -- Option equality (int) --
+
+pub fn opt_eq_int(o: Option, value: int) -> bool {
+    return match o {
+        Option::Some(v) => v == value,
+        Option::None => false
+    }
+}
+
+// -- Option equality (str) --
+
+pub fn opt_eq_str(o: Option, value: str) -> bool {
+    return match o {
+        Option::Some(v) => v == value,
+        Option::None => false
+    }
+}
+
+// -- Option containment (Rust idiom — alias of opt_eq_*) --
+
+pub fn opt_contains_int(o: Option, value: int) -> bool {
+    return opt_eq_int(o, value)
+}
+
+pub fn opt_contains_str(o: Option, value: str) -> bool {
+    return opt_eq_str(o, value)
+}
+
+// -- Result Ok-equality (int) --
+
+pub fn res_eq_ok_int(r: Result, value: int) -> bool {
+    return match r {
+        Result::Ok(v) => v == value,
+        Result::Err(_) => false
+    }
+}
+
+// -- Result Ok-equality (str) --
+
+pub fn res_eq_ok_str(r: Result, value: str) -> bool {
+    return match r {
+        Result::Ok(v) => v == value,
+        Result::Err(_) => false
+    }
+}
