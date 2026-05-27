@@ -1,8 +1,0 @@
-#!hexa strict
-// organoid structure — cells per mature organoid.
-fn main() {
-    let cells_per_organoid = 50000.0
-    println("organoid_structure (cells per mature organoid):")
-    println("  cells_per_organoid = " + str(cells_per_organoid))
-    println("__HEXA_ORGANOID_STRUCTURE__ PASS gate=GATE_OPEN absorbed=false")
-}

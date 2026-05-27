@@ -1,3 +1,0 @@
-verify --expr sigma(39270)=124416
-  calc   = 124416  == expected 124416
-  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)

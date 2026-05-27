@@ -1,8 +1,0 @@
-#!hexa strict
-// aerogel handoff — insulation panel thickness.
-fn main() {
-    let panel_mm = 25.0
-    println("aerogel_handoff (insulation panel thickness):")
-    println("  panel_mm = " + str(panel_mm))
-    println("__HEXA_AEROGEL_HANDOFF__ PASS gate=GATE_OPEN absorbed=false")
-}

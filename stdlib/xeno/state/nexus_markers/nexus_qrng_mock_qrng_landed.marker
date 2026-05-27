@@ -1,4 +1,0 @@
-module=modules/qrng/mock_qrng.hexa
-ts=2026-05-03T05:05:24Z
-selftest_tail=__QRNG_MOCK_QRNG__ PASS
-status=IMPLEMENTED

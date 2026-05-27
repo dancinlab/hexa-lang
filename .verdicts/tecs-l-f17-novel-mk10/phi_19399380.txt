@@ -1,3 +1,0 @@
-verify --expr euler_phi(19399380)=3317760
-  calc   = 3317760  == expected 3317760
-  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)

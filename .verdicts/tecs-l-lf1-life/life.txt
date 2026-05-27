@@ -1,5 +1,0 @@
-LF1 — LIFE verify-able triage
-codon 4^3=64 / pow              ORANGE (calculator NO path for 'pow', whitelist gap — same class as sopfr, existing INBOX stdlib-primitive)
-IIT Phi iit4_faithful_phi       DEFERRED (multi-arg; --expr <fn> <n> <v> simple path 아님 -> verify_cli phi_demo mode separate)
-molecular integers (DNA=4, amino=20)  ORANGE (integer facts, no calculator path)
-honest: LIFE verify-able sparse — calculator gap (pow/sopfr) + IIT Phi arity-complex deferred. matches pre-registered prediction.

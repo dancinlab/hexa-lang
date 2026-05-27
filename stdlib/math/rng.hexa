@@ -1,9 +1,0 @@
-// stdlib/math/rng.hexa — F1 (2026-05-10) backward-compat shim.
-//
-// Module relocated to stdlib/core/math/rng.hexa. LCG + Box-Muller —
-// pure deterministic functions, no syscall.
-//
-// Sunset: removed after F4 absorptions complete.
-// New canonical path: stdlib/core/math/rng.hexa
-
-import "stdlib/core/math/rng.hexa"

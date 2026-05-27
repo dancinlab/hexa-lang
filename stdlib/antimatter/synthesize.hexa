@@ -1,8 +1,0 @@
-#!hexa strict
-// antimatter synthesize — Hbar recombination rate.
-fn main() {
-    let hbar_rate_per_s = 10.0
-    println("antimatter_synthesize (Hbar recombination rate):")
-    println("  hbar_rate_per_s = " + str(hbar_rate_per_s))
-    println("__HEXA_ANTIMATTER_SYNTHESIZE__ PASS gate=GATE_OPEN absorbed=false")
-}

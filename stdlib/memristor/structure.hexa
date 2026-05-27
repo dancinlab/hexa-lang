@@ -1,8 +1,0 @@
-#!hexa strict
-// memristor structure — TiO2 oxide thickness.
-fn main() {
-    let oxide_nm = 20.0
-    println("memristor_structure (TiO2 oxide thickness):")
-    println("  oxide_nm = " + str(oxide_nm))
-    println("__HEXA_MEMRISTOR_STRUCTURE__ PASS gate=GATE_OPEN absorbed=false")
-}

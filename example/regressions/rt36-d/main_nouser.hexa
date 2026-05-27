@@ -1,3 +1,0 @@
-// No user fn main() — should just run top-level.
-// Expected: hello
-print("hello")

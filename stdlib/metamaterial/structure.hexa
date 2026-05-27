@@ -1,8 +1,0 @@
-#!hexa strict
-// metamaterial structure — SRR outer ring radius.
-fn main() {
-    let ring_mm = 5.0
-    println("metamaterial_structure (SRR outer ring radius):")
-    println("  ring_mm = " + str(ring_mm))
-    println("__HEXA_METAMATERIAL_STRUCTURE__ PASS gate=GATE_OPEN absorbed=false")
-}

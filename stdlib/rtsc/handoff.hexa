@@ -1,8 +1,0 @@
-#!hexa strict
-// rtsc handoff — cable ampacity target.
-fn main() {
-    let ampacity_kA_per_mm2 = 1.0
-    println("rtsc_handoff (cable ampacity target):")
-    println("  ampacity_kA_per_mm2 = " + str(ampacity_kA_per_mm2))
-    println("__HEXA_RTSC_HANDOFF__ PASS gate=GATE_OPEN absorbed=false")
-}

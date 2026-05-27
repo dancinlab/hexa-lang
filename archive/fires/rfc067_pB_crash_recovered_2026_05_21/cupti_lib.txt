@@ -1,6 +1,0 @@
-lrwxrwxrwx 1 root root      14  5월 13  2025 /usr/local/cuda/lib64/libcupti.so -> libcupti.so.12
-lrwxrwxrwx 1 root root      20  5월 13  2025 /usr/local/cuda/lib64/libcupti.so.12 -> libcupti.so.2025.2.1
--rw-r--r-- 1 root root 7604800  5월 13  2025 /usr/local/cuda/lib64/libcupti.so.2025.2.1
-lrwxrwxrwx 1 root root      14  4월  2  2024 /usr/lib/x86_64-linux-gnu/libcupti.so -> libcupti.so.12
-lrwxrwxrwx 1 root root      20  4월  2  2024 /usr/lib/x86_64-linux-gnu/libcupti.so.12 -> libcupti.so.2022.4.1
--rw-r--r-- 1 root root 7302896  1월 29  2023 /usr/lib/x86_64-linux-gnu/libcupti.so.2022.4.1

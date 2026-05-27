@@ -1,6 +1,0 @@
-// tool/tui_wire_selftest.hexa — T1.C wire contract selftest entry
-
-use "self/tui/wire"
-
-let rc = wire_selftest()
-exit(rc)

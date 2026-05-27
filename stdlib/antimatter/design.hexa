@@ -1,8 +1,0 @@
-#!hexa strict
-// antimatter design — Penning trap well depth.
-fn main() {
-    let trap_well_V = 1000.0
-    println("antimatter_design (Penning trap well depth):")
-    println("  trap_well_V = " + str(trap_well_V))
-    println("__HEXA_ANTIMATTER_DESIGN__ PASS gate=GATE_OPEN absorbed=false")
-}

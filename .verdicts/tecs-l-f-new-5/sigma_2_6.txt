@@ -1,3 +1,0 @@
-verify --expr sigma_2(6)=50
-  calc   = 50  == expected 50
-  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)

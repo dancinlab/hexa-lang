@@ -1,8 +1,0 @@
-#!hexa strict
-// antimatter handoff — 1 mg antimatter mass-energy.
-fn main() {
-    let E_TJ_per_mg = 90.0
-    println("antimatter_handoff (1 mg antimatter mass-energy):")
-    println("  E_TJ_per_mg = " + str(E_TJ_per_mg))
-    println("__HEXA_ANTIMATTER_HANDOFF__ PASS gate=GATE_OPEN absorbed=false")
-}

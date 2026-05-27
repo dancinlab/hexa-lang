@@ -1,5 +1,0 @@
-=== E40 : hexa verify --expr nth_prime 6 13 ===
-verify --expr nth_prime(6)=13
-  tier   = 🟠 INSUFFICIENT
-  reason = calculator system has NO path for 'nth_prime'
-  gap    = extend tool/verify_cli.hexa::_recompute (계산기시스템 개선 후보)

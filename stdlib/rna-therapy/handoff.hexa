@@ -1,8 +1,0 @@
-#!hexa strict
-// rna-therapy handoff — IND-enabling tox species.
-fn main() {
-    let ind_tox_n = 2.0
-    println("rna-therapy_handoff (IND-enabling tox species):")
-    println("  ind_tox_n = " + str(ind_tox_n))
-    println("__HEXA_RNA_THERAPY_HANDOFF__ PASS gate=GATE_OPEN absorbed=false")
-}

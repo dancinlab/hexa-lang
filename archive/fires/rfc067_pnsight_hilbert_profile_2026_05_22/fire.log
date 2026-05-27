@@ -1,67 +1,0 @@
-== STEP 1: stage to ubu-2:/tmp/rfc067_pnsight_hilbert_profile_2026_05_22/ ==
-== STEP 2: build host_hilbert on ubu-2 ==
-== STEP 3: ncu + nsys profile per shape (M=6144, M=8192) ==
---- shape M=6144 ---
-  [nsys trace] M=6144 nreps=20
-WARNING: Device-side CUDA Event completion trace is currently enabled.
-         This may increase runtime overhead and the likelihood of false
-         dependencies across CUDA Streams. If you wish to avoid this, please
-         disable the feature with --cuda-event-trace=false.
-WARNING: CPU IP/backtrace sampling not supported, disabling.
-Try the 'nsys status --environment' command to learn more.
-
-WARNING: CPU context switch tracing not supported, disabling.
-Try the 'nsys status --environment' command to learn more.
-
-Device: NVIDIA GeForce RTX 5070 sm_120
-shape M=6144 entry=sgemm_4warp_hilbert_6144x6144_grid regs/thd=64 shmem=8192 B
-launch grid=(128,128,1) block=(128,1,1) side=96 p=128 K_TILES=384 (real=9216 padding=7168)
-M=6144 nreps=20 mean=7.815ms min=7.797ms max=7.826ms TFLOPS=59.355
-Collecting data...
-Generating '/tmp/nsys-report-ddb4.qdstrm'
-[1/1] [0%                          ] nsys_M6144.nsys-rep[1/1] [0%                          ] nsys_M6144.nsys-rep[1/1] [========42%                 ] nsys_M6144.nsys-rep[1/1] [==========49%               ] nsys_M6144.nsys-rep[1/1] [============57%             ] nsys_M6144.nsys-rep[1/1] [==================75%       ] nsys_M6144.nsys-rep[1/1] [=======================93%  ] nsys_M6144.nsys-rep[1/1] [=======================94%  ] nsys_M6144.nsys-rep[1/1] [========================100%] nsys_M6144.nsys-rep[1/1] [========================100%] nsys_M6144.nsys-rep
-Generated:
-	/tmp/rfc067_pnsight_hilbert_profile_2026_05_22/nsys_M6144.nsys-rep
-  [ncu metrics CSV] M=6144 (sudo for perfcounter perm; RmProfilingAdminOnly=1)
-Device: NVIDIA GeForce RTX 5070 sm_120
-shape M=6144 entry=sgemm_4warp_hilbert_6144x6144_grid regs/thd=64 shmem=8192 B
-launch grid=(128,128,1) block=(128,1,1) side=96 p=128 K_TILES=384 (real=9216 padding=7168)
-M=6144 nreps=1 mean=157.932ms min=157.932ms max=157.932ms TFLOPS=2.937
-  [ncu sections] M=6144
-Device: NVIDIA GeForce RTX 5070 sm_120
-shape M=6144 entry=sgemm_4warp_hilbert_6144x6144_grid regs/thd=64 shmem=8192 B
-launch grid=(128,128,1) block=(128,1,1) side=96 p=128 K_TILES=384 (real=9216 padding=7168)
-M=6144 nreps=1 mean=637.909ms min=637.909ms max=637.909ms TFLOPS=0.727
---- shape M=8192 ---
-  [nsys trace] M=8192 nreps=20
-WARNING: Device-side CUDA Event completion trace is currently enabled.
-         This may increase runtime overhead and the likelihood of false
-         dependencies across CUDA Streams. If you wish to avoid this, please
-         disable the feature with --cuda-event-trace=false.
-WARNING: CPU IP/backtrace sampling not supported, disabling.
-Try the 'nsys status --environment' command to learn more.
-
-WARNING: CPU context switch tracing not supported, disabling.
-Try the 'nsys status --environment' command to learn more.
-
-Device: NVIDIA GeForce RTX 5070 sm_120
-shape M=8192 entry=sgemm_4warp_hilbert_8192x8192_grid regs/thd=64 shmem=8192 B
-launch grid=(128,128,1) block=(128,1,1) side=128 p=128 K_TILES=512 (real=16384 padding=0)
-M=8192 nreps=20 mean=18.160ms min=18.119ms max=18.180ms TFLOPS=60.545
-Collecting data...
-Generating '/tmp/nsys-report-fa7d.qdstrm'
-[1/1] [0%                          ] nsys_M8192.nsys-rep[1/1] [0%                          ] nsys_M8192.nsys-rep[1/1] [=========45%                ] nsys_M8192.nsys-rep[1/1] [================69%         ] nsys_M8192.nsys-rep[1/1] [=======================93%  ] nsys_M8192.nsys-rep[1/1] [=======================94%  ] nsys_M8192.nsys-rep[1/1] [========================100%] nsys_M8192.nsys-rep[1/1] [========================100%] nsys_M8192.nsys-rep
-Generated:
-	/tmp/rfc067_pnsight_hilbert_profile_2026_05_22/nsys_M8192.nsys-rep
-  [ncu metrics CSV] M=8192 (sudo for perfcounter perm; RmProfilingAdminOnly=1)
-Device: NVIDIA GeForce RTX 5070 sm_120
-shape M=8192 entry=sgemm_4warp_hilbert_8192x8192_grid regs/thd=64 shmem=8192 B
-launch grid=(128,128,1) block=(128,1,1) side=128 p=128 K_TILES=512 (real=16384 padding=0)
-M=8192 nreps=1 mean=240.746ms min=240.746ms max=240.746ms TFLOPS=4.567
-  [ncu sections] M=8192
-Device: NVIDIA GeForce RTX 5070 sm_120
-shape M=8192 entry=sgemm_4warp_hilbert_8192x8192_grid regs/thd=64 shmem=8192 B
-launch grid=(128,128,1) block=(128,1,1) side=128 p=128 K_TILES=512 (real=16384 padding=0)
-M=8192 nreps=1 mean=1221.209ms min=1221.209ms max=1221.209ms TFLOPS=0.900
-== STEP 4: pull artifacts back ==
-== DONE ==

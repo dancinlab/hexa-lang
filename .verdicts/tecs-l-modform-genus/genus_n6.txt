@@ -1,3 +1,0 @@
-verify --expr gamma0_genus(6)=0
-  calc   = 0  == expected 0
-  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)

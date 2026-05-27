@@ -1,3 +1,0 @@
-class A { fn name(self) { return "A" } }
-class B : A { fn name(self) { return super().name() + "B" } }
-print(B().name())

@@ -1,5 +1,0 @@
-// Only fn main(), no top-level code.
-// Expected: from main
-fn main() {
-    print("from main")
-}

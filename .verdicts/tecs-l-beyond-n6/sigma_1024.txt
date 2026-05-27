@@ -1,4 +1,0 @@
-$ hexa verify --expr sigma 1024 2047
-verify --expr sigma(1024)=2047
-  calc   = 2047  == expected 2047
-  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)

@@ -1,9 +1,0 @@
-// stdlib/json.hexa — F1 (2026-05-10) backward-compat shim.
-//
-// Module relocated to stdlib/alloc/json.hexa. JSON write-side helpers
-// — pure (no syscall) but allocates strings/maps; classified as alloc.
-//
-// Sunset: removed after F4 absorptions complete.
-// New canonical path: stdlib/alloc/json.hexa
-
-import "stdlib/alloc/json.hexa"

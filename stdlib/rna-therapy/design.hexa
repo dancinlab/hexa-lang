@@ -1,8 +1,0 @@
-#!hexa strict
-// rna-therapy design — LNP particle diameter.
-fn main() {
-    let lnp_nm = 100.0
-    println("rna-therapy_design (LNP particle diameter):")
-    println("  lnp_nm = " + str(lnp_nm))
-    println("__HEXA_RNA_THERAPY_DESIGN__ PASS gate=GATE_OPEN absorbed=false")
-}

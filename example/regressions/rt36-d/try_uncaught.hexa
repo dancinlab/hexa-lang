@@ -1,4 +1,0 @@
-// Uncaught throw should trap with "uncaught throw: ..." message.
-print("before")
-throw "oops"
-print("unreachable")

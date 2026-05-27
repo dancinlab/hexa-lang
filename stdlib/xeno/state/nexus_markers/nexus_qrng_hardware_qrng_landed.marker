@@ -1,4 +1,0 @@
-module=modules/qrng/hardware_qrng.hexa
-ts=2026-05-03T05:05:24Z
-selftest_tail=__QRNG_HARDWARE_QRNG__ PASS
-status=IMPLEMENTED

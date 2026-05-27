@@ -1,8 +1,0 @@
-#!hexa strict
-// green-nh3 specify — annual NH3 production target.
-fn main() {
-    let prod_Mt_per_yr = 1.0
-    println("green-nh3_specify (annual NH3 production target):")
-    println("  prod_Mt_per_yr = " + str(prod_Mt_per_yr))
-    println("__HEXA_GREEN_NH3_SPECIFY__ PASS gate=GATE_OPEN absorbed=false")
-}

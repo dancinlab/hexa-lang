@@ -1,8 +1,0 @@
-#!hexa strict
-// perovskite specify — absorber bandgap target.
-fn main() {
-    let Eg_target_eV = 1.6
-    println("perovskite_specify (absorber bandgap target):")
-    println("  Eg_target_eV = " + str(Eg_target_eV))
-    println("__HEXA_PEROVSKITE_SPECIFY__ PASS gate=GATE_OPEN absorbed=false")
-}

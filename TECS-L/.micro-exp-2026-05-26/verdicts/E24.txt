@@ -1,6 +1,0 @@
-=== E24 : hexa verify --expr sigma_k 6 2 50 ===
-verify --expr sigma_k(6,2)=50
-  calc   = 50  == expected 50
-  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
-  absorb = ⚠ atlas register did NOT confirm fold; invocation:
-           hexa atlas register --from-verify sigma_k 6 2 50

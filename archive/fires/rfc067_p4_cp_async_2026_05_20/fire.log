@@ -1,1 +1,0 @@
-F-RFC067-CP-ASYNC-PERF PASS -- M=16 N=16 K=64 max|d|_vs_ref=0 tol=0.000703125 mism_ref=0/256  vs_base max|d|=-1 mism_base=0/256  ms_cpa=0.0041 ms_base=-1.0000 speedup=0.000

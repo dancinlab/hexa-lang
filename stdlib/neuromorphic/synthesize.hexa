@@ -1,8 +1,0 @@
-#!hexa strict
-// neuromorphic synthesize — CMOS process node.
-fn main() {
-    let cmos_nm = 22.0
-    println("neuromorphic_synthesize (CMOS process node):")
-    println("  cmos_nm = " + str(cmos_nm))
-    println("__HEXA_NEUROMORPHIC_SYNTHESIZE__ PASS gate=GATE_OPEN absorbed=false")
-}

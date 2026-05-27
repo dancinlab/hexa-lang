@@ -1,8 +1,0 @@
-#!hexa strict
-// photonic specify — ring Q-factor target.
-fn main() {
-    let Q_target = 100000.0
-    println("photonic_specify (ring Q-factor target):")
-    println("  Q_target = " + str(Q_target))
-    println("__HEXA_PHOTONIC_SPECIFY__ PASS gate=GATE_OPEN absorbed=false")
-}

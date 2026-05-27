@@ -1,8 +1,0 @@
-#!hexa strict
-// co2-capture synthesize — solvothermal MOF temp.
-fn main() {
-    let solvo_T_C = 120.0
-    println("co2-capture_synthesize (solvothermal MOF temp):")
-    println("  solvo_T_C = " + str(solvo_T_C))
-    println("__HEXA_CO2_CAPTURE_SYNTHESIZE__ PASS gate=GATE_OPEN absorbed=false")
-}

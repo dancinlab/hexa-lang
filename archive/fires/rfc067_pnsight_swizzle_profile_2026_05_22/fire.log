@@ -1,98 +1,0 @@
-== STEP 1: stage to ubu-2:/tmp/rfc067_pnsight_swizzle_profile_2026_05_22/ ==
-== STEP 2: build host_one on ubu-2 ==
-== STEP 3: ncu + nsys profile per shape ==
---- shape M=4096 ---
-  [nsys trace] M=4096 nreps=20
-WARNING: Device-side CUDA Event completion trace is currently enabled.
-         This may increase runtime overhead and the likelihood of false
-         dependencies across CUDA Streams. If you wish to avoid this, please
-         disable the feature with --cuda-event-trace=false.
-WARNING: CPU IP/backtrace sampling not supported, disabling.
-Try the 'nsys status --environment' command to learn more.
-
-WARNING: CPU context switch tracing not supported, disabling.
-Try the 'nsys status --environment' command to learn more.
-
-Device: NVIDIA GeForce RTX 5070 sm_120
-shape M=4096 entry=sgemm_4warp_swizzle_4096x4096_grid regs/thd=64 shmem=8192 B
-launch grid=(64,64,1) block=(128,1,1) K_TILES=256
-M=4096 nreps=20 mean=2.341ms min=2.334ms max=2.350ms TFLOPS=58.701
-Collecting data...
-Generating '/tmp/nsys-report-f03d.qdstrm'
-[1/1] [0%                          ] nsys_M4096.nsys-rep[1/1] [0%                          ] nsys_M4096.nsys-rep[1/1] [=========43%                ] nsys_M4096.nsys-rep[1/1] [===========52%              ] nsys_M4096.nsys-rep[1/1] [==============61%           ] nsys_M4096.nsys-rep[1/1] [==================77%       ] nsys_M4096.nsys-rep[1/1] [=======================94%  ] nsys_M4096.nsys-rep[1/1] [========================100%] nsys_M4096.nsys-rep[1/1] [========================100%] nsys_M4096.nsys-rep
-Generated:
-	/tmp/rfc067_pnsight_swizzle_profile_2026_05_22/nsys_M4096.nsys-rep
-  [ncu metrics CSV] M=4096 (sudo for perfcounter perm; RmProfilingAdminOnly=1)
-Device: NVIDIA GeForce RTX 5070 sm_120
-shape M=4096 entry=sgemm_4warp_swizzle_4096x4096_grid regs/thd=64 shmem=8192 B
-launch grid=(64,64,1) block=(128,1,1) K_TILES=256
-M=4096 nreps=1 mean=117.730ms min=117.730ms max=117.730ms TFLOPS=1.167
-  [ncu sections] M=4096
-Device: NVIDIA GeForce RTX 5070 sm_120
-shape M=4096 entry=sgemm_4warp_swizzle_4096x4096_grid regs/thd=64 shmem=8192 B
-launch grid=(64,64,1) block=(128,1,1) K_TILES=256
-M=4096 nreps=1 mean=338.506ms min=338.506ms max=338.506ms TFLOPS=0.406
---- shape M=6144 ---
-  [nsys trace] M=6144 nreps=20
-WARNING: Device-side CUDA Event completion trace is currently enabled.
-         This may increase runtime overhead and the likelihood of false
-         dependencies across CUDA Streams. If you wish to avoid this, please
-         disable the feature with --cuda-event-trace=false.
-WARNING: CPU IP/backtrace sampling not supported, disabling.
-Try the 'nsys status --environment' command to learn more.
-
-WARNING: CPU context switch tracing not supported, disabling.
-Try the 'nsys status --environment' command to learn more.
-
-Device: NVIDIA GeForce RTX 5070 sm_120
-shape M=6144 entry=sgemm_4warp_swizzle_6144x6144_grid regs/thd=64 shmem=8192 B
-launch grid=(96,96,1) block=(128,1,1) K_TILES=384
-M=6144 nreps=20 mean=10.054ms min=10.014ms max=10.126ms TFLOPS=46.135
-Collecting data...
-Generating '/tmp/nsys-report-ba58.qdstrm'
-[1/1] [0%                          ] nsys_M6144.nsys-rep[1/1] [0%                          ] nsys_M6144.nsys-rep[1/1] [========42%                 ] nsys_M6144.nsys-rep[1/1] [=========46%                ] nsys_M6144.nsys-rep[1/1] [===========50%              ] nsys_M6144.nsys-rep[1/1] [=================72%        ] nsys_M6144.nsys-rep[1/1] [=======================93%  ] nsys_M6144.nsys-rep[1/1] [=======================94%  ] nsys_M6144.nsys-rep[1/1] [========================100%] nsys_M6144.nsys-rep[1/1] [========================100%] nsys_M6144.nsys-rep
-Generated:
-	/tmp/rfc067_pnsight_swizzle_profile_2026_05_22/nsys_M6144.nsys-rep
-  [ncu metrics CSV] M=6144 (sudo for perfcounter perm; RmProfilingAdminOnly=1)
-Device: NVIDIA GeForce RTX 5070 sm_120
-shape M=6144 entry=sgemm_4warp_swizzle_6144x6144_grid regs/thd=64 shmem=8192 B
-launch grid=(96,96,1) block=(128,1,1) K_TILES=384
-M=6144 nreps=1 mean=165.482ms min=165.482ms max=165.482ms TFLOPS=2.803
-  [ncu sections] M=6144
-Device: NVIDIA GeForce RTX 5070 sm_120
-shape M=6144 entry=sgemm_4warp_swizzle_6144x6144_grid regs/thd=64 shmem=8192 B
-launch grid=(96,96,1) block=(128,1,1) K_TILES=384
-M=6144 nreps=1 mean=644.014ms min=644.014ms max=644.014ms TFLOPS=0.720
---- shape M=8192 ---
-  [nsys trace] M=8192 nreps=20
-WARNING: Device-side CUDA Event completion trace is currently enabled.
-         This may increase runtime overhead and the likelihood of false
-         dependencies across CUDA Streams. If you wish to avoid this, please
-         disable the feature with --cuda-event-trace=false.
-WARNING: CPU IP/backtrace sampling not supported, disabling.
-Try the 'nsys status --environment' command to learn more.
-
-WARNING: CPU context switch tracing not supported, disabling.
-Try the 'nsys status --environment' command to learn more.
-
-Device: NVIDIA GeForce RTX 5070 sm_120
-shape M=8192 entry=sgemm_4warp_swizzle_8192x8192_grid regs/thd=64 shmem=8192 B
-launch grid=(128,128,1) block=(128,1,1) K_TILES=512
-M=8192 nreps=20 mean=24.938ms min=24.886ms max=24.970ms TFLOPS=44.090
-Collecting data...
-Generating '/tmp/nsys-report-bffa.qdstrm'
-[1/1] [0%                          ] nsys_M8192.nsys-rep[1/1] [0%                          ] nsys_M8192.nsys-rep[1/1] [=========46%                ] nsys_M8192.nsys-rep[1/1] [================69%         ] nsys_M8192.nsys-rep[1/1] [=======================93%  ] nsys_M8192.nsys-rep[1/1] [=======================94%  ] nsys_M8192.nsys-rep[1/1] [========================100%] nsys_M8192.nsys-rep[1/1] [========================100%] nsys_M8192.nsys-rep
-Generated:
-	/tmp/rfc067_pnsight_swizzle_profile_2026_05_22/nsys_M8192.nsys-rep
-  [ncu metrics CSV] M=8192 (sudo for perfcounter perm; RmProfilingAdminOnly=1)
-Device: NVIDIA GeForce RTX 5070 sm_120
-shape M=8192 entry=sgemm_4warp_swizzle_8192x8192_grid regs/thd=64 shmem=8192 B
-launch grid=(128,128,1) block=(128,1,1) K_TILES=512
-M=8192 nreps=1 mean=259.140ms min=259.140ms max=259.140ms TFLOPS=4.243
-  [ncu sections] M=8192
-Device: NVIDIA GeForce RTX 5070 sm_120
-shape M=8192 entry=sgemm_4warp_swizzle_8192x8192_grid regs/thd=64 shmem=8192 B
-launch grid=(128,128,1) block=(128,1,1) K_TILES=512
-M=8192 nreps=1 mean=1279.722ms min=1279.722ms max=1279.722ms TFLOPS=0.859
-== STEP 4: pull artifacts back ==
-== DONE ==

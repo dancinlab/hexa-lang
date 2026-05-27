@@ -1,9 +1,0 @@
-// stdlib/math/float.hexa — F1 (2026-05-10) backward-compat shim.
-//
-// Module relocated to stdlib/core/math/float.hexa. Pure libm wrappers
-// (transcendentals + classifiers) — target-agnostic.
-//
-// Sunset: removed after F4 absorptions complete.
-// New canonical path: stdlib/core/math/float.hexa
-
-import "stdlib/core/math/float.hexa"

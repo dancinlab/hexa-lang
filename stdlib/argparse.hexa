@@ -1,9 +1,0 @@
-// stdlib/argparse.hexa — F1 (2026-05-10) backward-compat shim.
-//
-// Module relocated to stdlib/alloc/argparse.hexa. argv parser — pure
-// (no syscall) but allocates maps + arrays heavily; alloc tier.
-//
-// Sunset: removed after F4 absorptions complete.
-// New canonical path: stdlib/alloc/argparse.hexa
-
-import "stdlib/alloc/argparse.hexa"

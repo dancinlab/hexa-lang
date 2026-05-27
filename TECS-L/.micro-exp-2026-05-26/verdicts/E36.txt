@@ -1,6 +1,0 @@
-=== E36 : hexa verify --expr gamma0_cusps 1 1 ===
-verify --expr gamma0_cusps(1)=1
-  calc   = 1  == expected 1
-  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
-  absorb = ⚠ atlas register did NOT confirm fold; invocation:
-           hexa atlas register --from-verify gamma0_cusps 1 1

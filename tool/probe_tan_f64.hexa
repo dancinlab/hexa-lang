@@ -1,8 +1,0 @@
-// tool/probe_tan_f64.hexa — F-TANF64-NUMERIC kernel (#1467 silicon validation)
-@gpu_kernel
-fn tan_f64_probe(a: [f64], c: [f64], n: i64) {
-    let mut tid: i64 = to_i64(gpu_thread_id_x())
-    if tid < n {
-        c[to_i64(tid)] = tan(a[to_i64(tid)])
-    }
-}

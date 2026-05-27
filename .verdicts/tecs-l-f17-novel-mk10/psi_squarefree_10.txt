@@ -1,3 +1,0 @@
-verify --expr sigma(10)=18
-  calc   = 18  == expected 18
-  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)

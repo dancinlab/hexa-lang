@@ -1,3 +1,0 @@
-verify --expr sigma_0(6)=4
-  calc   = 4  == expected 4
-  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)

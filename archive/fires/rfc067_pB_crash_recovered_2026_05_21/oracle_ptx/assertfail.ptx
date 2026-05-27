@@ -1,8 +1,0 @@
-.version 7.0
-.target sm_80
-.address_size 64
-.extern .func __assertfail (.param .b64 msg, .param .b64 file, .param .b32 line, .param .b64 fn, .param .b64 sz);
-.visible .entry hexa_assert_smoke()
-{
-    ret;
-}

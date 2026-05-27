@@ -1,9 +1,0 @@
-host.c: In function ‘main’:
-host.c:509:90: warning: ' ' flag used with ‘%o’ gnu_printf format [-Wformat=]
-  509 |     fprintf(rj, "    \"N197\":      \"named-bar warp-spec 4P+4C, NO TMA -- FAILED (-34% to -84%% vs N149)\",\n");
-      |                                                                                          ^
-host.c:509:90: warning: format ‘%to’ expects a matching ‘unsigned ptrdiff_t’ argument [-Wformat=]
-  509 |     fprintf(rj, "    \"N197\":      \"named-bar warp-spec 4P+4C, NO TMA -- FAILED (-34% to -84%% vs N149)\",\n");
-      |                                                                                       ~~~^
-      |                                                                                          |
-      |                                                                                          long unsigned int

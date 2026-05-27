@@ -1,6 +1,0 @@
-합계 68
-drwx------ 16 summer summer 4096  5월 20 21:09 .
-drwx------  3 summer summer 4096  5월 12 22:30 ..
-drwx------  5 summer summer 4096  5월 20 20:27 0
-drwx------  4 summer summer 4096  5월 20 20:02 1
-17M	/home/summer/.nv/ComputeCache/

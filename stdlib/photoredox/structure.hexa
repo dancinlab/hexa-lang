@@ -1,8 +1,0 @@
-#!hexa strict
-// photoredox structure — Ru(bpy)3 catalyst MW.
-fn main() {
-    let catalyst_MW = 750.0
-    println("photoredox_structure (Ru(bpy)3 catalyst MW):")
-    println("  catalyst_MW = " + str(catalyst_MW))
-    println("__HEXA_PHOTOREDOX_STRUCTURE__ PASS gate=GATE_OPEN absorbed=false")
-}

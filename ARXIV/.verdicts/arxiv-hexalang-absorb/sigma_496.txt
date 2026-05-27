@@ -1,9 +1,0 @@
-# A5 HEXA-LANG math.NT verify-native recompute (verbatim hexa verify stdout)
-# paper: 2202.06357 Gallardo & Rahavandrainy — perfect polynomials w/ Mersenne primes (math.NT); 1704.05595 Schmidt sum-of-divisors
-# cmd  : POOL_DISABLE=1 hexa verify --expr sigma 496 992  (HEAD driver #1153, mini arm64)
-# date : 2026-05-26
-----------------------------------------------------------------------------
-verify --expr sigma(496)=992
-  calc   = 992  == expected 992
-  tier   = 🔵 SUPPORTED-FORMAL  (hexa-native closed-form, g_self_verify · TECS-L Tier1)
-  absorb = · already in atlas — idempotent skip (default · @D g69)

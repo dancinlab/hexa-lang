@@ -1,8 +1,0 @@
-#!hexa strict
-// photoredox design — blue LED wavelength.
-fn main() {
-    let led_nm = 450.0
-    println("photoredox_design (blue LED wavelength):")
-    println("  led_nm = " + str(led_nm))
-    println("__HEXA_PHOTOREDOX_DESIGN__ PASS gate=GATE_OPEN absorbed=false")
-}

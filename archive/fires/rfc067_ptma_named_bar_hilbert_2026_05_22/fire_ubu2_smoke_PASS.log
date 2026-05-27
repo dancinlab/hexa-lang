@@ -1,7 +1,0 @@
-Device: NVIDIA GeForce RTX 5070 sm_120
-{
-  "sm": "sm_120",
-  "mismatch": 0,
-  "total_cells": 256,
-  "verdict": "TMA_SMOKE_PASS"
-}
