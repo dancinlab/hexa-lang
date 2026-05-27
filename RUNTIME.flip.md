@@ -297,8 +297,9 @@ hexa 로 존재 → reimpl 신규작성은 redundant. `.c` 가 남은 진짜 이
 
 ⚠ **DUP-RACE (2026-05-28)**: ~7 realistic 중 2개가 이미 hexa 존재 → blowfish 만 net-new.
 
-- [⛔DUP] **B9.5a-tokenizer-bpe** — `self/ml/tokenizer_bpe.hexa`·`qwen_bpe.hexa`
-      이미 존재. native `hxtok.c` 삭제 = wire 갭 (B9.6), reimpl 아님.
+- [x] **B9.5a-tokenizer-bpe** — `self/ml/tokenizer_bpe.hexa`·`qwen_bpe.hexa`
+      이미 존재. native `hxtok.c` = standalone dead shim (빌드/링크/FFI 호출 0건).
+      **DELETED B9.6e (228→227)** — dead-file git-rm (v565 패턴), reimpl 아님.
 - [⛔DUP] **B9.5b-sha256-core** — `stdlib/core/hash/sha256.hexa`·`stdlib/crypto/`
       이미 존재. wire 갭만.
 - [x] **B9.5c-blowfish** — `crypto_blowfish.c` (pi-seeded bcrypt) →
@@ -334,16 +335,23 @@ fan-out 불가, serial 진행.
       파일-삭제 후보 고갈 확정.**
 
       **잔여 native/*.c 삭제 = 전부 substantial multi-session port (clean 아님)**:
-      - `hxtok.c` (+`.h`) — BPE tokenizer C lib · 8 ml/flame FFI consumer · → B9.6e
+      - ~~`hxtok.c`~~ — **B9.6e 에서 dead-file git-rm 으로 해결 (port 아님)** ↓
       - `hxvocoder.c`/`hxflash_linux.c`/`hxlayer_linux.c`/`hxvdsp_linux.c` — layer①
         port · 각 dedicated build script + ml FFI consumer (rewrite+rewire)
       - `exec_argv_sha256.c` — sha256 builtin 다중 core-compiler caller + 이름불일치
         (대규모 rewire 트랙)
       - vendor FFI ③19 (CUDA/openssl/sodium/OS-ABI) — irreducible 영구 바닥
       - `runtime.c`/`runtime_core.c` — 640/548 fn FLOOR (전부 포팅해야 파일 삭제)
-- [ ] **B9.6e-hxtok-port** — `hxtok.c` BPE tokenizer C lib → hexa (228→227 목표).
-      full-lib port + 8-consumer rewire + RUNEQ token-equivalence. 진행중 — tractable
-      (기존 hexa BPE 재활용) 시 실행, from-scratch 면 multi-session BLOCKED 보고.
+- [x] **B9.6e-hxtok-c-delete** — 🎯 **실제 `.c` 삭제 DONE (228→227)**. (B9.6d 의
+      "hxtok = port 필요" 예측은 정밀 audit 으로 반증됨 — port 아닌 dead-file.)
+      `self/native/hxtok.c`(750L)+`hxtok.h`(49L) Qwen2.5 BPE C 라이브러리 삭제.
+      정밀 audit: standalone shim — `tool/`·`*.json`·`*.sh` 빌드 스크립트 0건,
+      `.so`/`.dylib` 아티팩트 0건, 전 repo `HxTok`/`hxtok_*` FFI 호출 0건 (유일
+      매치 = `compiler/roadmaps_archive/embedded.gen.hexa` 의 archived 텍스트
+      리터럴, 코드 아님). 순수-hexa 등가(`qwen_bpe.hexa`·`tokenizer_bpe.hexa`)가
+      8개 consumer 전수 서빙. **삭제 후 8/8 consumer `hexa parse` clean** — C
+      lib 가 dead 였음을 입증 (RUNEQ moot: live caller 0). runtime.c 무관(미
+      include). blowfish(#1816)·v565(#1818) 의 dead-file 패턴.
 - [ ] **B9.6a-hexaval-repr-emit** — HexaVal repr 생성자 codegen self-emit
       (`self/codegen/runtime_arm64.hexa` 확장; `rt_arena_*` 4 fn LANDED 패턴)
 - [ ] **B9.6b-runtime-primitive-emit** — 잔여 runtime primitive self-emit
