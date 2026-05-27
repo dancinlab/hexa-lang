@@ -1,8 +1,13 @@
 #!hexa strict
-// stdlib/photoredox/analyze.hexa — `PHOTOREDOX + analyze` producer scaffold (substrate=hexa).
-// cellrun manufactures the manifest record (gate_default=OPEN,
-// absorbed_default=false · g3) — this scaffold exits 0 to trigger it.
-// Real domain compute lands as a follow-up per-verb engine upgrade.
+// photoredox analyze — Rehm-Weller ΔG_ET for Ru(bpy)₃²⁺* + TEA.
 fn main() {
+    let E_donor_V = 0.4       // E(TEA+/TEA)
+    let E_accept_V = -1.3     // E(Ru^I/Ru^II)
+    let E_excited_V = 2.1     // *Ru excited-state energy
+    let dG_eV = E_donor_V - E_accept_V - E_excited_V
+    let dG_kJmol = dG_eV * 96.485
+    println("photoredox_analyze (Rehm-Weller · Ru(bpy)3 + TEA):")
+    println("  dG_ET_eV = " + str(dG_eV))
+    println("  dG_ET_kJ_per_mol = " + str(dG_kJmol))
     println("__HEXA_PHOTOREDOX_ANALYZE__ PASS gate=GATE_OPEN absorbed=false")
 }

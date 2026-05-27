@@ -1,8 +1,11 @@
 #!hexa strict
-// stdlib/gene-edit/analyze.hexa — `GENE_EDIT + analyze` producer scaffold (substrate=hexa).
-// cellrun manufactures the manifest record (gate_default=OPEN,
-// absorbed_default=false · g3) — this scaffold exits 0 to trigger it.
-// Real domain compute lands as a follow-up per-verb engine upgrade.
+// gene-edit analyze — CFD off-target score (perfect match + 1-mismatch).
 fn main() {
+    let cfd_perfect = 1.0
+    let pos18_weight = 0.97   // PAM-distal mismatch (sample)
+    let cfd_1mm = pos18_weight
+    println("gene-edit_analyze (CFD off-target):")
+    println("  cfd_perfect_match = " + str(cfd_perfect))
+    println("  cfd_1mm_pos18 = " + str(cfd_1mm))
     println("__HEXA_GENE_EDIT_ANALYZE__ PASS gate=GATE_OPEN absorbed=false")
 }

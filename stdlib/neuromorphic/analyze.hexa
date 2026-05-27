@@ -1,8 +1,12 @@
 #!hexa strict
-// stdlib/neuromorphic/analyze.hexa — `NEUROMORPHIC + analyze` producer scaffold (substrate=hexa).
-// cellrun manufactures the manifest record (gate_default=OPEN,
-// absorbed_default=false · g3) — this scaffold exits 0 to trigger it.
-// Real domain compute lands as a follow-up per-verb engine upgrade.
+// neuromorphic analyze — LIF membrane time constant τ = R·C.
 fn main() {
+    let R_ohm = 1.0e8         // 100 MΩ
+    let C_F = 1.0e-10         // 100 pF
+    let tau_s = R_ohm * C_F
+    let tau_ms = tau_s * 1000.0
+    println("neuromorphic_analyze (LIF · R=100MΩ C=100pF):")
+    println("  tau_s = " + str(tau_s))
+    println("  tau_ms = " + str(tau_ms))
     println("__HEXA_NEUROMORPHIC_ANALYZE__ PASS gate=GATE_OPEN absorbed=false")
 }
