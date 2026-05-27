@@ -1,5 +1,15 @@
 # INBOX — log
 
+## 2026-05-27 — ✅FIXED(deploy) ~/.hx/bin/hexa shim stale = #1149 fork-guard 미배포 (fork-storm 근본)
+
+배포된 `~/.hx/bin/hexa` 가 2줄 bare `exec hexa.real "$@"` 로 stale — 소스 shim(repo root `hexa`, HEAD)의 #1149 재귀-깊이 가드(HEXA_DEPTH cap 32) + hxv2 우선 + argv0-shadow(#866) 보호가 전부 deploy 에서 누락. 결과: 나선형 `hexa→sh→hexa-atlas→sh→hexa→…` 재진입이 무한정 가능 → process-table 벽 = fork-storm (2026-05-27 세션 중 crypto 검증 반복 compile 시 2회 발생).
+
+**진단**: `wc -l ~/.hx/bin/hexa` = 2 (bare). `git show origin/main:hexa | wc -l` = 54 (가드 완비). `strings ~/.hx/bin/hexa.real | grep HEXA_DEPTH` = 0 (바이너리에도 가드 없음 → shim 이 유일 방어선인데 그게 stale).
+
+**FIX(deploy, 검증됨)**: `git show origin/main:hexa > ~/.hx/bin/hexa; chmod +x`. 검증: dispatch OK(hexa 0.1.0-dispatch via hxv2) · `HEXA_DEPTH=32 hexa` → "recursion-depth cap reached — refusing" 발화 · depth 5 정상. bare shim 은 `.hexa.bare-preguard-bak-2026-05-27` 백업.
+
+**durable(잔여)**: installer(`hx install`/`build_hexa_cli --install`)가 소스 `hexa` shim(가드본)을 ~/.hx/bin/hexa 로 멱등 배포해야. 현재 어느 deploy 단계가 bare `exec hexa.real` 본을 깔았는지 미상(stale deploy 회귀 class — runtime.o/symlink 누락과 동류, [[reference_hxbin_symlink_swap_hazard]]). shim 도 deploy-completeness 체크리스트에 추가 필요.
+
 ## 2026-05-27T06:30Z — `~/.hx/packages/hexa-lang` install stale @ #1241 (ec1cd33) — atlas/verify arms invisible (TECS-L RTSC3 upstream)
 
 **severity: medium** — live `~/.hx/bin/hexa` 가 dispatch 하는 atlas/verify 소스가 install 패키지 `~/.hx/packages/hexa-lang/tool/{atlas_cli,verify_cli}.hexa` 이며, 이 패키지는 **#1241 (ec1cd33) 에 frozen** (main 은 #1520+). 결과:
