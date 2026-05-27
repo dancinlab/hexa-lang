@@ -1,0 +1,89 @@
+// HEXA Standard Library — crypto/tls13_new_session_ticket
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// TLS 1.3 NewSessionTicket message parser (RFC 8446 §4.6.1) — pure hexa.
+// Used for session resumption (PSK). Server sends this post-handshake; the
+// client stores ticket+nonce+age_add for the next session. let-mut (#1506).
+//
+// Structure (RFC 8446 §4.6.1):
+//   struct {
+//       uint32 ticket_lifetime;
+//       uint32 ticket_age_add;
+//       opaque ticket_nonce<0..255>;
+//       opaque ticket<1..2^16-1>;
+//       Extension extensions<0..2^16-2>;
+//   } NewSessionTicket;
+//
+// Surface (body = the NST message body, NOT including the 4-byte HS header):
+//   pub fn tls13_nst_lifetime(body: [int]) -> int             — uint32
+//   pub fn tls13_nst_age_add(body: [int]) -> int              — uint32
+//   pub fn tls13_nst_nonce(body: [int]) -> [int]              — variable
+//   pub fn tls13_nst_ticket(body: [int]) -> [int]             — variable
+//   pub fn tls13_nst_extensions_length(body: [int]) -> int
+//   pub fn tls13_nst_extensions_offset(body: [int]) -> int
+
+@pure
+fn _u32(b: [int], o: int) -> int {
+    return ((b[o] & 0xFF) << 24) | ((b[o + 1] & 0xFF) << 16) | ((b[o + 2] & 0xFF) << 8) | (b[o + 3] & 0xFF)
+}
+
+@pure
+fn _u16(b: [int], o: int) -> int {
+    return ((b[o] & 0xFF) << 8) | (b[o + 1] & 0xFF)
+}
+
+@pure
+pub fn tls13_nst_lifetime(body: [int]) -> int {
+    return _u32(body, 0)
+}
+
+@pure
+pub fn tls13_nst_age_add(body: [int]) -> int {
+    return _u32(body, 4)
+}
+
+@pure
+pub fn tls13_nst_nonce(body: [int]) -> [int] {
+    let nl = body[8] & 0xFF
+    let mut n: [int] = []
+    let mut i = 0
+    while i < nl { n.push(body[9 + i]); i = i + 1 }
+    return n
+}
+
+@pure
+fn _ticket_offset(body: [int]) -> int {
+    return 9 + (body[8] & 0xFF)
+}
+
+@pure
+fn _ticket_len(body: [int]) -> int {
+    let to = _ticket_offset(body)
+    return _u16(body, to)
+}
+
+@pure
+pub fn tls13_nst_ticket(body: [int]) -> [int] {
+    let to = _ticket_offset(body)
+    let tl = _u16(body, to)
+    let mut t: [int] = []
+    let mut i = 0
+    while i < tl { t.push(body[to + 2 + i]); i = i + 1 }
+    return t
+}
+
+@pure
+pub fn tls13_nst_extensions_offset(body: [int]) -> int {
+    let to = _ticket_offset(body)
+    let tl = _u16(body, to)
+    return to + 2 + tl + 2
+}
+
+@pure
+pub fn tls13_nst_extensions_length(body: [int]) -> int {
+    let to = _ticket_offset(body)
+    let tl = _u16(body, to)
+    return _u16(body, to + 2 + tl)
+}
