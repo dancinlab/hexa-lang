@@ -166,6 +166,103 @@ fn _mul(a: [int], b: [int]) -> [int] {
     return acc
 }
 
+// === Solinas P-256 fast reduction (FIPS 186-4 D.2) ===
+// Input: 32×16-bit limb product (< 2^512). Output: 16×16-bit limbs mod p.
+// Works on 32-bit words tw[0..15]; combines 9 Solinas terms:
+//   pos = 8p + s1 + 2·s2 + 2·s3 + s4 + s5 ; neg = s6 + s7 + s8 + s9
+//   result = (pos − neg) mod p   (8p keeps pos−neg ≥ 0; few conditional −p)
+@pure
+fn _reduce_p256(t: [int]) -> [int] {
+    // extract sixteen 32-bit words from the 16-bit-limb product
+    let mut tw: [int] = []
+    let mut k = 0
+    while k < 16 { tw.push((t[2*k] & 0xFFFF) | ((t[2*k+1] & 0xFFFF) << 16)); k = k + 1 }
+    // pos accumulator (9 limbs, wide) seeded with 8p
+    let mut pos: [int] = [0xfffffff8, 0xffffffff, 0xffffffff, 0x7, 0, 0, 0x8, 0xfffffff8, 0x7]
+    // s1 = t0..t7
+    let mut j = 0
+    while j < 8 { pos[j] = pos[j] + tw[j]; j = j + 1 }
+    // 2·s2 = 2·[0,0,0,t11,t12,t13,t14,t15]
+    pos[3] = pos[3] + 2*tw[11]; pos[4] = pos[4] + 2*tw[12]; pos[5] = pos[5] + 2*tw[13]
+    pos[6] = pos[6] + 2*tw[14]; pos[7] = pos[7] + 2*tw[15]
+    // 2·s3 = 2·[0,0,0,t12,t13,t14,t15,0]
+    pos[3] = pos[3] + 2*tw[12]; pos[4] = pos[4] + 2*tw[13]; pos[5] = pos[5] + 2*tw[14]; pos[6] = pos[6] + 2*tw[15]
+    // s4 = [t8,t9,t10,0,0,0,t14,t15]
+    pos[0] = pos[0] + tw[8]; pos[1] = pos[1] + tw[9]; pos[2] = pos[2] + tw[10]
+    pos[6] = pos[6] + tw[14]; pos[7] = pos[7] + tw[15]
+    // s5 = [t9,t10,t11,t13,t14,t15,t13,t8]
+    pos[0] = pos[0] + tw[9]; pos[1] = pos[1] + tw[10]; pos[2] = pos[2] + tw[11]; pos[3] = pos[3] + tw[13]
+    pos[4] = pos[4] + tw[14]; pos[5] = pos[5] + tw[15]; pos[6] = pos[6] + tw[13]; pos[7] = pos[7] + tw[8]
+    // neg accumulator (9 limbs)
+    let mut neg: [int] = [0,0,0,0,0,0,0,0,0]
+    // s6 = [t11,t12,t13,0,0,0,t8,t10]
+    neg[0] = neg[0] + tw[11]; neg[1] = neg[1] + tw[12]; neg[2] = neg[2] + tw[13]; neg[6] = neg[6] + tw[8]; neg[7] = neg[7] + tw[10]
+    // s7 = [t12,t13,t14,t15,0,0,t9,t11]
+    neg[0] = neg[0] + tw[12]; neg[1] = neg[1] + tw[13]; neg[2] = neg[2] + tw[14]; neg[3] = neg[3] + tw[15]; neg[6] = neg[6] + tw[9]; neg[7] = neg[7] + tw[11]
+    // s8 = [t13,t14,t15,t8,t9,t10,0,t12]
+    neg[0] = neg[0] + tw[13]; neg[1] = neg[1] + tw[14]; neg[2] = neg[2] + tw[15]; neg[3] = neg[3] + tw[8]; neg[4] = neg[4] + tw[9]; neg[5] = neg[5] + tw[10]; neg[7] = neg[7] + tw[12]
+    // s9 = [t14,t15,0,t9,t10,t11,0,t13]
+    neg[0] = neg[0] + tw[14]; neg[1] = neg[1] + tw[15]; neg[3] = neg[3] + tw[9]; neg[4] = neg[4] + tw[10]; neg[5] = neg[5] + tw[11]; neg[7] = neg[7] + tw[13]
+    // carry-normalize pos and neg to 32-bit limbs
+    let mut c = 0
+    j = 0
+    while j < 9 { let v = pos[j] + c; pos[j] = v & 0xffffffff; c = v >> 32; j = j + 1 }
+    c = 0
+    j = 0
+    while j < 9 { let v = neg[j] + c; neg[j] = v & 0xffffffff; c = v >> 32; j = j + 1 }
+    // diff = pos - neg (9-limb borrow; non-negative since pos ≥ 8p > neg)
+    let mut diff: [int] = [0,0,0,0,0,0,0,0,0]
+    let mut br = 0
+    j = 0
+    while j < 9 {
+        let v = pos[j] - neg[j] - br
+        if v < 0 { diff[j] = v + 4294967296; br = 1 } else { diff[j] = v; br = 0 }
+        j = j + 1
+    }
+    // reduce mod p: p as 9×32-bit limbs
+    let pp: [int] = [0xffffffff, 0xffffffff, 0xffffffff, 0, 0, 0, 1, 0xffffffff, 0]
+    let mut guard = 0
+    while guard < 20 {
+        // compare diff >= pp (9-limb, MSB first)
+        let mut ge = 1
+        let mut i2 = 8
+        let mut decided = 0
+        while i2 >= 0 {
+            if decided == 0 {
+                if diff[i2] > pp[i2] { ge = 1; decided = 1 }
+                else if diff[i2] < pp[i2] { ge = 0; decided = 1 }
+            }
+            i2 = i2 - 1
+        }
+        if ge == 0 { guard = 99 }
+        else {
+            let mut b2 = 0
+            j = 0
+            while j < 9 {
+                let v = diff[j] - pp[j] - b2
+                if v < 0 { diff[j] = v + 4294967296; b2 = 1 } else { diff[j] = v; b2 = 0 }
+                j = j + 1
+            }
+            guard = guard + 1
+        }
+    }
+    // convert diff low-8 32-bit limbs → 16×16-bit limbs
+    let mut out: [int] = []
+    j = 0
+    while j < 8 {
+        out.push(diff[j] & 0xFFFF)
+        out.push((diff[j] >> 16) & 0xFFFF)
+        j = j + 1
+    }
+    return out
+}
+
+// mod-p multiply via Solinas (fast path; mod-n still uses general _mod_reduce)
+@pure
+fn _mul_mod_p(a: [int], b: [int]) -> [int] {
+    return _reduce_p256(_mul(a, b))
+}
+
 // === Constants (P-256, FIPS 186-4 D.1.2.3) ===
 
 // p = 2^256 − 2^224 + 2^192 + 2^96 − 1
@@ -301,6 +398,34 @@ fn _inv_mod(a: [int], m: [int]) -> [int] {
     return _pow_mod(a, e, m)
 }
 
+// mod-p fast variants (Solinas reduction) for the scalar-mult hot path
+@pure
+fn _pow_mod_p(a: [int], e: [int]) -> [int] {
+    let mut result = _zeros()
+    result[0] = 1
+    let mut bit = 255
+    while bit >= 0 {
+        result = _mul_mod_p(result, result)
+        let limb = bit >> 4
+        let off = bit & 15
+        if ((e[limb] >> off) & 1) == 1 {
+            result = _mul_mod_p(result, a)
+        }
+        bit = bit - 1
+    }
+    return result
+}
+
+@pure
+fn _inv_mod_p(a: [int]) -> [int] {
+    let m = _P()
+    let mut e: [int] = []
+    let mut i = 0
+    while i < 16 { e.push(m[i]); i = i + 1 }
+    e[0] = e[0] - 2
+    return _pow_mod_p(a, e)
+}
+
 // === Point arithmetic (affine; "point at infinity" represented as both coords zero) ===
 // Edwards/Weierstrass: y^2 = x^3 - 3x + b mod p
 
@@ -315,19 +440,19 @@ fn _point_double(x: [int], y: [int]) -> [int] {
     if _is_zero(y) { let mut o: [int] = []; let mut i = 0; while i < 16 { o.push(0); i = i + 1 }; i = 0; while i < 16 { o.push(0); i = i + 1 }; return o }
     // s = (3x^2 - 3) / (2y) mod p   (since a=-3, slope = (3x^2 + a)/(2y))
     let three = _zeros(); let mut t3 = three; t3[0] = 3
-    let xx = _mul_mod(x, x, p)
-    let num1 = _mul_mod(t3, xx, p)
+    let xx = _mul_mod_p(x, x)
+    let num1 = _mul_mod_p(t3, xx)
     let num = _sub_mod(num1, t3, p)
     let two_y = _add_mod(y, y, p)
-    let inv = _inv_mod(two_y, p)
-    let s = _mul_mod(num, inv, p)
+    let inv = _inv_mod_p(two_y)
+    let s = _mul_mod_p(num, inv)
     // x3 = s^2 - 2x
-    let s2 = _mul_mod(s, s, p)
+    let s2 = _mul_mod_p(s, s)
     let two_x = _add_mod(x, x, p)
     let x3 = _sub_mod(s2, two_x, p)
     // y3 = s(x - x3) - y
     let diff = _sub_mod(x, x3, p)
-    let prod = _mul_mod(s, diff, p)
+    let prod = _mul_mod_p(s, diff)
     let y3 = _sub_mod(prod, y, p)
     let mut out: [int] = []
     let mut i = 0
@@ -367,15 +492,15 @@ fn _point_add(x1: [int], y1: [int], x2: [int], y2: [int]) -> [int] {
     // s = (y2 - y1) / (x2 - x1)
     let dy = _sub_mod(y2, y1, p)
     let dx = _sub_mod(x2, x1, p)
-    let inv = _inv_mod(dx, p)
-    let s = _mul_mod(dy, inv, p)
+    let inv = _inv_mod_p(dx)
+    let s = _mul_mod_p(dy, inv)
     // x3 = s^2 - x1 - x2
-    let s2 = _mul_mod(s, s, p)
+    let s2 = _mul_mod_p(s, s)
     let t = _sub_mod(s2, x1, p)
     let x3 = _sub_mod(t, x2, p)
     // y3 = s(x1 - x3) - y1
     let diff = _sub_mod(x1, x3, p)
-    let prod = _mul_mod(s, diff, p)
+    let prod = _mul_mod_p(s, diff)
     let y3 = _sub_mod(prod, y1, p)
     let mut out: [int] = []
     let mut i = 0
@@ -472,3 +597,4 @@ pub fn p256_verify(qx_be: [int], qy_be: [int], hash_be: [int], r_be: [int], s_be
     let rx_mod_n = _mod_reduce(rx_32, n)
     return _cmp(rx_mod_n, r) == 0
 }
+
