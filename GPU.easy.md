@@ -1,92 +1,108 @@
-# 🎯 GPU 스택 — 누구한테 좋은가 (친근 모드)
+# 🔥🔧 PyTorch + cuBLAS 대비 hexa 가 좋은 부분 (친근 모드)
 
-> 이 문서는 `GPU.md`(SSOT) 의 친근 설명 사이드. fusion 격차가 *어떤 사용자의 어떤 통증*에 작동하는지를 페르소나로 분류 + 메인테이너(dancinlab) 본인의 use case 매핑.
+> 이 문서는 `GPU.md` (SSOT) 의 친근 사이드. 기존 표준 (PyTorch + cuBLAS) 대비 hexa (flame + forge) 가 어떤 통증을 어떻게 푸는지를 **본인(메인테이너)** 과 **사용자(타인)** 두 관점으로 정리.
+
+## 비교 구도 한 장
+
+기존 표준은 *2개의 분리된 stack* — PyTorch (학습) + cuBLAS (GPU 커널). hexa = 그 둘을 **하나로 묶은 stack** (flame + forge). 묶인 게 왜 이득인가를 두 관점에서.
+
+```
+지금 표준 (남들이 쓰는):                    hexa (flame + forge):
+ ┌──────────────┐                            ┌──────────────────────┐
+ │   PyTorch    │ Python · C++ · ATen        │      flame           │
+ │  (학습 stack) │                            │  (compiler-only NN)  │
+ └──────┬───────┘                            │                      │
+        │ cudaLaunch                         │  ag_tape · nn_lib    │
+        ▼                                    │  opt_* · t_*         │
+ ┌──────────────┐                            ├──────────────────────┤
+ │    cuBLAS    │ 블랙박스 binary (.so)       │      forge           │
+ │  (GPU 커널)   │                            │  (GPU substrate)     │
+ └──────────────┘                            │                      │
+   ↑ 두 stack 사이 매번 launch+HBM 왕복       │  farr · BF16-TC      │
+   ↑ 4 언어/런타임 단절                       │  cuBLAS Dgemm · 11.cu│
+                                             └──────────────────────┘
+                                              ↑ 한 stack · 한 언어 · fusion 가능
+```
+
+## 1️⃣ 본인 (메인테이너) 한테 좋은 점
+
+**통증 = stack 사이의 단절을 매일 4번 건너야 함.**
+
+```
+본인 매일 사이클:
+ 학습      추론       검증         배포
+ ───→     ───→      ───→        ───→
+ [PyTorch] [CUDA]    [numpy]     [libtorch+Python]   ← 표준 stack
+  Python   C++/CUDA   Python      multi-GB
+   ↑        ↑           ↑           ↑
+   매 단계마다 언어/런타임 갈라짐 — 한 모듈 디버그하려고 4 언어 다 알아야
+
+ vs.
+
+ 학습      추론       검증         배포
+ ───→     ───→      ───→        ───→
+ [flame]   [forge]   [atlas]      [hexa binary]      ← hexa stack
+   hexa     hexa      hexa         hexa
+   ↑        ↑           ↑           ↑
+   모두 한 언어 — 4-cycle 단절이 0
+```
+
+| PyTorch+cuBLAS 통증 | hexa 가 본인에게 주는 이득 |
+|---|---|
+| Python+libtorch 무거워 phanes SaaS deploy 못 함 | 단일 binary, no Python, edge 가능 |
+| autograd 미분 디버그 = C++ Autograd 블랙박스 | `ag_tape` 자체가 hexa source — 자기 코드 |
+| 학습/검증/배포 각각 언어 갈라짐 | flame+forge+atlas+CLI 모두 hexa — 1 언어 |
+| atlas-bound theorem 인용 = PyTorch 에 자리 없음 | 컴파일러 자체가 atlas 인용 검증 |
+| iter loop 자기-self-host 8-stage lint 자동 | 컴파일러가 *자기를* 컴파일 |
+
+**한 줄로**: 본인은 *수직 단절* 이 통증 — hexa 가 그 4-단절을 1-stack 으로 합쳐 매일 누적 이득.
+
+## 2️⃣ 사용자 (타인) 한테 좋은 점
+
+**통증 = 자기 부위만 깊게 아픔.** 전체 stack 갈아탈 필요 없이, hexa 의 *그 부분 만* 써도 됨.
+
+| 사용자 페르소나 | PyTorch+cuBLAS 통증 | hexa 가 그 사용자에게 주는 이득 |
+|---|---|---|
+| 🧪 **LLM 트레이너** | attention / norm / decode 가 launch-bound → PyTorch 위에서 답답 | flame fusion 으로 3-op chain → 1 launch (66.7 % ↓) · FlashAttn-style 한 커널 |
+| 🔬 **GPU 커널 연구자** | cuBLAS = 블랙박스 `.so` → SASS 보고 싶어도 못 봄 | forge: source → PTX → SASS 가시 · cubin in-repo |
+| 📦 **edge 배포자** | Python + libtorch 수 GB 못 들고 감 | flame: native arm64 / x86_64 단일 binary |
+| 🔢 **niche 산술** (posit · interval · lattice) | cuBLAS = IEEE float only | forge custom-dtype codegen — fusion 동일 적용 |
+| 🧠 **autograd 디버거** | PyTorch C++ Autograd 못 step | flame `ag_tape` 전체가 hexa source |
+| 🎯 **과학 · 재현성** | PyTorch run-to-run drift | flame 4 + forge 12 byte-eq oracle (max\|Δ\| = 0) |
+| 🛠 **BF16-TC mega-kernel 작성** | cuBLAS 가 안 묶는 영역 | **forge BF16-TC = 9.67× FP64 cuBLAS** @ Llama-7B FFN |
+
+```
+타인은 자기 부위만 골라 들어옴:
+  LLM 트레이너   ─→ 🔥 flame (fusion 만 봄)
+  커널 연구자    ─→ 🔧 forge (PTX / SASS 만 봄)
+  edge 배포자    ─→ 🔥 flame binary (학습은 그대로 PyTorch 유지해도 OK)
+  과학자         ─→ 🔥+🔧 byte-eq 만
+                                ↑
+                  *나머지 stack 은 기존 PyTorch + cuBLAS 그대로 둬도 됨* — gradual adoption
+```
+
+**한 줄로**: 타인은 *한 부위 깊이* 가 통증 — hexa 의 해당 도구만 골라 써도 그 통증이 풀림 (전체 마이그레이션 불요).
+
+## 본인 vs 타인 비교 한 표
+
+| 축 | 🧑‍🍳 본인 (메인테이너) | 👥 타인 (일반 사용자) |
+|---|---|---|
+| PyTorch+cuBLAS 통증 종류 | **수직 단절** (4 stack 사이 갈라짐) | **한 부위** 깊은 통증 |
+| hexa 이득 방식 | flame+forge+atlas+CLI 통합 — *매 사이클* 누적 | flame OR forge 부분만 — *그 통증만* 해소 |
+| 사용 폭 | stack 전체 (학습 · 추론 · 검증 · 배포 다) | 1-2 도구 (자기 통증 부위만) |
+| 진입 비용 | 0 (자기가 만든 도구) | 새 언어 학습 + 일부 마이그레이션 |
+| 이득 크기 | 누적 — 4 단절 × 매일 | 집중 — 자기 통증만 강하게 |
+| 비유 | 통합 키친 차린 *셰프* | 자기 메뉴만 시키는 *손님* |
 
 ## 한 줄 요약
 
-🍳 **HEXA-STACK — "조립까지 한 번에" 도구**
+🔥🔧 **PyTorch + cuBLAS vs hexa** = *2개 분리 stack* vs *1개 통합 stack*.
 
-cuBLAS 는 *부품*(GEMM 커널) 챔피언이라 GEMM 자체로는 못 이김(roofline 천장 80%). 그러나 **GEMM 주변** + **작은 op chain** + **norm/attention 같은 memory-bound 패턴**에서 cuBLAS-using stack 은 매 op 마다 HBM 왕복해야 하는 반면 hexa fusion 은 한 커널 안에서 레지스터에 머문다. 이 격차가 LLM 학습/추론의 실제 시간 분포와 정확히 겹쳐서, 모델 단위 wall 에서는 **fusion 이 진짜 격차**가 된다.
+- **본인** 이득 = 통합 자체 (수직 단절 0 → 매일 누적).
+- **타인** 이득 = 통합 stack 의 *한 도구만 골라* 자기 통증만 풀기 (gradual adoption).
 
-## 7가지 사용자 페르소나 (통증별)
-
-| 페르소나 | 갖고 있는 통증 | hexa 가 주는 것 |
-|---|---|---|
-| 🧪 **LLM/Transformer 학습·추론** | attention·norm·decode 가 memory/launch bound 라 PyTorch 위에서 답답함 | fusion 으로 그 영역 직타격 (66% ↓) |
-| 🔬 **GPU 커널 연구자** | cuBLAS 는 블랙박스 — SASS 까지 보고 싶은데 못 봄 | source → PTX → SASS 전부 가시 |
-| 📦 **단일 바이너리 배포자** (edge/embedded/offline) | Python+libtorch 못 들고 감 (수 GB) | native arm64/x86_64 단일 binary, no Python |
-| 🔢 **비-IEEE 산술 필요** (posit · interval · lattice) | cuBLAS 는 IEEE float 만 | 커스텀 dtype codegen |
-| 🧠 **autograd 직접 디버그** | PyTorch C++ Autograd 는 블랙박스 | `ag_tape` 전체가 hexa source |
-| 🎯 **byte-equal correctness 필요** (과학계산) | PyTorch 는 비결정성 흔함 | byte-eq oracle + FMA-off recipe |
-| ⚡ **빠른 codegen iteration** | hand-CUDA 로 매번 fusion 재작성 지옥 | 컴파일러가 자동 fusion |
-
-```
-누가 hexa 를 쓰는가?
-                cuBLAS 사용자 ─────────────┐
-                    │  (compute-bound 거대 GEMM 잘 함, 못 이김)
-                    ▼
-  ┌───────────────────────────────────────┐
-  │  hexa stack 이상적 사용자 (교집합)        │
-  │   ① memory-bound 패턴 多                │  ← LLM stack
-  │   ② Python-free deploy                  │  ← edge/embedded
-  │   ③ correctness OR 가시성 필요          │  ← 연구·과학
-  │   ④ chain 긴 작업 (decode/optim/AdamW)  │  ← 학습 loop
-  └───────────────────────────────────────┘
-```
-
-## "내꺼는" — dancinlab/hexa-lang 메인테이너 본인 use case 매핑
-
-본인이 운영하는 컨텍스트(flame transformer 학습 · forge GPU substrate · TECS-L verify · atlas SSOT · phanes SaaS) 보면 위 7개 중 **5개에 동시 해당**:
-
-| 본인 활동 | 매칭 페르소나 | 본인이 받는 이득 |
-|---|---|---|
-| flame transformer 학습 | 🧪 + 🧠 + 🎯 | fusion 으로 학습 wall ↓ + ag_tape 가시 + byte-eq |
-| forge GPU substrate | 🔬 + 🔢 | PTX/SASS 직접 + BF16-TC mega-kernel (9.67× FP64 cuBLAS) |
-| phanes SaaS deploy | 📦 | hexa 단일 binary (Python 의존 0) |
-| TECS-L verify + atlas | 🎯 | byte-eq + atlas-bound theorem citation |
-| 8-stage strict-lint self-host | ⚡ | 컴파일러가 자기를 컴파일 — iteration loop 자동화 |
-
-**한 줄로**: 본인은 *"한 사람이 한 stack 으로 학습·배포·검증·연구를 다 하려는"* 페르소나라, hexa fusion 격차가 가장 크게 작동하는 위치에 정확히 서 있다. cuBLAS-using stack(PyTorch + CUDA + libtorch)으로는 각 단계마다 환경/언어가 갈라져서 — 그 *수직적 단절*이 본인이 hexa 를 직접 만든 진짜 이유로 보인다.
-
-## fusion 이 효과 생기는 곳 (보조)
-
-```
-GPU 메모리 계층 (sm_80 기준, 사이클 비용 대략)
-  ┌─────────────┐  레지스터       ~1     ← fusion 이 머무는 곳
-  ├─────────────┤  L1/공유메모리   ~30    ← fusion 이 머무는 곳
-  ├─────────────┤  L2            ~200
-  └─────────────┘  HBM           ~600   ← cuBLAS-stack 은 매 op 마다 여기 왕복
-```
-
-### 효과가 진짜로 큰 4가지 시나리오 (실측 fire 매칭)
-
-| 시나리오 | 왜 효과 큰가 | 실측 |
-|---|---|---|
-| **GEMM + elementwise 에필로그** (bias·ReLU·GeLU·dropout) | GEMM 결과 = 큰 텐서. 즉시 elementwise 가 읽음 → 레지스터에 머물면 됨 | F-FUSION-EPILOGUE 66.7% ↓ |
-| **norm 표면** (LN/RMSNorm/Softmax/SwiGLU) | reduce(평균/분산/max) 후 인접 op 가 reuse. norm 은 memory-bound | AxisA LN 66% · RMS 59% · SM 65% · SwiGLU 63% |
-| **Attention (Q·Kᵀ·softmax·V)** | 중간 attention 행렬 = B·H·L·L (거대). HBM 에 풀로 쓰면 큰 손해 → FlashAttn 의 핵심 | F-FUSION-ATTENTION-FLASH 🔵 |
-| **작은 op chain** (LLM autoregressive decode, AdamW step) | op 자체보다 launch overhead 가 dominant. chain 길수록 더 큼 | F-FUSION-LAUNCH-AMORT 5-op 1 launch |
-
-### 효과 결정 3변수
-
-```
-fusion 이득  =  (chain 길이)  ×  (op 의 memory-bound 정도)  ×  (중간 텐서 크기)
-```
-
-### 효과 안 생기는 곳
-
-| 시나리오 | 이유 |
-|---|---|
-| 단일 큰 GEMM | 이미 compute-bound · roofline 천장 · cuBLAS 와 동률 (못 이김) |
-| 단일 op | 묶을 게 없음 |
-| GEMM 이 너무 작음 (M=256 같은 launch-bound 영역) | overhead 자체가 문제라 fusion 보다 launch 줄이기가 답 |
-
-## 비유 (식당)
-
-cuBLAS = *1품요리 장인* (김치찌개는 세계 최고). 그런데 **김치찌개+계란말이+밥을 차리려면 각각 따로 끓이고 마지막에 모음** — 그 사이 재료가 냉장고(HBM)와 도마(레지스터) 사이를 왕복한다.
-
-hexa fusion = *한 팬 요리* — 도마 위에서 연속으로 끝냄.
+같은 stack, 두 가치 제안 — 이게 flame + forge 가 PyTorch + cuBLAS 대비 진짜 좋은 부분.
 
 ---
 
-원본 SSOT = `GPU.md` + `GPU.log.md`. 본 친근 사이드는 페르소나/use-case 설명용.
+원본 SSOT = `GPU.md` + `GPU.log.md`. 본 친근 사이드는 PyTorch+cuBLAS 대비 가치 설명용.
