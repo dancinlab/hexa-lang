@@ -1,0 +1,149 @@
+// HEXA Standard Library — wasm/wasm_section_header
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// WebAssembly binary-format module header + section-id constants.
+//
+// Frontier flip B7 (RUNTIME.flip.md): "wasm magic + version + section ids —
+// stdlib byte-table sibling of `linux_syscalls.hexa` / `posix_errno.hexa`.
+// Pure additive — emit-only constants, no parsing."
+//
+// Wasm module preamble (canonical, wasm-core-1 / wasm-core-2 unchanged):
+//   magic   = 0x00 0x61 0x73 0x6d   ("\0asm" little-endian)
+//   version = 0x01 0x00 0x00 0x00   (1 little-endian)
+//   then sections: (section_id : u8) || (size : uleb128) || (body : bytes)
+//
+// Section IDs (canonical, wasm-core spec §5.5):
+//   0 = Custom    · 1 = Type      · 2 = Import    · 3 = Function
+//   4 = Table     · 5 = Memory    · 6 = Global    · 7 = Export
+//   8 = Start     · 9 = Element   · 10 = Code     · 11 = Data
+//   12 = DataCount
+//
+// Surface:
+//   pub fn wasm_magic_bytes() -> [int]                              — 4 bytes
+//   pub fn wasm_version_bytes() -> [int]                            — 4 bytes
+//   pub fn wasm_module_header() -> [int]                            — 8 bytes
+//   pub fn wasm_section_id(name: str) -> int                        — name → id (or -1)
+//   pub fn wasm_section_name(id: int) -> str                        — id → name (or "")
+//   pub fn wasm_section_emit(section_id: int, body: [int]) -> [int] — wire bytes
+//
+// Section-id constants are also exposed as `pub let SECTION_<NAME>: int = …`
+// for direct citation by call-sites.
+//
+// uleb128 note: this file inlines a small-N uleb128 encoder (handles values
+// 0 .. 2^28-1 — up to 4 LEB bytes — which covers every realistic stdlib
+// section body size). Sibling `stdlib/wasm/wasm_leb128` is being shipped
+// concurrently per RUNTIME.flip B7 family; once landed, swap the inline
+// `_wasm_uleb128_small` call for `wasm_uleb128_encode` from that module.
+
+// ─── section-id constants ───────────────────────────────────────────────
+
+pub let SECTION_CUSTOM: int = 0
+pub let SECTION_TYPE: int = 1
+pub let SECTION_IMPORT: int = 2
+pub let SECTION_FUNCTION: int = 3
+pub let SECTION_TABLE: int = 4
+pub let SECTION_MEMORY: int = 5
+pub let SECTION_GLOBAL: int = 6
+pub let SECTION_EXPORT: int = 7
+pub let SECTION_START: int = 8
+pub let SECTION_ELEMENT: int = 9
+pub let SECTION_CODE: int = 10
+pub let SECTION_DATA: int = 11
+pub let SECTION_DATA_COUNT: int = 12
+
+// ─── module preamble ────────────────────────────────────────────────────
+
+@pure
+pub fn wasm_magic_bytes() -> [int] {
+    return [0x00, 0x61, 0x73, 0x6d]
+}
+
+@pure
+pub fn wasm_version_bytes() -> [int] {
+    return [0x01, 0x00, 0x00, 0x00]
+}
+
+// magic (4) || version (4) = 8 bytes — the canonical wasm module header.
+@pure
+pub fn wasm_module_header() -> [int] {
+    return [
+        0x00, 0x61, 0x73, 0x6d,
+        0x01, 0x00, 0x00, 0x00
+    ]
+}
+
+// ─── section name ↔ id lookup ───────────────────────────────────────────
+
+@pure
+pub fn wasm_section_name(id: int) -> str {
+    if id == 0 { return "Custom" }
+    if id == 1 { return "Type" }
+    if id == 2 { return "Import" }
+    if id == 3 { return "Function" }
+    if id == 4 { return "Table" }
+    if id == 5 { return "Memory" }
+    if id == 6 { return "Global" }
+    if id == 7 { return "Export" }
+    if id == 8 { return "Start" }
+    if id == 9 { return "Element" }
+    if id == 10 { return "Code" }
+    if id == 11 { return "Data" }
+    if id == 12 { return "DataCount" }
+    return ""
+}
+
+@pure
+pub fn wasm_section_id(name: str) -> int {
+    if name == "Custom" { return 0 }
+    if name == "Type" { return 1 }
+    if name == "Import" { return 2 }
+    if name == "Function" { return 3 }
+    if name == "Table" { return 4 }
+    if name == "Memory" { return 5 }
+    if name == "Global" { return 6 }
+    if name == "Export" { return 7 }
+    if name == "Start" { return 8 }
+    if name == "Element" { return 9 }
+    if name == "Code" { return 10 }
+    if name == "Data" { return 11 }
+    if name == "DataCount" { return 12 }
+    return -1
+}
+
+// ─── section emission ───────────────────────────────────────────────────
+
+// Minimal uleb128 encoder for sizes 0 .. 2^28-1 (up to 4 LEB bytes).
+// Sufficient for every realistic stdlib-emitted section body. Follow-up:
+// swap for `wasm_uleb128_encode` from sibling `stdlib/wasm/wasm_leb128`
+// once that module lands (RUNTIME.flip B7 family).
+@pure
+fn _wasm_uleb128_small(value: int) -> [int] {
+    let mut v = value
+    let mut out: [int] = []
+    if v < 0 { return out }
+    // emit 7-bit groups, low-bit-first, with continuation bit (0x80) set
+    // on every non-final byte.
+    while true {
+        let low = v & 0x7f
+        let rest = v >> 7
+        if rest == 0 {
+            out = out + [low]
+            return out
+        }
+        out = out + [low | 0x80]
+        v = rest
+    }
+    return out
+}
+
+// Emit one wasm section: [section_id] || uleb128(len(body)) || body.
+@pure
+pub fn wasm_section_emit(section_id: int, body: [int]) -> [int] {
+    let mut out: [int] = [section_id]
+    let size_bytes = _wasm_uleb128_small(body.len())
+    for b in size_bytes { out = out + [b] }
+    for b in body { out = out + [b] }
+    return out
+}
