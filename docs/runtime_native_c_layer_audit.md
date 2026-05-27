@@ -34,14 +34,14 @@ RUNTIME.md north-star("`.hexa`-ONLY · zero `.c`") 와 step3/step4 메모리
 | `hxblas_linux.c` | ③ | OpenBLAS `cblas_sgemm` FFI shim (`<cblas.h>`, `-lopenblas`). 벤더 BLAS ABI | 유지 (벤더 BLAS FFI) |
 | `hxccl_linux.c` | ③ | NCCL collective (`ncclAllReduce`/`ncclBroadcast`/`ncclAllGather`) FFI shim. 벤더 GPU 통신 ABI (Day-1 stub→NCCL) | 유지 (벤더 NCCL FFI) |
 | `hxffi_slot.c` | ③ | out-pointer slot 할당기 — FFI 경계 그 자체 (DuckDB/SQLite/curl out-param 패턴). C heap slot 필수 | 유지 (FFI 인프라 floor) |
-| `hxflash_linux.c` | ① | Flash-Attention forward — online-softmax 재귀를 libm(`math.h`) scalar 로만 구현, BLAS 미사용. 외부 벤더 의존 0 | `self/ai_native/flash_attention.hexa` (이미 hexa 레퍼런스 존재 — C 는 transliteration) |
-| `hxlayer_linux.c` | ① | fused rmsnorm+silu — libm scalar 단일 루프, 외부 의존 0. sigmoid/sqrt 만 사용 | `stdlib/flame/` fused kernel (hexa-native; perf 는 FFI-hop amortise 가 핵심) |
+| `hxflash_linux.c` | ① **LIVE** | Flash-Attention forward — online-softmax. **B9.6f 재검증: DEAD 아님** — `self/ml/hxflash.hexa` 가 `extern fn hxflash_attn_fwd_packed` + 실제 호출(L133), `gpu_train.hexa`/`train_7b_integrated.hexa`/test 가 consumer · `tool/build_hxflash_linux.hexa` dedicated build | `self/ai_native/flash_attention.hexa` (port = multi-session rewire, NOT clean delete) |
+| `hxlayer_linux.c` | ① **LIVE** | fused rmsnorm+silu. **B9.6f 재검증: DEAD 아님** — `self/ml/hxlayer.hexa`(`extern fn hxlayer_rmsnorm_silu` + 호출 L78) + `bench_hxlayer*.hexa`/`test_hxlayer.hexa` consumer · `tool/build_hxlayer_linux.hexa` dedicated build | `stdlib/flame/` fused kernel (port = multi-session rewire, NOT clean delete) |
 | `hxlmhead_linux.c` | ③ | fused LM-head fwd/bwd — 모든 matmul 이 `cblas_sgemm`(OpenBLAS/Accelerate) 라우팅. H100 측정 scalar 165× 느림 → BLAS 의존 본질적 | 유지 (벤더 BLAS FFI; scalar 포팅은 perf-부적격) |
 | `hxqwen14b.c` | ③ | Qwen2.5-14B LoRA 학습 shim — `#include <cuda_runtime.h>`/`<cublas_v2.h>`/`<cuda_bf16.h>`. 벤더 CUDA/cuBLAS ABI (CPU AdamW 레퍼런스 일부만 순수) | 유지 (벤더 CUDA FFI) |
 | `hxqwen32b.c` | ③ | Qwen2.5-32B 변종 (14b 와 동일 ABI, n_layer/ffn_dim 만 차이). 동일 CUDA/cuBLAS 벤더 ABI | 유지 (벤더 CUDA FFI) |
 | ~~`hxtok.c`~~ | ① | **DELETED (B9.6e)** — Qwen2.5 BPE C 구현. 빌드/링크/FFI 호출 0건 (standalone shim) · 순수-hexa 등가 `self/ml/qwen_bpe.hexa`·`tokenizer_bpe.hexa` 가 모든 consumer 서빙. dead-file git-rm (v565 패턴) | `self/ml/qwen_bpe.hexa`·`tokenizer_bpe.hexa` (이미 존재 — consumer 전수 사용 중) |
-| `hxvdsp_linux.c` | ① | Apple vDSP(RMSNorm/SoftMax/SwiGLU) 의 Linux scalar+libm 대체. 순수 scalar 루프, `-lm` 만 | `stdlib/flame/` eltwise (hexa-native scalar; auto-vec 은 native codegen 몫) |
-| `hxvocoder.c` | ① | HEXA-SPEAK 뉴럴 보코더 — additive synth sin/exp/clip 핫루프. libm(`math.h`) 만, BLAS 의도적 미통합 | `anima/anima-speak/neural_vocoder.hexa` (이미 hexa 레퍼런스 — C 는 libm floor 가속본) |
+| `hxvdsp_linux.c` | ① **LIVE** | Apple vDSP(RMSNorm/SoftMax/SwiGLU) Linux scalar+libm 대체. **B9.6f 재검증: DEAD 아님** — `bench/hxblas_linux.hexa` 가 `@link("hxvdsp")` + `extern fn hxvdsp_version`/`hxvdsp_rmsnorm_fwd` + 실제 호출(L116/L174) · `tool/build_hxblas_linux.hexa` build · `.hexanoport` 마커 | `stdlib/flame/` eltwise (port = multi-session rewire, NOT clean delete) |
+| ~~`hxvocoder.c`~~ | ① **DELETED B9.6f** | 정밀 재검증 결과 0-caller DEAD — 8 export 심볼(`hxvocoder_decode_nv`/`_decode_wave`/`_linear_proj`/`_synth_additive`/`_tanh_vec`/`_vec_zeros`/`_version`/`_write_wav`) 전부 코드 참조 0건. 유일 빌드 참조 = `build_native.hexa` `file_exists` 가드(삭제 시 auto-skip; 그 dead 블록도 제거). `.h`/`.so`/`.o` 0건. (audit 가 "neural_vocoder.hexa 레퍼런스" 라 적었으나 그 파일은 tree 에 부재; 1,922× 보코더는 순수-hexa Griffin-Lim `speech_audio.hexa` 경로) | ~~포팅~~ → git rm (hxtok 패턴 dead-file) |
 | `lora_cuda_host.c` | ① | LoRA fwd/bwd **CPU 레퍼런스** — CUDA 커널의 exact-arithmetic 등가 순수 C. CUDA launch 는 weak stub(없으면 CPU 라우팅) | CPU 레퍼런스는 `stdlib/flame/` hexa-native 포팅 적격 (CUDA dispatch 부분만 ③) |
 | `mount.c` | ③ | Linux `mount(2)`/`umount(2)` syscall 래퍼 (`<sys/mount.h>`). 커널 ABI | 유지 (커널 syscall floor) |
 | `namespace.c` | ③ | Linux `unshare(2)`/`setns(2)`/`pivot_root(2)` + CLONE_NEW* 상수 (`<sched.h>`). 커널 ABI | 유지 (커널 syscall floor) |
@@ -68,7 +68,7 @@ whitelist)으로 C 유지. `v565_grad_analysis.c` 는 분석 도구로 런타임
 | **③ vendor FFI / OS ABI floor** | **19** | 59% |
 | 합계 | 32 | 100% |
 
-- **layer ① (portable) = 11** (`hxtok` DELETED B9.6e — dead standalone, hexa 등가 기존; 잔존 list 는 historical) : `crypto_blowfish` · `exec_argv_sha256` · `gpu_codegen_stub` · `hxflash_linux` · `hxlayer_linux` · ~~`hxtok`~~ · `hxvdsp_linux` · `hxvocoder` · `lora_cuda_host` · `tensor_kernels`(\*perf-floor 보류) · `v565_grad_analysis`(\*도구)
+- **layer ① (portable) = 11** (`hxtok` DELETED B9.6e · `hxvocoder` DELETED B9.6f — 둘 다 0-caller dead standalone; 잔존 list 는 historical) : `crypto_blowfish` · `exec_argv_sha256` · `gpu_codegen_stub`(LIVE: nvptx_target 참조) · `hxflash_linux`(LIVE) · `hxlayer_linux`(LIVE) · ~~`hxtok`~~ · `hxvdsp_linux`(LIVE) · ~~`hxvocoder`~~ · `lora_cuda_host`(LIVE: CUDA build) · `tensor_kernels`(\*perf-floor 보류) · `v565_grad_analysis`(\*도구) — **B9.6f 재검증: hxvocoder 외 layer① 잔존 전부 실제 caller/build-ref 보유 LIVE (clean-delete 불가, port 만 가능)**
 - **layer ② (bootstrap/floor) = 2** : `hexa_cc`(self-host 산출물) · `fp_init`(FP 제어레지스터 floor)
 - **layer ③ (FFI/OS-ABI floor) = 19** : `crypto_openssl` · `crypto_sodium` · `hxblas_linux` · `hxccl_linux` · `hxffi_slot` · `hxlmhead_linux` · `hxqwen14b` · `hxqwen32b` · `mount` · `namespace` · `net` · `persistent_pipe` · `proc_fork` · `pty` · `signal_flock` · `term_ffi` · `thread` · `wait` · `exec_pipe`
 

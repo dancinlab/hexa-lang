@@ -215,10 +215,11 @@ coarse item 을 audit-grounded atomic 으로 분해 (2026-05-28).
 실측 현재 상태 (2026-05-28, origin/main):
 - `.o` = **0** ✅ (#1808 build-artifact 제거로 달성)
 - `.s` = **3** (3 irreducible boot-floor · B9.1a 로 dead fixture 1개 제거)
-- `.c` = **228** (`self/*.c` 44 + `self/native/*.c` 30 + 기타). north-star
+- `.c` = **226** (`self/*.c` 40 + `self/native/*.c` 28 + 기타). north-star
   충족 시 `find . -name '*.c' -o -name '*.s' -o -name '*.o'` 가 비어야 함.
-  🎯 **세션 2개 실제 삭제** — `crypto_blowfish.c` (B9.6c · #1816 · wire+regen) +
-  `v565_grad_analysis.c` (B9.6d · #1818 · dead git-rm). 230→228.
+  🎯 **세션 4개 실제 삭제** — `crypto_blowfish.c` (B9.6c · #1816 · wire+regen) +
+  `v565_grad_analysis.c` (B9.6d · #1818 · dead git-rm) + `hxtok.c` (B9.6e ·
+  #1820 · dead git-rm) + `hxvocoder.c` (B9.6f · dead git-rm). 230→226.
 
 ⚠ **파일-수 vs 함수-수 구조 인사이트 (중요)**: `.c` *파일* 카운트는 파일 전체가
 삭제될 때만 감소. `runtime.c`/`runtime_core.c` 는 각 1파일이지만 640/548 fn 을
@@ -336,8 +337,13 @@ fan-out 불가, serial 진행.
 
       **잔여 native/*.c 삭제 = 전부 substantial multi-session port (clean 아님)**:
       - ~~`hxtok.c`~~ — **B9.6e 에서 dead-file git-rm 으로 해결 (port 아님)** ↓
-      - `hxvocoder.c`/`hxflash_linux.c`/`hxlayer_linux.c`/`hxvdsp_linux.c` — layer①
-        port · 각 dedicated build script + ml FFI consumer (rewrite+rewire)
+      - ~~`hxvocoder.c`~~ — **B9.6f 에서 dead-file git-rm 으로 해결 (port 아님)** ↓
+        (audit 가 layer① port 후보로 분류했으나 정밀 재검증 결과 0-caller DEAD)
+      - `hxflash_linux.c`/`hxlayer_linux.c`/`hxvdsp_linux.c` — layer① **LIVE port**
+        (B9.6f 재검증 확정) · 각 dedicated build script + 실제 ml FFI consumer
+        (`extern fn` + 호출): hxflash→`self/ml/hxflash.hexa`+`gpu_train.hexa`,
+        hxlayer→`self/ml/hxlayer.hexa`+bench/test, hxvdsp→`bench/hxblas_linux.hexa`
+        (`@link("hxvdsp")`). rewrite+rewire (multi-session, NOT clean delete)
       - `exec_argv_sha256.c` — sha256 builtin 다중 core-compiler caller + 이름불일치
         (대규모 rewire 트랙)
       - vendor FFI ③19 (CUDA/openssl/sodium/OS-ABI) — irreducible 영구 바닥
@@ -352,6 +358,21 @@ fan-out 불가, serial 진행.
       8개 consumer 전수 서빙. **삭제 후 8/8 consumer `hexa parse` clean** — C
       lib 가 dead 였음을 입증 (RUNEQ moot: live caller 0). runtime.c 무관(미
       include). blowfish(#1816)·v565(#1818) 의 dead-file 패턴.
+- [x] **B9.6f-dead-native-c-sweep** — 🎯 **실제 `.c` 삭제 DONE (227→226)**.
+      `self/native/hxvocoder.c`(455L · HEXA-SPEAK 뉴럴 보코더) 삭제 — hxtok 패턴.
+      audit `docs/runtime_native_c_layer_audit.md` 가 layer① "포팅 적격"
+      으로 분류했으나 정밀 재검증 결과 8 export 심볼(`hxvocoder_decode_nv`/
+      `_decode_wave`/`_linear_proj`/`_synth_additive`/`_tanh_vec`/`_vec_zeros`/
+      `_version`/`_write_wav`) 전부 전 repo 코드 0-caller. 유일 빌드 참조 =
+      `tool/build_native.hexa` 의 `file_exists` 가드 조건부 link (파일 삭제 시
+      자동 skip → 그 dead 블록도 제거). `.h`/`.so`/`.dylib`/`.o` 아티팩트 0건,
+      `build_toolchain.json` 항목 無, `dlopen` 0건. runtime.c 미 include.
+      `clang -fsyntax-only self/runtime.c` EXIT 0. **4 PRIMARY 후보 중 hxvocoder
+      만 DEAD; hxflash/hxlayer/hxvdsp 는 실제 FFI caller 보유 LIVE (위 B9.6d 표
+      정정)**. 그 외 standalone native (gpu_codegen_stub·hxffi_slot·hxblas·hxccl
+      ·hxlmhead·hxqwen14b/32b·lora_cuda_host·hexa_cc) 전수 재스캔 = 전부 LIVE
+      caller/build-ref 보유 (PRESERVE). blowfish(#1816)·v565(#1818)·hxtok(#1820)
+      의 dead-file 패턴 연장.
 - [ ] **B9.6a-hexaval-repr-emit** — HexaVal repr 생성자 codegen self-emit
       (`self/codegen/runtime_arm64.hexa` 확장; `rt_arena_*` 4 fn LANDED 패턴)
 - [ ] **B9.6b-runtime-primitive-emit** — 잔여 runtime primitive self-emit
