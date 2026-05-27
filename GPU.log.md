@@ -2,6 +2,50 @@
 
 > SSOT = `GPU.md`(snapshot: @goal + `- [ ]` milestones) + 본 `GPU.log.md`(append-only step log). closure rationale·design note·tier disposition 은 여기에 누적한다. 산재 `tool/*_DESIGN*.md` / `*_CLOSURE*.md` 신규 작성 금지 (단일 SSOT).
 
+## 2026-05-28 — BC4 round-15 wgmma capstone-extension RED hardware-blocked
+
+`F-FUSION-ATTN-WGMMA-WALL` (`archive/fires/bc4_r15_wgmma_2026_05_28/`). BC4 R14 (PR #1735) 가 BM=32 BK=32 wedge 로 N=4096 0.927× / N=1024 0.909× partial capstone 닫은 후, R11 의 "wgmma ruled-out / not-tried" 단독 lever 를 직접 게이트.
+
+**Probe sequence on ubu-2 RTX 5070 (compute_cap 12.0 = sm_120 Blackwell, driver 580.159.03, nvcc 12.9.86):**
+
+1. **sm_90a build** (`tool/r15_walls/wgmma_numeric_probe.cu`, m64n32k16 GEMM with known A·B, CPU-ref check) — `nvcc -gencode arch=compute_90a,code=sm_90a -O2 -Xptxas=-v` →
+   ```
+   ptxas info : Compiling entry function 'wgmma_gemm_kernel' for 'sm_90a'
+   Used 42 registers, used 1 barriers
+   0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+   ```
+   ptxas accepts wgmma cleanly. SASS confirms `HGMMA.64x32x16.F32` instruction emitted.
+
+2. **sm_90a → sm_120 driver-JIT runtime** — kernel launches OK (no CUDA_ERROR_NO_BINARY_FOR_GPU 209) but **all 2048 outputs are zero**:
+   ```
+   Launch verdict: OK
+   GPU outputs: nonzero=0/2048  max_abs=0.0000  sum=0.0000
+   CPU ref:                                 sum=1956.8679
+   WGMMA_NUMERIC_PROBE: FAIL — output all zero (wgmma silently NOPs on sm_120 Blackwell)
+   ```
+   Driver forward-compat from sm_90 PTX to sm_120 SASS does NOT translate wgmma → Blackwell tensor-core ops.
+
+3. **sm_120 native build** — `nvcc -gencode arch=compute_120,code=sm_120` →
+   ```
+   ptxas fatal : Ptx assembly aborted due to errors
+   error : Instruction 'wgmma.mma_async with floating point types' cannot be compiled for architecture 'sm_120'
+   error : Instruction 'wgmma.commit_group' cannot be compiled for architecture 'sm_120'
+   error : Instruction 'wgmma.wait_group' cannot be compiled for architecture 'sm_120'
+   ```
+   Definitive: wgmma family explicitly **not part of Blackwell PTX surface**.
+
+**Verdict tier**: RED hardware-blocked (honest closed-negative per `paper_negative_ok`). Falsifier collapses to "wrong-generation hardware", not "instruction failed". wgmma is Hopper-exclusive (sm_90a); RTX 5070 = Blackwell = sm_120, uses `tcgen05.mma` (5th-gen tensor cores) instead.
+
+**Capstone status**: BC4 R14 BM=32 BK=32 (PR #1735) stays as attention capstone (2/5 shapes ≤1.0×: N=1024 0.909× + N=4096 0.927×). R15 cannot improve N=2048 (1.085×) or N=512 (1.107×) on this hardware via wgmma.
+
+**Compute cap mapping recorded** for future axis selection: Hopper sm_90a = wgmma supported, Ada sm_89 = wgmma not supported (mma.sync only), Blackwell sm_120/sm_100 = tcgen05.mma (≠wgmma).
+
+**Pivot**: cycle-all item 5 = FP8 e4m3 (works on sm_89+ via `mma.sync.aligned`, RTX 5070 supported). Separate future lever: tcgen05.mma probe (Blackwell-native async warpgroup MMA).
+
+**Preserves**: `g3 over-claim 0` (honest RED, not faked PASS) · `paper_negative_ok` (publishable closed-negative) · `feedback_closure_is_physical_limit` (physical limit here = hardware-instruction-incompatibility).
+
+
+
 ## 2026-05-28 — BC4 round-14 risk-a + risk-d cheap-first oracles (PRE-FIRE GATE)
 
 `F-FUSION-ATTN-BM32-RISK-A-REG-PRESSURE` (FREE) + `F-FUSION-ATTN-BM32-RISK-D-FRAGMENT-MAP` (1 probe, ~5 min). 두 오라클 모두 BC4 round-14 silicon fire (`flash_attn_bm32_occupancy_v0`) 전 게이트.

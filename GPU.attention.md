@@ -49,7 +49,8 @@ honest physical limit: BM=32 wedge 의 AI cap → expected **ratio ≈ 1.32×** 
 | 7 | `F-FUSION-ATTN-ROOFLINE` (N204 toolkit, BM=64) | 5.27–6.87× (REGRESSION) | 64×64 tile = 1 CTA/SM occupancy collapse |
 | 10 | `F-FUSION-ATTN-MULTIWARP` (BM=64 4-warp, cp.async) | best 1.149× @ N=4096 d=64 | intra-warp QK→reduce→PV chain |
 | 11 | `F-FUSION-ATTN-DSWEEP-PIPE` | d-sweep 잘못된 방향 | d-sweep + 2-stage 둘 다 닫힘 |
-| 14 | `F-FUSION-ATTN-BM32-OCCUPANCY` | **planned**, expected 1.32× | (in progress) |
+| 14 | `F-FUSION-ATTN-BM32-OCCUPANCY` (BM=32 BK=32, reg-O, cp.async dbuf) | **0.927× @ N=4096, 0.909× @ N=1024** 🛸 | first cross ≤1.0×; BK enlargement was real wedge (not reg-resident O) |
+| 15 | `F-FUSION-ATTN-WGMMA-WALL` (sm_90a wgmma m64n32k16) | 🔴 **hardware-blocked on Blackwell** | wgmma silently NOPs on sm_120 (Hopper-exclusive); needs H100/H200 |
 
 ### Round-14 wedge (현재 진행)
 
@@ -81,11 +82,20 @@ honest physical limit: BM=32 wedge 의 AI cap → expected **ratio ≈ 1.32×** 
   Honest correction: 직전 chat 의 closed-form re-audit 이 ratio ≈ 1.32× 예측 → **실측이 falsify**. 진짜 wedge = BK=16→32 enlargement (R10 한 softmax round 당 1 wmma chunk → R14 2 chunks, row-reduce overhead amortize). "register-resident O" 는 wedge 아니었음 (R10 이미 사용). verdict `archive/fires/bc4_round14_kernel_2026_05_28/result.json`
 - [x] **GPU.md round-14 row + verdict + log append** (this PR)
 
-### Round-15 contingency (capstone)
+### Round-15 capstone-extension (wgmma)
 
-- [ ] **wgmma axis-pivot** — sm_90 async warpgroup mma m64nNk16 (R11 유일 미시도 lever)
-- 적용 조건: round-14 ratio > 1.10× (1.0× 미도달)
-- 표적: ratio ≤ 1.10× (paper_gate PASS 후보)
+- [x] **wgmma axis-pivot** — sm_90a async warpgroup mma m64nNk16 🔴 **RED hardware-blocked** (`archive/fires/bc4_r15_wgmma_2026_05_28/result.json`)
+   - sm_90a build CLEAN (HGMMA.64x32x16.F32 in SASS, 42 reg, 0 spill)
+   - sm_90 PTX driver-JIT to sm_120 launches OK but **silently NOPs** (GPU sum=0.00 vs CPU sum=1956.87, nonzero=0/2048)
+   - sm_120 native: ptxas explicitly `'wgmma cannot be compiled for sm_120'` — Blackwell uses tcgen05.mma (5th-gen TC), not wgmma
+   - **closed-negative per `paper_negative_ok`**: rules out wgmma-on-Blackwell axis deterministically; would require Hopper (H100/H200, sm_90a) hardware
+   - R11's "wgmma ruled-out / not-tried" note CONFIRMED — reason is hardware unavailability, not algorithm
+   - R14 BM=32 BK=32 (PR #1735) stays as **BC4 attention capstone**
+
+### Round-15+ next levers
+
+- [ ] **tcgen05.mma** — Blackwell-native 5th-gen tensor-core async warpgroup MMA (sm_120/sm_100). Analogous to wgmma but supported on RTX 5070. Separate capstone-extension candidate.
+- [ ] **FP8 e4m3** — tensor-core throughput 2× via reduced-precision GEMM (sm_89+ supported; works on RTX 5070). Item 5 in /cycle-all queue, directly pivoted from wgmma RED.
 
 ---
 
@@ -111,6 +121,8 @@ honest physical limit: BM=32 wedge 의 AI cap → expected **ratio ≈ 1.32×** 
 | R14 plan | (PR #1711) | `docs/notes/bc4-attention-smem-residency-wedge-plan-2026-05-28.md` |
 | R14 risk-a | 🟢 GREEN | `archive/fires/bc4_risk_a_reg_pressure_2026_05_28/` |
 | R14 risk-d | 🟢 GREEN | `archive/fires/bc4_risk_d_mma_fragment_2026_05_28/` |
+| R14 kernel | 🛸 GREEN partial capstone | `archive/fires/bc4_round14_kernel_2026_05_28/` |
+| R15 wgmma | 🔴 RED hardware-blocked | `archive/fires/bc4_r15_wgmma_2026_05_28/` |
 
 ---
 
