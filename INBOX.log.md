@@ -1,6 +1,8 @@
 # INBOX — log
 
-## 2026-05-27 — stdlib/core/hash sha256_digest_bytes·hmac_sha256_bytes compiled-path SIGSEGV
+## 2026-05-27 — ✅RESOLVED stdlib/core/hash sha256/hmac compiled-path SIGSEGV (`let`-reassign → `let mut` fix)
+
+**RESOLVED 2026-05-27**: root cause = immutable `let` array with index-write (`let w=[]; w[ci]=…`) + scalar `let`-reassign across the 64-round loop → compiled `hexa run` miscompile/SIGSEGV. Fix = `let mut` + in-place `.push()` (sha256_digest_bytes + hmac_sha256_bytes). Verified: sha256("abc")=ba7816bf… + HMAC + PBKDF2 RFC6070 (120fb6cf…) all PASS on compiled path. Unblocks pbkdf2/HKDF.
 
 error: 'run' requires <file>
 HEXA — native-compiled, atlas-aware, strict-lint language toolchain

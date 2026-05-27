@@ -2158,8 +2158,8 @@ correctness (per M10/M16; see cycle-69 catalog + PR #251/#426 analysis)
       `concurrent_serve.hexa`. HTTP/2 still open.
 - [ ] Threading (green threads in hexa or keep C pthread?) — architectural decision.
 - [~] Crypto helpers: pbkdf2 + HKDF code (stdlib/crypto/pbkdf2.hexa net-new, RFC 8018/5869,
-      parse-clean, over existing hmac_sha256_bytes) — runtime-verify BLOCKED by #1506
-      (stdlib/core/hash sha256/hmac compiled-path SIGSEGV). HMAC-DRBG/scrypt remain.
+      parse-clean, over existing hmac_sha256_bytes) — runtime-verify ✅ (PBKDF2 RFC6070 120fb6cf… PASS after #1506 fix — sha256/hmac
+      let→let-mut compiled-path repair). HMAC-DRBG/scrypt remain.
 - [x] More math (gamma, beta, erf) — stdlib/core/special.hexa net-new 2026-05-27:
       lgamma_pos/gamma_fn (Lanczos g=7) · beta_fn · erf_fn/erfc_fn (A&S 7.1.26).
       Pure hexa (exp/log/sqrt/sin builtins), 12/12 self-test PASS (special_test.hexa @ci_gate).

@@ -60,44 +60,54 @@ fn hmac_shr(x, n) -> int {
 // builtin's pre-hex digest (verified in hmac_test.hexa).
 // @cite FIPS 180-4 §6.2 — SHA-256 message schedule + compression.
 pub fn sha256_digest_bytes(data: [int]) -> [int] {
-    let h0 = 1779033703
-    let h1 = 3144134277
-    let h2 = 1013904242
-    let h3 = 2773480762
-    let h4 = 1359893119
-    let h5 = 2600822924
-    let h6 = 528734635
-    let h7 = 1541459225
+    // 2026-05-27 #1506 fix: this fn previously used immutable `let` with
+    // reassignment (`let w = []; w[ci] = …`, `msg = msg.push(…)`, `let h0 …
+    // h0 = …`). That shape MISCOMPILES on the compiled `hexa run` path —
+    // index-write to a `let` (non-mut) array + scalar `let`-reassign across
+    // a 64-round loop SIGSEGV'd (the CI module_loader 2-step path tolerated
+    // it, so the regression escaped). Rewritten with `let mut` + in-place
+    // `.push()` statements — identical algorithm, verified ba7816bf… on the
+    // compiled path. See INBOX #1506.
+    let mut h0 = 1779033703
+    let mut h1 = 3144134277
+    let mut h2 = 1013904242
+    let mut h3 = 2773480762
+    let mut h4 = 1359893119
+    let mut h5 = 2600822924
+    let mut h6 = 528734635
+    let mut h7 = 1541459225
 
     // Padding: append 0x80, zero-fill to 56 mod 64, then 64-bit big-endian length.
     let bit_len = len(data) * 8
-    let msg = data
-    msg = msg.push(128)
+    let mut msg = []
+    let mut di = 0
+    while di < len(data) { msg.push(data[di] & 255); di = di + 1 }
+    msg.push(128)
     while (len(msg) % 64) != 56 {
-        msg = msg.push(0)
+        msg.push(0)
     }
     // 64-bit big-endian length: byte i = (bit_len >> (8*i)) & 0xFF, MSB first.
-    let i = 7
+    let mut i = 7
     while i >= 0 {
-        msg = msg.push((bit_len >> (8 * i)) & 255)
+        msg.push((bit_len >> (8 * i)) & 255)
         i = i - 1
     }
 
-    let block = 0
+    let mut block = 0
     while block * 64 < len(msg) {
-        let w = []
-        let wi = 0
+        let mut w = []
+        let mut wi = 0
         while wi < 64 {
-            w = w.push(0)
+            w.push(0)
             wi = wi + 1
         }
-        let ci = 0
+        let mut ci = 0
         while ci < 16 {
             let off = block * 64 + ci * 4
-            w[ci] = msg[off] * 16777216 + msg[off+1] * 65536 + msg[off+2] * 256 + msg[off+3]
+            w[ci] = (msg[off] * 16777216 + msg[off+1] * 65536 + msg[off+2] * 256 + msg[off+3]) % 4294967296
             ci = ci + 1
         }
-        let si = 16
+        let mut si = 16
         while si < 64 {
             let s0 = (hmac_rotr(w[si-15], 7) ^ hmac_rotr(w[si-15], 18)) ^ hmac_shr(w[si-15], 3)
             let s1 = (hmac_rotr(w[si-2], 17) ^ hmac_rotr(w[si-2], 19)) ^ hmac_shr(w[si-2], 10)
@@ -105,10 +115,10 @@ pub fn sha256_digest_bytes(data: [int]) -> [int] {
             si = si + 1
         }
 
-        let a = h0; let b = h1; let c = h2; let d = h3
-        let e = h4; let f = h5; let g = h6; let hh = h7
+        let mut a = h0; let mut b = h1; let mut c = h2; let mut d = h3
+        let mut e = h4; let mut f = h5; let mut g = h6; let mut hh = h7
 
-        let ri = 0
+        let mut ri = 0
         while ri < 64 {
             let bs1 = (hmac_rotr(e, 6) ^ hmac_rotr(e, 11)) ^ hmac_rotr(e, 25)
             let ch = (e & f) ^ ((e ^ HMAC_MASK32) & g)
@@ -129,14 +139,14 @@ pub fn sha256_digest_bytes(data: [int]) -> [int] {
         block = block + 1
     }
 
-    let result = []
+    let mut result = []
     let vals = [h0, h1, h2, h3, h4, h5, h6, h7]
-    let vi = 0
+    let mut vi = 0
     while vi < 8 {
-        result = result.push((vals[vi] / 16777216) % 256)
-        result = result.push((vals[vi] / 65536) % 256)
-        result = result.push((vals[vi] / 256) % 256)
-        result = result.push(vals[vi] % 256)
+        result.push((vals[vi] / 16777216) % 256)
+        result.push((vals[vi] / 65536) % 256)
+        result.push((vals[vi] / 256) % 256)
+        result.push(vals[vi] % 256)
         vi = vi + 1
     }
     return result
@@ -146,41 +156,46 @@ pub fn sha256_digest_bytes(data: [int]) -> [int] {
 // key + data are raw byte arrays; result is the 32-byte MAC.
 // @cite RFC 2104 / FIPS 198-1 — HMAC = H((K ⊕ opad) ∥ H((K ⊕ ipad) ∥ m)).
 pub fn hmac_sha256_bytes(key: [int], data: [int]) -> [int] {
+    // 2026-05-27 #1506 fix: same `let`-reassign → compiled-path miscompile
+    // class as sha256_digest_bytes above. Rewritten with `let mut` +
+    // in-place `.push()`.
     let block_size = 64
 
     // Key normalisation: hash if longer than the block size, then 0-pad.
-    let key_bytes = key
+    let mut key_bytes = []
+    let mut ki = 0
+    while ki < len(key) { key_bytes.push(key[ki] & 255); ki = ki + 1 }
     if len(key_bytes) > block_size {
         key_bytes = sha256_digest_bytes(key_bytes)
     }
     while len(key_bytes) < block_size {
-        key_bytes = key_bytes.push(0)
+        key_bytes.push(0)
     }
 
     // ipad / opad — K ⊕ 0x36 and K ⊕ 0x5c over the block.
-    let ipad = []
-    let opad = []
-    let i = 0
+    let mut ipad = []
+    let mut opad = []
+    let mut i = 0
     while i < block_size {
-        ipad = ipad.push(54 ^ key_bytes[i])
-        opad = opad.push(92 ^ key_bytes[i])
+        ipad.push(54 ^ key_bytes[i])
+        opad.push(92 ^ key_bytes[i])
         i = i + 1
     }
 
     // inner = H(ipad ∥ data)
-    let inner_msg = ipad
-    let di = 0
+    let mut inner_msg = ipad
+    let mut di = 0
     while di < len(data) {
-        inner_msg = inner_msg.push(data[di])
+        inner_msg.push(data[di])
         di = di + 1
     }
     let inner_hash = sha256_digest_bytes(inner_msg)
 
     // outer = H(opad ∥ inner)
-    let outer_msg = opad
-    let hi = 0
+    let mut outer_msg = opad
+    let mut hi = 0
     while hi < len(inner_hash) {
-        outer_msg = outer_msg.push(inner_hash[hi])
+        outer_msg.push(inner_hash[hi])
         hi = hi + 1
     }
     return sha256_digest_bytes(outer_msg)
