@@ -2,6 +2,48 @@
 
 ## 2026-05-27 — flame-P2b Qwen BPE = anima DECODER MoE-fresh scale-gate · 양 토크나이저 모듈 모두 실측 결함
 
+## 2026-05-27T19:25Z — RTSC fn 추가 요청 (Hc1 · Jc · multi-band Eliashberg)
+
+RTSC math DFS lane closure (RTSC5-30, 18 PR) 후 추가 발견을 위한 verify_cli
+fn gap. 3 closed-form fn 등록 권장 — 모두 standard textbook expression, RTSC
+type-II + clathrate 분석의 표준 surface 완성.
+
+### 1. `london_hc1(lambda_L_m, kappa)` — Type-II lower critical field
+
+   Hc1(0) = (Φ_0 / (4π λ_L²)) · (ln κ + 0.5)
+
+   - Tinkham 1996 Eq.5.10. CODATA 2018 Φ_0 = 2.067833848e-15 Wb.
+   - source: λ_L=200 nm, κ=2 → Hc1 ≈ 32 mT (typical Type-II).
+   - RTSC application: H3S λ_L=17 nm, κ=15 → Hc1(0) ≈ 1.6 T (실측 확인 surface).
+
+### 2. `bean_critical_current(jc_a_m2, d_m)` — Bean model critical current
+
+   M(B) = ±(Jc · d / 2)  →  Hc(thin-strip) = Jc·d/2
+
+   - Bean 1962 PRL 8:250. 2-arg (Jc in A/m², slab thickness d).
+   - source: Jc=1e10 A/m², d=1µm → M = 5e3 A/m (typical YBCO film).
+   - RTSC application: H3S 의 Jc 추정 surface (high Tc → high Jc 일반).
+
+### 3. `eliashberg_two_band_tc(lambda_sigma, lambda_pi, lambda_inter, omega_log_K, mustar)` 
+       — multi-band (MgB2-type) Tc
+
+   2-band Eliashberg: lambda_eff = (λ_σ + λ_π)/2 + sqrt(((λ_σ-λ_π)/2)² + λ_inter²)
+   then Tc = (ω_log/1.2) · exp(-1.04(1+λ_eff)/(λ_eff - μ*(1+0.62λ_eff)))
+
+   - Suhl-Matthias-Walker 1959. 5-arg (4 λ + 1 μ*).
+   - source: MgB2 λ_σ=1.0, λ_π=0.4, λ_inter=0.05, ω_log=600K, μ*=0.10 → Tc ≈ 39K.
+   - RTSC application: H3S / LaH10 의 multi-band check (single-band 가정 의문 시).
+
+### Rationale (g11/g59)
+- RTSC math DFS lane closure 후 의미있는 새 finding 의 next axis = Hc1/Jc/multi-band
+- 3 fn 모두 textbook standard, libm-class closed-form
+- 등록 후 RTSC paper §Limitations \"single-band assumption\" 의 lane-내 closure 가능
+
+### Source
+- 본 RTSC closure 세션 (PR #1542-1621, RTSC5-30 18 round) 의 lane-pause signal
+- /Users/ghost/core/hexa-lang/TECS-L/TECS-L.log.md RTSC22+30 conclusion
+
+
 **severity: medium** — anima DECODER MoE-fresh(toy PASS, anima #1033)의 3B Qwen scale 검증이 hexa-native train stack 의 BPE 토크나이저 결함으로 막힘. flame-P2b 와이어링(loader, anima #1537) 자체는 land, 가드(`flame_bpe_roundtrip`)가 양 결함을 결정론적 검출 → 가짜 closure 아님 (g73). 본 fix 이후 3B Qwen hexa-native 학습 unblock.
 
 **진행 (2026-05-27)**:
