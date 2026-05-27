@@ -445,6 +445,20 @@ fan-out 불가, serial 진행.
       `use` 안 됨 → `hexa_cc.c` regen 영향 0 = **fixpoint 무관·무위험** (shadow
       self-emit 모듈; arena 4-fn 도 동일 모델로 land 됨). 파일 카운트는 runtime.c 의
       640 fn 전부 self-emit 후에야 떨어짐 (이 increment 는 그 토대 1칸).
+
+      🧱 **increment 2 — 4 reloc-free leaf primitives self-emit LANDED (foundational
+      · `.c` 카운트 UNCHANGED)**. rt_memset 패턴(순수 register/memory 루프 · reloc 無 ·
+      `_arena_state` 無 · HexaVal/GC 無) 정확 답습한 동급 leaf 4종을 한 배치로 가속:
+      `rt_memcmp(a,b,len)` 13-instr 52 B (byte-load 비교 루프 · 첫 불일치서 부호차 반환) ·
+      `rt_memcpy(dst,src,len)` 8-instr 32 B (scalar forward byte-copy · NEON 변형의 작은
+      fallback) · `rt_memmove(dst,src,len)` 16-instr 64 B (overlap-safe · dst≤src 順 else
+      逆) · `rt_strcmp(a,b)` 12-instr 48 B (NUL-종단 비교 · len 인자 無). 검증(rt_memset
+      과 동일 3-layer): (1) interp self-test ALL CHECKS PASS (size·4-align·RET trailer·
+      signature instr — `subs`/`ldrb`/`cmp x0,x1`/`cbz`), (2) `as -arch arm64` 권위 disasm
+      과 **4종 전부 byte-identical** (파일 c.push 바이트 직접 대조), (3) **JIT-exec 실제
+      동작 PASS** (memcmp 부호차·len0; memcpy no-overrun·len0; memmove overlap fwd/bwd
+      둘 다 정확; strcmp eq/less/more/prefix/empty). leaf-first 순서 진행 — 다음 후보는
+      reloc 필요한 state-bound primitive, 최후가 HexaVal repr/GC core (hard floor).
 - [ ] **B9.6b-runtime-primitive-emit** — 잔여 runtime primitive self-emit
       (chunk-A wire-plan)
 

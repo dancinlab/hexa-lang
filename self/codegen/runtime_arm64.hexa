@@ -746,6 +746,364 @@ fn rt_memset() {
     return c
 }
 
+// ── rt_memcmp ────────────────────────────────────────────────
+// memcmp(x0=a, x1=b, x2=len) — compare len bytes; return in w0 the
+// signed difference (a[i]-b[i]) at the first mismatch, else 0.
+// Pure byte-load + compare loop; no relocation, no arena state, no
+// HexaVal touch — a clean rt_memset-style leaf (B9.6a / F3 inc 2).
+//
+// Algorithm:
+//   mov x3, #0           ; i = 0
+//   loop: cmp x3, x2     ; i == len?
+//         b.hs eq        ; if i >= len, equal
+//         ldrb w4, [x0, x3]
+//         ldrb w5, [x1, x3]
+//         subs w6, w4, w5
+//         b.ne diff      ; first mismatch
+//         add x3, x3, #1
+//         b loop
+//   eq:   mov w0, #0; ret
+//   diff: mov w0, w6; ret
+//
+// 13 instructions, 52 bytes. Encodings validated against
+// `as -arch arm64` disassembly (B9.6a self-emit increment 2).
+
+fn rt_memcmp() {
+    let mut c = []
+    // mov x3, #0  (counter i)        0xD2800003
+    c.push(3)
+    c.push(0)
+    c.push(128)
+    c.push(210)
+    // loop: cmp x3, x2               0xEB02007F
+    c.push(127)
+    c.push(0)
+    c.push(2)
+    c.push(235)
+    // b.hs eq (+7 instrs = +28)      0x540000E2
+    c.push(226)
+    c.push(0)
+    c.push(0)
+    c.push(84)
+    // ldrb w4, [x0, x3]              0x38636804
+    c.push(4)
+    c.push(104)
+    c.push(99)
+    c.push(56)
+    // ldrb w5, [x1, x3]              0x38636825
+    c.push(37)
+    c.push(104)
+    c.push(99)
+    c.push(56)
+    // subs w6, w4, w5                0x6B050086
+    c.push(134)
+    c.push(0)
+    c.push(5)
+    c.push(107)
+    // b.ne diff (+5 instrs = +20)    0x540000A1
+    c.push(161)
+    c.push(0)
+    c.push(0)
+    c.push(84)
+    // add x3, x3, #1                 0x91000463
+    c.push(99)
+    c.push(4)
+    c.push(0)
+    c.push(145)
+    // b loop (-7 instrs = -28)       0x17FFFFF9
+    c.push(249)
+    c.push(255)
+    c.push(255)
+    c.push(23)
+    // eq: mov w0, #0                 0x52800000
+    c.push(0)
+    c.push(0)
+    c.push(128)
+    c.push(82)
+    // ret                            0xD65F03C0
+    c.push(192)
+    c.push(3)
+    c.push(95)
+    c.push(214)
+    // diff: mov w0, w6               0x2A0603E0
+    c.push(224)
+    c.push(3)
+    c.push(6)
+    c.push(42)
+    // ret                            0xD65F03C0
+    c.push(192)
+    c.push(3)
+    c.push(95)
+    c.push(214)
+    return c
+}
+
+// ── rt_memcpy ────────────────────────────────────────────────
+// memcpy(x0=dst, x1=src, x2=len) — forward byte copy dst[i]=src[i]
+// for i in 0..len-1. Scalar leaf companion to rt_memcpy_neon (the
+// SIMD bulk path); this is the small/generic fallback with no
+// alignment assumptions. Pure byte load/store loop; no relocation,
+// no arena state, no HexaVal touch (B9.6a / F3 increment 2).
+//
+// Algorithm (identical structure to rt_memset, +1 load):
+//   mov x3, #0           ; i = 0
+//   loop: cmp x3, x2     ; i == len?
+//         b.hs done      ; if i >= len, return
+//         ldrb w4, [x1, x3]; w4 = src[i]
+//         strb w4, [x0, x3]; dst[i] = w4
+//         add x3, x3, #1
+//         b loop
+//   done: ret
+//
+// 8 instructions, 32 bytes. Encodings validated against
+// `as -arch arm64` disassembly (B9.6a self-emit increment 2).
+
+fn rt_memcpy() {
+    let mut c = []
+    // mov x3, #0  (counter i)        0xD2800003
+    c.push(3)
+    c.push(0)
+    c.push(128)
+    c.push(210)
+    // loop: cmp x3, x2               0xEB02007F
+    c.push(127)
+    c.push(0)
+    c.push(2)
+    c.push(235)
+    // b.hs done (+5 instrs = +20)    0x540000A2
+    c.push(162)
+    c.push(0)
+    c.push(0)
+    c.push(84)
+    // ldrb w4, [x1, x3]              0x38636824
+    c.push(36)
+    c.push(104)
+    c.push(99)
+    c.push(56)
+    // strb w4, [x0, x3]              0x38236804
+    c.push(4)
+    c.push(104)
+    c.push(35)
+    c.push(56)
+    // add x3, x3, #1                 0x91000463
+    c.push(99)
+    c.push(4)
+    c.push(0)
+    c.push(145)
+    // b loop (-5 instrs = -20)       0x17FFFFFB
+    c.push(251)
+    c.push(255)
+    c.push(255)
+    c.push(23)
+    // done: ret                      0xD65F03C0
+    c.push(192)
+    c.push(3)
+    c.push(95)
+    c.push(214)
+    return c
+}
+
+// ── rt_memmove ───────────────────────────────────────────────
+// memmove(x0=dst, x1=src, x2=len) — overlap-safe copy. When the
+// regions overlap, copy direction must avoid clobbering not-yet-read
+// source bytes: if dst <= src copy forward, else copy backward.
+// Pure byte load/store loops; no relocation, no arena state, no
+// HexaVal touch (B9.6a / F3 increment 2).
+//
+// Algorithm:
+//   cmp x0, x1            ; dst vs src
+//   b.ls fwd             ; dst <= src -> forward is safe
+//   ; backward: i = len; while i>0 { i--; dst[i]=src[i] }
+//   mov x3, x2
+//   bwd: cbz x3, done
+//        sub x3, x3, #1
+//        ldrb w4, [x1, x3]
+//        strb w4, [x0, x3]
+//        b bwd
+//   fwd: mov x3, #0
+//   fl:  cmp x3, x2
+//        b.hs done
+//        ldrb w4, [x1, x3]
+//        strb w4, [x0, x3]
+//        add x3, x3, #1
+//        b fl
+//   done: ret
+//
+// 16 instructions, 64 bytes. Encodings validated against
+// `as -arch arm64` disassembly (B9.6a self-emit increment 2).
+
+fn rt_memmove() {
+    let mut c = []
+    // cmp x0, x1                     0xEB01001F
+    c.push(31)
+    c.push(0)
+    c.push(1)
+    c.push(235)
+    // b.ls fwd (+7 instrs = +28)     0x540000E9
+    c.push(233)
+    c.push(0)
+    c.push(0)
+    c.push(84)
+    // mov x3, x2  (backward i=len)   0xAA0203E3
+    c.push(227)
+    c.push(3)
+    c.push(2)
+    c.push(170)
+    // bwd: cbz x3, done (+6 = +24)   0xB4000183
+    c.push(131)
+    c.push(1)
+    c.push(0)
+    c.push(180)
+    // sub x3, x3, #1                 0xD1000463
+    c.push(99)
+    c.push(4)
+    c.push(0)
+    c.push(209)
+    // ldrb w4, [x1, x3]              0x38636824
+    c.push(36)
+    c.push(104)
+    c.push(99)
+    c.push(56)
+    // strb w4, [x0, x3]              0x38236804
+    c.push(4)
+    c.push(104)
+    c.push(35)
+    c.push(56)
+    // b bwd (-4 instrs = -16)        0x17FFFFFC
+    c.push(252)
+    c.push(255)
+    c.push(255)
+    c.push(23)
+    // fwd: mov x3, #0                0xD2800003
+    c.push(3)
+    c.push(0)
+    c.push(128)
+    c.push(210)
+    // fl: cmp x3, x2                 0xEB02007F
+    c.push(127)
+    c.push(0)
+    c.push(2)
+    c.push(235)
+    // b.hs done (+5 instrs = +20)    0x540000A2
+    c.push(162)
+    c.push(0)
+    c.push(0)
+    c.push(84)
+    // ldrb w4, [x1, x3]              0x38636824
+    c.push(36)
+    c.push(104)
+    c.push(99)
+    c.push(56)
+    // strb w4, [x0, x3]              0x38236804
+    c.push(4)
+    c.push(104)
+    c.push(35)
+    c.push(56)
+    // add x3, x3, #1                 0x91000463
+    c.push(99)
+    c.push(4)
+    c.push(0)
+    c.push(145)
+    // b fl (-5 instrs = -20)         0x17FFFFFB
+    c.push(251)
+    c.push(255)
+    c.push(255)
+    c.push(23)
+    // done: ret                      0xD65F03C0
+    c.push(192)
+    c.push(3)
+    c.push(95)
+    c.push(214)
+    return c
+}
+
+// ── rt_strcmp ────────────────────────────────────────────────
+// strcmp(x0=a, x1=b) — lexicographic compare of two NUL-terminated
+// strings; return in w0 the signed difference (a[i]-b[i]) at the
+// first mismatch, else 0. The NUL terminator is the loop stop (no
+// length arg). Pure byte-load + compare loop; no relocation, no
+// arena state, no HexaVal touch (B9.6a / F3 increment 2).
+//
+// Algorithm:
+//   mov x3, #0           ; i = 0
+//   loop: ldrb w4, [x0, x3]
+//         ldrb w5, [x1, x3]
+//         subs w6, w4, w5
+//         b.ne diff      ; first mismatch
+//         cbz w4, eq     ; both NUL -> equal
+//         add x3, x3, #1
+//         b loop
+//   eq:   mov w0, #0; ret
+//   diff: mov w0, w6; ret
+//
+// 12 instructions, 48 bytes. Encodings validated against
+// `as -arch arm64` disassembly (B9.6a self-emit increment 2).
+
+fn rt_strcmp() {
+    let mut c = []
+    // mov x3, #0  (counter i)        0xD2800003
+    c.push(3)
+    c.push(0)
+    c.push(128)
+    c.push(210)
+    // loop: ldrb w4, [x0, x3]        0x38636804
+    c.push(4)
+    c.push(104)
+    c.push(99)
+    c.push(56)
+    // ldrb w5, [x1, x3]              0x38636825
+    c.push(37)
+    c.push(104)
+    c.push(99)
+    c.push(56)
+    // subs w6, w4, w5                0x6B050086
+    c.push(134)
+    c.push(0)
+    c.push(5)
+    c.push(107)
+    // b.ne diff (+6 instrs = +24)    0x540000C1
+    c.push(193)
+    c.push(0)
+    c.push(0)
+    c.push(84)
+    // cbz w4, eq (+3 instrs = +12)   0x34000064
+    c.push(100)
+    c.push(0)
+    c.push(0)
+    c.push(52)
+    // add x3, x3, #1                 0x91000463
+    c.push(99)
+    c.push(4)
+    c.push(0)
+    c.push(145)
+    // b loop (-6 instrs = -24)       0x17FFFFFA
+    c.push(250)
+    c.push(255)
+    c.push(255)
+    c.push(23)
+    // eq: mov w0, #0                 0x52800000
+    c.push(0)
+    c.push(0)
+    c.push(128)
+    c.push(82)
+    // ret                            0xD65F03C0
+    c.push(192)
+    c.push(3)
+    c.push(95)
+    c.push(214)
+    // diff: mov w0, w6               0x2A0603E0
+    c.push(224)
+    c.push(3)
+    c.push(6)
+    c.push(42)
+    // ret                            0xD65F03C0
+    c.push(192)
+    c.push(3)
+    c.push(95)
+    c.push(214)
+    return c
+}
+
 // ═══════════════════════════════════════════════════════════════
 // NEON SIMD string operations (HX5: AI-native algorithm replacement)
 // ═══════════════════════════════════════════════════════════════
@@ -1534,6 +1892,10 @@ fn test_runtime_arm64() {
     let free_bytes = rt_free()
     let slen = rt_str_len()
     let mset = rt_memset()
+    let mcmp = rt_memcmp()
+    let mcpy = rt_memcpy()
+    let mmove = rt_memmove()
+    let scmp = rt_strcmp()
     let ainit = rt_arena_init()
     let aalloc = rt_arena_alloc()
     let areset = rt_arena_reset()
@@ -1548,6 +1910,10 @@ fn test_runtime_arm64() {
     println("  rt_free          : " + to_string(len(free_bytes)) + " bytes")
     println("  rt_str_len       : " + to_string(len(slen)) + " bytes")
     println("  rt_memset        : " + to_string(len(mset)) + " bytes")
+    println("  rt_memcmp        : " + to_string(len(mcmp)) + " bytes")
+    println("  rt_memcpy        : " + to_string(len(mcpy)) + " bytes")
+    println("  rt_memmove       : " + to_string(len(mmove)) + " bytes")
+    println("  rt_strcmp        : " + to_string(len(scmp)) + " bytes")
     println("  rt_arena_init    : " + to_string(len(ainit)) + " bytes")
     println("  rt_arena_alloc   : " + to_string(len(aalloc)) + " bytes")
     println("  rt_arena_reset   : " + to_string(len(areset)) + " bytes")
@@ -1566,6 +1932,15 @@ fn test_runtime_arm64() {
     if len(slen) != 44 { println("  FAIL: rt_str_len expected 44, got " + to_string(len(slen))); ok = false }
     // rt_memset 28 (B9.6a / F3 increment): 7-instr leaf byte-store loop.
     if len(mset) != 28 { println("  FAIL: rt_memset expected 28, got " + to_string(len(mset))); ok = false }
+    // B9.6a / F3 increment 2 — 4 reloc-free leaf primitives:
+    //   rt_memcmp  13-instr 52 B  (byte-load compare loop, signed diff)
+    //   rt_memcpy   8-instr 32 B  (scalar forward byte copy)
+    //   rt_memmove 16-instr 64 B  (overlap-safe fwd/bwd copy)
+    //   rt_strcmp  12-instr 48 B  (NUL-terminated compare, signed diff)
+    if len(mcmp) != 52 { println("  FAIL: rt_memcmp expected 52, got " + to_string(len(mcmp))); ok = false }
+    if len(mcpy) != 32 { println("  FAIL: rt_memcpy expected 32, got " + to_string(len(mcpy))); ok = false }
+    if len(mmove) != 64 { println("  FAIL: rt_memmove expected 64, got " + to_string(len(mmove))); ok = false }
+    if len(scmp) != 48 { println("  FAIL: rt_strcmp expected 48, got " + to_string(len(scmp))); ok = false }
     // PR #1297 residual #2 — adr (4 B) → adrp+add (8 B) widening for
     // _arena_state PAGE21+PAGEOFF12 reloc machinery. Per-fn deltas:
     //   init   72 → 76 (+4 · 1 site)
@@ -1589,6 +1964,10 @@ fn test_runtime_arm64() {
     if len(free_bytes) % 4 != 0 { println("  FAIL: rt_free not aligned"); ok = false }
     if len(slen) % 4 != 0 { println("  FAIL: rt_str_len not aligned"); ok = false }
     if len(mset) % 4 != 0 { println("  FAIL: rt_memset not aligned"); ok = false }
+    if len(mcmp) % 4 != 0 { println("  FAIL: rt_memcmp not aligned"); ok = false }
+    if len(mcpy) % 4 != 0 { println("  FAIL: rt_memcpy not aligned"); ok = false }
+    if len(mmove) % 4 != 0 { println("  FAIL: rt_memmove not aligned"); ok = false }
+    if len(scmp) % 4 != 0 { println("  FAIL: rt_strcmp not aligned"); ok = false }
     if len(ainit) % 4 != 0 { println("  FAIL: rt_arena_init not aligned"); ok = false }
     if len(aalloc) % 4 != 0 { println("  FAIL: rt_arena_alloc not aligned"); ok = false }
     if len(areset) % 4 != 0 { println("  FAIL: rt_arena_reset not aligned"); ok = false }
@@ -1610,6 +1989,15 @@ fn test_runtime_arm64() {
     if slen[n5 - 4] != 192 { println("  FAIL: rt_str_len no RET"); ok = false }
     let nm = len(mset)
     if mset[nm - 4] != 192 { println("  FAIL: rt_memset no RET"); ok = false }
+    // F3 inc 2 — all four leaves end with ret (192,3,95,214).
+    let ncm = len(mcmp)
+    if mcmp[ncm - 4] != 192 { println("  FAIL: rt_memcmp no RET"); ok = false }
+    let ncp = len(mcpy)
+    if mcpy[ncp - 4] != 192 { println("  FAIL: rt_memcpy no RET"); ok = false }
+    let nmv = len(mmove)
+    if mmove[nmv - 4] != 192 { println("  FAIL: rt_memmove no RET"); ok = false }
+    let nsc = len(scmp)
+    if scmp[nsc - 4] != 192 { println("  FAIL: rt_strcmp no RET"); ok = false }
     let na1 = len(ainit)
     if ainit[na1 - 4] != 192 { println("  FAIL: rt_arena_init no RET"); ok = false }
     let na2 = len(aalloc)
@@ -1747,6 +2135,78 @@ fn test_runtime_arm64() {
         km = km + 1
     }
     if !found_memset_strb { println("  FAIL: rt_memset missing strb w1, [x0, x3] (byte store)"); ok = false }
+
+    // Verify rt_memcmp contains subs w6, w4, w5 (the compare body).
+    //   encoded as 0x6B050086 → little-endian bytes 134, 0, 5, 107.
+    let mut found_memcmp_subs = false
+    let mut ic = 0
+    while ic + 3 < len(mcmp) {
+        if mcmp[ic] == 134 {
+            if mcmp[ic + 1] == 0 {
+                if mcmp[ic + 2] == 5 {
+                    if mcmp[ic + 3] == 107 {
+                        found_memcmp_subs = true
+                    }
+                }
+            }
+        }
+        ic = ic + 1
+    }
+    if !found_memcmp_subs { println("  FAIL: rt_memcmp missing subs w6, w4, w5 (compare)"); ok = false }
+
+    // Verify rt_memcpy contains ldrb w4, [x1, x3] (the source load).
+    //   encoded as 0x38636824 → little-endian bytes 36, 104, 99, 56.
+    let mut found_memcpy_ldrb = false
+    let mut ip = 0
+    while ip + 3 < len(mcpy) {
+        if mcpy[ip] == 36 {
+            if mcpy[ip + 1] == 104 {
+                if mcpy[ip + 2] == 99 {
+                    if mcpy[ip + 3] == 56 {
+                        found_memcpy_ldrb = true
+                    }
+                }
+            }
+        }
+        ip = ip + 1
+    }
+    if !found_memcpy_ldrb { println("  FAIL: rt_memcpy missing ldrb w4, [x1, x3] (src load)"); ok = false }
+
+    // Verify rt_memmove contains cmp x0, x1 (the direction decision).
+    //   encoded as 0xEB01001F → little-endian bytes 31, 0, 1, 235.
+    let mut found_memmove_cmp = false
+    let mut iv = 0
+    while iv + 3 < len(mmove) {
+        if mmove[iv] == 31 {
+            if mmove[iv + 1] == 0 {
+                if mmove[iv + 2] == 1 {
+                    if mmove[iv + 3] == 235 {
+                        found_memmove_cmp = true
+                    }
+                }
+            }
+        }
+        iv = iv + 1
+    }
+    if !found_memmove_cmp { println("  FAIL: rt_memmove missing cmp x0, x1 (dir decision)"); ok = false }
+
+    // Verify rt_strcmp contains cbz w4, eq (the NUL-terminator stop).
+    //   encoded as 0x34000064 → little-endian bytes 100, 0, 0, 52.
+    let mut found_strcmp_cbz = false
+    let mut isc = 0
+    while isc + 3 < len(scmp) {
+        if scmp[isc] == 100 {
+            if scmp[isc + 1] == 0 {
+                if scmp[isc + 2] == 0 {
+                    if scmp[isc + 3] == 52 {
+                        found_strcmp_cbz = true
+                    }
+                }
+            }
+        }
+        isc = isc + 1
+    }
+    if !found_strcmp_cbz { println("  FAIL: rt_strcmp missing cbz w4 (NUL stop)"); ok = false }
 
     if ok {
         println("  ALL CHECKS PASS")
