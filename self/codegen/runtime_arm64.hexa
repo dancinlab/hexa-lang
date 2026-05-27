@@ -1531,6 +1531,240 @@ fn rt_strncpy() {
     return c
 }
 
+// ── rt_strcat ────────────────────────────────────────────────
+// strcat(x0=dst, x1=src) — append NUL-terminated src to the end of
+// NUL-terminated dst (including the terminating NUL); return dst in
+// x0. Composite of a strlen-scan (advance to dst's NUL) + a strcpy
+// (copy src bytes incl. NUL). Pure byte load/store loops; no
+// relocation, no calls, no arena state, no HexaVal touch — the LAST
+// simple composite-leaf in the easy phase (B9.6a / F3 increment 4).
+//
+// Algorithm:
+//   mov x2, x0           ; p = dst (x0 preserved as return value)
+//   scan: ldrb w3, [x2]  ; advance p to dst's NUL terminator
+//         cbz w3, scandone
+//         add x2, x2, #1
+//         b scan
+//   scandone:
+//   mov x3, #0           ; i = 0
+//   cpy: ldrb w4, [x1, x3]; w4 = src[i]
+//        strb w4, [x2, x3]; p[i] = w4  (copies the NUL too)
+//        cbz w4, cpydone  ; stop after writing the terminator
+//        add x3, x3, #1
+//        b cpy
+//   cpydone: ret         ; x0 still = dst
+//
+// 12 instructions, 48 bytes. Encodings validated against
+// `as -arch arm64` disassembly (B9.6a self-emit increment 4).
+
+fn rt_strcat() {
+    let mut c = []
+    // mov x2, x0  (p = dst)          0xAA0003E2
+    c.push(226)
+    c.push(3)
+    c.push(0)
+    c.push(170)
+    // scan: ldrb w3, [x2]            0x39400043
+    c.push(67)
+    c.push(0)
+    c.push(64)
+    c.push(57)
+    // cbz w3, scandone (+3 = +12)    0x34000063
+    c.push(99)
+    c.push(0)
+    c.push(0)
+    c.push(52)
+    // add x2, x2, #1                 0x91000442
+    c.push(66)
+    c.push(4)
+    c.push(0)
+    c.push(145)
+    // b scan (-3 instrs = -12)       0x17FFFFFD
+    c.push(253)
+    c.push(255)
+    c.push(255)
+    c.push(23)
+    // scandone: mov x3, #0  (i=0)    0xD2800003
+    c.push(3)
+    c.push(0)
+    c.push(128)
+    c.push(210)
+    // cpy: ldrb w4, [x1, x3]         0x38636824
+    c.push(36)
+    c.push(104)
+    c.push(99)
+    c.push(56)
+    // strb w4, [x2, x3]              0x38236844
+    c.push(68)
+    c.push(104)
+    c.push(35)
+    c.push(56)
+    // cbz w4, cpydone (+3 = +12)     0x34000064
+    c.push(100)
+    c.push(0)
+    c.push(0)
+    c.push(52)
+    // add x3, x3, #1                 0x91000463
+    c.push(99)
+    c.push(4)
+    c.push(0)
+    c.push(145)
+    // b cpy (-4 instrs = -16)        0x17FFFFFC
+    c.push(252)
+    c.push(255)
+    c.push(255)
+    c.push(23)
+    // cpydone: ret                   0xD65F03C0
+    c.push(192)
+    c.push(3)
+    c.push(95)
+    c.push(214)
+    return c
+}
+
+// ── rt_clz ───────────────────────────────────────────────────
+// clz(x0) — count leading zero bits of the 64-bit value in x0,
+// return in x0 (clz(0) = 64). ARM64 has a native CLZ instruction,
+// so this is the smallest possible leaf: one op + ret. Pure
+// register; no relocation, no memory, no arena state, no HexaVal
+// touch — a foundational bit-op leaf (B9.6a / F3 increment 4).
+//
+// Algorithm:
+//   clz x0, x0
+//   ret
+//
+// 2 instructions, 8 bytes. Encodings validated against
+// `as -arch arm64` disassembly (B9.6a self-emit increment 4).
+
+fn rt_clz() {
+    let mut c = []
+    // clz x0, x0                     0xDAC01000
+    c.push(0)
+    c.push(16)
+    c.push(192)
+    c.push(218)
+    // ret                            0xD65F03C0
+    c.push(192)
+    c.push(3)
+    c.push(95)
+    c.push(214)
+    return c
+}
+
+// ── rt_ctz ───────────────────────────────────────────────────
+// ctz(x0) — count trailing zero bits of the 64-bit value in x0,
+// return in x0 (ctz(0) = 64). ARM64 has no direct CTZ, so we
+// bit-reverse (RBIT) then count leading zeros (CLZ): the leading
+// zeros of the reversed word equal the trailing zeros of the
+// original. Pure register; no relocation, no memory, no arena
+// state, no HexaVal touch (B9.6a / F3 increment 4).
+//
+// Algorithm:
+//   rbit x0, x0          ; reverse bit order
+//   clz x0, x0           ; trailing zeros of orig = leading zeros of reversed
+//   ret
+//
+// 3 instructions, 12 bytes. Encodings validated against
+// `as -arch arm64` disassembly (B9.6a self-emit increment 4).
+
+fn rt_ctz() {
+    let mut c = []
+    // rbit x0, x0                    0xDAC00000
+    c.push(0)
+    c.push(0)
+    c.push(192)
+    c.push(218)
+    // clz x0, x0                     0xDAC01000
+    c.push(0)
+    c.push(16)
+    c.push(192)
+    c.push(218)
+    // ret                            0xD65F03C0
+    c.push(192)
+    c.push(3)
+    c.push(95)
+    c.push(214)
+    return c
+}
+
+// ── rt_popcount ──────────────────────────────────────────────
+// popcount(x0) — count the set bits of the 64-bit value in x0,
+// return in x0. ARM64 scalar has no popcount, so we move into a
+// NEON D register, use CNT (per-byte popcount of the 8 bytes) +
+// ADDV (horizontal byte sum across the 8B vector) to total the
+// set bits, then move the scalar result back to w0. Pure register
+// (FP/SIMD); no relocation, no memory, no arena state, no HexaVal
+// touch (B9.6a / F3 increment 4).
+//
+// Algorithm:
+//   fmov d0, x0          ; move 64 bits into NEON d0
+//   cnt v0.8b, v0.8b     ; per-byte popcount (8 lanes)
+//   addv b0, v0.8b       ; horizontal sum of the 8 byte lanes
+//   fmov w0, s0          ; result (0..64) back to w0
+//   ret
+//
+// 5 instructions, 20 bytes. Encodings validated against
+// `as -arch arm64` disassembly (B9.6a self-emit increment 4).
+
+fn rt_popcount() {
+    let mut c = []
+    // fmov d0, x0                    0x9E670000
+    c.push(0)
+    c.push(0)
+    c.push(103)
+    c.push(158)
+    // cnt v0.8b, v0.8b               0x0E205800
+    c.push(0)
+    c.push(88)
+    c.push(32)
+    c.push(14)
+    // addv b0, v0.8b                 0x0E31B800
+    c.push(0)
+    c.push(184)
+    c.push(49)
+    c.push(14)
+    // fmov w0, s0                    0x1E260000
+    c.push(0)
+    c.push(0)
+    c.push(38)
+    c.push(30)
+    // ret                            0xD65F03C0
+    c.push(192)
+    c.push(3)
+    c.push(95)
+    c.push(214)
+    return c
+}
+
+// ── rt_bswap ─────────────────────────────────────────────────
+// bswap(x0) — reverse the byte order of the 64-bit value in x0,
+// return in x0 (endianness swap). ARM64 has a native REV
+// instruction that reverses all 8 bytes of a 64-bit register, so
+// this is a one-op leaf. Pure register; no relocation, no memory,
+// no arena state, no HexaVal touch (B9.6a / F3 increment 4).
+//
+// Algorithm:
+//   rev x0, x0
+//   ret
+//
+// 2 instructions, 8 bytes. Encodings validated against
+// `as -arch arm64` disassembly (B9.6a self-emit increment 4).
+
+fn rt_bswap() {
+    let mut c = []
+    // rev x0, x0                     0xDAC00C00
+    c.push(0)
+    c.push(12)
+    c.push(192)
+    c.push(218)
+    // ret                            0xD65F03C0
+    c.push(192)
+    c.push(3)
+    c.push(95)
+    c.push(214)
+    return c
+}
+
 // ═══════════════════════════════════════════════════════════════
 // NEON SIMD string operations (HX5: AI-native algorithm replacement)
 // ═══════════════════════════════════════════════════════════════
@@ -2328,6 +2562,11 @@ fn test_runtime_arm64() {
     let srchr = rt_strrchr()
     let scpy = rt_strcpy()
     let sncpy = rt_strncpy()
+    let scat = rt_strcat()
+    let clz = rt_clz()
+    let ctz = rt_ctz()
+    let popc = rt_popcount()
+    let bswap = rt_bswap()
     let ainit = rt_arena_init()
     let aalloc = rt_arena_alloc()
     let areset = rt_arena_reset()
@@ -2351,6 +2590,11 @@ fn test_runtime_arm64() {
     println("  rt_strrchr       : " + to_string(len(srchr)) + " bytes")
     println("  rt_strcpy        : " + to_string(len(scpy)) + " bytes")
     println("  rt_strncpy       : " + to_string(len(sncpy)) + " bytes")
+    println("  rt_strcat        : " + to_string(len(scat)) + " bytes")
+    println("  rt_clz           : " + to_string(len(clz)) + " bytes")
+    println("  rt_ctz           : " + to_string(len(ctz)) + " bytes")
+    println("  rt_popcount      : " + to_string(len(popc)) + " bytes")
+    println("  rt_bswap         : " + to_string(len(bswap)) + " bytes")
     println("  rt_arena_init    : " + to_string(len(ainit)) + " bytes")
     println("  rt_arena_alloc   : " + to_string(len(aalloc)) + " bytes")
     println("  rt_arena_reset   : " + to_string(len(areset)) + " bytes")
@@ -2389,6 +2633,18 @@ fn test_runtime_arm64() {
     if len(srchr) != 44 { println("  FAIL: rt_strrchr expected 44, got " + to_string(len(srchr))); ok = false }
     if len(scpy) != 28 { println("  FAIL: rt_strcpy expected 28, got " + to_string(len(scpy))); ok = false }
     if len(sncpy) != 56 { println("  FAIL: rt_strncpy expected 56, got " + to_string(len(sncpy))); ok = false }
+    // B9.6a / F3 increment 4 — final 5 simple reloc-free leaf primitives
+    // (the LAST cold-batchable tier; thereafter = reloc/HexaVal/GC HARD floor):
+    //   rt_strcat   12-instr 48 B  (strlen-scan + strcpy composite, returns dst)
+    //   rt_clz       2-instr  8 B  (native CLZ; clz(0)=64)
+    //   rt_ctz       3-instr 12 B  (RBIT+CLZ; ctz(0)=64)
+    //   rt_popcount  5-instr 20 B  (NEON CNT+ADDV over 8 byte lanes)
+    //   rt_bswap     2-instr  8 B  (native REV; 64-bit byte reverse)
+    if len(scat) != 48 { println("  FAIL: rt_strcat expected 48, got " + to_string(len(scat))); ok = false }
+    if len(clz) != 8 { println("  FAIL: rt_clz expected 8, got " + to_string(len(clz))); ok = false }
+    if len(ctz) != 12 { println("  FAIL: rt_ctz expected 12, got " + to_string(len(ctz))); ok = false }
+    if len(popc) != 20 { println("  FAIL: rt_popcount expected 20, got " + to_string(len(popc))); ok = false }
+    if len(bswap) != 8 { println("  FAIL: rt_bswap expected 8, got " + to_string(len(bswap))); ok = false }
     // PR #1297 residual #2 — adr (4 B) → adrp+add (8 B) widening for
     // _arena_state PAGE21+PAGEOFF12 reloc machinery. Per-fn deltas:
     //   init   72 → 76 (+4 · 1 site)
@@ -2421,6 +2677,11 @@ fn test_runtime_arm64() {
     if len(srchr) % 4 != 0 { println("  FAIL: rt_strrchr not aligned"); ok = false }
     if len(scpy) % 4 != 0 { println("  FAIL: rt_strcpy not aligned"); ok = false }
     if len(sncpy) % 4 != 0 { println("  FAIL: rt_strncpy not aligned"); ok = false }
+    if len(scat) % 4 != 0 { println("  FAIL: rt_strcat not aligned"); ok = false }
+    if len(clz) % 4 != 0 { println("  FAIL: rt_clz not aligned"); ok = false }
+    if len(ctz) % 4 != 0 { println("  FAIL: rt_ctz not aligned"); ok = false }
+    if len(popc) % 4 != 0 { println("  FAIL: rt_popcount not aligned"); ok = false }
+    if len(bswap) % 4 != 0 { println("  FAIL: rt_bswap not aligned"); ok = false }
     if len(ainit) % 4 != 0 { println("  FAIL: rt_arena_init not aligned"); ok = false }
     if len(aalloc) % 4 != 0 { println("  FAIL: rt_arena_alloc not aligned"); ok = false }
     if len(areset) % 4 != 0 { println("  FAIL: rt_arena_reset not aligned"); ok = false }
@@ -2462,6 +2723,17 @@ fn test_runtime_arm64() {
     if scpy[nscp - 4] != 192 { println("  FAIL: rt_strcpy no RET"); ok = false }
     let nsnp = len(sncpy)
     if sncpy[nsnp - 4] != 192 { println("  FAIL: rt_strncpy no RET"); ok = false }
+    // F3 inc 4 — all five final leaves end with ret (192,3,95,214).
+    let nscat = len(scat)
+    if scat[nscat - 4] != 192 { println("  FAIL: rt_strcat no RET"); ok = false }
+    let nclz = len(clz)
+    if clz[nclz - 4] != 192 { println("  FAIL: rt_clz no RET"); ok = false }
+    let nctz = len(ctz)
+    if ctz[nctz - 4] != 192 { println("  FAIL: rt_ctz no RET"); ok = false }
+    let npop = len(popc)
+    if popc[npop - 4] != 192 { println("  FAIL: rt_popcount no RET"); ok = false }
+    let nbsw = len(bswap)
+    if bswap[nbsw - 4] != 192 { println("  FAIL: rt_bswap no RET"); ok = false }
     let na1 = len(ainit)
     if ainit[na1 - 4] != 192 { println("  FAIL: rt_arena_init no RET"); ok = false }
     let na2 = len(aalloc)
@@ -2761,6 +3033,96 @@ fn test_runtime_arm64() {
         inp = inp + 1
     }
     if !found_strncpy_pad { println("  FAIL: rt_strncpy missing strb wzr, [x0, x3] (NUL pad)"); ok = false }
+
+    // Verify rt_strcat contains strb w4, [x2, x3] (the copy-phase store).
+    //   encoded as 0x38236844 → little-endian bytes 68, 104, 35, 56.
+    let mut found_strcat_strb = false
+    let mut ica = 0
+    while ica + 3 < len(scat) {
+        if scat[ica] == 68 {
+            if scat[ica + 1] == 104 {
+                if scat[ica + 2] == 35 {
+                    if scat[ica + 3] == 56 {
+                        found_strcat_strb = true
+                    }
+                }
+            }
+        }
+        ica = ica + 1
+    }
+    if !found_strcat_strb { println("  FAIL: rt_strcat missing strb w4, [x2, x3] (copy store)"); ok = false }
+
+    // Verify rt_clz contains clz x0, x0 (the count-leading-zeros op).
+    //   encoded as 0xDAC01000 → little-endian bytes 0, 16, 192, 218.
+    let mut found_clz_op = false
+    let mut icl = 0
+    while icl + 3 < len(clz) {
+        if clz[icl] == 0 {
+            if clz[icl + 1] == 16 {
+                if clz[icl + 2] == 192 {
+                    if clz[icl + 3] == 218 {
+                        found_clz_op = true
+                    }
+                }
+            }
+        }
+        icl = icl + 1
+    }
+    if !found_clz_op { println("  FAIL: rt_clz missing clz x0, x0"); ok = false }
+
+    // Verify rt_ctz contains rbit x0, x0 (the bit-reverse before clz).
+    //   encoded as 0xDAC00000 → little-endian bytes 0, 0, 192, 218.
+    let mut found_ctz_rbit = false
+    let mut ict = 0
+    while ict + 3 < len(ctz) {
+        if ctz[ict] == 0 {
+            if ctz[ict + 1] == 0 {
+                if ctz[ict + 2] == 192 {
+                    if ctz[ict + 3] == 218 {
+                        found_ctz_rbit = true
+                    }
+                }
+            }
+        }
+        ict = ict + 1
+    }
+    if !found_ctz_rbit { println("  FAIL: rt_ctz missing rbit x0, x0"); ok = false }
+
+    // Verify rt_popcount contains cnt v0.8b, v0.8b (per-byte popcount).
+    //   encoded as 0x0E205800 → little-endian bytes 0, 88, 32, 14.
+    let mut found_pop_cnt = false
+    let mut ipo = 0
+    while ipo + 3 < len(popc) {
+        if popc[ipo] == 0 {
+            if popc[ipo + 1] == 88 {
+                if popc[ipo + 2] == 32 {
+                    if popc[ipo + 3] == 14 {
+                        found_pop_cnt = true
+                    }
+                }
+            }
+        }
+        ipo = ipo + 1
+    }
+    if !found_pop_cnt { println("  FAIL: rt_popcount missing cnt v0.8b, v0.8b"); ok = false }
+
+    // Verify rt_bswap contains rev x0, x0 (the byte-reverse op).
+    //   encoded as 0xDAC00C00 → little-endian bytes 0, 12, 192, 218.
+    let mut found_bswap_rev = false
+    let mut ibs = 0
+    while ibs + 3 < len(bswap) {
+        if bswap[ibs] == 0 {
+            if bswap[ibs + 1] == 12 {
+                if bswap[ibs + 2] == 192 {
+                    if bswap[ibs + 3] == 218 {
+                        found_bswap_rev = true
+                    }
+                }
+            }
+        }
+        ibs = ibs + 1
+    }
+    if !found_bswap_rev { println("  FAIL: rt_bswap missing rev x0, x0"); ok = false }
 
     if ok {
         println("  ALL CHECKS PASS")
