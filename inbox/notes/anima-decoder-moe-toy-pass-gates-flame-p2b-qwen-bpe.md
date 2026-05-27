@@ -56,7 +56,7 @@ scope 정정(#2 모듈 경계)을 실측하던 중 **더 깊은 선결 blocker**
 
 **fix (#1527 MERGED)**: `gen2_expr` free-fn 블록에 `.trim()` 메서드 경로(self/codegen.hexa:3942/7190 `cg_string_sym("str_trim") -> rt_str_trim`)와 동일한 free-fn `trim` lowering 추가 (12 LoC, SSOT only — hexa_cc.c bootstrap 은 표준 cadence). ubu-2 end-to-end 검증: `hexa cc --regen` → standalone `trim("  hi  ")` 가 `rt_str_trim` 으로 lowering + clang 링크 + 실행, `use "self/ml/tokenizer_bpe"` 전체 체인 컴파일 + round-trip PASS.
 
-**잔여 (이제 unblock, bootstrap 후 진행)**:
-1. `self/native/hexa_cc.c` bootstrap 재생성 — committed 컴파일러에 #1527 반영 (표준 regen cadence)
-2. stdlib/flame BPE-corpus 로더 — `read_file(corpus)` → `bpe_encode` → 토큰id 배열 (byte-level 경로의 `bytes_arr` 교체, downstream windowing/V 동일)
-3. Qwen V=151936 round-trip — vocab.json/merges.txt 로컬 존재 (`HEXAD/UNCLASSIFIED/state/grid_3b_s187_2026_05_21/vP21M_*/lora_adapter/`)
+**진행 (2026-05-27)**:
+1. ✅ **DONE (#1533)** `self/native/hexa_cc.c` bootstrap 재생성 — #1527 라이브, self-host fixpoint(gen1==gen2 byte-identical) 검증
+2. ✅ **DONE (anima #1537)** stdlib/flame BPE-corpus 로더 (`flame_bpe_corpus_lib.hexa`) — CI 테스트 10/10 PASS (`flame_bpe_corpus_test.hexa`, toy vocab round-trip)
+3. ❌ **FALSE — 세 번째 blocker 발견** Qwen V=151643 round-trip: hexa `chr(n)` byte 절단(`chr(288)==chr(32)`)으로 byte-level 256 distinct char 불가 → 공백/비-ASCII 손상. 실측 round-trip FALSE (`consciousness!emerges!from!cells`). 진짜 잔여 = **hexa chr Unicode** → `inbox/notes/hexa-chr-unicode-byte-level-bpe.md`. loader 가드가 검출(가짜 closure 아님). 본 fix 후 3B Qwen 정상화
