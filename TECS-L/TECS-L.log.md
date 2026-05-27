@@ -2,6 +2,46 @@
 
 Append-only history sister of `TECS-L.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
+## 2026-05-27T19:10Z · 축 RTSC · RTSC30 · 🛸 수학 DFS — extended ternary candidate m-classification + paper honest correction
+
+RTSC28+29 의 ternary candidate 분류 확장. literature param tuple 5 개 더 적용:
+LaBeH8 (Belli-Bergara 2023), CSH7 (Snider 2020 retracted), YbH6 (clathrate
+boundary 예측), ThH10 (Semenok 2018 실측), 그리고 paper conclusion 의
+honest correction.
+
+- [x] **ThH10** (λ=1.85, Semenok 2018 Tc=161K): m = 1−2.5/1.85 = **−0.351** 🟢 deep TRAPPED (실측 consistent)
+- [x] **LaBeH8** (λ=2.4, Belli-Bergara 2023): m = 1−2.5/2.4 = **−0.0417** 🟢 **marginal TRAPPED** ⚠
+       ⟹ **paper §Conclusion 의 "LaBeH8 ambient 후보" honest correction**:
+          실제 m-classification 으로는 marginal TRAPPED (boundary 거의 도달, +5% λ 필요).
+- [x] **YbH6** (λ=2.5 가정, clathrate boundary): m = 0 🟢 wall 정확 (boundary 예측)
+- [x] **CSH7 low** (λ=2.7, Snider 2020 controversial): m = **+0.074** 🟢 ESCAPE
+       하지만 Snider 2020 paper retracted → literature credibility 문제, 분류 unreliable.
+- [x] **CSH7 high** (λ=3.0 추정): m = **+0.167** 🟢 deep ESCAPE (가정 의존)
+
+⟹ 결론 (extended classification + honest correction):
+
+   | system    | λ    | m       | class           | source           |
+   |-----------|------|---------|-----------------|------------------|
+   | ThH10     | 1.85 | -0.35   | deep TRAPPED    | Semenok 2018     |
+   | H3S       | 2.00 | -0.25   | deep TRAPPED    | Drozdov 2015     |
+   | LaH10     | 2.20 | -0.14   | TRAPPED         | Somayazulu 2019  |
+   | LaBeH8    | 2.40 | -0.04   | marginal TRAPPED| Belli 2023 ⚠     |
+   | YbH6      | 2.50 |  0.00   | wall 정확       | (predicted)      |
+   | YH10      | 2.59 | +0.035  | marginal ESCAPE | Errea 2020       |
+   | CaH6      | 2.70 | +0.074  | ESCAPE          | Wang-Ma 2012     |
+   | CSH7      | ~3.0 | varies  | unreliable      | Snider 2020 ⚠   |
+
+   **honest correction**: paper §Conclusion 의 "LaBeH8 가 ambient 후보 0순위" 가
+   부정확. 실제로는 **YH10 만 measured/predicted ESCAPE class** (Errea 2020).
+   LaBeH8 는 +5% λ 더 필요한 marginal TRAPPED. paper revision 권장.
+
+verify (inline, --no-absorb, 모두 libm-class exact):
+  stability_coupling_margin 1.0 1.35135 → -0.35135 🟢 ThH10
+  stability_coupling_margin 1.0 1.04167 → -0.04167 🟢 LaBeH8 ⚠ marginal TRAPPED
+  stability_coupling_margin 1.0 1.0     → 0.0      🟢 YbH6 wall
+  stability_coupling_margin 1.0 0.92593 → +0.07407 🟢 CSH7 low
+  stability_coupling_margin 1.0 0.83333 → +0.16667 🟢 CSH7 high
+
 ## 2026-05-27T18:55Z · 축 RTSC · RTSC29 · 수학 DFS — chemistry-axis (ω²_anharm) m-margin sensitivity sweep
 
 RTSC28 의 grand unification (λ_actual 변화 → m) 의 dual representation: λ_target=2.5
