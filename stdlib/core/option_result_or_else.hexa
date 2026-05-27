@@ -1,0 +1,48 @@
+// HEXA Standard Library — core/option_result_or_else
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Option/Result fallback combinators. Pure additive sibling of
+// `stdlib/core/option_result.hexa` — adds `or_else` chains for graceful
+// recovery from None / Err without unwrapping.
+//
+// RUNTIME.flip B4.option-or-else.
+//
+// Surface:
+//   pub fn opt_or_else(o: Option, f) -> Option
+//     — Option::Some(v) passes through; Option::None invokes `f()` which
+//       must itself produce an Option (Some or None).
+//     — `f` is `() -> Option` (no args; the None branch is value-less).
+//
+//   pub fn res_or_else(r: Result, f) -> Result
+//     — Result::Ok(v) passes through; Result::Err(e) invokes `f(e)` which
+//       must produce a new Result (recovery → Ok, or rewrap → Err).
+//     — `f` is `(error) -> Result`.
+//
+// Design notes:
+//   - Mirrors Rust's `Option::or_else` / `Result::or_else` semantics:
+//     fallback is a thunk (closure), not a precomputed value (cf.
+//     `opt_unwrap_or` / `res_unwrap_or` which take an eager default).
+//   - Same `match`-with-return idiom as sibling helpers; no allocation
+//     in the happy path.
+
+use "stdlib/core/option_result"
+
+// -- Option fallback --
+
+pub fn opt_or_else(o: Option, f) -> Option {
+    return match o {
+        Option::Some(v) => Option::Some(v),
+        Option::None => f()
+    }
+}
+
+// -- Result fallback --
+
+pub fn res_or_else(r: Result, f) -> Result {
+    return match r {
+        Result::Ok(v) => Result::Ok(v),
+        Result::Err(e) => f(e)
+    }
+}
