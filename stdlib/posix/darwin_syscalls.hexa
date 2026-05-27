@@ -1,0 +1,88 @@
+// HEXA Standard Library — posix/darwin_syscalls
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// macOS (XNU) syscall number table — arm64 — for the 18 syscalls covered by
+// the cross-platform Phase-1 inline-svc campaign. Sibling of
+// stdlib/posix/linux_syscalls.hexa (frontier #3 Linux half — PR #1738); this
+// file covers the Darwin half so callers can dispatch by host-arch + OS via
+// a single lookup surface.
+//
+// Frontier 18-list #3 (RUNTIME.md): "Linux self-host 잔여 17 syscall — …
+// `#if Darwin-arm64 / #else libc` 패턴 → `svc #0x80` 인라인."
+//
+// macOS syscall calling convention (arm64 svc #0x80):
+//   syscall number in x16, args in x0-x5, result in x0 (CF-set on error).
+//   Numbers from xnu `bsd/kern/syscalls.master` (BSD class — top byte 0x02,
+//   but the runtime convention passes the bare BSD number through svc
+//   class-prefix in x16).
+//
+// Numbers below are the BARE BSD syscall numbers (no class-prefix or-mask).
+// The runtime emit pass is responsible for any class-prefix per Darwin ABI.
+//
+// Surface:
+//   pub fn darwin_syscall_arm64(name: str) -> int   — Darwin syscall number (or -1)
+//   pub fn darwin_syscall_count() -> int            — 18
+//   pub fn darwin_syscall_names() -> [str]          — same canonical order as Linux table
+//
+// Together with linux_syscalls.hexa this completes the cross-platform syscall
+// number lookup the Phase-1 emit pass needs.
+
+@pure
+pub fn darwin_syscall_count() -> int {
+    return 18
+}
+
+@pure
+pub fn darwin_syscall_names() -> [str] {
+    return [
+        "read",
+        "write",
+        "open",
+        "close",
+        "mkdir",
+        "dup2",
+        "lseek",
+        "select",
+        "poll",
+        "wait4",
+        "getpid",
+        "getuid",
+        "kill",
+        "fcntl",
+        "ioctl",
+        "stat",
+        "fstat",
+        "mmap",
+        "gettimeofday",
+        "exit"
+    ]
+}
+
+// Darwin (xnu) syscall numbers — bare BSD numbers from
+// bsd/kern/syscalls.master. svc #0x80 with class-prefix in x16 per ABI.
+@pure
+pub fn darwin_syscall_arm64(name: str) -> int {
+    if name == "exit" { return 1 }
+    if name == "read" { return 3 }
+    if name == "write" { return 4 }
+    if name == "open" { return 5 }
+    if name == "close" { return 6 }
+    if name == "wait4" { return 7 }
+    if name == "getpid" { return 20 }
+    if name == "getuid" { return 24 }
+    if name == "kill" { return 37 }
+    if name == "ioctl" { return 54 }
+    if name == "dup2" { return 90 }
+    if name == "fcntl" { return 92 }
+    if name == "select" { return 93 }
+    if name == "gettimeofday" { return 116 }
+    if name == "mkdir" { return 136 }
+    if name == "stat" { return 188 }
+    if name == "fstat" { return 189 }
+    if name == "mmap" { return 197 }
+    if name == "lseek" { return 199 }
+    if name == "poll" { return 230 }
+    return -1
+}
