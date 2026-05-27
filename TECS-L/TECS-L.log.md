@@ -2,6 +2,36 @@
 
 Append-only history sister of `TECS-L.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
+## 2026-05-27T18:25Z · 축 RTSC · RTSC21 · 수학 DFS — realistic 293K 도달 closed-form prediction (system-별 μ_bare)
+
+RTSC20 의 system-별 μ_bare 결정 (H3S=0.20, LaH10=0.14) 을 사용해 실측 hydride
+가 293K 도달하는 λ-증가 조건 closed-form 정량. demiurge DFT 무관, 모든 변수
+inline verify.
+
+- [x] H3S-class realistic: μ_bare=0.20, ω_log=1300, λ=3.0, μ*=0.142 → **293.07K** 🟢
+       ⟹ H3S 가 293K 도달 = **λ 현 2.0 → 3.0 (+50%)** 필요 (chemistry/pressure tweak)
+- [x] LaH10-class λ=2.5: μ_bare=0.14, ω_log=1340, μ*=0.109 → 283.26K 🔴 (FALSIFIED, 293 못 도달)
+- [x] LaH10-class λ=2.55: → 288.31K 🔴 (FALSIFIED, 293 못 도달)
+- [x] LaH10-class λ=2.6: ω_log=1340, μ*=0.109 → **293.32K** 🟢
+       ⟹ LaH10 가 293K 도달 = **λ 현 2.2 → 2.6 (+18%)** 필요 (ternary doping)
+
+⟹ 결론 (realistic 293K closed-form prediction): RTSC closure 의 정량 closed-form:
+   | system | 현재 λ | 293K 도달 λ | λ 증가율 | 현 Tc → 293K gap |
+   |---|---|---|---|---|
+   | H3S | 2.0 | **3.0** | **+50%** | 203K → 293K (+90K) |
+   | LaH10 | 2.2 | **2.6** | **+18%** | 250K → 293K (+43K) |
+
+   → **LaH10 family 가 H3S 보다 293K 에 훨씬 가까움**. LaH10-class ternary
+     (예: LaBeH8, YH10) 의 λ +18% 증가가 strong-coupling chemistry 로 가능 →
+     ambient/low-P 293K 후보 0순위. H3S 는 +50% λ 가 비현실적 → ambient 293K
+     불가 (binary sulfide hydride 의 closed-negative final closure).
+
+verify (inline, --no-absorb):
+  allen_dynes_full 3.0 1300 1950 0.142 → 293.074  🟢 (H3S +50% λ)
+  allen_dynes_full 2.5 1340 2010 0.109 → 283.257  🔴 (LaH10 λ=2.5 floor)
+  allen_dynes_full 2.55 1340 2010 0.109 → 288.31  🔴
+  allen_dynes_full 2.6 1340 2010 0.109 → 293.322  🟢 (LaH10 +18% λ)
+
 ## 2026-05-27T18:13Z · 축 RTSC · RTSC19 · 수학 DFS — H3S/LaH10 realistic μ* fit-back + Morel-Anderson tension
 
 RTSC18 의 closed-negative 후속. full-AD 가 실측 Tc 도달하는 μ* 를 fit-back 으로
