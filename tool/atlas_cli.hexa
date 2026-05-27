@@ -1730,6 +1730,60 @@ fn _build_raw_F_numerical(id: string, fn_name: string, arg_str: string, value_st
            "  provenance = \"tool/atlas_cli.hexa register --from-verify (direct node-gen → embedded.gen.hexa SSOT; 🟢 numerical)\""
 }
 
+// ── 6-tier node-gen (g5 rubric completeness) ─────────────────────────
+// register's --from-verify covers 🔵/🟢 (SUPPORTED, recompute-backed). The
+// remaining four g5 tiers (🟡 citation · 🟠 deferred · 🔴 falsified · ⚪ fenced)
+// carry NO in-process recompute — their evidence is external (DOI · blocker ·
+// falsifier id · honest-fence). Each builder emits a kind-F (or kind-X for
+// ⚪) node whose `tier =` field is the g5 verdict, so `atlas lookup --tier <T>`
+// and `atlas stats --tier-breakdown` can surface the full verdict spectrum.
+// This roots g63 (FALSIFIED never skipped) + honest-triad (claim+citation+
+// severity) in the atlas SSOT itself, not scattered markdown.
+
+// _build_raw_falsified — 🔴 FALSIFIED closed-negative (kind F). NO recompute:
+// the claim is invalidated, the falsifier id + citation carry the evidence.
+fn _build_raw_falsified(id: string, claim: string, falsifier: string, citation: string, today: string) -> string {
+    return "@F " + id + " = " + claim + " :: falsified [d=" + today + " active]\n" +
+           "  tier = \"🔴 FALSIFIED\"\n" +
+           "  closed_negative = true\n" +
+           "  falsifier = \"" + falsifier + "\"\n" +
+           "  cite = \"" + citation + "\"\n" +
+           "  provenance = \"tool/atlas_cli.hexa register --from-falsify (closed-negative · g63 · no recompute; falsifier carries evidence)\""
+}
+
+// _build_raw_citation — 🟡 SUPPORTED-BY-CITATION (kind F). Literature/atlas
+// registered with a DOI + verbatim note; NO hexa recompute (never auto-🔵).
+fn _build_raw_citation(id: string, claim: string, doi: string, note: string, today: string) -> string {
+    return "@F " + id + " = " + claim + " :: citation [d=" + today + " active]\n" +
+           "  tier = \"🟡 SUPPORTED-BY-CITATION\"\n" +
+           "  doi = \"" + doi + "\"\n" +
+           "  note = \"" + note + "\"\n" +
+           "  cite = \"literature-registered · no hexa recompute (g5 🟡 · never auto-🔵)\"\n" +
+           "  provenance = \"tool/atlas_cli.hexa register --from-citation (external DOI evidence)\""
+}
+
+// _build_raw_deferred — 🟠 INSUFFICIENT/DEFERRED (kind F). No calc path / blocked
+// on an external dependency (hardware · measurement · API). blocker + eta carry
+// the gate.
+fn _build_raw_deferred(id: string, claim: string, blocker: string, eta: string, today: string) -> string {
+    return "@F " + id + " = " + claim + " :: deferred [d=" + today + " active]\n" +
+           "  tier = \"🟠 INSUFFICIENT/DEFERRED\"\n" +
+           "  blocker = \"" + blocker + "\"\n" +
+           "  eta = \"" + eta + "\"\n" +
+           "  cite = \"deferred on external dep (g5 🟠 · no calc path)\"\n" +
+           "  provenance = \"tool/atlas_cli.hexa register --from-defer (external-dep blocker)\""
+}
+
+// _build_raw_fenced — ⚪ SPECULATION-FENCED (kind X experimental). Imagination /
+// metaphor / hypothesis honestly fenced — verify N/A, SF ≠ proven.
+fn _build_raw_fenced(id: string, claim_text: string, fence_kind: string, today: string) -> string {
+    return "@X " + id + " = " + claim_text + " :: fenced [d=" + today + " active]\n" +
+           "  tier = \"⚪ SPECULATION-FENCED\"\n" +
+           "  fence_kind = \"" + fence_kind + "\"\n" +
+           "  cite = \"honest fence (g5 ⚪ · verify N/A · SF ≠ proven)\"\n" +
+           "  provenance = \"tool/atlas_cli.hexa register --from-fence (imagination/metaphor honest-fenced)\""
+}
+
 // ── live n6 write path (the single absorption sink) ──────────────────
 // register appends the node's .n6-grammar block (ev.raw) DIRECTLY to the
 // live n6/atlas.n6 SSOT — the very file `hexa atlas lookup/stats/dump/hash`
@@ -2400,6 +2454,14 @@ fn cmd_register(rest: array) {
     let mut drill_seed = ""
     let mut drill_rounds = 1
     let mut drill_engine = "mk9"
+    // 6-tier (g5) extra-evidence flags: 🔴 falsify · 🟡 citation · 🟠 defer · ⚪ fence
+    let mut nt_falsifier = ""
+    let mut nt_citation = ""
+    let mut nt_doi = ""
+    let mut nt_note = ""
+    let mut nt_blocker = ""
+    let mut nt_eta = ""
+    let mut nt_kind = "hypothesis"
     let mut positional = []
     let mut i = 0
     let n = len(rest)
@@ -2409,6 +2471,17 @@ fn cmd_register(rest: array) {
         else if a == "--compute" { want_compute = true; i = i + 1 }
         else if a == "--from-drill" || a == "--from-kick" { from_verb = "drill"; i = i + 1 }
         else if a == "--from-discovery" && i + 1 < n { from_verb = "discovery"; discovery_slug = to_string(rest[i + 1]); i = i + 2 }
+        else if a == "--from-falsify" { from_verb = "falsify"; i = i + 1 }
+        else if a == "--from-citation" { from_verb = "citation"; i = i + 1 }
+        else if a == "--from-defer" { from_verb = "defer"; i = i + 1 }
+        else if a == "--from-fence" { from_verb = "fence"; i = i + 1 }
+        else if a == "--falsifier" && i + 1 < n { nt_falsifier = to_string(rest[i + 1]); i = i + 2 }
+        else if a == "--citation" && i + 1 < n { nt_citation = to_string(rest[i + 1]); i = i + 2 }
+        else if a == "--doi" && i + 1 < n { nt_doi = to_string(rest[i + 1]); i = i + 2 }
+        else if a == "--note" && i + 1 < n { nt_note = to_string(rest[i + 1]); i = i + 2 }
+        else if a == "--blocker" && i + 1 < n { nt_blocker = to_string(rest[i + 1]); i = i + 2 }
+        else if a == "--eta" && i + 1 < n { nt_eta = to_string(rest[i + 1]); i = i + 2 }
+        else if a == "--kind" && i + 1 < n { nt_kind = to_string(rest[i + 1]); i = i + 2 }
         else if a == "--id" && i + 1 < n { id_override = to_string(rest[i + 1]); i = i + 2 }
         else if a == "--source" && i + 1 < n { node_source = to_string(rest[i + 1]); i = i + 2 }
         else if a == "--url" && i + 1 < n { node_url = to_string(rest[i + 1]); i = i + 2 }
@@ -2422,7 +2495,12 @@ fn cmd_register(rest: array) {
             println("       hexa atlas register --from-verify wilson_hilferty_p <t> <df> <v> (🟢)")
             println("       hexa atlas register --from-drill  --seed \"<text>\" [--rounds N] [--engine mk9|mk10] [--id <id>]")
             println("       hexa atlas register --from-discovery <slug>                     (fold .discoveries/<slug>.tape atoms)")
+            println("       hexa atlas register --from-falsify  <claim_id> [<desc>] --falsifier <id> [--citation <ref>]  (🔴 closed-negative)")
+            println("       hexa atlas register --from-citation <fn> [<args> <v>] --doi <doi> [--note <quote>]           (🟡 literature)")
+            println("       hexa atlas register --from-defer    <claim_id> --blocker <dep> [--eta <approx>]              (🟠 deferred)")
+            println("       hexa atlas register --from-fence    \"<claim text>\" [--kind metaphor|sf|hypothesis]           (⚪ fenced)")
             println("")
+            println("g5 6-tier set: 🔵🟢 (--from-verify, recompute) · 🟡 (--from-citation) · 🟠 (--from-defer) · 🔴 (--from-falsify) · ⚪ (--from-fence)")
             println("Options (verify): --source \"<attribution>\"  external provenance (OEIS id, DOI) → node `source =` field")
             println("                  --url    \"<link>\"         CC-BY-SA / DOI link → node `url =` field")
             println("")
@@ -2527,6 +2605,110 @@ fn cmd_register(rest: array) {
             println("error: " + rerr)
             exit(5)
         }
+        return
+    }
+
+    // ── 🔴 FALSIFIED — closed-negative (g63 · no recompute) ──────────
+    if from_verb == "falsify" {
+        if len(positional) < 1 || len(nt_falsifier) == 0 {
+            println("error: --from-falsify needs <claim_id> [<desc...>] --falsifier <id> [--citation <ref>]")
+            println("       see: hexa atlas register --help")
+            exit(2)
+        }
+        let claim_id = to_string(positional[0])
+        let mut desc_arr = []
+        let mut di = 1
+        while di < len(positional) { desc_arr.push(to_string(positional[di])); di = di + 1 }
+        let mut claim = claim_id
+        if len(desc_arr) > 0 { claim = claim_id + " " + desc_arr.join(" ") }
+        let mut id = id_override
+        if len(id) == 0 { id = "falsified-" + _slug_register(claim_id) }
+        let today = _today_compact()
+        let raw = _build_raw_falsified(id, claim, nt_falsifier, nt_citation, today)
+        println("hexa atlas register --from-falsify " + claim_id)
+        println("  tier   = 🔴 FALSIFIED  (closed-negative · falsifier " + nt_falsifier + ")")
+        let ferr = _fold_into_embedded("F", raw, id)
+        if len(ferr) > 0 {
+            if embed_is_skip(ferr) { println("  skip   = " + id + " (already in atlas — idempotent)"); return }
+            println("error: " + ferr); exit(5)
+        }
+        println("  atlas  = folded @F " + id + " → live (🔴 closed-negative)")
+        return
+    }
+
+    // ── 🟡 SUPPORTED-BY-CITATION — literature, no recompute ──────────
+    if from_verb == "citation" {
+        if len(positional) < 1 || len(nt_doi) == 0 {
+            println("error: --from-citation needs <claim_fn> [<args...> <value>] --doi <doi> [--note <quote>]")
+            println("       see: hexa atlas register --help")
+            exit(2)
+        }
+        let cfn = to_string(positional[0])
+        let mut ca = []
+        let mut ci = 1
+        while ci < len(positional) { ca.push(to_string(positional[ci])); ci = ci + 1 }
+        let claim = cfn + "(" + ca.join(",") + ")"
+        let mut id = id_override
+        if len(id) == 0 { id = "cited-" + _slug_register(cfn) }
+        let today = _today_compact()
+        let raw = _build_raw_citation(id, claim, nt_doi, nt_note, today)
+        println("hexa atlas register --from-citation " + cfn)
+        println("  tier   = 🟡 SUPPORTED-BY-CITATION  (doi " + nt_doi + ")")
+        let ferr = _fold_into_embedded("F", raw, id)
+        if len(ferr) > 0 {
+            if embed_is_skip(ferr) { println("  skip   = " + id + " (already in atlas — idempotent)"); return }
+            println("error: " + ferr); exit(5)
+        }
+        println("  atlas  = folded @F " + id + " → live (🟡 citation)")
+        return
+    }
+
+    // ── 🟠 INSUFFICIENT/DEFERRED — external-dep blocker ──────────────
+    if from_verb == "defer" {
+        if len(positional) < 1 || len(nt_blocker) == 0 {
+            println("error: --from-defer needs <claim_id> --blocker <dep> [--eta <approx>]")
+            println("       see: hexa atlas register --help")
+            exit(2)
+        }
+        let dclaim = to_string(positional[0])
+        let mut id = id_override
+        if len(id) == 0 { id = "deferred-" + _slug_register(dclaim) }
+        let today = _today_compact()
+        let raw = _build_raw_deferred(id, dclaim, nt_blocker, nt_eta, today)
+        println("hexa atlas register --from-defer " + dclaim)
+        println("  tier   = 🟠 INSUFFICIENT/DEFERRED  (blocker " + nt_blocker + ")")
+        let ferr = _fold_into_embedded("F", raw, id)
+        if len(ferr) > 0 {
+            if embed_is_skip(ferr) { println("  skip   = " + id + " (already in atlas — idempotent)"); return }
+            println("error: " + ferr); exit(5)
+        }
+        println("  atlas  = folded @F " + id + " → live (🟠 deferred)")
+        return
+    }
+
+    // ── ⚪ SPECULATION-FENCED — honest imagination/metaphor fence ─────
+    if from_verb == "fence" {
+        if len(positional) < 1 {
+            println("error: --from-fence needs \"<claim text>\" [--kind metaphor|sf|hypothesis]")
+            println("       see: hexa atlas register --help")
+            exit(2)
+        }
+        let mut fa = []
+        let mut fi = 0
+        while fi < len(positional) { fa.push(to_string(positional[fi])); fi = fi + 1 }
+        let ftext = fa.join(" ")
+        let mut id = id_override
+        if len(id) == 0 { id = "fenced-" + _slug_register(ftext) }
+        let today = _today_compact()
+        let raw = _build_raw_fenced(id, ftext, nt_kind, today)
+        println("hexa atlas register --from-fence")
+        println("  tier   = ⚪ SPECULATION-FENCED  (kind " + nt_kind + ")")
+        let ferr = _fold_into_embedded("X", raw, id)
+        if len(ferr) > 0 {
+            if embed_is_skip(ferr) { println("  skip   = " + id + " (already in atlas — idempotent)"); return }
+            println("error: " + ferr); exit(5)
+        }
+        println("  atlas  = folded @X " + id + " → live (⚪ fenced)")
         return
     }
 
