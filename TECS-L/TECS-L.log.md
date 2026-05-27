@@ -2,6 +2,30 @@
 
 Append-only history sister of `TECS-L.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
+## 2026-05-27T17:28Z · 축 RTSC · RTSC10 · 수학 DFS — Morel-Anderson μ* 의 ω_ph 의존성 (표준 μ*=0.10 가정의 재검토)
+
+RTSC9 (λ→∞ asymptote) 의 깊이 확장. Coulomb pseudopotential μ* 는 단순 상수가
+아니라 Morel-Anderson 1962 의 Tolmachev log renormalization 으로 phonon cutoff
+ω_ph 에 의존: μ* = μ_bare / (1 + μ_bare·ln(E_F/ω_ph)). hydride 의 높은 ω_log
+영역에서 μ* 가 얼마나 커지는지 inline verify.
+
+- [x] canonical source 재현: μ_bare=0.3 E_F=10000 ω_ph=100 → μ*=**0.125968** 🟢 (verify_cli :1486 doc)
+- [x] hydride 영역: μ_bare=0.3 E_F=10000 ω_ph=1500 (h3cl ω_log=1350 scale) → μ*=**0.191188** 🟢
+- [x] metallic H 영역: μ_bare=0.3 E_F=10000 ω_ph=3000 (metallic-H ω_log scale) → μ*=**0.220395** 🟢
+
+⟹ 결론 (표준 가정 재검토): RTSC standard μ*=0.10 가정 은 low-ω_ph (transition
+   metal scale) 에서만 정합. hydride 영역 ω_ph=1500K 면 μ*≈0.191 (≈2× 표준값).
+   metallic-H ω_ph=3000K 면 μ*≈0.220. 즉 같은 μ_bare 라도 hydride 의 phonon
+   energy 가 높을수록 Tolmachev log renormalization 약화 → μ* 가 커짐 →
+   RTSC 더 어려움. RTSC5 의 ω_log 천장 (μ*=0.10 가정 1530K) 는 lower bound;
+   현실적 (μ*=0.19) 천장은 +11% 더 빡셈 (대략 1700K). h3cl ω_log=1350K
+   margin 이 더욱 좁아짐.
+
+verify (inline, morel_anderson_mustar <μ_bare> <E_F> <ω_ph>, --no-absorb):
+  morel_anderson_mustar 0.3 10000 100  → 0.125968 (|Δ|=3.3e-7,   --tol 0.001) 🟢
+  morel_anderson_mustar 0.3 10000 1500 → 0.191188 (|Δ|=1.9e-4,   --tol 0.005) 🟢
+  morel_anderson_mustar 0.3 10000 3000 → 0.220395 (|Δ|=4.0e-4,   --tol 0.005) 🟢
+
 ## 2026-05-27T17:20Z · 축 RTSC · RTSC9 · 수학 DFS — λ→∞ asymptotic Tc/ω_log 천장 (closed-form 절대 하한)
 
 RTSC8 (McMillan prefactor) 의 깊이 확장. Allen-Dynes simple 의 λ→∞ 점근 한계
