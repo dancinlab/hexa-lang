@@ -2472,7 +2472,38 @@ flip = step-4 (자평 400-800 cycle, 빌드 아키텍처 변경, 가장 깊은 t
 = 이 native-asm flip 의 현 완성도 조사 → arena_init 등 단일 floor primitive 부터
 native-emit 교체 + fixpoint 검증 점진 wiring.
 
-### 2026-05-26 — `.c none` feasibility roadmap (arithmetic core DE-RISKED portable — refines the floor note above)
+### 2026-05-27 — `.c none` C-SOURCE-LOGIC port lane EXHAUSTED (62 fns delegated · remaining = irreducible repr+arena+GC floor → phase-H)
+
+Milestone-exhaustion investigation (user: "마일스톤 고갈시까지 조사·기록·진행").
+Surveyed the runtime.c→hexa port frontier against the roadmap below:
+
+**Finding — the C-source-logic layer is essentially DONE.** `runtime_core.c`
+carries **62 distinct `return rt_*(...)` delegations** (under
+`HEXA_HAS_HEXA_RT_STDLIB`, 153 conditional branches; `build_aprime.sh:120`
+defines the flag → these are LIVE + fixpoint-verified in aprime_cc). Coverage:
+- arithmetic core 5/5 (`rt_add/sub/mul/div/mod`) ✓ (#1226/#1231 lane EXHAUSTED)
+- comparison 4-op (`rt_cmp_lt/gt/le/ge`) ✓ (#1231)
+- math (`rt_abs_int/float · ceil · floor · log2 · log10 · pow_int/float · fma_*`) ✓
+- arrays (`rt_array_pop/shift/reverse_float/sort_float`) ✓
+- maps (`rt_map_keys/values/entries/merge/remove/set/invert/from_array/...`) ✓
+- string hot-path (`rt_to_string_scalar/array/map · rt_str_join_str`) ✓
+- format/pad (`rt_format · rt_format_float_f/sci · rt_pad_left/right`) ✓
+- number-parse (`rt_atoll · rt_str_parse_float`) ✓
+
+**Remaining = the IRREDUCIBLE FLOOR (roadmap items 4-5), NOT C-source logic:**
+1. arena allocator + GC → needs `@asm` memory primitives (mmap/atomics).
+2. HexaVal tagged-union REPR — the codegen-emitted value type (the genuine
+   `.c none` decision point: codegen keeps emitting the C struct = irreducible,
+   OR a codegen-unbox rearchitecture = the **HEXA_BACKEND flip / phase-H
+   hexa-native backend**).
+
+**Conclusion (closure-is-physical-limit):** the single-session-closeable
+C-source-logic porting lane is DRAINED. `.c none` down to an `@asm`+repr floor
+is Go's exact end-state; reaching it requires the phase-H native backend
+(architectural, multi-session — `project-hexa-selfhosted-state-2026-05-26`),
+not another per-fn port. No tractable single-unit runtime port remains; the
+frontier is the phase-H backend work.
+
 
 User goal `.c none closure` = runtime.c (13.6K L) + runtime_core.c (7.9K L) →
 hexa, zero linked `.c` in aprime_cc (Go-1.5 model · `@asm` floor only). This
