@@ -1,0 +1,77 @@
+// HEXA Standard Library — core/trait_default_fixture
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Trait `Default` design fixture — documents the planned API surface for
+// the `Default` core trait (RUNTIME.flip B5.trait-default). The actual
+// trait-dispatch typechecker + monomorphization is a multi-PR compiler
+// campaign (RFC #532 design landed, scaffold branch
+// `rfc-082-impl-a-trait-bound-scaffold-2026-05-23` active). This file
+// pins the **caller-facing concrete-type zero-value wrappers** so callers
+// can compile against a stable surface while the polymorphic trait
+// dispatch lands.
+//
+// RUNTIME.flip B5.trait-default — `Default` trait monomorphic surface:
+// zero-value constructors for the core scalar + array types, ready to be
+// replaced by a single generic `default[T: Default]() -> T` when the
+// typechecker gains trait support.
+//
+// What this file is NOT:
+//   - it is NOT a trait declaration (the compiler doesn't yet parse
+//     `trait` / `impl` syntax for user-level types)
+//   - it does NOT enable polymorphic dispatch over user types
+//   - it does NOT exercise the coherence/orphan rule decision
+//
+// What this file IS:
+//   - the concrete-monomorphic `_int` / `_float` / `_str` / `_bool` /
+//     `_array_int` / `_array_float` instantiations of the planned
+//     `Default` trait surface, ready to be replaced by a single generic
+//     `default[T: Default]() -> T` when the typechecker gains trait
+//     support
+//   - a parse-clean fixture that the trait-impl campaign can A/B test
+//     against
+//   - a documentation of intended zero-value semantics per type
+//
+// Planned trait surface (RFC #532, mirrors trait_design_fixture):
+//
+//   trait Default { fn default() -> Self }
+//
+// Coherence/orphan rule (D2 decision pending) — see
+// trait_design_fixture.hexa for the shared decision context.
+
+// -- Default — monomorphic scalar zero-values --
+
+@pure
+pub fn default_int() -> int {
+    return 0
+}
+
+@pure
+pub fn default_float() -> float {
+    return 0.0
+}
+
+@pure
+pub fn default_str() -> str {
+    return ""
+}
+
+@pure
+pub fn default_bool() -> bool {
+    return false
+}
+
+// -- Default — monomorphic array zero-values (empty arrays) --
+
+@pure
+pub fn default_array_int() -> [int] {
+    let out: [int] = []
+    return out
+}
+
+@pure
+pub fn default_array_float() -> [float] {
+    let out: [float] = []
+    return out
+}
