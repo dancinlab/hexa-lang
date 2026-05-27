@@ -154,7 +154,54 @@ The same mechanic generalises: GEMM-epilogue, norm surface, attention block, aut
 | `F-FUSION-ATTENTION-FLASH` | single-kernel fused attention (Q·K · softmax · V) | 🔵 + wall ruled-out |
 | §5j `Custom reductions` — LogSumExp 1-kernel (#1657) | numerically-stable max-shift + exp + log + sum in one kernel, silicon-validated rel_err 1.7e-10 | 🟢 SUPPORTED-NUMERICAL |
 
-Detail: `stdlib/flame/README.md` (canonical perf table + RETRACTION note) · `stdlib/flame/PERF.md` · `stdlib/flame/PLAN.md` (campaign log + cycle ledger) · `self/forge/PLAN.md` · `self/forge/PARADIGM.md` (Phase R measured verdicts) · `GPU.md` §1h-1o fusion-moat fires · `state/anima_handoff_2026_05_19.md` (integration recipe).
+### 🎯 Who benefits — 7 user personas (the pain → the gain)
+
+cuBLAS-using stacks ship a champion *part* (the GEMM kernel, already at roofline). hexa wins where **the part isn't the bottleneck — the chain around it is**. Whether that helps *you* depends on which pain you actually carry:
+
+| 페르소나 | 갖고 있는 통증 | hexa 가 주는 이득 |
+|---|---|---|
+| 🧪 **LLM trainer / inference engineer** | attention · norm · decode 가 memory- / launch-bound 라 PyTorch 위에서 답답함 | fusion 으로 그 영역 직타격 — 3-op chain 1 launch + 1 HBM-write (66 % ↓) · FlashAttn-style 한 커널 |
+| 🔬 **GPU kernel researcher** | cuBLAS 는 블랙박스 — SASS 까지 보고 싶은데 못 봄 | source → PTX → SASS 가시. cubin 도 in-repo |
+| 📦 **Single-binary deployer** (edge / embedded / offline) | Python + libtorch 수 GB 못 들고 감 | native arm64 / x86_64 단일 binary · no Python in trained artifact |
+| 🔢 **비-IEEE 산술 필요** (posit · interval · n=6 lattice) | cuBLAS 는 IEEE float 만 | custom-dtype codegen — 새 산술도 같은 fusion path 위에서 |
+| 🧠 **Autograd-debug 필요** | PyTorch C++ Autograd 는 블랙박스, 디버그 못 함 | `ag_tape` 전체가 hexa source — 한 줄씩 따라갈 수 있음 |
+| 🎯 **byte-equal correctness 필요** (과학·재현성) | PyTorch 는 비결정성 흔함, run-to-run drift | byte-eq oracle + FMA-contraction-off recipe, max\|Δ\| = 0 |
+| ⚡ **빠른 codegen iteration** | hand-CUDA 로 매 fusion 재작성 지옥 | 컴파일러가 자동 fusion — `@gpu_kernel` 한 번이면 됨 |
+
+```
+누가 hexa 의 fusion 격차에 가장 크게 올라타나?
+                cuBLAS-using stack ─────────┐
+                    │  (거대 standalone GEMM 잘 함, 못 이김)
+                    ▼
+  ┌───────────────────────────────────────┐
+  │  hexa fusion 이 가장 크게 작동하는 교집합 │
+  │   ① memory-bound 패턴 多                │  ← LLM training/inference
+  │   ② Python-free deploy                  │  ← edge · embedded · offline
+  │   ③ correctness OR 가시성 필요          │  ← 연구 · 과학 · 재현성
+  │   ④ chain 긴 작업 (decode/optim/AdamW)  │  ← training loop
+  └───────────────────────────────────────┘
+```
+
+### 🍳 fusion 이 효과 큰 곳 — memory hierarchy 비대칭
+
+GPU 레지스터 ~1 cycle vs HBM ~600 cycle. cuBLAS 는 매 op 끝마다 결과를 HBM 에 쓰고 다음 op 가 다시 읽음. fusion 은 그 왕복을 없앤다.
+
+| 시나리오 | 왜 효과 큰가 | 실측 |
+|---|---|---|
+| **GEMM + elementwise 에필로그** (bias · ReLU · GeLU · dropout) | GEMM 결과 = 큰 텐서, 즉시 elementwise reuse | F-FUSION-EPILOGUE 66.7 % ↓ |
+| **norm 표면** (LN / RMSNorm / Softmax / SwiGLU) | reduce 직후 인접 op reuse, memory-bound | AxisA LN 66 % · RMS 59 % · SM 65 % · SwiGLU 63 % |
+| **Attention block** (Q·Kᵀ · softmax · V) | 중간 attention 행렬 거대 → HBM round-trip 피하기 핵심 | F-FUSION-ATTENTION-FLASH 🔵 |
+| **작은 op chain** (LLM autoregressive decode · AdamW step) | op 자체보다 launch overhead 가 dominant | F-FUSION-LAUNCH-AMORT 5-op → 1 launch |
+
+```
+fusion 이득  =  (chain 길이)  ×  (op 의 memory-bound 정도)  ×  (중간 텐서 크기)
+```
+
+효과가 *안 생기는* 곳도 정직하게: 단일 거대 GEMM (이미 compute-bound · cuBLAS roofline 동률) · 단일 op · 너무 작은 GEMM (launch-bound 자체가 문제).
+
+**한 줄로**: cuBLAS = *1품요리 장인*(김치찌개 세계 최고). hexa fusion = *한 팬 요리*(여러 작업을 도마 위에서 연속). 위 4 시나리오가 *자기 워크로드의 시간 분포와 겹치는* 사용자가 hexa 의 진짜 격차에 올라탄다.
+
+Detail: `stdlib/flame/README.md` (canonical perf table + RETRACTION note) · `stdlib/flame/PERF.md` · `stdlib/flame/PLAN.md` (campaign log + cycle ledger) · `self/forge/PLAN.md` · `self/forge/PARADIGM.md` (Phase R measured verdicts) · `GPU.md` §1h-1o fusion-moat fires · `GPU.easy.md` (친근 페르소나 사이드) · `state/anima_handoff_2026_05_19.md` (integration recipe).
 
 * * *
 
