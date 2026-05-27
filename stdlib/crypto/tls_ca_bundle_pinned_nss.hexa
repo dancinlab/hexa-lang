@@ -1,0 +1,113 @@
+// HEXA Standard Library — crypto/tls_ca_bundle_pinned_nss
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Option A — Pinned Mozilla NSS PEM subset.
+//
+// Compact pinned trust roots shipped IN the binary (~30-40 roots from
+// ISRG / DigiCert / Let's Encrypt families). 100% hexa-self — no FFI, no
+// C dependency. Reproducible · zero IO at startup. Sister to
+// `stdlib/crypto/tls_ca_bundle.hexa` (caller-facing API stub, kind="none")
+// and `stdlib/crypto/tls_ca_bundle_caller_supplied.hexa` (Option C),
+// `stdlib/crypto/tls_ca_bundle_hybrid.hexa` (Option D).
+//
+// RUNTIME.flip B2.ca-pinned-nss — Mozilla NSS PEM subset (compact, e.g.
+// 30-40 ISRG/DigiCert/Let's Encrypt roots). pinned implementation; the
+// bundle bytes go in a sibling .pem-like data file. Option A — 100%
+// hexa-self.
+//
+// SCAFFOLD STATUS — surface only. PEM payloads are placeholder strings
+// shaped like real PEM (BEGIN/END CERTIFICATE wrappers) so the dispatcher
+// + index-bounds + count are exercised; REAL Mozilla NSS PEM bytes ship
+// in a follow-up PR (mechanical: paste the binary-distribution PEM bodies
+// into the `_isrg_root_x1_pem()` / `_digicert_global_root_g2_pem()` /
+// `_lets_encrypt_isrg_x2_pem()` returns). verify_chain delegates to the
+// future `x509_chain` primitive — for now returns kind="no-bundle".
+//
+// Surface (4 fn · all `tls_ca_bundle_pinned_nss_*` prefix):
+//   pub fn tls_ca_bundle_pinned_nss_source() -> str
+//   pub fn tls_ca_bundle_pinned_nss_count() -> int
+//   pub fn tls_ca_bundle_pinned_nss_pem(index: int) -> str
+//   pub fn tls_ca_bundle_pinned_nss_verify_chain(leaf_der: [int],
+//        intermediates: [[int]]) -> TlsCaVerifyResult
+//
+// Reuses `TlsCaVerifyResult` from `stdlib/crypto/tls_ca_bundle` (no
+// redeclaration — single SSOT for the verify-result shape so callers can
+// dispatch across A/C/D bundles uniformly).
+
+use "stdlib/crypto/tls_ca_bundle"
+
+// Number of pinned trust roots currently embedded. SCAFFOLD value = 3
+// (one ISRG · one DigiCert · one Let's Encrypt placeholder). The real
+// drop-in will grow this to ~30-40.
+let _PINNED_NSS_COUNT: int = 3
+
+@pure
+fn _isrg_root_x1_pem() -> str {
+    // ISRG Root X1 (Let's Encrypt root) — PEM body placeholder. Real
+    // base64 ships in the follow-up PR; the wrapper is shape-correct so
+    // PEM parsers see a well-formed BEGIN/END envelope.
+    return "-----BEGIN CERTIFICATE-----\nPLACEHOLDER_ISRG_ROOT_X1_BASE64_BODY\n-----END CERTIFICATE-----\n"
+}
+
+@pure
+fn _digicert_global_root_g2_pem() -> str {
+    // DigiCert Global Root G2 — PEM body placeholder. Real base64 ships
+    // in the follow-up PR.
+    return "-----BEGIN CERTIFICATE-----\nPLACEHOLDER_DIGICERT_GLOBAL_ROOT_G2_BASE64_BODY\n-----END CERTIFICATE-----\n"
+}
+
+@pure
+fn _lets_encrypt_isrg_x2_pem() -> str {
+    // ISRG Root X2 (Let's Encrypt ECDSA root) — PEM body placeholder.
+    // Real base64 ships in the follow-up PR.
+    return "-----BEGIN CERTIFICATE-----\nPLACEHOLDER_ISRG_ROOT_X2_BASE64_BODY\n-----END CERTIFICATE-----\n"
+}
+
+@pure
+pub fn tls_ca_bundle_pinned_nss_source() -> str {
+    return "pinned-nss"
+}
+
+@pure
+pub fn tls_ca_bundle_pinned_nss_count() -> int {
+    return _PINNED_NSS_COUNT
+}
+
+@pure
+pub fn tls_ca_bundle_pinned_nss_pem(index: int) -> str {
+    if index < 0 {
+        return ""
+    }
+    if index >= _PINNED_NSS_COUNT {
+        return ""
+    }
+    if index == 0 {
+        return _isrg_root_x1_pem()
+    }
+    if index == 1 {
+        return _digicert_global_root_g2_pem()
+    }
+    if index == 2 {
+        return _lets_encrypt_isrg_x2_pem()
+    }
+    // Unreachable given the bounds checks above; defensive fallback.
+    return ""
+}
+
+@pure
+pub fn tls_ca_bundle_pinned_nss_verify_chain(leaf_der: [int], intermediates: [[int]]) -> TlsCaVerifyResult {
+    // SCAFFOLD — real verify_chain delegates to the (pending) x509_chain
+    // primitive: parse `leaf_der` + each intermediate, walk subject/issuer,
+    // verify each signature with the parent's SPKI, terminate at a
+    // matching pinned root, check notBefore/notAfter on every link. For
+    // now we return "no-bundle" so the surface compiles and a follow-up
+    // PR can swap the body without churning callers.
+    return TlsCaVerifyResult {
+        kind: "no-bundle",
+        matched_root_index: -1,
+        chain_depth: len(intermediates),
+        failing_subject: ""
+    }
+}
