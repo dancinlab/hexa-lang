@@ -685,6 +685,67 @@ fn rt_str_len() {
     return c
 }
 
+// ── rt_memset ────────────────────────────────────────────────
+// memset(x0=dst, x1=byte_val, x2=len) — write low byte of x1 to
+// dst[0 .. len-1]. Pure byte-store loop; no relocation, no arena
+// state, no HexaVal touch — the smallest unimplemented runtime
+// leaf after the rt_arena_* / rt_str_len family (B9.6a / F3).
+//
+// Leaf function (no prologue — like rt_arena_alloc): the loop uses
+// only caller-saved x3 as a scratch counter, so no frame is needed.
+//
+// Algorithm:
+//   mov x3, #0            ; i = 0
+//   loop: cmp x3, x2      ; i == len?
+//         b.hs done       ; if i >= len, return
+//         strb w1, [x0, x3]; dst[i] = (byte)val
+//         add x3, x3, #1   ; i++
+//         b loop
+//   done: ret
+//
+// 7 instructions, 28 bytes. Encodings validated against
+// `as -arch arm64` disassembly (B9.6a self-emit increment).
+
+fn rt_memset() {
+    let mut c = []
+    // mov x3, #0  (counter i)        0xD2800003
+    c.push(3)
+    c.push(0)
+    c.push(128)
+    c.push(210)
+    // loop: cmp x3, x2               0xEB02007F
+    c.push(127)
+    c.push(0)
+    c.push(2)
+    c.push(235)
+    // b.hs done (+4 instrs = +16)    0x54000082
+    c.push(130)
+    c.push(0)
+    c.push(0)
+    c.push(84)
+    // strb w1, [x0, x3]              0x38236801
+    c.push(1)
+    c.push(104)
+    c.push(35)
+    c.push(56)
+    // add x3, x3, #1                 0x91000463
+    c.push(99)
+    c.push(4)
+    c.push(0)
+    c.push(145)
+    // b loop (-4 instrs = -16)       0x17FFFFFC
+    c.push(252)
+    c.push(255)
+    c.push(255)
+    c.push(23)
+    // done: ret                      0xD65F03C0
+    c.push(192)
+    c.push(3)
+    c.push(95)
+    c.push(214)
+    return c
+}
+
 // ═══════════════════════════════════════════════════════════════
 // NEON SIMD string operations (HX5: AI-native algorithm replacement)
 // ═══════════════════════════════════════════════════════════════
@@ -1472,6 +1533,7 @@ fn test_runtime_arm64() {
     let alloc_bytes = rt_alloc()
     let free_bytes = rt_free()
     let slen = rt_str_len()
+    let mset = rt_memset()
     let ainit = rt_arena_init()
     let aalloc = rt_arena_alloc()
     let areset = rt_arena_reset()
@@ -1485,6 +1547,7 @@ fn test_runtime_arm64() {
     println("  rt_alloc         : " + to_string(len(alloc_bytes)) + " bytes")
     println("  rt_free          : " + to_string(len(free_bytes)) + " bytes")
     println("  rt_str_len       : " + to_string(len(slen)) + " bytes")
+    println("  rt_memset        : " + to_string(len(mset)) + " bytes")
     println("  rt_arena_init    : " + to_string(len(ainit)) + " bytes")
     println("  rt_arena_alloc   : " + to_string(len(aalloc)) + " bytes")
     println("  rt_arena_reset   : " + to_string(len(areset)) + " bytes")
@@ -1501,6 +1564,8 @@ fn test_runtime_arm64() {
     if len(alloc_bytes) != 68 { println("  FAIL: rt_alloc expected 68, got " + to_string(len(alloc_bytes))); ok = false }
     if len(free_bytes) != 24 { println("  FAIL: rt_free expected 24, got " + to_string(len(free_bytes))); ok = false }
     if len(slen) != 44 { println("  FAIL: rt_str_len expected 44, got " + to_string(len(slen))); ok = false }
+    // rt_memset 28 (B9.6a / F3 increment): 7-instr leaf byte-store loop.
+    if len(mset) != 28 { println("  FAIL: rt_memset expected 28, got " + to_string(len(mset))); ok = false }
     // PR #1297 residual #2 — adr (4 B) → adrp+add (8 B) widening for
     // _arena_state PAGE21+PAGEOFF12 reloc machinery. Per-fn deltas:
     //   init   72 → 76 (+4 · 1 site)
@@ -1523,6 +1588,7 @@ fn test_runtime_arm64() {
     if len(alloc_bytes) % 4 != 0 { println("  FAIL: rt_alloc not aligned"); ok = false }
     if len(free_bytes) % 4 != 0 { println("  FAIL: rt_free not aligned"); ok = false }
     if len(slen) % 4 != 0 { println("  FAIL: rt_str_len not aligned"); ok = false }
+    if len(mset) % 4 != 0 { println("  FAIL: rt_memset not aligned"); ok = false }
     if len(ainit) % 4 != 0 { println("  FAIL: rt_arena_init not aligned"); ok = false }
     if len(aalloc) % 4 != 0 { println("  FAIL: rt_arena_alloc not aligned"); ok = false }
     if len(areset) % 4 != 0 { println("  FAIL: rt_arena_reset not aligned"); ok = false }
@@ -1542,6 +1608,8 @@ fn test_runtime_arm64() {
     if free_bytes[nf - 4] != 192 { println("  FAIL: rt_free no RET"); ok = false }
     let n5 = len(slen)
     if slen[n5 - 4] != 192 { println("  FAIL: rt_str_len no RET"); ok = false }
+    let nm = len(mset)
+    if mset[nm - 4] != 192 { println("  FAIL: rt_memset no RET"); ok = false }
     let na1 = len(ainit)
     if ainit[na1 - 4] != 192 { println("  FAIL: rt_arena_init no RET"); ok = false }
     let na2 = len(aalloc)
@@ -1661,6 +1729,24 @@ fn test_runtime_arm64() {
         ks = ks + 1
     }
     if !found_alloc_str { println("  FAIL: rt_alloc missing str x19, [x0] (header write)"); ok = false }
+
+    // Verify rt_memset contains strb w1, [x0, x3] (the byte-store body).
+    //   encoded as 0x38236801 → little-endian bytes 1, 104, 35, 56.
+    let mut found_memset_strb = false
+    let mut km = 0
+    while km + 3 < len(mset) {
+        if mset[km] == 1 {
+            if mset[km + 1] == 104 {
+                if mset[km + 2] == 35 {
+                    if mset[km + 3] == 56 {
+                        found_memset_strb = true
+                    }
+                }
+            }
+        }
+        km = km + 1
+    }
+    if !found_memset_strb { println("  FAIL: rt_memset missing strb w1, [x0, x3] (byte store)"); ok = false }
 
     if ok {
         println("  ALL CHECKS PASS")

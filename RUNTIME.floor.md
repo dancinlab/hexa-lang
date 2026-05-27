@@ -99,10 +99,18 @@ runtime.c 조각이라 F3 로 fold (mis-split 해소). **F3 만이 진짜 open**
     self-emit 패턴 LANDED — `self/codegen/runtime_arm64.hexa` 에 `rt_arena_init/
     alloc/reset/release` (L1157/1268/1339/1375) 포함 16 self-emit fn. dup-race
     precheck: codegen self-emit 작업 중인 open PR 0 (활성 브랜치는 전부 B9 flip
-    quick-win/doc 트랙 — F3 와 직교). **다음 단위 = B9.6a HexaVal repr 생성자 emit**
-    (`hexa_int/float/bool/str` tagged-union 생성자 → runtime_arm64.hexa hexa-emit-bytes).
-    각 단위 = emit-path 라 `gen1≡gen2` byte-eq fixpoint 검증 필수 (regen heavy →
-    ubu route). F4 sha256 ① port (FIPS-검증된 stdlib 타깃) 도 이 campaign 의 한 단위.
+    quick-win/doc 트랙 — F3 와 직교). 각 단위 = emit-path 라 `gen1≡gen2` byte-eq
+    fixpoint 검증 필수 (regen heavy → ubu route). F4 sha256 ① port (FIPS-검증된
+    stdlib 타깃) 도 이 campaign 의 한 단위.
+  - 🧱 **increment 1 LANDED — `rt_memset` self-emit (#1830)** (`runtime_arm64.hexa`
+    확장 · 7-instr 28-B leaf byte-store loop · arena 패턴 답습). interp self-test
+    PASS + `as -arch arm64` byte-identical + **JIT-exec 실제 memset 동작 검증**
+    (fill range 정확 · no overrun · len=0 no-op · low-byte-only). shadow 모듈이라
+    `hexa_cc.c` regen 무관 = fixpoint 무위험 · **`.c` 카운트 UNCHANGED** (640 fn
+    전부 emit 후에야 파일 삭제 — 토대 1칸). **leaf-first 순서**: 다음 후보 =
+    `rt_memcmp`/`rt_memmove` (동급 reloc-free 순수 루프) → reloc 필요한 state-bound
+    primitive → **최후가 HexaVal repr/GC core (hard floor · B9.6a 본체 = 가장 위험)**.
+    즉 B9.6a "HexaVal repr 생성자 emit" 은 leaf 들을 먼저 소진한 뒤 도달할 hard 단위.
   - **WHY [ ] 유지 (not over-closure)**: F3 는 irreducible 아님 — 실제 포팅 가능한
     open 작업. terminal verdict (🔵/🟢/🔴) 부여 불가 (= `feedback-no-over-closure`).
     단일 foreground 세션이 50-70 PR campaign 을 닫을 수 없음 = 정직한 multi-session
