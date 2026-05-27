@@ -378,3 +378,88 @@ vs cublasSgemm + cub::DeviceSegmentedRadixSort.
 cycle 우선순위 = small-M GEMV (rank 1, LLM-decode killer feature) 또는 top-K
 fused (rank 2, LM-head wedge). `feedback_instrument_first_methodology` cheap-
 first oracle 의 multi-cycle 자원 절약 사례 #2 (BC3 decomp 가 사례 #1).
+
+## 2026-05-28 — 🔴 HONEST ROOFLINE CORRECTION: W1 small-M GEMV phantom wedge
+
+직전 wedge probe (PR #1698) 의 "small-M GEMV 5-10× ceiling" 주장 자체-감사
+시작 — W1 follow-up codegen 진입 전 cheap HBM-roofline 측정으로 ceiling 정직
+산출. 결과 = 측정 framework 자체 잘못 적용. 직전 round 의 "99.05% sub-roofline"
+은 **FP32 compute peak (31.2 TFLOPS) 을 universal reference 로 쓴 실수** — M=1
+GEMV 의 arithmetic intensity (AI=0.50 F/B) 가 memory-bound threshold (~46 F/B)
+보다 한참 아래라 진짜 roofline 은 HBM bandwidth.
+
+**Tier**: 🔴 W1 RETIRED (phantom wedge falsified by honest roofline)
+**Branch**: `roofline-correction-2026-05-28`
+**Falsifier**: `F-WEDGE-SMALL-M-SUB-ROOFLINE-HONEST`
+**Verdict**: `archive/fires/gpu_hbm_roofline_2026_05_28/result.json` + `hbm_roofline.log`
+
+**Honest measurement** (ubu-2 RTX 5070 sm_120, cudaMemcpy DtoD 256 MB + cuBLAS SGEMM sweep):
+
+- effective HBM BW = **578.88 GB/s** (= 86% of 672 GB/s marketing peak)
+
+| M | cuBLAS GFLOPS | AI (F/B) | HBM roof | HBM % | (compute % for ref) |
+|---|---|---|---|---|---|
+| 1 | 297.13 | 0.50 | 289.30 | **102.71%** | 0.95% |
+| 8 | 2340.57 | 3.98 | 2306.53 | **101.48%** | 7.50% |
+| 32 | 9046.76 | 15.75 | 9119.65 | 99.20% | 29.00% |
+| 64 | 17050.02 | 31.03 | 17962.95 | 94.92% | 54.65% |
+| 128 | 19978.82 | 60.24 | 34869.25 | 57.30% | 64.03% (transition) |
+| 1024 | 23852.98 | 341.33 | 197592.40 | 12.07% | 76.45% (compute-bound) |
+
+(>100% HBM% = measurement noise within ~3% of HBM roof; sustained-vs-burst BW variance.
+보수적 해석 = **cuBLAS 는 small-M (1-32) 에서 이미 HBM roofline 도달**.)
+
+### W1 retire 근거
+
+- M=1 에서 cuBLAS = 102.71% HBM roof → 더 빠를 여지 없음 (HBM 이 binding constraint)
+- M=8 에서 cuBLAS = 101.48% HBM roof → 동일
+- M=32 에서 cuBLAS = 99.20% HBM roof → 0.8% headroom (noise level)
+- W1 "hand-emit GEMV 5-10× ceiling" 은 잘못된 reference 적용으로 surface 한 phantom
+
+### W2 (top-K) 도 재검토 필요
+
+직전 측정 (thrust::sort, 1.80× ceiling) 은 thrust 가 production radix-select 보다
+느리다. cub::DeviceSegmentedRadixSort 도 HBM-bound 일 가능성 높음. cuBLAS SGEMM
++ cub topK 합산이 둘 다 HBM-bound 면 합산 wall = HBM-bound wall 의 합, fusion
+은 HBM read 한 번으로 절약 가능. 하지만 small-M 에서 cublas 자체가 이미 HBM
+roof 라 단순 합산이 아닌 SHARED HBM 사용량 분석 필요. 재측정 deferred.
+
+### W3 (grouped QKV) retire
+
+stride debug 성공 시에도 ceiling = X 의 1/3 HBM read 절약 (M·K bytes / total
+bytes). small-M 에서 total HBM 은 압도적 (K·N=64MB 가 M·K=16KB 보다 4000×
+큼) → 절약 효과 ~0.025% → ceiling ~1.000×. 추구 가치 없음.
+
+### Methodology lesson — rule 5 추가
+
+`feedback_instrument_first_methodology` 의 cheap-first oracle 패턴을 적용할 때,
+**roofline reference 는 AI-aware 해야 함**:
+
+```
+binding_constraint(AI) = AI < (peak_compute / peak_BW) ? memory : compute
+proper_roofline = min(peak_compute, peak_BW * AI)
+sub_roofline_pct = 100 * (1 - achieved / proper_roofline)
+```
+
+FP32 compute peak (31.2 TFLOPS) 을 universal reference 로 쓰면 memory-bound
+kernel 의 sub-roofline 이 항상 거대해 보이지만 (W1 99.05%), 진짜로는 cuBLAS
+가 binding constraint (HBM) 에 이미 도달한 상태. 이 함정이 wedge probe 의 W1
+"5-10× ceiling" 을 surface 했음.
+
+### Round-11 honest closure (W1+W3 retired, W2 needs remeasure)
+
+남은 진짜 GPU wedge:
+- F-FUSION-LAUNCH-AMORT-WALL §1 (73-76%, REALIZED, [x])
+- F-FUSION-AXISA-BREADTH §1l (4/4 PASS, 59-72%, REALIZED, [x])
+- BC4 attention occupancy fix (round-7 5.3-6.9× FALSIFIED, still open, structural-moat existential)
+- (W2 top-K remeasure with cub, low priority)
+
+cuBLAS standalone GEMM 추월 = M ≤ 32 에서 HBM-bounded, M ≥ 128 에서 BC2 영역
+(이미 [x]). 진짜 hexa 우위는 "**fusion (cuBLAS API 의 한계)** vs **roofline-saturated standalone
+GEMM (cuBLAS 가 잘 함)**" 의 구분 그 자체에 있음 — `g3 over-claim 0` + cheap-first
+oracle 의 roofline-aware 적용으로 phantom wedge 회피.
+
+`feedback_instrument_first_methodology` cheap-first oracle 사례 #3: **wrong
+roofline 자기-감사**. 사례 #1 = BC3 decomp (epilogue share 측정으로 1.5×
+unphysical 확인), 사례 #2 = 3-probe oracle (wedge ranking), 사례 #3 = HBM
+roofline correction (W1 phantom 식별). 매 사례마다 multi-cycle 캠페인 절약.

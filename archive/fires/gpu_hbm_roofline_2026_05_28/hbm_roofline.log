@@ -1,0 +1,12 @@
+# HBM bandwidth (effective) — cudaMemcpy DtoD 256 MB
+# median = 0.9274 ms, effective BW = 578.88 GB/s (read+write)
+# (NVIDIA RTX 5070 marketing: 672 GB/s; sustainable ~85% = ~570 GB/s)
+
+# cuBLAS SGEMM small-M sweep, HBM-roofline-honest
+# M     median_ms  GFLOPS   AI(F/B)   HBM_roof_GFLOPS  HBM_pct  compute_pct (for reference)
+1      0.112928   297.13  0.4998   289.30         102.71%    0.95%
+8      0.114688  2340.57  3.9844  2306.53         101.48%    7.50%
+32     0.118688  9046.76  15.7538  9119.65          99.20%   29.00%
+64     0.125952  17050.02  31.0303  17962.95          94.92%   54.65%
+128    0.214976  19978.82  60.2353  34869.25          57.30%   64.03%
+1024   1.440480  23852.98  341.3333  197592.40          12.07%   76.45%
