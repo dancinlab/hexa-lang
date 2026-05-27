@@ -1052,7 +1052,7 @@ fn _bind_builtin_names() -> [string] {
         // Step 4 .c-none to_int: float→int truncate bridge + real str-parse C fn
         // (rt_to_int escape — self/runtime_core.c).
         "__raw_d2i", "hexa_str_parse_int",
-        "abs", "aes256_ctr_xor", "append", "args", "argv", "bcrypt_pbkdf", "bits_to_float", "byte_len", "bytes_to_f32_le",
+        "abs", "aes256_ctr_xor", "append", "args", "argv", "bits_to_float", "byte_len", "bytes_to_f32_le",
         "bytes", "bytes_to_f64_le", "ceil", "chacha20_poly1305_decrypt", "chacha20_poly1305_encrypt", "chacha20_xor", "chars", "clock_ms", "copy_file",
         "cos", "crc32", "dict_keys", "ed25519_keypair", "ed25519_sign", "ed25519_verify", "env", "eprint",
         "eprintln", "exec_pipe_open", "exec_stream_kill", "exec_with_status", "exec", "exit", "exp", "f32_to_bytes_le",

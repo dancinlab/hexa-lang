@@ -6967,10 +6967,6 @@ fn gen2_expr(node) {
                 if name == "chacha20_poly1305_encrypt" {
                     return "hexa_chacha20_poly1305_encrypt(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ")"
                 }
-                // stdlib/crypto — bcrypt_pbkdf KDF (RFC ssh-keyfile-encrypted)
-                if name == "bcrypt_pbkdf" {
-                    return "hexa_bcrypt_pbkdf(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ")"
-                }
                 if name == "chacha20_poly1305_decrypt" {
                     return "hexa_chacha20_poly1305_decrypt(" + arg_strs[0] + ", " + arg_strs[1] + ", " + arg_strs[2] + ", " + arg_strs[3] + ")"
                 }
@@ -10177,7 +10173,6 @@ fn _is_builtin_name(name) {
     if name == "x25519_scalarmult" { return true }
     if name == "chacha20_xor" { return true }
     if name == "aes256_ctr_xor" { return true }
-    if name == "bcrypt_pbkdf" { return true }
     if name == "poly1305_onetimeauth" { return true }
     if name == "chacha20_poly1305_encrypt" { return true }
     if name == "chacha20_poly1305_decrypt" { return true }

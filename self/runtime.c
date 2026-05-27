@@ -12425,7 +12425,6 @@ static void _hexa_init_fn_shims(void) {
  * RFC: incoming/patches/stdlib-ssh-client.md (crypto suite prereq)
  * ═══════════════════════════════════════════════════════════════════ */
 #include "native/crypto_sodium.c"
-#include "native/crypto_blowfish.c"
 #include "native/crypto_openssl.c"
 #include "native/exec_pipe.c"
 #include "native/proc_fork.c"
