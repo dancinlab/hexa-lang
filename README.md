@@ -201,7 +201,7 @@ Honest scope on where it *doesn't*: a single huge GEMM (already compute-bound, t
 
 **One line**: cuBLAS = a one-dish specialist (master of the stew). hexa fusion = a one-pan dinner (multiple steps in sequence on the same heat). Users whose workload's time distribution overlaps the four scenarios above land on hexa's real gap.
 
-Detail: `stdlib/flame/README.md` (canonical perf table + RETRACTION note) · `stdlib/flame/PERF.md` · `stdlib/flame/PLAN.md` (campaign log + cycle ledger) · `self/forge/PLAN.md` · `self/forge/PARADIGM.md` (Phase R measured verdicts) · `GPU.md` §1h-1o fusion-moat fires · `GPU.easy.md` (친근 페르소나 사이드) · `state/anima_handoff_2026_05_19.md` (integration recipe).
+Detail: `stdlib/flame/README.md` (canonical perf table + RETRACTION note) · `stdlib/flame/PERF.md` · `stdlib/flame/PLAN.md` (campaign log + cycle ledger) · `self/forge/PLAN.md` · `self/forge/PARADIGM.md` (Phase R measured verdicts) · `GPU.md` §1h-1o fusion-moat fires · `GPU.easy.md` (friendly persona sidecar) · `state/anima_handoff_2026_05_19.md` (integration recipe).
 
 * * *
 
