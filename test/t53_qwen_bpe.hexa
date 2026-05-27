@@ -4,7 +4,7 @@
 // fixture, encodes a handful of strings to the HF-reference ids and
 // round-trips decode(encode(x)) == x on ASCII inputs.
 //
-// The fixture (tests/fixtures/qwen_bpe_toy.json) is a 6.5 KB subset
+// The fixture (test/fixtures/qwen_bpe_toy.json) is a 6.5 KB subset
 // of the real Qwen2.5-14B-Instruct tokenizer.json containing only the
 // vocab entries + merges + added_tokens actually touched by these
 // tests — carrying the full 7 MB file into CI would slow every run
@@ -50,7 +50,7 @@ fn ids_str(a) {
 }
 
 // ── 1. Load toy fixture ───────────────────────────────────────────
-let bpe = qwen_bpe_load("tests/fixtures/qwen_bpe_toy.json")
+let bpe = qwen_bpe_load("test/fixtures/qwen_bpe_toy.json")
 must("vocab loaded (>= 244 entries)", qwen_bpe_vocab_size(bpe) >= 244)
 must("has im_start in vocab", has_key(bpe.vocab, "<|im_start|>"))
 must("has im_end in vocab",   has_key(bpe.vocab, "<|im_end|>"))
