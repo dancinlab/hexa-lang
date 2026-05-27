@@ -1,0 +1,216 @@
+// HEXA Standard Library — crypto/tls13_client_record_io
+//
+// @version 0.1.0
+// @capabilities [network, ffi]
+//
+// TLS 1.3 client application-record IO wire — couples the AEAD seal/open
+// primitives (tls13_record) with stdlib/net/socket for actual record send
+// and receive. Closes the IO-half of frontier 18-list #6 (`Finished
+// verify_data + app-record send/recv — tls13_record + tls13_finished + AEAD
+// seal/open 와이어`); the crypto-half (verify_data + app-traffic key
+// derivation) landed in the sibling file tls13_client_finished_wire.hexa.
+//
+// Wire layout (RFC 8446 §5.2):
+//   plaintext = inner_pt || inner_content_type  (TLSInnerPlaintext, no padding here)
+//   aad       = 0x17 0x03 0x03 ⟨ciphertext_len_be16⟩         (record_aad)
+//   ct_tag    = AEAD-Seal(key, nonce(iv, seq), aad, plaintext) || 16-byte tag
+//   record    = 0x17 0x03 0x03 ⟨ct_tag_len_be16⟩ || ct_tag
+//
+// The inner content type is 0x16 (Handshake) for sealed handshake messages
+// (e.g. EncryptedExtensions / Certificate / CertVerify / Finished) AFTER
+// the server's first encrypted record, and 0x17 (ApplicationData) for app
+// payloads post-Finished. The OUTER record content type is always 0x17
+// (ApplicationData) per the TLS 1.3 record-layer disguise rule.
+//
+// Surface:
+//   tls13_seal_app_record(key, iv, seq, inner_content_type, inner_plaintext)
+//     -> [int]
+//     Returns the complete on-wire record (header + ciphertext+tag).
+//
+//   tls13_client_send_app_record(conn, key, iv, seq, inner_content_type,
+//                                 inner_plaintext) -> int
+//     seal_app_record + socket_write. Returns the next-sequence value
+//     (seq + 1) so the caller can chain calls without managing the counter
+//     externally.
+//
+//   tls13_open_app_record(key, iv, seq, record_bytes)
+//     -> Tls13OpenedRecord
+//     Validate record header, recompute AAD, AEAD-Open the body, strip the
+//     trailing inner content type byte. Populates `kind` discriminator
+//     (ok / short-record / non-app-record / open-fail / empty-inner).
+//
+//   tls13_client_recv_app_record(conn, key, iv, seq) -> Tls13OpenedRecord
+//     socket_read + open_app_record. Caller bumps seq after a successful open.
+//
+// Building blocks (all pre-LANDED):
+//   - tls13_record_aad / tls13_record_seal / tls13_record_open
+//     / tls13_record_open_verify  (tls13_record)
+//   - tls13_record_header / tls13_record_type / tls13_record_version
+//     / tls13_record_length       (tls13_wire)
+//   - socket_write / socket_read  (stdlib/net/socket)
+//
+// Constants reused (defined in tls13_client_driver.hexa):
+//   TLS_REC_HANDSHAKE = 0x16
+//   TLS_REC_APPLICATION_DATA = 0x17
+//   TLS_VERSION_LEGACY = 0x0303
+// (We re-declare here as locals to keep this file standalone; the values are
+// fixed by RFC 8446.)
+
+use "stdlib/crypto/tls13_record"
+use "stdlib/crypto/tls13_wire"
+use "stdlib/net/socket"
+
+let _TLS_REC_HANDSHAKE_LOCAL:        int = 0x16
+let _TLS_REC_APPLICATION_DATA_LOCAL: int = 0x17
+let _TLS_VERSION_LEGACY_LOCAL:       int = 0x0303
+
+// Result of opening a single received TLS application-record.
+struct Tls13OpenedRecord {
+    kind:                 str,    // ok / short-record / non-app-record / open-fail / empty-inner
+    inner_content_type:   int,    // 0x16 Handshake or 0x17 AppData (only when kind = "ok")
+    inner_plaintext:      [int],  // plaintext bytes WITHOUT the trailing type byte (only when ok)
+    diagnostic_record_ct: int,    // outer record content type as received (for non-app-record)
+    diagnostic_record_len: int    // record body length as parsed
+}
+
+// Seal `inner_plaintext` + inner_content_type into a TLS 1.3 application-record.
+// Returns the complete on-wire bytes (record_header + ciphertext+tag).
+pub fn tls13_seal_app_record(
+    key:                 [int],
+    iv:                  [int],
+    seq:                 int,
+    inner_content_type:  int,
+    inner_plaintext:     [int]
+) -> [int] {
+    // TLSInnerPlaintext = plaintext || inner_content_type (no padding here).
+    let mut plain: [int] = []
+    let mut i = 0
+    while i < len(inner_plaintext) {
+        plain.push(inner_plaintext[i])
+        i = i + 1
+    }
+    plain.push(inner_content_type & 0xFF)
+    // AAD encodes the OUTER record fields including the ciphertext length
+    // (= plaintext length + 16-byte AEAD tag). tls13_record_aad takes the
+    // INNER plaintext length; the helper adds the 16-byte tag internally.
+    let aad = tls13_record_aad(len(plain))
+    let ct_tag = tls13_record_seal(key, iv, seq, aad, plain)
+    let hdr = tls13_record_header(_TLS_REC_APPLICATION_DATA_LOCAL, _TLS_VERSION_LEGACY_LOCAL, len(ct_tag))
+    let mut out: [int] = []
+    i = 0
+    while i < len(hdr) {
+        out.push(hdr[i])
+        i = i + 1
+    }
+    i = 0
+    while i < len(ct_tag) {
+        out.push(ct_tag[i])
+        i = i + 1
+    }
+    return out
+}
+
+// seal + socket_write. Returns the new sequence number (seq + 1).
+pub fn tls13_client_send_app_record(
+    conn:                int,
+    key:                 [int],
+    iv:                  [int],
+    seq:                 int,
+    inner_content_type:  int,
+    inner_plaintext:     [int]
+) -> int {
+    let record = tls13_seal_app_record(key, iv, seq, inner_content_type, inner_plaintext)
+    socket_write(conn, record)
+    return seq + 1
+}
+
+// Helper: build an empty Tls13OpenedRecord populated only with error fields.
+fn _opened_err(kind: str, ct: int, body_len: int) -> Tls13OpenedRecord {
+    let empty: [int] = []
+    return Tls13OpenedRecord {
+        kind:                  kind,
+        inner_content_type:    0,
+        inner_plaintext:       empty,
+        diagnostic_record_ct:  ct,
+        diagnostic_record_len: body_len
+    }
+}
+
+// Validate record header, AEAD-Open the body, strip trailing inner content type.
+pub fn tls13_open_app_record(
+    key:           [int],
+    iv:            [int],
+    seq:           int,
+    record_bytes:  [int]
+) -> Tls13OpenedRecord {
+    if len(record_bytes) < 5 {
+        return _opened_err("short-record", 0, 0)
+    }
+    let ct = tls13_record_type(record_bytes, 0)
+    let body_len = tls13_record_length(record_bytes, 0)
+    if ct != _TLS_REC_APPLICATION_DATA_LOCAL {
+        return _opened_err("non-app-record", ct, body_len)
+    }
+    if len(record_bytes) < 5 + body_len {
+        return _opened_err("short-record", ct, body_len)
+    }
+    // Extract the AEAD ciphertext+tag (body_len bytes after 5-byte header).
+    let mut ct_tag: [int] = []
+    let mut i = 0
+    while i < body_len {
+        ct_tag.push(record_bytes[5 + i])
+        i = i + 1
+    }
+    // AAD = the SAME outer record header bytes (RFC 8446 §5.2: additional_data
+    // = TLSCiphertext.opaque_type || legacy_record_version ||
+    //   TLSCiphertext.length). tls13_record_aad reconstructs that.
+    let inner_len = body_len - 16
+    if inner_len < 0 {
+        return _opened_err("open-fail", ct, body_len)
+    }
+    let aad = tls13_record_aad(inner_len)
+    let ok = tls13_record_open_verify(key, iv, seq, aad, ct_tag)
+    if !ok {
+        return _opened_err("open-fail", ct, body_len)
+    }
+    let plain = tls13_record_open(key, iv, seq, aad, ct_tag)
+    // Strip trailing zero-padding then the inner content type byte
+    // (RFC 8446 §5.4 — TLSInnerPlaintext = content || content_type || zero*).
+    let mut end = len(plain) - 1
+    while end >= 0 {
+        if plain[end] != 0 {
+            i = end
+            end = -1
+        } else {
+            end = end - 1
+        }
+    }
+    if i < 0 {
+        return _opened_err("empty-inner", ct, body_len)
+    }
+    let inner_type = plain[i] & 0xFF
+    let mut inner_pt: [int] = []
+    let mut j = 0
+    while j < i {
+        inner_pt.push(plain[j])
+        j = j + 1
+    }
+    return Tls13OpenedRecord {
+        kind:                  "ok",
+        inner_content_type:    inner_type,
+        inner_plaintext:       inner_pt,
+        diagnostic_record_ct:  ct,
+        diagnostic_record_len: body_len
+    }
+}
+
+// socket_read + open. Caller bumps seq externally after a successful open.
+pub fn tls13_client_recv_app_record(
+    conn: int,
+    key:  [int],
+    iv:   [int],
+    seq:  int
+) -> Tls13OpenedRecord {
+    let rec = socket_read(conn)
+    return tls13_open_app_record(key, iv, seq, rec)
+}
