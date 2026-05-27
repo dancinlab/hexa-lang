@@ -13,11 +13,13 @@
 //   pub fn ed25519_sign(seed: [int], msg: [int]) -> [int]        — 64-byte signature
 //   pub fn ed25519_verify(pubk: [int], msg: [int], sig: [int]) -> bool
 //
-// VERIFY STATUS (2026-05-27): parse-clean; shares the SAME field arithmetic
-// (_M/_car/_S/_inv) as stdlib/crypto/x25519 which is RFC-7748-verified. Runtime
-// KAT (sign→verify round-trip) TIMES OUT >150s on the compiled path — the
-// 255-bit Edwards scalar-mult over 16-limb gf is perf-heavy in hexa (not a
-// correctness signal). KAT pending a longer run / field-arith optimization.
+// VERIFY STATUS (2026-05-27): parse-clean + RUNS (pubkey 53ms, sign/verify
+// complete fast). Fixed an infinite loop (missing i+=1 in the S=r+k*a reduce).
+// Round-trip KAT currently FAILS (verify rejects a self-produced valid sig) —
+// a subtle math bug remains (candidate sites: _unpackneg sign/sqrt, _modL, or
+// the verify S·B−k·A equation). tampered/wrong-msg correctly reject. The shared
+// field arith (_M/_car) is x25519-verified; the Edwards-layer bug is isolated
+// to sign/verify. CORRECTNESS-DEBUG pending — code lands runnable, not yet KAT-clean.
 // Reference (RFC 8032 §7.1 TEST 1):
 //   seed = 9d61b19deffebc3fd6a85e8d2a3a3e7b...60ee1d535919db (32B)
 //   pub  = d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a
@@ -325,7 +327,7 @@ pub fn ed25519_sign(seed: [int], msg: [int]) -> [int] {
         i = i + 1
     }
     i = 0
-    while i < 32 { ka[i] = ka[i] + r[i] }   // add r (low 32 bytes)
+    while i < 32 { ka[i] = ka[i] + r[i]; i = i + 1 }   // add r (low 32 bytes)
     let S = _modL(ka)
 
     let mut sig: [int] = []
