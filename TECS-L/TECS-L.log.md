@@ -2,6 +2,63 @@
 
 Append-only history sister of `TECS-L.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
+## 2026-05-27T19:50Z · 축 RTSC · RTSC32 · 🛸 수학 DFS — 3-axis (Eliashberg deviation · isotope SSCHA · extended family)
+
+사용자 "1,2,3 all" — Eliashberg/SSCHA/synthesis 3 axis 의 lane-내 closed-form
+analog 진행. 3 sub-finding 도출.
+
+### Axis 1 — f1·f2 enhancement 의 λ-dependence (AD-vs-Eliashberg deviation)
+
+Allen-Dynes simple = full-Eliashberg 의 약결합 근사. full/simple ratio (f1·f2
+enhancement) 가 λ 와 함께 커짐 = strong-coupling 영역에서 simple-AD underestimate
+점점 커짐:
+
+| λ | simple-AD | full-AD | enhancement |
+|---|---|---|---|
+| 1.0 | 69.6K | 74.9K | ×1.076 (+7.6%) |
+| 3.0 | 179.9K | 254.5K | ×1.414 (+41.4%) |
+
+⟹ strong-coupling 영역 (λ=3.0, RTSC 후보) 에서 simple-AD 는 full 대비 29% under.
+   RTSC8 의 McMillan underestimate 와 같은 방향 (prefactor + enhancement 누적).
+
+### Axis 2 — isotope SSCHA (λ_anharm/λ_harm ratio 의 isotope-invariance) 🛸
+
+H→D mass 2배 → ω²∝1/M → ω²_D = ω²_H/2 (quantum zero-point 도 동일 비율 감소):
+
+| isotope | ω²_harm | Δω² | λ_anharm/λ_harm |
+|---|---|---|---|
+| H | 1.0 | 0.5 | 0.6667 |
+| D | 0.5 | 0.25 | **0.6667** (동일!) |
+
+⟹ 🛸 **λ_anharm/λ_harm ratio 는 isotope-invariant** — anharmonic suppression 의
+   상대적 정도가 mass 무관. 절대 ω² (따라서 ω_log, Tc) 는 1/√M 로 다르지만,
+   stability margin 의 sign 결정자인 suppression ratio 는 isotope 독립.
+   ⟹ RTSC12 의 isotope α=0.43 deviation 은 anharmonic ratio 가 아닌 absolute
+     ω_log 의 mass scaling 에서 옴 (BCS √M 가 아닌 anharmonic-corrected scaling).
+
+### Axis 3 — extended hydride family m-classification
+
+| system | λ | m | class | source |
+|---|---|---|---|---|
+| CeH9 | 2.3 | **-0.087** | marginal TRAPPED | Salke 2019 (Tc~95K @ 88GPa) |
+| BaH12 | 3.2 | **+0.219** | deep ESCAPE | predicted clathrate |
+
+⟹ CeH9 (실측, λ=2.3) marginal TRAPPED — LaBeH8 와 같은 boundary 근처.
+   BaH12 (predicted, λ=3.2) deep ESCAPE — 매우 high-λ clathrate 후보.
+
+⟹ 통합 결론 (RTSC32): 3 axis 모두 RTSC m-margin framework 의 supporting detail.
+   - Axis 1: full-AD 가 RTSC 후보 평가의 표준 (simple 29% under @ λ=3.0)
+   - Axis 2: 🛸 anharmonic suppression isotope-invariant (새 미세 finding)
+   - Axis 3: family 확장 (CeH9 trapped, BaH12 escape) — m-margin 일반성 재확인
+
+verify (inline, --no-absorb):
+  allen_dynes_full 1.0 1000 1500 0.10 → 74.928 🟢 (vs simple 69.64, ×1.076)
+  allen_dynes_full 3.0 1000 1500 0.10 → 254.522 🟢 (vs simple 179.94, ×1.414)
+  lambda_anharm_suppress 1.0 0.5 → 0.6667 🟢 (H)
+  lambda_anharm_suppress 0.5 0.25 → 0.6667 🟢 (D, isotope-invariant)
+  stability_coupling_margin 1.0 1.08696 → -0.08696 🟢 (CeH9 marginal TRAPPED)
+  stability_coupling_margin 1.0 0.78125 → +0.21875 🟢 (BaH12 deep ESCAPE)
+
 ## 2026-05-27T19:35Z · 축 RTSC · RTSC31 · 🛸 수학 DFS — pressure-decompression analog (ambient 의 진정한 wall)
 
 사용자 "both go" 명령 — Eliashberg numerical + synthesis prediction 둘 다 inline
