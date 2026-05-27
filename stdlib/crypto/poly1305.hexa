@@ -140,11 +140,16 @@ pub fn poly1305_mac(msg: [int], key: [int]) -> [int] {
     // if g4 >= 0 (i.e. h >= p) use g, else keep h.  mask = (g4 >> 63) ... use sign.
     let neg = if g4 < 0 { 1 } else { 0 }
     if neg == 0 {
+        // h >= p: select the reduced g across ALL 5 limbs. h4 MUST update too —
+        // serialization reads h4 (f3 = (h3>>18)|(h4<<8)). Leaving h4 stale
+        // corrupts the tag whenever the final h >= p. This passed the RFC
+        // §2.5.2 KAT (whose final h < p) but failed the ChaCha20-Poly1305
+        // AEAD §2.8.2 mac_data (whose final h >= p).
         h0 = g0
         h1 = g1
         h2 = g2
         h3 = g3
-        // h4 = g4, but we don't need h4 below (tag is 128-bit)
+        h4 = g4
     }
 
     // serialize h (low 128 bits) into 4 little-endian 32-bit words

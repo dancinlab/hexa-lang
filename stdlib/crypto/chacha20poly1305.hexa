@@ -1,0 +1,108 @@
+// HEXA Standard Library — crypto/chacha20poly1305
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// ChaCha20-Poly1305 AEAD (RFC 8439 §2.8) — pure hexa, composing the verified
+// stdlib/crypto/chacha20 cipher with stdlib/crypto/poly1305 MAC. This is the
+// TLS 1.3 / WireGuard / age record cipher. Construction:
+//   otk        = chacha20_block(key, 0, nonce)[0:32]   (one-time Poly1305 key)
+//   ciphertext = chacha20_encrypt(key, 1, nonce, plaintext)
+//   mac_data   = aad ‖ pad16(aad) ‖ ct ‖ pad16(ct) ‖ le64(|aad|) ‖ le64(|ct|)
+//   tag        = poly1305_mac(mac_data, otk)
+//
+// Surface:
+//   pub fn chacha20poly1305_encrypt(key: [int], nonce: [int], aad: [int], pt: [int]) -> [int]
+//       — returns ciphertext ‖ 16-byte tag.  key=32 bytes, nonce=12 bytes.
+//   pub fn chacha20poly1305_verify(key: [int], nonce: [int], aad: [int], ct: [int], tag: [int]) -> bool
+//   pub fn chacha20poly1305_decrypt(key: [int], nonce: [int], aad: [int], ct: [int]) -> [int]
+//       — plaintext (XOR keystream); verify the tag FIRST with _verify.
+//
+// Verified vector (RFC 8439 §2.8.2):
+//   key=808182..9f · nonce=070000004041424344454647 · aad=50515253c0c1c2c3c4c5c6c7
+//   pt="Ladies and Gentlemen … sunscreen would be it." (114 bytes)
+//   ct[0:32]=d31a8d34648e60db7b86afbc53ef7ec2.. · tag=1ae10b594f09e26a7e902ecbd0600691
+
+use "stdlib/crypto/chacha20"
+use "stdlib/crypto/poly1305"
+
+// zero-pad to the next 16-byte boundary (none if already aligned)
+@pure
+fn _pad16(out: [int], curlen: int) -> [int] {
+    let mut o = out
+    let rem = curlen % 16
+    if rem != 0 {
+        let mut k = rem
+        while k < 16 { o.push(0); k = k + 1 }
+    }
+    return o
+}
+
+// 8-byte little-endian length
+@pure
+fn _le64(n: int) -> [int] {
+    let mut o: [int] = []
+    let mut v = n
+    let mut i = 0
+    while i < 8 { o.push(v & 0xFF); v = v >> 8; i = i + 1 }
+    return o
+}
+
+// build the Poly1305 mac input: aad ‖ pad16 ‖ ct ‖ pad16 ‖ le64(|aad|) ‖ le64(|ct|)
+@pure
+fn _mac_data(aad: [int], ct: [int]) -> [int] {
+    let mut m: [int] = []
+    let mut i = 0
+    while i < len(aad) { m.push(aad[i]); i = i + 1 }
+    m = _pad16(m, len(aad))
+    i = 0
+    while i < len(ct) { m.push(ct[i]); i = i + 1 }
+    m = _pad16(m, len(ct))
+    let la = _le64(len(aad))
+    i = 0
+    while i < 8 { m.push(la[i]); i = i + 1 }
+    let lc = _le64(len(ct))
+    i = 0
+    while i < 8 { m.push(lc[i]); i = i + 1 }
+    return m
+}
+
+// derive the one-time Poly1305 key = first 32 bytes of the counter-0 block
+@pure
+fn _poly_key(key: [int], nonce: [int]) -> [int] {
+    let blk = chacha20_block(key, 0, nonce)
+    let mut otk: [int] = []
+    let mut i = 0
+    while i < 32 { otk.push(blk[i]); i = i + 1 }
+    return otk
+}
+
+@pure
+pub fn chacha20poly1305_encrypt(key: [int], nonce: [int], aad: [int], pt: [int]) -> [int] {
+    let otk = _poly_key(key, nonce)
+    let ct = chacha20_encrypt(key, 1, nonce, pt)
+    let tag = poly1305_mac(_mac_data(aad, ct), otk)
+    let mut out: [int] = []
+    let mut i = 0
+    while i < len(ct) { out.push(ct[i]); i = i + 1 }
+    i = 0
+    while i < len(tag) { out.push(tag[i]); i = i + 1 }
+    return out
+}
+
+@pure
+pub fn chacha20poly1305_verify(key: [int], nonce: [int], aad: [int], ct: [int], tag: [int]) -> bool {
+    let otk = _poly_key(key, nonce)
+    let want = poly1305_mac(_mac_data(aad, ct), otk)
+    if len(tag) != 16 { return false }
+    let mut diff = 0
+    let mut i = 0
+    while i < 16 { if want[i] != tag[i] { diff = 1 }; i = i + 1 }
+    return diff == 0
+}
+
+@pure
+pub fn chacha20poly1305_decrypt(key: [int], nonce: [int], aad: [int], ct: [int]) -> [int] {
+    // ChaCha20 is a stream cipher → decrypt == encrypt with counter 1
+    return chacha20_encrypt(key, 1, nonce, ct)
+}
