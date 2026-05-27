@@ -215,11 +215,15 @@ coarse item 을 audit-grounded atomic 으로 분해 (2026-05-28).
 실측 현재 상태 (2026-05-28, origin/main):
 - `.o` = **0** ✅ (#1808 build-artifact 제거로 달성)
 - `.s` = **3** (3 irreducible boot-floor · B9.1a 로 dead fixture 1개 제거)
-- `.c` = **226** (`self/*.c` 40 + `self/native/*.c` 28 + 기타). north-star
+- `.c` = **226 → 99** (B9.6h 대량 삭제 후 · A merged #1823, B/C open). north-star
   충족 시 `find . -name '*.c' -o -name '*.s' -o -name '*.o'` 가 비어야 함.
-  🎯 **세션 4개 실제 삭제** — `crypto_blowfish.c` (B9.6c · #1816 · wire+regen) +
+  🎯 **세션 4개 단일삭제** — `crypto_blowfish.c` (B9.6c · #1816 · wire+regen) +
   `v565_grad_analysis.c` (B9.6d · #1818 · dead git-rm) + `hxtok.c` (B9.6e ·
   #1820 · dead git-rm) + `hxvocoder.c` (B9.6f · dead git-rm). 230→226.
+  🎯🎯 **B9.6h 대량삭제** — 분포 스캔 결과 `.c` 카운트의 **대부분이 runtime/floor
+  가 아니라 DEAD experiment scaffolding** 이었음 (아래 핵심 정정 ↓). archive/fires
+  88 (A #1823) + tool/ probe-host 36 (B #1825) + 잡 3 (C #1826) = **127 삭제 →
+  99**. findings(result.json/.verdicts/papers/.ptx) 전수 보존, harness `.c` 만.
 
 ⚠ **파일-수 vs 함수-수 구조 인사이트 (중요)**: `.c` *파일* 카운트는 파일 전체가
 삭제될 때만 감소. `runtime.c`/`runtime_core.c` 는 각 1파일이지만 640/548 fn 을
@@ -382,12 +386,49 @@ fan-out 불가, serial 진행.
       `fn`→dlopen `.so` 재현 불가. → hxflash/hxlayer/hxvdsp 전부 perf-floor 재분류
       (위 B9.6d 표). harm-guard 가 정확히 작동 — perf-critical 커널 삭제 방지.
 
-      🏁 **clean/safe `.c`-파일 count-reduction DEFINITIVELY 고갈** (세션 4건:
-      blowfish wire + v565/hxtok/hxvocoder dead). 잔여 226 = perf-floor(hxflash/
-      hxlayer/hxvdsp · 285x) + vendor-FFI③19 + sha256-entangled + runtime FLOOR.
-      **전부 multi-session codegen self-emit(B9.6a/b) 또는 irreducible** — 단일-PR
-      안전 삭제 불가. 다음 진짜 진전 = B9.6a/b serial codegen 캠페인 (expert work,
-      cold fan-out 부적합).
+      🏁 **`self/native/*.c` 범위의 clean/safe single-file count-reduction 고갈**
+      (세션 4건: blowfish wire + v565/hxtok/hxvocoder dead). 잔여 native 28 =
+      perf-floor(hxflash/hxlayer/hxvdsp · 285x) + vendor-FFI③19 + sha256-entangled
+      + runtime FLOOR — 전부 multi-session codegen self-emit(B9.6a/b) 또는
+      irreducible.
+
+      ⚠ **정정 (B9.6h 분포 스캔)**: 위 "고갈" 은 `self/native/` 만 본 **좁은 결론**
+      이었음. 전-repo `.c` 226 의 **bulk 은 runtime/floor 가 아니라 archive/fires
+      (87) + tool/ probe-host (68) = 155 의 DEAD experiment scaffolding** (GPU-fire
+      host wrapper · cuBLAS baseline · transcendental probe). 단일-PR 안전 삭제
+      가능한 죽은 harness 가 대량으로 남아있었음 → B9.6h 로 127 삭제. floor/wire
+      트랙(B9.6a/b)과 무관한 별도 cleanup 레인.
+- [x] **B9.6h-dead-experiment-scaffolding-sweep** — 🎯🎯 **대량 `.c` 삭제 (226→99 ·
+      127 파일 · A merged #1823 / B #1825 / C #1826)**. 분포 스캔의 핵심 발견:
+      `.c` 카운트의 **bulk 은 runtime/vendor floor 가 아니라 DEAD experiment
+      harness** — `archive/fires/` 87 (GPU-fire host: cuBLAS baseline · wmma host
+      · roofline · rfc067 sgemm host · rfc071 silicon) + `tool/` probe-host 68
+      (adamw/exp/layernorm/logsumexp/probe_*/r067-r070/sweep). findings 는
+      result.json/`.verdicts/`/papers/`.ptx` 에 보존, `.c` 는 harness 일 뿐.
+      per-batch verify-dead (빌드 레시피 grep + `#include` 체크; provenance 주석
+      참조는 live 아님):
+      - **Batch A (#1823 MERGED)** — `archive/fires/*.c`+`.h` 88 git-rm.
+        live-ref = `nvptx_*.hexa` 주석 + parse_only fixture 주석뿐. findings 515건
+        보존. 226→139.
+      - **Batch B (#1825 OPEN)** — dead `tool/*.c` 36 git-rm. KEPT-LIVE:
+        `hexa_daemon_serve.c`(build.sh→bin), `gpu_standalone_cubin_host.c`+
+        `fusion_epilogue_cublas_timed.c`+`gpu_multiarch_fatbin_host.c`(probe.hexa
+        preflight), **flame_phase4* byte-eq battery 전체**(`verify_all.sh`
+        `${leaf}`/`${bench}` 동적 루프 + `*_build.sh`/`dispatch_*.sh` 컴파일),
+        `cuda_syntax_stub/*.h`(vendored allow-list), `tool/test/hexa_ld_*`
+        링커 fixture 7(active linker dev · 보수적 KEEP). 226→190.
+      - **Batch C (#1826 OPEN)** — isolated dead 3 git-rm (`exports/nvptx_math_fire/
+        host_math.c` · orphan `poc_arena_bundle_caller.c` · `runtime_hexaval_
+        sketch.c` "DESIGN SKETCH ONLY"). KEPT-LIVE (verify 결과 대부분 live):
+        sscb firmware src 5(Makefile wildcard) · hal t3 harness 2(make+ELF
+        assert) · hxpyembed/hxnccl(cmake/@link) · self/cuda runtime 2(CUDA
+        bridge) · self/forge tier(build_hexa_cli shadow-sync) · state flame 2
+        (dispatch) · poc_rt_exit_caller(drive.hexa) · example bench_*_native 3
+        (C-ceiling baseline · 보수적 KEEP) · self/*nanbox* tests(live
+        hexa_nanbox.h 검증). 226→223.
+      smoke: `clang -fsyntax-only self/runtime.c` EXIT 0 · `self/native/*.c`(28
+      floor) 무손상 · 삭제 심볼 live grep 0. **floor/codegen-wire(B9.6a/b) 와
+      독립된 cleanup 레인** — git-recoverable.
 - [ ] **B9.6a-hexaval-repr-emit** — HexaVal repr 생성자 codegen self-emit
       (`self/codegen/runtime_arm64.hexa` 확장; `rt_arena_*` 4 fn LANDED 패턴).
       ⚠ serial · regen+fixpoint · phase-h codegen 에이전트와 경합 · expert work.
