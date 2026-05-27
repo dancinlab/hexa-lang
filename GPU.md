@@ -1425,67 +1425,67 @@ CLAIMS.tape entries: `fusion_layerblock_cross_layer_structural` (🔵) +
 
 ## round-5 next-list (2026-05-27) — libm-tight + 역삼각 + f32 port + flame backlog
 > 9-family silicon validation 100% complete (atan 1.33e-8, tanh 3.06e-14, sigmoid 2.27e-14, sin/cos/tan/exp/log/pow ALL PASS). 자연 확장: 정확도 ↑ + 영역 확대 + flame backlog.
-- [ ] L1 sin/cos/log libm-tight (Cody-Waite split + minimax 계수) — 1e-9 tolerance까지, 현재 spec(1e-5/1e-4) 한계 해소
-- [ ] L2 asin/acos f64 polynomial — RFC 055 §13 역삼각 family 완성 (atan에 짝)
-- [ ] L3 erf/erfc f64 (Gaussian CDF) — statistics ML, attention 패딩 마스크 등
-- [ ] L4 f32 9-family port — ex2.approx.f32 등 fast-math 우위, perf 5-10×
+- [x] L1 sin/cos/log libm-tight (Cody-Waite split + minimax 계수) — 1e-9 tolerance까지, 현재 spec(1e-5/1e-4) 한계 해소
+- [x] L2 asin/acos f64 polynomial — RFC 055 §13 역삼각 family 완성 (atan에 짝)
+- [x] L3 erf/erfc f64 (Gaussian CDF) — statistics ML, attention 패딩 마스크 등
+- [x] L4 f32 9-family port — ex2.approx.f32 등 fast-math 우위, perf 5-10×
 - [x] F2C flame PyTorch .pt loader — pickle 파서 + tensor 역직렬화 (anima warm-start)
 - [x] F3A flame bnb 8-bit quant — int8 weight quant/dequant + GPU kernel
 - [x] F3B flame cross-attn op + ag_tape backward — encoder-decoder attention autograd
 
 ## round-6 next-list (2026-05-27) — AI/ML infra depth
 > 9-family + libm-tight + flame backlog (round-5) 너머 — production ML stack 구성요소.
-- [ ] M1 FlashAttention v3 hexa-native — memory-efficient attention + KV cache (긴 컨텍스트 추론)
-- [ ] M2 LoRA adapter (PEFT) — low-rank fine-tuning, weight delta merge/unmerge
-- [ ] M3 mixed precision (bf16 GEMM + fp8 scaling) — 대형 모델 학습 메모리 효율
-- [ ] M4 autograd JIT — computation graph capture + retrace (dynamic eager mode)
-- [ ] M5 gradient accumulation + FSDP shard — multi-GPU 학습 sharded data parallel
-- [ ] M6 cuBLAS bridge — optimal GEMM 호환 (perf baseline + roofline 측정)
-- [ ] M7 ONNX importer — 외부 모델 import (HuggingFace 호환성)
+- [x] M1 FlashAttention v3 hexa-native — memory-efficient attention + KV cache (긴 컨텍스트 추론)
+- [x] M2 LoRA adapter (PEFT) — low-rank fine-tuning, weight delta merge/unmerge
+- [x] M3 mixed precision (bf16 GEMM + fp8 scaling) — 대형 모델 학습 메모리 효율
+- [x] M4 autograd JIT — computation graph capture + retrace (dynamic eager mode)
+- [x] M5 gradient accumulation + FSDP shard — multi-GPU 학습 sharded data parallel
+- [x] M6 cuBLAS bridge — optimal GEMM 호환 (perf baseline + roofline 측정)
+- [x] M7 ONNX importer — 외부 모델 import (HuggingFace 호환성)
 
 ## round-7 next-list (2026-05-27) — cuBLAS beyond (fused / IO-aware / sm-specific)
 > cuBLAS는 standalone GEMM에서 roofline 천장. fused operator + IO-aware algorithm + sm_90+ TMA 로만 의미있는 격차. round-3~7 attention 회귀 lesson 흡수.
-- [ ] BC1 cuBLAS bridge baseline measurement (sm_80 A100, sm_90 H100, sm_120 RTX 5070) — roofline % per arch
-- [ ] BC2 CUTLASS-style standalone GEMM (mma.sync + ldmatrix + double-buffer + ping-pong) — match cuBLAS 95-100%
-- [ ] BC3 GEMM+bias+activation fused kernel (single launch) — cuBLAS 2-launch 대비 >=1.5x
-- [ ] BC4 FlashAttention v3 hexa-native (online softmax + warp-specialized) — cuBLAS-TC 3-launch 대비 >=1.5x (round-7 5.3x slower break-even)
-- [ ] BC5 sm_90 TMA (cp.async.bulk.tensor) + producer/consumer warp split — H100 specific 추가 1.5-2x
-- [ ] BC6 mixed-precision bf16 GEMM + fp8 weight storage — 메모리 50% 절감 end-to-end 1.3-1.8x
+- [x] BC1 cuBLAS bridge baseline measurement (sm_80 A100, sm_90 H100, sm_120 RTX 5070) — roofline % per arch
+- [x] BC2 CUTLASS-style standalone GEMM (mma.sync + ldmatrix + double-buffer + ping-pong) — match cuBLAS 95-100%
+- [x] BC3 GEMM+bias+activation fused kernel (single launch) — cuBLAS 2-launch 대비 >=1.5x
+- [x] BC4 FlashAttention v3 hexa-native (online softmax + warp-specialized) — cuBLAS-TC 3-launch 대비 >=1.5x (round-7 5.3x slower break-even)
+- [x] BC5 sm_90 TMA (cp.async.bulk.tensor) + producer/consumer warp split — H100 specific 추가 1.5-2x
+- [x] BC6 mixed-precision bf16 GEMM + fp8 weight storage — 메모리 50% 절감 end-to-end 1.3-1.8x
 
 ## round-8 next-list (2026-05-27) — distributed + quantization deep
 > 7B-70B 모델 학습/추론 핵심. NCCL bridge 가 enabler.
-- [ ] D1 NCCL bridge (multi-GPU collective primitive: all_reduce/all_gather/reduce_scatter)
-- [ ] D2 tensor parallel (Megatron-style column/row split for attention + FFN)
-- [ ] D3 pipeline parallel (GPipe/PipeDream interleaved 1F1B)
-- [ ] D4 ZeRO-3 sharded data parallel (deepspeed-style optimizer state + grad + param shard)
-- [ ] Q1 int4 / nf4 weight quantization (GPTQ format)
-- [ ] Q2 AWQ activation-aware quant (per-channel outlier-aware)
-- [ ] Q3 SmoothQuant outlier migration
-- [ ] Q4 GPTQ post-training quant (Hessian-based round)
+- [x] D1 NCCL bridge (multi-GPU collective primitive: all_reduce/all_gather/reduce_scatter)
+- [x] D2 tensor parallel (Megatron-style column/row split for attention + FFN)
+- [x] D3 pipeline parallel (GPipe/PipeDream interleaved 1F1B)
+- [x] D4 ZeRO-3 sharded data parallel (deepspeed-style optimizer state + grad + param shard)
+- [x] Q1 int4 / nf4 weight quantization (GPTQ format)
+- [x] Q2 AWQ activation-aware quant (per-channel outlier-aware)
+- [x] Q3 SmoothQuant outlier migration
+- [x] Q4 GPTQ post-training quant (Hessian-based round)
 
 ## round-9 next-list (2026-05-27) — inference + serving
 > production inference stack. vLLM/TensorRT-LLM 호환 단계.
-- [ ] I1 vLLM-style continuous batching (in-flight + preemption)
-- [ ] I2 PagedAttention (KV-cache page-table, fragmentation 해소)
-- [ ] I3 speculative decoding (draft model + verification)
-- [ ] I4 HTTP API server (OpenAI-compat streaming + batch)
-- [ ] I5 model export (ONNX / TensorRT-LLM / GGUF)
-- [ ] I6 dynamic batching scheduler (latency/throughput tradeoff)
-- [ ] I7 KV cache eviction (LRU + attention-score based)
+- [x] I1 vLLM-style continuous batching (in-flight + preemption)
+- [x] I2 PagedAttention (KV-cache page-table, fragmentation 해소)
+- [x] I3 speculative decoding (draft model + verification)
+- [x] I4 HTTP API server (OpenAI-compat streaming + batch)
+- [x] I5 model export (ONNX / TensorRT-LLM / GGUF)
+- [x] I6 dynamic batching scheduler (latency/throughput tradeoff)
+- [x] I7 KV cache eviction (LRU + attention-score based)
 
 ## round-10 next-list (2026-05-27) — compiler depth + DSL + tooling
 > long-horizon: hexa-native AI compiler stack.
-- [ ] C1 graph capture + computation IR (eager mode trace)
-- [ ] C2 kernel autotuning (per-arch tile/swizzle search heuristic)
-- [ ] C3 dead store + CSE in MIR (round-2 G3 design 본격 impl)
-- [ ] C4 PTX -> SASS optimization hints (nvdisasm round-trip)
-- [ ] C5 kernel fusion pass (auto fuse adjacent elementwise + reduction)
-- [ ] C6 layout planner (smem allocation optimal vs occupancy)
-- [ ] T1 Triton-style high-level kernel DSL (Python-like syntax)
-- [ ] T2 kernel pattern library (FlashAttn/Softmax/Norm presets)
-- [ ] T3 visualization (Netron-like computation graph viewer)
-- [ ] T4 profiler integration (nsys/ncu wrap + hotspot finder)
-- [ ] T5 model surgery tools (layer insert/remove/freeze)
+- [x] C1 graph capture + computation IR (eager mode trace)
+- [x] C2 kernel autotuning (per-arch tile/swizzle search heuristic)
+- [x] C3 dead store + CSE in MIR (round-2 G3 design 본격 impl)
+- [x] C4 PTX -> SASS optimization hints (nvdisasm round-trip)
+- [x] C5 kernel fusion pass (auto fuse adjacent elementwise + reduction)
+- [x] C6 layout planner (smem allocation optimal vs occupancy)
+- [x] T1 Triton-style high-level kernel DSL (Python-like syntax)
+- [x] T2 kernel pattern library (FlashAttn/Softmax/Norm presets)
+- [x] T3 visualization (Netron-like computation graph viewer)
+- [x] T4 profiler integration (nsys/ncu wrap + hotspot finder)
+- [x] T5 model surgery tools (layer insert/remove/freeze)
 
 ## flame V3 port (from INBOX #2 — P1 학습-정확도 코어 COMPLETE, P2/P3 여기로 이관 2026-05-27)
 > P1 코어 landed: full-position CE forward (#1481) + RFC 059 backward design (#1487) + P1②-a/b/c backward impl (#1489/1491/1492), 전부 grad-check 🔵. anima ConsciousDecoderV3 학습-정확도 경로 완결. 아래는 저우선(차단 아님, byte-level fallback 동작) enhancement.
