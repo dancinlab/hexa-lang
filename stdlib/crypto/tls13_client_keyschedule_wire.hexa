@@ -1,0 +1,175 @@
+// HEXA Standard Library — crypto/tls13_client_keyschedule_wire
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// TLS 1.3 client key-schedule wire — pure hexa. Given a CH/SH transcript
+// + the client's x25519 secret + the server's x25519 share (extracted from
+// SH key_share extension), derive the handshake-phase + master secrets +
+// AEAD traffic keys (client/server, handshake/application).
+//
+// Frontier 18-list #5 (RUNTIME.md): "key-schedule 도출 +
+// EncryptedExtensions/Certificate parse 와이어 — x509_chain + tls13_keyschedule
+// 활용." This PR delivers the **key-schedule derivation half**; the
+// EncryptedExtensions/Certificate parse-and-wire pass is a sibling follow-up
+// (also frontier #5, separated for g4 stacked-PR <200 LOC).
+//
+// Surface:
+//   - tls13_sh_extract_x25519_share(record_bytes, sh_offset, sh_ext_off,
+//                                    sh_ext_len) -> [int]
+//     Walk SH extensions to locate the server's X25519 share (32 bytes).
+//     Returns the share bytes; returns empty array if no KeyShare/X25519
+//     extension found.
+//
+//   - tls13_client_derive_handshake_keys(ch_message, sh_message,
+//                                         my_x25519_priv, peer_x25519_pub,
+//                                         aead_key_length)
+//     -> Tls13HandshakeKeys
+//     Full key schedule for AES-128-GCM (aead_key_length=16) or AES-256-GCM
+//     (32). ChaCha20-Poly1305 also uses key_length=32 — same derivation.
+//
+// Building blocks (all pre-LANDED):
+//   - sha256_digest_bytes (stdlib/core/hash/hmac.hexa)
+//   - x25519 (stdlib/crypto/x25519.hexa)
+//   - tls13_early_secret / derive_handshake_secret / derive_master_secret
+//   - tls13_client_handshake_traffic_secret / server_handshake_traffic_secret
+//   - tls13_client_application_traffic_secret / server_application_traffic_secret
+//   - tls13_traffic_key / traffic_iv
+//   - tls13_ext_type / length / value_start / next
+//   - tls13_key_share_parse_x25519
+//
+// Verified composition (RFC 8446 §7.1, §7.3):
+//   transcript_hash = SHA256(CH_message || SH_message)
+//   ecdhe = X25519(my_priv, server_pub)
+//   early_secret   = HKDF-Extract(0, 0)
+//   handshake_secret = HKDF-Extract(Derive-Secret(early_secret,"derived",""), ecdhe)
+//   c_hs_traffic   = Derive-Secret(handshake_secret, "c hs traffic", H_ch_sh)
+//   s_hs_traffic   = Derive-Secret(handshake_secret, "s hs traffic", H_ch_sh)
+//   client_hs_key  = Expand-Label(c_hs_traffic, "key", "", AEAD_KEY_LEN)
+//   client_hs_iv   = Expand-Label(c_hs_traffic, "iv",  "", 12)
+//   server_hs_key  = Expand-Label(s_hs_traffic, "key", "", AEAD_KEY_LEN)
+//   server_hs_iv   = Expand-Label(s_hs_traffic, "iv",  "", 12)
+//   master_secret  = HKDF-Extract(Derive-Secret(handshake_secret,"derived",""), 0)
+//
+// Out-of-scope (split per g4):
+//   - SH extensions wiring beyond key_share (supported_versions verification)
+//   - EncryptedExtensions / Certificate / CertVerify parsing-after-AEAD-open
+//   - Finished verify_data + app traffic keys/IVs at the post-server-finished
+//     transition (those derive from master_secret + later transcript hash;
+//     they're the frontier #6 piece).
+
+use "stdlib/core/hash/hmac"
+use "stdlib/crypto/x25519"
+use "stdlib/crypto/tls13_keyschedule"
+use "stdlib/crypto/tls13_traffic_secrets"
+use "stdlib/crypto/tls13_record"
+use "stdlib/crypto/tls13_extensions"
+use "stdlib/crypto/tls13_key_share"
+
+// Handshake-phase keys + IVs (client + server) and the chained secrets the
+// caller can use to drive the rest of the handshake (master_secret, the
+// handshake_secret itself, and the transcript hash of CH||SH).
+struct Tls13HandshakeKeys {
+    transcript_hash:    [int],   // SHA256(CH || SH) — 32 bytes
+    ecdhe_shared:       [int],   // X25519(priv, peer_pub) — 32 bytes
+    handshake_secret:   [int],   // 32 bytes
+    master_secret:      [int],   // 32 bytes (for later application-traffic step)
+    c_hs_traffic:       [int],   // 32 bytes (client handshake traffic secret)
+    s_hs_traffic:       [int],   // 32 bytes (server handshake traffic secret)
+    client_hs_key:      [int],   // AEAD key (16 for AES-128-GCM, 32 for AES-256-GCM/ChaCha20)
+    client_hs_iv:       [int],   // 12 bytes
+    server_hs_key:      [int],   // matches client_hs_key length
+    server_hs_iv:       [int]    // 12 bytes
+}
+
+// Concat two byte arrays.
+fn _concat(a: [int], b: [int]) -> [int] {
+    let mut out: [int] = []
+    let mut i = 0
+    while i < len(a) {
+        out.push(a[i])
+        i = i + 1
+    }
+    i = 0
+    while i < len(b) {
+        out.push(b[i])
+        i = i + 1
+    }
+    return out
+}
+
+// Walk SH extensions looking for the KeyShare extension carrying an X25519
+// share. Returns the 32-byte server public; empty array if not found.
+@pure
+pub fn tls13_sh_extract_x25519_share(
+    record_bytes: [int],
+    sh_offset:    int,
+    sh_ext_off:   int,
+    sh_ext_len:   int
+) -> [int] {
+    let end = sh_ext_off + sh_ext_len
+    let mut o = sh_ext_off
+    while o < end {
+        let etype = tls13_ext_type(record_bytes, o)
+        let elen = tls13_ext_length(record_bytes, o)
+        let evstart = tls13_ext_value_start(record_bytes, o)
+        if etype == TLS_EXT_KEY_SHARE {
+            // Build the extension VALUE slice (length = elen).
+            let mut ext_value: [int] = []
+            let mut k = 0
+            while k < elen {
+                ext_value.push(record_bytes[evstart + k])
+                k = k + 1
+            }
+            return tls13_key_share_parse_x25519(ext_value)
+        }
+        o = tls13_ext_next(record_bytes, o)
+    }
+    let empty: [int] = []
+    return empty
+}
+
+// Full handshake-phase key derivation (client side).
+//
+// Inputs:
+//   ch_message       — full ClientHello HandshakeMessage bytes (hs_header + body)
+//   sh_message       — full ServerHello HandshakeMessage bytes (hs_header + body)
+//   my_x25519_priv   — 32-byte client x25519 scalar
+//   peer_x25519_pub  — 32-byte server x25519 share (from SH key_share)
+//   aead_key_length  — 16 for AES-128-GCM, 32 for AES-256-GCM / ChaCha20-Poly1305
+//
+// Returns a populated Tls13HandshakeKeys.
+@pure
+pub fn tls13_client_derive_handshake_keys(
+    ch_message:      [int],
+    sh_message:      [int],
+    my_x25519_priv:  [int],
+    peer_x25519_pub: [int],
+    aead_key_length: int
+) -> Tls13HandshakeKeys {
+    let transcript_input = _concat(ch_message, sh_message)
+    let transcript_hash = sha256_digest_bytes(transcript_input)
+    let ecdhe = x25519(my_x25519_priv, peer_x25519_pub)
+    let empty: [int] = []
+    let early = tls13_early_secret(empty)
+    let handshake_secret = tls13_derive_handshake_secret(early, ecdhe)
+    let master_secret = tls13_derive_master_secret(handshake_secret)
+    let c_hs = tls13_client_handshake_traffic_secret(handshake_secret, transcript_hash)
+    let s_hs = tls13_server_handshake_traffic_secret(handshake_secret, transcript_hash)
+    let c_key = tls13_traffic_key(c_hs, aead_key_length)
+    let c_iv = tls13_traffic_iv(c_hs)
+    let s_key = tls13_traffic_key(s_hs, aead_key_length)
+    let s_iv = tls13_traffic_iv(s_hs)
+    return Tls13HandshakeKeys {
+        transcript_hash:  transcript_hash,
+        ecdhe_shared:     ecdhe,
+        handshake_secret: handshake_secret,
+        master_secret:    master_secret,
+        c_hs_traffic:     c_hs,
+        s_hs_traffic:     s_hs,
+        client_hs_key:    c_key,
+        client_hs_iv:     c_iv,
+        server_hs_key:    s_key,
+        server_hs_iv:     s_iv
+    }
+}
