@@ -1,0 +1,70 @@
+// HEXA Standard Library — runtime/value_logic_fixture
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// HexaVal truthy semantics — executable specification + test oracle. This
+// file CANNOT replace `hexa_truthy` in self/runtime_core.c (that fn operates
+// on HexaVal tagged-union internals via HX_TAG/HX_INT/HX_BOOL/etc macros that
+// are only meaningful inside the C codegen). It instead provides a hexa-side
+// fixture that any future codegen-emit port can byte-eq verify against.
+//
+// Frontier 18-list #2 (RUNTIME.md): "runtime_core.c 의 548 fn 중 순수-logic
+// 1개 hexa-native 포팅 — `gmtime_r` 류 후속; runtime.c wipe-prone (surgical
+// edit + grep 검증)."
+//
+// Honest analysis: the listed candidate fns (`hexa_truthy`, `rt_str_starts_with`,
+// `hexa_is_type`, …) all manipulate HexaVal tagged-union internals. A hexa
+// source file cannot construct/inspect HexaVal tags directly — that's the
+// codegen-emit pass's job. Therefore a true "port" of these fns is
+// **codegen-side work** (overlapping with frontier #1 phase-H lane), NOT a
+// stdlib addition. This fixture preserves the SEMANTICS in hexa source so
+// that a future codegen-emit port can A/B verify against it.
+//
+// Truthy semantics (from self/runtime_core.c:6407-6435 — `hexa_truthy`):
+//   bool b            → b
+//   int n             → n != 0
+//   float f           → f != 0.0   (2026-04-20 fix: was falling through to 1)
+//   string s          → s != NULL && s[0] != 0   (empty string falsy)
+//   void              → 0
+//   array [a, …]      → len > 0    (RFC r16 — empty collection falsy)
+//   map #{...}        → len > 0    UNLESS has "__type__" field (struct → truthy)
+//   valstruct         → vs != NULL
+//   default           → 1
+//
+// Surface (parse-only fixture · not currently wired to runtime):
+//   pub fn truthy_bool_oracle(b: bool) -> bool
+//   pub fn truthy_int_oracle(n: int) -> bool
+//   pub fn truthy_float_oracle(f: float) -> bool
+//   pub fn truthy_str_oracle(s: str) -> bool
+//   pub fn truthy_array_int_oracle(a: [int]) -> bool
+//
+// (TAG_VALSTRUCT / TAG_MAP `__type__` carrier rules are not expressible in
+// hexa user-level types — they're internal to the codegen. Per RFC §4/Q2:
+// struct existence is always truthy.)
+
+@pure
+pub fn truthy_bool_oracle(b: bool) -> bool {
+    return b
+}
+
+@pure
+pub fn truthy_int_oracle(n: int) -> bool {
+    return n != 0
+}
+
+@pure
+pub fn truthy_float_oracle(f: float) -> bool {
+    return f != 0.0
+}
+
+@pure
+pub fn truthy_str_oracle(s: str) -> bool {
+    // empty string = falsy; non-empty (any chars) = truthy
+    return len(s) > 0
+}
+
+@pure
+pub fn truthy_array_int_oracle(a: [int]) -> bool {
+    return len(a) > 0
+}
