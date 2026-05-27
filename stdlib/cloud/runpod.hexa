@@ -206,19 +206,59 @@ fn runpod_create_cascade(api_key: str, gpu_types: [str], image: str, pubkey: str
 
 // ── ssh-port query + wait ────────────────────────────────────────────
 
+// runpodctl emits one of three JSON shapes depending on version:
+//   shape-A (canonical):  { ssh: { ip: "1.2.3.4", port: 11863 } }
+//   shape-B (variant):    { ssh: { host: "1.2.3.4", port: 11863 } }
+//   shape-C (0.5+ flat):  { publicIp: "1.2.3.4", ports: [{ type: "ssh", port: 11863 }, ...] }
+// Anima M3 fire (INBOX #1734, 2026-05-28) hit shape-C — old CLI arm only saw
+// shape-A and degraded to the GraphQL fallback. We now try all three before
+// declaring "no ssh info yet" so the resolver covers every runpodctl version
+// in the wild without needing the API key for the fallback.
 fn _runpod_get_ssh_port_cli(rpc: str, pod_id: str) -> RunPodSshPort {
     let cmd = _shq_local(rpc) + " pod get " + _shq_local(pod_id) + " -o json 2>&1"
     let out = exec(cmd)
     let parsed = json_parse(out)
-    let ip_v = json_object_get_path(parsed, "ssh.ip")
-    let port_v = json_object_get_path(parsed, "ssh.port")
-    if type_of(ip_v) == "string" && type_of(port_v) == "int" {
-        let ipstr = to_string(ip_v)
-        let portstr = to_string(port_v)
+
+    // shape-A: ssh.ip + ssh.port (int)
+    let ip_a = json_object_get_path(parsed, "ssh.ip")
+    let port_a = json_object_get_path(parsed, "ssh.port")
+    if type_of(ip_a) == "string" && type_of(port_a) == "int" {
+        let ipstr = to_string(ip_a)
+        let portstr = to_string(port_a)
         if len(ipstr) > 0 && len(portstr) > 0 {
-            return RunPodSshPort { ok: 1, ip: ipstr, port: portstr, message: "port 22 (cli)" }
+            return RunPodSshPort { ok: 1, ip: ipstr, port: portstr, message: "port 22 (cli/ssh.ip)" }
         }
     }
+
+    // shape-B: ssh.host + ssh.port (int)
+    let host_b = json_object_get_path(parsed, "ssh.host")
+    if type_of(host_b) == "string" && type_of(port_a) == "int" {
+        let hoststr = to_string(host_b)
+        let portstr = to_string(port_a)
+        if len(hoststr) > 0 && len(portstr) > 0 {
+            return RunPodSshPort { ok: 1, ip: hoststr, port: portstr, message: "port 22 (cli/ssh.host)" }
+        }
+    }
+
+    // shape-C: publicIp + ports[].{type=="ssh"}.port (runpodctl 0.5+)
+    let pub_ip = json_object_get_path(parsed, "publicIp")
+    let ports_v = json_object_get_path(parsed, "ports")
+    if type_of(pub_ip) == "string" && type_of(ports_v) == "array" {
+        let ipstr = to_string(pub_ip)
+        if len(ipstr) > 0 {
+            let mut i = 0
+            while i < len(ports_v) {
+                let p = ports_v[i]
+                let ptype = json_object_get_str(p, "type", "")
+                let pport = json_object_get_int(p, "port", 0)
+                if ptype == "ssh" && pport > 0 {
+                    return RunPodSshPort { ok: 1, ip: ipstr, port: to_string(pport), message: "port 22 (cli/publicIp+ports)" }
+                }
+                i = i + 1
+            }
+        }
+    }
+
     return _runpod_fail_port("get_ssh_port (cli): no ssh info yet")
 }
 

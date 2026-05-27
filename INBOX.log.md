@@ -1,5 +1,13 @@
 # INBOX — log
 
+## 2026-05-28T — ✅ RESOLVED #1734 · resolver shape-B/C arms (`stdlib/cloud/runpod.hexa::_runpod_get_ssh_port_cli`)
+
+`_runpod_get_ssh_port_cli` 는 shape-A (`ssh.ip`+`ssh.port`) 만 매칭 → anima M3 4축 fire 가 hit 한 shape-C (`runpodctl pod get -o json` of v0.5+ = top-level `publicIp` + `ports[].{type=="ssh"}.port`) 에서 fall-through 해 GraphQL API arm 으로 떨어졌고, 그 arm 은 API key 가 필요해 dispatcher 경로에서 "resolver 부재" 처럼 보임.
+
+**fix**: CLI arm 에 3-shape fall-through 추가 — shape-A 그대로 + shape-B (`ssh.host`+`ssh.port`) + shape-C (`publicIp` + `ports[]` iterate, `type=="ssh"` → `port`). message tag 가 매칭된 shape (`cli/ssh.ip` · `cli/ssh.host` · `cli/publicIp+ports`) 를 표시 → 차후 schema drift 관측 가능. GraphQL fallback 은 `runpodctl` 자체 부재일 때만 발동.
+
+**검증**: `hexa parse stdlib/cloud/runpod.hexa` clean. 라이브 pod end-to-end 는 anima M3 production fire 가 다음 round 에 검증 (resolver 가 unblock 됐는지 = transport 진입 여부 보는 게 oracle). branch `inbox-1734-runpod-resolver-fallback`.
+
 ## 2026-05-28 — M3 fire 2차 hit on #1659 resolver gap (anima DECODER, recommend `runpodctl pod get` JSON parse)
 
 > **finding (anima M3 4축 fire 시도)**: anima `CORE/DECODER/m3_fire_dispatch.hexa` 의 lifecycle wrapper (cloud-guard 정합 `runpodctl pod create`) 는 LANDED · 그러나 transport (ssh-cascade) 시점에 hexa cloud 의 RunPod pod-id → SSH-host resolver gap (#1659) 으로 다시 막힘 — M3 4축 4-pod fire 실행 불가.
