@@ -1443,6 +1443,50 @@ CLAIMS.tape entries: `fusion_layerblock_cross_layer_structural` (🔵) +
 - [ ] M6 cuBLAS bridge — optimal GEMM 호환 (perf baseline + roofline 측정)
 - [ ] M7 ONNX importer — 외부 모델 import (HuggingFace 호환성)
 
+## round-7 next-list (2026-05-27) — cuBLAS beyond (fused / IO-aware / sm-specific)
+> cuBLAS는 standalone GEMM에서 roofline 천장. fused operator + IO-aware algorithm + sm_90+ TMA 로만 의미있는 격차. round-3~7 attention 회귀 lesson 흡수.
+- [ ] BC1 cuBLAS bridge baseline measurement (sm_80 A100, sm_90 H100, sm_120 RTX 5070) — roofline % per arch
+- [ ] BC2 CUTLASS-style standalone GEMM (mma.sync + ldmatrix + double-buffer + ping-pong) — match cuBLAS 95-100%
+- [ ] BC3 GEMM+bias+activation fused kernel (single launch) — cuBLAS 2-launch 대비 >=1.5x
+- [ ] BC4 FlashAttention v3 hexa-native (online softmax + warp-specialized) — cuBLAS-TC 3-launch 대비 >=1.5x (round-7 5.3x slower break-even)
+- [ ] BC5 sm_90 TMA (cp.async.bulk.tensor) + producer/consumer warp split — H100 specific 추가 1.5-2x
+- [ ] BC6 mixed-precision bf16 GEMM + fp8 weight storage — 메모리 50% 절감 end-to-end 1.3-1.8x
+
+## round-8 next-list (2026-05-27) — distributed + quantization deep
+> 7B-70B 모델 학습/추론 핵심. NCCL bridge 가 enabler.
+- [ ] D1 NCCL bridge (multi-GPU collective primitive: all_reduce/all_gather/reduce_scatter)
+- [ ] D2 tensor parallel (Megatron-style column/row split for attention + FFN)
+- [ ] D3 pipeline parallel (GPipe/PipeDream interleaved 1F1B)
+- [ ] D4 ZeRO-3 sharded data parallel (deepspeed-style optimizer state + grad + param shard)
+- [ ] Q1 int4 / nf4 weight quantization (GPTQ format)
+- [ ] Q2 AWQ activation-aware quant (per-channel outlier-aware)
+- [ ] Q3 SmoothQuant outlier migration
+- [ ] Q4 GPTQ post-training quant (Hessian-based round)
+
+## round-9 next-list (2026-05-27) — inference + serving
+> production inference stack. vLLM/TensorRT-LLM 호환 단계.
+- [ ] I1 vLLM-style continuous batching (in-flight + preemption)
+- [ ] I2 PagedAttention (KV-cache page-table, fragmentation 해소)
+- [ ] I3 speculative decoding (draft model + verification)
+- [ ] I4 HTTP API server (OpenAI-compat streaming + batch)
+- [ ] I5 model export (ONNX / TensorRT-LLM / GGUF)
+- [ ] I6 dynamic batching scheduler (latency/throughput tradeoff)
+- [ ] I7 KV cache eviction (LRU + attention-score based)
+
+## round-10 next-list (2026-05-27) — compiler depth + DSL + tooling
+> long-horizon: hexa-native AI compiler stack.
+- [ ] C1 graph capture + computation IR (eager mode trace)
+- [ ] C2 kernel autotuning (per-arch tile/swizzle search heuristic)
+- [ ] C3 dead store + CSE in MIR (round-2 G3 design 본격 impl)
+- [ ] C4 PTX -> SASS optimization hints (nvdisasm round-trip)
+- [ ] C5 kernel fusion pass (auto fuse adjacent elementwise + reduction)
+- [ ] C6 layout planner (smem allocation optimal vs occupancy)
+- [ ] T1 Triton-style high-level kernel DSL (Python-like syntax)
+- [ ] T2 kernel pattern library (FlashAttn/Softmax/Norm presets)
+- [ ] T3 visualization (Netron-like computation graph viewer)
+- [ ] T4 profiler integration (nsys/ncu wrap + hotspot finder)
+- [ ] T5 model surgery tools (layer insert/remove/freeze)
+
 ## flame V3 port (from INBOX #2 — P1 학습-정확도 코어 COMPLETE, P2/P3 여기로 이관 2026-05-27)
 > P1 코어 landed: full-position CE forward (#1481) + RFC 059 backward design (#1487) + P1②-a/b/c backward impl (#1489/1491/1492), 전부 grad-check 🔵. anima ConsciousDecoderV3 학습-정확도 경로 완결. 아래는 저우선(차단 아님, byte-level fallback 동작) enhancement.
 - [x] flame-P2a rope base 인자화 — `nn_rope_build_tables` base 10000 하드코딩 → 파라미터화 (Qwen=50000). trivial, parse-gate 검증
