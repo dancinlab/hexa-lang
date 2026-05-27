@@ -2,6 +2,39 @@
 
 Append-only history sister of `TECS-L.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
+## 2026-05-27T18:35Z · 축 RTSC · RTSC23 · 수학 DFS — YH10 literature param honest test (lane 진정 closure 신호)
+
+RTSC22 closure summary 후속, ternary candidate YH10 (Errea 2020 literature
+predicted Tc=303K) 의 Allen-Dynes param tuple 검증. honest closed-negative:
+literature 의 단일 (λ, ω_log, ω̄₂, μ*) tuple 이 정확하지 않거나 paper 마다
+달라 RTSC math DFS lane 으로 추가 의미있는 진전 어려움 신호.
+
+- calc YH10 simple-AD λ=2.59 ω_log=1500 μ*=0.10 → **251.66K** (literature 303K 보다 under)
+- calc YH10 full-AD ω̄₂=2250 μ*=0.10 → **336.11K** (literature 303K 보다 over)
+- calc Morel-Anderson (μ_bare=0.14, ω_ph=1500) → μ*=0.1106
+- calc YH10 full-AD μ*=0.1106 → **326.74K** (여전히 over)
+
+⟹ 결론 (lane 진정 closure 신호): literature 의 단일 param tuple 만으로
+   simple/full-AD 사이 격차 (251 ↔ 336K, 35% spread) — μ* fit-back 으로 303K
+   도달 가능 (μ*≈0.13-0.15) 하나 param tuple 자체가 paper 마다 달라 추가
+   closed-form finding 무의미. RTSC math DFS lane 의 진정한 closure 도달.
+
+   추가 정밀도는 외부 데이터:
+   - Eliashberg solver 와 직접 α²F integration (numerical, deferred)
+   - demiurge DFT 의 first-principles phonon spectrum (GPU·cross-repo)
+   - literature paper 들의 individual param tuple 직접 fit
+   모두 RTSC math DFS lane 외 영역.
+
+   ⟹ **RTSC math DFS lane FULLY DRAINED**: 17 round (RTSC5-22) closed-form
+     finding + 1 round (RTSC23) literature limit signal = 추가 진전 불가능.
+     다음 진전 axis = paper-ready 정리 (별도 cycle, g51) 또는 lane 외 진입.
+
+verify (inline, --no-absorb):
+  allen_dynes_tc 2.59 1500 0.10 → 251.664 (literature under) 🔴
+  allen_dynes_full 2.59 1500 2250 0.10 → 336.114 (literature over) 🔴
+  morel_anderson_mustar 0.14 10000 1500 → 0.11062 🔴 (내 추정 거침)
+  allen_dynes_full 2.59 1500 2250 0.1106 → 326.742 🔴
+
 ## 2026-05-27T18:30Z · 축 RTSC · RTSC22 · 수학 DFS lane CLOSURE — 17-round 누적 closed-form 정리 (RTSC5~RTSC21)
 
 사용자 "RTSC 완전 closure 까지" 명령에 따른 17-round inline math DFS 의 closure
