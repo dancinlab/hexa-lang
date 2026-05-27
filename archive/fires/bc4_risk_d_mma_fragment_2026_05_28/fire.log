@@ -1,0 +1,5 @@
+BUILD_EXIT=0
+PROBE_A_TRANS_BK32 err_vs_A.B=0.8399 miss err_vs_A.Bt=2.74 miss
+PROBE_B_PRETRANS_BK32 err_vs_P.V=5.96e-08 MATCH
+VERDICT trans_behavior=NEITHER_OTHER v_pretranspose_required=1 b_pretranspose_works=1
+RUN_EXIT=0

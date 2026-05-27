@@ -1,0 +1,124 @@
+//
+// BC4 round-14 risk-a cheap-first oracle (FREE, no GPU).
+//
+// Probe: BM=32 wedge accumulator (O register-resident) shape.
+//   - 4 warps/CTA (128 threads), block=128.
+//   - O = BM x d fp32 = 32 x 64 = 2048 fp32 elements distributed over 128 thd
+//     => 16 fp32 acc regs / thread (plan section 4 estimate).
+//   - Single fma chain emulates QK^T -> softmax -> P*V accumulator pattern
+//     (i.e., the O accumulator stays in registers through the iteration).
+//   - Final st.global.f32 reads accumulator regs DIRECTLY (no st.shared / ld.shared O stage).
+//
+// Goal: ptxas -v reports reg/thread + spill at sm_120a in isolation.
+// Honest scope: probe measures only O accumulator's reg + spill behavior
+// in isolation. Full-kernel reg count = this + R10 tile-load overhead (~91 base).
+//
+.version 7.8
+.target sm_90
+.address_size 64
+
+.visible .entry probe_bm32_oreg(
+    .param .u64 probe_bm32_oreg_param_0,
+    .param .u64 probe_bm32_oreg_param_1
+)
+{
+    .reg .f32       %facc<16>;
+    .reg .f32       %f_src, %f_one;
+    .reg .b32       %r<6>;
+    .reg .b64       %rd<8>;
+    .reg .pred      %p<2>;
+
+    ld.param.u64    %rd1, [probe_bm32_oreg_param_0]; // dst (fp32 buffer, len 2048)
+    ld.param.u64    %rd2, [probe_bm32_oreg_param_1]; // src (fp32 buffer, len 1)
+    cvta.to.global.u64 %rd3, %rd1;
+    cvta.to.global.u64 %rd4, %rd2;
+
+    // Per-thread global-tid: r1 = ctaid.x * ntid.x + tid.x  (block=128, grid=1)
+    mov.u32         %r1, %tid.x;
+    mov.u32         %r2, %ntid.x;
+    mov.u32         %r3, %ctaid.x;
+    mad.lo.s32      %r4, %r3, %r2, %r1;        // global tid (0..127)
+
+    // Load src scalar (single fp32 element, broadcast input to fma chain).
+    ld.global.f32   %f_src, [%rd4];
+
+    // Initialize 16 accumulators (clear to +0.0).
+    mov.f32         %facc0, 0f00000000;
+    mov.f32         %facc1, 0f00000000;
+    mov.f32         %facc2, 0f00000000;
+    mov.f32         %facc3, 0f00000000;
+    mov.f32         %facc4, 0f00000000;
+    mov.f32         %facc5, 0f00000000;
+    mov.f32         %facc6, 0f00000000;
+    mov.f32         %facc7, 0f00000000;
+    mov.f32         %facc8, 0f00000000;
+    mov.f32         %facc9, 0f00000000;
+    mov.f32         %facc10, 0f00000000;
+    mov.f32         %facc11, 0f00000000;
+    mov.f32         %facc12, 0f00000000;
+    mov.f32         %facc13, 0f00000000;
+    mov.f32         %facc14, 0f00000000;
+    mov.f32         %facc15, 0f00000000;
+
+    // Single-shot fma chain (each acc += f_src * f_src).
+    // 16 instructions = one pass; simulates the inner-loop body of P*V accumulation
+    // where each thread's O fragment is fma-updated against P/V fragments.
+    // The acc REGs must stay live across the chain (plan section 4 claim).
+    fma.rn.f32      %facc0,  %f_src, %f_src, %facc0;
+    fma.rn.f32      %facc1,  %f_src, %f_src, %facc1;
+    fma.rn.f32      %facc2,  %f_src, %f_src, %facc2;
+    fma.rn.f32      %facc3,  %f_src, %f_src, %facc3;
+    fma.rn.f32      %facc4,  %f_src, %f_src, %facc4;
+    fma.rn.f32      %facc5,  %f_src, %f_src, %facc5;
+    fma.rn.f32      %facc6,  %f_src, %f_src, %facc6;
+    fma.rn.f32      %facc7,  %f_src, %f_src, %facc7;
+    fma.rn.f32      %facc8,  %f_src, %f_src, %facc8;
+    fma.rn.f32      %facc9,  %f_src, %f_src, %facc9;
+    fma.rn.f32      %facc10, %f_src, %f_src, %facc10;
+    fma.rn.f32      %facc11, %f_src, %f_src, %facc11;
+    fma.rn.f32      %facc12, %f_src, %f_src, %facc12;
+    fma.rn.f32      %facc13, %f_src, %f_src, %facc13;
+    fma.rn.f32      %facc14, %f_src, %f_src, %facc14;
+    fma.rn.f32      %facc15, %f_src, %f_src, %facc15;
+
+    // Second pass (forces accs to stay live; otherwise ptxas may coalesce).
+    fma.rn.f32      %facc0,  %facc1, %f_src, %facc0;
+    fma.rn.f32      %facc1,  %facc2, %f_src, %facc1;
+    fma.rn.f32      %facc2,  %facc3, %f_src, %facc2;
+    fma.rn.f32      %facc3,  %facc4, %f_src, %facc3;
+    fma.rn.f32      %facc4,  %facc5, %f_src, %facc4;
+    fma.rn.f32      %facc5,  %facc6, %f_src, %facc5;
+    fma.rn.f32      %facc6,  %facc7, %f_src, %facc6;
+    fma.rn.f32      %facc7,  %facc8, %f_src, %facc7;
+    fma.rn.f32      %facc8,  %facc9, %f_src, %facc8;
+    fma.rn.f32      %facc9,  %facc10, %f_src, %facc9;
+    fma.rn.f32      %facc10, %facc11, %f_src, %facc10;
+    fma.rn.f32      %facc11, %facc12, %f_src, %facc11;
+    fma.rn.f32      %facc12, %facc13, %f_src, %facc12;
+    fma.rn.f32      %facc13, %facc14, %f_src, %facc13;
+    fma.rn.f32      %facc14, %facc15, %f_src, %facc14;
+    fma.rn.f32      %facc15, %facc0,  %f_src, %facc15;
+
+    // Final st.global.f32 -- accumulator regs go DIRECTLY to global (no smem stage).
+    // base addr = dst + tid * 16 * 4 bytes (per-thread stride = 16 fp32).
+    mul.wide.s32    %rd5, %r4, 64;             // tid * 16 * 4
+    add.s64         %rd6, %rd3, %rd5;
+    st.global.f32   [%rd6 +  0], %facc0;
+    st.global.f32   [%rd6 +  4], %facc1;
+    st.global.f32   [%rd6 +  8], %facc2;
+    st.global.f32   [%rd6 + 12], %facc3;
+    st.global.f32   [%rd6 + 16], %facc4;
+    st.global.f32   [%rd6 + 20], %facc5;
+    st.global.f32   [%rd6 + 24], %facc6;
+    st.global.f32   [%rd6 + 28], %facc7;
+    st.global.f32   [%rd6 + 32], %facc8;
+    st.global.f32   [%rd6 + 36], %facc9;
+    st.global.f32   [%rd6 + 40], %facc10;
+    st.global.f32   [%rd6 + 44], %facc11;
+    st.global.f32   [%rd6 + 48], %facc12;
+    st.global.f32   [%rd6 + 52], %facc13;
+    st.global.f32   [%rd6 + 56], %facc14;
+    st.global.f32   [%rd6 + 60], %facc15;
+
+    ret;
+}

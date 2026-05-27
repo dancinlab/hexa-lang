@@ -2,6 +2,38 @@
 
 > SSOT = `GPU.md`(snapshot: @goal + `- [ ]` milestones) + 본 `GPU.log.md`(append-only step log). closure rationale·design note·tier disposition 은 여기에 누적한다. 산재 `tool/*_DESIGN*.md` / `*_CLOSURE*.md` 신규 작성 금지 (단일 SSOT).
 
+## 2026-05-28 — BC4 round-14 risk-a + risk-d cheap-first oracles (PRE-FIRE GATE)
+
+`F-FUSION-ATTN-BM32-RISK-A-REG-PRESSURE` (FREE) + `F-FUSION-ATTN-BM32-RISK-D-FRAGMENT-MAP` (1 probe, ~5 min). 두 오라클 모두 BC4 round-14 silicon fire (`flash_attn_bm32_occupancy_v0`) 전 게이트.
+
+**risk-a** (`archive/fires/bc4_risk_a_reg_pressure_2026_05_28/`) — 60-line isolation PTX (`probe_bm32_oreg.ptx`) = 16 fp32 accumulator regs/thread (BM=32 d=64 ÷ 128 thd = 16 per-thread O-fragment) + fma chain + direct accumulator→global store (no smem stage). `ptxas -arch=sm_120a -v` (CUDA 12.9 May 2025 ptxas on ubu-2) →
+
+```
+Used 12 registers, used 0 barriers
+0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+```
+
+🟢 **GREEN**. ptxas coalesced 16 declared → 12 physical regs (single-warp isolation, no surrounding QK/softmax live ranges). Full-kernel projection (this + R10 91-reg base) = ~103 reg/thread, plan §4 unfalsified. Spill = 0 verified, BC4 round-14 NOT blocked by reg-pressure.
+
+**risk-d** (`archive/fires/bc4_risk_d_mma_fragment_2026_05_28/`) — 2-kernel CU probe at BM=32 BK=32 fragment shape (mma is atomic at m16n8k16, so single 16×16 probe settles the BK=32 wedge claim). nvcc -arch=compute_90 + driver JIT to sm_120 on ubu-2 →
+
+```
+PROBE_A_TRANS_BK32 err_vs_A.B=0.8399 miss err_vs_A.Bt=2.74 miss
+PROBE_B_PRETRANS_BK32 err_vs_P.V=5.96e-08 MATCH
+VERDICT trans_behavior=NEITHER_OTHER v_pretranspose_required=1 b_pretranspose_works=1
+```
+
+🟢 **GREEN**. `.trans + .row.col` 매핑은 BK=32 에서도 round-7 64×64 발견 (`8×8 블록 transpose, NOT full 16×16`) 그대로 유지 — A.B 도 A.B^T 도 아닌 partial-block 결과. V pre-transpose 경로 (probeB) 는 정확 (err 6e-8). 플랜 §2 smem budget table (BM=32 BK=32 O-reg = 30 720 B 포함 V^T 4096 B 슬롯) **수정 없음**, BM=32 BK=32 = 3 CTAs/SM 그대로.
+
+**implication**: BC4 round-14 silicon fire 의 두 사전 위험 모두 **CLEARED**. plan §10 step 2 + step 3 = `[x]`. 다음 단계 = round-14 step 4 silicon fire 자체 (`flash_attn_bm32_occupancy_v0` hand-emit + fa_mma_oracle 확장, 별도 cycle-bg).
+
+**honest caveats (g3)**:
+1. risk-a probe = O-accumulator isolation; full-kernel reg count 의 unfalsified 한 부분만 측정. catastrophic-spill 시나리오 falsified, ≤255 한계 통과 여부는 round-14 full-kernel ptxas 에서 재확인.
+2. risk-d probe = 단일 (BM=32, BK=32) shape only; 다른 wedge variants (BM=16 BK=64 등) 는 별도 re-probe 없이 일반화 불가 — atomic-mma 추론상 동일 결론 예상되지만 측정은 미수행.
+3. risk-d probe 는 pre-transpose smem 의 bank-conflict 미측정 (multi-warp contention 분리 oracle). round-14 full-kernel 측정 시 별도로 점검.
+
+**PR**: `bc4-risk-a-d-oracles-2026-05-28` branch, 2 probe + 2 result.json + 1 fire log + 1 ptxas stderr log + GPU.md §1p 2 boxes flip + 본 entry.
+
 ## 2026-05-28 — §5l 4-of-5 closure: standalone cubin + driver-only deployment
 
 `F-GPU-STANDALONE-CUBIN` (deployment-capability probe) — ubu-2 RTX 5070 driver 580.159.03 / CUDA 12.9 / sm_120.

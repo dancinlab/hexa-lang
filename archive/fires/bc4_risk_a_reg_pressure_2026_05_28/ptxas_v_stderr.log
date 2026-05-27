@@ -1,0 +1,11 @@
+ptxas: NVIDIA (R) Ptx optimizing assembler
+Copyright (c) 2005-2025 NVIDIA Corporation
+Built on Tue_May_27_02:18:05_PDT_2025
+=== RUN sm_120a ===
+ptxas info    : 0 bytes gmem
+ptxas info    : Compiling entry function 'probe_bm32_oreg' for 'sm_120a'
+ptxas info    : Function properties for probe_bm32_oreg
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 12 registers, used 0 barriers
+ptxas info    : Compile time = 2.649 ms
+EXIT=0
