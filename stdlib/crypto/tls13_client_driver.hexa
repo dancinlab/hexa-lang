@@ -1,0 +1,210 @@
+// HEXA Standard Library — crypto/tls13_client_driver
+//
+// @version 0.1.0
+// @capabilities [network, ffi]
+//
+// TLS 1.3 client handshake driver — first round-trip:
+//   send ClientHello, receive ServerHello, parse server fields.
+//
+// Frontier 18-list #4 (RUNTIME.md): "ClientHello 송신 + ServerHello 수신 round-trip
+// 드라이버 — stdlib/net/socket 위에 첫 핸드셰이크 round-trip; 모든 프리미티브
+// 준비됨." All primitives pre-LANDED (~56 PRs · 2026-05-27 segment 2); this
+// file wires them onto stdlib/net/socket as the FIRST IO consumer.
+//
+// Surface:
+//   tls13_record_wrap(content_type, body) -> [int]
+//     Frame a handshake message in a single-fragment TLS record.
+//
+//   tls13_client_connect_send_ch(host, port, hostname, random32, x25519_pub)
+//     -> Tls13ClientSentState
+//     Open TCP, build CH, wrap in record, send. Returns conn + on-wire bytes.
+//
+//   tls13_client_recv_server_hello(conn) -> Tls13ServerHelloParsed
+//     Read one record, validate type, parse SH body fields. Sets kind field
+//     ("ok" | "short-record" | "non-handshake-record" | "wrong-handshake-type"
+//      | "truncated-sh" | "short-handshake").
+//
+//   tls13_client_roundtrip_x25519(host, port, hostname, random32, x25519_pub)
+//     -> Tls13RoundtripState
+//     One-shot: connect + send + recv + parse.
+//
+// Out-of-scope (frontier #5 / #6 — multi-PR follow-up):
+//   - key schedule derivation (frontier #5)
+//   - EncryptedExtensions/Certificate/CertVerify parse-wire (frontier #5)
+//   - Finished verify_data + app-record send/recv (frontier #6)
+//
+// Note: socket_read is best-effort single-packet per stdlib/net/socket.hexa
+// TODO (net_read_n primitive missing in env.hexa builtins). For TLS 1.3
+// ServerHello on a well-behaved server this fits in one MTU; multi-packet
+// streaming = follow-up (needs net_read_n + a fragment reassembler).
+
+use "stdlib/crypto/tls13_compose"
+use "stdlib/crypto/tls13_wire"
+use "stdlib/crypto/tls13_server_hello"
+use "stdlib/net/socket"
+
+// TLS record content types (RFC 8446 §5.1)
+let TLS_REC_CHANGE_CIPHER_SPEC: int = 0x14
+let TLS_REC_ALERT:              int = 0x15
+let TLS_REC_HANDSHAKE:          int = 0x16
+let TLS_REC_APPLICATION_DATA:   int = 0x17
+
+// Record-layer legacy version (always 0x0303 in TLS 1.3 record header, RFC 8446 §5.1)
+let TLS_VERSION_LEGACY: int = 0x0303
+
+// Sent-state returned by tls13_client_connect_send_ch.
+struct Tls13ClientSentState {
+    conn:       int,    // socket descriptor / handle
+    ch_message: [int],  // on-wire HandshakeMessage (hs_header + ClientHello body)
+    ch_record:  [int]   // full TLS record (record_header + ch_message)
+}
+
+// Parsed ServerHello returned by tls13_client_recv_server_hello.
+// `kind` discriminates outcome; on "ok" all sh_* fields are filled.
+struct Tls13ServerHelloParsed {
+    kind:                   str,
+    record_bytes:           [int],
+    sh_offset:              int,
+    sh_length:              int,
+    record_legacy_version:  int,
+    sh_legacy_version:      int,
+    sh_random:              [int],
+    sh_session_id:          [int],
+    sh_cipher_suite:        int,
+    sh_legacy_compression:  int,
+    sh_extensions_length:   int,
+    sh_extensions_offset:   int,
+    error_got:              int,   // diagnostic for non-ok kinds
+    error_need:             int    // diagnostic for "truncated-*" kinds
+}
+
+// Combined round-trip state.
+struct Tls13RoundtripState {
+    conn:     int,
+    sent:     Tls13ClientSentState,
+    received: Tls13ServerHelloParsed
+}
+
+// Frame body bytes inside a TLS record (single fragment).
+pub fn tls13_record_wrap(content_type: int, body: [int]) -> [int] {
+    let hdr = tls13_record_header(content_type, TLS_VERSION_LEGACY, len(body))
+    let mut out: [int] = []
+    let mut i = 0
+    while i < len(hdr) {
+        out.push(hdr[i])
+        i = i + 1
+    }
+    i = 0
+    while i < len(body) {
+        out.push(body[i])
+        i = i + 1
+    }
+    return out
+}
+
+// Build a Tls13ServerHelloParsed populated only with error-class fields.
+fn _sh_error(kind: str, got: int, need: int) -> Tls13ServerHelloParsed {
+    let empty: [int] = []
+    return Tls13ServerHelloParsed {
+        kind:                  kind,
+        record_bytes:          empty,
+        sh_offset:             0,
+        sh_length:             0,
+        record_legacy_version: 0,
+        sh_legacy_version:     0,
+        sh_random:             empty,
+        sh_session_id:         empty,
+        sh_cipher_suite:       0,
+        sh_legacy_compression: 0,
+        sh_extensions_length:  0,
+        sh_extensions_offset:  0,
+        error_got:             got,
+        error_need:            need
+    }
+}
+
+// Stage 1 — open TCP, send wrapped ClientHello (x25519 + ed25519 minimal modern).
+pub fn tls13_client_connect_send_ch(
+    host: str,
+    port: int,
+    hostname: str,
+    random32: [int],
+    x25519_pub: [int]
+) -> Tls13ClientSentState {
+    let ch = tls13_compose_client_hello_x25519_ed25519(hostname, random32, x25519_pub)
+    let record = tls13_record_wrap(TLS_REC_HANDSHAKE, ch)
+    let addr = host + ":" + string(port)
+    let conn = socket_connect(addr)
+    socket_write(conn, record)
+    return Tls13ClientSentState {
+        conn:       conn,
+        ch_message: ch,
+        ch_record:  record
+    }
+}
+
+// Stage 2 — read ONE record from conn, expect Handshake / ServerHello.
+pub fn tls13_client_recv_server_hello(conn: int) -> Tls13ServerHelloParsed {
+    let rec = socket_read(conn)
+    if len(rec) < 5 {
+        return _sh_error("short-record", len(rec), 5)
+    }
+    let ct = tls13_record_type(rec, 0)
+    let ver = tls13_record_version(rec, 0)
+    let body_len = tls13_record_length(rec, 0)
+    if ct != TLS_REC_HANDSHAKE {
+        return _sh_error("non-handshake-record", ct, TLS_REC_HANDSHAKE)
+    }
+    if len(rec) < 5 + 4 {
+        return _sh_error("short-handshake", len(rec), 5 + 4)
+    }
+    let hs_type = tls13_hs_type(rec, 5)
+    let hs_len = tls13_hs_length(rec, 5)
+    if hs_type != TLS_HS_SERVER_HELLO {
+        return _sh_error("wrong-handshake-type", hs_type, TLS_HS_SERVER_HELLO)
+    }
+    let sh_offset = 5 + 4
+    if len(rec) < sh_offset + hs_len {
+        return _sh_error("truncated-sh", len(rec), sh_offset + hs_len)
+    }
+    let sh_version = tls13_sh_version(rec, sh_offset)
+    let sh_random = tls13_sh_random(rec, sh_offset)
+    let sh_sid = tls13_sh_session_id(rec, sh_offset)
+    let sh_cs = tls13_sh_cipher_suite(rec, sh_offset)
+    let sh_comp = tls13_sh_compression(rec, sh_offset)
+    let sh_ext_len = tls13_sh_extensions_length(rec, sh_offset)
+    let sh_ext_off = tls13_sh_extensions_offset(rec, sh_offset)
+    return Tls13ServerHelloParsed {
+        kind:                  "ok",
+        record_bytes:          rec,
+        sh_offset:             sh_offset,
+        sh_length:             hs_len,
+        record_legacy_version: ver,
+        sh_legacy_version:     sh_version,
+        sh_random:             sh_random,
+        sh_session_id:         sh_sid,
+        sh_cipher_suite:       sh_cs,
+        sh_legacy_compression: sh_comp,
+        sh_extensions_length:  sh_ext_len,
+        sh_extensions_offset:  sh_ext_off,
+        error_got:             0,
+        error_need:            0
+    }
+}
+
+// Stage 1 + Stage 2 combined — full first round-trip.
+pub fn tls13_client_roundtrip_x25519(
+    host: str,
+    port: int,
+    hostname: str,
+    random32: [int],
+    x25519_pub: [int]
+) -> Tls13RoundtripState {
+    let sent = tls13_client_connect_send_ch(host, port, hostname, random32, x25519_pub)
+    let received = tls13_client_recv_server_hello(sent.conn)
+    return Tls13RoundtripState {
+        conn:     sent.conn,
+        sent:     sent,
+        received: received
+    }
+}
