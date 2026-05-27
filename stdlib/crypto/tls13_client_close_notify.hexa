@@ -1,0 +1,111 @@
+// HEXA Standard Library — crypto/tls13_client_close_notify
+//
+// @version 0.1.0
+// @capabilities [network, ffi]
+//
+// TLS 1.3 close_notify ALERT builder + sender — RFC 8446 §6.1.
+//
+// Closes RUNTIME.flip B1.tls13-close-notify: builds the 2-byte ALERT body
+// (level + close_notify=0) and ships it over stdlib/net/socket either as an
+// unencrypted alert-record (pre-handshake / aborted handshake) or AEAD-sealed
+// inside an application-record (post-Finished half-close, the spec way).
+//
+// Wire layout (RFC 8446 §6 / §6.1):
+//   ALERT body  = ⟨level⟩ ⟨description=0 close_notify⟩          (2 bytes)
+//   plain rec   = 0x15 0x03 0x03 0x00 0x02 ⟨level⟩ 0x00         (7 bytes)
+//   sealed rec  = AEAD-Seal inside an ApplicationData record,
+//                 inner_content_type = 0x15 (ALERT)              (delegated to
+//                                                                tls13_seal_app_record)
+//
+// Surface:
+//   pub fn tls13_close_notify_record(level: int) -> [int]
+//     Build the unencrypted 7-byte ALERT record. level ∈ {1 warning, 2 fatal}.
+//
+//   pub fn tls13_client_send_close_notify_plain(conn: int, level: int)
+//     -> Tls13CloseNotifyState
+//     socket_write the unencrypted record. Returns the bytes for transcript.
+//
+//   pub fn tls13_client_send_close_notify_encrypted(conn: int, key: [int],
+//     iv: [int], seq: int, level: int) -> int
+//     AEAD-seal ALERT(level, close_notify=0) inside an ApplicationData record
+//     and socket_write it. Returns seq + 1.
+//
+// Constants:
+//   TLS13_AD_CLOSE_NOTIFY     = 0
+//   TLS13_AL_WARNING          = 1
+//   TLS13_AL_FATAL            = 2
+//   _TLS_REC_ALERT_LOCAL      = 0x15
+//   _TLS_VERSION_LEGACY_LOCAL = 0x0303
+//
+// Per RFC 8446 §6.1, peers MUST send a close_notify before closing the write
+// side; the receiver SHOULD discard pending app data and MAY send its own
+// close_notify back. Half-close handling is the caller's job (close one
+// direction, keep reading); this module owns the wire-format + send side.
+
+use "stdlib/crypto/tls13_client_record_io"
+use "stdlib/crypto/tls13_wire"
+use "stdlib/net/socket"
+
+// AlertDescription / AlertLevel constants — RFC 8446 §6.
+let TLS13_AD_CLOSE_NOTIFY: int = 0
+let TLS13_AL_WARNING:      int = 1
+let TLS13_AL_FATAL:        int = 2
+
+// Locally re-declared record-layer constants (kept stable by RFC 8446 §5.1).
+let _TLS_REC_ALERT_LOCAL:      int = 0x15
+let _TLS_VERSION_LEGACY_LOCAL: int = 0x0303
+
+// State returned by the plaintext send path.
+// `kind` ∈ {"ok", "send-failed"}; "send-failed" is reserved for future
+// socket_write error wiring (socket_write currently returns no status).
+struct Tls13CloseNotifyState {
+    kind:       str,
+    sent:       bool,
+    sent_bytes: [int]
+}
+
+// Build the unencrypted 7-byte close_notify ALERT record:
+//   0x15 0x03 0x03 0x00 0x02 ⟨level⟩ 0x00
+pub fn tls13_close_notify_record(level: int) -> [int] {
+    let body_len = 2
+    let hdr = tls13_record_header(_TLS_REC_ALERT_LOCAL, _TLS_VERSION_LEGACY_LOCAL, body_len)
+    let mut out: [int] = []
+    let mut i = 0
+    while i < len(hdr) {
+        out.push(hdr[i])
+        i = i + 1
+    }
+    out.push(level & 0xFF)
+    out.push(TLS13_AD_CLOSE_NOTIFY & 0xFF)
+    return out
+}
+
+// Send the unencrypted close_notify record over `conn`.
+// Use in PRE-handshake / aborted-handshake paths; post-Finished closures
+// should use the encrypted variant.
+pub fn tls13_client_send_close_notify_plain(conn: int, level: int) -> Tls13CloseNotifyState {
+    let record = tls13_close_notify_record(level)
+    socket_write(conn, record)
+    return Tls13CloseNotifyState {
+        kind:       "ok",
+        sent:       true,
+        sent_bytes: record
+    }
+}
+
+// Send an AEAD-sealed close_notify (RFC 8446 §6.1 half-close, post-Finished).
+// Wraps a 2-byte ALERT body with inner_content_type = 0x15 inside an
+// ApplicationData record via tls13_seal_app_record. Returns seq + 1 so the
+// caller can chain further app-record sends without managing the counter.
+pub fn tls13_client_send_close_notify_encrypted(
+    conn:  int,
+    key:   [int],
+    iv:    [int],
+    seq:   int,
+    level: int
+) -> int {
+    let alert_body: [int] = [level & 0xFF, TLS13_AD_CLOSE_NOTIFY & 0xFF]
+    let record = tls13_seal_app_record(key, iv, seq, _TLS_REC_ALERT_LOCAL, alert_body)
+    socket_write(conn, record)
+    return seq + 1
+}
