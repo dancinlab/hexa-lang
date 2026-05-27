@@ -708,3 +708,13 @@ Next user-gate decisions (with FINAL evidence):
   eliminate per-shape primitive call overhead): autonomous-able,
   marginal incremental gain
 - Phase 4-B SHIPPED CLOSURE (recommended) — substantial milestone
+
+## 2026-05-27 — flame V3 backlog 8 milestone closure (single-SSOT, absorbed FLAME_BACKLOG_CLOSURE.md)
+# source-done (2): P2a nn_rope_build_tables_base parameterized (nn_lib.hexa:509) ·
+#   P2b Qwen BPE round-trip (#1556 encode chr->from_char_code + #1578 decode UTF-8
+#   codepoint-aware; ubu-1 deploy-refresh flame_bpe_corpus_test PASS=10/0).
+# design-defer (4): P2c .pt loader (safetensors detour per g0) · P3a int8 quant
+#   (codegen intrinsic pair) · P3b cross-attn (encoder-decoder model timing) ·
+#   P3c KV-cache (inference stage).
+# design+impl-soon (2): P3d gaussian RNG (Box-Muller; exp/log/sin/cos fired-validated) ·
+#   P3e LayerNorm gamma/beta (nn_rmsnorm_fwd mirror).
