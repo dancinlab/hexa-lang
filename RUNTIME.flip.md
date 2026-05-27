@@ -206,6 +206,39 @@ C-frontier residual + B (cross-domain) translates to INBOX handoff entries.
 
 ---
 
+## Batch B9 — `.c`-zero north-star campaign (5 items · multi-session architectural)
+
+post-B1-B8 stdlib expansion 100% closure 이후, RUNTIME.md 의 north-star
+("`.hexa`-ONLY · zero `.c`") 달성을 위한 실제 C-floor 제거 작업. 본 batch 는
+multi-session architectural — 단일-PR <200 LOC 가 아니라 도메인-multi-PR
+캠페인이며, `## deferred` 와 달리 active multi-session work track.
+
+실측 현재 상태 (2026-05-28): `self/*.c` = **44개** (`runtime.c` · `runtime_core.c`
+· `runtime_hi_gen.c` · `bootstrap_compiler.c` · `native/*.c` 38개 등). north-star
+충족 시 `ls self/*.c` 가 비어야 함.
+
+- [ ] **B9.runtime-c-fns-hexa-port** — `self/runtime.c` 의 ~150 fn 을
+      `stdlib/runtime/*.hexa` 로 hexa-native 포팅 (multi-session). wipe-prone
+      가드: surgical edit + 직후 grep 검증 (memory
+      `feedback-runtime-c-deploy-regen-wipe`). 이미 일부 LANDED —
+      `stdlib/runtime/` 의 7 파일 (`numeric.hexa` 88 fn 외).
+- [ ] **B9.runtime-core-c-fns-hexa-port** — `self/runtime_core.c` 의 ~548 fn
+      포팅 (multi-session). 단 HexaVal repr · arena · GC core 는 irreducible
+      bootstrap floor (memory `project-runtime-md-step3-step4-progress` step-4
+      "irreducible-core FLOOR" terminal); portable layer (~150 fn) 부분만
+      target.
+- [ ] **B9.native-c-files-port** — `self/native/*.c` 38 파일 분류 →
+      layer ① (reimplementable) 는 hexa-native 포팅 · layer ③ (vendor FFI:
+      GPU/crypto/network) 는 정책 정당으로 유지. 분류 audit 필요.
+- [ ] **B9.codegen-s-self-emit** — `self/codegen/runtime_arm64.hexa` 의
+      machine-code self-emit 확장. 현재 `rt_arena_init/alloc/reset/release` 4 fn
+      LANDED (#1252/#1297/#1315). 잔여 = HexaVal repr 생성자 · 기타 runtime
+      primitive 의 codegen self-emit (chunk-A wire-plan 진행중).
+- [ ] **B9.self-host-linker** — `tool/hexa_ld` phase-H 격납고 — phase-h-inc4
+      dyld bind LANDED (#1348), 잔여 = 더 많은 syscall · scattered relocation ·
+      TLV thread-locals · multi-dylib (CLOSED-NEG #1674). 활성 브랜치
+      `phase-h-inc4-dyld-write` 다른 에이전트 진행중.
+
 ## cross-domain handoff (B-갈래 → 별도 도메인)
 
 The B-갈래 (HEXA-LANG · GPU · TECS-L · PROBE · ARXIV) handoff items DO NOT
