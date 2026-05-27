@@ -19,7 +19,7 @@
 use "stdlib/crypto/asn1_der"
 use "stdlib/crypto/p256"
 use "stdlib/crypto/x509_min"
-use "stdlib/core/hash/sha256"
+use "stdlib/core/hash/hmac"
 
 // normalize a DER INTEGER's value bytes to exactly 32 big-endian bytes:
 // strip a leading 0x00 sign byte, then left-pad with zeros to 32.
