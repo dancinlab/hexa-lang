@@ -1,0 +1,73 @@
+// HEXA Standard Library — crypto/tls13_server_hello
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// TLS 1.3 ServerHello body parser (RFC 8446 §4.1.3) — pure hexa. Reads the
+// fields of a ServerHello body: legacy_version, random, session_id_echo,
+// cipher_suite, compression_method, and the extensions vector. Pair with
+// stdlib/crypto/tls13_extensions for parsing individual ServerHello
+// extensions (selected supported_versions, key_share, etc.). let-mut (#1506).
+//
+// Structure (RFC 8446 §4.1.3):
+//   ProtocolVersion legacy_version = 0x0303
+//   Random random[32]
+//   opaque legacy_session_id_echo<0..32>
+//   CipherSuite cipher_suite
+//   uint8 legacy_compression_method = 0
+//   Extension extensions<6..2^16-1>
+//
+// Surface — each takes (body, o) with o = offset of the ServerHello body's first byte:
+//   pub fn tls13_sh_version(body: [int], o: int) -> int            — 2-byte legacy_version
+//   pub fn tls13_sh_random(body: [int], o: int) -> [int]            — 32 bytes
+//   pub fn tls13_sh_session_id(body: [int], o: int) -> [int]        — 0..32 bytes
+//   pub fn tls13_sh_cipher_suite(body: [int], o: int) -> int        — 2-byte suite code
+//   pub fn tls13_sh_compression(body: [int], o: int) -> int         — 1 byte (should be 0)
+//   pub fn tls13_sh_extensions_offset(body: [int], o: int) -> int   — offset of first Extension TLV
+//   pub fn tls13_sh_extensions_length(body: [int], o: int) -> int   — total extensions vector length
+
+@pure
+pub fn tls13_sh_version(body: [int], o: int) -> int {
+    return ((body[o] & 0xFF) << 8) | (body[o + 1] & 0xFF)
+}
+
+@pure
+pub fn tls13_sh_random(body: [int], o: int) -> [int] {
+    let mut r: [int] = []
+    let mut i = 0
+    while i < 32 { r.push(body[o + 2 + i]); i = i + 1 }
+    return r
+}
+
+@pure
+pub fn tls13_sh_session_id(body: [int], o: int) -> [int] {
+    let sl = body[o + 34] & 0xFF
+    let mut s: [int] = []
+    let mut i = 0
+    while i < sl { s.push(body[o + 35 + i]); i = i + 1 }
+    return s
+}
+
+@pure
+pub fn tls13_sh_cipher_suite(body: [int], o: int) -> int {
+    let sl = body[o + 34] & 0xFF
+    return ((body[o + 35 + sl] & 0xFF) << 8) | (body[o + 36 + sl] & 0xFF)
+}
+
+@pure
+pub fn tls13_sh_compression(body: [int], o: int) -> int {
+    let sl = body[o + 34] & 0xFF
+    return body[o + 37 + sl] & 0xFF
+}
+
+@pure
+pub fn tls13_sh_extensions_length(body: [int], o: int) -> int {
+    let sl = body[o + 34] & 0xFF
+    return ((body[o + 38 + sl] & 0xFF) << 8) | (body[o + 39 + sl] & 0xFF)
+}
+
+@pure
+pub fn tls13_sh_extensions_offset(body: [int], o: int) -> int {
+    let sl = body[o + 34] & 0xFF
+    return o + 40 + sl
+}
