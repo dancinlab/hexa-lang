@@ -1,0 +1,62 @@
+// HEXA Standard Library — crypto/hkdf_sha512
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// HKDF-SHA-512 (RFC 5869 with SHA-512) — pure hexa. Completes the HKDF
+// family alongside the existing SHA-256 variant (stdlib/crypto/pbkdf2 carries
+// hkdf_sha256). Used wherever a 64-byte PRK / longer keying material is
+// needed. let-mut idiom (#1506).
+//
+// Surface:
+//   pub fn hkdf_sha512_extract(salt: [int], ikm: [int]) -> [int]              — 64-byte PRK
+//   pub fn hkdf_sha512_expand(prk: [int], info: [int], length: int) -> [int]
+//   pub fn hkdf_sha512(ikm: [int], salt: [int], info: [int], length: int) -> [int]
+
+use "stdlib/core/hash/hmac_sha512"
+
+let _HKDF_SHA512_HASHLEN: int = 64
+
+// HKDF-Extract(salt, IKM) = HMAC-SHA-512(salt, IKM). RFC 5869 §2.2.
+@pure
+pub fn hkdf_sha512_extract(salt: [int], ikm: [int]) -> [int] {
+    let mut s = salt
+    if len(s) == 0 {
+        let mut zero: [int] = []
+        let mut i = 0
+        while i < _HKDF_SHA512_HASHLEN { zero.push(0); i = i + 1 }
+        s = zero
+    }
+    return hmac_sha512_bytes(s, ikm)
+}
+
+// HKDF-Expand(PRK, info, L) = T(1) ‖ T(2) ‖ … truncated to L. RFC 5869 §2.3.
+@pure
+pub fn hkdf_sha512_expand(prk: [int], info: [int], length: int) -> [int] {
+    let mut okm: [int] = []
+    let mut t: [int] = []
+    let mut i = 1
+    while len(okm) < length {
+        let mut block: [int] = []
+        let mut j = 0
+        while j < len(t) { block.push(t[j]); j = j + 1 }
+        j = 0
+        while j < len(info) { block.push(info[j]); j = j + 1 }
+        block.push(i & 0xFF)
+        t = hmac_sha512_bytes(prk, block)
+        j = 0
+        while j < len(t) { okm.push(t[j]); j = j + 1 }
+        i = i + 1
+    }
+    let mut out: [int] = []
+    i = 0
+    while i < length { out.push(okm[i]); i = i + 1 }
+    return out
+}
+
+// HKDF(ikm, salt, info, length) = Expand(Extract(salt, ikm), info, length). RFC 5869 §2.
+@pure
+pub fn hkdf_sha512(ikm: [int], salt: [int], info: [int], length: int) -> [int] {
+    let prk = hkdf_sha512_extract(salt, ikm)
+    return hkdf_sha512_expand(prk, info, length)
+}
