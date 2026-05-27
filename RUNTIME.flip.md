@@ -13,7 +13,7 @@
 | batch | concern | items | est. LOC each | target dir |
 |---|---|---|---|---|
 | B1 | TLS 1.3 client expansion (post-#4/5/6) | 7 | ~150 | stdlib/crypto/ |
-| B2 | CA bundle policy options (post-#9 stub) | 5 | ~120 | stdlib/crypto/ |
+| B2 | CA bundle policy options (post-#9 stub · 100% hexa-self) | 4 | ~120 | stdlib/crypto/ |
 | B3 | POSIX syscall ABI tables (post-#3) | 5 | ~100 | stdlib/posix/ |
 | B4 | Option/Result combinators (post-#7) | 6 | ~80 | stdlib/core/ |
 | B5 | trait fixture expansion (post-#8) | 6 | ~90 | stdlib/core/ |
@@ -21,7 +21,7 @@
 | B7 | WebAssembly target scaffold (new C1) | 6 | ~150 | stdlib/wasm/ + compiler/codegen/ |
 | B8 | LSP completion + cross-domain handoff (B+C residual) | 8 | ~100 | stdlib/lsp/ + INBOX entries |
 
-Total ~47 atomic items (~9400 LOC) — depletion-grade brainstorm.
+Total **46 atomic items** (~9280 LOC) — depletion-grade brainstorm. **All 46 are 100% hexa-self** (no FFI, no C-runtime dep). 1 layer-③ FFI option moved to `## deferred` below.
 
 ## How to use
 
@@ -62,25 +62,26 @@ state-handlers + extension wires the round-trip driver doesn't cover yet.
       `stdlib/crypto/tls13_client_post_handshake_auth.hexa`: CertificateRequest
       handling + cert+CertVerify response. RFC 8446 §4.6.2.
 
-## B2 — CA bundle policy options (5 items)
+## B2 — CA bundle policy options (4 items · 100% hexa-self)
 
-post-#9 — `tls_ca_bundle.hexa` API stub landed (kind="none"). 4 policy options
-+ 1 test scaffold. Once D2+ decision lands, one of these gets wired.
+post-#9 — `tls_ca_bundle.hexa` API stub landed (kind="none"). 3 policy options
+(A pinned · C caller-supplied · D hybrid) + 1 test scaffold — all hexa-self.
+Option B (system trust store FFI) moved to `## deferred` (layer ③ vendor FFI ·
+D2+ if Option B is chosen).
 
 - [ ] **B2.ca-pinned-nss** — `stdlib/crypto/tls_ca_bundle_pinned_nss.hexa`:
       Mozilla NSS PEM subset (compact, e.g. 30-40 ISRG/DigiCert/Let's Encrypt
       roots). pinned implementation; the bundle bytes go in a sibling .pem-like
-      data file.
-- [ ] **B2.ca-system-fficacert** — `stdlib/crypto/tls_ca_bundle_system_fficacert.hexa`:
-      FFI wrapper (macOS SecTrust / Linux /etc/ssl/certs walk). impl skeleton
-      with FFI binding sites stubbed.
+      data file. **Option A — 100% hexa-self**.
 - [ ] **B2.ca-caller-supplied** — `stdlib/crypto/tls_ca_bundle_caller_supplied.hexa`:
       reads bundle from a caller-passed path. PEM parser + slot-loader.
+      **Option C — 100% hexa-self**.
 - [ ] **B2.ca-hybrid** — `stdlib/crypto/tls_ca_bundle_hybrid.hexa`: composes
-      pinned-as-default + caller-supplied-as-override. delegates to the prior 3.
+      pinned-as-default + caller-supplied-as-override. delegates to A + C.
+      **Option D — 100% hexa-self**.
 - [ ] **B2.ca-test-vectors** — `stdlib/crypto/tls_ca_bundle_test_vectors.hexa`:
       Known-good test PEM strings (1 self-signed ISRG-Root-X1 sample · 1
-      tampered) for offline verify_chain testing.
+      tampered) for offline verify_chain testing. **100% hexa-self**.
 
 ## B3 — POSIX syscall ABI tables (5 items)
 
@@ -224,6 +225,20 @@ the canonical handoff surface.
 
 ## depletion criterion
 
-47 atomic items registered. After all 47 ship: re-enter `/mining` for next
+46 atomic items registered. After all 46 ship: re-enter `/mining` for next
 divergence round; or pivot to a different active domain (HEXA-LANG · GPU ·
 TECS-L 등) per cross-domain handoff list above.
+
+## deferred (layer ③ FFI · vendor ABI · policy-D2+)
+
+레이어 ③ (irreducible-external-interface · vendor ABI) 항목 — RUNTIME
+north-star ("zero libc / libm / libsystem") 와 별도 카테고리. LATTICE_POLICY
+정의상 FFI 정당하지만 "완전히 hexa-self" 좁은 기준에선 active batch 에서
+빠짐. D2+ governance 결정이 옵션 B 채택 시에만 실제 작업.
+
+- [ ] **B2.ca-system-fficacert (deferred)** —
+      `stdlib/crypto/tls_ca_bundle_system_fficacert.hexa`: FFI wrapper (macOS
+      SecTrust / Linux /etc/ssl/certs walk). impl skeleton with FFI binding
+      sites stubbed. **레이어 ③ vendor ABI** — `#1674` multi-dylib closed-neg
+      및 GPU 드라이버 FFI 와 동일 카테고리. D2+ 가 Option B 채택 시 active 로
+      승격 · A/C/D 채택 시 cancel.
