@@ -45,3 +45,18 @@ flame-P2b 를 "BPE tokenizer 부재 → 새로 작성" 으로 적었으나 **부
 3. Qwen vocab.json + merges.txt 로드 → V=151936 round-trip + reference 토큰화 일치 검증
 
 → flame-P2b 재정의: **BPE 알고리즘 (있음) 를 flame 학습 corpus 경로에 연결**. 난이도 = wiring/module-boundary (from-scratch BPE 보다 작음). flame-P2a (rope base) 와 함께 진행 시 3B Qwen hexa-native 학습 path 개방.
+
+## 근본원인 발견 + fix LANDED (2026-05-27 — #1527)
+
+scope 정정(#2 모듈 경계)을 실측하던 중 **더 깊은 선결 blocker** 발견 — "wiring" 이 아니라 **컴파일러 codegen 버그**:
+
+- 실측 probe (stdlib/flame 에서 `use "self/ml/tokenizer_bpe"`) → cross-tree `use` 는 **resolve 됨** (모듈 경계 #2 는 비문제로 판명). 그러나 ubu-2 Linux `hexa run` clang 단계에서 `error: use of undeclared identifier 'trim'` ×6.
+- 추적: `tokenizer_bpe.hexa` 의 `load_merges` 가 **free-fn `trim(line)`** 사용. `trim` 은 binder(`compiler/check/bind.hexa`) + arm64 백엔드(`compiler/codegen/arm64_darwin.hexa`: `trim -> rt_str_trim`)가 인정하는 free-fn builtin. **그러나 gen2 C 백엔드(`self/codegen.hexa` `gen2_expr` free-fn 블록)에 free-fn `trim` lowering 이 누락** (`split` 은 있음) → generic `hexa_call1(trim,…)` 로 fall-through → undeclared.
+- = **cross-backend 불일치**: Mac arm64 는 free-fn `trim` 동작, 포터블 C 백엔드(Linux `hexa run`)는 미동작. tokenizer_bpe 가 Linux flame 경로에 연결 안 됐던 진짜 이유. free-fn `trim` 쓰는 self/ 모듈 47곳 공통 영향.
+
+**fix (#1527 MERGED)**: `gen2_expr` free-fn 블록에 `.trim()` 메서드 경로(self/codegen.hexa:3942/7190 `cg_string_sym("str_trim") -> rt_str_trim`)와 동일한 free-fn `trim` lowering 추가 (12 LoC, SSOT only — hexa_cc.c bootstrap 은 표준 cadence). ubu-2 end-to-end 검증: `hexa cc --regen` → standalone `trim("  hi  ")` 가 `rt_str_trim` 으로 lowering + clang 링크 + 실행, `use "self/ml/tokenizer_bpe"` 전체 체인 컴파일 + round-trip PASS.
+
+**잔여 (이제 unblock, bootstrap 후 진행)**:
+1. `self/native/hexa_cc.c` bootstrap 재생성 — committed 컴파일러에 #1527 반영 (표준 regen cadence)
+2. stdlib/flame BPE-corpus 로더 — `read_file(corpus)` → `bpe_encode` → 토큰id 배열 (byte-level 경로의 `bytes_arr` 교체, downstream windowing/V 동일)
+3. Qwen V=151936 round-trip — vocab.json/merges.txt 로컬 존재 (`HEXAD/UNCLASSIFIED/state/grid_3b_s187_2026_05_21/vP21M_*/lora_adapter/`)
