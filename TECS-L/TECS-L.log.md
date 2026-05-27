@@ -2,6 +2,34 @@
 
 Append-only history sister of `TECS-L.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
+## 2026-05-27T18:55Z · 축 RTSC · RTSC29 · 수학 DFS — chemistry-axis (ω²_anharm) m-margin sensitivity sweep
+
+RTSC28 의 grand unification (λ_actual 변화 → m) 의 dual representation: λ_target=2.5
+고정에서 ω²_anharm 변화 → m. 즉 같은 λ_target 도달하려는 chemistry 의 stiffness
+변화로 m-sign 추적. CaH₆ cation pre-compression 의 정량적 정의.
+
+- [x] ω²_anharm=0.5 (soft binary): m = (0.5−1)/0.5 = **−1.0** 🟢 (deep TRAPPED, unstable)
+- [x] ω²_anharm=0.9: m = **−0.111** 🟢 (가까운 TRAPPED)
+- [x] ω²_anharm=1.0: m = 0 (wall boundary, RTSC24 wall 정확)
+- [x] ω²_anharm=1.1: m = **+0.0909** 🟢 (marginal ESCAPE)
+- [x] ω²_anharm=2.0 (CaH₆ cation-clathrate): m = **+0.5** 🟢 (doc canonical anchor)
+- [x] ω²_anharm=4.0 (metallic-H limit): m = **+0.75** 🟢 (deep ESCAPE)
+
+⟹ 결론 (RTSC chemistry roadmap):
+   - **binary**: ω²_anharm ~ 0.5-0.9 (soft H sublattice) → m<0 trapped
+   - **ternary clathrate**: ω²_anharm ~ 1.1-2.0 (cation pre-compression) → m>0 escape
+   - **metallic H** (asymptotic): ω²_anharm → 4.0+ (full stiffness) → m → 0.75+
+   ω²_anharm 의 chemistry-axis 가 RTSC roadmap 의 핵심 tuning parameter.
+   CaH₆ (Wang-Ma 2012) 의 cation Ca²⁺ pre-compression 으로 ω²_anharm ~2× 증가
+   = m=+0.5 deep escape (doc anchor) 의 정량적 정의.
+
+verify (inline, --no-absorb, libm-class):
+  stability_coupling_margin 0.5 1.0 → -1.0       🟢
+  stability_coupling_margin 0.9 1.0 → -0.111     🟢
+  stability_coupling_margin 1.1 1.0 → +0.0909    🟢
+  stability_coupling_margin 2.0 1.0 → +0.5       🟢 (CaH₆ canonical)
+  stability_coupling_margin 4.0 1.0 → +0.75      🟢 (metallic-H limit)
+
 ## 2026-05-27T18:50Z · 축 RTSC · RTSC28 · 🛸🛸 수학 DFS — m-margin 분류로 모든 실측 hydride mechanism 통합
 
 RTSC24 의 stability_coupling_margin primitive 를 모든 실측 RTSC system 에 적용:
