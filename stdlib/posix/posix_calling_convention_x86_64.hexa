@@ -1,0 +1,89 @@
+// HEXA Standard Library — posix/posix_calling_convention_x86_64
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// x86_64 SysV syscall calling-convention table — the kernel-syscall ABI half
+// of the cross-arch CC pair (sibling: posix_calling_convention_arm64.hexa).
+// Per RUNTIME.flip.md milestone B3.posix-cc-x86-64.
+//
+// Surface (all @pure, 100% hexa-self, pure additive — no behavioural change):
+//   pub fn posix_cc_x86_64_arg_register(idx: int) -> str
+//       — arg register name for idx ∈ [0, 6). Kernel ABI uses
+//         rdi · rsi · rdx · r10 · r8 · r9 (NOTE: r10 for arg 3, NOT rcx —
+//         rcx is clobbered by the `syscall` instruction so the kernel ABI
+//         diverges from the user-mode SysV C ABI on this one slot).
+//   pub fn posix_cc_x86_64_arg_count() -> int
+//       — number of register-passable args (6).
+//   pub fn posix_cc_x86_64_result_register() -> str
+//       — syscall return-value register ("rax").
+//   pub fn posix_cc_x86_64_syscall_number_register() -> str
+//       — register that carries the syscall number on entry ("rax").
+//   pub fn posix_cc_x86_64_syscall_instruction() -> str
+//       — kernel-entry instruction mnemonic ("syscall").
+//   pub fn posix_cc_x86_64_user_vs_kernel_arg3_note() -> str
+//       — human-readable note on the rcx/r10 divergence between the user-mode
+//         SysV C ABI (rcx for arg 3) and the kernel syscall ABI (r10 for arg
+//         3). The `syscall` instruction itself clobbers rcx (saves rip there)
+//         which is why the kernel ABI substitutes r10.
+//   pub fn posix_cc_x86_64_clobbered_registers() -> [str]
+//       — list of registers clobbered by the `syscall` instruction
+//         (rax = result, rcx = saved rip, r11 = saved rflags).
+//
+// References:
+//   • System V ABI AMD64 Supplement, §A.2.1 "Calling Conventions"
+//     (kernel-level: rdi · rsi · rdx · r10 · r8 · r9 · rax (number) → rax)
+//   • Linux kernel arch/x86/entry/entry_64.S — `syscall` entry, r10 swap.
+//   • Intel SDM Vol. 2B — SYSCALL instruction (RCX ← RIP, R11 ← RFLAGS).
+//
+// This file is a pure data-table. It does not emit any code; the codegen
+// (NVPTX / native x86_64) consults these surfaces when wiring inline syscall
+// sequences per the RUNTIME.flip Linux self-host campaign.
+
+@pure
+pub fn posix_cc_x86_64_arg_count() -> int {
+    return 6
+}
+
+@pure
+pub fn posix_cc_x86_64_arg_register(idx: int) -> str {
+    // Kernel syscall ABI — diverges from user-mode SysV C ABI at arg 3 (r10
+    // vs rcx). The `syscall` instruction clobbers rcx (it stashes rip there),
+    // so the kernel substitutes r10 for the 4th argument slot.
+    if idx == 0 { return "rdi" }
+    if idx == 1 { return "rsi" }
+    if idx == 2 { return "rdx" }
+    if idx == 3 { return "r10" }  // user ABI = rcx, kernel ABI = r10
+    if idx == 4 { return "r8" }
+    if idx == 5 { return "r9" }
+    return ""
+}
+
+@pure
+pub fn posix_cc_x86_64_result_register() -> str {
+    return "rax"
+}
+
+@pure
+pub fn posix_cc_x86_64_syscall_number_register() -> str {
+    return "rax"
+}
+
+@pure
+pub fn posix_cc_x86_64_syscall_instruction() -> str {
+    return "syscall"
+}
+
+@pure
+pub fn posix_cc_x86_64_user_vs_kernel_arg3_note() -> str {
+    return "user ABI uses rcx for arg 3; kernel syscall ABI uses r10 (rcx clobbered by syscall insn)"
+}
+
+@pure
+pub fn posix_cc_x86_64_clobbered_registers() -> [str] {
+    // `syscall` instruction clobbers:
+    //   rax = syscall return value (input was syscall number)
+    //   rcx = saved rip (return address after kernel returns)
+    //   r11 = saved rflags
+    return ["rax", "rcx", "r11"]
+}
