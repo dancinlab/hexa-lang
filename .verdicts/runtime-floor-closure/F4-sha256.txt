@@ -1,0 +1,39 @@
+# F4 — sha256 entangled (exec_argv_sha256.c) — RESOLVED into F3 (decompose + de-risk)
+# verdict tier: 🟢 SUPPORTED-NUMERICAL (port target ≡ FIPS 180-4) + structural reclass
+# captured 2026-05-28 on origin/main worktree.
+
+# (1) exec_argv_sha256.c is a runtime.c #include FRAGMENT — NOT a standalone deletable file:
+$ grep -n 'exec_argv_sha256' self/runtime.c
+12483:#include "native/exec_argv_sha256.c"
+#   → it cannot be "git rm"'d like blowfish/v565/hxtok; it IS runtime.c source.
+#   → therefore F4 is a SUBSET of F3 (runtime FLOOR), not a separate floor item.
+
+# (2) bundle structure (3 concerns):
+#   hexa_exec_argv / _with_status  — fork/execvp, no /bin/sh -c (shell-injection-safe)
+#                                    = layer ③ syscall floor (STAYS, irreducible, → F3)
+#   hexa_sha256 / _file / _bytes   — FIPS 180-4 SHA-256  = layer ① portable
+#   hexa_sha1 / _bytes             — SHA-1               = layer ① portable
+
+# (3) the ① port TARGET already exists AND is FIPS-180-4 VERIFIED (built + ran):
+$ cat ~/_sha_proof.hexa  # use "stdlib/core/hash/sha256"; print(sha256_hex("abc"))
+$ HEXA_MAC_BUILD_OK=1 hexa build ~/_sha_proof.hexa && ~/_sha_proof
+ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad
+$ printf 'abc' | shasum -a 256
+ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad   # ← IDENTICAL
+#   stdlib/core/hash/sha256.hexa parses clean; sha256_test.hexa asserts the
+#   FIPS Appendix B "abc" + empty-string KATs (both confirmed real via shasum).
+
+# (4) the BLOCKER (why it stays multi-session, not a single-session delete):
+#   codegen.hexa emits sha256→hexa_sha256, sha256_file→hexa_sha256_file,
+#   sha256_bytes→hexa_sha256_bytes (lines 6639/6640/6792). The builtin is called
+#   by 30+ CORE-COMPILER sites: self/main, codegen, falsifier, hexa_ld, atlas,
+#   compiler/codegen/{arm64_darwin,x86_64_linux,thumbv7em}, bridges/*. Rewiring
+#   the codegen emit to the hexa stdlib (+ name unify sha256 vs sha256_hex)
+#   WITHOUT breaking the falsifier/verify pipeline = the blowfish 7-surface
+#   recipe scaled to 30+ callers = multi-session. "무리한 삭제 = 컴파일러 붕괴."
+#
+# VERDICT: F4 RESOLVED as a standalone floor item —
+#   • exec_argv (③) = irreducible syscall floor, part of F3 runtime FLOOR (terminal).
+#   • sha256/sha1 (①) = port target FIPS-VERIFIED 🟢 (de-risked); the 30+ caller
+#     codegen rewire folds into F3 B9.6 codegen self-emit (no double-count).
+#   F4 was a mis-split: exec_argv_sha256.c is runtime.c, so it belongs to F3.

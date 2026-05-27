@@ -1,0 +1,42 @@
+# F1 — perf-floor (hxflash/hxlayer/hxvdsp) — TERMINAL closed-negative
+# verdict tier: 🔴 FALSIFIED (port-is-beneficial hypothesis) → perf-floor irreducible
+# captured 2026-05-28 on origin/main worktree, raw command outputs:
+
+$ ls self/native/hx{flash,layer,vdsp}_linux.c
+self/native/hxflash_linux.c   (25845 B)
+self/native/hxlayer_linux.c   ( 4372 B)
+self/native/hxvdsp_linux.c    ( 9552 B)
+
+# (1) @link FFI .so boundary — NOT a portable C-source-logic file:
+$ grep -n '@link' self/ml/hxlayer.hexa
+19://  Platform resolution (@link("hxlayer")):
+30:@link("hxlayer")
+33:@link("hxlayer")
+
+# (2) pure-hexa reference equivalent EXISTS (so port is not blocked by absence):
+$ grep -rn 'ref_rmsnorm_silu' self --include='*.hexa'
+self/bench_hxlayer.hexa:32:fn ref_rmsnorm_silu(x, gamma, eps) {
+self/bench_hxlayer_matrix.hexa:24:fn ref_rmsnorm_silu(x, gamma, eps) {
+self/test_hxlayer.hexa:50:fn ref_rmsnorm_silu(x, gamma, eps) {
+
+# (3) bench measures ratio = ref_ms / ffi_ms (>1 ⇒ pure-hexa SLOWER):
+$ grep -nE 'ratio|285' self/bench_hxlayer_matrix.hexa
+9://    self/bench_hxlayer.hexa @ DIM=128 iters=10000 measured 285x
+113:    let mut ratio = 0.0
+114:    if ffi_ms > 0.001 { ratio = ref_ms / ffi_ms }
+
+# (4) H100 deploy hot-path (dlopen .so) — production ML training:
+$ grep -rln 'libhxlayer\|hxlayer' tool --include='*.hexa'
+tool/deploy_h100.hexa
+tool/build_hxlayer_linux.hexa
+
+# FINDING (closure-is-physical-limit):
+#   Porting hxlayer/hxflash/hxvdsp C→hexa is NOT blocked by missing equivalent —
+#   ref_rmsnorm_silu already exists. It is blocked by MEASURED 285x regression
+#   (DIM=128, iters=10000, B9.6g). The pure-hexa path is 285x slower on the
+#   H100 ML-training hot-path. Additionally hexa `fn` cannot be emitted as a
+#   standalone dlopen `.so` (the @link FFI deploy model is unreproducible).
+#   B9.6g harm-guard aborted the port with 0 edits (honest-abort).
+# VERDICT: 🔴 PERF-FLOOR TERMINAL — port forbidden (285x ML regression).
+#   Same irreducible tier as vendor FFI. Re-open only if codegen self-emits
+#   SIMD/GPU machine-code at FFI parity (B9.6 enabler, multi-session).
