@@ -2320,6 +2320,65 @@ below is the chosen target.
 - [x] HEXA-NATIVE-ONLY.md updated with measured proof — 2026-05-27 0-extern
       HEAD rebuild measurement recorded.
 
+## frontier next list (2026-05-27 등록 · 18 milestones)
+
+framing-① (nm aprime 0 externs) 측정-충족 이후 — framing-② (source zero-.c)
++ phase-H 후속 + TLS/언어/CI 레인의 runnable scoped 단위들을 단일 SSOT 에
+일괄 등록. 각 항목 = 단일-PR 또는 명시된 multi-PR 작업.
+
+### RUNTIME source-zero-.c — phase-H self-emit 캠페인 (multi-session)
+
+- [ ] **rt_arena/alloc/reset/release 머신코드 self-emit** — HexaVal repr 첫 piece;
+      `phase-h-inc*` 브랜치에서 진행중인 레인 (병렬 에이전트 경합 회피).
+- [ ] **runtime_core.c 의 548 fn 중 순수-logic 1개 hexa-native 포팅** — `gmtime_r`
+      류 후속; runtime.c wipe-prone (surgical edit + grep 검증).
+- [ ] **Linux self-host 잔여 17 syscall** — read/write/open/close/mkdir/dup2/lseek/
+      select/poll/wait4/getpid/getuid/kill/fcntl/ioctl/stat/fstat/mmap/gettimeofday/
+      exit 의 `#if Darwin-arm64 / #else libc` 패턴 → `svc #0x80` 인라인. Phase-1
+      반복 적용.
+
+### TLS 1.3 handshake state-machine loop — socket 와이어링 (multi-PR)
+
+- [ ] **ClientHello 송신 + ServerHello 수신 round-trip 드라이버** — stdlib/net/socket
+      위에 첫 핸드셰이크 round-trip; 모든 프리미티브 준비됨.
+- [ ] **key-schedule 도출 + EncryptedExtensions/Certificate parse 와이어** — x509_chain
+      + tls13_keyschedule 활용.
+- [ ] **Finished verify_data + app-record send/recv** — tls13_record + tls13_finished
+      + AEAD seal/open 와이어.
+
+### hexa-lang language features (HEXA-LANG.log open)
+
+- [ ] **Option/Result enum surface + `?` propagation typechecker** — `pop()`/
+      `get()`/`find()` 반환채널 마이그레이션 동반.
+- [ ] **trait core 4종 (`Add`/`Sub`/`Eq`/`Ord`) dispatch** — coherence/orphan
+      rule 결정 동반.
+- [ ] **TLS CA bundle 배포 결정 (D2+)** — TLS handshake 와 함께.
+
+### phase-H linker future generalizations (macOS 잔여는 ZERO · 미래용)
+
+- [ ] **lazy-bind 옵션화** — 현재 모든 import 가 `__got` non-lazy; lazy bind
+      변종 추가 (선택).
+- [ ] **scattered relocation + TLV thread-locals** — rare path 지원.
+- [ ] **multi-dylib (3rd-party — Metal/CUDA 시점)** — macOS standard 엔 불필요
+      (closed-neg #1674); GPU/외부 dylib 등장 시점에만.
+
+### GPU / COMPILER 후속 (도메인 active 레인)
+
+- [ ] **GPU: function-body ExprKind::Let 의 Expr struct annotations 부재** —
+      F-GPU-SWEEP-SHARED-REDUCE-NUMERIC falsifier 의 next gap.
+- [ ] **GPU: exp polynomial · to_int root-fix (sub-PR-C)** — math 도메인 후속.
+- [ ] **COMPILER: gen3 idempotent 확장** — S5 closed (#1058) 이후 옵션; gen2 ≡ gen3
+      byte-eq 확장 증명.
+
+### infra / CI gates (INBOX open · cross-cutting)
+
+- [ ] **CI 에 `stdlib/**/*_test.hexa` runner 추가** — module_loader flatten + 빌드 +
+      run all stdlib tests (inbox/notes/stdlib_module_test_and_builtin_findings).
+- [ ] **forge/farr32 codegen→clang smoke (Linux build gate)** — 5-fire 캐스케이드
+      의 farr32 emit 갭을 사전 차단하는 CI gate (inbox/notes/linux-ci-build-gate).
+- [ ] **preflight v2 DFT/HPC 축 (RFC 091 witness)** — 외부 자원 의존 (DFT/MD
+      메모리 산정 + rent 전 GPU vs CPU-HPC 판단 자동화).
+
 ## Methodology checkpoints (per-cycle)
 
 For each Tier-A sub-phase:
