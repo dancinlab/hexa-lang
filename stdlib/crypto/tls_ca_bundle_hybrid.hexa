@@ -1,0 +1,183 @@
+// HEXA Standard Library — crypto/tls_ca_bundle_hybrid
+//
+// @version 0.1.0
+// @capabilities [pure, ffi]
+//
+// TLS trust-root (CA bundle) — OPTION D (hybrid: pinned-NSS default + caller-
+// supplied override). Composes the prior two options' files (B2.ca-pinned-nss
+// and B2.ca-caller-supplied agents are shipping these concurrently):
+//
+//   Option A (pinned-NSS)        → stdlib/crypto/tls_ca_bundle_pinned_nss
+//   Option C (caller-supplied)   → stdlib/crypto/tls_ca_bundle_caller_supplied
+//   Option D (hybrid, this file) → pinned-NSS as DEFAULT, caller-supplied as
+//                                  OVERRIDE. When `override_path` is non-empty,
+//                                  the caller-supplied bundle takes precedence;
+//                                  the pinned NSS bundle is still available as
+//                                  a fallback for chains that don't match the
+//                                  caller's roots.
+//
+// Frontier 18-list #9 (RUNTIME.md): "TLS CA bundle 배포 결정 (D2+) — TLS
+// handshake 와 함께." This file pins the hybrid option's CALLER-FACING surface
+// per RUNTIME.flip B2.ca-hybrid so downstream wire compose can choose Option D
+// while sibling files (pinned-NSS · caller-supplied) ship in parallel.
+//
+// Surface (3 fn · 1 struct):
+//
+//   pub fn tls_ca_bundle_hybrid_source() -> str
+//     Returns "hybrid".
+//
+//   pub fn tls_ca_bundle_hybrid_load(override_path: str) -> Tls13CaHybridState
+//     If `override_path == ""` → pinned-only mode (no IO).
+//     Else delegate to caller-supplied loader; combine the override count
+//     with the pinned NSS count for a fused trust set.
+//
+//   pub fn tls_ca_bundle_hybrid_pem_at(state: Tls13CaHybridState,
+//                                       index: int) -> str
+//     First `state.override_count` indices come from the caller-supplied PEM
+//     accessor (override takes precedence); the next `state.pinned_count`
+//     indices come from the pinned-NSS PEM accessor. Bounds-checked.
+//
+// State.kind discriminates the active mode:
+//   "ok"             — both pinned + override loaded (override_path non-empty
+//                      AND caller-supplied returned ≥1 cert)
+//   "pinned-only"    — override_path was empty; pinned-NSS is the sole source
+//   "override-empty" — override_path was non-empty BUT caller-supplied
+//                      returned 0 certs (file missing / unreadable / empty);
+//                      falls back to pinned-NSS like "pinned-only" but
+//                      preserves the diagnostic that an override was requested
+//
+// ⚠ Sibling-file dependency:
+//   This file is being shipped concurrently with sibling PRs landing
+//   `stdlib/crypto/tls_ca_bundle_pinned_nss` and
+//   `stdlib/crypto/tls_ca_bundle_caller_supplied`. On origin/main at fan-out
+//   start, neither sibling existed yet — so to keep parse green, this file
+//   inlines forward-declared stubs (`__hybrid_*` prefix) that mirror the
+//   sibling APIs. Once the sibling PRs land, the stubs collapse into a
+//   2-line `use` import + delegation rewrite (separate follow-up PR — the
+//   API contract is stable so this PR's surface stays compatible).
+
+// Hybrid trust-bundle state. `kind` discriminates the active mode:
+//   "ok"             — pinned + caller-supplied override both loaded
+//   "pinned-only"    — override_path empty, pinned NSS is the only source
+//   "override-empty" — override requested but caller-supplied loader
+//                      returned 0 certs (file missing or empty)
+struct Tls13CaHybridState {
+    kind:            str,
+    pinned_count:    int,
+    override_count:  int,
+    total_count:     int,
+    override_loaded: bool
+}
+
+// ─── Forward-declared sibling stubs ──────────────────────────────────────────
+// These mirror the surface of the sibling files (pinned-NSS · caller-supplied)
+// so this PR parses on origin/main before the siblings land. When the sibling
+// PRs merge, replace these with `use` imports + direct delegation. The stub
+// values (pinned_count = 0, caller_supplied loaded = 0) keep the hybrid
+// surface honest until siblings land — "pinned-only" with 0 pinned certs is
+// still a valid (degenerate) state and downstream code already handles it via
+// `tls_ca_bundle_count() == 0`.
+
+@pure
+fn __hybrid_pinned_nss_count() -> int {
+    // Sibling stub — real impl lives in stdlib/crypto/tls_ca_bundle_pinned_nss.
+    // Returns 0 until that sibling PR lands; the hybrid surface stays correct
+    // because total = 0 + override (and downstream handles the no-bundle case).
+    return 0
+}
+
+@pure
+fn __hybrid_pinned_nss_pem_at(index: int) -> str {
+    // Sibling stub — real impl lives in stdlib/crypto/tls_ca_bundle_pinned_nss.
+    return ""
+}
+
+@pure
+fn __hybrid_caller_supplied_load_count(override_path: str) -> int {
+    // Sibling stub — real impl lives in
+    // stdlib/crypto/tls_ca_bundle_caller_supplied. Returns 0 until that
+    // sibling PR lands. The override is honored as "requested but empty"
+    // per the "override-empty" state.kind contract.
+    return 0
+}
+
+@pure
+fn __hybrid_caller_supplied_pem_at(override_path: str, index: int) -> str {
+    // Sibling stub — real impl lives in
+    // stdlib/crypto/tls_ca_bundle_caller_supplied.
+    return ""
+}
+
+// ─── Public surface ──────────────────────────────────────────────────────────
+
+@pure
+pub fn tls_ca_bundle_hybrid_source() -> str {
+    return "hybrid"
+}
+
+@pure
+pub fn tls_ca_bundle_hybrid_load(override_path: str) -> Tls13CaHybridState {
+    let pinned = __hybrid_pinned_nss_count()
+
+    // Empty override path → pinned-only mode (no IO into caller-supplied).
+    if override_path == "" {
+        return Tls13CaHybridState {
+            kind:            "pinned-only",
+            pinned_count:    pinned,
+            override_count:  0,
+            total_count:     pinned,
+            override_loaded: false
+        }
+    }
+
+    // Non-empty override → delegate to caller-supplied loader.
+    let supplied = __hybrid_caller_supplied_load_count(override_path)
+
+    // Caller asked for an override but the loader returned 0 (missing /
+    // unreadable / empty file). Preserve the diagnostic via "override-empty"
+    // kind, but fall back to pinned NSS for the actual chain validation.
+    if supplied == 0 {
+        return Tls13CaHybridState {
+            kind:            "override-empty",
+            pinned_count:    pinned,
+            override_count:  0,
+            total_count:     pinned,
+            override_loaded: false
+        }
+    }
+
+    // Both sides populated — full hybrid mode.
+    return Tls13CaHybridState {
+        kind:            "ok",
+        pinned_count:    pinned,
+        override_count:  supplied,
+        total_count:     pinned + supplied,
+        override_loaded: true
+    }
+}
+
+@pure
+pub fn tls_ca_bundle_hybrid_pem_at(state: Tls13CaHybridState, index: int) -> str {
+    // Bounds check — return empty string for out-of-range indices so callers
+    // can iterate [0, state.total_count) without a separate length guard.
+    if index < 0 {
+        return ""
+    }
+    if index >= state.total_count {
+        return ""
+    }
+
+    // Override-first ordering: first `override_count` indices come from the
+    // caller-supplied bundle; the remaining `pinned_count` from pinned NSS.
+    if index < state.override_count {
+        // The caller-supplied PEM accessor needs the same path that was used
+        // at load time. State doesn't carry the path (would inflate the
+        // struct), so when sibling lands we'll either (a) add path to state,
+        // (b) cache load result in caller-supplied module, or (c) require the
+        // caller to re-pass the path. For the stub the choice is moot.
+        return __hybrid_caller_supplied_pem_at("", index)
+    }
+
+    let pinned_index = index - state.override_count
+    return __hybrid_pinned_nss_pem_at(pinned_index)
+}

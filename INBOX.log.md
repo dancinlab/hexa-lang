@@ -1,5 +1,33 @@
 # INBOX — log
 
+## 2026-05-28T — 🟠 OPEN · cloud forget — accept ssh-form / IP / alias pod_id (registry cleanup asymmetry)
+
+`hexa cloud reconcile` 는 GHOST 후보로 numeric provider-id 외에 ssh-form (`root@141.195.21.87` · `ssh1.vast.ai` · `root@ssh9.vast.ai`) + alias (`ubu-2`) + edge-case (`--help` adopted ghost) 까지 모두 잡아 표시하는데, `hexa cloud forget <pod_id>` 는 numeric provider-id 만 허용 (`registry: refusing non-pod-id 'root@<ip>' (expected a provider instance-id; use cloud adopt <id> to track an existing pod)`). 결과 cleanup loop 가 절반만 동작 — anima session 에서 36 GHOST 중 16 만 forget 성공 (numeric only), 20 ssh-form 은 모두 거부.
+
+**증상 재현** (anima `/Users/ghost/core/anima` cwd, 2026-05-28 04:00 KST):
+```
+hexa cloud reconcile | awk '/GHOST/ {print $1}' > /tmp/ghosts.txt   # 36 entry
+while IFS= read -r pid; do hexa cloud forget "$pid"; done < /tmp/ghosts.txt
+# ok=16 fail=20 (모든 fail = "refusing non-pod-id")
+```
+
+**asymmetry**:
+- `cloud reconcile` 의 GHOST 판정 set = `{numeric, ssh-host, root@host, root@ip, alias, --help-as-id}`
+- `cloud forget` 의 accept set = `{numeric}` 만
+- 두 set 동일해야 cleanup loop 가 폐쇄형 (closed-loop) — 현재 partial loop = orphan ledger 영구 누적
+
+**recommend** (둘 중 하나, g0 simplest sufficient):
+1. **`cloud forget` validation 완화** — `cloud reconcile` 가 받는 form 모두 accept (numeric || ssh-host || root@ip || alias). `cloud forget --form=numeric|ssh|alias` 같은 명시 옵션 불필요 — registry 가 이미 form 별 entry 를 carry 하므로 forget 도 동일 form 으로 lookup.
+2. **`cloud reconcile --auto-forget` 추가** — GHOST 표시만 하지 말고 자동 close (anima session 의 manual loop 대체). `--dry-run` default + `--apply` 명시로 안전.
+
+권장 = (1) — 작은 변경 (validation regex 완화 1줄), reconcile 호출 비용 0, semantics 정합.
+
+**위치 (추정)**: `stdlib/cloud/cloud_cli.hexa` 의 `forget` verb handler — `pod_id` validation 직전.
+
+**carry**: anima session 의 잔여 20 ssh-form GHOST (cosmetic only, billing 영향 0) 는 upstream fix 까지 보존.
+
+---
+
 ## 2026-05-28T — ✅ RESOLVED #1703 · parser: paren-less line continuation with leading `-` silent miscompute (`self/parser.hexa::parse_addition`)
 
 `parse_addition` 의 newline-continuation arm 이 `p_continue_bin_op(["Plus"])` 만 허용해 다음 줄이 `-` 로 시작하면 silent-drop — `let x = a + b \n - c` 가 `let x = a + b` 로 끝나고 `- c` 는 폐기되는 unary-minus expression-statement 로 파싱됐다. 인라인 `Plus || Minus` 는 둘 다 받지만 newline arm 만 `Plus` 였던 비대칭이 원인. anima bench #4 (Gierer-Meinhardt PDE · ρ=1 control sim 이 ~10^236 으로 발산) 에서 `- 4.0 * u[i][j]` 항이 사라져 잡힘.

@@ -1030,7 +1030,7 @@ fn main() {
                 + ",\"tail_cmd\":" + _mh_json_str("hexa cloud tail " + host + " " + r.logfile)
                 + "}")
             // ghost-pod 자동 차단 — `--register` 가 있으면 in-process로 ./pods.json
-            // 갱신 (Fix A, PR L2-auto). 없으면 기존 advisory line 유지 (Fix L2-aware).
+            // 갱신 (Fix A, PR L2-auto). 없으면 기존 advisory line 유지 (PR #1769 L2-aware).
             if len(reg_token) > 0 {
                 let _ = _auto_register(reg_token, host, r.pid)
             } else {
@@ -1087,7 +1087,7 @@ fn main() {
                 + ",\"tail_cmd\":" + _mh_json_str("hexa cloud tail " + host + " " + r.logfile)
                 + "}")
             // ghost-pod 자동 차단 — `--register` 있으면 in-process로 ./pods.json
-            // 갱신 (Fix A, PR L2-auto). 없으면 advisory line 유지 (Fix L2-aware).
+            // 갱신 (Fix A, PR L2-auto). 없으면 advisory line 유지 (PR #1769 L2-aware).
             if len(reg_token) > 0 {
                 let _ = _auto_register(reg_token, host, r.pid)
             } else {

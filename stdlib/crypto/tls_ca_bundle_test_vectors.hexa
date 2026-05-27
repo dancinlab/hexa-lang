@@ -1,0 +1,152 @@
+// HEXA Standard Library — crypto/tls_ca_bundle_test_vectors
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Known-good + adversarial test PEM vectors for offline `verify_chain`
+// testing. These vectors let the TLS 1.3 CA bundle surfaces
+// (tls_ca_bundle_pinned_nss · tls_ca_bundle_caller_supplied ·
+// tls_ca_bundle_hybrid) be exercised in CI without any network IO or
+// system trust store dependency.
+//
+// Frontier 18-list #9 (RUNTIME.md) ←→ RUNTIME.flip B2.ca-test-vectors.
+//
+// Surface (5 fn · `tls_ca_test_vector_*` prefix):
+//   pub fn tls_ca_test_vector_count() -> int
+//     Number of bundled test vectors (currently 4).
+//
+//   pub fn tls_ca_test_vector_name(index: int) -> str
+//     Stable test-vector identifier (e.g. "isrg-root-x1-valid",
+//     "tampered-cn", "expired-2020", "untrusted-self-signed"). Empty
+//     string when `index` is out of range.
+//
+//   pub fn tls_ca_test_vector_pem(index: int) -> str
+//     PEM-encoded certificate body for the test vector. Bodies are
+//     placeholder base64 (truncated) — a follow-up PR slots real bytes
+//     from an established TLS test corpus. The point of THIS file is to
+//     pin the API + dispatcher so verify-chain tests can compile.
+//
+//   pub fn tls_ca_test_vector_expected_verify_ok(index: int) -> bool
+//     True if this vector should pass `verify_chain` against a default
+//     trust store containing the ISRG Root X1 sample; false if the
+//     vector is expected to fail (tampered · expired · untrusted).
+//
+//   pub fn tls_ca_test_vector_expected_failure_kind(index: int) -> str
+//     For vectors that should fail, the expected `kind` discriminator
+//     from `TlsCaVerifyResult` (see stdlib/crypto/tls_ca_bundle.hexa):
+//       "sig-fail"        — signature didn't verify (tampered body)
+//       "expired"         — past notAfter
+//       "untrusted-root"  — chain terminates at a root not in the store
+//     Empty string for vectors that should pass.
+//
+// Vector roster (index → name → expected outcome):
+//   0  isrg-root-x1-valid       ok                (matches pinned root)
+//   1  tampered-cn              fail · sig-fail   (one base64 char flipped)
+//   2  expired-2020             fail · expired    (past notAfter, self-signed)
+//   3  untrusted-self-signed    fail · untrusted-root (random self-signed)
+//
+// Capability discipline: [pure] — no IO, no FFI. All bodies are inline
+// string literals. Real PEM bytes can be substituted by editing the
+// `_tls_ca_test_vector_pem_*` helpers without changing the surface.
+
+// ─── Vector 0 — isrg-root-x1-valid ──────────────────────────────────────
+// Self-signed ISRG Root X1 (representative; placeholder body — real
+// PEM slotted in a follow-up PR). Expected to verify_chain=ok when the
+// pinned-NSS bundle contains the matching root.
+@pure
+fn _tls_ca_test_vector_pem_isrg_root_x1() -> str {
+    return "-----BEGIN CERTIFICATE-----\nMIIDuzCCAqOgAwIBAgIRA-ISRG-ROOT-X1-PLACEHOLDER-VALID-BODY-AAAAAA==\n-----END CERTIFICATE-----\n"
+}
+
+// ─── Vector 1 — tampered-cn ─────────────────────────────────────────────
+// Same body as vector 0 with one base64 char flipped (B → C). Expected
+// verify_chain=fail · kind="sig-fail" (signature won't verify against
+// the cert's own public key once a single base64 nibble shifts).
+@pure
+fn _tls_ca_test_vector_pem_tampered_cn() -> str {
+    return "-----BEGIN CERTIFICATE-----\nMIIDuzCCAqOgAwIBAgIRA-ISRG-ROOT-X1-PLACEHOLDER-VALID-CODY-AAAAAA==\n-----END CERTIFICATE-----\n"
+}
+
+// ─── Vector 2 — expired-2020 ────────────────────────────────────────────
+// Self-signed cert whose notAfter is in the past (2020-01-01). Expected
+// verify_chain=fail · kind="expired" against any wall-clock past that
+// date. Placeholder body — real expired test cert slotted in follow-up.
+@pure
+fn _tls_ca_test_vector_pem_expired_2020() -> str {
+    return "-----BEGIN CERTIFICATE-----\nMIIDuzCCAqOgAwIBAgIRA-EXPIRED-2020-PLACEHOLDER-NOTAFTER-PAST-AA==\n-----END CERTIFICATE-----\n"
+}
+
+// ─── Vector 3 — untrusted-self-signed ───────────────────────────────────
+// Random self-signed cert NOT present in any pinned trust store.
+// Expected verify_chain=fail · kind="untrusted-root" — signature is
+// internally consistent but the root isn't trusted.
+@pure
+fn _tls_ca_test_vector_pem_untrusted_self_signed() -> str {
+    return "-----BEGIN CERTIFICATE-----\nMIIDuzCCAqOgAwIBAgIRA-UNTRUSTED-SELF-SIGNED-PLACEHOLDER-BODY-AA==\n-----END CERTIFICATE-----\n"
+}
+
+// ─── Public dispatcher surface ──────────────────────────────────────────
+
+@pure
+pub fn tls_ca_test_vector_count() -> int {
+    return 4
+}
+
+@pure
+pub fn tls_ca_test_vector_name(index: int) -> str {
+    if index == 0 {
+        return "isrg-root-x1-valid"
+    }
+    if index == 1 {
+        return "tampered-cn"
+    }
+    if index == 2 {
+        return "expired-2020"
+    }
+    if index == 3 {
+        return "untrusted-self-signed"
+    }
+    return ""
+}
+
+@pure
+pub fn tls_ca_test_vector_pem(index: int) -> str {
+    if index == 0 {
+        return _tls_ca_test_vector_pem_isrg_root_x1()
+    }
+    if index == 1 {
+        return _tls_ca_test_vector_pem_tampered_cn()
+    }
+    if index == 2 {
+        return _tls_ca_test_vector_pem_expired_2020()
+    }
+    if index == 3 {
+        return _tls_ca_test_vector_pem_untrusted_self_signed()
+    }
+    return ""
+}
+
+@pure
+pub fn tls_ca_test_vector_expected_verify_ok(index: int) -> bool {
+    if index == 0 {
+        return true
+    }
+    return false
+}
+
+@pure
+pub fn tls_ca_test_vector_expected_failure_kind(index: int) -> str {
+    if index == 0 {
+        return ""
+    }
+    if index == 1 {
+        return "sig-fail"
+    }
+    if index == 2 {
+        return "expired"
+    }
+    if index == 3 {
+        return "untrusted-root"
+    }
+    return ""
+}

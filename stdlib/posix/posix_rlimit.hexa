@@ -1,0 +1,111 @@
+// HEXA Standard Library — posix/posix_rlimit
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// RLIMIT_* resource-limit constant table for getrlimit/setrlimit syscalls —
+// Linux + Darwin. Pure additive, hexa-self, sibling of:
+//   stdlib/posix/linux_syscalls.hexa                — syscall number table (Linux)
+//   stdlib/posix/darwin_syscalls.hexa               — syscall number table (Darwin)
+//   stdlib/posix/posix_calling_convention_arm64.hexa
+//   stdlib/posix/posix_calling_convention_x86_64.hexa
+//
+// RUNTIME.flip B3.posix-resource-limits — provides the per-OS RLIMIT_*
+// constant values the emit pass needs when lowering a getrlimit(2) /
+// setrlimit(2) call. Linux and Darwin diverge on a couple of names
+// (NOFILE, AS/RSS); the per-OS lookup keeps the divergence honest.
+//
+// Linux RLIMIT_* values (from include/uapi/asm-generic/resource.h, Linux 6.x):
+//   RLIMIT_CPU    = 0
+//   RLIMIT_FSIZE  = 1
+//   RLIMIT_DATA   = 2
+//   RLIMIT_STACK  = 3
+//   RLIMIT_CORE   = 4
+//   RLIMIT_NOFILE = 7
+//   RLIMIT_AS     = 9
+//
+// Darwin RLIMIT_* values (from xnu/bsd/sys/resource.h):
+//   RLIMIT_CPU    = 0
+//   RLIMIT_FSIZE  = 1
+//   RLIMIT_DATA   = 2
+//   RLIMIT_STACK  = 3
+//   RLIMIT_CORE   = 4
+//   RLIMIT_NOFILE = 8
+//   RLIMIT_AS     = 5   (Darwin's RLIMIT_RSS slot — Darwin lacks a separate
+//                        RLIMIT_AS; RSS is the conceptual equivalent of the
+//                        Linux address-space cap and is the canonical mapping
+//                        the Phase-1 dispatch uses on Darwin.)
+//
+// RLIM_INFINITY: on 64-bit kernels both Linux and Darwin represent the
+// "no limit" sentinel as int64_max (0x7fffffffffffffff = 9223372036854775807).
+// Linux header defines it as `(~0UL)` which is unsigned-as-signed -1, but the
+// in-kernel + userland 64-bit sysctl path treats it as int64_max for arithmetic
+// purposes. We return the int64_max form so it round-trips through hexa's
+// signed `int` without two's-complement gotchas.
+//
+// Surface:
+//   pub fn posix_rlimit_linux(name: str) -> int
+//   pub fn posix_rlimit_darwin(name: str) -> int
+//   pub fn posix_rlimit_names() -> [str]
+//   pub fn posix_rlimit_infinity_linux() -> int
+//   pub fn posix_rlimit_infinity_darwin() -> int
+//
+// Canonical name set (7): CORE, CPU, DATA, FSIZE, NOFILE, STACK, AS.
+// All names match the POSIX `RLIMIT_<NAME>` macro stem with the `RLIMIT_`
+// prefix stripped — keeps the table stem-aligned with the C header for grep.
+
+@pure
+pub fn posix_rlimit_names() -> [str] {
+    return [
+        "CORE",
+        "CPU",
+        "DATA",
+        "FSIZE",
+        "NOFILE",
+        "STACK",
+        "AS"
+    ]
+}
+
+// Linux RLIMIT_* values (asm-generic/resource.h).
+@pure
+pub fn posix_rlimit_linux(name: str) -> int {
+    if name == "CPU" { return 0 }
+    if name == "FSIZE" { return 1 }
+    if name == "DATA" { return 2 }
+    if name == "STACK" { return 3 }
+    if name == "CORE" { return 4 }
+    if name == "NOFILE" { return 7 }
+    if name == "AS" { return 9 }
+    return -1
+}
+
+// Darwin RLIMIT_* values (xnu/bsd/sys/resource.h).
+// Note: Darwin has no separate RLIMIT_AS — slot 5 is RLIMIT_RSS, which is
+// the conceptual equivalent of Linux RLIMIT_AS for the address-space cap.
+@pure
+pub fn posix_rlimit_darwin(name: str) -> int {
+    if name == "CPU" { return 0 }
+    if name == "FSIZE" { return 1 }
+    if name == "DATA" { return 2 }
+    if name == "STACK" { return 3 }
+    if name == "CORE" { return 4 }
+    if name == "NOFILE" { return 8 }
+    if name == "AS" { return 5 }
+    return -1
+}
+
+// RLIM_INFINITY sentinel — Linux 64-bit kernel.
+// Header: `(~0UL)` → as int64 this is -1, but the canonical 64-bit
+// representation used by the sysctl/getrlimit64 path is int64_max.
+@pure
+pub fn posix_rlimit_infinity_linux() -> int {
+    return 9223372036854775807
+}
+
+// RLIM_INFINITY sentinel — Darwin 64-bit kernel.
+// Header: `((rlim_t)((__uint64_t)-1))` → same int64_max representation as Linux.
+@pure
+pub fn posix_rlimit_infinity_darwin() -> int {
+    return 9223372036854775807
+}
