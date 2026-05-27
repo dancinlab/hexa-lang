@@ -2,6 +2,16 @@
 
 Append-only history sister of `TECS-L.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
+## 2026-05-27T15:10Z · 축 RTSC · RTSC1+RTSC2 · Allen-Dynes/McMillan Tc verify-게이트 작동 (demiurge anchor 재현 🟢)
+
+- [x] **RTSC1 — Allen-Dynes Tc closed-form g5 재근거화 CLOSED**: demiurge RTSC 캠페인의 검증된 anchor 를 TECS-L verify 로 재현.
+  - `hexa verify --expr allen_dynes_tc 1.135 1254.2 0.10 104.597 --tol 0.01 --no-absorb` → **🟢 SUPPORTED-NUMERICAL** (calc=104.597, |Δ|=0.000164). demiurge `domains/RTSC/research/cation_VEC_rule.md:111` 검증 예시 동일 재현.
+  - `hexa verify --expr mcmillan_tc 1.135 1254.2 0.10 86.566 --tol 0.1 --no-absorb` → **🟢 SUPPORTED-NUMERICAL** (calc=86.5632, |Δ|=0.0028). Allen-Dynes 대비 ~83% (prefactor ω_log/1.2 vs ω_D/1.45, 동일 exp-argument).
+  - **의의**: demiurge RTSC material-discovery 캠페인 (293K 1atm @goal) 의 DFT-산출 (λ,ω_log,μ*) → Tc 가 TECS-L g5 verify-게이트로 재근거화 가능 확인. RTSC loop 의 verify-게이트 = allen_dynes_tc closed-form (verify_cli.hexa:1387) 작동.
+- [x] **RTSC2 — Tc primitive verify_cli audit CLOSED**: `allen_dynes_tc`(3-arg :1387) · `mcmillan_tc`(3-arg :1400) · `allen_dynes_full`(4-arg strong-coupling :1472) 모두 verify 모드 등록 ✅.
+  - 🟠 **compute 모드 미지원**: expected 생략 시 `_recompute_float` 가 allen_dynes_tc/mcmillan_tc 의 compute-path 없음 → 🟠 "float calculator system has NO path". verify 모드 (expected 제공) 만 작동. INBOX 후보 — RTSC loop 가 후보 Tc 를 *산출* 하려면 compute-path 필요 (현재는 외부 DFT 산출 Tc 를 verify 만).
+- 다음: RTSC3 (closed-negative atlas 1급, Mg₂IrH₆ 등 demiurge 5+ 🔴) · RTSC4 (loop 연속 운전, h3br ω_log probe 첫 iteration). verify-게이트 ✅ → atlas-기억 (RTSC3) → loop-운전 (RTSC4) 순.
+
 ## 2026-05-27T14:35Z · 축 F · F27 · Phase 1 finite-arithmetic NOVEL — multiply-perfect · superperfect · HCN (6/6 🔵, n=6 위치 관측)
 
 - [x] **F27 multiply-perfect / superperfect / HCN family — 6/6 🔵 SUPPORTED-FORMAL** (F26 priority shortlist Phase 1, existing primitive 로 verify-able). `--no-absorb` inline verify (agent throttle 우회, main-tree). cycle 3 의 "cache race" 진단이 진짜 auto-absorb hang 였음 재확인 — `--no-absorb` 로 main-tree verify 정상.
