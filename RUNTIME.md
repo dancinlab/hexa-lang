@@ -2187,10 +2187,13 @@ unit. Registered as milestones so the next cycle can pick them up.
       into a socket-driven client driver over `stdlib/net/socket`. Multi-PR series.
 - [ ] **RSA-PSS / RSA-PKCS#1 v1.5 cert signature verify** — for real-world X.509
       chains (most CA certs are RSA). Needs bignum modexp (large unit).
-- [ ] **ECDSA-P256 verify perf** — add Solinas P-256 fast reduction (mod p) +
-      Barrett reduction (mod n) to the algorithm on branch `feat-p256-verify` so
-      the verify KAT completes within practical time (currently >300s timeout
-      with general shift-and-subtract mod-reduce). ~200 lines, then KAT-land.
+- [x] **ECDSA-P256 verify perf** — DONE (#1653). Solinas P-256 fast reduction
+      (FIPS 186-4 D.2 · `_reduce_p256`) on the scalar-mult mod-p path (~30 ops
+      vs ~25K) brought a full verify from >300s timeout to ~3s. KAT-clean:
+      verify=true on a python-cryptography reference sig, tampered-r rejected;
+      reduction kernel isolation-verified (3 random T mod p pairs byte-exact).
+      ECDSA-P256 is now the 2nd usable cert-sig algorithm (alongside Ed25519);
+      X.509 chain validation can extend to P-256 certs (follow-up).
 - [ ] **threading** — architectural decision: green threads in hexa (M:N
       scheduler over `@asm` context-switch) vs. keep C pthread FFI. Blocks any
       concurrent runtime story.
