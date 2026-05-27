@@ -733,7 +733,10 @@ fn p_skip_newlines() {
 // T35+: If current token is Newline and the first non-newline/semicolon
 // token ahead matches any of `kinds`, skip newlines and return true.
 // Callers: binary-op parsers — enables `x \n + y`, `a \n && b` etc.
-// Excludes unary-ambiguous ops (Minus, Bang) from kinds.
+// Note: callers are responsible for choosing the kinds whitelist. Minus is
+// safe at the parse_addition tier (INBOX #1703) because the look-ahead only
+// fires after a complete left operand was consumed — at that point a leading
+// Minus on the next line is unambiguously binary, not unary.
 fn p_continue_bin_op(kinds) {
     if p_peek_kind() != "Newline" { return false }
     let mut _o = 1
@@ -3354,9 +3357,17 @@ fn parse_range() {
 }
 
 // Level 5.4: + -
+// INBOX #1703 (2026-05-28): Newline continuation list extended to include
+// `Minus` so `let x = a + b \n - c` parses as `a + b - c` instead of silently
+// dropping `- c` (which previously became a discarded unary-minus stmt — see
+// anima bench #4 Gierer-Meinhardt PDE blow-up to ~10^236, and stdlib hits
+// like runtime/math.hexa `rt_lgamma` Stirling series). The "unary-ambiguous"
+// concern that excluded Minus only applies at expression-START position;
+// here we are inside the parse_addition binary loop after consuming a left
+// operand, so a leading Minus on the next line is unambiguously binary.
 fn parse_addition() {
     let mut left = parse_multiplication()
-    while p_peek_kind() == "Plus" || p_peek_kind() == "Minus" || (p_peek_kind() == "Newline" && p_continue_bin_op(["Plus"])) {
+    while p_peek_kind() == "Plus" || p_peek_kind() == "Minus" || (p_peek_kind() == "Newline" && p_continue_bin_op(["Plus", "Minus"])) {
         let op_tok = p_advance()
         p_skip_newlines()
         let right = parse_multiplication()
