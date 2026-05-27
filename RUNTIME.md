@@ -2185,8 +2185,11 @@ unit. Registered as milestones so the next cycle can pick them up.
       pieces (ClientHello compose → record send → ServerHello parse → key-schedule
       derive → EncryptedExtensions/Certificate/CertVerify/Finished → app records)
       into a socket-driven client driver over `stdlib/net/socket`. Multi-PR series.
-- [ ] **RSA-PSS / RSA-PKCS#1 v1.5 cert signature verify** — for real-world X.509
-      chains (most CA certs are RSA). Needs bignum modexp (large unit).
+- [x] **RSA-PKCS#1 v1.5 cert signature verify** — DONE (#1660). 2048-bit bignum
+      on 128×16-bit limbs; sig^e mod n (square-and-multiply, e=65537 → ~17
+      squarings → ~1s) + EMSA-PKCS1-v1_5 check. KAT-clean vs python-cryptography
+      (valid verify true, tampered rejected). 3rd cert-sig algorithm (with
+      Ed25519 + ECDSA-P256). RSA-PSS variant + RSA-cert OID dispatch = follow-up.
 - [x] **ECDSA-P256 verify perf** — DONE (#1653). Solinas P-256 fast reduction
       (FIPS 186-4 D.2 · `_reduce_p256`) on the scalar-mult mod-p path (~30 ops
       vs ~25K) brought a full verify from >300s timeout to ~3s. KAT-clean:
