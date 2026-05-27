@@ -1,0 +1,50 @@
+// HEXA Standard Library — core/hash/hmac_sha512
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// HMAC-SHA-512 (RFC 2104 / FIPS 198-1) — pure hexa. Completes the HMAC
+// family alongside hmac_sha256 (stdlib/core/hash/hmac). Used by HKDF-SHA512
+// constructions. let-mut idiom (#1506).
+//
+// HMAC(K, m) = H((K ⊕ opad) ‖ H((K ⊕ ipad) ‖ m))
+//   with block_size = 128 bytes (SHA-512 block) and digest_size = 64.
+//
+// Surface:
+//   pub fn hmac_sha512_bytes(key: [int], data: [int]) -> [int]   — 64-byte tag
+
+use "stdlib/crypto/sha512"
+
+@pure
+pub fn hmac_sha512_bytes(key: [int], data: [int]) -> [int] {
+    let block_size = 128
+    // step 1: normalize key
+    let mut key_bytes: [int] = []
+    let mut i = 0
+    if len(key) > block_size {
+        let h = sha512_bytes(key)
+        while i < len(h) { key_bytes.push(h[i]); i = i + 1 }
+    } else {
+        while i < len(key) { key_bytes.push(key[i]); i = i + 1 }
+    }
+    while len(key_bytes) < block_size { key_bytes.push(0) }
+    // step 2: ipad / opad
+    let mut ipad: [int] = []
+    let mut opad: [int] = []
+    i = 0
+    while i < block_size {
+        ipad.push(0x36 ^ key_bytes[i])
+        opad.push(0x5c ^ key_bytes[i])
+        i = i + 1
+    }
+    // step 3: inner = H(ipad ‖ data)
+    let mut inner_msg = ipad
+    i = 0
+    while i < len(data) { inner_msg.push(data[i]); i = i + 1 }
+    let inner_digest = sha512_bytes(inner_msg)
+    // step 4: outer = H(opad ‖ inner_digest)
+    let mut outer_msg = opad
+    i = 0
+    while i < len(inner_digest) { outer_msg.push(inner_digest[i]); i = i + 1 }
+    return sha512_bytes(outer_msg)
+}
