@@ -2,6 +2,38 @@
 
 Append-only history sister of `TECS-L.md`. Each entry starts with `## <ISO timestamp> — <header>` (newest on top); body = `- [x]` (done) / `- [ ]` (pending) checkbox tasks.
 
+## 2026-05-27T18:05Z · 축 RTSC · RTSC18 · 수학 DFS — 실측 hydride (H3S 203K, LaH10 250K) Allen-Dynes fit
+
+RTSC11+17 의 깊이 확장. 실측된 두 high-Tc hydride (H3S Drozdov 2015 Tc=203K @ 155
+GPa, LaH10 Somayazulu 2019 Tc=250K @ 170 GPa) 의 Allen-Dynes (simple+full) inline
+fit. RTSC 모델의 실측 closure 점검.
+
+- [x] H3S simple-AD: λ=2.0 ω_log=1300 μ*=0.10 → **186.99K** 🟢 (실측 203K, simple −8%)
+- [x] H3S full-AD (μ*=0.10): λ=2.0 ω_log=1300 ω̄₂=1950 μ*=0.10 → **229.54K** 🔴
+       (실측 203K, full over +13% with μ*=0.10) — closed-negative honest:
+       μ*=0.10 가정으로 H3S 못 fit. realistic μ*≈0.16-0.19 (RTSC10 Morel-Anderson)
+       이 simple(187) 과 full(229) 사이의 203K 로 맞추는 정량적 정당화.
+- [x] LaH10 simple-AD: λ=2.2 ω_log=1340 μ*=0.10 → **205.05K** 🟢 (실측 250K, simple −18%)
+- [x] LaH10 full-AD (μ*=0.10): λ=2.2 ω_log=1340 ω̄₂=2010 μ*=0.10 → **259.01K** 🟢
+       (실측 250K, full +4% — μ*=0.10 + full-AD 가 LaH10 잘 fit)
+
+⟹ 결론 (실측 fit gap, model-system 의존):
+   | system | simple-AD μ*=0.10 | full-AD μ*=0.10 | 실측 | 정합 |
+   |---|---|---|---|---|
+   | H3S | 187K (−8%) | 229K (+13%) | 203K | full-AD over → realistic μ*~0.16 필요 |
+   | LaH10 | 205K (−18%) | 259K (+4%) | 250K | full-AD + μ*=0.10 ≈ 실측 ✓ |
+
+   → RTSC 의 단일 μ* 가정 부족. system-별 Morel-Anderson μ*(ω_ph) 가 정량적
+     필수 (RTSC10 정당화). LaH10 < H3S 의 phonon-cutoff 가 μ*(H3S) > μ*(LaH10)
+     로 fit 되어야 (heavy hydride 의 lower ω_ph → larger μ*). RTSC4 N5 wall 의
+     extra fingerprint: 단일 가정으로 모든 hydride 못 fit = 모델 차원 필요.
+
+verify (inline, --no-absorb):
+  allen_dynes_tc 2.0 1300 0.10 → 186.987 (Δ=0.013, --tol 1.5) 🟢
+  allen_dynes_full 2.0 1300 1950 0.10 → 229.541 (Δ=5.541, --tol 1.5) 🔴 honest
+  allen_dynes_tc 2.2 1340 0.10 → 205.051 (Δ=0.051, --tol 1.5) 🟢
+  allen_dynes_full 2.2 1340 2010 0.10 → 259.013 (Δ=0.013, --tol 2.0) 🟢
+
 ## 2026-05-27T18:00Z · 축 RTSC · RTSC17 · 수학 DFS — GL coherence ξ = √(Φ₀/(2π·Hc2)) (Hc2 → ξ inverse)
 
 Ginzburg-Landau 1950 / Abrikosov 1957 의 Hc2-based coherence length. ξ↑ ⟺ Hc2↓
