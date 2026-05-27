@@ -318,6 +318,8 @@ fn cmd_rubric() {
     println("             arr(p_control,p_treat)      → p_control-p_treat   (Absolute Risk Reduction, percentage points, 2-arg)")
     println("             ln_hr_to_hr(ln_hr)          → exp(ln_hr)          (log-HR → HR, Cox-PH back-transform, 1-arg)")
     println("             ln(x)                       → natural log         (CLM init-CE floor = ln(vocab), 1-arg)")
+    println("             binary_entropy(p)           → -p·log₂p-(1-p)·log₂(1-p) [bits] (Shannon H₂ · H₂(0.5)=1 · use --tol, UNIVERSE info-arc, 1-arg)")
+    println("             kl_divergence_bernoulli(p,q)→ p·log₂(p/q)+(1-p)·log₂((1-p)/(1-q)) [bits] (KL D(p‖q)≥0 · use --tol, UNIVERSE info-arc, 2-arg)")
     println("             gamma(x)                    → Γ(x) (libm tgamma)  (VERIFY-KIT V4 special fn · gamma(5)=24 · gamma(0.5)=√π · use --tol, 1-arg)")
     println("             erf(x)                      → Gauss error fn      (VERIFY-KIT V4 special fn · erf(0)=0 · erf(1)=0.84270 · use --tol, 1-arg)")
     println("             bessel_j0(x)                → J₀(x) (libm j0)     (VERIFY-KIT V4 special fn · J₀(0)=1 · use --tol, 1-arg)")
@@ -1278,6 +1280,38 @@ fn _ln_hr_to_hr(ln_hr: float) -> float {
 // CLAIMS chat_init_ce_floor: ln(151936) = 11.931214658529285.
 fn _ln(x: float) -> float {
     return ln(x)
+}
+
+// ── UNIVERSE consciousness/info-theory closed-forms (anima H_287 arc · 2026-05-27) ──
+// binary_entropy(p): Shannon entropy of a Bernoulli(p), in BITS.
+//   H₂(p) = -p·log₂(p) - (1-p)·log₂(1-p);  H₂(0)=H₂(1)=0 (0·log0≔0), peak H₂(0.5)=1.
+// A real closed-form info measure — gives consciousness/info hypotheses a verify
+// path (prior gap: such claims → 🟠 INSUFFICIENT → self-judged tautology smokes).
+fn _binary_entropy(p: float) -> float {
+    if p < 0.0 { return _NOCALC_F }
+    if p > 1.0 { return _NOCALC_F }
+    if p == 0.0 { return 0.0 }
+    if p == 1.0 { return 0.0 }
+    let ln2 = ln(2.0)
+    let q = 1.0 - p
+    return 0.0 - p * (ln(p) / ln2) - q * (ln(q) / ln2)
+}
+
+// kl_divergence_bernoulli(p, q): KL divergence D(Bernoulli(p) ‖ Bernoulli(q)), BITS.
+//   D = p·log₂(p/q) + (1-p)·log₂((1-p)/(1-q));  D≥0, =0 iff p=q (Gibbs).
+//   q∈(0,1) required (else D diverges); p∈{0,1} terms drop via 0·log0≔0.
+fn _kl_divergence_bernoulli(p: float, q: float) -> float {
+    if p < 0.0 { return _NOCALC_F }
+    if p > 1.0 { return _NOCALC_F }
+    if q <= 0.0 { return _NOCALC_F }
+    if q >= 1.0 { return _NOCALC_F }
+    let ln2 = ln(2.0)
+    let mut acc = 0.0
+    if p > 0.0 { acc = acc + p * (ln(p / q) / ln2) }
+    let p1 = 1.0 - p
+    let q1 = 1.0 - q
+    if p1 > 0.0 { acc = acc + p1 * (ln(p1 / q1) / ln2) }
+    return acc
 }
 
 // ── VERIFY-KIT V4 — special-function primitives (2026-05-26) ───────────
@@ -3194,6 +3228,18 @@ fn _recompute_float(fn_name: string, a0: float, a1: float, a2: float, a3: float,
     }
     if fn_name == "ln" {
         return _ln(a0)
+    }
+    // ── UNIVERSE consciousness/info-theory closed-forms (anima H_287 arc) ──
+    //   binary_entropy(p)              1-arg: Shannon H₂(p) = -p·log₂p-(1-p)·log₂(1-p) [bits]
+    //   kl_divergence_bernoulli(p,q)   2-arg: D(p‖q) = p·log₂(p/q)+(1-p)·log₂((1-p)/(1-q)) [bits]
+    //   Real info-measure closed-forms — verify path for Φ/info hypotheses
+    //   (was: consciousness claim → 🟠 INSUFFICIENT → self-judged tautology smoke).
+    if fn_name == "binary_entropy" {
+        return _binary_entropy(a0)
+    }
+    if fn_name == "kl_divergence_bernoulli" {
+        if argc < 2 { return _NOCALC_F }
+        return _kl_divergence_bernoulli(a0, a1)
     }
     // ── VERIFY-KIT V4 — special-function primitives (native libm) ──────
     //   gamma(x)=Γ(x) · erf(x) · bessel_j0(x) · bessel_j1(x). All 1-arg,

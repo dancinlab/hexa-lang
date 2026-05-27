@@ -171,6 +171,12 @@ pub fn calc_is_float_fn(fn_name: string) -> bool {
         || fn_name == "shell_correction_cu_bg255"
         || fn_name == "bloch_l2_beta046_z1"
         || fn_name == "barkas_l1_cu_bg046_pbar"
+        // UNIVERSE consciousness/info-theory closed-forms (anima H_287 arc · 2026-05-27):
+        //   binary_entropy(p) Shannon H₂ [bits] · kl_divergence_bernoulli(p,q) D(p‖q) [bits].
+        //   Real closed-form info measures — unblock verify-driven Φ/info hypotheses
+        //   (prior gap: consciousness claims → 🟠 INSUFFICIENT → self-judged tautology smokes).
+        || fn_name == "binary_entropy"
+        || fn_name == "kl_divergence_bernoulli"
 }
 
 // calc_is_zero_arg_float_fn — is fn_name a 0-arg closed-form constant?
