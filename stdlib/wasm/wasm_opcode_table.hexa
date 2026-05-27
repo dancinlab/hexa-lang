@@ -1,0 +1,164 @@
+// HEXA Standard Library — wasm/wasm_opcode_table
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// WebAssembly core opcode + type encoding constants (WASM 1.0 / MVP).
+// Pure additive table — single source of truth for downstream wasm
+// emitters / decoders / disassemblers. Mnemonics match the canonical
+// text format (https://webassembly.github.io/spec/core/binary/instructions.html).
+//
+// Surface:
+//   let WASM_OP_*  : int — opcode byte for each instruction
+//   let WASM_TYPE_*: int — value-type / block-type encoding byte
+//   pub fn wasm_op_name(opcode: int) -> str
+//       canonical text mnemonic for known opcodes, or "unknown".
+//   pub fn wasm_type_i32() -> int { 0x7F }
+//   pub fn wasm_type_i64() -> int { 0x7E }
+//   pub fn wasm_type_f32() -> int { 0x7D }
+//   pub fn wasm_type_f64() -> int { 0x7C }
+//   pub fn wasm_type_void() -> int { 0x40 }
+
+// ── Control flow ─────────────────────────────────────────────────────────
+let WASM_OP_UNREACHABLE: int = 0x00
+let WASM_OP_NOP:         int = 0x01
+let WASM_OP_BLOCK:       int = 0x02
+let WASM_OP_LOOP:        int = 0x03
+let WASM_OP_IF:          int = 0x04
+let WASM_OP_ELSE:        int = 0x05
+let WASM_OP_END:         int = 0x0B
+let WASM_OP_BR:          int = 0x0C
+let WASM_OP_BR_IF:       int = 0x0D
+let WASM_OP_RETURN:      int = 0x0F
+let WASM_OP_CALL:        int = 0x10
+
+// ── Locals / globals ─────────────────────────────────────────────────────
+let WASM_OP_LOCAL_GET:   int = 0x20
+let WASM_OP_LOCAL_SET:   int = 0x21
+let WASM_OP_LOCAL_TEE:   int = 0x22
+let WASM_OP_GLOBAL_GET:  int = 0x23
+let WASM_OP_GLOBAL_SET:  int = 0x24
+
+// ── Memory ───────────────────────────────────────────────────────────────
+let WASM_OP_I32_LOAD:    int = 0x28
+let WASM_OP_I64_LOAD:    int = 0x29
+let WASM_OP_F32_LOAD:    int = 0x2A
+let WASM_OP_F64_LOAD:    int = 0x2B
+let WASM_OP_I32_STORE:   int = 0x36
+let WASM_OP_I64_STORE:   int = 0x37
+
+// ── Const ────────────────────────────────────────────────────────────────
+let WASM_OP_I32_CONST:   int = 0x41
+let WASM_OP_I64_CONST:   int = 0x42
+let WASM_OP_F32_CONST:   int = 0x43
+let WASM_OP_F64_CONST:   int = 0x44
+
+// ── i32 comparison ───────────────────────────────────────────────────────
+let WASM_OP_I32_EQZ:     int = 0x45
+let WASM_OP_I32_EQ:      int = 0x46
+let WASM_OP_I32_NE:      int = 0x47
+let WASM_OP_I32_LT_S:    int = 0x48
+
+// ── i32 arithmetic ───────────────────────────────────────────────────────
+let WASM_OP_I32_ADD:     int = 0x6A
+let WASM_OP_I32_SUB:     int = 0x6B
+let WASM_OP_I32_MUL:     int = 0x6C
+let WASM_OP_I32_DIV_S:   int = 0x6D
+let WASM_OP_I32_DIV_U:   int = 0x6E
+let WASM_OP_I32_REM_S:   int = 0x6F
+let WASM_OP_I32_REM_U:   int = 0x70
+
+// ── i64 arithmetic ───────────────────────────────────────────────────────
+let WASM_OP_I64_ADD:     int = 0x7C
+let WASM_OP_I64_SUB:     int = 0x7D
+let WASM_OP_I64_MUL:     int = 0x7E
+
+// ── f64 arithmetic ───────────────────────────────────────────────────────
+let WASM_OP_F64_ADD:     int = 0xA0
+let WASM_OP_F64_SUB:     int = 0xA1
+let WASM_OP_F64_MUL:     int = 0xA2
+let WASM_OP_F64_DIV:     int = 0xA3
+
+// ── Type encoding (value types, block types, funcref) ────────────────────
+// Note: WASM_TYPE_FUNCREF (0x70) collides numerically with WASM_OP_I32_REM_U
+// in the opcode space; they live in disjoint binary positions (type tables
+// vs instruction stream) so there's no ambiguity at decode time.
+let WASM_TYPE_I32:       int = 0x7F
+let WASM_TYPE_I64:       int = 0x7E
+let WASM_TYPE_F32:       int = 0x7D
+let WASM_TYPE_F64:       int = 0x7C
+let WASM_TYPE_FUNCREF:   int = 0x70
+let WASM_TYPE_VOID:      int = 0x40
+
+@pure
+pub fn wasm_op_name(opcode: int) -> str {
+    // Control flow
+    if opcode == 0x00 { return "unreachable" }
+    if opcode == 0x01 { return "nop" }
+    if opcode == 0x02 { return "block" }
+    if opcode == 0x03 { return "loop" }
+    if opcode == 0x04 { return "if" }
+    if opcode == 0x05 { return "else" }
+    if opcode == 0x0B { return "end" }
+    if opcode == 0x0C { return "br" }
+    if opcode == 0x0D { return "br_if" }
+    if opcode == 0x0F { return "return" }
+    if opcode == 0x10 { return "call" }
+    // Locals / globals
+    if opcode == 0x20 { return "local.get" }
+    if opcode == 0x21 { return "local.set" }
+    if opcode == 0x22 { return "local.tee" }
+    if opcode == 0x23 { return "global.get" }
+    if opcode == 0x24 { return "global.set" }
+    // Memory load
+    if opcode == 0x28 { return "i32.load" }
+    if opcode == 0x29 { return "i64.load" }
+    if opcode == 0x2A { return "f32.load" }
+    if opcode == 0x2B { return "f64.load" }
+    // Memory store
+    if opcode == 0x36 { return "i32.store" }
+    if opcode == 0x37 { return "i64.store" }
+    // Const
+    if opcode == 0x41 { return "i32.const" }
+    if opcode == 0x42 { return "i64.const" }
+    if opcode == 0x43 { return "f32.const" }
+    if opcode == 0x44 { return "f64.const" }
+    // i32 comparison
+    if opcode == 0x45 { return "i32.eqz" }
+    if opcode == 0x46 { return "i32.eq" }
+    if opcode == 0x47 { return "i32.ne" }
+    if opcode == 0x48 { return "i32.lt_s" }
+    // i32 arithmetic
+    if opcode == 0x6A { return "i32.add" }
+    if opcode == 0x6B { return "i32.sub" }
+    if opcode == 0x6C { return "i32.mul" }
+    if opcode == 0x6D { return "i32.div_s" }
+    if opcode == 0x6E { return "i32.div_u" }
+    if opcode == 0x6F { return "i32.rem_s" }
+    if opcode == 0x70 { return "i32.rem_u" }
+    // i64 arithmetic
+    if opcode == 0x7C { return "i64.add" }
+    if opcode == 0x7D { return "i64.sub" }
+    if opcode == 0x7E { return "i64.mul" }
+    // f64 arithmetic
+    if opcode == 0xA0 { return "f64.add" }
+    if opcode == 0xA1 { return "f64.sub" }
+    if opcode == 0xA2 { return "f64.mul" }
+    if opcode == 0xA3 { return "f64.div" }
+    return "unknown"
+}
+
+@pure
+pub fn wasm_type_i32() -> int { return 0x7F }
+
+@pure
+pub fn wasm_type_i64() -> int { return 0x7E }
+
+@pure
+pub fn wasm_type_f32() -> int { return 0x7D }
+
+@pure
+pub fn wasm_type_f64() -> int { return 0x7C }
+
+@pure
+pub fn wasm_type_void() -> int { return 0x40 }
