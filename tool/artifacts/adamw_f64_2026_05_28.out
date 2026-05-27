@@ -1,0 +1,6 @@
+AdamW step-fusion 1-kernel wedge (N=256, step t=7)
+  max_abs_err p_out = 0.000e+00  (@i=0, gpu=0.6441683573632957 ref=0.6441683573632957)
+  max_abs_err m_out = 6.939e-18  (@i=0, gpu=0.04848000335337125 ref=0.048480003353371257)
+  max_abs_err v_out = 6.939e-18  (@i=0, gpu=0.032764862923093684 ref=0.032764862923093691)
+  worst across all = 6.939e-18
+  RESULT: PASS (byte-eq band <1e-12)

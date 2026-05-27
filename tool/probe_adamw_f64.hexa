@@ -1,0 +1,42 @@
+// §5a AdamW step fusion — 1-kernel wedge probe (Round 5 cycle-fg)
+//
+// AdamW (one-pass fused step):
+//   m_t   = β1·m + (1-β1)·g
+//   v_t   = β2·v + (1-β2)·g²
+//   m_hat = m_t / (1-β1^t)        // bias-corrected; host precomputes bc1=1-β1^t
+//   v_hat = v_t / (1-β2^t)        // host precomputes bc2=1-β2^t
+//   p_t   = p - lr·m_hat/(√v_hat + ε) - lr·wd·p
+//
+// fused: 1 kernel launch · 1 HBM round-trip per (p,g,m,v) → (p',m',v')
+// vs PyTorch eager: ~6-8 separate ops × N launches = launch-bound
+//
+// All scalars/buffers f64; @shared not needed (per-thread independent update).
+
+@gpu_kernel
+fn probe_adamw_f64(
+    p: [f64], g: [f64], m: [f64], v: [f64],
+    p_out: [f64], m_out: [f64], v_out: [f64],
+    lr: f64, b1: f64, b2: f64, eps: f64, wd: f64,
+    bc1: f64, bc2: f64,
+    n: i64
+) {
+    let mut tid: i64 = to_i64(gpu_thread_id_x())
+    if tid >= n { return }
+    let pi: f64 = p[tid]
+    let gi: f64 = g[tid]
+    let mi: f64 = m[tid]
+    let vi: f64 = v[tid]
+    let one_b1: f64 = 1.0 - b1
+    let one_b2: f64 = 1.0 - b2
+    let mt: f64 = b1 * mi + one_b1 * gi
+    let gi2: f64 = gi * gi
+    let vt: f64 = b2 * vi + one_b2 * gi2
+    let mh: f64 = mt / bc1
+    let vh: f64 = vt / bc2
+    let sv: f64 = sqrt(vh)
+    let denom: f64 = sv + eps
+    let upd: f64 = lr * mh / denom + lr * wd * pi
+    p_out[tid] = pi - upd
+    m_out[tid] = mt
+    v_out[tid] = vt
+}

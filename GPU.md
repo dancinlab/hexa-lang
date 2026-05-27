@@ -648,7 +648,7 @@ PR #189/#190/#191 fires used direct one-shot bash; sustained automation needs he
 - [x] **Attention scoring fusion** — Q@K^T + softmax + V@ in single kernel (flash-attn pattern). **REALIZED** → §1h `F-FUSION-ATTENTION-FLASH` (fused attention moat, structural-formal + wall ruled-out, 2026-05-25) + §1i `F-FUSION-ATTN-WMMA` (Tensor-Core fused flash-attention codegen)
 - [ ] **MoE dispatch + GEMM + reduce** — single kernel from gate to output
 - [ ] **LayerNorm + GEMM fusion** — pre-layer-norm fused with GEMM weights
-- [ ] **AdamW step fusion** — optimizer + parameter update fused with gradient compute
+- [x] **AdamW step fusion** — optimizer + parameter update fused with gradient compute (Round-5 wedge silicon · worst 6.939e-18 sub-ULP · `tool/probe_adamw_f64.hexa`)
 
 ### 5b — Compile-time specialization
 
