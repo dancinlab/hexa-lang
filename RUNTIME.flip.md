@@ -339,11 +339,14 @@ fan-out 불가, serial 진행.
       - ~~`hxtok.c`~~ — **B9.6e 에서 dead-file git-rm 으로 해결 (port 아님)** ↓
       - ~~`hxvocoder.c`~~ — **B9.6f 에서 dead-file git-rm 으로 해결 (port 아님)** ↓
         (audit 가 layer① port 후보로 분류했으나 정밀 재검증 결과 0-caller DEAD)
-      - `hxflash_linux.c`/`hxlayer_linux.c`/`hxvdsp_linux.c` — layer① **LIVE port**
-        (B9.6f 재검증 확정) · 각 dedicated build script + 실제 ml FFI consumer
-        (`extern fn` + 호출): hxflash→`self/ml/hxflash.hexa`+`gpu_train.hexa`,
-        hxlayer→`self/ml/hxlayer.hexa`+bench/test, hxvdsp→`bench/hxblas_linux.hexa`
-        (`@link("hxvdsp")`). rewrite+rewire (multi-session, NOT clean delete)
+      - `hxflash_linux.c`/`hxlayer_linux.c`/`hxvdsp_linux.c` — ⛔ **PERF-FLOOR
+        (B9.6g 검증 · port 불가)**. audit 가 "layer① portable" 로 오분류했으나,
+        이들은 `@link(...)` FFI `.so` (H100 ML 학습 hot-path · `tool/deploy_h100`
+        배포 · dlopen). pure-hexa 등가가 **이미 존재**(`hxlayer.hexa:ref_rmsnorm_silu`)
+        하나 `bench_hxlayer_matrix.hexa` 측정 **C 가 285x 빠름** → 포팅 시 ML 학습
+        285x 회귀 (perf-floor). + hexa `fn` 은 standalone `.so` 로 dlopen 불가
+        (FFI deploy 모델 재현 불가). **vendor-FFI 와 동급 irreducible** — 삭제 X.
+        (B9.6g 는 GO/NO-GO 게이트에서 편집 0건 honest-abort.)
       - `exec_argv_sha256.c` — sha256 builtin 다중 core-compiler caller + 이름불일치
         (대규모 rewire 트랙)
       - vendor FFI ③19 (CUDA/openssl/sodium/OS-ABI) — irreducible 영구 바닥
@@ -373,8 +376,21 @@ fan-out 불가, serial 진행.
       ·hxlmhead·hxqwen14b/32b·lora_cuda_host·hexa_cc) 전수 재스캔 = 전부 LIVE
       caller/build-ref 보유 (PRESERVE). blowfish(#1816)·v565(#1818)·hxtok(#1820)
       의 dead-file 패턴 연장.
+- [x] **B9.6g-hxlayer-port-attempt** — ⛔ **BLOCKED · perf-floor 확정** (편집 0건
+      honest-abort). hxlayer_linux.c 는 CPU(GPU 아님)지만 `@link` FFI `.so` (H100
+      배포) + pure-hexa 등가가 측정상 **285x 느림** → 포팅=ML 학습 285x 회귀. hexa
+      `fn`→dlopen `.so` 재현 불가. → hxflash/hxlayer/hxvdsp 전부 perf-floor 재분류
+      (위 B9.6d 표). harm-guard 가 정확히 작동 — perf-critical 커널 삭제 방지.
+
+      🏁 **clean/safe `.c`-파일 count-reduction DEFINITIVELY 고갈** (세션 4건:
+      blowfish wire + v565/hxtok/hxvocoder dead). 잔여 226 = perf-floor(hxflash/
+      hxlayer/hxvdsp · 285x) + vendor-FFI③19 + sha256-entangled + runtime FLOOR.
+      **전부 multi-session codegen self-emit(B9.6a/b) 또는 irreducible** — 단일-PR
+      안전 삭제 불가. 다음 진짜 진전 = B9.6a/b serial codegen 캠페인 (expert work,
+      cold fan-out 부적합).
 - [ ] **B9.6a-hexaval-repr-emit** — HexaVal repr 생성자 codegen self-emit
-      (`self/codegen/runtime_arm64.hexa` 확장; `rt_arena_*` 4 fn LANDED 패턴)
+      (`self/codegen/runtime_arm64.hexa` 확장; `rt_arena_*` 4 fn LANDED 패턴).
+      ⚠ serial · regen+fixpoint · phase-h codegen 에이전트와 경합 · expert work.
 - [ ] **B9.6b-runtime-primitive-emit** — 잔여 runtime primitive self-emit
       (chunk-A wire-plan)
 
