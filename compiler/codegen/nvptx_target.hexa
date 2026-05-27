@@ -263,12 +263,34 @@ fn _nvptx_reg_shfl_mask(id: i64) -> string {
 // RFC 055 055-P0 - const_str / global operands are out of the FP64
 // arithmetic slice; they lower to an honest placeholder so the emit
 // pass never silently mis-renders. String/global GPU operands are 055-P1+.
+
+// _nvptx_f64_hexlit - render an f64 as a PTX `0d<16-upper-hex>` immediate
+// of its IEEE-754 bit pattern. Required because ptxas rejects decimal f64
+// immediates (`neg.f64 %d, 1e+308` -> `Arguments mismatch for instruction`).
+// `float_to_bits` is a 4-surface runtime builtin (PR #1678); for ASCII-only
+// nibble characters we look up a fixed table to side-step the `chr` byte
+// truncation hazard (memory: `chr→from_char_code` Unicode fix).
+fn _nvptx_f64_hexlit(v: f64) -> string {
+    let bits: i64 = float_to_bits(v)
+    let hex = "0123456789ABCDEF"
+    let mut out = "0d"
+    let mut k = 15  // 16 nibbles, MSB first
+    while k >= 0 {
+        let nib = (bits >> (4 * k)) & 15
+        out = out + hex.substring(nib, nib + 1)
+        k = k - 1
+    }
+    return out
+}
+
 fn _nvptx_operand_text(o: Operand) -> string {
     if o.kind == "local" {
         return _nvptx_reg_f64(o.local_id)
     }
     if o.kind == "const_float" {
-        return to_string(o.float_val)
+        // INBOX 2026-05-27 #3 ③ - emit f64 const as `0d<hex>` so ptxas
+        // accepts it everywhere (neg.f64 / st.shared.f64 / fma.rn.f64 ...).
+        return _nvptx_f64_hexlit(o.float_val)
     }
     if o.kind == "const_int" {
         return to_string(o.int_val)
@@ -288,7 +310,8 @@ fn _nvptx_operand_text_kinds(o: Operand, kinds: [PReg]) -> string {
         return _nvptx_lookup_reg_for_local(kinds, o.local_id)
     }
     if o.kind == "const_float" {
-        return to_string(o.float_val)
+        // Same as `_nvptx_operand_text`: PTX f64 immediate = `0d<hex>`.
+        return _nvptx_f64_hexlit(o.float_val)
     }
     if o.kind == "const_int" {
         return to_string(o.int_val)
@@ -3115,6 +3138,26 @@ fn _nvptx_lower_stmt(buf: [LInstr], s: Stmt, kinds: [PReg], shared_idx_off: [i64
         }
         return out
     }
+    // INBOX 2026-05-27 #3 ① - STMT_UNOP lowering. Literal-only negation
+    // (e.g. `-1.0e308`) is folded at hir_to_mir into a single const_float,
+    // so this arm is reached only by register-neg `-x`. Mnemonic depends
+    // on the dst kind (f64 / s64 / s32). Boolean `!` / `not` is out of the
+    // FP slice and falls through to the honest stub below.
+    if s.kind == STMT_UNOP {
+        if (s.op == "-" || s.op == "neg") && len(s.args) >= 1 {
+            let dst_kind = _nvptx_lookup_kind_for_local(kinds, s.dst.id)
+            let dst_reg = _nvptx_lookup_reg_for_local(kinds, s.dst.id)
+            let src_reg = _nvptx_operand_text_kinds(s.args[0], kinds)
+            let mut a = []
+            a.push(_nvptx_op(dst_reg))
+            a.push(_nvptx_op(src_reg))
+            let mut mnem = "neg.f64"
+            if dst_kind == NVPTX_RKIND_U64 { mnem = "neg.s64" }
+            if dst_kind == NVPTX_RKIND_U32 { mnem = "neg.s32" }
+            out.push(_nvptx_instr(mnem, a, "unop -: -x (RFC 055 055-P4)"))
+            return out
+        }
+    }
     // RFC 055 055-P0 - statement outside the FP64 slice + the 055-P3b
     // primitives above. STMT_THROW / STMT_TRY_* / STMT_ARENA_* /
     // STMT_CALL_INDIRECT etc. are later 055-P4+ cycles. Honest stub.
@@ -3817,7 +3860,10 @@ fn _nvptx_classify_locals(mfn: MFunc) -> [PReg] {
         let mut si = 0
         while si < len(blk.stmts) {
             let s = blk.stmts[si]
-            if s.kind == STMT_ASSIGN || s.kind == STMT_BINOP || s.kind == STMT_CALL {
+            if s.kind == STMT_ASSIGN || s.kind == STMT_BINOP || s.kind == STMT_CALL || s.kind == STMT_UNOP {
+                // INBOX 2026-05-27 #3 ② - STMT_UNOP dst must be classified
+                // here so a `.reg .f64 %fdN` (or s64/s32) declaration is
+                // emitted; without it ptxas errors `Unknown symbol %fdN`.
                 // Void-return guard: STMT_CALL with `dst._miss_local()`
                 // (id < 0) - e.g. `gpu_barrier()` - produces no value
                 // and must not get a spurious `.reg` declaration. Skip.

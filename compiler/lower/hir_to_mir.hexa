@@ -1088,6 +1088,19 @@ fn _lower_hexpr(ctx: LowerCtx, e: HExpr) -> LowerExprResult {
     if k == "unop" {
         if len(e.children) < 1 { return _no_value(ctx) }
         let r = _lower_hexpr(ctx, e.children[0])
+        // INBOX 2026-05-27 #3 (fold) - `-<const>` folds to a single
+        // const_float / const_int operand so codegen never sees STMT_UNOP
+        // for a literal-only negation. Closes the NVPTX `-1.0e308` / `-1`
+        // literal case independently of the per-target STMT_UNOP arm
+        // (that arm still handles register-neg `-x`).
+        if e.text == "-" {
+            if r.operand.kind == "const_float" {
+                return _value(r.ctx, _const_float_op(0.0 - r.operand.float_val))
+            }
+            if r.operand.kind == "const_int" {
+                return _value(r.ctx, _const_int_op(0 - r.operand.int_val))
+            }
+        }
         let mut ctx2 = _fresh_local(r.ctx, e.typ, "t")
         let dst = _lr_locals[len(_lr_locals) - 1]
         let mut args: [Operand] = []
