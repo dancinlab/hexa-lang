@@ -1,0 +1,117 @@
+// HEXA Standard Library — crypto/tls13_client_keyupdate
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// TLS 1.3 KeyUpdate message + traffic-key rotation (RFC 8446 §4.6.3 +
+// §7.2) — pure hexa. Post-handshake key rotation: build the on-wire
+// KeyUpdate HandshakeMessage that signals rotation to the peer, then
+// derive the NEXT application-traffic secret / key / iv from the
+// current traffic secret via Expand-Label(secret, "traffic upd", "",
+// Hash.length).
+//
+// RUNTIME.flip B1.tls13-keyupdate. Pure additive — no edits to
+// existing files. Composes building blocks pre-LANDED in earlier
+// frontier PRs (tls13_keyschedule + tls13_wire + tls13_record).
+//
+// Wire format (RFC 8446 §4.6.3):
+//   enum { update_not_requested(0), update_requested(1) } KeyUpdateRequest;
+//   struct { KeyUpdateRequest request_update; } KeyUpdate;
+//
+//   HandshakeMessage = hs_header(msg_type=24, length=1) || request_update
+//
+// Key rotation (RFC 8446 §7.2):
+//   application_traffic_secret_N+1 =
+//       HKDF-Expand-Label(application_traffic_secret_N,
+//                         "traffic upd", "", Hash.length)
+//   new_key = HKDF-Expand-Label(application_traffic_secret_N+1, "key", "", N)
+//   new_iv  = HKDF-Expand-Label(application_traffic_secret_N+1, "iv",  "", 12)
+//
+// Surface (2 fn · 1 struct · 3 const):
+//   - TLS_HS_KEY_UPDATE              = 24
+//   - TLS_KEY_UPDATE_NOT_REQUESTED   = 0
+//   - TLS_KEY_UPDATE_REQUESTED       = 1
+//   - tls13_keyupdate_message(request_update) -> [int]
+//   - tls13_client_rotate_traffic_keys(current_traffic_secret, aead_key_length)
+//       -> Tls13KeyUpdateState
+//
+// Building blocks (all pre-LANDED):
+//   - tls13_expand_label                              (tls13_keyschedule)
+//   - tls13_hs_header                                  (tls13_wire)
+//   - tls13_traffic_key / tls13_traffic_iv             (tls13_record)
+//
+// Out-of-scope (driver glue, not pure crypto):
+//   - AEAD-seal the KeyUpdate inside an application-record
+//   - socket_write of the sealed record + sequence-number reset
+//   - receive + parse a peer-sent KeyUpdate (handled by sibling parse fn
+//     in stdlib/crypto/tls13_key_update for the body byte)
+
+use "stdlib/crypto/tls13_keyschedule"
+use "stdlib/crypto/tls13_wire"
+use "stdlib/crypto/tls13_record"
+
+// HandshakeMessage type for KeyUpdate (RFC 8446 §4 enum HandshakeType).
+let TLS_HS_KEY_UPDATE: int = 24
+
+// KeyUpdateRequest enum values (RFC 8446 §4.6.3).
+let TLS_KEY_UPDATE_NOT_REQUESTED: int = 0
+let TLS_KEY_UPDATE_REQUESTED:     int = 1
+
+// Rotated-traffic state returned by tls13_client_rotate_traffic_keys.
+// kind ∈ {"ok"} — the derivation is pure HKDF and has no error paths.
+struct Tls13KeyUpdateState {
+    kind:        str,
+    next_secret: [int],
+    next_key:    [int],
+    next_iv:     [int]
+}
+
+// Build the on-wire KeyUpdate HandshakeMessage bytes:
+//   hs_header(msg_type=24, length=1) || request_update (one byte)
+//
+// `request_update` MUST be 0 (update_not_requested) or 1 (update_requested).
+// The caller AEAD-seals the returned bytes inside an application-record
+// using the CURRENT client application traffic key/iv at the current
+// app-phase sequence number, then rotates locally via
+// tls13_client_rotate_traffic_keys.
+@pure
+pub fn tls13_keyupdate_message(request_update: int) -> [int] {
+    let hdr = tls13_hs_header(TLS_HS_KEY_UPDATE, 1)
+    let mut out: [int] = []
+    let mut i = 0
+    while i < len(hdr) {
+        out.push(hdr[i])
+        i = i + 1
+    }
+    out.push(request_update & 0xFF)
+    return out
+}
+
+// Derive the next application-traffic secret / key / iv from the current
+// traffic secret (RFC 8446 §7.2). The next secret has the same length as
+// the current one (Hash.length — 32 bytes for SHA-256, 48 for SHA-384).
+//
+// Inputs:
+//   current_traffic_secret — current (pre-rotation) application traffic
+//                            secret (client OR server side; caller picks).
+//   aead_key_length        — 16 (AES-128-GCM) or 32 (AES-256-GCM /
+//                            ChaCha20-Poly1305).
+@pure
+pub fn tls13_client_rotate_traffic_keys(
+    current_traffic_secret: [int],
+    aead_key_length:        int
+) -> Tls13KeyUpdateState {
+    // "traffic upd" = 74 72 61 66 66 69 63 20 75 70 64
+    let label = [0x74, 0x72, 0x61, 0x66, 0x66, 0x69, 0x63, 0x20, 0x75, 0x70, 0x64]
+    let ctx: [int] = []
+    let next_secret = tls13_expand_label(
+        current_traffic_secret, label, ctx, len(current_traffic_secret))
+    let next_key = tls13_traffic_key(next_secret, aead_key_length)
+    let next_iv = tls13_traffic_iv(next_secret)
+    return Tls13KeyUpdateState {
+        kind:        "ok",
+        next_secret: next_secret,
+        next_key:    next_key,
+        next_iv:     next_iv
+    }
+}
