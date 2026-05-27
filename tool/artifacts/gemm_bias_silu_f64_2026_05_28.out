@@ -1,0 +1,5 @@
+GEMM+bias+SiLU 1-kernel wedge (M=4 N=64 K=128, 256 outputs)
+  max_abs_err = 2.506e-14  (@i=76, gpu=0.20301274449397905 ref=0.20301274449400411)
+  mean_abs_err = 4.594e-15
+  ref_abs_max  = 0.2167  → max_rel_err = 1.157e-13
+  RESULT: PASS (byte-eq band <1e-12)
