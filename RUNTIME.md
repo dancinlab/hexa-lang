@@ -2385,8 +2385,13 @@ framing-① (nm aprime 0 externs) 측정-충족 이후 — framing-② (source z
       rule 결정 동반. **RFC-ONLY**: #532 (`inbox(patches): trait dyn dispatch
       &dyn Trait design RFC (PROBE r14-GGGG)`) 머지됨; scaffold branch
       `rfc-082-impl-a-trait-bound-scaffold-2026-05-23` 활성; impl PR 부재.
-- [ ] **TLS CA bundle 배포 결정 (D2+)** — TLS handshake 와 함께.
-      **POLICY-DEFERRED**: D2+ 결정 항목 (코딩 unblocked, 정책 결정 대기).
+- [~] **TLS CA bundle 배포 결정 (D2+)** — TLS handshake 와 함께.
+      **API-STUB LANDED · POLICY-PENDING**: `stdlib/crypto/tls_ca_bundle.hexa`
+      caller-facing surface (`tls_ca_bundle_source/count/pem/verify_chain` +
+      `TlsCaVerifyResult` 6-kind discriminator). TLS client wire (PR #1724/
+      #1725/#1726/#1728) 가 stable API 와 compile-link 가능. 잔여 = D2+
+      governance 가 4-옵션 (pinned NSS / system FFI / caller-supplied / hybrid)
+      중 결정 후 stub 구현 채우기.
 
 ### phase-H linker future generalizations (macOS 잔여는 ZERO · 미래용)
 
