@@ -1,5 +1,16 @@
 # INBOX — log
 
+## 2026-05-28T — ✅ RESOLVED #1703 · parser: paren-less line continuation with leading `-` silent miscompute (`self/parser.hexa::parse_addition`)
+
+`parse_addition` 의 newline-continuation arm 이 `p_continue_bin_op(["Plus"])` 만 허용해 다음 줄이 `-` 로 시작하면 silent-drop — `let x = a + b \n - c` 가 `let x = a + b` 로 끝나고 `- c` 는 폐기되는 unary-minus expression-statement 로 파싱됐다. 인라인 `Plus || Minus` 는 둘 다 받지만 newline arm 만 `Plus` 였던 비대칭이 원인. anima bench #4 (Gierer-Meinhardt PDE · ρ=1 control sim 이 ~10^236 으로 발산) 에서 `- 4.0 * u[i][j]` 항이 사라져 잡힘.
+
+stdlib 영향 (현재 silently broken):
+- `stdlib/runtime/math.hexa` `rt_lgamma` Stirling 급수 (L81/L83 leading `-`)
+- `stdlib/sim_universe/multiverse/higher_order/quad_mi.hexa` (L136 leading `-`)
+- 그 외 9 leading-`-` · 30 leading-`*` (이미 multiplication tier 에서 처리) · 5 leading-`/`
+
+옵션 선택: (a) syntactic reject 대신 (b) deterministic-continuation — `p_continue_bin_op` whitelist 를 `["Plus", "Minus"]` 로 확장. 이유: (1) "unary-ambiguous" 우려는 expression-START 위치에서만 유효한데, `parse_addition` while-loop 안에서는 이미 완전한 left operand 가 소비된 후라 다음 줄의 leading `-` 는 반드시 binary, (2) stdlib 가 이미 leading-`-` 패턴을 의도된 continuation 으로 작성하고 있어 reject 는 ~9 stdlib 파일을 깨뜨림 (그 파일들 자체가 현재 silently miscompiled 라 fix 효과는 +). PR: https://github.com/dancinlab/hexa-lang/pull/{TBD}.
+
 ## 2026-05-28T — ✅ RESOLVED #1734 · resolver shape-B/C arms (`stdlib/cloud/runpod.hexa::_runpod_get_ssh_port_cli`)
 
 `_runpod_get_ssh_port_cli` 는 shape-A (`ssh.ip`+`ssh.port`) 만 매칭 → anima M3 4축 fire 가 hit 한 shape-C (`runpodctl pod get -o json` of v0.5+ = top-level `publicIp` + `ports[].{type=="ssh"}.port`) 에서 fall-through 해 GraphQL API arm 으로 떨어졌고, 그 arm 은 API key 가 필요해 dispatcher 경로에서 "resolver 부재" 처럼 보임.
