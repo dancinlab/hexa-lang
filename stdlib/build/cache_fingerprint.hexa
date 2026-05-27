@@ -1,0 +1,75 @@
+// HEXA Standard Library — build/cache_fingerprint
+//
+// @version 0.1.0
+// @capabilities [pure]
+//
+// Distributed build-cache fingerprint — SHA-256 of (source + flags +
+// compiler version) → deterministic cache key. Closes
+// RUNTIME.flip B8.distributed-cache-fingerprint.
+//
+// Surface:
+//   pub fn cache_fingerprint_compute(
+//       source_text: string,
+//       compile_flags: string,
+//       compiler_version: string,
+//   ) -> string
+//       Canonical 64-char lowercase hex SHA-256 over the three inputs
+//       joined by a single NUL byte (`\0`) — matches the spec's
+//       `"<source>\0<flags>\0<version>"` shape. The hash is computed on
+//       the byte-array representation of the combined string so that the
+//       NUL separators are preserved across the digest (the string-form
+//       `sha256` runtime builtin uses `strlen` and would truncate at
+//       the first NUL — see honest-limit L1 below).
+//
+//   pub fn cache_fingerprint_short(full_hash: string) -> string
+//       First 16 hex chars of the full digest — compact ID for log
+//       lines, cache-dir shard names, and human inspection. Returns the
+//       input verbatim if it is shorter than 16 chars (defensive — does
+//       NOT pad).
+//
+//   pub fn cache_fingerprint_combine_inputs(
+//       source: string,
+//       flags: string,
+//       version: string,
+//   ) -> string
+//       The canonical combined string `<source>\0<flags>\0<version>`
+//       BEFORE hashing — exposed so that tests can validate the input
+//       framing independently of the SHA-256 step.
+//
+// Honest limits:
+//   L1 — `cache_fingerprint_compute` routes through `sha256_of_bytes`
+//        (libsodium-gated, see `stdlib/core/hash/sha256.hexa` L3) so
+//        that the NUL separators in the combined string survive the
+//        digest. On a runtime built WITHOUT libsodium, `sha256_of_bytes`
+//        returns "" — and so does this function. Callers that need a
+//        libsodium-free path should keep `\0` out of the inputs and
+//        substitute `sha256_hex` directly; this module deliberately
+//        preserves the spec's NUL framing instead.
+//   L2 — The framing is `<source>\0<flags>\0<version>` — a NUL byte that
+//        appears inside any of the three inputs would collide with the
+//        separator. Normal source code, compile-flag strings, and
+//        version strings are pure text and contain no NUL bytes in
+//        practice; this is a documented constraint, not a hidden risk.
+//
+// All three functions are deterministic and pure within their input
+// domain.
+
+use "stdlib/core/hash/sha256"
+use "stdlib/core/hash/hmac"
+
+pub fn cache_fingerprint_combine_inputs(source: string, flags: string, version: string) -> string {
+    return source + "\0" + flags + "\0" + version
+}
+
+pub fn cache_fingerprint_compute(source_text: string, compile_flags: string, compiler_version: string) -> string {
+    let combined = cache_fingerprint_combine_inputs(source_text, compile_flags, compiler_version)
+    let bytes = string_to_byte_array(combined)
+    return sha256_of_bytes(bytes, len(bytes))
+}
+
+pub fn cache_fingerprint_short(full_hash: string) -> string {
+    if len(full_hash) < 16 {
+        return full_hash
+    }
+    return full_hash.substring(0, 16)
+}
